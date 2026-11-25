@@ -845,9 +845,14 @@ fn smoke_continue(
 
 fn verify_prompt(scene: &mut SceneSession<'_, '_>) -> Result<(), RenderError> {
     let pixels = scene.readback().map_err(failure)?;
-    for point in [Point { x: 17, y: 3 }, Point { x: 9, y: 15 }] {
-        let row = health_row(&pixels, point, scene.layout().width().get(), 1)?;
-        if row.get(..4) != Some(&[248, 228, 168, 255]) {
+    for y in [3, 14, 20] {
+        let row = health_row(
+            &pixels,
+            Point { x: 8, y },
+            scene.layout().width().get(),
+            64,
+        )?;
+        if !row.as_chunks::<4>().0.contains(&[248, 228, 168, 255]) {
             return Err(failure("missing native free rejoin prompt"));
         }
     }

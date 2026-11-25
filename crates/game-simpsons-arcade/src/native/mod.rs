@@ -646,11 +646,11 @@ impl Scene {
         view: world::View,
     ) -> Result<(), RenderError> {
         let offset = world::station_offset(view.width, player)?;
-        let prompt = self.hud.draw(player, seat, station.participation)?;
-        if let Some(mut draw) = prompt {
-            draw.destination.x = draw.destination.x.saturating_add(offset);
-            self.draws.push(draw);
-        }
+        let prompted = self.hud.queue(
+            (player, seat),
+            (station.participation, offset),
+            &mut self.draws,
+        )?;
         if !matches!(
             station.participation,
             Participation::Playing | Participation::Recovering { .. }
@@ -663,7 +663,7 @@ impl Scene {
             .ok_or(RenderError::InvalidSprite)?;
         let mut icon = indicator(player)?;
         icon.x = icon.x.saturating_add(offset);
-        if prompt.is_none() {
+        if !prompted {
             self.draws.push(actor.draw(icon, false));
         }
         if let Some(combat) = &self.combat {
@@ -1120,7 +1120,7 @@ const fn main_menu_hints(hosted: bool) -> &'static [&'static str] {
         &[
             "LEFT/RIGHT CHOOSE YOUR CHARACTER",
             "PRESS YOUR START KEY TO JOIN",
-            "GAMEPAD / TOUCH: START TO JOIN",
+            "GAMEPAD / TOUCH: USE JOIN CONTROL",
             "UP/DOWN SELECT - PRIMARY CONFIRM",
         ]
     }

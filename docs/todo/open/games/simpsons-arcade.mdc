@@ -1718,3 +1718,30 @@ movement and 20 first-strike submissions met the 16.667 ms budget;
 lifetime peak RSS was 101,593,088 bytes. The older 189-pose catalogue
 passed the aspect-fit smoke without the combined jump. No original
 assets are tracked, and physical multiplayer remains unverified.
+
+Local character selection and vacant-seat HUD plates now show the
+configured keyboard and gamepad Start bindings, including remaps. A
+continuing local station reuses those binding rows beneath its changing
+seconds indicator, including when the chosen character differs from
+the physical seat. Connected and offline remote indicators remain
+distinct. Long SDL names that cannot fit the compact plate refer to
+the profile rather than suggesting an incorrect key. Touch and axis
+Start remaps retain their existing presentation policies.
+
+The HUD keeps the same 221,184-byte local atlas and hosted texture
+budgets. A continuing local seat uses at most two draws, no more than
+the existing actor and icon allowance. The accelerated native gate
+compares the complete remapped F1/right-shoulder join plate, verifies
+that the two binding rows stay identical through successive continue
+seconds, and retains the remote connection-status controls.
+
+Fresh workspace validation including native rendering and audio passed
+in run 1795629010560775769-249935. The 3,329,456-byte Linux build passed
+the 192-pose adaptive offscreen OpenGL smoke with touch and dummy
+audio, including all three visible rejoin rows, successful free
+continue, cooperative jump, and three reinforcement meters. The
+600 movement and 20 first-strike submissions missed none of the
+16.667 ms host-work budgets. Mean submission work was 68.521 and
+65.582 microseconds respectively; lifetime peak RSS was 133,189,632
+bytes. These are synthetic input and offscreen measurements, not
+physical controller or full gameplay acceptance.

@@ -24,7 +24,11 @@ Each hash identifies a verified canonical bundle with the corresponding
 Marge's bundle also provides the stage background. The visible main menu
 shows each seat's selected character and Start key. Left/Right selects
 a vacant character before joining; Enter starts seat 1 immediately.
-Other seats can choose and join during play. Up/Down navigates the menu
+Other seats can choose and join during play. Local join and free-continue
+plates show the effective keyboard and gamepad Start bindings. Unusually
+long SDL key names may require checking the control profile. The continue
+plate retains the countdown without allocating extra textures.
+Up/Down navigates the menu
 and Primary confirms. Pause opens Resume, Settings, Main Menu and Exit;
 Pause or Start resumes.
 Close the window or select Exit to quit.
