@@ -31,6 +31,6 @@
 
 //! Platform adapters for the shared game engine.
 
-/// Explicitly enabled native TCP framing on local network addresses.
+/// Explicitly enabled native TLS framing on local network addresses.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lan;

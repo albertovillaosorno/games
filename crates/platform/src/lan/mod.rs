@@ -9,25 +9,28 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native TCP binding, connection and bounded message framing.
+//   - Native TCP endpoints, transfer deadlines and shared frame boundaries.
 // - Must-Not:
-//   - Authenticate peers, interpret game actions or expose a public service.
+//   - Interpret game actions or expose a public service.
 // - Allows:
 //   - Inputs: Explicit LAN configuration, endpoints and byte frames.
-//   - Outputs: Untrusted connections and bounded frames or I/O errors.
+//   - Outputs: Bounded frames and untrusted sockets for secure negotiation.
 //   - Side effects: Local socket I/O and bounded frame allocation.
 // - Split-When:
-//   - A secure transport or nonblocking I/O runtime needs its own adapter.
+//   - Secure negotiation needs a separate authentication adapter.
 // - Merge-When:
 //   - A shared native transport covers these same framing guarantees.
 // - Summary:
-//   - Opt-in private-address TCP transport.
+//   - Opt-in native TCP transport and reusable deadline framing.
 // - Description:
 //   - Bounds entire frame transfers and closes failed connections.
 // - Usage:
-//   - Use on an I/O worker; authenticate peers before session admission.
+//   - Use authenticated connections from the secure adapter on I/O workers.
 // - Defaults:
 //   - No socket access without explicit LAN permission.
+
+/// Locally provisioned, mutually authenticated TLS transport.
+pub mod secure;
 
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
@@ -74,48 +77,38 @@ impl LanConfig {
     }
 }
 
-/// Nonblocking TCP listener bound to one explicit local network interface.
-///
-/// Accepted connections are untrusted until a separate identity mechanism
-/// verifies them. This is not an authenticated or encrypted transport.
 #[derive(Debug)]
-pub struct LanListener {
+struct LanListener {
     config: LanConfig,
     listener: TcpListener,
 }
 
 impl LanListener {
-    /// Open a listener on an explicitly selected private address.
-    ///
-    /// # Errors
-    ///
-    /// Rejects public and wildcard addresses or operating-system failures.
-    pub fn bind(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
+    fn bind(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
         require_private(address)?;
         let listener = TcpListener::bind(address)?;
         listener.set_nonblocking(true)?;
         Ok(Self { config, listener })
     }
 
-    /// Report the assigned local address, including an ephemeral port.
-    ///
-    /// # Errors
-    ///
-    /// Propagates socket inspection failures.
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+    fn local_addr(&self) -> io::Result<SocketAddr> {
         self.listener.local_addr()
     }
 
-    /// Poll for one untrusted connection without blocking the host loop.
-    ///
-    /// # Errors
-    ///
-    /// Rejects non-private peers and propagates socket failures.
-    pub fn try_accept(&self) -> io::Result<Option<FrameStream>> {
+    #[cfg(test)]
+    fn try_accept(&self) -> io::Result<Option<FrameStream>> {
+        self.try_socket().map(|stream| {
+            stream.map(|socket| FrameStream {
+                channel: FrameChannel::new(socket, self.config),
+            })
+        })
+    }
+
+    fn try_socket(&self) -> io::Result<Option<DeadlineSocket>> {
         match self.listener.accept() {
             Ok((stream, address)) => {
                 require_private(address)?;
-                FrameStream::from_socket(stream, self.config).map(Some)
+                DeadlineSocket::new(stream, self.config).map(Some)
             },
             Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error),
@@ -123,63 +116,85 @@ impl LanListener {
     }
 }
 
-/// A bounded native stream carrying big-endian u32 length-prefixed frames.
-///
-/// Transfers may block until the configured deadline. Use an I/O worker,
-/// never the simulation or render thread. Bytes are not authenticated.
 #[derive(Debug)]
-pub struct FrameStream {
-    config: LanConfig,
-    stream: Option<TcpStream>,
+struct DeadlineSocket {
+    deadline: Instant,
+    socket: TcpStream,
 }
 
-impl FrameStream {
-    /// Connect to an explicit local network peer.
-    ///
-    /// # Errors
-    ///
-    /// Rejects public and wildcard destinations or connection failures.
-    pub fn connect(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
-        require_private(address)?;
-        let stream = TcpStream::connect_timeout(&address, config.timeout)?;
-        Self::from_socket(stream, config)
-    }
-
-    fn from_socket(stream: TcpStream, config: LanConfig) -> io::Result<Self> {
-        stream.set_nonblocking(false)?;
-        stream.set_nodelay(true)?;
+impl DeadlineSocket {
+    fn new(socket: TcpStream, config: LanConfig) -> io::Result<Self> {
+        socket.set_nonblocking(false)?;
+        socket.set_nodelay(true)?;
         Ok(Self {
-            config,
-            stream: Some(stream),
+            deadline: config.deadline()?,
+            socket,
         })
     }
 
-    /// Receive one complete frame, allocating only after its size is checked.
-    ///
-    /// # Errors
-    ///
-    /// Rejects oversized, incomplete or timed-out frames. A failed transfer
-    /// closes the connection, so an invalid frame cannot desynchronise it.
-    pub fn receive(&mut self) -> io::Result<Vec<u8>> {
+    fn prepare_read(&self) -> io::Result<()> {
+        self.socket
+            .set_read_timeout(Some(remaining(self.deadline)?))
+    }
+
+    fn prepare_write(&self) -> io::Result<()> {
+        self.socket
+            .set_write_timeout(Some(remaining(self.deadline)?))
+    }
+}
+
+trait TimedStream {
+    fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize>;
+    fn reset_deadline(&mut self, deadline: Instant);
+    fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize>;
+}
+
+impl TimedStream for DeadlineSocket {
+    fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.prepare_read()?;
+        self.socket.read(bytes)
+    }
+
+    fn reset_deadline(&mut self, deadline: Instant) {
+        self.deadline = deadline;
+    }
+
+    fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.prepare_write()?;
+        self.socket.write(bytes)
+    }
+}
+
+#[derive(Debug)]
+struct FrameChannel<Stream> {
+    config: LanConfig,
+    stream: Option<Stream>,
+}
+
+impl<Stream> FrameChannel<Stream>
+where
+    Stream: TimedStream,
+{
+    const fn new(stream: Stream, config: LanConfig) -> Self {
+        Self {
+            config,
+            stream: Some(stream),
+        }
+    }
+
+    fn receive(&mut self) -> io::Result<Vec<u8>> {
         self.transfer(receive_frame)
     }
 
-    /// Send one bounded frame without fragmenting its application boundary.
-    ///
-    /// # Errors
-    ///
-    /// Rejects oversized outgoing data before I/O. Transfer failures close
-    /// the connection.
-    pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+    fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
         let length = u32::try_from(bytes.len())
             .map_err(|_error| ErrorKind::InvalidInput)?;
         if length > self.config.max_bytes {
             return Err(ErrorKind::InvalidInput.into());
         }
-        self.transfer(|stream, config| {
-            let deadline = config.deadline()?;
-            write_until(stream, &length.to_be_bytes(), deadline)?;
-            write_until(stream, bytes, deadline)
+        self.transfer(|stream, _config| {
+            write_all(stream, &length.to_be_bytes())?;
+            write_all(stream, bytes)
         })
     }
 
@@ -188,15 +203,49 @@ impl FrameStream {
         operation: Operation,
     ) -> io::Result<Output>
     where
-        Operation: FnOnce(&mut TcpStream, LanConfig) -> io::Result<Output>,
+        Operation: FnOnce(&mut Stream, LanConfig) -> io::Result<Output>,
     {
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
+        stream.reset_deadline(self.config.deadline()?);
         let result = operation(stream, self.config);
         if result.is_err() {
             drop(self.stream.take());
         }
         result
     }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct FrameStream {
+    channel: FrameChannel<DeadlineSocket>,
+}
+
+#[cfg(test)]
+impl FrameStream {
+    fn connect(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
+        let socket = connect_socket(address, config)?;
+        Ok(Self {
+            channel: FrameChannel::new(socket, config),
+        })
+    }
+
+    fn receive(&mut self) -> io::Result<Vec<u8>> {
+        self.channel.receive()
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.channel.send(bytes)
+    }
+}
+
+fn connect_socket(
+    address: SocketAddr,
+    config: LanConfig,
+) -> io::Result<DeadlineSocket> {
+    require_private(address)?;
+    let stream = TcpStream::connect_timeout(&address, config.timeout)?;
+    DeadlineSocket::new(stream, config)
 }
 
 const fn private_address(address: SocketAddr) -> bool {
@@ -212,14 +261,12 @@ const fn private_address(address: SocketAddr) -> bool {
     }
 }
 
-fn read_until(
-    stream: &mut TcpStream,
-    mut bytes: &mut [u8],
-    deadline: Instant,
-) -> io::Result<()> {
+fn read_all<Stream>(stream: &mut Stream, mut bytes: &mut [u8]) -> io::Result<()>
+where
+    Stream: TimedStream,
+{
     while !bytes.is_empty() {
-        stream.set_read_timeout(Some(remaining(deadline)?))?;
-        match stream.read(bytes) {
+        match stream.read_chunk(bytes) {
             Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
             Ok(count) => {
                 bytes = bytes.get_mut(count..).ok_or(ErrorKind::InvalidData)?;
@@ -231,20 +278,22 @@ fn read_until(
     Ok(())
 }
 
-fn receive_frame(
-    stream: &mut TcpStream,
+fn receive_frame<Stream>(
+    stream: &mut Stream,
     config: LanConfig,
-) -> io::Result<Vec<u8>> {
-    let deadline = config.deadline()?;
+) -> io::Result<Vec<u8>>
+where
+    Stream: TimedStream,
+{
     let mut header = [0; 4];
-    read_until(stream, &mut header, deadline)?;
+    read_all(stream, &mut header)?;
     let length = config.frame_length(u32::from_be_bytes(header))?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
         .map_err(|_error| ErrorKind::OutOfMemory)?;
     bytes.resize(length, 0);
-    read_until(stream, &mut bytes, deadline)?;
+    read_all(stream, &mut bytes)?;
     Ok(bytes)
 }
 
@@ -262,14 +311,12 @@ fn require_private(address: SocketAddr) -> io::Result<()> {
     Ok(())
 }
 
-fn write_until(
-    stream: &mut TcpStream,
-    mut bytes: &[u8],
-    deadline: Instant,
-) -> io::Result<()> {
+fn write_all<Stream>(stream: &mut Stream, mut bytes: &[u8]) -> io::Result<()>
+where
+    Stream: TimedStream,
+{
     while !bytes.is_empty() {
-        stream.set_write_timeout(Some(remaining(deadline)?))?;
-        match stream.write(bytes) {
+        match stream.write_chunk(bytes) {
             Ok(0) => return Err(ErrorKind::WriteZero.into()),
             Ok(count) => {
                 bytes = bytes.get(count..).ok_or(ErrorKind::InvalidData)?;
@@ -293,9 +340,9 @@ mod tests {
 
     use super::{FrameStream, LanConfig, LanListener};
 
-    const LOOPBACK: SocketAddr =
+    pub(super) const LOOPBACK: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    const TIMEOUT: Duration = Duration::from_secs(2);
+    pub(super) const TIMEOUT: Duration = Duration::from_secs(2);
 
     #[derive(Debug)]
     struct TestCodec;
@@ -311,12 +358,17 @@ mod tests {
         }
     }
 
-    fn accepted(listener: &LanListener) -> io::Result<FrameStream> {
+    pub(super) fn poll_accept<Connection, Accept>(
+        mut accept: Accept,
+    ) -> io::Result<Connection>
+    where
+        Accept: FnMut() -> io::Result<Option<Connection>>,
+    {
         let deadline = Instant::now()
             .checked_add(TIMEOUT)
             .ok_or(ErrorKind::TimedOut)?;
         loop {
-            if let Some(stream) = listener.try_accept()? {
+            if let Some(stream) = accept()? {
                 return Ok(stream);
             }
             if Instant::now() >= deadline {
@@ -326,11 +378,17 @@ mod tests {
         }
     }
 
-    fn config() -> io::Result<LanConfig> {
+    fn accepted(listener: &LanListener) -> io::Result<FrameStream> {
+        poll_accept(|| listener.try_accept())
+    }
+
+    pub(super) fn config() -> io::Result<LanConfig> {
         LanConfig::new(session_config(true), TIMEOUT)
     }
 
-    fn error_kind<Value>(result: io::Result<Value>) -> Option<ErrorKind> {
+    pub(super) fn error_kind<Value>(
+        result: io::Result<Value>,
+    ) -> Option<ErrorKind> {
         result.err().map(|error| error.kind())
     }
 
@@ -392,7 +450,10 @@ mod tests {
         )
     }
 
-    fn require(condition: bool, context: &'static str) -> io::Result<()> {
+    pub(super) fn require(
+        condition: bool,
+        context: &'static str,
+    ) -> io::Result<()> {
         if condition {
             Ok(())
         } else {
@@ -441,7 +502,7 @@ mod tests {
         )
     }
 
-    fn session_config(lan: bool) -> SessionConfig {
+    pub(super) fn session_config(lan: bool) -> SessionConfig {
         SessionConfig {
             allow_lan: lan,
             max_message_bytes: NonZeroUsize::new(8)

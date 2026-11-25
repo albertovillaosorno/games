@@ -38,6 +38,15 @@ bidirectional framing, opt-in, size and timeout handling, and composition
 with session decoding and reconnect using test-controlled identities.
 Fresh validation passed in run 1795573514614423045-2067685.
 
-Real multi-device LAN play, verified peer identities, encrypted transport,
-and integration into a playable host remain untested or unimplemented.
-The raw adapter must not be used to admit unverified peer identities.
+The native adapter now also supports mutually authenticated TLS 1.3 with
+explicit local trust roots, server-name verification, leaf certificate
+fingerprints and no session resumption. Raw TCP frames are test-only;
+production code exposes only the secure adapter. Loopback tests verify
+both certificate identities, secure frame boundaries, disconnect/rejoin,
+rejection of a wrong host name and an untrusted client, and a bounded
+handshake when an unauthenticated socket stops responding.
+
+Fresh validation passed in run 1795576645026554056-2660129.
+The tests provision temporary certificates; a real host must enrol trusted
+fingerprints and bind them to player slots before admitting any messages.
+No real multi-device LAN play or credential enrolment workflow is verified.

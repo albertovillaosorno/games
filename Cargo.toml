@@ -23,6 +23,16 @@ serde_json = "*"
 toml = "*"
 sha2 = "0.11"
 
+[workspace.dependencies.rustls]
+version = "0.23.46"
+default-features = false
+features = ["std", "ring"]
+
+[workspace.dependencies.rcgen]
+version = "0.14.10"
+default-features = false
+features = ["crypto", "ring"]
+
 [workspace.lints.rust]
 # Absolute policy for every owned crate, inline test and native-call adapter.
 # No member may weaken the inherited forbid or opt out of root lint inheritance.
