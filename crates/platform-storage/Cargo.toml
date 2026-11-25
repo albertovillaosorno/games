@@ -9,6 +9,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+games.workspace = true
 games-assets.workspace = true
 nix.workspace = true
 

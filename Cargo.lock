@@ -272,6 +272,7 @@ dependencies = [
 name = "games-platform-storage"
 version = "0.1.0"
 dependencies = [
+ "games",
  "games-assets",
  "nix",
 ]

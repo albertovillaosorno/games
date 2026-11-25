@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded immutable snapshots of native regular-file descriptors.
+//   - Bounded snapshots and shared native regular-file admission.
 // - Must-Not:
 //   - Interpret source formats, asset semantics or execute files.
 // - Allows:
@@ -32,12 +32,18 @@
 use std::fs::File;
 use std::io::{self, Read as _};
 use std::num::NonZeroU64;
-use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd as _, OwnedFd};
 use std::path::Path;
 
 use nix::errno::Errno;
-use nix::fcntl::{OFlag, open};
-use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
+use nix::fcntl::{AtFlags, OFlag, open, openat};
+use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat};
+use nix::unistd::geteuid;
+
+pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
+    .union(OFlag::O_DIRECTORY)
+    .union(OFlag::O_NOFOLLOW)
+    .union(OFlag::O_CLOEXEC);
 
 /// Admission failure for a native file snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +144,49 @@ pub(crate) const fn regular(stat: &FileStat) -> bool {
 
 pub(crate) fn file_size(stat: &FileStat) -> Result<u64, FileReadError> {
     u64::try_from(stat.st_size).map_err(|_error| FileReadError::TooLarge)
+}
+
+pub(crate) fn trusted_directory(fd: impl AsFd) -> nix::Result<bool> {
+    let stat = fstat(fd)?;
+    Ok(stat.st_mode & 0o022 == 0 && stat.st_uid == geteuid().as_raw())
+}
+
+pub(crate) fn private_regular(stat: &FileStat) -> bool {
+    regular(stat)
+        && stat.st_nlink == 1
+        && stat.st_uid == geteuid().as_raw()
+        && stat.st_mode & 0o022 == 0
+}
+
+pub(crate) fn read_regular(
+    parent: &impl AsFd,
+    name: &str,
+    maximum: u64,
+) -> Result<Vec<u8>, FileReadError> {
+    if !trusted_directory(parent)? {
+        return Err(FileReadError::UnsafeFile);
+    }
+    let before = fstatat(parent, name, AtFlags::AT_SYMLINK_NOFOLLOW)?;
+    if !private_regular(&before) {
+        return Err(FileReadError::UnsafeFile);
+    }
+    let fd = openat(
+        parent,
+        name,
+        OFlag::O_RDONLY
+            | OFlag::O_NOFOLLOW
+            | OFlag::O_NONBLOCK
+            | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )?;
+    let stat = fstat(&fd)?;
+    if !private_regular(&stat)
+        || stat.st_dev != before.st_dev
+        || stat.st_ino != before.st_ino
+    {
+        return Err(FileReadError::UnsafeFile);
+    }
+    read_bounded_descriptor(fd, file_size(&stat)?, maximum)
 }
 
 #[cfg(test)]

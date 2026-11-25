@@ -45,9 +45,12 @@ use nix::{
 };
 
 use super::{ArchiveStaging, StagedArchive, StagingError};
-use crate::bundle::{DIRECTORY_FLAGS, MANIFEST_NAME, PAYLOADS_DIRECTORY};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use crate::bundle::{bundle_name, trusted_directory};
+use crate::bundle::bundle_name;
+use crate::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
+use crate::file::DIRECTORY_FLAGS;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::file::trusted_directory;
 
 /// A complete canonical bundle that has not yet been published.
 ///

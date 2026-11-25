@@ -35,7 +35,7 @@ use std::num::NonZeroU64;
 
 use sha2::{Digest as _, Sha256};
 
-const SAVE_HEADER: usize = 40;
+const SAVE_HEADER: u8 = 40;
 const SAVE_MAGIC: &[u8] = b"GMS1";
 
 /// Rejections before save decoding or allocation.
@@ -57,6 +57,15 @@ fn checked_save(
     u32::try_from(payload.len()).map_err(|_error| SafetyError::TooLarge)
 }
 
+/// Maximum encoded bytes accepted for a payload limit.
+#[must_use]
+pub fn save_envelope_limit(max_size: NonZeroU64) -> u64 {
+    max_size
+        .get()
+        .min(u64::from(u32::MAX))
+        .saturating_add(u64::from(SAVE_HEADER))
+}
+
 /// Encode a portable, integrity-checked save envelope with a size budget.
 ///
 /// # Errors
@@ -69,9 +78,11 @@ pub fn encode_save(
     let length = checked_save(payload, max_size)?;
     let capacity = payload
         .len()
-        .checked_add(SAVE_HEADER)
+        .checked_add(usize::from(SAVE_HEADER))
         .ok_or(SafetyError::TooLarge)?;
-    let mut data = Vec::with_capacity(capacity);
+    let mut data = Vec::new();
+    data.try_reserve_exact(capacity)
+        .map_err(|_error| SafetyError::TooLarge)?;
     data.extend_from_slice(SAVE_MAGIC);
     data.extend_from_slice(&length.to_le_bytes());
     data.extend_from_slice(&Sha256::digest(payload));
@@ -96,8 +107,12 @@ pub fn decode_save(
     let length: [u8; 4] = declared
         .try_into()
         .map_err(|_error| SafetyError::InvalidSave)?;
-    let checksum = data.get(8..SAVE_HEADER).ok_or(SafetyError::InvalidSave)?;
-    let payload = data.get(SAVE_HEADER..).ok_or(SafetyError::InvalidSave)?;
+    let checksum = data
+        .get(8..usize::from(SAVE_HEADER))
+        .ok_or(SafetyError::InvalidSave)?;
+    let payload = data
+        .get(usize::from(SAVE_HEADER)..)
+        .ok_or(SafetyError::InvalidSave)?;
     let actual = checked_save(payload, max_size)?;
     if u32::from_le_bytes(length) != actual
         || checksum != Sha256::digest(payload).as_slice()
@@ -111,10 +126,23 @@ pub fn decode_save(
 mod tests {
     use std::num::NonZeroU64;
 
-    use super::{SafetyError, decode_save, encode_save};
+    use super::{SafetyError, decode_save, encode_save, save_envelope_limit};
 
     fn limit(value: u64) -> NonZeroU64 {
         NonZeroU64::new(value).unwrap_or(NonZeroU64::MIN)
+    }
+
+    #[test]
+    fn encoded_read_limit_accounts_for_envelope_and_format_capacity() {
+        let maximum = limit(4);
+        let encoded = encode_save(b"four", maximum);
+        assert_eq!(
+            encoded
+                .ok()
+                .and_then(|bytes| u64::try_from(bytes.len()).ok()),
+            Some(save_envelope_limit(maximum)),
+        );
+        assert_eq!(save_envelope_limit(limit(u64::MAX)), 4_294_967_335);
     }
 
     #[test]

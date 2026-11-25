@@ -38,6 +38,10 @@ pub mod bundle;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod file;
 
+/// Integrity-checked local save slots.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub mod save;
+
 /// Private, bounded native archive staging.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod staging;

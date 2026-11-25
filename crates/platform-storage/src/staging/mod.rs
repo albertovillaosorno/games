@@ -52,9 +52,8 @@ use nix::sys::stat::{Mode, mkdirat};
 pub use publication::PublishedBundle;
 pub use publication::StagedBundle;
 
-use super::bundle::{
-    DIRECTORY_FLAGS, MANIFEST_NAME, PAYLOADS_DIRECTORY, trusted_directory,
-};
+use super::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
+use super::file::{DIRECTORY_FLAGS, trusted_directory};
 const MAX_DEPTH: usize = 64;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 

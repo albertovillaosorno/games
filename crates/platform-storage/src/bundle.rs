@@ -39,18 +39,15 @@ use games_assets::{
     AssetError, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
 use nix::errno::Errno;
-use nix::fcntl::{AtFlags, OFlag, open, openat};
-use nix::sys::stat::{FileStat, Mode, fstat, fstatat};
-use nix::unistd::geteuid;
+use nix::fcntl::{open, openat};
+use nix::sys::stat::Mode;
 #[cfg(test)]
 use nix::unistd::mkdtemp;
 
-use crate::file::{FileReadError, file_size, read_bounded_descriptor, regular};
+use crate::file::{
+    DIRECTORY_FLAGS, FileReadError, read_regular, trusted_directory,
+};
 
-pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
-    .union(OFlag::O_DIRECTORY)
-    .union(OFlag::O_NOFOLLOW)
-    .union(OFlag::O_CLOEXEC);
 pub(crate) const MANIFEST_NAME: &str = "manifest.json";
 pub(crate) const PAYLOADS_DIRECTORY: &str = "payloads";
 
@@ -230,11 +227,6 @@ pub(crate) fn bundle_name(digest: ContentHash) -> String {
     format!("bundle-{digest}")
 }
 
-pub(crate) fn trusted_directory(fd: &OwnedFd) -> nix::Result<bool> {
-    let stat = fstat(fd)?;
-    Ok(stat.st_mode & 0o022 == 0 && stat.st_uid == geteuid().as_raw())
-}
-
 fn open_directory(
     parent: &OwnedFd,
     name: &str,
@@ -247,44 +239,6 @@ fn open_directory(
         return Err(BundleError::UnsafeStorage);
     }
     Ok(fd)
-}
-
-fn private_regular(stat: &FileStat) -> bool {
-    regular(stat)
-        && stat.st_nlink == 1
-        && stat.st_uid == geteuid().as_raw()
-        && stat.st_mode & 0o022 == 0
-}
-
-fn read_regular(
-    parent: &OwnedFd,
-    name: &str,
-    maximum: u64,
-) -> Result<Vec<u8>, BundleError> {
-    if !trusted_directory(parent)? {
-        return Err(BundleError::UnsafeStorage);
-    }
-    let before = fstatat(parent, name, AtFlags::AT_SYMLINK_NOFOLLOW)?;
-    if !private_regular(&before) {
-        return Err(BundleError::UnsafeStorage);
-    }
-    let fd = openat(
-        parent,
-        name,
-        OFlag::O_RDONLY
-            | OFlag::O_NOFOLLOW
-            | OFlag::O_NONBLOCK
-            | OFlag::O_CLOEXEC,
-        Mode::empty(),
-    )?;
-    let stat = fstat(&fd)?;
-    if !private_regular(&stat)
-        || stat.st_dev != before.st_dev
-        || stat.st_ino != before.st_ino
-    {
-        return Err(BundleError::UnsafeStorage);
-    }
-    Ok(read_bounded_descriptor(fd, file_size(&stat)?, maximum)?)
 }
 
 #[cfg(test)]
