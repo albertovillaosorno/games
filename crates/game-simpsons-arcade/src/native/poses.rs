@@ -43,9 +43,9 @@ use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
-use crate::JumpMotion;
+use crate::{JumpMotion, WalkMotion};
 
-const MAX_POSES: usize = 96;
+const MAX_POSES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -55,6 +55,7 @@ enum Kind {
     Lift,
     Special,
     Walk,
+    WalkUp,
 }
 
 impl Kind {
@@ -65,7 +66,7 @@ impl Kind {
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
             Self::Special => 30,
-            Self::Walk => walk_duration(player),
+            Self::Walk | Self::WalkUp => walk_duration(player),
         }
     }
 }
@@ -124,10 +125,15 @@ impl Catalogue {
                 .into_iter()
                 .all(|kind| entries.contains_key(&(player, kind, 0)))
         });
-        let complete_optional =
-            [Kind::AirAttack, Kind::Lift, Kind::Special, Kind::Walk]
-                .into_iter()
-                .all(|kind| optional_complete(&entries, kind));
+        let complete_optional = [
+            Kind::AirAttack,
+            Kind::Lift,
+            Kind::Special,
+            Kind::Walk,
+            Kind::WalkUp,
+        ]
+        .into_iter()
+        .all(|kind| optional_complete(&entries, kind));
         if !complete || !complete_optional {
             return Err(failure("missing tick-zero pose"));
         }
@@ -168,11 +174,26 @@ impl PoseArt {
                 return jump_entry(&self.entries, player, motion).copied();
             },
             Maneuver::Idle => {
-                (Kind::Walk, walking_offset(player, station.walking_ticks?)?)
+                return walking_entry(&self.entries, player, station.walking?)
+                    .copied();
             },
         };
         select_entry(&self.entries, (player, kind, tick)).copied()
     }
+}
+
+fn walking_entry<Value>(
+    entries: &BTreeMap<Key, Value>,
+    player: Player,
+    motion: WalkMotion,
+) -> Option<&Value> {
+    let tick = walking_offset(player, motion.tick)?;
+    if motion.away
+        && let Some(entry) = select_entry(entries, (player, Kind::WalkUp, tick))
+    {
+        return Some(entry);
+    }
+    select_entry(entries, (player, Kind::Walk, tick))
 }
 
 fn air_attack_entry<Value>(
@@ -228,6 +249,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         "jump-lift" => Kind::Lift,
         "special" => Kind::Special,
         "walk" => Kind::Walk,
+        "walk-up" => Kind::WalkUp,
         _ => return Err(failure("unknown pose maneuver")),
     };
     let tick = elapsed.parse::<u8>().map_err(failure)?;
@@ -292,6 +314,94 @@ mod tests {
             assert_eq!(walking_offset(player, period), Some(0));
             assert_eq!(walking_offset(player, period * 2 + 1), Some(1));
         }
+    }
+
+    #[test]
+    fn optional_upward_walk_requires_each_station_and_valid_offsets() {
+        let base = complete();
+        let up = format!(
+            "marge walk-up 0 {HASH}\n\
+             homer walk-up 0 {HASH}\n\
+             bart walk-up 0 {HASH}\n\
+             lisa walk-up 0 {HASH}\n"
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}marge walk-up 0 {HASH}")).is_err()
+        );
+        assert_eq!(
+            Catalogue::parse(&format!("{base}{up}"))
+                .map(|value| value.count())
+                .ok(),
+            Some(12)
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{up}bart walk-up 24 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{up}bart walk-up 25 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn walking_selects_direction_at_shared_phase_and_falls_back() {
+        let entries = BTreeMap::from([
+            ((Player::Marge, Kind::Walk, 0), "forward"),
+            ((Player::Marge, Kind::Walk, 5), "forward-late"),
+            ((Player::Marge, Kind::WalkUp, 0), "away"),
+            ((Player::Marge, Kind::WalkUp, 5), "away-late"),
+            ((Player::Bart, Kind::Walk, 0), "bart"),
+        ]);
+        assert_eq!(
+            walking_entry(&entries, Player::Marge, WalkMotion {
+                away: true,
+                tick: 48
+            }),
+            Some(&"away-late")
+        );
+        assert_eq!(
+            walking_entry(&entries, Player::Marge, WalkMotion {
+                away: false,
+                tick: 48
+            }),
+            Some(&"forward-late")
+        );
+        assert_eq!(
+            walking_entry(&entries, Player::Marge, WalkMotion {
+                away: true,
+                tick: 42
+            }),
+            Some(&"away")
+        );
+        assert_eq!(
+            walking_entry(&entries, Player::Bart, WalkMotion {
+                away: true,
+                tick: 5
+            }),
+            Some(&"bart")
+        );
+    }
+
+    #[test]
+    fn catalogue_enforces_total_pose_budget() {
+        let extra: String = ["marge", "homer", "bart", "lisa"]
+            .into_iter()
+            .flat_map(|name| {
+                (0u8..30).map(move |tick| {
+                    format!("{name} air-attack {tick} {HASH}\n")
+                })
+            })
+            .collect();
+        let text = format!("{}{extra}", complete());
+        assert_eq!(
+            Catalogue::parse(&text).map(|value| value.count()).ok(),
+            Some(MAX_POSES)
+        );
+        assert!(
+            Catalogue::parse(&format!("{text}marge air-attack 30 {HASH}\n"))
+                .is_err()
+        );
     }
 
     #[test]

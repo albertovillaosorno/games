@@ -1243,3 +1243,35 @@ compare all four stations, four directions, both button orders and
 short/long holds, including same-tick release, delayed steering,
 reversal and landing. Remote input uses the same pending-action path.
 Fresh workspace validation passed in run 1795620061793906008-3417164.
+
+Four original upward-walking traces show the cycle continues even
+while displacement is blocked. Marge's held leftward trace likewise
+continues cycling against the boundary until release. The upward
+periods match the previously observed forward cycles: 42 ticks for
+Marge, 40 for Homer and Lisa, and 25 for Bart. Marge's continuous
+right-to-up and up-to-right traces retain their animation phase.
+Her upward diagonals use the rear walking art, with horizontal
+mirroring for Left; downward diagonals use forward walking art.
+An unobstructed diagonal advances two pixels on each axis per tick.
+
+The preview now tracks admitted walking direction and phase together,
+rather than deriving animation from actual displacement. Upward
+movement selects optional walk-up poses at the shared cycle phase.
+Missing upward art falls back to the forward catalogue. Neutral input
+and maneuvers reset the phase. Four-character regressions cover
+direction changes and diagonal displacement; boundary, catalogue
+admission, sequence selection, fallback and capacity tests pass.
+Thirty upward pose crops passed pixel-exact complete-scene import
+and were added to the local 118-pose catalogue; the limit is now
+128 poses with the unchanged 16 KiB text and 128-pixel extent bounds.
+No proprietary captures or pose data are tracked.
+
+Fresh combined native rendering, audio and portable-core validation
+passed in run 1795620578959201048-3493237. The 3,227,240-byte optimized
+preview passed adaptive offscreen OpenGL touch smoke with both the
+118-pose and legacy 88-pose catalogues. Each met the 16.667 ms
+host-work budget on all 600 movement and 60 combat submissions.
+Mean movement and combat submission work with the expanded catalogue
+was 65.173 and 53.995 microseconds, respectively; whole-smoke peak RSS
+was 123,777,024 bytes. These are host-specific offscreen measurements,
+not physical presentation or full original collision parity.

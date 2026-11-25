@@ -220,6 +220,15 @@ pub enum LayoutError {
     SpawnOutside,
 }
 
+/// Consecutive admitted walking input, including blocked movement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WalkMotion {
+    /// Whether the station is walking away from the viewer.
+    pub away: bool,
+    /// Zero-based animation phase, independent of displacement.
+    pub tick: u64,
+}
+
 /// A read-only view of an individual station.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Station {
@@ -235,13 +244,19 @@ pub struct Station {
     pub participation: Participation,
     /// Current foot position.
     pub position: Point,
-    /// Consecutive walking ticks, zero-based; None outside displaced walking.
-    pub walking_ticks: Option<u64>,
+    /// Walking phase and direction, absent outside admitted walking.
+    pub walking: Option<WalkMotion>,
 }
 
 impl Station {
     const fn can_fight(self) -> bool {
         matches!(self.participation, Participation::Playing) && self.health > 0
+    }
+
+    /// Zero-based walking phase, absent outside admitted walking.
+    #[must_use]
+    pub fn walking_ticks(self) -> Option<u64> {
+        self.walking.map(|motion| motion.tick)
     }
 }
 
@@ -348,7 +363,7 @@ impl Slot {
             }
             self.attack_quarters = 0;
             self.station.maneuver = maneuver;
-            self.station.walking_ticks = None;
+            self.station.walking = None;
         }
     }
 
@@ -357,7 +372,7 @@ impl Slot {
         self.action_recovery = Recovery::Ready;
         self.station.health = self.station.health.saturating_sub(1);
         self.station.maneuver = Maneuver::Idle;
-        self.station.walking_ticks = None;
+        self.station.walking = None;
         if self.station.health == 0 {
             self.station.participation = Participation::Continuing {
                 ticks_left: CONTINUE_TICKS,
@@ -461,7 +476,6 @@ impl Slot {
             };
         }
         let (step_x, step_y) = self.maneuver_step(dx, dy);
-        let previous = self.station.position;
         let position = &mut self.station.position;
         position.x = position
             .x
@@ -471,17 +485,19 @@ impl Slot {
             .y
             .saturating_add(step_y)
             .clamp(layout.min.y, layout.max.y);
-        self.station.walking_ticks = if *position == previous
+        self.station.walking = if (dx == 0 && dy == 0)
             || self.station.maneuver != Maneuver::Idle
             || self.action_recovery != Recovery::Ready
         {
             None
         } else {
-            Some(
-                self.station
-                    .walking_ticks
-                    .map_or(0, |elapsed| elapsed.saturating_add(1)),
-            )
+            Some(WalkMotion {
+                away: dy < 0,
+                tick: self
+                    .station
+                    .walking
+                    .map_or(0, |motion| motion.tick.saturating_add(1)),
+            })
         };
     }
 
@@ -498,7 +514,7 @@ impl Slot {
                 maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
-                walking_ticks: None,
+                walking: None,
             },
         }
     }
@@ -519,7 +535,7 @@ impl Slot {
         };
         self.station.facing = Facing::Right;
         self.station.maneuver = Maneuver::Idle;
-        self.station.walking_ticks = None;
+        self.station.walking = None;
         self.station.participation = Participation::Playing;
     }
 }
@@ -1311,14 +1327,14 @@ mod tests {
         assert_eq!(resumed.maneuver, Maneuver::Idle);
         assert_eq!(resumed.position.x, recovered.position.x.saturating_add(2));
         assert_eq!(resumed.position.y, recovered.position.y.saturating_sub(2));
-        assert_eq!(resumed.walking_ticks, Some(0));
+        assert_eq!(resumed.walking_ticks(), Some(0));
     }
 
     fn assert_recovery_pose(recovering: Station, depth: i16) {
         assert_eq!(recovering.facing, Facing::Left);
         assert_eq!(recovering.maneuver, Maneuver::Idle);
         assert_eq!(recovering.position.y, depth);
-        assert_eq!(recovering.walking_ticks, None);
+        assert_eq!(recovering.walking_ticks(), None);
     }
 
     #[test]
@@ -1360,7 +1376,7 @@ mod tests {
             Facing::Right
         };
         assert_eq!(moved.facing, facing);
-        assert_eq!(moved.walking_ticks, walking.then_some(0));
+        assert_eq!(moved.walking_ticks(), walking.then_some(0));
     }
 
     #[test]
@@ -1484,13 +1500,13 @@ mod tests {
         assert_eq!(landed.maneuver, Maneuver::Idle);
         assert_eq!(landed.position, before.position);
         assert_eq!(landed.facing, facing);
-        assert_eq!(landed.walking_ticks, None);
+        assert_eq!(landed.walking_ticks(), None);
         state.input_step(target.saturating_add(1), &[]);
         let walking = station_for(&state, player);
         assert_eq!(walking.position.x, landed.position.x.saturating_sub(2));
         assert_eq!(walking.position.y, landed.position.y.saturating_sub(2));
         assert_eq!(walking.facing, Facing::Left);
-        assert_eq!(walking.walking_ticks, Some(0));
+        assert_eq!(walking.walking_ticks(), Some(0));
     }
 
     fn special_started(player: Player) -> Cabinet {
@@ -1667,7 +1683,7 @@ mod tests {
         assert_eq!(last.position.x, start.x.saturating_sub(22));
         assert_eq!(last.position.y, start.y.saturating_sub(2));
         assert_eq!(last.facing, Facing::Left);
-        assert_eq!(last.walking_ticks, None);
+        assert_eq!(last.walking_ticks(), None);
         verify_stride_stops(state, player, last.position);
     }
 
@@ -1881,26 +1897,55 @@ mod tests {
     }
 
     #[test]
-    fn walking_ticks_track_actual_displacement_and_restart() {
+    // The walk cycle continues while input is held against a boundary.
+    fn walking_ticks_follow_held_input_and_restart() {
         let mut state = four_playing();
         state.input_step(3, &[change(Player::Marge, Control::Right, true)]);
         let [started, _, _, _] = state.stations();
-        assert_eq!(started.walking_ticks, Some(0));
+        assert_eq!(started.walking_ticks(), Some(0));
         state.input_step(4, &[]);
         let [moving, _, _, _] = state.stations();
-        assert_eq!(moving.walking_ticks, Some(1));
+        assert_eq!(moving.walking_ticks(), Some(1));
         state.input_step(5, &[change(Player::Marge, Control::Left, true)]);
         let [opposed, _, _, _] = state.stations();
-        assert_eq!(opposed.walking_ticks, None);
+        assert_eq!(opposed.walking_ticks(), None);
         state.input_step(6, &[change(Player::Marge, Control::Right, false)]);
         let [restarted, _, _, _] = state.stations();
-        assert_eq!(restarted.walking_ticks, Some(0));
+        assert_eq!(restarted.walking_ticks(), Some(0));
         for tick in 7..300 {
             state.input_step(tick, &[]);
         }
         let [blocked, _, _, _] = state.stations();
         assert_eq!(blocked.position.x, StreetLayout::DOWNTOWN.min.x);
-        assert_eq!(blocked.walking_ticks, None);
+        assert_eq!(blocked.walking_ticks(), Some(293));
+        state.input_step(300, &[change(Player::Marge, Control::Left, false)]);
+        assert_eq!(station_for(&state, Player::Marge).walking, None);
+    }
+
+    #[test]
+    fn walking_phase_survives_direction_changes() {
+        for player in Player::ALL {
+            assert_walking_direction_changes(player);
+        }
+    }
+
+    fn assert_walking_direction_changes(player: Player) {
+        let mut state = four_playing();
+        state.input_step(3, &[change(player, Control::Right, true)]);
+        let started = station_for(&state, player);
+        assert_eq!(started.walking, Some(WalkMotion { away: false, tick: 0 }));
+        state.input_step(4, &[change(player, Control::Up, true)]);
+        let diagonal = station_for(&state, player);
+        assert_eq!(diagonal.walking, Some(WalkMotion { away: true, tick: 1 }));
+        assert_eq!(diagonal.position.x, started.position.x.saturating_add(2));
+        assert_eq!(diagonal.position.y, started.position.y.saturating_sub(2));
+        state.input_step(5, &[change(player, Control::Up, false)]);
+        assert_eq!(
+            station_for(&state, player).walking,
+            Some(WalkMotion { away: false, tick: 2 })
+        );
+        state.input_step(6, &[change(player, Control::Right, false)]);
+        assert_eq!(station_for(&state, player).walking, None);
     }
 
     #[test]
@@ -1929,14 +1974,14 @@ mod tests {
         let [recovering, ..] = state.stations();
         assert_eq!(recovering.maneuver, Maneuver::Idle);
         assert_eq!(recovering.position, position);
-        assert_eq!(recovering.walking_ticks, None);
+        assert_eq!(recovering.walking_ticks(), None);
         for tick in 21..=23 {
             state.input_step(tick, &[]);
         }
         let [walking, ..] = state.stations();
         assert_eq!(walking.maneuver, Maneuver::Idle);
         assert_eq!(walking.position.x, position.x.saturating_add(2));
-        assert_eq!(walking.walking_ticks, Some(0));
+        assert_eq!(walking.walking_ticks(), Some(0));
     }
 
     fn assert_maneuvers_at_end(state: &Cabinet, position: Point) {
