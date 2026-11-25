@@ -33,8 +33,11 @@
 
 use std::ffi::OsString;
 use std::io::{Write as _, stdout};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+pub(crate) const NATIVE_TARGET: &str = "x86_64-unknown-linux-gnu";
+pub(crate) const PREVIEW_FEATURE: &str = "native-preview";
 
 /// Buildable title in the current workspace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,7 +47,7 @@ pub enum Title {
 }
 
 impl Title {
-    const fn binary(self) -> &'static str {
+    pub(crate) const fn binary(self) -> &'static str {
         match self {
             Self::SimpsonsArcade => "simpsons-arcade",
         }
@@ -59,14 +62,43 @@ impl Title {
             "--locked",
             "--release",
             "--target",
-            "x86_64-unknown-linux-gnu",
+            NATIVE_TARGET,
             "--package",
             package,
             "--bin",
             self.binary(),
             "--features",
-            "native-preview",
+            PREVIEW_FEATURE,
         ]
+    }
+
+    pub(crate) fn compile(self, root: &Path) -> Result<PathBuf, String> {
+        if !cfg!(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            target_env = "gnu"
+        )) {
+            return Err(String::from("requires an x86-64 GNU/Linux host"));
+        }
+        let target = root.join("target");
+        let status = Command::new("cargo")
+            .current_dir(root)
+            .args(self.cargo_args())
+            .arg("--target-dir")
+            .arg(&target)
+            .status()
+            .map_err(|error| format!("launch Cargo: {error}"))?;
+        if !status.success() {
+            return Err(format!("title compilation failed: {status}"));
+        }
+        let executable = target
+            .join(NATIVE_TARGET)
+            .join("release")
+            .join(self.binary());
+        if !executable.is_file() {
+            return Err(String::from("compiled title executable is missing"));
+        }
+        Ok(executable)
     }
 
     /// Admit a known title and the optional native target.
@@ -92,38 +124,17 @@ impl Title {
     ///
     /// Returns an error for an unsupported host or an unsuccessful build.
     pub fn run(self) -> Result<(), String> {
-        if !cfg!(all(
-            target_os = "linux",
-            target_arch = "x86_64",
-            target_env = "gnu"
-        )) {
-            return Err(String::from("requires an x86-64 GNU/Linux host"));
-        }
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .map_err(|error| format!("workspace path: {error}"))?;
-        let target = root.join("target");
-        let status = Command::new("cargo")
-            .current_dir(&root)
-            .args(self.cargo_args())
-            .arg("--target-dir")
-            .arg(&target)
-            .status()
-            .map_err(|error| format!("launch Cargo: {error}"))?;
-        if !status.success() {
-            return Err(format!("title compilation failed: {status}"));
-        }
-        let executable = target
-            .join("x86_64-unknown-linux-gnu")
-            .join("release")
-            .join(self.binary());
-        if !executable.is_file() {
-            return Err(String::from("compiled title executable is missing"));
-        }
+        let executable = self.compile(&workspace_root()?)?;
         writeln!(stdout().lock(), "Executable: {}", executable.display())
             .map_err(|error| error.to_string())
     }
+}
+
+pub(crate) fn workspace_root() -> Result<PathBuf, String> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .map_err(|error| format!("workspace path: {error}"))
 }
 
 #[cfg(test)]

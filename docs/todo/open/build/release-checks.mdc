@@ -25,4 +25,13 @@ Verify build outputs, portability and distribution boundaries.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+The native prototype package now includes the project licence and notices,
+a target-filtered locked Cargo dependency inventory (34 packages, including
+six local workspace crates), and 55 upstream licence or notice texts.
+The inventory includes normal and build dependency edges but excludes
+dev-only dependencies. The local package has no original game assets,
+no bundled system libraries and one authored release executable.
+The release hash and direct dynamic dependencies were checked and the
+packaged executable passed a hidden native smoke with separate assets.
+This is not a legal distribution audit or cross-host compatibility test.
+Portable Linux, Android and Web builds remain unverified.

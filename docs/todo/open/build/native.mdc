@@ -30,3 +30,19 @@ executable or library. The hidden native four-player movement smoke passed
 with four verified local art bundles. This verifies local startup, not
 portable distribution, independent asset discovery, saves or complete
 gameplay. Those remain open.
+
+The native `package TITLE OUTPUT` command now compiles the admitted
+title, preflights bounded executable and licence sources, and writes
+them into a new private directory. It rejects an existing destination,
+unknown title, wrong ELF target and unreviewed dependency licence
+metadata. Original media, imported canonical assets and system
+libraries are not bundled. An I/O failure can leave a partial directory;
+the receipt is written only after the other files.
+
+The first local package contained a 984,632-byte x86-64 ELF and 59
+non-executable files. Its recorded SHA-256 matched independent hashing.
+Reinvocation at the same destination was rejected. From the package
+directory, the hidden touch, pose, enemy and dummy-audio smoke passed
+using explicitly selected external bundles. The package remains local
+to the development host. Linux ABI portability, automatic local asset
+discovery, save paths and complete gameplay remain open.

@@ -25,6 +25,8 @@ games-importer.workspace = true
 games-platform-storage.workspace = true
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+serde.workspace = true
+serde_json.workspace = true
 games = { workspace = true, optional = true }
 games-platform = { workspace = true, optional = true }
 games-platform-audio = { workspace = true, optional = true }

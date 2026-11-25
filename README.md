@@ -81,9 +81,19 @@ cargo run --locked -p games-build -- build simpsons-arcade
 ```
 
 The optional target is `linux-x86-64`; other targets and unknown titles are
-rejected. This produces a release executable, not a portable distribution
-package or a game containing original assets. The title requires explicit
-local art bundles (see its TODO). Keep the engine modular, dependency
+rejected. This produces a release executable without original assets.
+Create a local prototype package in a new directory with:
+
+```sh
+cargo run --locked -p games-build -- package simpsons-arcade .temp/local-game
+```
+
+The package includes the executable, project notices, selected Cargo
+dependency licence texts and an executable identity receipt. It requires
+compatible system libraries, excludes all game assets and is not yet a
+portable release. Supply a trusted output parent that already exists.
+The title requires explicit local art bundles (see its TODO). Keep the
+engine modular, dependency
 versions centralised and game code limited to unique behaviour.
 All Rust code and development tools live under `crates/`.
 Keep behavioural tests inline in their source modules. Use one TODO.md per

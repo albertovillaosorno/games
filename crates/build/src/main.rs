@@ -77,6 +77,10 @@ pub mod render_check;
 /// Compile one admitted independently authored title.
 pub mod title_build;
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+/// Package the selected authored native executable.
+pub mod title_package;
+
 use std::env;
 use std::ffi::OsString;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -103,6 +107,7 @@ use games_platform_storage::file::snapshot;
 
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
+    "GNU/Linux: games-build package TITLE OUTPUT\n",
     "games-build zip verify PATH TITLE REV SHA256 ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
@@ -235,6 +240,8 @@ enum Command {
     Import(AssetSelection, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     ObjectCheck(Machine, PathBuf, PathBuf),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    PackageTitle(title_build::Title, PathBuf),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     PaletteCheck(Machine, PathBuf, PathBuf),
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -273,6 +280,16 @@ impl Command {
             (Some("build"), Some(title)) => Ok(Self::BuildTitle(
                 title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
             )),
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            (Some("package"), Some(title)) => {
+                let [output] =
+                    <[OsString; 1]>::try_from(args.collect::<Vec<_>>())
+                        .map_err(|_args| String::from(USAGE))?;
+                Ok(Self::PackageTitle(
+                    title_build::Title::parse(title, &[])?,
+                    output.into(),
+                ))
+            },
             (Some("zip"), Some("verify")) => {
                 Ok(Self::Verify(Arguments::parse(args.collect())?))
             },
@@ -477,6 +494,10 @@ impl Command {
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::PackageTitle(title, output) => {
+                title_package::run(title, &output)
+            },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::ArtPublish(machine, args) => args.run(machine),
             #[cfg(all(
@@ -720,6 +741,26 @@ mod tests {
             assert!(
                 Command::parse(invalid.into_iter().map(OsString::from))
                     .is_err()
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn package_command_requires_admitted_title_and_output() {
+        let args = ["package", "simpsons-arcade", "local-package"];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::PackageTitle(title_build::Title::SimpsonsArcade, _))
+        ));
+        let invalid: [&[&str]; 3] = [
+            &["package", "simpsons-arcade"],
+            &["package", "metal-slug", "out"],
+            &["package", "simpsons-arcade", "out", "extra"],
+        ];
+        for candidate in invalid {
+            assert!(
+                Command::parse(candidate.iter().map(OsString::from)).is_err()
             );
         }
     }
