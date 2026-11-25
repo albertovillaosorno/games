@@ -549,11 +549,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn opt_in_touch_controller_smoke() -> Result<(), RenderError> {
-        if env::var_os("GAMES_NATIVE_RENDER_SMOKE").is_none() {
-            return Ok(());
-        }
+    fn verify_touch_controller() -> Result<(), RenderError> {
         let profiles = DEFAULT_PROFILES;
         let layout = controller_layout(&profiles, true)?;
         let mut window = NativeWindow::open(
@@ -627,6 +623,7 @@ mod tests {
             },
         )?;
         drop(window);
+        verify_touch_controller()?;
         super::super::station_hud::tests::remote_station_indicators_smoke()
     }
 }

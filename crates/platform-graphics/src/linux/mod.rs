@@ -456,6 +456,7 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
+    use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
@@ -861,6 +862,7 @@ mod tests {
             "repeated discovery attached an existing controller",
         )?;
         verify_unknown_controller(&mut startup.input)?;
+        verify_touch_opt_in(&mut startup.input)?;
         let event = Event::KeyDown {
             timestamp: 0,
             window_id: window.canvas.window().id(),
@@ -887,6 +889,54 @@ mod tests {
         Err(RenderError::Backend(String::from(
             "queued native key did not reach the input router",
         )))
+    }
+
+    fn verify_touch_opt_in(input: &mut NativeInput) -> Result<(), RenderError> {
+        let down = Event::FingerDown {
+            timestamp: 0,
+            touch_id: 3,
+            finger_id: 4,
+            x: 0.5,
+            y: 0.5,
+            dx: 0.0,
+            dy: 0.0,
+            pressure: 1.0,
+        };
+        require(
+            input.translate(&down)?.is_none(),
+            "touch enabled by default",
+        )?;
+        input.enable_touch();
+        let id = ContactId { device: 3, finger: 4 };
+        require(
+            input.translate(&down)?
+                == Some(HostEvent::Input(InputEvent::Contact {
+                    id,
+                    phase: ContactPhase::Down(TouchPoint {
+                        x: 32_768,
+                        y: 32_768,
+                    }),
+                })),
+            "enabled native touch did not deliver contact",
+        )?;
+        let up = Event::FingerUp {
+            timestamp: 0,
+            touch_id: 3,
+            finger_id: 4,
+            x: 0.5,
+            y: 0.5,
+            dx: 0.0,
+            dy: 0.0,
+            pressure: 0.0,
+        };
+        require(
+            input.translate(&up)?
+                == Some(HostEvent::Input(InputEvent::Contact {
+                    id,
+                    phase: ContactPhase::Up,
+                })),
+            "native touch release did not preserve contact identity",
+        )
     }
 
     fn verify_unknown_controller(

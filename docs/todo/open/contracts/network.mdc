@@ -539,3 +539,22 @@ exercise remapped simultaneous contacts, drag-off and focus-loss releases,
 disabled touch and excluded Pause geometry. The opt-in native rendering
 smoke also passes on isolated offscreen OpenGL ES. Actual touchscreen
 hardware and physical multi-device LAN remain unverified.
+
+An optimized native Xvfb loopback at 1f716d0 opened a touch-enabled
+controller at 640x608 and two default controllers at 640x352. A visible
+capture of the controller showed the Start glyph and background in the
+excluded Pause region. All remote seats joined and moved with keyboard
+input, released movement, and survived one controller's disconnect and
+same-identity rejoin. The host recorded 10,891 successful submissions
+and 18 remote decode-age samples before a menu-driven exit. The first
+attempt could not locate the host window; the successful retry explicitly
+selected SDL's X11 driver. The diagnostic did not inject touchscreen
+events or use physical touch hardware.
+The optimized launcher also rejected a profile selecting station 2
+and duplicate touch options before opening a controller connection.
+
+Native touch rendering and projection now run inside the existing
+single-thread native controller smoke sequence to respect SDL thread
+affinity even under parallel test execution. The platform smoke also
+checks disabled and enabled native translation of constructed finger
+events and the preserved contact identity on release.
