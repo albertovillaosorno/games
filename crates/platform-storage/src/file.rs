@@ -36,12 +36,16 @@ use std::os::fd::{AsFd, AsRawFd as _, OwnedFd};
 use std::path::Path;
 
 use nix::errno::Errno;
-use nix::fcntl::{AtFlags, OFlag, open, openat};
-use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat};
+use nix::fcntl::{OFlag, open, openat};
+use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
 use nix::unistd::geteuid;
 
 pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
+    .union(OFlag::O_NOFOLLOW)
+    .union(OFlag::O_CLOEXEC);
+
+const PIN_FLAGS: OFlag = OFlag::O_PATH
     .union(OFlag::O_NOFOLLOW)
     .union(OFlag::O_CLOEXEC);
 
@@ -83,17 +87,21 @@ pub fn snapshot(
     path: &Path,
     maximum: NonZeroU64,
 ) -> Result<Vec<u8>, FileReadError> {
-    let pinned = open(
-        path,
-        OFlag::O_PATH | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-        Mode::empty(),
-    )?;
-    let before = fstat(&pinned)?;
-    if !regular(&before) {
+    let pinned = open(path, PIN_FLAGS, Mode::empty())?;
+    read_pinned(&pinned, maximum.get(), regular)
+}
+
+fn read_pinned(
+    pinned: &OwnedFd,
+    maximum: u64,
+    admitted: fn(&FileStat) -> bool,
+) -> Result<Vec<u8>, FileReadError> {
+    let before = fstat(pinned)?;
+    if !admitted(&before) {
         return Err(FileReadError::UnsafeFile);
     }
     let size = file_size(&before)?;
-    if size > maximum.get() {
+    if size > maximum {
         return Err(FileReadError::TooLarge);
     }
     let descriptor_path = format!("/proc/self/fd/{}", pinned.as_raw_fd());
@@ -103,17 +111,17 @@ pub fn snapshot(
         Mode::empty(),
     )?;
     let after = fstat(&fd)?;
-    if !regular(&after)
+    if !admitted(&after)
         || before.st_dev != after.st_dev
         || before.st_ino != after.st_ino
         || before.st_size != after.st_size
     {
         return Err(FileReadError::UnsafeFile);
     }
-    read_bounded_descriptor(fd, size, maximum.get())
+    read_bounded_descriptor(fd, size, maximum)
 }
 
-pub(crate) fn read_bounded_descriptor(
+fn read_bounded_descriptor(
     fd: OwnedFd,
     size: u64,
     maximum: u64,
@@ -138,11 +146,11 @@ pub(crate) fn read_bounded_descriptor(
     }
 }
 
-pub(crate) const fn regular(stat: &FileStat) -> bool {
+const fn regular(stat: &FileStat) -> bool {
     stat.st_mode & SFlag::S_IFMT.bits() == SFlag::S_IFREG.bits()
 }
 
-pub(crate) fn file_size(stat: &FileStat) -> Result<u64, FileReadError> {
+fn file_size(stat: &FileStat) -> Result<u64, FileReadError> {
     u64::try_from(stat.st_size).map_err(|_error| FileReadError::TooLarge)
 }
 
@@ -151,9 +159,11 @@ pub(crate) fn trusted_directory(fd: impl AsFd) -> nix::Result<bool> {
     Ok(stat.st_mode & 0o022 == 0 && stat.st_uid == geteuid().as_raw())
 }
 
+// A zero-link inode can be the complete previous file after an atomic rename.
+// Multiple links remain inadmissible, as does any untrusted owner or mode.
 pub(crate) fn private_regular(stat: &FileStat) -> bool {
     regular(stat)
-        && stat.st_nlink == 1
+        && stat.st_nlink <= 1
         && stat.st_uid == geteuid().as_raw()
         && stat.st_mode & 0o022 == 0
 }
@@ -166,27 +176,8 @@ pub(crate) fn read_regular(
     if !trusted_directory(parent)? {
         return Err(FileReadError::UnsafeFile);
     }
-    let before = fstatat(parent, name, AtFlags::AT_SYMLINK_NOFOLLOW)?;
-    if !private_regular(&before) {
-        return Err(FileReadError::UnsafeFile);
-    }
-    let fd = openat(
-        parent,
-        name,
-        OFlag::O_RDONLY
-            | OFlag::O_NOFOLLOW
-            | OFlag::O_NONBLOCK
-            | OFlag::O_CLOEXEC,
-        Mode::empty(),
-    )?;
-    let stat = fstat(&fd)?;
-    if !private_regular(&stat)
-        || stat.st_dev != before.st_dev
-        || stat.st_ino != before.st_ino
-    {
-        return Err(FileReadError::UnsafeFile);
-    }
-    read_bounded_descriptor(fd, file_size(&stat)?, maximum)
+    let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())?;
+    read_pinned(&pinned, maximum, private_regular)
 }
 
 #[cfg(test)]
@@ -203,6 +194,21 @@ mod tests {
         condition
             .then_some(())
             .ok_or(FileReadError::Io(io::ErrorKind::InvalidData))
+    }
+
+    #[test]
+    fn pinned_regular_survives_atomic_replacement() -> Result<(), FileReadError>
+    {
+        let root = TestRoot::new()?;
+        let directory = open(&root.path, DIRECTORY_FLAGS, Mode::empty())?;
+        let slot = root.path.join("slot");
+        let next = root.path.join("next");
+        fs::write(&slot, b"old")?;
+        let pinned = openat(&directory, "slot", PIN_FLAGS, Mode::empty())?;
+        fs::write(&next, b"new")?;
+        fs::rename(next, slot)?;
+        require(read_pinned(&pinned, 3, private_regular)? == b"old")?;
+        require(read_regular(&directory, "slot", 3)? == b"new")
     }
 
     #[test]

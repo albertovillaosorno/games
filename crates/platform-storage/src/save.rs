@@ -101,6 +101,7 @@ pub struct SaveReceipt {
 /// The caller chooses an existing title-specific directory whose ancestors
 /// are trusted. Other processes running as the same user remain trusted.
 /// Concurrent writes to one slot have last-publication-wins semantics.
+/// Loads pin a complete file before reading through trusted kernel procfs.
 #[derive(Debug)]
 pub struct SaveStore {
     directory: File,
@@ -246,10 +247,49 @@ mod tests {
     use super::*;
     use crate::bundle::TestRoot;
 
+    fn publish_replacements(
+        store: &SaveStore,
+        first: &[u8],
+        second: &[u8],
+    ) -> Result<(), SaveError> {
+        for payload in [second, first].into_iter().cycle().take(32) {
+            require(store.store(0, payload)?.durability.is_ok())?;
+        }
+        Ok(())
+    }
+
     fn require(condition: bool) -> Result<(), SaveError> {
         condition
             .then_some(())
             .ok_or(SaveError::Io(io::ErrorKind::InvalidData))
+    }
+
+    #[test]
+    fn concurrent_loads_observe_only_complete_replacements()
+    -> Result<(), SaveError> {
+        let root = TestRoot::new()?;
+        let maximum = NonZeroU64::new(4096).unwrap_or(NonZeroU64::MIN);
+        let store = SaveStore::open(&root.path, maximum)?;
+        let first = [0x12; 4096];
+        let second = [0x34; 4096];
+        require(store.store(0, &first)?.durability.is_ok())?;
+        let barrier = Barrier::new(2);
+        thread::scope(|scope| {
+            let writer = scope.spawn(|| -> Result<(), SaveError> {
+                let _ready = barrier.wait();
+                publish_replacements(&store, &first, &second)
+            });
+            let _ready = barrier.wait();
+            for _index in 0u8..128 {
+                let payload = store.load(0)?;
+                require(payload == first || payload == second)?;
+            }
+            writer
+                .join()
+                .map_err(|_error| SaveError::Io(io::ErrorKind::Other))?
+        })?;
+        require(store.load(0)? == first)?;
+        require(fs::read_dir(&root.path)?.count() == 1)
     }
 
     #[test]

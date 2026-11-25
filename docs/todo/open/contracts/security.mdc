@@ -114,3 +114,14 @@ cover rejection before decoding an excess malformed record, exact
 count and byte limits, and unchanged version-one serialized bytes.
 The input remains bounded by the original manifest byte limit; this
 does not establish a sandbox or independently authenticate metadata.
+
+The canonical bundle and save readers now share the metadata-only inode
+pin used for source snapshots. A file must pass admission before it is
+opened for content through trusted kernel procfs; the reopened descriptor
+must still have the same identity and length. This avoids a second
+lookup of the untrusted filename. A previously pinned file may have
+zero links after atomic replacement; additional hardlinks remain
+inadmissible. Tests pin a prior file across a rename and interleave
+128 save loads with 32 atomic replacements, requiring complete valid
+payloads and no staging residue. Native reads now require trusted
+procfs; Android and power-loss behavior are not established.

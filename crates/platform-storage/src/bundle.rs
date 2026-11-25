@@ -97,6 +97,7 @@ impl From<io::Error> for BundleError {
 /// The caller supplies a trusted manifest digest, not one taken from
 /// untrusted metadata. A digest alone does not authenticate its origin.
 /// Host-controlled ancestors must remain trusted; payloads are individually
+/// opened through trusted kernel procfs after metadata-only pinning, then
 /// verified on demand, not assumed valid because their filenames match.
 #[derive(Debug)]
 pub struct CanonicalBundle {
