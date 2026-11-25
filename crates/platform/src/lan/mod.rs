@@ -149,12 +149,20 @@ impl DeadlineSocket {
 }
 
 trait TimedStream {
+    fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize>;
     fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize>;
     fn reset_deadline(&mut self, deadline: Instant);
     fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize>;
 }
 
 impl TimedStream for DeadlineSocket {
+    fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.socket.set_nonblocking(true)?;
+        let result = self.socket.read(bytes);
+        self.socket.set_nonblocking(false)?;
+        result
+    }
+
     fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         self.prepare_read()?;
         self.socket.read(bytes)
@@ -171,8 +179,73 @@ impl TimedStream for DeadlineSocket {
 }
 
 #[derive(Debug)]
+struct FrameReader {
+    filled: usize,
+    header: [u8; 4],
+    payload: Option<Vec<u8>>,
+}
+
+impl FrameReader {
+    fn advance<Read>(
+        &mut self,
+        config: LanConfig,
+        read: Read,
+    ) -> io::Result<Option<Vec<u8>>>
+    where
+        Read: FnOnce(&mut [u8]) -> io::Result<usize>,
+    {
+        let buffer = match &mut self.payload {
+            Some(payload) => payload.as_mut_slice(),
+            None => self.header.as_mut_slice(),
+        };
+        let target = buffer
+            .get_mut(self.filled..)
+            .ok_or(ErrorKind::InvalidData)?;
+        let count = read(target)?;
+        if count == 0 {
+            return Err(ErrorKind::UnexpectedEof.into());
+        }
+        if count > target.len() {
+            return Err(ErrorKind::InvalidData.into());
+        }
+        self.filled = self
+            .filled
+            .checked_add(count)
+            .ok_or(ErrorKind::InvalidData)?;
+        if self.filled < buffer.len() {
+            return Ok(None);
+        }
+        self.filled = 0;
+        if let Some(frame) = self.payload.take() {
+            return Ok(Some(frame));
+        }
+        let length = config.frame_length(u32::from_be_bytes(self.header))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_error| ErrorKind::OutOfMemory)?;
+        bytes.resize(length, 0);
+        if bytes.is_empty() {
+            return Ok(Some(bytes));
+        }
+        self.payload = Some(bytes);
+        Ok(None)
+    }
+
+    const fn new() -> Self {
+        Self {
+            filled: 0,
+            header: [0; 4],
+            payload: None,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct FrameChannel<Stream> {
     config: LanConfig,
+    read_deadline: Option<Instant>,
+    reader: FrameReader,
     stream: Option<Stream>,
 }
 
@@ -180,15 +253,87 @@ impl<Stream> FrameChannel<Stream>
 where
     Stream: TimedStream,
 {
+    fn close(&mut self) {
+        drop(self.stream.take());
+        self.reader = FrameReader::new();
+        self.read_deadline = None;
+    }
+
     const fn new(stream: Stream, config: LanConfig) -> Self {
         Self {
             config,
+            read_deadline: None,
+            reader: FrameReader::new(),
             stream: Some(stream),
         }
     }
 
+    fn poll_receive(&mut self) -> io::Result<Option<Vec<u8>>> {
+        let result = self.poll_receive_inner();
+        if result.is_err() {
+            self.close();
+        }
+        result
+    }
+
+    fn poll_receive_inner(&mut self) -> io::Result<Option<Vec<u8>>> {
+        let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
+        if let Some(deadline) = self.read_deadline {
+            let _time = remaining(deadline)?;
+        }
+        match self
+            .reader
+            .advance(self.config, |bytes| stream.poll_read_chunk(bytes))
+        {
+            Ok(Some(frame)) => {
+                self.read_deadline = None;
+                Ok(Some(frame))
+            },
+            Ok(None) => {
+                if self.read_deadline.is_none() {
+                    self.read_deadline = Some(self.config.deadline()?);
+                }
+                Ok(None)
+            },
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(None)
+            },
+            Err(error) => Err(error),
+        }
+    }
+
     fn receive(&mut self) -> io::Result<Vec<u8>> {
-        self.transfer(receive_frame)
+        let result = self.receive_blocking();
+        if result.is_err() {
+            self.close();
+        }
+        result
+    }
+
+    fn receive_blocking(&mut self) -> io::Result<Vec<u8>> {
+        let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
+        let deadline = self.read_deadline.unwrap_or(self.config.deadline()?);
+        stream.reset_deadline(deadline);
+        loop {
+            let _time = remaining(deadline)?;
+            match self
+                .reader
+                .advance(self.config, |bytes| stream.read_chunk(bytes))
+            {
+                Ok(Some(frame)) => {
+                    self.read_deadline = None;
+                    return Ok(frame);
+                },
+                Ok(None) => {},
+                Err(error) if error.kind() == ErrorKind::Interrupted => {},
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -214,7 +359,7 @@ where
         stream.reset_deadline(self.config.deadline()?);
         let result = operation(stream, self.config);
         if result.is_err() {
-            drop(self.stream.take());
+            self.close();
         }
         result
     }
@@ -264,42 +409,6 @@ const fn private_address(address: SocketAddr) -> bool {
                 || ip.is_unicast_link_local()
         },
     }
-}
-
-fn read_all<Stream>(stream: &mut Stream, mut bytes: &mut [u8]) -> io::Result<()>
-where
-    Stream: TimedStream,
-{
-    while !bytes.is_empty() {
-        match stream.read_chunk(bytes) {
-            Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
-            Ok(count) => {
-                bytes = bytes.get_mut(count..).ok_or(ErrorKind::InvalidData)?;
-            },
-            Err(error) if error.kind() == ErrorKind::Interrupted => {},
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
-fn receive_frame<Stream>(
-    stream: &mut Stream,
-    config: LanConfig,
-) -> io::Result<Vec<u8>>
-where
-    Stream: TimedStream,
-{
-    let mut header = [0; 4];
-    read_all(stream, &mut header)?;
-    let length = config.frame_length(u32::from_be_bytes(header))?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_error| ErrorKind::OutOfMemory)?;
-    bytes.resize(length, 0);
-    read_all(stream, &mut bytes)?;
-    Ok(bytes)
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {

@@ -132,3 +132,18 @@ passed in run 1795584885193639323-3848985. The worker serialises transfers:
 idle receive requests still use the transport deadline and disconnect,
 so callers must submit protocol-expected receives. Independent peer
 scheduling and physical LAN play remain unverified.
+
+The caller-driven host worker now also supports an incremental nonblocking
+receive operation. An idle authenticated peer does not consume a transfer
+timeout or prevent unrelated queued host commands. Incomplete plaintext
+headers and payloads retain one deadline across polls; an oversized header,
+EOF or expired partial frame closes the connection. A blocking receive can
+resume the same partial frame without extending its deadline. Empty frames
+are distinct from pending polls. Loopback tests verify partial transfers,
+idle polling, schema rejection without losing a subsequent valid frame,
+transport-loss slot reservation, and same-certificate rejoin. Fresh
+validation passed in run 1795586058926200097-4046029.
+
+Polling is explicitly caller-driven; authentication and outbound sends
+still use serialised bounded operations. Physical LAN and an integrated
+playable host remain open.

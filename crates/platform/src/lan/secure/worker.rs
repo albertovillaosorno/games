@@ -56,6 +56,8 @@ pub enum HostOperation {
     Disconnect(u64),
     /// Join a directly connected local controller.
     JoinLocal(u64),
+    /// Poll one frame without blocking on an idle or incomplete peer.
+    PollReceive(u64),
     /// Receive one protocol-expected frame; an idle timeout disconnects.
     Receive(u64),
     /// Reconnect a previously reserved local controller.
@@ -96,6 +98,8 @@ pub enum HostOutcome<Message> {
         /// Title-defined decoded message.
         value: Message,
     },
+    /// No complete frame available on the polled peer.
+    Pending,
 }
 
 /// Failure of an operation performed by the worker.
@@ -163,8 +167,8 @@ struct Channels<Message> {
 /// Only the worker performs authentication, schema decoding and transfers.
 /// Requests and completions each have the supplied finite capacity. One
 /// operation is in flight at a time. A trusted title codec must be bounded
-/// and nonblocking. Quiet clients should not receive unsolicited read
-/// requests: the existing transport treats a receive timeout as disconnect.
+/// and nonblocking. Use `PollReceive` for quiet clients; blocking receive
+/// requests still treat a receive timeout as a disconnect.
 ///
 /// Shutdown cancels queued operations and joins the worker. It may wait for
 /// an in-flight bounded transfer; do not shut down on the rendering path.
@@ -319,6 +323,12 @@ where
         HostOperation::JoinLocal(peer) => {
             session.join_local(peer)?;
             Ok(HostOutcome::Applied)
+        },
+        HostOperation::PollReceive(peer) => {
+            Ok(session.poll_receive(peer, codec)?.map_or_else(
+                || HostOutcome::Pending,
+                |value| HostOutcome::Message { peer, value },
+            ))
         },
         HostOperation::Receive(peer) => {
             let value = session.receive(peer, codec)?;
@@ -586,6 +596,40 @@ mod tests {
             ) && matches!(completion(&worker, 3)?, Ok(HostOutcome::Applied)),
             "commands complete in submission order",
         )?;
+        worker.shutdown()
+    }
+
+    #[test]
+    fn idle_peer_poll_allows_other_commands_and_future_messages()
+    -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, config()?, keys.server.clone())?;
+        let session =
+            HostSession::new(session_config(true), &[(keys.client_id, 2)])
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
+        let mut client = authenticate(&worker, &listener, &keys, 1)?;
+        submit(&worker, 2, HostOperation::PollReceive(2))?;
+        require(
+            matches!(completion(&worker, 2)?, Ok(HostOutcome::Pending)),
+            "idle peer is pending",
+        )?;
+        submit(&worker, 3, HostOperation::JoinLocal(1))?;
+        require(
+            matches!(completion(&worker, 3)?, Ok(HostOutcome::Applied)),
+            "other player admitted while LAN peer is idle",
+        )?;
+        client.send(b"M\x09")?;
+        poll_accept(|| {
+            submit(&worker, 4, HostOperation::PollReceive(2))?;
+            match completion(&worker, 4)? {
+                Ok(HostOutcome::Pending) => Ok(None),
+                Ok(HostOutcome::Message { peer: 2, value: 9 }) => Ok(Some(())),
+                result => Err(io::Error::other(format!("{result:?}"))),
+            }
+        })?;
         worker.shutdown()
     }
 }

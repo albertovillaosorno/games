@@ -64,6 +64,9 @@ impl From<SessionError> for HostError {
     }
 }
 
+/// Result of polling a peer for a complete, schema-checked message.
+pub type HostPoll<Message> = Result<Option<Message>, HostError>;
+
 /// A host-owned roster with one authenticated channel per active LAN player.
 ///
 /// Admission uses only the verified certificate, never a client-supplied ID.
@@ -172,6 +175,31 @@ impl HostSession {
         })
     }
 
+    /// Poll one authenticated peer without disconnecting an idle channel.
+    ///
+    /// # Errors
+    /// Rejects unknown peers, schema failures and invalid or expired frames.
+    pub fn poll_receive<Codec>(
+        &mut self,
+        peer: u64,
+        codec: &Codec,
+    ) -> HostPoll<Codec::Message>
+    where
+        Codec: MessageSchema,
+    {
+        let stream = self
+            .channels
+            .get_mut(&peer)
+            .ok_or(SessionError::UnknownPeer)?;
+        let bytes = stream
+            .poll_receive()
+            .map_err(|error| self.failed_transfer(peer, &error))?;
+        bytes
+            .map(|frame| self.roster.decode(peer, &frame, codec))
+            .transpose()
+            .map_err(HostError::from)
+    }
+
     /// Receive and schema-check one frame for an authenticated LAN identity.
     ///
     /// # Errors
@@ -261,7 +289,7 @@ mod tests {
     use games::network::SessionError;
 
     use super::super::super::tests::{
-        LOOPBACK, TestCodec, config, require, session_config,
+        LOOPBACK, TestCodec, config, poll_accept, require, session_config,
     };
     use super::super::tests::{
         authority, client_credentials, credentials, pair,
@@ -468,6 +496,65 @@ mod tests {
         host_ok(host.reconnect_local(1))?;
         host_ok(host.remove(2))?;
         host_ok(host.join_local(3))
+    }
+
+    #[test]
+    fn polling_preserves_schema_and_reconnect_policy() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let mut host = host_ok(HostSession::new(session_config(true), &[(
+            keys.client_id,
+            2,
+        )]))?;
+        host_ok(host.join_local(1))?;
+        let (incoming, outgoing) =
+            pair(&listener, settings, &keys.client, "games.test")?;
+        require(host_ok(host.admit(incoming?))? == 2, "approved peer")?;
+        let mut remote = outgoing?;
+        remote.send(b"bad")?;
+        let rejected = poll_accept(|| {
+            Ok(match host.poll_receive(2, &TestCodec) {
+                Ok(None) => None,
+                result => Some(result),
+            })
+        })?;
+        require(
+            rejected == Err(HostError::Session(SessionError::MalformedMessage)),
+            "polling applies schema before delivery",
+        )?;
+        remote.send(b"M\x07")?;
+        require(
+            poll_accept(|| host_ok(host.poll_receive(2, &TestCodec)))? == 7,
+            "schema rejection preserves the channel",
+        )?;
+        drop(remote);
+        let disconnected = poll_accept(|| {
+            Ok(match host.poll_receive(2, &TestCodec) {
+                Ok(None) => None,
+                result => Some(result),
+            })
+        })?;
+        require(
+            matches!(disconnected, Err(HostError::Transport(_))),
+            "polling detects transport loss",
+        )?;
+        require(
+            host.join_local(3)
+                == Err(HostError::Session(SessionError::NoCapacity)),
+            "disconnected LAN slot remains reserved",
+        )?;
+        let (replacement, replacement_client) =
+            pair(&listener, settings, &keys.client, "games.test")?;
+        require(host_ok(host.admit(replacement?))? == 2, "same identity")?;
+        let mut rejoined = replacement_client?;
+        rejoined.send(b"M\x09")?;
+        require(
+            poll_accept(|| host_ok(host.poll_receive(2, &TestCodec)))? == 9,
+            "rejoined identity delivers subsequent action",
+        )
     }
 
     #[test]

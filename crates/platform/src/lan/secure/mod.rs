@@ -396,6 +396,17 @@ impl SecureFrameStream {
         self.fingerprint
     }
 
+    /// Advance one nonblocking receive step without disconnecting an idle peer.
+    ///
+    /// Returns no frame while idle or while a frame is incomplete. Once
+    /// plaintext frame bytes arrive, the original transfer timeout applies.
+    ///
+    /// # Errors
+    /// Closes the connection on invalid frames, partial-frame timeout or EOF.
+    pub fn poll_receive(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.channel.poll_receive()
+    }
+
     /// Receive one bounded, authenticated application frame.
     ///
     /// # Errors
@@ -435,6 +446,28 @@ impl TlsSocket {
         Ok(())
     }
 
+    fn poll_tls(&mut self) -> io::Result<()> {
+        if self.connection.wants_write() {
+            match self.connection.write_tls(&mut self.socket.socket) {
+                Ok(0) => return Err(ErrorKind::WriteZero.into()),
+                Ok(_) => {},
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {},
+                Err(error) => return Err(error),
+            }
+        }
+        match self.connection.read_tls(&mut self.socket.socket) {
+            Ok(0) => Err(ErrorKind::UnexpectedEof.into()),
+            Ok(_) => {
+                let _state = self
+                    .connection
+                    .process_new_packets()
+                    .map_err(io::Error::other)?;
+                Ok(())
+            },
+            Err(error) => Err(error),
+        }
+    }
+
     fn read_tls(&mut self) -> io::Result<()> {
         loop {
             self.socket.prepare_read()?;
@@ -455,6 +488,19 @@ impl TlsSocket {
 }
 
 impl TimedStream for TlsSocket {
+    fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        match self.connection.reader().read(bytes) {
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                self.socket.socket.set_nonblocking(true)?;
+                let result = self.poll_tls();
+                self.socket.socket.set_nonblocking(false)?;
+                result?;
+                self.connection.reader().read(bytes)
+            },
+            result => result,
+        }
+    }
+
     fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {
             match self.connection.reader().read(bytes) {
@@ -509,7 +555,7 @@ mod tests {
     use std::net::TcpStream;
     use std::num::NonZeroU8;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use games::network::{PeerKind, Session};
     use rcgen::{
@@ -630,6 +676,130 @@ mod tests {
                 .map_err(|_error| io::Error::other("TLS worker failed"))?;
             Ok((host, remote))
         })
+    }
+
+    fn send_unframed(
+        client: &mut SecureFrameStream,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        client
+            .channel
+            .transfer(|stream, _config| super::super::write_all(stream, bytes))
+    }
+
+    #[test]
+    fn polled_frames_preserve_partial_data_and_blocking_compatibility()
+    -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let (host_result, remote_result) =
+            pair(&listener, settings, &keys.client, HOST)?;
+        let mut host = host_result?;
+        let mut remote = remote_result?;
+        require(host.poll_receive()?.is_none(), "idle peer stays connected")?;
+        send_unframed(&mut remote, &[0, 0])?;
+        let _deadline = poll_accept(|| {
+            require(host.poll_receive()?.is_none(), "partial header")?;
+            Ok(host.channel.read_deadline)
+        })?;
+        send_unframed(&mut remote, &[0, 4, b'a'])?;
+        require(host.poll_receive()?.is_none(), "partial frame")?;
+        send_unframed(&mut remote, b"bcd")?;
+        require(host.receive()? == b"abcd", "blocking read resumes frame")?;
+        remote.send(b"")?;
+        remote.send(b"second")?;
+        require(
+            poll_accept(|| host.poll_receive())?.is_empty(),
+            "empty frame is not pending",
+        )?;
+        require(
+            poll_accept(|| host.poll_receive())? == b"second",
+            "next frame preserved",
+        )
+    }
+
+    #[test]
+    fn idle_poll_does_not_start_timeout_but_partial_frame_expires()
+    -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings =
+            LanConfig::new(session_config(true), Duration::from_millis(100))?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let (host_result, remote_result) =
+            pair(&listener, settings, &keys.client, HOST)?;
+        let mut host = host_result?;
+        let mut remote = remote_result?;
+        let idle_until = Instant::now()
+            .checked_add(settings.timeout)
+            .ok_or(ErrorKind::TimedOut)?;
+        poll_accept(|| {
+            require(
+                host.poll_receive()?.is_none(),
+                "idle poll after deadline",
+            )?;
+            Ok((Instant::now() >= idle_until).then_some(()))
+        })?;
+        send_unframed(&mut remote, &[0, 0])?;
+        let deadline = poll_accept(|| {
+            require(host.poll_receive()?.is_none(), "partial header")?;
+            Ok(host.channel.read_deadline)
+        })?;
+        send_unframed(&mut remote, &[0])?;
+        poll_accept(|| {
+            require(host.poll_receive()?.is_none(), "additional header byte")?;
+            Ok((host.channel.reader.filled == 3).then_some(()))
+        })?;
+        require(
+            host.channel.read_deadline == Some(deadline),
+            "deadline not extended",
+        )?;
+        let error = poll_accept(|| match host.poll_receive() {
+            Ok(None) => Ok(None),
+            Ok(Some(_frame)) => Err(io::Error::other("unexpected frame")),
+            Err(error) => Ok(Some(error.kind())),
+        })?;
+        require(error == ErrorKind::TimedOut, "partial frame expires")?;
+        require(
+            error_kind(host.poll_receive()) == Some(ErrorKind::NotConnected),
+            "expired frame closes connection",
+        )
+    }
+
+    #[test]
+    fn polled_oversized_header_and_eof_close_transport() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let (host_result, remote_result) =
+            pair(&listener, settings, &keys.client, HOST)?;
+        let mut host = host_result?;
+        let mut remote = remote_result?;
+        send_unframed(&mut remote, &u32::MAX.to_be_bytes())?;
+        require(
+            error_kind(poll_accept(|| host.poll_receive()))
+                == Some(ErrorKind::InvalidData),
+            "oversized polled header",
+        )?;
+        require(
+            error_kind(host.poll_receive()) == Some(ErrorKind::NotConnected),
+            "oversized frame closes transport",
+        )?;
+        let (rejoined_result, client) =
+            pair(&listener, settings, &keys.client, HOST)?;
+        let mut rejoined = rejoined_result?;
+        drop(client?);
+        require(
+            error_kind(poll_accept(|| rejoined.poll_receive()))
+                == Some(ErrorKind::UnexpectedEof),
+            "polled peer disconnect detected",
+        )
     }
 
     #[test]
