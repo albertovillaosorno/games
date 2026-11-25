@@ -634,3 +634,10 @@ street preview uses temporary aspect-fit fallback for adaptive mode;
 real camera extension with additional imported scene content and responsive
 HUD/touch placement is still required. Fill is unavailable with the fixed
 touch panel to prevent clipping essential controls.
+
+Local keyboard and controller-button profiles can override each of the
+four stations independently. Regression tests route remapped inputs,
+reject old bindings and verify the replacement controller receives the
+vacant station's profile. A combined hidden title run passed with a
+custom profile and integer scaling. Touch and analog remapping,
+interactive settings and physical devices remain open.

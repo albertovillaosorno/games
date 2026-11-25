@@ -44,7 +44,7 @@ const FILE_NAME: &str = "simpsons-arcade.local";
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke] [--touch] ",
-    "[--display MODE] [--window MODE] ",
+    "[--display MODE] [--window MODE] [--controls FILE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -52,7 +52,7 @@ const USAGE: &str = concat!(
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
-type ConfiguredAssets = (Assets, DisplaySettings);
+type ConfiguredAssets = (Assets, DisplaySettings, Option<PathBuf>);
 type Fields<'text> = BTreeMap<&'text str, &'text str>;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -93,6 +93,7 @@ impl Assets {
         };
         let audio = values.remove("audio").map(hash).transpose()?;
         let poses = values.remove("poses").map(|value| base.join(value));
+        let controls = values.remove("controls").map(|value| base.join(value));
         let display = DisplaySettings::default()
             .configured(values.remove("display"), values.remove("window"))?;
         if !values.is_empty() {
@@ -107,6 +108,7 @@ impl Assets {
                 poses,
             },
             display,
+            controls,
         ))
     }
 
@@ -150,6 +152,7 @@ impl Assets {
 #[derive(Debug)]
 pub(super) struct Launch {
     pub(super) assets: Assets,
+    pub(super) controls: Option<PathBuf>,
     pub(super) display: DisplaySettings,
     pub(super) smoke: bool,
     pub(super) touch_enabled: bool,
@@ -162,19 +165,29 @@ impl Launch {
         let touch_enabled = flag(&mut remaining, "--touch");
         let mode = optional_value(&mut remaining, "--display")?;
         let window = optional_value(&mut remaining, "--window")?;
-        let (assets, defaults) = if flag(&mut remaining, "--config") {
-            let config = PathBuf::from(next(&mut remaining)?);
-            if remaining.next().is_some() {
-                return Err(String::from(USAGE));
-            }
-            Assets::open(&config)?
-        } else if remaining.peek().is_none() {
-            let executable = env::current_exe()
-                .map_err(|error| format!("executable path: {error}"))?;
-            Assets::open(&sibling_catalogue(&executable)?)?
+        let explicit_controls = if flag(&mut remaining, "--controls") {
+            Some(PathBuf::from(next(&mut remaining)?))
         } else {
-            (Assets::explicit(remaining)?, DisplaySettings::default())
+            None
         };
+        let (assets, defaults, configured_controls) =
+            if flag(&mut remaining, "--config") {
+                let config = PathBuf::from(next(&mut remaining)?);
+                if remaining.next().is_some() {
+                    return Err(String::from(USAGE));
+                }
+                Assets::open(&config)?
+            } else if remaining.peek().is_none() {
+                let executable = env::current_exe()
+                    .map_err(|error| format!("executable path: {error}"))?;
+                Assets::open(&sibling_catalogue(&executable)?)?
+            } else {
+                (
+                    Assets::explicit(remaining)?,
+                    DisplaySettings::default(),
+                    None,
+                )
+            };
         let display =
             defaults.configured(mode.as_deref(), window.as_deref())?;
         if touch_enabled && display.presentation == PresentationMode::Fill {
@@ -184,6 +197,7 @@ impl Launch {
         }
         Ok(Self {
             assets,
+            controls: explicit_controls.or(configured_controls),
             display,
             smoke,
             touch_enabled,
@@ -277,11 +291,11 @@ mod tests {
     fn catalogue_anchors_paths_to_its_own_directory() -> Result<(), String> {
         let path = Path::new("/package/simpsons-arcade.local");
         let text = format!(
-            "{}poses=poses.txt\naudio={DIGEST}\n\
+            "{}poses=poses.txt\ncontrols=controls.txt\naudio={DIGEST}\n\
              enemy_approach={DIGEST}\nenemy_strike={DIGEST}\n",
             catalogue()
         );
-        let (assets, display) = Assets::catalogue(path, &text)?;
+        let (assets, display, controls) = Assets::catalogue(path, &text)?;
         let expected = Assets {
             actors: [DIGEST, DIGEST, DIGEST, DIGEST].map(OsString::from),
             audio: Some(DIGEST.into()),
@@ -289,7 +303,10 @@ mod tests {
             enemy: Some([DIGEST.into(), DIGEST.into()]),
             poses: Some(PathBuf::from("/package/poses.txt")),
         };
-        if assets != expected || display != DisplaySettings::default() {
+        if assets != expected
+            || display != DisplaySettings::default()
+            || controls != Some(PathBuf::from("/package/controls.txt"))
+        {
             return Err(String::from("incorrect catalogue selection"));
         }
         Ok(())
@@ -348,7 +365,7 @@ mod tests {
         let path = Path::new("local");
         let text =
             format!("{}display=integer\nwindow=fullscreen\n", catalogue());
-        let (_, settings) = Assets::catalogue(path, &text)?;
+        let (_, settings, _) = Assets::catalogue(path, &text)?;
         let expected = DisplaySettings {
             presentation: PresentationMode::Integer,
             window: WindowMode::Fullscreen,

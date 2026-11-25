@@ -45,6 +45,7 @@ use std::fmt::Debug;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
+use std::str;
 use std::time::{Duration, Instant};
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
@@ -56,6 +57,9 @@ use games::presentation::{DisplaySettings, FramePacing};
 use games::replay::{LiveInputLimits, LiveSimulation, QueueRejection};
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
+use games_platform_graphics::linux::input::profile::{
+    DigitalProfiles, MAX_PROFILE_BYTES,
+};
 use games_platform_graphics::linux::input::{
     Axis, Button, HostEvent, NativeInput, Scancode, axis_code, button_code,
     key_code,
@@ -65,6 +69,7 @@ use games_platform_graphics::linux::sprites::{
 };
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
+use games_platform_storage::file::snapshot;
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Participation, Phase, Player,
@@ -138,9 +143,26 @@ const BUTTONS: [Button; 8] = [
     Button::DPadDown,
 ];
 
+const ACTION_NAMES: [&str; 8] = [
+    "coin",
+    "start",
+    "primary",
+    "secondary",
+    "left",
+    "right",
+    "up",
+    "down",
+];
+const DEFAULT_PROFILES: Profiles = Profiles {
+    buttons: [BUTTONS; 4],
+    keys: KEYBOARD,
+};
+type Profiles = DigitalProfiles<4, 8>;
+
 #[derive(Debug)]
 struct Controls {
     devices: [Option<u64>; 4],
+    profiles: Profiles,
     router: InputRouter<Action>,
 }
 
@@ -154,8 +176,13 @@ impl Controls {
         };
         let player =
             *Player::ALL.get(index).ok_or(RenderError::InvalidSprite)?;
-        let buttons = BUTTONS
-            .into_iter()
+        let buttons = self
+            .profiles
+            .buttons
+            .get(index)
+            .ok_or(RenderError::InvalidSprite)?
+            .iter()
+            .copied()
             .zip(CONTROLS)
             .map(|(button, control)| {
                 (button_code(button), Action { control, player })
@@ -184,20 +211,25 @@ impl Controls {
         }
     }
 
+    fn key(
+        &self,
+        player: Player,
+        control: Control,
+    ) -> Result<Scancode, RenderError> {
+        let index = CONTROLS
+            .iter()
+            .position(|item| *item == control)
+            .ok_or(RenderError::InvalidSprite)?;
+        self.profiles
+            .keys
+            .get(player.index())
+            .and_then(|keys| keys.get(index))
+            .copied()
+            .ok_or(RenderError::InvalidSprite)
+    }
+
     fn new(touch_enabled: bool) -> Result<Self, RenderError> {
-        let mut mapping = InputMapping::new();
-        for (player, keys) in Player::ALL.into_iter().zip(KEYBOARD) {
-            for (key, control) in keys.into_iter().zip(CONTROLS) {
-                mapping.bind_key(key_code(key), Action { control, player });
-            }
-        }
-        if touch_enabled {
-            touch::install(&mut mapping)?;
-        }
-        Ok(Self {
-            devices: [None; 4],
-            router: InputRouter::new(mapping),
-        })
+        Self::with_profiles(touch_enabled, &DEFAULT_PROFILES)
     }
 
     fn route(
@@ -223,6 +255,27 @@ impl Controls {
                 .map_err(|error| failure(error.reason))?;
         }
         Ok(())
+    }
+
+    fn with_profiles(
+        touch_enabled: bool,
+        profiles: &Profiles,
+    ) -> Result<Self, RenderError> {
+        profiles.validate().map_err(failure)?;
+        let mut mapping = InputMapping::new();
+        for (player, keys) in Player::ALL.into_iter().zip(profiles.keys) {
+            for (key, control) in keys.into_iter().zip(CONTROLS) {
+                mapping.bind_key(key_code(key), Action { control, player });
+            }
+        }
+        if touch_enabled {
+            touch::install(&mut mapping)?;
+        }
+        Ok(Self {
+            devices: [None; 4],
+            profiles: *profiles,
+            router: InputRouter::new(mapping),
+        })
     }
 }
 
@@ -460,6 +513,14 @@ impl<'source> Sources<'source> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PreviewOptions<'profiles> {
+    display: DisplaySettings,
+    hidden: bool,
+    profiles: &'profiles Profiles,
+    touch_enabled: bool,
+}
+
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
 
 fn ground_position(
@@ -658,10 +719,12 @@ fn project_contact(
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
     let launch::Launch {
         assets,
+        controls,
         display,
         smoke,
         touch_enabled,
     } = launch::Launch::parse(args)?;
+    let profiles = load_profiles(controls.as_deref())?;
     let catalogue = assets
         .poses
         .as_deref()
@@ -675,8 +738,30 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             enemy: assets.enemy,
             poses: catalogue,
         })
-        .and_then(|source| window(&source, smoke, touch_enabled, display));
+        .and_then(|source| {
+            window(&source, PreviewOptions {
+                display,
+                hidden: smoke,
+                profiles: &profiles,
+                touch_enabled,
+            })
+        });
     result.map_err(|error| format!("{error:?}"))
+}
+
+fn load_profiles(selection: Option<&Path>) -> Result<Profiles, String> {
+    let Some(path) = selection else {
+        return Ok(DEFAULT_PROFILES);
+    };
+    let limit = u64::try_from(MAX_PROFILE_BYTES)
+        .ok()
+        .and_then(NonZeroU64::new)
+        .ok_or("invalid profile byte limit")?;
+    let bytes = snapshot(path, limit).map_err(|error| {
+        format!("control profile {}: {error:?}", path.display())
+    })?;
+    let text = str::from_utf8(&bytes).map_err(|error| error.to_string())?;
+    DEFAULT_PROFILES.configured(ACTION_NAMES, text)
 }
 
 fn size(value: usize) -> Result<NonZeroUsize, RenderError> {
@@ -687,13 +772,14 @@ fn smoke(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     touch_enabled: bool,
+    profiles: &Profiles,
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene
         .readback()
         .map_err(|error| failure(format!("initial readback: {error:?}")))?;
-    let mut controls = Controls::new(touch_enabled)?;
+    let mut controls = Controls::with_profiles(touch_enabled, profiles)?;
     if touch_enabled {
         smoke_touch(scene, &mut controls, &mut simulation)?;
     }
@@ -754,7 +840,9 @@ fn smoke_jump(
     for down in [true, false] {
         controls.route(
             InputEvent::Key {
-                code: key_code(Scancode::X),
+                code: key_code(
+                    controls.key(Player::Marge, Control::Secondary)?,
+                ),
                 down,
             },
             TICK_INTERVAL.saturating_mul(tick),
@@ -802,7 +890,7 @@ fn smoke_movement_benchmark(
         let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
         let elapsed = TICK_INTERVAL.saturating_mul(tick);
         let before = simulation.state().stations();
-        for [_, _, _, _, left, right, ..] in KEYBOARD {
+        for [_, _, _, _, left, right, ..] in controls.profiles.keys {
             let (release, press) = if cycle.is_multiple_of(2) {
                 (left, right)
             } else {
@@ -871,7 +959,7 @@ fn smoke_poses(
     let _drawn = art.present(scene, simulation.state())?;
     let idle = scene.readback().map_err(failure)?;
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
-    for [_, _, primary, ..] in KEYBOARD {
+    for [_, _, primary, ..] in controls.profiles.keys {
         for down in [true, false] {
             controls.route(
                 InputEvent::Key {
@@ -977,10 +1065,9 @@ fn smoke_touch_point(
 
 fn window(
     source: &Sources<'_>,
-    hidden: bool,
-    touch_enabled: bool,
-    display: DisplaySettings,
+    options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
+    let touch_enabled = options.touch_enabled;
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
         dimension(960)?,
@@ -989,9 +1076,9 @@ fn window(
         } else {
             672
         })?,
-        hidden,
+        options.hidden,
     )?;
-    window.apply_display_settings(display)?;
+    window.apply_display_settings(options.display)?;
     let layout = preview_layout(touch_enabled)?;
     let limits = scene_limits(source, touch_enabled)?;
     let startup = window.input(size(4)?)?;
@@ -1002,8 +1089,8 @@ fn window(
         .transpose()?;
     window.with_scene(layout, limits, |scene| {
         let mut art = Scene::load(scene, source, touch_enabled)?;
-        if hidden {
-            smoke(scene, &mut art, touch_enabled)?;
+        if options.hidden {
+            smoke(scene, &mut art, touch_enabled, options.profiles)?;
             if source.enemy.is_some() {
                 encounter::smoke(scene, &mut art, touch_enabled)?;
             }
@@ -1016,7 +1103,8 @@ fn window(
             audio.resume();
         }
         let mut simulation = live(source.enemy.is_some())?;
-        let mut controls = Controls::new(touch_enabled)?;
+        let mut controls =
+            Controls::with_profiles(touch_enabled, options.profiles)?;
         for event in startup.attached {
             controls.route(event, Duration::ZERO, &mut simulation)?;
         }
@@ -1085,9 +1173,14 @@ mod tests {
     use games::input::InputEvent;
     use games::replay::LiveSimulation;
     use games_platform_graphics::linux::RenderError;
-    use games_platform_graphics::linux::input::{Button, button_code};
+    use games_platform_graphics::linux::input::{
+        Button, Scancode, button_code, key_code,
+    };
 
-    use super::{Cabinet, Controls, Station, TICK_INTERVAL, failure, live};
+    use super::{
+        ACTION_NAMES, Cabinet, Controls, DEFAULT_PROFILES, Profiles, Station,
+        TICK_INTERVAL, failure, live,
+    };
 
     type TestCabinet = (Controls, LiveSimulation<Cabinet>);
 
@@ -1115,9 +1208,9 @@ mod tests {
         Ok(simulation.state().stations())
     }
 
-    fn cabinet() -> Result<TestCabinet, RenderError> {
+    fn cabinet(profiles: &Profiles) -> Result<TestCabinet, RenderError> {
         let mut simulation = live(false)?;
-        let mut controls = Controls::new(false)?;
+        let mut controls = Controls::with_profiles(false, profiles)?;
         for device in 10..14u64 {
             route_now(&mut controls, &mut simulation, InputEvent::Attached {
                 device,
@@ -1145,7 +1238,7 @@ mod tests {
     #[test]
     fn hotplug_releases_only_the_removed_station_and_reuses_it()
     -> Result<(), RenderError> {
-        let (mut controls, mut simulation) = cabinet()?;
+        let (mut controls, mut simulation) = cabinet(&DEFAULT_PROFILES)?;
         let start = simulation.state().stations();
         for device in 10..14u64 {
             route_now(
@@ -1186,6 +1279,68 @@ mod tests {
         let [_, old_homer, ..] = stopped;
         if resumed.position.x <= old_homer.position.x {
             return Err(failure("replacement did not control vacant slot"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_profiles_route_only_the_configured_station_and_device()
+    -> Result<(), RenderError> {
+        let profiles = DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                "version=1\nkey 1 right=Q\nbutton 2 right=x\n",
+            )
+            .map_err(failure)?;
+        let (mut controls, mut simulation) = cabinet(&profiles)?;
+        let before = simulation.state().stations();
+        for event in [
+            InputEvent::Key {
+                code: key_code(Scancode::Right),
+                down: true,
+            },
+            button(11, Button::DPadRight, true),
+        ] {
+            route_now(&mut controls, &mut simulation, event)?;
+        }
+        let unchanged = advance(&mut simulation)?;
+        if before != unchanged {
+            return Err(failure("replaced bindings still routed"));
+        }
+        for event in [
+            InputEvent::Key {
+                code: key_code(Scancode::Q),
+                down: true,
+            },
+            button(11, Button::X, true),
+        ] {
+            route_now(&mut controls, &mut simulation, event)?;
+        }
+        let moved = advance(&mut simulation)?;
+        for (index, (old, new)) in before.into_iter().zip(moved).enumerate() {
+            if (new.position.x > old.position.x) != (index < 2) {
+                return Err(failure("remapped action affected wrong station"));
+            }
+        }
+        verify_remapped_replacement(&mut controls, &mut simulation)
+    }
+
+    fn verify_remapped_replacement(
+        controls: &mut Controls,
+        simulation: &mut LiveSimulation<Cabinet>,
+    ) -> Result<(), RenderError> {
+        for event in [
+            InputEvent::Detached { device: 11 },
+            InputEvent::Attached { device: 14 },
+            button(14, Button::DPadRight, true),
+        ] {
+            route_now(controls, simulation, event)?;
+        }
+        let [_, waiting, ..] = advance(simulation)?;
+        route_now(controls, simulation, button(14, Button::X, true))?;
+        let [_, moved, ..] = advance(simulation)?;
+        if moved.position.x <= waiting.position.x {
+            return Err(failure("replacement did not inherit profile"));
         }
         Ok(())
     }

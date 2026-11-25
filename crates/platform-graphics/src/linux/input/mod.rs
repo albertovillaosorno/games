@@ -30,6 +30,8 @@
 //   - Ignore repeat keys, unknown controllers and unhandled event types.
 
 //! Native SDL input for the shared action router.
+/// Reusable bounded digital control profile admission.
+pub mod profile;
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};

@@ -81,3 +81,12 @@ Adaptive world extension, responsive HUD, high-DPI hardware, independent
 touch overlays, automatic settings persistence and remapping remain open.
 The current title rejects fill with its fixed touch panel to avoid
 cropping essential controls.
+
+The native digital profile parser now admits bounded per-station keyboard
+and controller-button overrides, rejecting conflicting physical bindings.
+Simpsons Arcade uses this shared parser for local profile selection;
+omission retains its original defaults. Synthetic tests verify routing
+only to remapped stations and replacement-controller inheritance. A hidden
+title run with the custom profile, integer mode, touch, original poses,
+enemy art and dummy audio passed. Analog axis remapping, touch profiles,
+interactive settings and hardware validation remain open.

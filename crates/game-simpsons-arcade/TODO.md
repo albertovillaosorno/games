@@ -127,3 +127,27 @@ scene and HUD extension remains open. Fill may crop the game HUD and
 is rejected when the current fixed touch panel is enabled. Responsive
 HUD placement and independent touch overlays remain open. Settings
 are edited in the catalogue, not saved automatically by an in-game menu.
+
+### Digital control profiles
+
+After the display options, pass `--controls FILE`, or set the local
+launch catalogue's optional `controls=FILE` field. The explicit path
+overrides the catalogue selection. The bounded UTF-8 profile uses:
+
+```text
+version=1
+key 1 right=Q
+key 1 secondary=Space
+key 2 primary=R
+button 2 right=x
+```
+
+Station numbers 1-4 are Marge, Homer, Bart and Lisa. Actions are
+coin, start, primary, secondary, left, right, up and down. Key names
+are SDL scancode names; button names follow SDL's game-controller
+mapping names. Unspecified controls keep the defaults. Duplicate
+keyboard bindings across stations and duplicate buttons within a
+station are rejected, as are unknown names and repeated overrides.
+Controller replacement inherits the vacant station's profile.
+Analog axes and touch layouts remain unchanged; an interactive
+remapping menu and automatic settings persistence remain open.
