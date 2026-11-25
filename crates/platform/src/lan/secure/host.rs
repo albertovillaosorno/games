@@ -210,6 +210,30 @@ impl HostSession {
         Ok(())
     }
 
+    /// Revoke a previously approved certificate and release its player slot.
+    ///
+    /// The certificate may still pass TLS chain validation, but this host
+    /// will no longer admit it. Revocation also drops any active channel
+    /// and releases a disconnected slot reserved for that identity.
+    ///
+    /// # Errors
+    /// Rejects unknown fingerprints and unexpected roster failures.
+    pub fn revoke_enrollment(
+        &mut self,
+        fingerprint: &PeerFingerprint,
+    ) -> Result<(), HostError> {
+        let peer = *self
+            .enrolled
+            .get(fingerprint)
+            .ok_or(HostError::Unenrolled)?;
+        match self.remove(peer) {
+            Ok(()) | Err(HostError::Session(SessionError::UnknownPeer)) => {},
+            Err(error) => return Err(error),
+        }
+        let _revoked = self.enrolled.remove(fingerprint);
+        Ok(())
+    }
+
     /// Send a bounded application frame to an active LAN player.
     ///
     /// # Errors
@@ -365,6 +389,65 @@ mod tests {
         host_ok(host.join_local(3))?;
         host_ok(host.disconnect(1))?;
         host_ok(host.reconnect_local(1))
+    }
+
+    #[test]
+    fn revocation_closes_channel_and_rejects_rejoin() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let mut host = host_ok(HostSession::new(session_config(true), &[(
+            keys.client_id,
+            2,
+        )]))?;
+        let (incoming, outgoing) =
+            pair(&listener, settings, &keys.client, "games.test")?;
+        require(host_ok(host.admit(incoming?))? == 2, "approved peer")?;
+        let _remote = outgoing?;
+        host_ok(host.revoke_enrollment(&keys.client_id))?;
+        require(
+            host.send(2, b"revoked")
+                == Err(HostError::Session(SessionError::UnknownPeer)),
+            "revoked channel is absent",
+        )?;
+        host_ok(host.join_local(2))?;
+        let (rejoin, client) =
+            pair(&listener, settings, &keys.client, "games.test")?;
+        require(
+            host.admit(rejoin?) == Err(HostError::Unenrolled),
+            "revoked peer cannot rejoin",
+        )?;
+        drop(client?);
+        require(
+            host.revoke_enrollment(&keys.client_id)
+                == Err(HostError::Unenrolled),
+            "already revoked identity is unknown",
+        )
+    }
+
+    #[test]
+    fn revocation_releases_reserved_and_unused_identities() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let unused = PeerFingerprint::from_bytes([7; 32]);
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let mut host = host_ok(HostSession::new(session_config(true), &[
+            (keys.client_id, 2),
+            (unused, 1),
+        ]))?;
+        let (incoming, outgoing) =
+            pair(&listener, settings, &keys.client, "games.test")?;
+        require(host_ok(host.admit(incoming?))? == 2, "approved peer")?;
+        drop(outgoing?);
+        host_ok(host.disconnect(2))?;
+        host_ok(host.revoke_enrollment(&keys.client_id))?;
+        host_ok(host.revoke_enrollment(&unused))?;
+        host_ok(host.join_local(2))?;
+        host_ok(host.join_local(1))
     }
 
     #[test]

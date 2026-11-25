@@ -79,3 +79,10 @@ leaf signed by the same trusted CA is rejected, as is a pinned leaf without
 a trusted chain. Certificate rotation requires explicit local re-enrolment;
 no production credential provisioning interface is claimed yet.
 Fresh validation passed in run 1795577894972235875-2911264 (109 tests).
+
+Host-side enrollment revocation drops active channels and releases both
+connected and reserved player identities. Revoked certificates remain
+ineligible for this host's application session even when a TLS handshake
+can still authenticate their chain. Loopback tests cover active, disconnected,
+never-connected and already-revoked identities. Fresh validation passed in
+run 1795578187013800242-2949531 (127 workspace tests).
