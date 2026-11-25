@@ -352,3 +352,34 @@ private key with group/other read permissions. Restoring the exact
 approved leaf and owner-only mode admitted the controller. These tests
 used disposable local identities; all generated private key files
 were removed after the runs.
+
+The native shared-screen HUD now distinguishes connected and unavailable
+reserved stations using only authenticated fixed-tick lifecycle state.
+An absent remote seat shows an offline prompt, a continuing seat retains
+its countdown, and an active disconnected actor and health remain visible.
+Local prompts do not change; extra atlas plates are allocated only for
+reserved seats. Native panel readback and the full fresh gate passed in
+run 1795603871230889222-3317506.
+
+Host idle renewal now uses the worker's monotonic decode completion time,
+not a delayed caller poll. Real TLS completions with controlled observation
+timestamps verify that a frame decoded before expiry can still arrive
+within its renewed lease, but neither a frame decoded at expiry nor a
+completion observed after its renewed lease becomes simulation input.
+Both expired paths disconnect and reserve the identity for rejoin. Fresh
+validation passed in run 1795604189112144995-3357907.
+
+The three-byte wire schema is now version two, with a distinct host-only
+acknowledgement that cannot decode as client input. Each valid remote
+message can schedule one bounded reply through its existing fair worker
+slot; replies do not renew the host's receive lease. The native controller
+requires a valid acknowledgement within three seconds, and the host
+rate-limits acknowledgements to at most four per second per peer.
+Real TLS tests reject duplicate and oversized replies, preserve independent
+peer input, sustain both leases beyond a shortened one-second limit, and
+expire a controller when the still-connected host stops polling. The same
+identity can then rejoin. Fresh native-enabled validation passed in run
+1795604517688391544-3441994. Matching host and controller builds are now
+required; the local credential catalogue remains version one. Physical
+network partitions, multi-device latency and remote world display remain
+unverified.
