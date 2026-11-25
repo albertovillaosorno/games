@@ -273,3 +273,19 @@ rejoin. Disabled LAN, empty enrolment and excess reserved capacity fail
 before opening a listener. Fresh validation passed in joint run
 1795602334492857230-2957088. Native title composition, outbound state,
 credential provisioning and physical LAN play remain open.
+
+The native Simpsons LAN bridge now composes the authenticated host pump,
+title decoder, reserved cabinet and shared bounded live input queue.
+Network work is limited per presentation poll; every verified event is
+assigned the next unexecuted simulation tick. If the queue is full, one
+rejected event is retained and retried before any further network polling,
+rather than losing a disconnect or release.
+
+An all-feature test uses independently issued temporary TLS credentials
+and real loopback sockets to join and move the approved remote station.
+It deliberately fills a one-action simulation queue before connection
+loss and verifies that the remote hold stops after retry while the local
+station keeps moving. The same certificate then reconnects and moves the
+same station in the opposite direction. The full fresh gate passed in
+1795602549609489814-2994574. Native window launch and a remote controller
+application are still required for interactive play.

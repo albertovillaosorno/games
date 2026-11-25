@@ -1,0 +1,439 @@
+// Copyright:
+//   - Copyright © 2026 Alberto Villa Osorno.
+// SPDX-License-Identifier:
+//   - Apache-2.0
+// Confidential:
+//   - false
+// License-File:
+//   - LICENSE
+//
+// Boundary-Contract:
+// - Owns:
+//   - Native authenticated input composition and fixed-tick admission.
+// - Must-Not:
+//   - Verify certificates, interpret raw frames or render a second world.
+// - Allows:
+//   - Inputs: Host-approved seats, TLS settings and an existing simulation.
+//   - Outputs: Ordered remote input and safe queue backpressure.
+//   - Side effects: Explicit private listener and bounded worker polling.
+// - Split-When:
+//   - A different client presentation protocol needs its own boundary.
+// - Merge-When:
+//   - A shared title host covers equivalent seat and tick admission.
+// - Summary:
+//   - Apply verified LAN controller events to the existing arcade cabinet.
+// - Description:
+//   - Retry a rejected event before polling another network operation.
+// - Usage:
+//   - Bind explicitly, construct the reserved cabinet and poll before updates.
+// - Defaults:
+//   - No implicit network access or account service.
+
+use std::io::{self, ErrorKind};
+use std::mem;
+use std::net::SocketAddr;
+use std::num::{NonZeroU8, NonZeroUsize};
+use std::time::Duration;
+
+use games::network::SessionConfig;
+use games::replay::{LiveSimulation, QueueRejection};
+use games_platform::lan::secure::pump::{
+    HostInputConfig, HostInputPump, PumpProgress, RemoteEvent,
+};
+use games_platform::lan::secure::{PeerFingerprint, ServerTls};
+
+use super::Cabinet;
+use super::remote::{
+    CONTROL_BYTES, HostedCabinet, HostedInput, RemoteCodec, RemoteControl,
+};
+
+const POLL_BUDGET: usize = 32;
+const TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Native input bridge for explicitly hosted free play.
+///
+/// The host's local screen remains authoritative. Each approved certificate
+/// is assigned a cabinet seat by the host. All other seats remain local.
+/// Network events target the next unexecuted fixed tick. A saturated
+/// simulation queue retains the single rejected event and stops polling
+/// until that event can be accepted; releases must never be discarded.
+#[derive(Debug)]
+pub struct HostLan {
+    pending: Vec<HostedInput>,
+    pump: HostInputPump<RemoteControl>,
+    reserved: [bool; 4],
+}
+
+impl HostLan {
+    /// Bind an explicit LAN endpoint for up to three remote controllers.
+    ///
+    /// # Errors
+    /// Rejects no remote seats, all remote seats, duplicate identities,
+    /// invalid transport settings or listener/worker creation failure.
+    pub fn bind(
+        address: SocketAddr,
+        tls: ServerTls,
+        approved: &[Option<PeerFingerprint>; 4],
+    ) -> io::Result<Self> {
+        let reserved = approved.map(|peer| peer.is_some());
+        if reserved.into_iter().all(|remote| remote) {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        let mut enrolments = Vec::new();
+        let mut local_peers = Vec::new();
+        for (peer, approval) in (0u64..).zip(approved.iter().copied()) {
+            if let Some(fingerprint) = approval {
+                enrolments.push((fingerprint, peer));
+            } else {
+                local_peers.push(peer);
+            }
+        }
+        let pump = HostInputPump::bind(
+            HostInputConfig {
+                address,
+                enrolments: &enrolments,
+                local_peers: &local_peers,
+                session: session_config(),
+                timeout: TIMEOUT,
+            },
+            tls,
+            RemoteCodec,
+        )?;
+        Ok(Self {
+            pending: Vec::new(),
+            pump,
+            reserved,
+        })
+    }
+
+    /// Return the address assigned to the private host listener.
+    ///
+    /// # Errors
+    /// Reports a failed native socket inspection.
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.pump.local_addr()
+    }
+
+    /// Poll bounded network work before advancing the shared fixed clock.
+    ///
+    /// # Errors
+    /// Reports listener/worker failures or an invalid simulation tick.
+    /// Capacity rejection retains the event for retry without error.
+    pub fn poll(
+        &mut self,
+        live: &mut LiveSimulation<HostedCabinet>,
+    ) -> io::Result<()> {
+        if !self.retry(live)? {
+            return Ok(());
+        }
+        for _step in 0..POLL_BUDGET {
+            match self.pump.poll()? {
+                PumpProgress::Event(event) => {
+                    self.pending.push(hosted_input(&event));
+                },
+                PumpProgress::Idle => break,
+                PumpProgress::Progress => {},
+            }
+            if !self.retry(live)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the fixed remote seat reservation, in cabinet order.
+    #[must_use]
+    pub const fn reserved(&self) -> [bool; 4] {
+        self.reserved
+    }
+
+    fn retry(
+        &mut self,
+        live: &mut LiveSimulation<HostedCabinet>,
+    ) -> io::Result<bool> {
+        if self.pending.is_empty() {
+            return Ok(true);
+        }
+        match live.enqueue(live.next_tick(), mem::take(&mut self.pending)) {
+            Ok(()) => Ok(true),
+            Err(rejection) => {
+                self.pending = rejection.actions;
+                if rejection.reason == QueueRejection::Capacity {
+                    Ok(false)
+                } else {
+                    Err(io::Error::other(format!("{:?}", rejection.reason)))
+                }
+            },
+        }
+    }
+
+    /// Construct the title's hosted cabinet with the bound reservation.
+    #[must_use]
+    pub fn simulation(&self, cabinet: &Cabinet) -> Option<HostedCabinet> {
+        HostedCabinet::new(cabinet, self.reserved)
+    }
+}
+
+/// The bounded title-specific transport settings shared by host and client.
+#[must_use]
+pub fn session_config() -> SessionConfig {
+    SessionConfig {
+        allow_lan: true,
+        max_message_bytes: NonZeroUsize::new(CONTROL_BYTES)
+            .unwrap_or(NonZeroUsize::MIN),
+        max_players: NonZeroU8::new(4).unwrap_or(NonZeroU8::MIN),
+    }
+}
+
+const fn hosted_input(event: &RemoteEvent<RemoteControl>) -> HostedInput {
+    match *event {
+        RemoteEvent::Connected(peer) => HostedInput::Connected(peer),
+        RemoteEvent::Disconnected { peer, reason: _reason } => {
+            HostedInput::Disconnected(peer)
+        },
+        RemoteEvent::Message { peer, value } => {
+            HostedInput::Remote { peer, value }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+    use std::slice::from_ref;
+    use std::thread;
+    use std::time::Instant;
+
+    use games::input::LogicalAction;
+    use games::replay::LiveInputLimits;
+    use games::timing::StepClock;
+    use games_platform::lan::LanConfig;
+    use games_platform::lan::secure::identity::LocalIdentity;
+    use games_platform::lan::secure::{ClientTls, SecureFrameStream};
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer,
+        ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
+    };
+    use rustls::pki_types::{PrivatePkcs8KeyDer, ServerName};
+
+    use super::*;
+    use crate::{
+        Action, Control, Participation, Player, StreetLayout, TICK_INTERVAL,
+    };
+
+    const HOST: &str = "games.test";
+
+    fn identity(host: bool) -> io::Result<LocalIdentity> {
+        let mut authority = CertificateParams::default();
+        authority.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        authority.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        let root = CertifiedIssuer::self_signed(
+            authority,
+            KeyPair::generate().map_err(io::Error::other)?,
+        )
+        .map_err(io::Error::other)?;
+        let key = KeyPair::generate().map_err(io::Error::other)?;
+        let mut leaf = if host {
+            CertificateParams::new(vec![String::from(HOST)])
+                .map_err(io::Error::other)?
+        } else {
+            CertificateParams::default()
+        };
+        leaf.extended_key_usages = vec![if host {
+            ExtendedKeyUsagePurpose::ServerAuth
+        } else {
+            ExtendedKeyUsagePurpose::ClientAuth
+        }];
+        let certificate =
+            leaf.signed_by(&key, &root).map_err(io::Error::other)?;
+        let private = PrivatePkcs8KeyDer::from(key.serialize_der()).into();
+        if host {
+            LocalIdentity::host(HOST, root.der(), certificate.der(), private)
+        } else {
+            LocalIdentity::client(root.der(), certificate.der(), private)
+        }
+    }
+
+    fn host() -> io::Result<(HostLan, ClientTls)> {
+        let server = identity(true)?;
+        let client = identity(false)?;
+        let tls =
+            server.server_tls(session_config(), from_ref(client.public()))?;
+        let listener =
+            HostLan::bind(SocketAddr::from(([127, 0, 0, 1], 0)), tls, &[
+                None,
+                Some(client.public().fingerprint()),
+                None,
+                None,
+            ])?;
+        Ok((listener, client.client_tls(server.public())?))
+    }
+
+    fn live(host: &HostLan) -> io::Result<LiveSimulation<HostedCabinet>> {
+        let cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let hosted = host.simulation(&cabinet).ok_or(ErrorKind::InvalidData)?;
+        let clock = StepClock::new(TICK_INTERVAL, NonZeroU32::MIN)
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        Ok(LiveSimulation::new(hosted, clock, LiveInputLimits {
+            future_ticks: 0,
+            pending_actions: NonZeroUsize::MIN,
+        }))
+    }
+
+    fn await_poll<Ready>(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        ready: Ready,
+    ) -> io::Result<()>
+    where
+        Ready: Fn(&HostLan, &LiveSimulation<HostedCabinet>) -> bool,
+    {
+        let deadline = Instant::now()
+            .checked_add(TIMEOUT)
+            .ok_or(ErrorKind::TimedOut)?;
+        loop {
+            host.poll(live)?;
+            if ready(host, live) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(ErrorKind::TimedOut.into());
+            }
+            thread::yield_now();
+        }
+    }
+
+    fn advance(live: &mut LiveSimulation<HostedCabinet>) -> io::Result<()> {
+        let _report = live
+            .advance(TICK_INTERVAL)
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        Ok(())
+    }
+
+    fn local(
+        live: &mut LiveSimulation<HostedCabinet>,
+        control: Control,
+    ) -> io::Result<()> {
+        live.enqueue(live.next_tick(), vec![HostedInput::Local(
+            LogicalAction {
+                action: Action {
+                    control,
+                    player: Player::Marge,
+                },
+                down: true,
+            },
+        )])
+        .map_err(|error| io::Error::other(format!("{:?}", error.reason)))
+    }
+
+    fn connect(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        client: &ClientTls,
+    ) -> io::Result<SecureFrameStream> {
+        let address = host.local_addr()?;
+        let config = LanConfig::new(session_config(), TIMEOUT)?;
+        let name = ServerName::try_from(HOST).map_err(io::Error::other)?;
+        thread::scope(|scope| {
+            let remote = scope.spawn(|| {
+                SecureFrameStream::connect(address, config, client, name)
+            });
+            await_poll(host, live, |_host, state| {
+                state.pending_actions() == 1
+            })?;
+            advance(live)?;
+            remote.join().map_err(|_panic| {
+                io::Error::other("client handshake panicked")
+            })?
+        })
+    }
+
+    fn send(
+        client: &mut SecureFrameStream,
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        control: Control,
+    ) -> io::Result<()> {
+        let value =
+            RemoteControl::new(control, true).ok_or(ErrorKind::InvalidInput)?;
+        client.send(&value.encode())?;
+        await_poll(host, live, |_host, state| state.pending_actions() == 1)?;
+        advance(live)
+    }
+
+    fn require(condition: bool, reason: &'static str) -> io::Result<()> {
+        if condition {
+            Ok(())
+        } else {
+            Err(io::Error::other(reason))
+        }
+    }
+
+    fn join_and_move(
+        client: &mut SecureFrameStream,
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+    ) -> io::Result<()> {
+        local(live, Control::Start)?;
+        advance(live)?;
+        send(client, host, live, Control::Start)?;
+        let [marge, homer, bart, lisa] = live.state().state().stations();
+        require(
+            marge.participation == Participation::Playing
+                && homer.participation == Participation::Playing
+                && bart.participation == Participation::Absent
+                && lisa.participation == Participation::Absent,
+            "only the local and approved remote seats joined",
+        )?;
+        send(client, host, live, Control::Right)?;
+        let [local, remote, ..] = live.state().state().stations();
+        require(
+            remote.position.x > homer.position.x && local == marge,
+            "authenticated remote controls only its assigned station",
+        )
+    }
+
+    fn disconnect(
+        client: SecureFrameStream,
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+    ) -> io::Result<()> {
+        local(live, Control::Right)?;
+        drop(client);
+        // Fill the fixed queue before loss arrives. Wait for the host to
+        // receive that loss while it cannot yet enqueue its release.
+        await_poll(host, live, |bridge, _state| !bridge.pending.is_empty())?;
+        require(live.pending_actions() == 1, "local action retained")?;
+        advance(live)?;
+        host.poll(live)?;
+        require(live.pending_actions() == 1, "disconnect retried")?;
+        advance(live)?;
+        let [marge, homer, ..] = live.state().state().stations();
+        advance(live)?;
+        let [moving, stopped, ..] = live.state().state().stations();
+        require(
+            moving.position.x > marge.position.x
+                && stopped.position == homer.position,
+            "remote hold released without stopping local control",
+        )
+    }
+
+    #[test]
+    fn real_tls_input_moves_and_rejoins_the_reserved_station() -> io::Result<()>
+    {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let mut client = connect(&mut host, &mut live, &credentials)?;
+        join_and_move(&mut client, &mut host, &mut live)?;
+        disconnect(client, &mut host, &mut live)?;
+        let [_, stopped, ..] = live.state().state().stations();
+        let mut rejoined = connect(&mut host, &mut live, &credentials)?;
+        send(&mut rejoined, &mut host, &mut live, Control::Left)?;
+        let [_, reversed, ..] = live.state().state().stations();
+        require(
+            reversed.position.x < stopped.position.x,
+            "same authenticated identity reclaimed its station",
+        )
+    }
+}

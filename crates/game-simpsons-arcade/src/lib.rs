@@ -32,6 +32,13 @@
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
 mod encounter;
+#[cfg(all(
+    feature = "native-preview",
+    target_os = "linux",
+    target_env = "gnu"
+))]
+/// Native authenticated host input for the local arcade screen.
+pub mod lan;
 mod maneuver;
 /// Host-authoritative remote input for the free-play cabinet.
 pub mod remote;

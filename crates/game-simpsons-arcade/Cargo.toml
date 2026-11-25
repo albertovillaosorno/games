@@ -18,6 +18,7 @@ workspace = true
 [features]
 native-preview = [
     "dep:games-assets",
+    "dep:games-platform",
     "dep:games-platform-audio",
     "dep:games-platform-graphics",
     "dep:games-platform-storage",
@@ -25,9 +26,14 @@ native-preview = [
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 games-assets = { workspace = true, optional = true }
+games-platform = { workspace = true, optional = true }
 games-platform-audio = { workspace = true, optional = true }
 games-platform-graphics = { workspace = true, optional = true }
 games-platform-storage = { workspace = true, optional = true }
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
+rcgen.workspace = true
+rustls.workspace = true
 
 [[bin]]
 name = "simpsons-arcade"
