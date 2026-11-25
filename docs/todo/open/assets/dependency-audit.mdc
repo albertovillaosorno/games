@@ -24,4 +24,13 @@ Evaluate reusable Rust libraries before creating new mechanisms.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+Inspected Craft Libraries snapshot
+`a9949872bd91ecf6bcec4e86339e3f50ad007fb9`, its NOTICE and ZIP interfaces.
+The upstream offers MIT or Apache-2.0. Its archive convenience layer
+loads decoded entries into memory and does not expose Unix file modes.
+The newer upstream ZIP backend exposes iterable entries and header
+consistency checks; its suitability for bounded extraction remains under
+evaluation. No Craft source was incorporated. Native staging uses Nix
+instead of Rustix and tempfile to avoid duplicate dependency versions.
+The asset contract reuses the existing SHA-2 and Serde ecosystem.
+Full portability, performance and distribution audits remain pending.

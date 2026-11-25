@@ -79,6 +79,9 @@ On Linux, descriptor-relative archive staging enforces private files,
 no-overwrite creation, exact payload lengths and collision rejection. Physical
 LAN verification and credential provisioning remain pending. Archive format
 decoding, publication, sandboxing, graphics and playable titles remain open.
+The shared asset crate defines deterministic versioned manifests, SHA-256
+content identities and checked RGBA8 and PCM16 payload descriptors.
+Source-format conversion and runtime consumption are not yet implemented.
 
 ## Catalogue
 

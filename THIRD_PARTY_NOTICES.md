@@ -2,7 +2,8 @@
 
 ## Current scope
 
-The engine uses SHA-2 for save integrity. The native platform
+The engine uses SHA-2 for save integrity. The shared asset crate uses
+SHA-2 and Serde JSON for canonical manifests. The native platform
 adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
 Nix for descriptor-relative archive staging. No
 original game assets, original game code or candidate project source is

@@ -1,0 +1,494 @@
+// Copyright:
+//   - Copyright © 2026 Alberto Villa Osorno.
+// SPDX-License-Identifier:
+//   - Apache-2.0
+// Confidential:
+//   - false
+// License-File:
+//   - LICENSE
+//
+// Boundary-Contract:
+// - Owns:
+//   - Canonical asset identities, manifest encoding and payload integrity.
+// - Must-Not:
+//   - Interpret source platforms, access the filesystem or execute assets.
+// - Allows:
+//   - Inputs: Asset descriptors, source identities and explicit limits.
+//   - Outputs: Deterministic metadata and validated payload identities.
+//   - Side effects: None.
+// - Split-When:
+//   - A separate canonical media representation needs its own contract.
+// - Merge-When:
+//   - Shared contracts duplicate asset identity or integrity validation.
+// - Summary:
+//   - Versioned canonical asset manifests for importers and runtimes.
+// - Description:
+//   - Identifies content-addressed payloads independently of source formats.
+// - Usage:
+//   - Verify source identity, construct a manifest and validate asset bytes.
+// - Defaults:
+//   - Reject unknown versions, malformed keys and invalid payload lengths.
+
+//! Source-independent canonical asset contracts.
+
+use std::fmt::{self, Display, Formatter};
+use std::num::{NonZeroU8, NonZeroU32, NonZeroU64, NonZeroUsize};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+
+const VERSION: u16 = 1;
+const MAX_KEY_BYTES: usize = 255;
+
+/// SHA-256 content identity, encoded as 32 bytes in a version-one manifest.
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(transparent)]
+pub struct ContentHash([u8; 32]);
+
+impl ContentHash {
+    /// Hash an existing byte slice.
+    #[must_use]
+    pub fn calculate(bytes: &[u8]) -> Self {
+        Self(Sha256::digest(bytes).into())
+    }
+
+    /// Construct from an independently calculated SHA-256 digest.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Display for ContentHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Canonical payload encoding, independent of the original platform.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AssetFormat {
+    /// Title-defined declarative data, never executable source code.
+    Data,
+    /// Interleaved signed 16-bit little-endian PCM samples.
+    PcmS16Le {
+        /// Channels, limited to eight.
+        channels: NonZeroU8,
+        /// Number of complete sample frames.
+        frames: NonZeroU64,
+        /// Samples per second per channel.
+        sample_rate: NonZeroU32,
+    },
+    /// Top-to-bottom row-major sRGB RGBA pixels with straight alpha.
+    Rgba8 {
+        /// Height in pixels.
+        height: NonZeroU32,
+        /// Width in pixels.
+        width: NonZeroU32,
+    },
+}
+
+impl AssetFormat {
+    fn expected_size(self) -> Result<Option<u64>, AssetError> {
+        let bytes = match self {
+            Self::Data => return Ok(None),
+            Self::PcmS16Le {
+                channels,
+                frames,
+                sample_rate: _rate,
+            } => {
+                if channels.get() > 8 {
+                    return Err(AssetError::InvalidFormat);
+                }
+                frames.get().checked_mul(u64::from(channels.get()) * 2)
+            },
+            Self::Rgba8 { height, width } => NonZeroU64::from(height)
+                .checked_mul(NonZeroU64::from(width))
+                .and_then(|pixels| pixels.get().checked_mul(4)),
+        };
+        bytes.map(Some).ok_or(AssetError::InvalidFormat)
+    }
+}
+
+/// One immutable logical asset and its content-addressed payload.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssetRecord {
+    /// Exact SHA-256 identity of the canonical payload.
+    pub digest: ContentHash,
+    /// Canonical encoding of the payload.
+    pub format: AssetFormat,
+    /// Lowercase logical key, not a source filename or filesystem path.
+    pub key: String,
+    /// Exact number of bytes in the canonical payload.
+    pub size: u64,
+}
+
+impl AssetRecord {
+    fn validate(&self) -> Result<(), AssetError> {
+        if !valid_key(&self.key) {
+            return Err(AssetError::InvalidIdentity);
+        }
+        if self
+            .format
+            .expected_size()?
+            .is_some_and(|size| size != self.size)
+        {
+            return Err(AssetError::InvalidFormat);
+        }
+        Ok(())
+    }
+
+    /// Check payload length, representation and SHA-256 before consumption.
+    ///
+    /// # Errors
+    /// Rejects malformed descriptors or mismatched payloads.
+    pub fn verify(&self, payload: &[u8]) -> Result<(), AssetError> {
+        self.validate()?;
+        if u64::try_from(payload.len()).ok() != Some(self.size)
+            || ContentHash::calculate(payload) != self.digest
+        {
+            return Err(AssetError::PayloadMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Source selection, recorded as provenance rather than runtime behaviour.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceIdentity {
+    /// SHA-256 of the exact source archive or input container.
+    pub digest: ContentHash,
+    /// Verified official edition and revision identifier.
+    pub revision: String,
+    /// Canonical catalogue title identifier.
+    pub title: String,
+}
+
+impl SourceIdentity {
+    fn validate(&self) -> Result<(), AssetError> {
+        if !valid_slug(&self.title) || !valid_slug(&self.revision) {
+            return Err(AssetError::InvalidIdentity);
+        }
+        Ok(())
+    }
+}
+
+/// Caller-selected admission limits for asset metadata and payloads.
+#[derive(Clone, Copy, Debug)]
+pub struct ManifestLimits {
+    /// Maximum encoded manifest length.
+    pub manifest_bytes: NonZeroUsize,
+    /// Maximum size of any individual asset.
+    pub payload_bytes: NonZeroU64,
+    /// Maximum number of logical records.
+    pub records: NonZeroUsize,
+    /// Maximum sum of declared asset sizes.
+    pub total_bytes: NonZeroU64,
+}
+
+/// Asset contract failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetError {
+    /// An encoding is malformed, ambiguous or has unsupported fields.
+    InvalidEncoding,
+    /// The dimensions, channels or declared payload size are incompatible.
+    InvalidFormat,
+    /// An identity is not a canonical lowercase logical key.
+    InvalidIdentity,
+    /// Duplicate or out-of-order logical asset identities.
+    InvalidOrder,
+    /// Actual canonical payload differs from the manifest.
+    PayloadMismatch,
+    /// A metadata, count or payload budget was exceeded.
+    TooLarge,
+    /// The manifest version is unsupported.
+    UnsupportedVersion,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestDocument {
+    records: Vec<AssetRecord>,
+    source: SourceIdentity,
+    version: u16,
+}
+
+/// Validated versioned asset metadata and content-addressed payloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetManifest(ManifestDocument);
+
+impl AssetManifest {
+    /// Encode validated manifest metadata deterministically.
+    ///
+    /// # Errors
+    /// Rejects serialization failure or an exceeded metadata budget.
+    pub fn encode(
+        &self,
+        limits: ManifestLimits,
+    ) -> Result<Vec<u8>, AssetError> {
+        self.validate(limits)?;
+        let bytes = serde_json::to_vec(&self.0)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        if bytes.len() > limits.manifest_bytes.get() {
+            return Err(AssetError::TooLarge);
+        }
+        Ok(bytes)
+    }
+
+    /// Build a version-one manifest, sorting by canonical logical key.
+    ///
+    /// # Errors
+    /// Rejects invalid identities, duplicates and exceeded budgets.
+    pub fn new(
+        source: SourceIdentity,
+        mut records: Vec<AssetRecord>,
+        limits: ManifestLimits,
+    ) -> Result<Self, AssetError> {
+        if records.len() > limits.records.get() {
+            return Err(AssetError::TooLarge);
+        }
+        records.sort_unstable_by(|left, right| left.key.cmp(&right.key));
+        let manifest = Self(ManifestDocument {
+            records,
+            source,
+            version: VERSION,
+        });
+        let _encoded = manifest.encode(limits)?;
+        Ok(manifest)
+    }
+
+    /// Decode bounded metadata and verify version and all descriptors.
+    ///
+    /// # Errors
+    /// Rejects malformed, unsupported, unordered or oversized metadata.
+    pub fn parse(
+        bytes: &[u8],
+        limits: ManifestLimits,
+    ) -> Result<Self, AssetError> {
+        if bytes.len() > limits.manifest_bytes.get() {
+            return Err(AssetError::TooLarge);
+        }
+        let manifest = Self(
+            serde_json::from_slice(bytes)
+                .map_err(|_error| AssetError::InvalidEncoding)?,
+        );
+        manifest.validate(limits)?;
+        Ok(manifest)
+    }
+
+    /// Return records in deterministic logical-key order.
+    #[must_use]
+    pub fn records(&self) -> &[AssetRecord] {
+        &self.0.records
+    }
+
+    /// Return the verified source identity recorded by the importer.
+    #[must_use]
+    pub const fn source(&self) -> &SourceIdentity {
+        &self.0.source
+    }
+
+    fn validate(&self, limits: ManifestLimits) -> Result<(), AssetError> {
+        if self.0.version != VERSION {
+            return Err(AssetError::UnsupportedVersion);
+        }
+        self.0.source.validate()?;
+        if self.0.records.len() > limits.records.get() {
+            return Err(AssetError::TooLarge);
+        }
+        let mut previous = None;
+        let mut remaining = limits.total_bytes.get();
+        for record in &self.0.records {
+            record.validate()?;
+            if previous.is_some_and(|key: &str| key >= record.key.as_str()) {
+                return Err(AssetError::InvalidOrder);
+            }
+            if record.size > limits.payload_bytes.get() {
+                return Err(AssetError::TooLarge);
+            }
+            remaining = remaining
+                .checked_sub(record.size)
+                .ok_or(AssetError::TooLarge)?;
+            previous = Some(record.key.as_str());
+        }
+        Ok(())
+    }
+}
+
+fn valid_key(value: &str) -> bool {
+    value.len() <= MAX_KEY_BYTES && value.split('/').all(valid_slug)
+}
+
+fn valid_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_KEY_BYTES
+        && value.split('-').all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit()
+                })
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limits() -> ManifestLimits {
+        ManifestLimits {
+            manifest_bytes: NonZeroUsize::new(4096)
+                .unwrap_or(NonZeroUsize::MIN),
+            payload_bytes: NonZeroU64::new(16).unwrap_or(NonZeroU64::MIN),
+            records: NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN),
+            total_bytes: NonZeroU64::new(24).unwrap_or(NonZeroU64::MIN),
+        }
+    }
+
+    fn source() -> SourceIdentity {
+        SourceIdentity {
+            digest: ContentHash::calculate(b"synthetic source"),
+            revision: String::from("world-set-1"),
+            title: String::from("synthetic-title"),
+        }
+    }
+
+    fn record(key: &str, payload: &[u8]) -> AssetRecord {
+        AssetRecord {
+            digest: ContentHash::calculate(payload),
+            format: AssetFormat::Data,
+            key: String::from(key),
+            size: u64::try_from(payload.len()).unwrap_or(u64::MAX),
+        }
+    }
+
+    fn require(condition: bool) -> Result<(), AssetError> {
+        condition.then_some(()).ok_or(AssetError::InvalidEncoding)
+    }
+
+    #[test]
+    fn manifests_are_deterministic_and_payloads_verified()
+    -> Result<(), AssetError> {
+        let left = record("stage/tiles", b"tiles");
+        let right = record("stage/sprites", b"sprites");
+        let first = AssetManifest::new(
+            source(),
+            vec![left.clone(), right.clone()],
+            limits(),
+        )?;
+        let second = AssetManifest::new(source(), vec![right, left], limits())?;
+        let bytes = first.encode(limits())?;
+        require(bytes == second.encode(limits())?)?;
+        let parsed = AssetManifest::parse(&bytes, limits())?;
+        require(parsed == first)?;
+        require(parsed.source() == &source())?;
+        let entry = parsed.records().first().ok_or(AssetError::InvalidOrder)?;
+        require(entry.key == "stage/sprites")?;
+        entry.verify(b"sprites")?;
+        require(entry.verify(b"wrongxx") == Err(AssetError::PayloadMismatch))?;
+        require(entry.verify(b"sprite") == Err(AssetError::PayloadMismatch))
+    }
+
+    #[test]
+    fn duplicate_keys_invalid_paths_and_budgets_are_rejected() {
+        let item = record("stage/tile", b"tile");
+        assert_eq!(
+            AssetManifest::new(source(), vec![item.clone(), item], limits()),
+            Err(AssetError::InvalidOrder),
+        );
+        for key in ["", "../escape", "Stage/tile", "stage//tile", "stage/tile."]
+        {
+            assert_eq!(
+                AssetManifest::new(source(), vec![record(key, b"x")], limits()),
+                Err(AssetError::InvalidIdentity),
+            );
+        }
+        assert_eq!(
+            AssetManifest::new(
+                source(),
+                vec![record("large", &[0; 17])],
+                limits(),
+            ),
+            Err(AssetError::TooLarge),
+        );
+        assert_eq!(
+            AssetManifest::new(
+                source(),
+                vec![record("first", &[0; 16]), record("second", &[0; 9])],
+                limits(),
+            ),
+            Err(AssetError::TooLarge),
+        );
+    }
+
+    #[test]
+    fn representations_require_exact_checked_sizes() {
+        let mut item = record("image", &[0; 4]);
+        item.format = AssetFormat::Rgba8 {
+            height: NonZeroU32::MIN,
+            width: NonZeroU32::MIN,
+        };
+        assert_eq!(item.verify(&[0; 4]), Ok(()));
+        item.size = 3;
+        assert_eq!(item.verify(&[0; 3]), Err(AssetError::InvalidFormat));
+        item.format = AssetFormat::Rgba8 {
+            height: NonZeroU32::MAX,
+            width: NonZeroU32::MAX,
+        };
+        assert_eq!(item.verify(&[]), Err(AssetError::InvalidFormat));
+        item.format = AssetFormat::PcmS16Le {
+            channels: NonZeroU8::MIN,
+            frames: NonZeroU64::MAX,
+            sample_rate: NonZeroU32::MIN,
+        };
+        assert_eq!(item.verify(&[]), Err(AssetError::InvalidFormat));
+    }
+
+    #[test]
+    fn parse_rejects_versions_and_unknown_or_duplicate_fields()
+    -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(source(), Vec::new(), limits())?;
+        let bytes = manifest.encode(limits())?;
+        let document = String::from_utf8(bytes)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let unknown_version =
+            document.replace("\"version\":1", "\"version\":2");
+        require(
+            AssetManifest::parse(unknown_version.as_bytes(), limits())
+                == Err(AssetError::UnsupportedVersion),
+        )?;
+        for replacement in
+            ["\"version\":1,\"extra\":0", "\"version\":1,\"version\":1"]
+        {
+            let malformed = document.replace("\"version\":1", replacement);
+            require(
+                AssetManifest::parse(malformed.as_bytes(), limits())
+                    == Err(AssetError::InvalidEncoding),
+            )?;
+        }
+        let mut restrictive = limits();
+        restrictive.manifest_bytes = NonZeroUsize::MIN;
+        require(
+            AssetManifest::parse(document.as_bytes(), restrictive)
+                == Err(AssetError::TooLarge),
+        )
+    }
+
+    #[test]
+    fn content_hash_uses_sha256_and_canonical_hex() {
+        assert_eq!(
+            ContentHash::calculate(b"abc").to_string(),
+            concat!(
+                "ba7816bf8f01cfea414140de5dae2223",
+                "b00361a396177a9cb410ff61f20015ad"
+            ),
+        );
+    }
+}
