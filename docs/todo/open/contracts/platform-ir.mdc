@@ -137,3 +137,14 @@ values directly, removing twelve further platform references. Fresh
 native render/audio validation passed in run
 1795637163797669035-1780490. Other backend implementations and physical
 performance acceptance remain open.
+
+Build source requests now use one storage snapshot facade. Linux and
+Android keep the metadata-only pin and verified bounded descriptor
+reader. Other targets fail explicitly before opening the path; the
+former check-then-open fallback could not guarantee final-link and
+special-file rejection. Exact, oversized, empty and changed-length
+snapshot coverage remains in the storage adapter. This removes twelve
+target predicates and one target dependency table from the baseline.
+Fresh validation 1795637347765536328-1840915 passed with the expanded
+Android ARM64, WebAssembly and Windows GNU x86-64 core library checks.
+No native device or packaged runtime support is established.

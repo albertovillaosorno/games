@@ -1,15 +1,14 @@
 {
   "crates/build/Cargo.toml": {
-    "target-table:cfg(all(target_os = \"linux\", target_env = \"gnu\"))": 1,
-    "target-table:cfg(any(target_os = \"linux\", target_os = \"android\"))": 1
+    "target-table:cfg(all(target_os = \"linux\", target_env = \"gnu\"))": 1
   },
   "crates/build/src/audio_check.rs": {
     "os:linux": 1
   },
   "crates/build/src/main.rs": {
     "target:target_env:\"gnu\"": 52,
-    "target:target_os:\"android\"": 32,
-    "target:target_os:\"linux\"": 84
+    "target:target_os:\"android\"": 26,
+    "target:target_os:\"linux\"": 78
   },
   "crates/build/src/reference_background/mod.rs": {
     "os:linux": 1

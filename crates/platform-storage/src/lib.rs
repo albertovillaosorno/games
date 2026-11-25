@@ -55,3 +55,75 @@ pub mod save;
 /// Private, bounded native archive staging.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod staging;
+
+use std::io;
+#[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
+use std::num::NonZeroU64;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use std::path::Path;
+
+/// Read a bounded snapshot using the host's regular-file adapter.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use file::snapshot;
+
+/// Admission failure for a native file snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileReadError {
+    /// Opening, inspecting or reading the pinned file failed.
+    Io(io::ErrorKind),
+    /// The file size or allocation exceeds the supplied limit.
+    TooLarge,
+    /// The file failed admission or its content metadata changed.
+    UnsafeFile,
+}
+
+impl From<io::Error> for FileReadError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error.kind())
+    }
+}
+
+/// Reject a snapshot request when safe regular-file admission is unavailable.
+///
+/// No path lookup or content access is attempted.
+/// # Errors
+/// Always returns an unsupported host error.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub const fn snapshot(
+    _path: &Path,
+    _maximum: NonZeroU64,
+) -> Result<Vec<u8>, FileReadError> {
+    Err(FileReadError::Io(io::ErrorKind::Unsupported))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn snapshots_are_exact_and_bounded() -> Result<(), FileReadError> {
+        use std::fs;
+
+        let root = fixtures::TestRoot::new()?;
+        let path = root.path().join("file");
+        let max = NonZeroU64::new(4).unwrap_or(NonZeroU64::MIN);
+        fs::write(&path, b"four")?;
+        let exact = snapshot(&path, max)? == b"four";
+        fs::write(&path, b"fives")?;
+        let oversized = snapshot(&path, max) == Err(FileReadError::TooLarge);
+        fs::write(&path, b"")?;
+        (exact && oversized && snapshot(&path, max)?.is_empty())
+            .then_some(())
+            .ok_or(FileReadError::Io(io::ErrorKind::InvalidData))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[test]
+    fn unsupported_snapshot_does_not_open_a_path() {
+        assert_eq!(
+            snapshot(Path::new("unavailable"), NonZeroU64::MIN),
+            Err(FileReadError::Io(io::ErrorKind::Unsupported))
+        );
+    }
+}

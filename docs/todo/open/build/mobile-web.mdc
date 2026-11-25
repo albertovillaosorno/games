@@ -31,12 +31,14 @@ toolchain, then request the optional cross-target library checks through
 the shared validator:
 
 ```sh
-rustup target add aarch64-linux-android wasm32-unknown-unknown
+rustup target add aarch64-linux-android wasm32-unknown-unknown \
+  x86_64-pc-windows-gnu
 GAMES_PORTABLE_CORE_CHECK=1 cargo validate --no-cache
 ```
 
-This checks the shared engine, canonical asset library and the first
-title's platform-independent library without native preview features.
+This checks the shared engine, canonical asset library, importer, first
+title's platform-independent library and storage adapter without native
+preview features.
 The opt-in gate always runs fresh because installed target components
 can change independently of tracked source. It does not link an Android
 application, produce a browser module, or execute either target.
@@ -53,3 +55,10 @@ alongside the three portable libraries. Fresh validation run
 and repeated the WebAssembly library checks. Android atomic package
 publication remains GNU/Linux-specific; no Android link, device storage,
 runtime or package acceptance is inferred from cross-target checking.
+
+The optional gate now also checks the importer and storage facade for
+all three targets, including Windows GNU x86-64. Fresh validation run
+1795637347765536328-1840915 passed all five library checks on Android,
+WebAssembly and Windows. The storage facade reports unsupported on
+WebAssembly and Windows rather than attempting a weaker file open.
+This is compile-time evidence only; no target was linked or executed.

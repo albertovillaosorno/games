@@ -41,6 +41,9 @@ use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
 use nix::unistd::geteuid;
 use zeroize::Zeroizing;
 
+/// Admission failure shared by the portable facade and native readers.
+pub use crate::FileReadError;
+
 pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
     .union(OFlag::O_NOFOLLOW)
@@ -50,26 +53,9 @@ const PIN_FLAGS: OFlag = OFlag::O_PATH
     .union(OFlag::O_NOFOLLOW)
     .union(OFlag::O_CLOEXEC);
 
-/// Admission failure for a native file snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FileReadError {
-    /// Opening, inspecting or reading the pinned file failed.
-    Io(io::ErrorKind),
-    /// The file size or allocation exceeds the supplied limit.
-    TooLarge,
-    /// The file failed admission or its content metadata changed.
-    UnsafeFile,
-}
-
 impl From<Errno> for FileReadError {
     fn from(error: Errno) -> Self {
         Self::Io(io::Error::from(error).kind())
-    }
-}
-
-impl From<io::Error> for FileReadError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error.kind())
     }
 }
 
@@ -370,19 +356,6 @@ mod tests {
         fs::rename(next, slot)?;
         require(read_pinned(&pinned, 3, private_regular)? == b"old")?;
         require(read_regular(&directory, "slot", 3)? == b"new")
-    }
-
-    #[test]
-    fn snapshots_are_exact_and_bounded() -> Result<(), FileReadError> {
-        let root = TestRoot::new()?;
-        let path = root.path.join("file");
-        let max = NonZeroU64::new(4).unwrap_or(NonZeroU64::MIN);
-        fs::write(&path, b"four")?;
-        require(snapshot(&path, max)? == b"four")?;
-        fs::write(&path, b"fives")?;
-        require(snapshot(&path, max) == Err(FileReadError::TooLarge))?;
-        fs::write(&path, b"")?;
-        require(snapshot(&path, max)?.is_empty())
     }
 
     #[test]

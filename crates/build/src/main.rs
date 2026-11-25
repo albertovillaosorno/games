@@ -83,10 +83,6 @@ pub mod title_package;
 
 use std::env;
 use std::ffi::OsString;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-use std::fs::{self, File};
-#[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
-use std::io::Read;
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -106,8 +102,7 @@ use games_importer::mame::samples::compare_observations;
 use games_importer::neo::CartridgeGraphics;
 use games_importer::selection::AssetSelection;
 use games_importer::{ImportError, SourceSnapshot};
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use games_platform_storage::file::snapshot;
+use games_platform_storage::snapshot;
 
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
@@ -118,12 +113,14 @@ const USAGE: &str = concat!(
     "RAW MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "GNU/Linux: games-build bundle replace-wave PARENT BASE_SHA256 KEY ",
     "WAV MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
-    "games-build neo import TITLE REV PATH SOURCE ENTRY TOTAL COUNT\n",
+    "Linux/Android: games-build neo import TITLE REV PATH ",
+    "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: neo check TITLE REV PARENT MANIFEST_SHA256\n",
-    "games-build zip|neo verify PATH TITLE REV ",
+    "Linux/Android: games-build zip|neo verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "games-build mame verify|import|audio-import MACHINE REV PATH ",
+    "Linux/Android: games-build mame verify|import|audio-import ",
+    "MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: mame publish|audio-publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
@@ -192,22 +189,6 @@ impl Arguments {
         Self::with_identity(identity, path, [source, entry, total, count])
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    fn snapshot(&self) -> Result<Vec<u8>, String> {
-        let path_metadata = fs::symlink_metadata(&self.path)
-            .map_err(|error| error.to_string())?;
-        if !path_metadata.is_file() {
-            return Err(String::from("source is not a regular file"));
-        }
-        let file = File::open(&self.path).map_err(|error| error.to_string())?;
-        let metadata = file.metadata().map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > self.source_limit.get() {
-            return Err(String::from("source is not a bounded regular file"));
-        }
-        read_source(file, self.source_limit)
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn snapshot(&self) -> Result<Vec<u8>, String> {
         snapshot(&self.path, self.source_limit)
             .map_err(|error| format!("source file: {error:?}"))
@@ -763,22 +744,6 @@ fn parse_limit(value: &OsString) -> Result<NonZeroU64, String> {
         .map_err(|_error| String::from("expected positive byte or count limit"))
 }
 
-#[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
-fn read_source<R>(reader: R, limit: NonZeroU64) -> Result<Vec<u8>, String>
-where
-    R: Read,
-{
-    let mut bytes = Vec::new();
-    let mut bounded = reader.take(limit.get().saturating_add(1));
-    let _count = bounded
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit.get() {
-        return Err(String::from("source exceeds input limit"));
-    }
-    Ok(bytes)
-}
-
 fn with_source<Run>(args: &Arguments, run: Run) -> Result<(), String>
 where
     Run: FnOnce(&SourceSnapshot<'_>, ArchiveBudget) -> Result<(), String>,
@@ -935,17 +900,6 @@ mod tests {
                 Command::parse(candidate.iter().map(OsString::from)).is_err()
             );
         }
-    }
-
-    #[test]
-    fn bounded_reader_rejects_growing_or_oversized_sources() {
-        let limit = NonZeroU64::new(4).unwrap_or(NonZeroU64::MIN);
-        assert_eq!(
-            read_source(b"four".as_slice(), limit),
-            Ok(b"four".to_vec())
-        );
-        assert!(read_source(b"fives".as_slice(), limit).is_err());
-        assert_eq!(read_source(b"".as_slice(), limit), Ok(Vec::new()));
     }
 
     #[test]

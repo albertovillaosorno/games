@@ -151,8 +151,12 @@ fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
         execute(Command::new("cargo").current_dir(root).args(*args), log)?;
     }
     if env::var_os(cache::PORTABLE_CORE_FLAG).is_some() {
-        for target in ["aarch64-linux-android", "wasm32-unknown-unknown"] {
-            let mut args = vec![
+        for target in [
+            "aarch64-linux-android",
+            "wasm32-unknown-unknown",
+            "x86_64-pc-windows-gnu",
+        ] {
+            let args = [
                 "check",
                 "--locked",
                 "--target",
@@ -163,11 +167,12 @@ fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
                 "-p",
                 "games-assets",
                 "-p",
+                "games-importer",
+                "-p",
                 "games-simpsons-arcade",
+                "-p",
+                "games-platform-storage",
             ];
-            if target == "aarch64-linux-android" {
-                args.extend(["-p", "games-platform-storage"]);
-            }
             writeln!(log, "cargo {}", args.join(" "))
                 .map_err(|error| error.to_string())?;
             execute(Command::new("cargo").current_dir(root).args(args), log)?;

@@ -10,6 +10,10 @@ cargo run --locked -p games-build -- mame import simpsons world-4p-set-1 \
 ```
 
 Use `mame verify` for read-only archive and required media-lane admission.
+Source snapshots require the Linux or Android regular-file pinning adapter
+and trusted procfs. Other hosts reject source requests before path access
+until an equivalent adapter is implemented. Android device operation is
+not yet verified.
 On GNU/Linux, use
 `mame publish MACHINE REV PARENT PATH SOURCE ENTRY TOTAL COUNT` or
 `mame check MACHINE REV PARENT MANIFEST_SHA256`. The four numeric limits
