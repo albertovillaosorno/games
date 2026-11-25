@@ -34,11 +34,12 @@ use std::ffi::OsString;
 use std::iter::Peekable;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::{env, str, vec};
+use std::{str, vec};
 
 use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
+use games_platform::ir::storage::executable_path;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, VolumeStore,
@@ -230,9 +231,9 @@ impl Assets {
             }
             Self::open(&config)
         } else if remaining.peek().is_none() {
-            let executable = env::current_exe()
+            let executable = executable_path()
                 .map_err(|error| format!("executable path: {error}"))?;
-            Self::open(&sibling_catalogue(&executable)?)
+            Self::open(&sibling_catalogue(Path::new(&executable))?)
         } else {
             Ok((
                 Self::explicit(remaining)?,

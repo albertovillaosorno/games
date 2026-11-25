@@ -33,8 +33,25 @@
 /// Verified canonical asset bundles and passive media overlays.
 pub mod bundle;
 
+use std::ffi::OsString;
+use std::io::Result as IoResult;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use crate::selected::fixtures;
 pub use crate::selected::{
     FileReadError, file, preferences, save, snapshot, staging,
 };
+
+/// Backend observation of the process executable location.
+pub(crate) trait ExecutableLocation {
+    fn executable_path() -> IoResult<OsString>;
+}
+
+/// Observe the running executable's location for explicit local resolution.
+///
+/// This does not search for assets, inspect their contents or grant trust.
+/// # Errors
+/// Returns a host error if the location cannot be determined.
+pub fn executable_path() -> IoResult<OsString> {
+    <() as ExecutableLocation>::executable_path()
+}

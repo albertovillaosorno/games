@@ -31,11 +31,11 @@
 
 //! Native timestamp and resource observations for the shared collector.
 
+use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use std::{env, fs};
 
 static ORIGIN: OnceLock<Instant> = OnceLock::new();
 
@@ -82,7 +82,7 @@ fn parse_memory_bytes(status: &str, prefix: &str) -> Option<u64> {
     kibibytes.checked_mul(1024)
 }
 
-fn artifact_bytes(path: &Path) -> io::Result<u64> {
+pub(in crate::software) fn artifact_bytes(path: &Path) -> io::Result<u64> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Err(ErrorKind::InvalidInput.into());
@@ -90,22 +90,8 @@ fn artifact_bytes(path: &Path) -> io::Result<u64> {
     Ok(metadata.len())
 }
 
-pub(in crate::software) fn executable_bytes() -> io::Result<u64> {
-    artifact_bytes(&env::current_exe()?)
-}
-
 pub(in crate::software) fn now() -> Duration {
     ORIGIN.get_or_init(Instant::now).elapsed()
-}
-
-#[cfg(feature = "secure-lan")]
-pub(in crate::software) fn timestamp_at(
-    observed: Instant,
-) -> io::Result<Duration> {
-    let origin = ORIGIN.get().ok_or(ErrorKind::InvalidData)?;
-    observed
-        .checked_duration_since(*origin)
-        .ok_or_else(|| ErrorKind::InvalidData.into())
 }
 
 #[cfg(test)]
@@ -154,19 +140,13 @@ mod tests {
             .ok_or_else(|| io::Error::other("test timestamp overflow"))
     }
 
-    #[cfg(feature = "secure-lan")]
     #[test]
-    fn native_completion_uses_the_same_clock_domain() -> io::Result<()> {
-        use std::time::Instant;
-
-        use super::timestamp_at;
-
+    fn process_clock_observations_are_monotonic() -> io::Result<()> {
         let before = now();
-        let observed = Instant::now();
-        let completed = timestamp_at(observed)?;
+        let observed = now();
         let after = now();
-        check(before <= completed, true)?;
-        check(completed <= after, true)
+        check(before <= observed, true)?;
+        check(observed <= after, true)
     }
 
     #[test]

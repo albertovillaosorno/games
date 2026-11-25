@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, ErrorKind};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use games::network::{MessageSchema, SessionConfig, SessionError};
 
@@ -48,7 +48,7 @@ use super::{
     LanConfig, PeerFingerprint, PendingConnection, SecureLanListener,
     SendProgress, ServerTls,
 };
-use crate::software::linux::performance::{now, timestamp_at};
+use crate::software::linux::performance::now;
 
 /// One verified remote lifecycle or schema-checked input event.
 #[derive(Debug)]
@@ -89,8 +89,8 @@ enum PollKind {
     Authenticate,
     // The flag records whether gameplay was notified of admission.
     Disconnect(u64, bool),
-    Receive(u64, Option<Instant>),
-    Reply(u64, Option<Instant>),
+    Receive(u64, Option<Duration>),
+    Reply(u64, Option<Duration>),
 }
 
 #[derive(Debug)]
@@ -114,14 +114,14 @@ impl PollTask {
         }
     }
 
-    const fn receive(peer: u64, deadline: Option<Instant>) -> Self {
+    const fn receive(peer: u64, deadline: Option<Duration>) -> Self {
         Self {
             kind: PollKind::Receive(peer, deadline),
             operation: HostOperation::PollReceive(peer),
         }
     }
 
-    const fn reply(peer: u64, deadline: Option<Instant>) -> Self {
+    const fn reply(peer: u64, deadline: Option<Duration>) -> Self {
         Self {
             kind: PollKind::Reply(peer, deadline),
             operation: HostOperation::PollSend(peer),
@@ -220,7 +220,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         } = config;
         let settings = LanConfig::new(limits, timeout)?;
         if idle_timeout.is_some_and(|limit| {
-            limit.is_zero() || Instant::now().checked_add(limit).is_none()
+            limit.is_zero() || now().checked_add(limit).is_none()
         }) {
             return Err(ErrorKind::InvalidInput.into());
         }
@@ -240,7 +240,6 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let capacity = NonZeroUsize::new(players.saturating_mul(2))
             .ok_or(ErrorKind::InvalidInput)?;
         let listener = SecureLanListener::bind(address, settings, tls)?;
-        let _clock_origin = now();
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
             frame_budget: limits.max_message_bytes.get(),
@@ -256,7 +255,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     fn complete(
         &mut self,
         completion: HostCompletion<Message>,
-        observed_at: Instant,
+        observed_at: Duration,
     ) -> io::Result<PumpProgress<Message>> {
         let kind = self
             .in_flight
@@ -289,8 +288,8 @@ impl<Message: Send + 'static> HostInputPump<Message> {
 
     fn complete_auth(
         &mut self,
-        completed_at: Instant,
-        observed_at: Instant,
+        completed_at: Duration,
+        observed_at: Duration,
         result: HostResult<Message>,
     ) -> io::Result<PumpProgress<Message>> {
         match result {
@@ -323,9 +322,9 @@ impl<Message: Send + 'static> HostInputPump<Message> {
 
     fn complete_receive(
         &mut self,
-        lease: (u64, Option<Instant>),
+        lease: (u64, Option<Duration>),
         completion: HostCompletion<Message>,
-        observed_at: Instant,
+        observed_at: Duration,
     ) -> io::Result<PumpProgress<Message>> {
         let (peer, deadline) = lease;
         let completed_at = completion.completed_at;
@@ -334,7 +333,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
                 if actual == peer =>
             {
                 PumpProgress::Event(RemoteEvent::Message {
-                    completed_at: timestamp_at(completed_at)?,
+                    completed_at,
                     peer,
                     value,
                 })
@@ -372,7 +371,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     fn complete_reply(
         &mut self,
         peer: u64,
-        deadline: Option<Instant>,
+        deadline: Option<Duration>,
         result: &HostResult<Message>,
     ) -> io::Result<PumpProgress<Message>> {
         match result {
@@ -396,7 +395,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         Ok(PumpProgress::Progress)
     }
 
-    fn deadline(&self, since: Instant) -> io::Result<Option<Instant>> {
+    fn deadline(&self, since: Duration) -> io::Result<Option<Duration>> {
         self.idle_timeout
             .map(|timeout| {
                 since
@@ -425,7 +424,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// Reports listener, worker or internal correlation failures.
     pub fn poll(&mut self) -> io::Result<PumpProgress<Message>> {
         if let Some(completion) = self.worker.poll()? {
-            return self.complete(completion, Instant::now());
+            return self.complete(completion, now());
         }
         let accepted = self.accept_one()?;
         let submitted = self.submit_one()?;
@@ -478,7 +477,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let PollTask { kind, operation } = match task.kind {
             PollKind::Receive(peer, Some(deadline))
             | PollKind::Reply(peer, Some(deadline))
-                if Instant::now() >= deadline =>
+                if now() >= deadline =>
             {
                 PollTask::disconnect(peer, true)
             },
@@ -808,15 +807,15 @@ mod tests {
             TestCodec,
         )?;
         let mut client = connect(&mut pump, &keys.client, 1)?;
-        let mut next_send = Instant::now();
+        let mut next_send = now();
         let event = poll_accept(|| {
             if let PumpProgress::Event(event) = pump.poll()? {
                 return Ok(Some(event));
             }
-            if Instant::now() < next_send {
+            if now() < next_send {
                 return Ok(None);
             }
-            next_send = Instant::now()
+            next_send = now()
                 .checked_add(Duration::from_millis(25))
                 .ok_or(ErrorKind::TimedOut)?;
             if client.send(b"bad").is_err() {
@@ -849,7 +848,7 @@ mod tests {
         }
         require(
             !matches!(
-                pump.complete(completion, Instant::now())?,
+                pump.complete(completion, now())?,
                 PumpProgress::Event(_)
             ),
             "no peer announced before the target admission",
@@ -943,7 +942,7 @@ mod tests {
             }
             require(
                 !matches!(
-                    pump.complete(completion, Instant::now())?,
+                    pump.complete(completion, now())?,
                     PumpProgress::Event(_)
                 ),
                 "only the intended message may complete",
@@ -955,7 +954,7 @@ mod tests {
     fn pending_deadline(
         pump: &HostInputPump<u8>,
         completion: &HostCompletion<u8>,
-    ) -> io::Result<Instant> {
+    ) -> io::Result<Duration> {
         match pump.in_flight.get(&completion.id) {
             Some(PollKind::Receive(1, Some(deadline))) => Ok(*deadline),
             _ => Err(ErrorKind::InvalidData.into()),
@@ -965,7 +964,7 @@ mod tests {
     fn expect_expired(
         pump: &mut HostInputPump<u8>,
         completion: HostCompletion<u8>,
-        observed_at: Instant,
+        observed_at: Duration,
     ) -> io::Result<()> {
         require(
             matches!(
@@ -1007,7 +1006,7 @@ mod tests {
         client.send(b"M\x05")?;
         let completion = message_completion(&mut pump)?;
         let deadline = pending_deadline(&pump, &completion)?;
-        let decoded_at = timestamp_at(completion.completed_at)?;
+        let decoded_at = completion.completed_at;
         require(
             matches!(
                 pump.complete(completion, deadline)?,

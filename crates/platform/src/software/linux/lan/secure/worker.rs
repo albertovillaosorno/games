@@ -39,12 +39,13 @@ use std::sync::mpsc::{
     Receiver, SyncSender, TryRecvError, TrySendError, sync_channel,
 };
 use std::thread::{Builder, JoinHandle};
-use std::time::Instant;
+use std::time::Duration;
 
 use games::network::{MessageSchema, SessionError};
 
 use super::host::{HostError, HostSession};
 use super::{PeerFingerprint, PendingConnection, SendProgress};
+use crate::software::linux::performance::now;
 
 const MAX_QUEUE_CAPACITY: usize = 1024;
 
@@ -139,8 +140,8 @@ pub type HostResult<Message> = Result<HostOutcome<Message>, OperationError>;
 /// One correlated completion, including failures.
 #[derive(Debug)]
 pub struct HostCompletion<Message> {
-    /// Host monotonic time immediately after the operation completed.
-    pub completed_at: Instant,
+    /// Process-local monotonic time immediately after the operation completed.
+    pub completed_at: Duration,
     /// Identifier supplied with the original command.
     pub id: u64,
     /// Operation success or failure.
@@ -171,7 +172,7 @@ pub struct RejectedRequest {
 // Keep it attached while the request waits in the bounded worker queue.
 #[derive(Debug)]
 struct ScheduledRequest {
-    lease: Option<(u64, Instant)>,
+    lease: Option<(u64, Duration)>,
     request: HostRequest,
 }
 
@@ -286,7 +287,7 @@ impl<Message: Send + 'static> HostWorker<Message> {
     pub(super) fn try_submit_leased(
         &self,
         request: HostRequest,
-        lease: Option<(u64, Instant)>,
+        lease: Option<(u64, Duration)>,
     ) -> Result<(), RejectedRequest> {
         if let HostOperation::Send { bytes, .. }
         | HostOperation::QueueSend { bytes, .. } = &request.operation
@@ -410,7 +411,7 @@ where
     }
 }
 
-fn expired_peer(lease: Option<(u64, Instant)>, now: Instant) -> Option<u64> {
+fn expired_peer(lease: Option<(u64, Duration)>, now: Duration) -> Option<u64> {
     lease
         .filter(|&(_peer, deadline)| now >= deadline)
         .map(|(peer, _deadline)| peer)
@@ -428,7 +429,7 @@ fn execute_scheduled<Codec>(
     session: &mut HostSession,
     codec: &Codec,
     scheduled: ScheduledRequest,
-    mut now: impl FnMut() -> Instant,
+    mut now: impl FnMut() -> Duration,
 ) -> HostCompletion<Codec::Message>
 where
     Codec: MessageSchema,
@@ -471,8 +472,7 @@ fn serve<Codec>(
         if channels.stopped.load(Ordering::Acquire) {
             break;
         }
-        let completion =
-            execute_scheduled(&mut session, codec, scheduled, Instant::now);
+        let completion = execute_scheduled(&mut session, codec, scheduled, now);
         if channels.outgoing.send(completion).is_err() {
             break;
         }
@@ -891,8 +891,8 @@ mod tests {
 
     fn receive_at(
         host: &mut HostSession,
-        deadline: Instant,
-        observed_at: Instant,
+        deadline: Duration,
+        observed_at: Duration,
     ) -> io::Result<HostCompletion<u8>> {
         let before = deadline
             .checked_sub(TIMEOUT)
@@ -932,8 +932,8 @@ mod tests {
     fn timely_schema_results(
         host: &mut HostSession,
         client: &mut SecureFrameStream,
-        deadline: Instant,
-        now: Instant,
+        deadline: Duration,
+        now: Duration,
     ) -> io::Result<()> {
         client.send(b"bad")?;
         let timely = receive_at(host, deadline, now)?;
@@ -970,7 +970,7 @@ mod tests {
         let mut host =
             HostSession::new(session_config(true), &[(keys.client_id, 2)])
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
-        let now = Instant::now();
+        let now = now();
         let deadline =
             now.checked_add(TIMEOUT).ok_or(ErrorKind::InvalidInput)?;
         for payload in [b"bad".as_slice(), b"M\x06".as_slice()] {
@@ -1037,7 +1037,7 @@ mod tests {
                     id: 3,
                     operation: HostOperation::PollSend(2),
                 },
-                Some((2, Instant::now())),
+                Some((2, now())),
             )
             .map_err(|error| io::Error::other(format!("{error:?}")))?;
         require(

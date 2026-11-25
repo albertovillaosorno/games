@@ -247,3 +247,17 @@ is translated before delivery rather than sampled at the caller. Fresh
 combined rendering, dummy audio and portable-core checks passed in run
 1795644432750821019-4162270 (1,338 test executions). The target checks
 cover core libraries, not complete native runtimes.
+
+Title launch now observes executable location through portable storage.
+The selected adapter owns the native query; executable-size measurement
+uses the same location. Explicit catalogue and asset selection remain
+unchanged, and the query grants no trust in adjacent content.
+
+A rebuilt 3,451,872-byte Linux preview passed the local combined-jump
+catalogue smoke on NVIDIA offscreen OpenGL with touch and dummy audio.
+The 426x304 adaptive scene, 444 camera columns, two cooperative pose
+families and six reinforcement meters were verified. All 600 movement
+and 20 combat host submissions met 16.667 ms (mean 80.642 and 68.449
+microseconds respectively); lifetime RSS peak was 99,446,784 bytes.
+This is synthetic-input/offscreen evidence, not physical latency,
+controller acceptance or complete original-game parity.

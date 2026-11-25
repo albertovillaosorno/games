@@ -126,12 +126,15 @@ pub mod staging {
     pub const AVAILABLE: bool = false;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::env;
 use std::ffi::OsStr;
-#[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 use std::io;
 #[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 use std::num::NonZeroU64;
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
 /// Read a bounded snapshot using the host's regular-file adapter.
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -177,9 +180,26 @@ impl BundleFactory for () {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::software) fn executable_path() -> io::Result<PathBuf> {
+    env::current_exe()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::ir::storage::executable_path as observed_executable_path;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn executable_location_matches_running_artifact() -> io::Result<()> {
+        let observed = observed_executable_path()?;
+        let expected = env::current_exe()?;
+        (expected.is_absolute() && observed == expected.into_os_string())
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]

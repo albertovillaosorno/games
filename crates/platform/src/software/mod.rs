@@ -40,10 +40,13 @@ pub mod lan {
     pub const AVAILABLE: bool = false;
 }
 
+use std::ffi::OsString;
 use std::io;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use std::io::ErrorKind;
 use std::num::NonZeroU32;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
@@ -60,6 +63,7 @@ use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::input::InputNames;
 use crate::ir::measurement::MeasurementSource;
 use crate::ir::security::audio::PlaybackRequest;
+use crate::ir::storage::ExecutableLocation;
 
 #[cfg(all(feature = "interactive", target_os = "linux"))]
 impl PlaybackFactory for () {
@@ -140,7 +144,9 @@ impl InputNames for () {
 impl MeasurementSource for () {
     fn executable_bytes() -> io::Result<u64> {
         #[cfg(not(target_arch = "wasm32"))]
-        return linux::performance::executable_bytes();
+        return linux::performance::artifact_bytes(&PathBuf::from(
+            <() as ExecutableLocation>::executable_path()?,
+        ));
         #[cfg(target_arch = "wasm32")]
         Err(ErrorKind::Unsupported.into())
     }
@@ -163,6 +169,15 @@ impl MeasurementSource for () {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         return linux::performance::resident_bytes();
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        Err(ErrorKind::Unsupported.into())
+    }
+}
+
+impl ExecutableLocation for () {
+    fn executable_path() -> io::Result<OsString> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return executable_path().map(PathBuf::into_os_string);
+        #[cfg(target_arch = "wasm32")]
         Err(ErrorKind::Unsupported.into())
     }
 }
