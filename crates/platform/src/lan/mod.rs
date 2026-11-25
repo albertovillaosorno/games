@@ -122,7 +122,7 @@ impl LanListener {
         match self.listener.accept() {
             Ok((stream, address)) => {
                 require_private(address)?;
-                DeadlineSocket::new(stream, self.config).map(Some)
+                DeadlineSocket::new(stream, self.config.deadline()?).map(Some)
             },
             Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error),
@@ -137,13 +137,11 @@ struct DeadlineSocket {
 }
 
 impl DeadlineSocket {
-    fn new(socket: TcpStream, config: LanConfig) -> io::Result<Self> {
+    fn new(socket: TcpStream, deadline: Instant) -> io::Result<Self> {
         socket.set_nonblocking(false)?;
         socket.set_nodelay(true)?;
-        Ok(Self {
-            deadline: config.deadline()?,
-            socket,
-        })
+        let _time = remaining(deadline)?;
+        Ok(Self { deadline, socket })
     }
 
     fn prepare_read(&self) -> io::Result<()> {
@@ -546,7 +544,7 @@ struct FrameStream {
 #[cfg(test)]
 impl FrameStream {
     fn connect(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
-        let socket = connect_socket(address, config)?;
+        let socket = connect_socket(address, config.deadline()?)?;
         Ok(Self {
             channel: FrameChannel::new(socket, config),
         })
@@ -563,11 +561,11 @@ impl FrameStream {
 
 fn connect_socket(
     address: SocketAddr,
-    config: LanConfig,
+    deadline: Instant,
 ) -> io::Result<DeadlineSocket> {
     require_private(address)?;
-    let stream = TcpStream::connect_timeout(&address, config.timeout)?;
-    DeadlineSocket::new(stream, config)
+    let stream = TcpStream::connect_timeout(&address, remaining(deadline)?)?;
+    DeadlineSocket::new(stream, deadline)
 }
 
 const fn private_address(address: SocketAddr) -> bool {
@@ -627,7 +625,7 @@ mod tests {
 
     use super::{
         FrameChannel, FrameStream, LanConfig, LanListener, SendProgress,
-        TimedStream,
+        TimedStream, connect_socket,
     };
 
     pub(super) const LOOPBACK: SocketAddr =
@@ -958,6 +956,26 @@ mod tests {
                 .unwrap_or(NonZeroUsize::MIN),
             max_players: NonZeroU8::new(2).unwrap_or(NonZeroU8::MIN),
         }
+    }
+
+    #[test]
+    fn outbound_socket_preserves_establishment_deadline() -> io::Result<()> {
+        let settings = config()?;
+        let listener = LanListener::bind(LOOPBACK, settings)?;
+        let address = listener.local_addr()?;
+        require(
+            error_kind(connect_socket(address, Instant::now()))
+                == Some(ErrorKind::TimedOut)
+                && listener.try_accept()?.is_none(),
+            "expired deadline must not open a socket",
+        )?;
+        let deadline = settings.deadline()?;
+        let socket = connect_socket(address, deadline)?;
+        let _host = accepted(&listener)?;
+        require(
+            socket.deadline == deadline,
+            "TCP connection must not renew the handshake deadline",
+        )
     }
 
     #[test]

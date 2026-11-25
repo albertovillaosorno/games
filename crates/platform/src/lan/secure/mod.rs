@@ -405,6 +405,8 @@ pub struct SecureFrameStream {
 impl SecureFrameStream {
     /// Connect and verify the server name against locally trusted roots.
     ///
+    /// TCP establishment and TLS negotiation share one transfer deadline.
+    ///
     /// # Errors
     ///
     /// Rejects public endpoints, untrusted hosts and I/O failures.
@@ -414,7 +416,7 @@ impl SecureFrameStream {
         tls: &ClientTls,
         name: ServerName<'static>,
     ) -> io::Result<Self> {
-        let socket = connect_socket(address, config)?;
+        let socket = connect_socket(address, config.deadline()?)?;
         let connection = ClientConnection::new(Arc::clone(&tls.0), name)
             .map_err(io::Error::other)?;
         handshake(
@@ -661,6 +663,7 @@ fn finish_handshake(
         .and_then(|chain| chain.first())
         .ok_or(ErrorKind::PermissionDenied)?;
     let fingerprint = PeerFingerprint::from_der(certificate.as_ref());
+    let _time = remaining(stream.socket.deadline)?;
     Ok(SecureFrameStream {
         channel: FrameChannel::new(stream, config),
         fingerprint,
@@ -687,7 +690,8 @@ mod tests {
     };
     use super::{
         ClientTls, ErrorKind, LanConfig, PeerFingerprint, RootCertStore,
-        SecureFrameStream, SecureLanListener, ServerName, ServerTls, io,
+        SecureFrameStream, SecureLanListener, ServerName, ServerTls,
+        finish_handshake, io,
     };
 
     const HOST: &str = "games.test";
@@ -1046,6 +1050,31 @@ mod tests {
             matches!(error, Some(ErrorKind::TimedOut | ErrorKind::WouldBlock)),
             "silent TLS handshake must time out",
         )
+    }
+
+    #[test]
+    fn expired_negotiation_cannot_publish_verified_stream() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let (host_result, remote_result) =
+            pair(&listener, settings, &keys.client, HOST)?;
+        for mut verified in [host_result?, remote_result?] {
+            let mut stream = verified
+                .channel
+                .stream
+                .take()
+                .ok_or(ErrorKind::NotConnected)?;
+            stream.socket.deadline = Instant::now();
+            require(
+                error_kind(finish_handshake(stream, settings))
+                    == Some(ErrorKind::TimedOut),
+                "final TLS identity admission must honor the deadline",
+            )?;
+        }
+        Ok(())
     }
 
     #[test]

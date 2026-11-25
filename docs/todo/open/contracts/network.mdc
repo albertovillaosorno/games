@@ -227,3 +227,10 @@ partial receive now closes the connection even when the caller polls
 only outbound progress or attempts a blocking send. A loopback test
 covers idle outbound polling, queued outbound polling and blocking
 transmission with a previously admitted partial header.
+
+Outbound TCP establishment and mutual TLS negotiation now share a
+single absolute deadline, rather than resetting the timeout after TCP
+connect. Final certificate admission also checks the remaining time.
+Loopback regressions verify that expired outbound attempts do not
+open sockets, successful TCP establishment preserves its deadline,
+and both TLS roles reject publication after negotiation expiry.
