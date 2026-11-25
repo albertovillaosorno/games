@@ -394,7 +394,6 @@ pub(in crate::software) fn open_window(
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
@@ -427,6 +426,7 @@ mod tests {
     use crate::ir::input::{
         HostEvent, InputStartup, NativeInput, key_from_name,
     };
+    use crate::ir::process::fixtures::{NativeSmoke, smoke_requested};
     use crate::ir::scene::{EventBatch, SceneLimits, SpriteDraw, SpriteRect};
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
@@ -663,7 +663,9 @@ mod tests {
 
     #[test]
     fn opt_in_native_accelerated_smoke() -> Result<(), RenderError> {
-        if env::var_os("GAMES_NATIVE_RENDER_SMOKE").is_none() {
+        if !smoke_requested(NativeSmoke::Render)
+            .map_err(|error| RenderError::Backend(error.to_string()))?
+        {
             return Ok(());
         }
         let _guard = super::super::NATIVE_SMOKE_LOCK

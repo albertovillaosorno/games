@@ -122,6 +122,11 @@ use crate::ir::input::InputNames;
 use crate::ir::measurement::MeasurementSource;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::process::ProcessPort;
+#[cfg(all(
+    not(target_os = "linux"),
+    any(test, feature = "test-fixtures")
+))]
+use crate::ir::process::fixtures::{FixturePort, NativeSmoke};
 use crate::ir::security::audio::PlaybackRequest;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::security::toolchain::CargoArguments;
@@ -263,7 +268,37 @@ impl ProcessPort for () {
         Err(ErrorKind::Unsupported.into())
     }
 
+    fn wait_for_retry(_delay: Duration) -> io::Result<()> {
+        Err(ErrorKind::Unsupported.into())
+    }
+
     fn write_status(_message: StatusMessage<'_>) -> io::Result<()> {
+        Err(ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(all(
+    not(target_os = "linux"),
+    any(test, feature = "test-fixtures")
+))]
+impl FixturePort for () {
+    fn smoke_requested(_check: NativeSmoke) -> io::Result<bool> {
+        Err(ErrorKind::Unsupported.into())
+    }
+
+    fn with_worker<Output, Worker, Foreground>(
+        _worker: Worker,
+        _foreground: Foreground,
+    ) -> io::Result<Output>
+    where
+        Output: Send,
+        Worker: FnOnce() -> io::Result<Output> + Send,
+        Foreground: FnOnce() -> io::Result<()>,
+    {
+        Err(ErrorKind::Unsupported.into())
+    }
+
+    fn yield_execution() -> io::Result<()> {
         Err(ErrorKind::Unsupported.into())
     }
 }

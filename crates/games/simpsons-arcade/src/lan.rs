@@ -395,13 +395,13 @@ const fn hosted_input(
 mod tests {
     use std::num::NonZeroU32;
     use std::slice::from_ref;
-    use std::thread;
 
     use games::input::LogicalAction;
     use games::replay::LiveInputLimits;
     use games::timing::StepClock;
     use games_platform::ir::lan::identity::LocalIdentity;
     use games_platform::ir::lan::{ClientTls, LanConfig};
+    use games_platform::ir::process::fixtures::{with_worker, yield_execution};
     use rcgen::{
         BasicConstraints, CertificateParams, CertifiedIssuer,
         ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
@@ -495,7 +495,7 @@ mod tests {
             if now()? >= deadline {
                 return Err(ErrorKind::TimedOut.into());
             }
-            thread::yield_now();
+            yield_execution()?;
         }
     }
 
@@ -529,18 +529,15 @@ mod tests {
     ) -> io::Result<SecureFrameStream> {
         let address = host.local_addr()?;
         let config = LanConfig::new(session_config(), TIMEOUT)?;
-        thread::scope(|scope| {
-            let remote = scope.spawn(|| {
-                SecureFrameStream::connect(address, config, client, HOST)
-            });
-            await_poll(host, live, |_host, state| {
-                state.pending_actions() == 1
-            })?;
-            advance(live)?;
-            remote.join().map_err(|_panic| {
-                io::Error::other("client handshake panicked")
-            })?
-        })
+        with_worker(
+            || SecureFrameStream::connect(address, config, client, HOST),
+            || {
+                await_poll(host, live, |_host, state| {
+                    state.pending_actions() == 1
+                })?;
+                advance(live)
+            },
+        )
     }
 
     fn send(
@@ -687,7 +684,7 @@ mod tests {
             if now()? >= deadline {
                 return Err(ErrorKind::TimedOut.into());
             }
-            thread::yield_now();
+            yield_execution()?;
         }
     }
 
@@ -782,7 +779,7 @@ mod tests {
                 live.pending_actions() == 0 && admitted.is_none(),
                 "heartbeats refresh the lease without simulation input",
             )?;
-            thread::yield_now();
+            yield_execution()?;
         }
         Ok(())
     }
@@ -866,7 +863,7 @@ mod tests {
             if now()? >= disconnect_deadline {
                 return Err(ErrorKind::TimedOut.into());
             }
-            thread::yield_now();
+            yield_execution()?;
         }
         advance(&mut live)?;
         require(
@@ -889,7 +886,7 @@ mod tests {
             now()?.checked_add(TIMEOUT).ok_or(ErrorKind::TimedOut)?;
         loop {
             match client.poll() {
-                Ok(()) if now()? < deadline => thread::yield_now(),
+                Ok(()) if now()? < deadline => yield_execution()?,
                 Err(error) if error.kind() == ErrorKind::TimedOut => break,
                 _ => {
                     return Err(io::Error::other(

@@ -56,7 +56,27 @@ pub const FINGERPRINT_KEYS: &[&str] = &[
 
 /// Native smoke checks require fresh evidence even if sources are unchanged.
 pub const FRESH_CHECK_FLAGS: [&str; 2] =
-    ["GAMES_NATIVE_AUDIO_SMOKE", "GAMES_NATIVE_RENDER_SMOKE"];
+    [NativeSmoke::Audio.key(), NativeSmoke::Render.key()];
+
+/// Explicit opt-in for a native integration smoke check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeSmoke {
+    /// Exercise native audio playback.
+    Audio,
+    /// Exercise native graphics and input presentation.
+    Render,
+}
+
+impl NativeSmoke {
+    /// Shared environment name used for opt-in and cache invalidation.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Audio => "GAMES_NATIVE_AUDIO_SMOKE",
+            Self::Render => "GAMES_NATIVE_RENDER_SMOKE",
+        }
+    }
+}
 
 /// An admitted environment observation; debug output never reveals values.
 pub struct Environment {

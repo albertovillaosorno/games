@@ -328,3 +328,15 @@ port verifies argument and formatting dispatch and failure propagation.
 Fresh joint validation 1795649826427734182-479878 passed 1,457 aggregate
 test executions and all six portable core targets. Host scheduling and
 native smoke environment checks in title tests remain open.
+
+The shared process contract now owns cooperative retry waits without
+coupling simulation ticks to native scheduling. The controller retains
+its existing one-millisecond transport backpressure delay. Test-only
+scoped workers, cooperative polling and typed native smoke opt-ins are
+shared by the title and platform adapters; smoke keys remain aligned with
+validation cache admission. Worker completion is joined even on a
+foreground error. Fresh joint validation 1795650229784564411-705202
+passed 1,469 aggregate test executions and all six portable core targets.
+Physical device and native non-Linux runtime support remain unverified.
+The combined Xvfb rendering and dummy-audio gate also passed in fresh
+run 1795650318348738722-728178, including the native controller panel.

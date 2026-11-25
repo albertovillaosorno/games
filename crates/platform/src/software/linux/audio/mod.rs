@@ -138,13 +138,13 @@ pub(in crate::software) fn devices() -> Result<AudioDevices, PlaybackError> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::num::NonZeroU32;
 
     use super::super::NATIVE_SMOKE_LOCK;
     use super::*;
     use crate::ir::audio::NativeAudio;
     use crate::ir::audio::fixtures::{configuration, pcm};
+    use crate::ir::process::fixtures::{NativeSmoke, smoke_requested};
     fn require(condition: bool, reason: &str) -> Result<(), PlaybackError> {
         if condition {
             Ok(())
@@ -155,7 +155,9 @@ mod tests {
 
     #[test]
     fn opt_in_native_audio_smoke() -> Result<(), PlaybackError> {
-        if env::var_os("GAMES_NATIVE_AUDIO_SMOKE").is_none() {
+        if !smoke_requested(NativeSmoke::Audio)
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?
+        {
             return Ok(());
         }
         let _guard = NATIVE_SMOKE_LOCK

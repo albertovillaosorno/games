@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable launch arguments and explicit status output.
+//   - Portable launch arguments, status output and cooperative retry waits.
 // - Must-Not:
 //   - Read host arguments, write native streams or interpret title options.
 // - Allows:
 //   - Inputs: Explicit requests and borrowed formatted status messages.
 //   - Outputs: Owned portable arguments or typed I/O errors.
-//   - Side effects: Only explicitly requested adapter dispatch.
+//   - Side effects: Only explicitly requested adapter dispatch or waiting.
 // - Split-When:
 //   - Additional process capabilities require independent admission.
 // - Merge-When:
@@ -29,14 +29,21 @@
 // - Defaults:
 //   - Missing host implementations return unsupported errors.
 
-//! Portable process arguments and status output.
+//! Portable process arguments, status output and cooperative retry waits.
+
+/// Isolated host integration test scheduling and opt-in.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures;
 
 use std::ffi::OsString;
 use std::fmt::Arguments;
 use std::io::Result as IoResult;
+use std::time::Duration;
 
 pub(crate) trait ProcessPort {
     fn arguments() -> IoResult<Vec<OsString>>;
+
+    fn wait_for_retry(delay: Duration) -> IoResult<()>;
 
     fn write_status(message: Arguments<'_>) -> IoResult<()>;
 }
@@ -47,6 +54,17 @@ pub(crate) trait ProcessPort {
 /// Returns an unavailable capability or host observation error.
 pub fn arguments() -> IoResult<Vec<OsString>> {
     arguments_with::<()>()
+}
+
+/// Defer a retry after nonblocking host work reports backpressure.
+///
+/// The caller chooses the delay. This does not advance simulation time
+/// or guarantee an exact scheduling interval.
+///
+/// # Errors
+/// Reports unavailable cooperative waiting.
+pub fn wait_for_retry(delay: Duration) -> IoResult<()> {
+    wait_with::<()>(delay)
 }
 
 /// Write a formatted status message followed by a newline.
@@ -62,6 +80,16 @@ where
     Port: ProcessPort,
 {
     Port::arguments()
+}
+
+fn wait_with<Port>(delay: Duration) -> IoResult<()>
+where
+    Port: ProcessPort,
+{
+    if delay.is_zero() {
+        return Ok(());
+    }
+    Port::wait_for_retry(delay)
 }
 
 fn write_status_with<Port>(message: Arguments<'_>) -> IoResult<()>
@@ -84,12 +112,33 @@ mod tests {
             Ok(vec![OsString::from("--local"), OsString::from("a b")])
         }
 
+        fn wait_for_retry(delay: Duration) -> IoResult<()> {
+            if delay == Duration::from_millis(1) {
+                Ok(())
+            } else {
+                Err(ErrorKind::Unsupported.into())
+            }
+        }
+
         fn write_status(message: Arguments<'_>) -> IoResult<()> {
             if message.to_string() == "ready 4" {
                 Ok(())
             } else {
                 Err(ErrorKind::BrokenPipe.into())
             }
+        }
+    }
+
+    #[test]
+    fn retry_wait_preserves_explicit_delay_and_failure() -> IoResult<()> {
+        wait_with::<Recording>(Duration::ZERO)?;
+        wait_with::<Recording>(Duration::from_millis(1))?;
+        if wait_with::<Recording>(Duration::from_millis(2))
+            .is_err_and(|error| error.kind() == ErrorKind::Unsupported)
+        {
+            Ok(())
+        } else {
+            Err(ErrorKind::InvalidData.into())
         }
     }
 

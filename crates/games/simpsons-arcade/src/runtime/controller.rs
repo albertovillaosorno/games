@@ -32,8 +32,8 @@
 
 use std::ffi::OsString;
 use std::io::ErrorKind;
+use std::mem;
 use std::time::Duration;
-use std::{mem, thread};
 
 use games::input::InputEvent;
 use games::input::physical::ControllerAxis;
@@ -41,6 +41,7 @@ use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::NativeWindow;
 use games_platform::ir::graphics::scene_renderer::{SceneSession, SceneView};
 use games_platform::ir::input::{HostEvent, InputStartup, NativeInput};
+use games_platform::ir::process::wait_for_retry;
 use games_platform::ir::scene::{EventBatch, SceneLimits, SpriteDraw};
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
 
@@ -345,7 +346,7 @@ fn interactive(
         {
             deferred = rejected;
             // Transport must progress before consuming more native input.
-            thread::sleep(Duration::from_millis(1));
+            wait_for_retry(Duration::from_millis(1)).map_err(failure)?;
             continue;
         }
         if input
@@ -404,10 +405,9 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-
     use games::input::physical::{ControllerButton, KeyboardKey};
     use games::input::touch::{ContactId, ContactPhase};
+    use games_platform::ir::process::fixtures::{NativeSmoke, smoke_requested};
 
     use super::super::{DEFAULT_PROFILES, configured_profiles};
     use super::*;
@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn opt_in_native_panels_smoke() -> Result<(), RenderError> {
-        if env::var_os("GAMES_NATIVE_RENDER_SMOKE").is_none() {
+        if !smoke_requested(NativeSmoke::Render).map_err(failure)? {
             return Ok(());
         }
         let mut window = NativeWindow::open(
