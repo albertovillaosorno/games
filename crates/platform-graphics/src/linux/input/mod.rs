@@ -51,8 +51,8 @@ use sdl2::mouse::MouseButton;
 use sdl2::video::Window;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
-use super::RenderError;
 use super::sprites::SceneSession;
+use crate::frame::RenderError;
 
 /// Events a host can forward to its action router or application loop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -750,7 +750,7 @@ mod tests {
         axis_code, button_code, deliver_feedback, event_elapsed, key_from_name,
         key_name, mouse_code, open_candidate, route, route_contact,
     };
-    use crate::linux::RenderError;
+    use crate::frame::RenderError;
 
     #[test]
     fn keyboard_profile_names_preserve_routing_identities() {

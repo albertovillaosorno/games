@@ -44,7 +44,7 @@ use games::replay::LiveSimulation;
 use games_assets::ManifestLimits;
 use games_assets::pcm::PcmSamples;
 use games_platform_audio::linux::{NativeAudio, PlaybackSpec};
-use games_platform_graphics::linux::RenderError;
+use games_platform_graphics::frame::RenderError;
 use games_platform_storage::bundle::MediaOverlay;
 
 use super::launch::AudioSelection;

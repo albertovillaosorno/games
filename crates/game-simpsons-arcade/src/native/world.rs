@@ -37,10 +37,9 @@ use games::input::LogicalAction;
 use games::presentation::{DisplaySettings, PresentationMode};
 use games::replay::InputStep as _;
 use games_assets::AssetFormat;
-use games_platform_graphics::linux::sprites::{
-    SceneSession, SpriteDraw, SpriteRect,
-};
-use games_platform_graphics::linux::{FrameLayout, RenderError};
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::sprites::SceneSession;
+use games_platform_graphics::scene::{SpriteDraw, SpriteRect};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{

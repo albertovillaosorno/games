@@ -382,9 +382,10 @@ button 2 right=x
 
 Seat numbers 1-4 default to Marge, Homer, Bart and Lisa. Actions are
 pause, start, primary, secondary, left, right, up and down. Key names
-are SDL scancode names; button names follow SDL's game-controller
-mapping names. Unspecified controls keep the defaults. Use `none` for an unbound
-key or mouse button. Mouse names are left, middle, right, x1 and x2.
+retain the version-one SDL scancode spelling, resolved by the native
+adapter; controller button names retain the established mapping spelling.
+Unspecified controls keep the defaults. Use `none` for an unbound key or
+mouse button. Mouse names are left, middle, right, x1 and x2.
 Only seat 1 defines the global keyboard pause binding. Duplicate
 keyboard or mouse bindings across stations and duplicate buttons within
 a station are rejected, as are unknown names and repeated overrides.
@@ -398,7 +399,7 @@ axis-threshold 2 rightx=20000/9000
 axis 2 righttrigger=none/primary
 ```
 
-Axis names follow SDL: leftx, lefty, rightx, righty, lefttrigger and
+Version-one axis names are leftx, lefty, rightx, righty, lefttrigger and
 righttrigger. The two actions correspond to negative and positive
 motion; none disables a direction. Triggers accept only positive
 bindings. Press magnitudes must be 1-32767 and release magnitudes

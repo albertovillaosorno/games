@@ -31,9 +31,10 @@
 
 //! Station join, verified remote status and free-rejoin presentation.
 
-use games_platform_graphics::linux::RenderError;
-use games_platform_graphics::linux::sprites::{SceneSession, SpriteDraw};
+use games_platform_graphics::frame::RenderError;
+use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
+use games_platform_graphics::scene::SpriteDraw;
 
 use super::{Profiles, failure, key_label, size};
 use crate::{CONTINUE_TICKS, Participation, Player};
@@ -341,8 +342,9 @@ fn plate<'text>(top: &'text str, bottom: &'text str) -> Vec<TextLine<'text>> {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use games_platform_graphics::linux::sprites::SceneLimits;
-    use games_platform_graphics::linux::{FrameLayout, NativeWindow};
+    use games_platform_graphics::frame::FrameLayout;
+    use games_platform_graphics::linux::NativeWindow;
+    use games_platform_graphics::scene::SceneLimits;
 
     use super::super::{configured_profiles, dimension};
     use super::*;

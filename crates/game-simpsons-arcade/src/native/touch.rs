@@ -33,10 +33,10 @@
 
 use games::input::InputMapping;
 use games::input::touch::{TouchLayout, TouchPoint, TouchZone};
-use games_platform_graphics::linux::sprites::{
-    SceneSession, SpriteDraw, SpriteRect,
-};
-use games_platform_graphics::linux::{FrameLayout, RenderError, ui};
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::sprites::SceneSession;
+use games_platform_graphics::linux::ui;
+use games_platform_graphics::scene::{SpriteDraw, SpriteRect};
 
 use super::{
     Action, CONTROLS, Control, Player, Profiles, dimension, size, world,
@@ -456,7 +456,7 @@ pub(super) fn to_scene(point: TouchPoint, width: u32) -> Option<TouchPoint> {
 mod tests {
     use games::input::touch::{ContactId, ContactPhase};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
-    use games_platform_graphics::linux::RenderError;
+    use games_platform_graphics::frame::RenderError;
 
     use super::super::DEFAULT_PROFILES;
     use super::{

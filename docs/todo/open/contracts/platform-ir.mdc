@@ -127,3 +127,13 @@ types and traits. Synthetic controls verify these distinctions. Fresh
 validation passed in run 1795637004022076798-1711638. No baseline entries
 were added. This is not semantic name resolution or macro expansion;
 title and tool host-I/O migration remains open.
+
+Frame layout, rendering errors, sprite command values, scene budgets and
+bounded event outcomes now live in backend-independent graphics modules.
+The existing RGBA stride, extent and byte-budget checks are preserved;
+texture creation, rectangle conversion and native event polling remain
+in the adapter. Title and reference-rendering consumers use the neutral
+values directly, removing twelve further platform references. Fresh
+native render/audio validation passed in run
+1795637163797669035-1780490. Other backend implementations and physical
+performance acceptance remain open.

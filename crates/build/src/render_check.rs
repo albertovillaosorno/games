@@ -43,10 +43,12 @@ use games_assets::ContentHash;
 use games_assets::indexed::IndexedTiles;
 use games_assets::indexed::atlas::{AtlasTile, TileAtlasLayout};
 use games_importer::mame::Machine;
-use games_platform_graphics::linux::sprites::{
-    AtlasId, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::NativeWindow;
+use games_platform_graphics::linux::sprites::SceneSession;
+use games_platform_graphics::scene::{
+    AtlasId, SceneLimits, SpriteDraw, SpriteRect,
 };
-use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
 

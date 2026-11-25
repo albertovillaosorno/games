@@ -71,15 +71,17 @@ use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform::performance::{
     FrameMeter, peak_resident_bytes, resident_bytes,
 };
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::NativeWindow;
 use games_platform_graphics::linux::input::{
     HostEvent, InputStartup, NativeInput, key_from_name, key_name,
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
-use games_platform_graphics::linux::sprites::{
-    AtlasId, EventBatch, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
-};
+use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_graphics::linux::ui::PlateLayout;
-use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
+use games_platform_graphics::scene::{
+    AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
+};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
 use games_platform_storage::preferences::{DisplayStore, VolumeStore};
@@ -2758,8 +2760,8 @@ mod tests {
     };
     use games::input::{InputEvent, LogicalAction};
     use games::replay::{InputStep as _, LiveSimulation};
-    use games_platform_graphics::linux::RenderError;
-    use games_platform_graphics::linux::sprites::EventBatch;
+    use games_platform_graphics::frame::RenderError;
+    use games_platform_graphics::scene::EventBatch;
 
     use super::{
         Action, Cabinet, Control, Controls, DEFAULT_PROFILES, LiveInputLimits,

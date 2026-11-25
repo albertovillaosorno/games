@@ -49,101 +49,10 @@ use sdl2::render::{
 use sdl2::video::WindowContext;
 
 use super::{
-    FrameLayout, RenderError, apply_window_mode, copy_to_viewport,
-    drawable_viewport, validate_dimensions,
+    apply_window_mode, copy_to_viewport, drawable_viewport, validate_dimensions,
 };
-
-/// An atlas identifier scoped to a scene session.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AtlasId(usize);
-
-/// Limits on atlas allocation and per-frame command count.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SceneLimits {
-    /// Total logical RGBA bytes permitted across loaded atlases.
-    pub atlas_bytes: NonZeroUsize,
-    /// Maximum number of simultaneously loaded atlases.
-    pub atlases: NonZeroUsize,
-    /// Maximum number of draw commands per frame.
-    pub sprites: NonZeroUsize,
-}
-
-/// Result of processing one bounded batch of native events.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EventBatch {
-    /// At least one event was delivered before a poll returned no event.
-    Drained,
-    /// The initial poll returned no event.
-    Empty,
-    /// The event budget was reached; more events may be waiting.
-    Limited,
-    /// The caller requested termination from its event handler.
-    Stopped,
-}
-
-/// A nonempty integer rectangle in atlas or logical scene pixels.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SpriteRect {
-    /// Rectangle height.
-    pub height: NonZeroU32,
-    /// Rectangle width.
-    pub width: NonZeroU32,
-    /// Horizontal origin.
-    pub x: i32,
-    /// Vertical origin.
-    pub y: i32,
-}
-
-impl SpriteRect {
-    fn native(self) -> Result<Rect, RenderError> {
-        validate_dimensions(self.width, self.height)?;
-        let max = i32::try_from(max_int_value())
-            .map_err(|_error| RenderError::InvalidDimensions)?;
-        if !(min_int_value()..=max).contains(&self.x)
-            || !(min_int_value()..=max).contains(&self.y)
-        {
-            return Err(RenderError::InvalidSprite);
-        }
-        Ok(Rect::new(
-            self.x,
-            self.y,
-            self.width.get(),
-            self.height.get(),
-        ))
-    }
-
-    fn source(self, layout: FrameLayout) -> Result<Rect, RenderError> {
-        let left = u32::try_from(self.x)
-            .map_err(|_error| RenderError::InvalidSprite)?;
-        let top = u32::try_from(self.y)
-            .map_err(|_error| RenderError::InvalidSprite)?;
-        if left
-            .checked_add(self.width.get())
-            .is_none_or(|right| right > layout.width().get())
-            || top
-                .checked_add(self.height.get())
-                .is_none_or(|bottom| bottom > layout.height().get())
-        {
-            return Err(RenderError::InvalidSprite);
-        }
-        self.native()
-    }
-}
-
-/// One ordered sprite command; later commands are drawn over earlier ones.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SpriteDraw {
-    /// Atlas to sample.
-    pub atlas: AtlasId,
-    /// Destination in logical scene pixels (may be clipped).
-    pub destination: SpriteRect,
-    /// Reverse horizontal pixel order.
-    pub flip_horizontal: bool,
-    /// Reverse vertical pixel order.
-    pub flip_vertical: bool,
-    /// Source rectangle entirely within the atlas.
-    pub source: SpriteRect,
-}
+use crate::frame::{FrameLayout, RenderError};
+use crate::scene::{AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect};
 
 struct Atlas<'texture> {
     layout: FrameLayout,
@@ -187,7 +96,7 @@ impl<'texture, Context> Atlases<'texture, Context> {
         texture.set_blend_mode(BlendMode::BLEND);
         texture.set_scale_mode(ScaleMode::Nearest);
         texture
-            .update(None, pixels, layout.pitch)
+            .update(None, pixels, layout.pitch())
             .map_err(|error| RenderError::Backend(error.to_string()))?;
         let id = AtlasId(self.entries.len());
         self.entries.push(Atlas { layout, texture });
@@ -216,8 +125,8 @@ impl<'texture, Context> Atlases<'texture, Context> {
                 .entries
                 .get(sprite.atlas.0)
                 .ok_or(RenderError::InvalidSprite)?;
-            let _source = sprite.source.source(atlas.layout)?;
-            let _destination = sprite.destination.native()?;
+            let _source = source_rectangle(sprite.source, atlas.layout)?;
+            let _destination = native_rectangle(sprite.destination)?;
         }
         Ok(())
     }
@@ -539,6 +448,43 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
     }
 }
 
+fn native_rectangle(rectangle: SpriteRect) -> Result<Rect, RenderError> {
+    validate_dimensions(rectangle.width, rectangle.height)?;
+    let max = i32::try_from(max_int_value())
+        .map_err(|_error| RenderError::InvalidDimensions)?;
+    if !(min_int_value()..=max).contains(&rectangle.x)
+        || !(min_int_value()..=max).contains(&rectangle.y)
+    {
+        return Err(RenderError::InvalidSprite);
+    }
+    Ok(Rect::new(
+        rectangle.x,
+        rectangle.y,
+        rectangle.width.get(),
+        rectangle.height.get(),
+    ))
+}
+
+fn source_rectangle(
+    rectangle: SpriteRect,
+    layout: FrameLayout,
+) -> Result<Rect, RenderError> {
+    let left = u32::try_from(rectangle.x)
+        .map_err(|_error| RenderError::InvalidSprite)?;
+    let top = u32::try_from(rectangle.y)
+        .map_err(|_error| RenderError::InvalidSprite)?;
+    if left
+        .checked_add(rectangle.width.get())
+        .is_none_or(|right| right > layout.width().get())
+        || top
+            .checked_add(rectangle.height.get())
+            .is_none_or(|bottom| bottom > layout.height().get())
+    {
+        return Err(RenderError::InvalidSprite);
+    }
+    native_rectangle(rectangle)
+}
+
 fn dispatch_batch<Source, Next, Dispatch>(
     source: &mut Source,
     budget: NonZeroUsize,
@@ -581,8 +527,8 @@ where
         let atlas = atlases
             .get(sprite.atlas.0)
             .ok_or(RenderError::InvalidSprite)?;
-        let source = sprite.source.source(atlas.layout)?;
-        let destination = sprite.destination.native()?;
+        let source = source_rectangle(sprite.source, atlas.layout)?;
+        let destination = native_rectangle(sprite.destination)?;
         if sprite.flip_horizontal || sprite.flip_vertical {
             canvas
                 .copy_ex(

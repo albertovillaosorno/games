@@ -57,85 +57,11 @@ use sdl2::video::FullscreenType;
 use sdl2::{EventPump, Sdl};
 
 use self::input::{InputStartup, NativeInput};
-use self::sprites::{SceneLimits, SceneSession, SceneTextures};
+use self::sprites::{SceneSession, SceneTextures};
+use crate::frame::{FrameLayout, RenderError};
+use crate::scene::SceneLimits;
 // SDL_RENDERER_ACCELERATED in the public SDL2 renderer flags.
 const ACCELERATED_FLAG: u32 = 2;
-
-/// An explicit native rendering failure.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RenderError {
-    /// The native display or renderer rejected an operation.
-    Backend(String),
-    /// The pixel or surface dimensions are not representable.
-    InvalidDimensions,
-    /// The supplied frame is not exactly the requested RGBA extent.
-    InvalidLength,
-    /// An atlas or sprite rectangle is absent or outside its source.
-    InvalidSprite,
-    /// The frame requires more bytes than permitted.
-    TooLarge,
-}
-
-/// A bounded, tightly packed logical RGBA8 frame.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FrameLayout {
-    bytes: usize,
-    height: NonZeroU32,
-    pitch: usize,
-    width: NonZeroU32,
-}
-
-impl FrameLayout {
-    /// Number of bytes in one complete frame.
-    #[must_use]
-    pub const fn bytes(self) -> usize {
-        self.bytes
-    }
-
-    /// Logical height of the frame.
-    #[must_use]
-    pub const fn height(self) -> NonZeroU32 {
-        self.height
-    }
-
-    /// Check dimensions and the caller's maximum texture upload size.
-    ///
-    /// # Errors
-    /// Rejects unrepresentable dimensions, stride or total byte counts.
-    pub fn new(
-        width: NonZeroU32,
-        height: NonZeroU32,
-        max_bytes: NonZeroUsize,
-    ) -> Result<Self, RenderError> {
-        validate_dimensions(width, height)?;
-        let pitch = usize::try_from(width.get())
-            .ok()
-            .and_then(|pixels| pixels.checked_mul(4))
-            .ok_or(RenderError::InvalidDimensions)?;
-        if i32::try_from(pitch).is_err() {
-            return Err(RenderError::InvalidDimensions);
-        }
-        let bytes = usize::try_from(height.get())
-            .ok()
-            .and_then(|rows| pitch.checked_mul(rows))
-            .ok_or(RenderError::TooLarge)?;
-        if bytes > max_bytes.get() {
-            return Err(RenderError::TooLarge);
-        }
-        Ok(Self {
-            bytes,
-            height,
-            pitch,
-            width,
-        })
-    }
-
-    /// Logical width of the frame.
-    #[must_use]
-    pub const fn width(self) -> NonZeroU32 {
-        self.width
-    }
-}
 
 /// A native window with an explicitly accelerated renderer.
 pub struct NativeWindow {
@@ -377,8 +303,8 @@ fn create_texture<Context>(
     let mut texture = creator
         .create_texture_streaming(
             PixelFormatEnum::RGBA32,
-            layout.width.get(),
-            layout.height.get(),
+            layout.width().get(),
+            layout.height().get(),
         )
         .map_err(|error| RenderError::Backend(error.to_string()))?;
     texture.set_blend_mode(BlendMode::NONE);
@@ -396,14 +322,14 @@ where
     Target: RenderTarget,
 {
     let FramePresentation { layout, mode } = presentation;
-    if pixels.len() != layout.bytes {
+    if pixels.len() != layout.bytes() {
         return Err(RenderError::InvalidLength);
     }
     let Some(drawable) = drawable_viewport(canvas, layout, mode)? else {
         return Ok(false);
     };
     texture
-        .update(None, pixels, layout.pitch)
+        .update(None, pixels, layout.pitch())
         .map_err(|error| RenderError::Backend(error.to_string()))?;
     copy_to_viewport(canvas, texture, drawable)?;
     Ok(true)
@@ -428,7 +354,7 @@ where
     validate_dimensions(width, height)?;
     Ok(Some(mode.layout(
         Dimensions::new(width, height),
-        Dimensions::new(layout.width, layout.height),
+        Dimensions::new(layout.width(), layout.height()),
     )))
 }
 
@@ -476,13 +402,12 @@ mod tests {
     use sdl2::video::FullscreenType;
 
     use super::input::{HostEvent, NativeInput};
-    use super::sprites::{
-        EventBatch, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
-    };
+    use super::sprites::SceneSession;
     use super::{
         FrameLayout, FramePresentation, NativeWindow, RenderError,
         create_texture, draw_frame,
     };
+    use crate::scene::{EventBatch, SceneLimits, SpriteDraw, SpriteRect};
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];

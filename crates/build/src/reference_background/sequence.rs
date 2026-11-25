@@ -37,7 +37,8 @@ use std::time::Instant;
 
 use games_importer::mame::Machine;
 use games_importer::mame::background::Pixel;
-use games_platform_graphics::linux::{FrameSession, NativeWindow, RenderError};
+use games_platform_graphics::frame::RenderError;
+use games_platform_graphics::linux::{FrameSession, NativeWindow};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{

@@ -54,11 +54,11 @@ use games_importer::mame::objects::RAM_BYTES;
 use games_importer::mame::priority::VideoPriority;
 use games_importer::mame::tilemap::TilemapSnapshot;
 #[cfg(feature = "native-preview")]
-use games_platform_graphics::linux::sprites::{
-    SceneLimits, SpriteDraw, SpriteRect,
-};
+use games_platform_graphics::frame::{FrameLayout, RenderError};
 #[cfg(feature = "native-preview")]
-use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
+use games_platform_graphics::linux::NativeWindow;
+#[cfg(feature = "native-preview")]
+use games_platform_graphics::scene::{SceneLimits, SpriteDraw, SpriteRect};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
 

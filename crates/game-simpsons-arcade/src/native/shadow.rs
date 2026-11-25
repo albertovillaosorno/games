@@ -34,10 +34,9 @@
 use std::num::NonZeroU32;
 
 use games_assets::AssetFormat;
-use games_platform_graphics::linux::RenderError;
-use games_platform_graphics::linux::sprites::{
-    SceneSession, SpriteDraw, SpriteRect,
-};
+use games_platform_graphics::frame::RenderError;
+use games_platform_graphics::linux::sprites::SceneSession;
+use games_platform_graphics::scene::{SpriteDraw, SpriteRect};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{Art, Scene, failure};

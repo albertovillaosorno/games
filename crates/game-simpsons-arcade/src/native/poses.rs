@@ -38,7 +38,7 @@ use std::path::Path;
 use std::str::from_utf8;
 
 use games_assets::ContentHash;
-use games_platform_graphics::linux::RenderError;
+use games_platform_graphics::frame::RenderError;
 use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_storage::file::snapshot;
 

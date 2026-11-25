@@ -33,8 +33,9 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use super::sprites::{AtlasId, SceneSession, SpriteDraw, SpriteRect};
-use super::{FrameLayout, RenderError};
+use super::sprites::SceneSession;
+use crate::frame::{FrameLayout, RenderError};
+use crate::scene::{AtlasId, SpriteDraw, SpriteRect};
 
 type Rasterized = (FrameLayout, Vec<u8>);
 

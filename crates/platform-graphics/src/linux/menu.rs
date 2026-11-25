@@ -38,9 +38,10 @@ use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 use games::session::{LocalSession, MenuItem, SessionPhase};
 
-use super::RenderError;
-use super::sprites::{SceneSession, SpriteDraw};
+use super::sprites::SceneSession;
 use super::ui::{PlateLayout, TextAtlas, TextLine};
+use crate::frame::RenderError;
+use crate::scene::SpriteDraw;
 
 const PHASES: [SessionPhase; 3] = [
     SessionPhase::MainMenu,

@@ -2125,3 +2125,17 @@ and three and six misses of the 16.667 ms work budget respectively.
 The sample uses virtual input and a software renderer under a window
 manager; it does not establish physical GPU, controller, input-latency
 or audio acceptance. Captures and logs remain local and ignored.
+
+Portable input and graphics follow-up: the optimized preview passed
+original-media smoke with a version-one custom profile remapping keyboard,
+controller buttons, digital axes and two touch panels. After extraction
+of backend-independent frame and scene values, the 3,416,904-byte build
+passed the same 512-by-384 adaptive smoke, with 192 added logical columns,
+444 camera columns, both cooperative families, six reinforcement meters
+and dedicated and combined restraint recovery verified. The run missed
+no 16.667 ms host budgets over 600 movement and 20 strike submissions.
+Whole-smoke peak RSS was 219,893,760 bytes, versus 159,293,440 bytes in the
+preceding profile run. These are individual software OpenGL samples,
+not a controlled physical performance comparison. The runs used dummy
+SDL audio and synthetic input; actual audibility and physical device
+acceptance remain open.

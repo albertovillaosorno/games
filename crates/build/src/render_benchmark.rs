@@ -43,8 +43,9 @@ use games::presentation::FramePacing;
 use games_platform::performance::{
     FrameMeter, peak_resident_bytes, resident_bytes,
 };
-use games_platform_graphics::linux::sprites::{SceneSession, SpriteDraw};
-use games_platform_graphics::linux::{FrameLayout, RenderError};
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::sprites::SceneSession;
+use games_platform_graphics::scene::SpriteDraw;
 
 use crate::render_check::present;
 

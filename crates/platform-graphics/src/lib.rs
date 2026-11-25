@@ -31,6 +31,12 @@
 
 //! Native graphics adapters outside the deterministic engine.
 
+/// Backend-independent frame layout and rendering errors.
+pub mod frame;
+
 /// SDL2-backed Linux RGBA presentation.
 #[cfg(target_os = "linux")]
 pub mod linux;
+
+/// Backend-independent scene command values.
+pub mod scene;

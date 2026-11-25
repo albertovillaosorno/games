@@ -39,7 +39,7 @@ use games::performance::{
 };
 use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
 use games_platform::performance::{FrameMeter, resident_bytes};
-use games_platform_graphics::linux::RenderError;
+use games_platform_graphics::frame::RenderError;
 
 use super::failure;
 

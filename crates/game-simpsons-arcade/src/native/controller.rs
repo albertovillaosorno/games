@@ -37,14 +37,14 @@ use std::{mem, thread};
 
 use games::input::InputEvent;
 use games::input::physical::ControllerAxis;
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::NativeWindow;
 use games_platform_graphics::linux::input::{
     HostEvent, InputStartup, NativeInput,
 };
-use games_platform_graphics::linux::sprites::{
-    EventBatch, SceneLimits, SceneSession, SpriteDraw,
-};
+use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
-use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
+use games_platform_graphics::scene::{EventBatch, SceneLimits, SpriteDraw};
 
 use super::launch::ControllerLaunch;
 use super::{

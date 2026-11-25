@@ -44,10 +44,9 @@ use games::performance::{
 use games::presentation::FramePacing;
 use games::replay::LiveSimulation;
 use games::session::LocalSession;
-use games_platform_graphics::linux::sprites::{
-    SceneSession, SpriteDraw, SpriteRect,
-};
-use games_platform_graphics::linux::{FrameLayout, RenderError};
+use games_platform_graphics::frame::{FrameLayout, RenderError};
+use games_platform_graphics::linux::sprites::SceneSession;
+use games_platform_graphics::scene::{SpriteDraw, SpriteRect};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
