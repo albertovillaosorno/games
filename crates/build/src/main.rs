@@ -116,7 +116,7 @@ const USAGE: &str = concat!(
     "RAW MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "GNU/Linux: games-build bundle replace-wave PARENT BASE_SHA256 KEY ",
     "WAV MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
-    "games-build zip verify PATH TITLE REV ",
+    "games-build zip|neo verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
@@ -228,6 +228,13 @@ impl Arguments {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Verification {
+    Mame(Machine),
+    Neo,
+    Zip,
+}
+
 #[derive(Debug)]
 enum Command {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -276,7 +283,7 @@ enum Command {
     TilemapCheck(Machine, PathBuf, PathBuf),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Upgrade(PathBuf, ContentHash, ManifestLimits),
-    Verify(Option<Machine>, Arguments),
+    Verify(Verification, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     WaveCompare(PathBuf, PathBuf, NonZeroU64),
 }
@@ -320,8 +327,8 @@ impl Command {
                     publication::MediaEncoding::Wave,
                 )
             },
-            (Some("zip"), Some("verify")) => {
-                Ok(Self::Verify(None, Arguments::parse(args.collect())?))
+            (Some(kind @ ("zip" | "neo")), Some("verify")) => {
+                Self::parse_verification(kind, args.collect())
             },
             #[cfg(any(target_os = "linux", target_os = "android"))]
             (Some("wave"), Some("compare")) => {
@@ -443,7 +450,7 @@ impl Command {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             "sample-check" => Self::parse_sample(selected, args),
             "verify" => Ok(Self::Verify(
-                Some(selected),
+                Verification::Mame(selected),
                 Arguments::parse_mame(selected, args.collect())?,
             )),
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -569,6 +576,18 @@ impl Command {
         ))
     }
 
+    fn parse_verification(
+        kind: &str,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        let verification = if kind == "neo" {
+            Verification::Neo
+        } else {
+            Verification::Zip
+        };
+        Ok(Self::Verify(verification, Arguments::parse(args)?))
+    }
+
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
@@ -636,9 +655,9 @@ impl Command {
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::ReplaceMedia(replacement) => replacement.run(),
-            Self::Verify(machine, args) => {
+            Self::Verify(format, args) => {
                 with_source(&args, |source, archive| {
-                    verify_archive(source, archive, machine)
+                    verify_source(source, archive, format)
                 })
             },
             Self::Import(selection, args) => {
@@ -737,14 +756,14 @@ fn main() -> Result<(), String> {
     Command::parse(env::args_os().skip(1))?.run()
 }
 
-fn verify_archive(
+fn verify_source(
     source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
-    machine: Option<Machine>,
+    format: Verification,
 ) -> Result<(), String> {
     let mut count = 0u64;
     let mut total = 0u64;
-    let mut visit = |_name: &str, payload: &[u8]| {
+    let visit = |_name: &str, payload: &[u8]| {
         count = count.checked_add(1).ok_or(ImportError::TooLarge)?;
         total = total
             .checked_add(
@@ -754,9 +773,12 @@ fn verify_archive(
             .ok_or(ImportError::TooLarge)?;
         Ok(())
     };
-    match machine {
-        Some(selected) => selected.visit_layout(source, archive, visit),
-        None => source.visit_flat_zip(archive, &mut visit),
+    match format {
+        Verification::Mame(selected) => {
+            selected.visit_layout(source, archive, visit)
+        },
+        Verification::Neo => source.visit_neo(archive, visit),
+        Verification::Zip => source.visit_flat_zip(archive, visit),
     }
     .map_err(|error| format!("archive: {error:?}"))?;
     let identity = source.identity();
@@ -1026,6 +1048,29 @@ mod tests {
                 args.into_iter().chain(["extra"]).map(OsString::from)
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn cartridge_verification_requires_explicit_identity_and_limits() {
+        let args = [
+            "neo",
+            "verify",
+            "cartridge.neo",
+            "synthetic",
+            "v1",
+            "8192",
+            "1024",
+            "2048",
+            "6",
+        ];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::Verify(Verification::Neo, _))
+        ));
+        assert!(
+            Command::parse(args.into_iter().take(8).map(OsString::from))
+                .is_err()
         );
     }
 

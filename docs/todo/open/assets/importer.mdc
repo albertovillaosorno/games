@@ -98,3 +98,19 @@ with no source fingerprint; independent read-back verified both families.
 Their canonical payload records match the existing version-one bundles
 exactly. Legacy graphics and audio read-back also retained their original
 canonical manifest addresses. No original archive or payload is tracked.
+
+The shared snapshot now also admits bounded NEO version-one cartridge
+containers. It validates the 4096-byte header, all six little-endian
+region lengths, exact file extent, required program and sprite regions,
+and every nonempty region's shared entry and aggregate budgets before
+calling the visitor. It borrows region bytes without extracting or
+executing them, and does not trust header text as a title identifier.
+Synthetic tests cover missing and truncated regions, unknown versions,
+trailing data, all three archive budgets, and visitor failure.
+
+Read-only `games-build neo verify` admitted the supplied Metal Slug
+container as five regions containing 27,525,120 bytes, with exact source,
+entry, aggregate and count limits. A one-byte reduction in the entry
+budget rejected the same source. This proves structural admission only:
+cartridge-specific graphics/audio conversion, edition authenticity,
+and gameplay are not established by the parser.

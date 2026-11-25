@@ -37,6 +37,7 @@ pub mod conversion;
 pub mod graphics;
 /// MAME machine profiles and shared arcade ROM-set conversion.
 pub mod mame;
+mod neo;
 /// Strict PCM16 WAVE reference capture admission.
 pub mod wave;
 
@@ -68,6 +69,8 @@ pub enum ImportError {
     EmptyConversion,
     /// The selected source layout is not supported by the converter.
     IncorrectSource,
+    /// Cartridge header version or region extents are invalid.
+    InvalidNeo,
     /// The title or revision identifier is not canonical.
     InvalidSourceIdentity,
     /// Reference WAVE headers or PCM frame extents are invalid.
