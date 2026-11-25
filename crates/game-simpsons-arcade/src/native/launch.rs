@@ -55,7 +55,7 @@ const USAGE: &str = concat!(
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA [--audio-mod SHA]] ",
-    "[--world SHA] ",
+    "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local ",
     "beside the binary.\n",
@@ -111,6 +111,7 @@ pub(super) struct Assets {
     pub(super) directory: PathBuf,
     pub(super) enemy: Option<[OsString; 2]>,
     pub(super) poses: Option<PathBuf>,
+    pub(super) shadow: Option<OsString>,
     pub(super) world: Option<OsString>,
 }
 
@@ -145,6 +146,7 @@ impl Assets {
             values.remove("audio").map(hash).transpose()?,
             values.remove("audio_mod").map(hash).transpose()?,
         )?;
+        let shadow = values.remove("shadow").map(hash).transpose()?;
         let world = values.remove("world").map(hash).transpose()?;
         let poses = values.remove("poses").map(|value| base.join(value));
         let controls = values.remove("controls").map(|value| base.join(value));
@@ -161,6 +163,7 @@ impl Assets {
                 directory,
                 enemy,
                 poses,
+                shadow,
                 world,
             },
             display,
@@ -180,6 +183,9 @@ impl Assets {
             None
         };
         let audio = AudioSelection::explicit(&mut args)?;
+        let shadow = flag(&mut args, "--shadow")
+            .then(|| next(&mut args))
+            .transpose()?;
         let world = if flag(&mut args, "--world") {
             Some(next(&mut args)?)
         } else {
@@ -194,6 +200,7 @@ impl Assets {
             directory: directory.into(),
             enemy,
             poses,
+            shadow,
             world,
         })
     }
@@ -640,7 +647,8 @@ mod tests {
         let text = format!(
             "{}poses=poses.txt\ncontrols=controls.txt\n\
              settings=preferences\naudio={DIGEST}\nworld={DIGEST}\n\
-             enemy_approach={DIGEST}\nenemy_strike={DIGEST}\n",
+             enemy_approach={DIGEST}\nenemy_strike={DIGEST}\n\
+             shadow={DIGEST}\n",
             catalogue()
         );
         let (assets, display, paths) = Assets::catalogue(path, &text)?;
@@ -653,6 +661,7 @@ mod tests {
             directory: PathBuf::from("/package/../local assets"),
             enemy: Some([DIGEST.into(), DIGEST.into()]),
             poses: Some(PathBuf::from("/package/poses.txt")),
+            shadow: Some(DIGEST.into()),
             world: Some(DIGEST.into()),
         };
         if assets != expected
@@ -677,6 +686,7 @@ mod tests {
             "poses=\n",
             "audio=not-a-hash\n",
             "audio_mod=not-a-hash\n",
+            "shadow=not-a-hash\n",
             "world=not-a-hash\n",
         ] {
             assert!(
@@ -711,10 +721,26 @@ mod tests {
             directory: PathBuf::from("parent"),
             enemy: Some(["approach".into(), "strike".into()]),
             poses: Some(PathBuf::from("poses")),
+            shadow: None,
             world: Some("world".into()),
         };
         if !launch.smoke || !launch.touch_enabled || launch.assets != expected {
             return Err(String::from("incorrect explicit selection"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_shadow_selection_is_optional() -> Result<(), String> {
+        let args = ["--shadow", "mask", "parent", "m", "h", "b", "l"];
+        let launch = Launch::parse(args.map(OsString::from).into())?;
+        if launch.assets.shadow != Some("mask".into()) {
+            return Err(String::from("explicit shadow missing"));
+        }
+        let (assets, _, _) =
+            Assets::catalogue(Path::new("local"), &catalogue())?;
+        if assets.shadow.is_some() {
+            return Err(String::from("shadow must be optional"));
         }
         Ok(())
     }

@@ -1330,3 +1330,37 @@ misses occurred across 600 movement and 60 combat submissions;
 mean host work was 67.462 and 54.333 microseconds respectively,
 and whole-smoke peak RSS was 124,506,112 bytes. This does not
 establish physical presentation, original hitbox or sound parity.
+
+Twenty additional isolated jump observations compare neutral, vertical
+and diagonal inputs for all four characters. Unobstructed movement
+supports the existing two-pixel axis stride, retained horizontal
+direction and held vertical movement. Camera and boundary interference
+in some traces prevents full world-coordinate or collision parity.
+
+The original separate airborne ground object is present in the observed
+Marge, Homer and Lisa jumps, aerial attacks and neutral specials. Bart
+omits it during the observed jumps and aerial attacks, with coverage
+only at displayed ticks one through four of his neutral special.
+A complete-scene pixel-exact import now preserves isolated transparent
+shadow coverage as black 40-percent alpha instead of discarding it.
+The locally published 24-by-8 mask is not tracked.
+
+An optional verified shadow bundle is selected through `--shadow SHA`
+or the local catalogue's `shadow` field. It adds one bounded atlas and
+up to four draws, centered on the projected ground position before
+depth-ordered actor draws. No extra atlas or draws are admitted for
+legacy launches without a shadow selection. Inline tests cover mask
+admission, character-specific visibility and readback comparison.
+Native smoke compares identical airborne and landed states with and
+without the mask, checking darkened RGB channels during lift and
+unchanged pixels after landing. Native alpha quantization, overlap
+ordering and exact pivots remain approximate.
+
+Fresh workspace validation passed in run 1795621791497204796-3634541.
+The optimized 3,235,440-byte preview passed adaptive 400x304 offscreen
+OpenGL touch and dummy-audio smoke with the 134-pose catalogue, both
+with and without the shadow selection. With the mask, all 600 movement
+and 60 combat submissions met the 16.667 ms host-work budget; mean
+submission work was 64.348 and 50.612 microseconds respectively, and
+whole-smoke peak RSS was 124,313,600 bytes. This establishes bounded
+native presentation, not exact original per-pixel shadow blending.

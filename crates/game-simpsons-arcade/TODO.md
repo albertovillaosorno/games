@@ -103,6 +103,15 @@ admission selects it for the rest of that attack. Its first preview
 tick and missing moving art use the neutral sequence. Hit timing and
 recovery are unchanged.
 
+Optional `--shadow SHA` follows the audio selection (if used) and
+precedes `--world` or PARENT. It selects an independently isolated
+`actor/shadow` mask from a verified local canonical bundle. Marge,
+Homer and Lisa display it during jumps, aerial attacks and specials;
+Bart uses it only during the observed early special ticks. The mask
+tracks the ground point, not actor lift. Without this option, no extra
+atlas is allocated. Native alpha blending and overlap ordering remain
+approximate.
+
 For the experimental first enemy, insert
 `--enemy APPROACH_SHA STRIKE_SHA` after `--poses FILE` (if used) and
 before PARENT. These are separately verified local canonical bundles
@@ -156,7 +165,8 @@ lisa=LISA_SHA
 ```
 
 Replace the placeholders with locally verified manifest digests. Optional
-asset fields are `poses`, `audio`, `audio_mod`, `world`, and the pair
+asset fields are `poses`, `audio`, `audio_mod`, `shadow`, `world`,
+and the pair
 `enemy_approach` and `enemy_strike`. The pose field names a catalogue
 file; the other asset fields name manifest digests. The `audio_mod`
 field requires `audio`. Relative paths resolve from the launch catalogue
@@ -179,7 +189,8 @@ explicit command-line choices override those fields.
 Integer mode uses aspect-fit below native logical resolution. Adaptive
 widens the logical frame only when a matching world strip is selected;
 otherwise it uses aspect-fit. Use the optional `world` catalogue digest
-or `--world SHA` after `--audio` (if used) and before PARENT. Generate
+or `--world SHA` after the audio and shadow options (if used) and
+before PARENT. Generate
 the local strip with the original observations and the build command:
 
 ```sh

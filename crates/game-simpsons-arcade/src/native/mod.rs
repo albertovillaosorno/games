@@ -38,6 +38,7 @@ mod lan;
 mod launch;
 mod measurement;
 mod poses;
+mod shadow;
 mod station_hud;
 mod touch;
 mod world;
@@ -436,6 +437,7 @@ struct Scene {
     menu: MenuArt,
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
+    shadow: Option<shadow::ShadowArt>,
     world: Vec<(i16, SpriteDraw)>,
     world_art: Option<world::WorldArt>,
 }
@@ -466,29 +468,25 @@ impl Scene {
             .map(|bundle| world::WorldArt::load(scene, &original, bundle))
             .transpose()?;
         drop(original);
-        let mut actors = Vec::new();
-        for (bundle, key) in source.actors.iter().zip(KEYS) {
-            let actor = Art::load(scene, bundle, key)?;
-            if actor.rect.width.get() > 128 || actor.rect.height.get() > 128 {
-                return Err(failure("unexpected actor extent"));
-            }
-            actors.push(actor);
-        }
+        let actors = load_actors(scene, source)?;
         Ok(Self {
-            actors: actors
-                .try_into()
-                .map_err(|_error| failure("actor count"))?,
+            actors,
             background,
             combat: source
                 .enemy
                 .as_ref()
                 .map(|bundles| encounter::CombatArt::load(scene, bundles))
                 .transpose()?,
-            draws: Vec::with_capacity(if source.enemy.is_some() {
-                28
-            } else {
-                17
-            }),
+            draws: Vec::with_capacity(
+                (if source.enemy.is_some() {
+                    28usize
+                } else {
+                    17usize
+                })
+                .saturating_add(
+                    usize::from(source.shadow.is_some()).saturating_mul(4),
+                ),
+            ),
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
             menu: load_menu(
                 scene,
@@ -501,6 +499,11 @@ impl Scene {
                 None
             },
             poses: source.poses.load(source.parent, scene)?,
+            shadow: source
+                .shadow
+                .as_ref()
+                .map(|bundle| shadow::ShadowArt::load(scene, bundle))
+                .transpose()?,
             world: Vec::with_capacity(5),
             world_art,
         })
@@ -612,13 +615,19 @@ impl Scene {
             combat.station_health(&mut self.draws, icon.x, station)?;
         }
         if station.health > 0 {
+            let position = view.project(station.position);
+            if let Some(shadow) = &self.shadow
+                && shadow::visible(player, station.maneuver)
+            {
+                self.draws.push(shadow.draw(position)?);
+            }
             let pose = self.poses.select(player, station).unwrap_or(actor);
             self.world.push((
                 station.position.y,
                 pose.draw(
                     ground_position(
                         pose,
-                        view.project(station.position),
+                        position,
                         station.maneuver.elevation(),
                     )?,
                     station.facing == Facing::Left,
@@ -652,6 +661,7 @@ struct OptionalSources {
     audio: Option<launch::AudioSelection>,
     enemy: Option<[OsString; 2]>,
     poses: poses::Catalogue,
+    shadow: Option<OsString>,
     world: Option<OsString>,
 }
 
@@ -661,6 +671,7 @@ struct Sources<'source> {
     enemy: Option<[CanonicalBundle; 2]>,
     parent: &'source Path,
     poses: poses::Catalogue,
+    shadow: Option<CanonicalBundle>,
     world: Option<CanonicalBundle>,
 }
 
@@ -684,6 +695,11 @@ impl<'source> Sources<'source> {
                 .transpose()?,
             parent,
             poses: options.poses,
+            shadow: options
+                .shadow
+                .as_ref()
+                .map(|hash| open_bundle(parent, hash))
+                .transpose()?,
             world: options
                 .world
                 .as_ref()
@@ -945,6 +961,21 @@ impl<'preferences> Interactive<'preferences> {
 }
 
 type LocalAdmission<Input> = Result<Option<u64>, RejectedInput<Input>>;
+
+fn load_actors(
+    scene: &mut SceneSession<'_, '_>,
+    source: &Sources<'_>,
+) -> Result<[Art; 4], RenderError> {
+    let mut actors = Vec::new();
+    for (bundle, key) in source.actors.iter().zip(KEYS) {
+        let actor = Art::load(scene, bundle, key)?;
+        if actor.rect.width.get() > 128 || actor.rect.height.get() > 128 {
+            return Err(failure("unexpected actor extent"));
+        }
+        actors.push(actor);
+    }
+    actors.try_into().map_err(|_error| failure("actor count"))
+}
 
 fn enqueue_local<Simulation>(
     live: &mut LiveSimulation<Simulation>,
@@ -1262,6 +1293,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             audio: assets.audio,
             enemy: assets.enemy,
             poses: catalogue,
+            shadow: assets.shadow,
             world: assets.world,
         })
         .and_then(|source| {
@@ -1677,6 +1709,7 @@ fn smoke_held_jump(
     if pixels == scene.readback().map_err(failure)? {
         return Err(failure("held jump not visibly presented"));
     }
+    shadow::smoke(scene, art, simulation.state(), true)?;
     for _ in 32..59u8 {
         let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
     }
@@ -1684,6 +1717,7 @@ fn smoke_held_jump(
     if landed.maneuver != Maneuver::Idle || landed.position != before.position {
         return Err(failure("held jump did not return to ground"));
     }
+    shadow::smoke(scene, art, simulation.state(), false)?;
     smoke_jump_edge(controls, simulation, false)?;
     let _released = simulation.advance(TICK_INTERVAL).map_err(failure)?;
     Ok(())
@@ -2146,6 +2180,7 @@ fn scene_limits(
     };
     let count = source.poses.count().saturating_add(enemy_atlases);
     let extension = usize::from(source.world.is_some());
+    let shadows = usize::from(source.shadow.is_some());
     Ok(SceneLimits {
         atlas_bytes: size(
             3_407_872usize
@@ -2156,18 +2191,23 @@ fn scene_limits(
                     0
                 })
                 .saturating_add(count.saturating_mul(65_536))
+                .saturating_add(shadows.saturating_mul(shadow::MAX_BYTES))
                 .saturating_add(extension.saturating_mul(401_408)),
         )?,
-        atlases: size(count.saturating_add(extension).saturating_add(
-            if touch_enabled {
-                9
-            } else {
-                8
-            },
-        ))?,
+        atlases: size(
+            count
+                .saturating_add(extension)
+                .saturating_add(shadows)
+                .saturating_add(if touch_enabled {
+                    9
+                } else {
+                    8
+                }),
+        )?,
         sprites: size(
             enemy_sprites
                 .saturating_add(extension.saturating_mul(2))
+                .saturating_add(shadows.saturating_mul(4))
                 .saturating_add(if touch_enabled {
                     15
                 } else {
