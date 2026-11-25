@@ -70,6 +70,9 @@ pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
 
 /// Approximate twenty-second original continue opportunity in ticks.
 pub const CONTINUE_TICKS: u16 = 1200;
+const BASE_WIDTH: u32 = 320;
+const MAX_VIEW_WIDTH: u32 = 512;
+const SIDE: u32 = 16;
 const ENEMY_CAPACITY: usize = 7;
 const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
@@ -663,6 +666,7 @@ enum PairSupport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Encounter {
+    art_travel: i16,
     enemies: [Option<Enemy>; ENEMY_CAPACITY],
     marge_restraint: bool,
     progressive: bool,
@@ -1079,6 +1083,9 @@ impl Cabinet {
         {
             return Err(LayoutError::ScrollOverflow);
         }
+        if let Some(encounter) = &mut self.encounter {
+            encounter.art_travel = requested;
+        }
         self.scroll_limit = limit;
         Ok(self)
     }
@@ -1128,6 +1135,34 @@ fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {
         }
     }
     let _first = queued.candidate.get_or_insert(maneuver);
+}
+
+/// Clamp the logical viewport to the available strip.
+fn viewport_width(strip_width: u32) -> u32 {
+    strip_width.clamp(BASE_WIDTH, MAX_VIEW_WIDTH)
+}
+
+/// World origin of a supported logical view.
+fn view_origin(strip_width: u32, width: u32, camera: i16) -> Option<i16> {
+    if !(BASE_WIDTH..=viewport_width(strip_width)).contains(&width)
+        || camera < 0
+    {
+        return None;
+    }
+    let (available, inset) = if width > BASE_WIDTH {
+        (strip_width, i16::try_from(SIDE).ok()?)
+    } else {
+        (strip_width.saturating_add(SIDE * 2), 0)
+    };
+    let remaining = i16::try_from(available.saturating_sub(width)).ok()?;
+    Some(camera.min(remaining).saturating_add(inset))
+}
+
+/// Verified strip interior width for additional camera travel.
+fn strip_width(travel: i16) -> u32 {
+    BASE_WIDTH
+        .saturating_sub(SIDE * 2)
+        .saturating_add(u32::try_from(travel).unwrap_or_default())
 }
 
 #[cfg(test)]

@@ -32,7 +32,8 @@
 //! Provisional fixed-step encounter for the first street.
 
 use super::{
-    ENEMY_CAPACITY, Encounter, Facing, Maneuver, Point, Slot, StreetLayout,
+    BASE_WIDTH, ENEMY_CAPACITY, Encounter, Facing, Maneuver, Point, Slot,
+    StreetLayout, strip_width, view_origin, viewport_width,
 };
 
 const ENEMY_HEALTH: u8 = 1;
@@ -81,7 +82,7 @@ impl Encounter {
                 continue;
             }
             let mut enemy = Enemy::new(Point {
-                x: anchor.x.saturating_add(trigger),
+                x: arrival_x(self.art_travel, trigger, anchor.x),
                 y: anchor.y,
             });
             if anchor.x < 0 {
@@ -99,7 +100,11 @@ impl Encounter {
     ) {
         let street = StreetLayout {
             max: Point {
-                x: base.max.x.saturating_add(scroll_limit).saturating_add(46),
+                x: base
+                    .max
+                    .x
+                    .saturating_add(scroll_limit.max(self.art_travel))
+                    .saturating_add(46),
                 ..base.max
             },
             min: Point {
@@ -163,6 +168,7 @@ impl Encounter {
         let [initial, ..] = &mut enemies;
         *initial = Some(Enemy::new(spawn));
         Self {
+            art_travel: 0,
             enemies,
             marge_restraint: false,
             progressive,
@@ -542,6 +548,23 @@ const fn restrain_damage(marge: &mut Slot) -> bool {
     }
 }
 
+fn arrival_x(travel: i16, camera: i16, offset: i16) -> i16 {
+    if travel == 0 {
+        return camera.saturating_add(offset);
+    }
+    let strip = strip_width(travel);
+    let width = viewport_width(strip);
+    let origin = view_origin(strip, width, camera).unwrap_or(camera);
+    let original = camera.saturating_add(offset);
+    if offset < 0 {
+        original.min(origin.saturating_add(offset))
+    } else {
+        let extra =
+            i16::try_from(width.saturating_sub(BASE_WIDTH)).unwrap_or_default();
+        original.max(origin.saturating_add(offset).saturating_add(extra))
+    }
+}
+
 fn distance(first: Point, second: Point) -> u32 {
     u32::from(first.x.abs_diff(second.x))
         .saturating_add(u32::from(first.y.abs_diff(second.y)))
@@ -682,6 +705,36 @@ mod tests {
         let mut encounter = Encounter::new(Point { x: 246, y: 190 }, false);
         encounter.admit(154);
         assert_eq!(encounter.enemies().count(), 1);
+    }
+
+    #[test]
+    fn reinforcements_enter_beyond_every_supported_view() {
+        for travel in [50i16, 82, 154, 362, 444] {
+            for (gate, anchor) in REINFORCEMENTS
+                .into_iter()
+                .filter(|(gate, _)| *gate <= travel)
+            {
+                assert_arrival_outside_view(travel, gate, anchor.x);
+            }
+        }
+    }
+
+    fn assert_arrival_outside_view(travel: i16, gate: i16, offset: i16) {
+        let strip = strip_width(travel);
+        let x = i32::from(arrival_x(travel, gate, offset));
+        for width in BASE_WIDTH..=viewport_width(strip) {
+            let origin =
+                i32::from(view_origin(strip, width, gate).unwrap_or_default());
+            if offset < 0 {
+                assert!(x < origin);
+            } else {
+                assert!(
+                    x >= origin.saturating_add(
+                        i32::try_from(width).unwrap_or_default()
+                    )
+                );
+            }
+        }
     }
 
     #[test]

@@ -47,13 +47,11 @@ use super::{
     Action, Art, Cabinet, Control, Controls, Player, Point, PreviewOptions,
     Scene, StreetLayout, dimension, failure, live, size, smoke_press,
 };
-
-pub(super) const BASE_WIDTH: u32 = 320;
+pub(super) const BASE_WIDTH: u32 = crate::BASE_WIDTH;
+use crate::{MAX_VIEW_WIDTH, SIDE, view_origin, viewport_width};
 pub(super) const BASE_HEIGHT: u32 = TOP + HEIGHT;
-const MAX_VIEW_WIDTH: u32 = 512;
 const MAX_STRIP_WIDTH: u32 = 736;
 const HEIGHT: u32 = 196;
-const SIDE: u32 = 16;
 const TOP: u32 = 28;
 
 #[derive(Clone, Copy, Debug)]
@@ -501,30 +499,14 @@ fn verify_camera_rows(
     Ok(())
 }
 
-fn viewport_width(strip_width: u32) -> u32 {
-    strip_width.clamp(BASE_WIDTH, MAX_VIEW_WIDTH)
-}
-
 fn world_view(
     strip_width: u32,
     width: u32,
     camera: i16,
 ) -> Result<View, RenderError> {
-    if !(BASE_WIDTH..=viewport_width(strip_width)).contains(&width)
-        || camera < 0
-    {
-        return Err(RenderError::InvalidDimensions);
-    }
-    let (available, inset) = if width > BASE_WIDTH {
-        (strip_width, i16::try_from(SIDE).map_err(failure)?)
-    } else {
-        (strip_width.saturating_add(SIDE * 2), 0)
-    };
-    let remaining = available.saturating_sub(width);
     Ok(View {
-        origin: camera
-            .min(i16::try_from(remaining).map_err(failure)?)
-            .saturating_add(inset),
+        origin: view_origin(strip_width, width, camera)
+            .ok_or(RenderError::InvalidDimensions)?,
         width,
     })
 }

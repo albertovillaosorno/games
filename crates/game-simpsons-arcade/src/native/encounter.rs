@@ -427,17 +427,31 @@ fn smoke_reinforcements(
     let limit = art
         .world_art
         .map_or(Ok(0), super::world::WorldArt::scroll_limit)?;
-    let target = limit.min(362);
-    let target_origin = i16::try_from(target).map_err(failure)?;
-    let expected: usize = match target {
-        0..=49 => return Ok(()),
-        50..=81 => 1,
-        82..=153 => 2,
-        154..=209 => 3,
-        210..=273 => 4,
-        274..=361 => 5,
-        _ => 6,
-    };
+    let gates = [50u16, 82, 154, 210, 274, 362];
+    let mut verified = 0usize;
+    for gate in gates.into_iter().filter(|gate| *gate <= limit) {
+        verified = verified.saturating_add(1);
+        smoke_reinforcement_gate(
+            scene,
+            art,
+            touch_enabled,
+            (limit, gate, verified),
+        )?;
+    }
+    writeln!(
+        stdout().lock(),
+        "Reinforcements: {verified} meters verified"
+    )
+    .map_err(failure)
+}
+
+fn smoke_reinforcement_gate(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+    (limit, gate, expected): (u16, u16, usize),
+) -> Result<(), RenderError> {
+    let target_origin = i16::try_from(gate).map_err(failure)?;
     let mut simulation =
         live_with_scroll(true, LocalSession::default(), limit)?;
     let mut controls = Controls::new(touch_enabled)?;
@@ -466,38 +480,25 @@ fn walk_reinforcements(
     (target, expected): (i16, usize),
 ) -> Result<(), RenderError> {
     let mut seen = [false; ENEMY_CAPACITY - 1];
+    for checked in seen.iter_mut().take(expected.saturating_sub(1)) {
+        *checked = true;
+    }
     key(controls, simulation, Scancode::D, true)?;
     for _ in 0..300u16 {
         advance(simulation, 1)?;
-        let admitted = simulation.state().enemies().count().saturating_sub(1);
-        if seen.iter().filter(|checked| **checked).count() < admitted {
-            key(controls, simulation, Scancode::D, false)?;
-            verify_reinforcements(
-                scene,
-                art,
-                simulation,
-                (admitted, &mut seen),
-            )?;
-            key(controls, simulation, Scancode::D, true)?;
-        }
-        if simulation.state().camera_origin() == target {
+        if simulation.state().camera_origin() >= target {
             break;
         }
     }
     key(controls, simulation, Scancode::D, false)?;
     if simulation.state().camera_origin() != target
         || simulation.state().enemies().count() != expected.saturating_add(1)
-        || seen.iter().filter(|checked| **checked).count() != expected
     {
         return Err(failure(
             "street reinforcement admission did not match travel",
         ));
     }
-    writeln!(
-        stdout().lock(),
-        "Reinforcements: {expected} meters verified"
-    )
-    .map_err(failure)
+    verify_reinforcements(scene, art, simulation, (expected, &mut seen))
 }
 
 fn smoke_restraint(
@@ -647,7 +648,7 @@ fn verify_reinforcements(
     simulation: &mut LiveSimulation<Cabinet>,
     (expected, seen): (usize, &mut [bool; ENEMY_CAPACITY - 1]),
 ) -> Result<(), RenderError> {
-    for _ in 0..40u8 {
+    for _ in 0..80u8 {
         observe_reinforcements(scene, art, simulation.state(), seen)?;
         if seen.iter().filter(|checked| **checked).count() == expected {
             return Ok(());
