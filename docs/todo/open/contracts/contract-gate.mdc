@@ -12,6 +12,7 @@ depends_on:
   - "network"
   - "security"
   - "performance"
+  - "platform-ir"
 validation:
   - "cargo validate"
 ---

@@ -50,3 +50,9 @@ Linux x86-64 remains the primary implementation target. Android ARM64,
 WebAssembly and Windows are planned and require runtime and packaging
 adapters. Every target must use the same portable contracts, not a
 separate game engine. No native Windows runtime is verified here.
+
+The [P1 isolation task](../todo/open/contracts/platform-ir.mdc) is the
+canonical migration and acceptance record. The initial validator inventory
+records 253 occurrences in 27 files; this is transitional debt, not
+permission to introduce further coupling. Full isolation requires zero
+remaining entries, stronger semantic checks and adapter conformance.

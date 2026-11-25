@@ -1,7 +1,7 @@
 # games
 
-Modular Rust game engine with fixed-step simulation, deterministic replay,
-action-mapped input, asset conversion and native/WASM targets.
+A shared Rust engine for independent, faithful game reconstructions with
+modern controls, presentation, performance and portability.
 
 **Preserve the gameplay, not the technical debt.**
 
@@ -12,7 +12,10 @@ developers or publishers.
 ## Goals
 
 - Faithful gameplay with modern performance, presentation and controls.
-- One shared engine that improves across all titles, including earlier games.
+- One shared engine: improvements to common systems benefit earlier and
+  future titles without duplicating implementations.
+- Portable capability contracts: add platforms and devices through shared
+  adapters, not individual game ports.
 - Offline play, portable saves and self-hosted multiplayer where applicable.
 - No ads, subscriptions or in-app purchases in our implementations.
 - Import lawfully supplied original assets locally; distribute no proprietary
@@ -20,15 +23,14 @@ developers or publishers.
 
 ## Platforms
 
-Linux x86-64 is the primary target. Android ARM64, WebAssembly and Windows
-are planned. Other 64-bit platforms are welcome through community
-contributions.
+Linux x86-64 is the primary development target. Windows, Android ARM64
+and WebAssembly are planned through shared adapters. No title has
+completed release acceptance.
 
 ## Getting started
 
-The Simpsons Arcade Game has an experimental native preview. No title has
-completed release acceptance. See the
-[title instructions](crates/game-simpsons-arcade/TODO.md) to run the preview.
+The Simpsons Arcade Game has an experimental native preview. See the
+[title instructions](crates/game-simpsons-arcade/TODO.md) to run it.
 
 From the repository root:
 
@@ -43,6 +45,7 @@ prerequisites, builds and local packages.
 ## Documentation
 
 - [Technical documentation](docs/technical/README.md)
+- [Platform portability](docs/technical/platform-ir.md)
 - [Roadmap and task records](TODO.md)
 - [Agent and contribution rules](AGENTS.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

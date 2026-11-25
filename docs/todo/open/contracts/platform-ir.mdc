@@ -1,0 +1,70 @@
+---
+id: "platform-ir"
+status: "open"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Portable capability IR and platform isolation"
+depends_on:
+  - "reuse"
+  - "input"
+  - "security"
+  - "network"
+  - "performance"
+validation:
+  - "cargo validate"
+---
+# TODO - Portable capability IR and platform isolation
+
+## Objective
+
+Eliminate platform and device coupling throughout the workspace. Adding an
+operating system or backend must extend shared capabilities for all titles
+without per-title ports. Use the typed capability IR described in
+[the platform design](../../../technical/platform-ir.md).
+
+## Acceptance
+
+- Migrate every existing occurrence in the portability baseline to the
+  owning platform adapter or a neutral shared contract. Delete the baseline
+  once empty; never increase it, hide occurrences or weaken the gate.
+- Centralise target selection and native SDK dependencies in explicitly
+  owned adapter/composition directories. No OS, architecture, vendor or
+  backend-specific branching or native handles in other authored code,
+  including titles, importers, shared libraries, tools and inline tests.
+- Reject direct host I/O outside its owning adapter, including filesystem,
+  sockets, clocks, environment, process launch and native device access.
+  Use narrow injected service ports; keep pure data and algorithms portable.
+- Reuse typed commands, events, observations and errors for graphics,
+  presentation, audio, input, haptics, storage, networking, timing,
+  lifecycle, host services and capability discovery. Extend contracts for
+  real consumers rather than introducing parallel or speculative systems.
+- Normalise physical controller identities, axes, buttons, touch, pointer
+  input, sensors and optional haptic actuators. Persist device-independent
+  per-player settings; support explicit capability absence, safe disconnect
+  and focus loss, bounded feedback and no gameplay changes on failure.
+- Share menu, presentation, adaptive widescreen, audio, input, saves and
+  other common mechanisms across all titles. Keep title-specific scene
+  requirements and gameplay in the title. Verify existing title behaviour
+  whenever shared contracts or adapters change.
+- Enforce the isolation in `cargo validate` over every authored source and
+  manifest, including target tables, aliases, features, re-exports, macros,
+  imports, direct native dependency paths and nested directories. Use
+  parsed structures and dependency metadata where lexical checks are
+  insufficient. Add positive and negative controls with no original media.
+- Test each portable contract using deterministic fake adapters, capability
+  absence, resource budgets, event ordering and error paths. Verify
+  equivalent observable behaviour across implemented backends.
+- Preserve the existing Linux runtime and packaging; validate shared
+  contracts against Windows, Android and Web targets where available.
+  Implement missing adapters via the build roadmap. Record any unavailable
+  toolchains or physical hardware; do not claim untested compatibility.
+
+## Evidence
+
+Commit 569801d introduced the first haptic capability contract and a
+mandatory incremental portability gate. Its initial inventory records
+253 occurrences across 27 files. Fresh validation passed in run
+1795635890959083883-1411397. The gate prevents additional matching
+couplings above the recorded ceilings, but strict zero-debt isolation,
+semantic coverage, native haptics and cross-target support remain open.

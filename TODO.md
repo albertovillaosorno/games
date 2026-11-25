@@ -33,6 +33,14 @@ Measure useful throughput without degrading fidelity.
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Performance regression contracts](docs/todo/open/contracts/performance.mdc)
 
+### TODO - Portable capability IR and platform isolation
+
+Eliminate all existing platform coupling and enforce adapter-only host
+access throughout the workspace.
+
+<!-- MarkdownLint-disable-next-line MD013 MD044 -->
+[TODO - Portable capability IR and platform isolation](docs/todo/open/contracts/platform-ir.mdc)
+
 ### TODO - Integrate architecture checks
 
 Make the P1 contracts a required part of the existing validator.

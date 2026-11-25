@@ -19,6 +19,9 @@
   Cache is under `.cache/validate/`; run logs are under `.temp/validate/`.
 - Keep task headings, identifiers, priorities and dependency order aligned.
   Move records to the completed directory only with actual evidence.
+- Keep the root README concise: purpose, goals, platform status, entry
+  points and catalogue. Put implementation details, commands, limits and
+  technical design under docs/technical; keep title evidence in tasks.
 - Keep one TODO.md per title after onboarding; link to the canonical record.
   No additional planning bureaucracy.
 - Keep every authored text line within 80 characters. Direct task links
@@ -42,6 +45,17 @@
   Recheck reuse before completing each title; avoid speculative abstractions.
 - Keep game logic independent of operating systems and original media
   formats. Platform adapters own OS access; importers own source formats.
+- Enforce portable typed capability IR across all titles and tools. Only
+  explicit platform adapter/composition directories may select targets,
+  use native SDKs, access host services or translate device/vendor codes.
+  Shared contracts own commands, events, results, errors and capability
+  negotiation. Reuse existing types; do not create one universal VM.
+  Cover input, haptics, graphics, presentation, audio, storage, network,
+  timing and lifecycle. No native handles or OS branches leak into titles.
+  Resolve the P1 platform-ir task before new title work. Migrate the
+  portability baseline to zero; never increase it or weaken validation.
+  A new OS or backend must extend shared support, not fork title code.
+  Test portable contracts with fake adapters and real supported targets.
 - Organise importers by source format and hardware family, not by title.
   Arcade ROM sets use a shared MAME adapter under the importer crate.
   Share ROM admission, region assembly, chip layouts and asset conversion.
@@ -115,7 +129,7 @@
 - Offline single-player, portable saves, user-hosted multiplayer,
   no required commercial backend or monetisation. Use secure defaults.
 - Primary target Linux x86-64; Android ARM64 and Web are intended.
-  Other platforms are community-driven. Do not claim untested support.
+  Windows is planned through shared adapters. Do not claim untested support.
 
 ## Local inputs and tools
 
