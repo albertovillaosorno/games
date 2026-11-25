@@ -261,3 +261,15 @@ and 20 combat host submissions met 16.667 ms (mean 80.642 and 68.449
 microseconds respectively); lifetime RSS peak was 99,446,784 bytes.
 This is synthetic-input/offscreen evidence, not physical latency,
 controller acceptance or complete original-game parity.
+
+Contributor Cargo requests and version observations now use a public IR
+toolchain contract rather than a re-exported native implementation.
+The contract admits package, binary, feature and target selection before
+dispatch and shares that selection between compilation and metadata.
+Portable path values, typed failures and fake-adapter regressions cover
+consistent selection and rejection before unavailable backend dispatch.
+The Linux adapter owns workspace resolution and process execution;
+other hosts return explicit unsupported errors. Build and validator
+consumers use the shared contract. Fresh full validation passed in run
+1795645061242257303-199510 (1,355 test executions). This does not migrate
+all contributor process, environment or storage operations.

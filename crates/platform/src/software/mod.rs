@@ -40,6 +40,8 @@ pub mod lan {
     pub const AVAILABLE: bool = false;
 }
 
+#[cfg(not(target_os = "linux"))]
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -53,7 +55,6 @@ use games::input::physical::KeyboardKey;
 #[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
 pub use linux::lan;
 pub use linux::storage::*;
-pub use linux::toolchain;
 
 use crate::ir::audio::{
     AudioDevices, PlaybackError, PlaybackFactory, PlaybackPort,
@@ -63,7 +64,13 @@ use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::input::InputNames;
 use crate::ir::measurement::MeasurementSource;
 use crate::ir::security::audio::PlaybackRequest;
+#[cfg(not(target_os = "linux"))]
+use crate::ir::security::toolchain::CargoArguments;
 use crate::ir::storage::ExecutableLocation;
+#[cfg(not(target_os = "linux"))]
+use crate::ir::toolchain::{
+    Target, ToolVersion, ToolchainError, ToolchainFactory, ValidationTool,
+};
 
 #[cfg(all(feature = "interactive", target_os = "linux"))]
 impl PlaybackFactory for () {
@@ -179,5 +186,39 @@ impl ExecutableLocation for () {
         return executable_path().map(PathBuf::into_os_string);
         #[cfg(target_arch = "wasm32")]
         Err(ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl ToolchainFactory for () {
+    fn available(_target: Target) -> bool {
+        false
+    }
+
+    fn compile(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _target: Target,
+    ) -> Result<OsString, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn metadata(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _manifest: &OsStr,
+    ) -> Result<Vec<u8>, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn probe_version(
+        _root: &OsStr,
+        _tool: ValidationTool,
+    ) -> Result<ToolVersion, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn workspace_root() -> Result<OsString, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
     }
 }

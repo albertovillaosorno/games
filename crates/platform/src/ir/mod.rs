@@ -48,6 +48,8 @@ pub mod measurement;
 pub mod security;
 /// Portable storage capabilities.
 pub mod storage;
+/// Portable contributor toolchain requests.
+pub mod toolchain;
 /// Bounded bitmap text, menu and scene preparation.
 pub mod ui;
 
@@ -60,7 +62,7 @@ pub use ui::{menu, scene};
 
 /// Selected service interfaces; concrete implementation paths stay
 /// private.
-pub use crate::selected::{lan, toolchain};
+pub use crate::selected::lan;
 
 #[cfg(test)]
 pub(crate) fn check<T, U>(

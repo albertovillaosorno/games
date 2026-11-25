@@ -35,7 +35,7 @@ use std::ffi::OsString;
 use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
 
-use games_platform::ir::toolchain::{CargoTitle, Target};
+use games_platform::ir::toolchain::{self, CargoTitle, Target};
 
 pub(crate) const NATIVE_TARGET: Target = Target::LinuxX86_64Gnu;
 const PREVIEW_FEATURE: &str = "native-preview";
@@ -56,7 +56,8 @@ impl Title {
 
     pub(crate) fn compile(self, root: &Path) -> Result<PathBuf, String> {
         self.request()?
-            .compile(root)
+            .compile(root.as_os_str())
+            .map(PathBuf::from)
             .map_err(|error| error.to_string())
     }
 
@@ -98,10 +99,9 @@ impl Title {
 }
 
 pub(crate) fn workspace_root() -> Result<PathBuf, String> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|error| format!("workspace path: {error}"))
+    toolchain::workspace_root()
+        .map(PathBuf::from)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

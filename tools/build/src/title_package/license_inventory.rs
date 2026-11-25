@@ -96,7 +96,7 @@ impl Inventory {
             .join("Cargo.toml");
         let bytes = title
             .request()?
-            .metadata(root, &manifest)
+            .metadata(root.as_os_str(), manifest.as_os_str())
             .map_err(|error| error.to_string())?;
         let metadata: Metadata = serde_json::from_slice(&bytes)
             .map_err(|error| format!("Cargo metadata JSON: {error}"))?;

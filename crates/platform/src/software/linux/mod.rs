@@ -42,7 +42,8 @@ pub mod lan;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod performance;
 pub(super) mod storage;
-pub mod toolchain;
+#[cfg(target_os = "linux")]
+mod toolchain;
 
 #[cfg(all(test, feature = "interactive", target_os = "linux"))]
 use std::sync::Mutex;

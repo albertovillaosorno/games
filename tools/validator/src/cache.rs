@@ -167,8 +167,8 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
         ValidationTool::Markdown,
         ValidationTool::Ripgrep,
     ] {
-        let output =
-            probe_version(root, tool).map_err(|error| error.to_string())?;
+        let output = probe_version(root.as_os_str(), tool)
+            .map_err(|error| error.to_string())?;
         hash_value(hash, &output.stdout);
         hash_value(hash, &output.stderr);
     }
