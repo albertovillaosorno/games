@@ -42,12 +42,12 @@ use games::safety::{
 };
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat, renameat};
-use nix::sys::stat::{Mode, fstatat};
+use nix::sys::stat::{Mode, fstat, fstatat};
 use nix::unistd::{UnlinkatFlags, unlinkat};
 
 use crate::file::{
     DIRECTORY_FLAGS, FileReadError, private_regular, read_bounded_descriptor,
-    read_regular_with, trusted_directory,
+    read_regular_with, same_inode, trusted_directory,
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -171,19 +171,17 @@ impl SaveStore {
             return Err(SaveError::UnsafeStorage);
         }
         let name = slot_name(slot);
-        match fstatat(directory, name.as_str(), AtFlags::AT_SYMLINK_NOFOLLOW) {
-            Ok(stat) if private_regular(&stat) => {},
-            Ok(_) => return Err(SaveError::UnsafeStorage),
-            Err(Errno::ENOENT) => {},
-            Err(error) => return Err(error.into()),
-        }
+        admit_slot(directory, &name)?;
         let header = encode_save_header(payload, self.maximum)?;
+        let expected = header
+            .len()
+            .checked_add(payload.len())
+            .and_then(|length| u64::try_from(length).ok())
+            .ok_or(SafetyError::TooLarge)?;
         let mut pending = PendingSave::create(directory)?;
         pending.file.write_all(&header)?;
         pending.file.write_all(payload)?;
-        pending.file.sync_all()?;
-        renameat(directory, pending.name.as_str(), directory, name.as_str())?;
-        pending.published = true;
+        pending.publish(&name, expected)?;
         Ok(SaveReceipt {
             durability: self.directory.sync_all().map_err(|error| error.kind()),
         })
@@ -227,17 +225,59 @@ impl<'directory> PendingSave<'directory> {
         }
         Err(Errno::EEXIST.into())
     }
+
+    fn publish(&mut self, name: &str, expected: u64) -> Result<(), SaveError> {
+        self.verify_location()?;
+        self.file.sync_all()?;
+        self.verify_location()?;
+        if self.file.metadata()?.len() != expected {
+            return Err(SaveError::UnsafeStorage);
+        }
+        admit_slot(self.directory, name)?;
+        renameat(self.directory, self.name.as_str(), self.directory, name)?;
+        self.published = true;
+        Ok(())
+    }
+
+    fn verify_location(&self) -> Result<(), SaveError> {
+        if !trusted_directory(self.directory)? {
+            return Err(SaveError::UnsafeStorage);
+        }
+        let pinned = fstat(&self.file)?;
+        let named = fstatat(
+            self.directory,
+            self.name.as_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        )?;
+        if !private_regular(&named)
+            || named.st_nlink != 1
+            || named.st_mode & 0o077 != 0
+            || !same_inode(&pinned, &named)
+        {
+            return Err(SaveError::UnsafeStorage);
+        }
+        Ok(())
+    }
 }
 
 impl Drop for PendingSave<'_> {
     fn drop(&mut self) {
-        if !self.published {
+        if !self.published && self.verify_location().is_ok() {
             let _cleanup = unlinkat(
                 self.directory,
                 self.name.as_str(),
                 UnlinkatFlags::NoRemoveDir,
             );
         }
+    }
+}
+
+fn admit_slot(directory: &File, name: &str) -> Result<(), SaveError> {
+    match fstatat(directory, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+        Ok(stat) if private_regular(&stat) => Ok(()),
+        Ok(_) => Err(SaveError::UnsafeStorage),
+        Err(Errno::ENOENT) => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -400,6 +440,54 @@ mod tests {
         require(store.store(0, b"x") == Err(SaveError::UnsafeStorage))?;
         fs::set_permissions(&root.path, fs::Permissions::from_mode(0o700))?;
         Ok(())
+    }
+
+    #[test]
+    fn substituted_pending_file_is_neither_published_nor_removed()
+    -> Result<(), SaveError> {
+        let root = TestRoot::new()?;
+        let store = SaveStore::open(&root.path, NonZeroU64::MIN)?;
+        require(store.store(0, b"a")?.durability.is_ok())?;
+        let mut pending = PendingSave::create(&store.directory)?;
+        let bytes = encode_save(b"b", NonZeroU64::MIN)?;
+        pending.file.write_all(&bytes)?;
+        let expected = u64::try_from(bytes.len())
+            .map_err(|_error| SafetyError::TooLarge)?;
+        let path = root.path.join(&pending.name);
+        let moved = root.path.join("moved");
+        fs::rename(&path, &moved)?;
+        fs::write(&path, b"sentinel")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        require(
+            pending.publish(&slot_name(0), expected)
+                == Err(SaveError::UnsafeStorage),
+        )?;
+        drop(pending);
+        require(fs::read(&path)? == b"sentinel")?;
+        require(fs::read(moved)? == bytes)?;
+        require(store.load(0)? == b"a")
+    }
+
+    #[test]
+    fn pending_publication_rechecks_size_and_destination()
+    -> Result<(), SaveError> {
+        let root = TestRoot::new()?;
+        let store = SaveStore::open(&root.path, NonZeroU64::MIN)?;
+        let mut pending = PendingSave::create(&store.directory)?;
+        let path = root.path.join(&pending.name);
+        let name = slot_name(0);
+        let destination = root.path.join(&name);
+        let sentinel = root.path.join("sentinel");
+        fs::write(&sentinel, b"untouched")?;
+        pending.file.write_all(b"x")?;
+        require(pending.publish(&name, 2) == Err(SaveError::UnsafeStorage))?;
+        require(!destination.exists())?;
+        symlink(&sentinel, &destination)?;
+        require(pending.publish(&name, 1) == Err(SaveError::UnsafeStorage))?;
+        drop(pending);
+        require(!path.exists())?;
+        require(fs::symlink_metadata(destination)?.file_type().is_symlink())?;
+        require(fs::read(sentinel)? == b"untouched")
     }
 
     #[test]

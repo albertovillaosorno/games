@@ -55,7 +55,7 @@ pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
 use super::bundle::{
     BundleError, CanonicalBundle, MANIFEST_NAME, PAYLOADS_DIRECTORY,
 };
-use super::file::{DIRECTORY_FLAGS, trusted_directory};
+use super::file::{DIRECTORY_FLAGS, same_inode, trusted_directory};
 const MAX_DEPTH: usize = 64;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -634,7 +634,7 @@ where
 fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
     let before = fstat(left)?;
     let after = fstat(right)?;
-    Ok(before.st_dev == after.st_dev && before.st_ino == after.st_ino)
+    Ok(same_inode(&before, &after))
 }
 
 #[cfg(test)]

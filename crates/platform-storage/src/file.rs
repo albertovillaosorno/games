@@ -168,11 +168,14 @@ fn reopen_pinned(
     Ok((File::from(fd), after))
 }
 
+pub(crate) const fn same_inode(left: &FileStat, right: &FileStat) -> bool {
+    left.st_dev == right.st_dev && left.st_ino == right.st_ino
+}
+
 // Ignore ctime and link count: atomic replacement can legitimately unlink
 // the old inode while a reader still holds it. Admission checks the latter.
 const fn same_content_metadata(before: &FileStat, after: &FileStat) -> bool {
-    before.st_dev == after.st_dev
-        && before.st_ino == after.st_ino
+    same_inode(before, after)
         && before.st_size == after.st_size
         && before.st_mtime == after.st_mtime
         && before.st_mtime_nsec == after.st_mtime_nsec

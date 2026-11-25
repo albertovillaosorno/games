@@ -333,3 +333,16 @@ PCM layouts are rejected against the pinned mono slot, oversized trailing
 bytes publish nothing, and equivalent raw and WAV samples address the same
 canonical bundle without overwriting it. Fresh validation passed in run
 1795608899161480984-501879.
+
+Pending native saves now recheck the identity of the owner-only temporary
+file against its directory entry before and after synchronisation, verify
+its exact envelope length, and re-admit the destination before rename.
+Unpublished cleanup checks the same pinned identity, so an observed
+replacement is neither published nor removed. The shared inode comparison
+is also used by canonical staging and read admission. Synthetic tests move
+the pending inode and substitute another regular file, preserving both and
+the previous slot; length mismatch and a substituted destination symlink
+also fail without affecting a sentinel. This is an observed-state check,
+not an atomic defence against hostile same-user races; such writers and
+the pinned directory remain trusted, and changed files can be orphaned.
+Fresh validation passed in run 1795609582998660652-607892.
