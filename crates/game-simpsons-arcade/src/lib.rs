@@ -31,6 +31,7 @@
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
+mod encounter;
 mod maneuver;
 
 #[cfg(all(
@@ -42,6 +43,7 @@ mod maneuver;
 pub mod native;
 use std::time::Duration;
 
+pub use encounter::{Enemy, EnemyAction};
 use games::input::LogicalAction;
 use games::replay::InputStep;
 pub use maneuver::Maneuver;
@@ -213,6 +215,8 @@ pub struct Station {
     pub credits: u8,
     /// Current sprite facing.
     pub facing: Facing,
+    /// Experimental encounter health; zero means the station is knocked out.
+    pub health: u8,
     /// Current attack or jump, independent of rendering.
     pub maneuver: Maneuver,
     /// Whether the station has joined.
@@ -221,6 +225,12 @@ pub struct Station {
     pub position: Point,
     /// Consecutive displaced ticks, zero-based; None when stationary.
     pub walking_ticks: Option<u64>,
+}
+
+impl Station {
+    const fn can_fight(self) -> bool {
+        matches!(self.participation, Participation::Playing) && self.health > 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,9 +276,7 @@ impl Slot {
     }
 
     fn begin_maneuver(&mut self, maneuver: Maneuver) {
-        if self.station.participation == Participation::Playing
-            && self.station.maneuver == Maneuver::Idle
-        {
+        if self.station.can_fight() && self.station.maneuver == Maneuver::Idle {
             self.station.maneuver = maneuver;
             self.station.walking_ticks = None;
         }
@@ -279,7 +287,7 @@ impl Slot {
     }
 
     fn move_tick(&mut self, layout: StreetLayout) {
-        if self.station.participation != Participation::Playing {
+        if !self.station.can_fight() {
             return;
         }
         let dx = axis(self.held(Control::Left), self.held(Control::Right));
@@ -321,6 +329,7 @@ impl Slot {
             station: Station {
                 credits: 0,
                 facing: Facing::Right,
+                health: 3,
                 maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
@@ -346,11 +355,12 @@ impl Slot {
 
 /// Deterministic first-street title state, independent of the host platform.
 ///
-/// The prototype omits the original intro, camera, collision, enemy
-/// combat, scoring and continuing. Maneuver timings are provisional.
+/// The prototype omits the original intro, camera, collision, scoring
+/// and continuing. Optional combat and maneuver timings are provisional.
 /// It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
+    enemy: Option<Enemy>,
     layout: StreetLayout,
     phase: Phase,
     slots: [Slot; 4],
@@ -381,6 +391,12 @@ impl Cabinet {
         }
     }
 
+    /// Inspect the optional experimental enemy, including after defeat.
+    #[must_use]
+    pub const fn enemy(&self) -> Option<Enemy> {
+        self.enemy
+    }
+
     /// Construct a cabinet with explicit spawn and movement boundaries.
     ///
     /// # Errors
@@ -390,6 +406,7 @@ impl Cabinet {
             return Err(LayoutError::SpawnOutside);
         }
         Ok(Self {
+            enemy: None,
             layout,
             phase: Phase::Attract,
             slots: layout.spawn.map(Slot::new),
@@ -407,6 +424,22 @@ impl Cabinet {
     pub fn stations(&self) -> [Station; 4] {
         self.slots.map(|slot| slot.station)
     }
+
+    /// Enable one provisional enemy at a specified walkable ground position.
+    ///
+    /// # Errors
+    /// Rejects an enemy spawn outside the configured movement bounds.
+    pub fn with_encounter(
+        layout: StreetLayout,
+        spawn: Point,
+    ) -> Result<Self, LayoutError> {
+        let mut cabinet = Self::new(layout)?;
+        if !layout.contains(spawn) {
+            return Err(LayoutError::SpawnOutside);
+        }
+        cabinet.enemy = Some(Enemy::new(spawn));
+        Ok(cabinet)
+    }
 }
 
 impl InputStep for Cabinet {
@@ -422,6 +455,9 @@ impl InputStep for Cabinet {
         if self.phase == Phase::Street {
             for slot in &mut self.slots {
                 slot.move_tick(self.layout);
+            }
+            if let Some(enemy) = &mut self.enemy {
+                enemy.advance(self.layout, &mut self.slots);
             }
         }
     }
@@ -450,6 +486,7 @@ mod tests {
         // A valid constant layout cannot fail; keep fixture construction
         // independent from any mutable global or host input.
         result.unwrap_or_else(|_error| Cabinet {
+            enemy: None,
             layout: StreetLayout::DOWNTOWN,
             phase: Phase::Attract,
             slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
