@@ -31,6 +31,8 @@
 
 //! Native initial street preview using only verified canonical art.
 
+mod touch;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Debug;
@@ -38,6 +40,7 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::time::Duration;
 
+use games::input::touch::{ContactId, ContactPhase};
 use games::input::{AxisBinding, InputEvent, InputMapping, InputRouter};
 use games::replay::{LiveInputLimits, LiveSimulation, QueueRejection};
 use games::timing::StepClock;
@@ -170,17 +173,20 @@ impl Controls {
         }
     }
 
-    fn new() -> Self {
+    fn new(touch_enabled: bool) -> Result<Self, RenderError> {
         let mut mapping = InputMapping::new();
         for (player, keys) in Player::ALL.into_iter().zip(KEYBOARD) {
             for (key, control) in keys.into_iter().zip(CONTROLS) {
                 mapping.bind_key(key_code(key), Action { control, player });
             }
         }
-        Self {
+        if touch_enabled {
+            touch::install(&mut mapping)?;
+        }
+        Ok(Self {
             devices: [None; 4],
             router: InputRouter::new(mapping),
-        }
+        })
     }
 
     fn route(
@@ -260,12 +266,14 @@ struct Scene {
     actors: [Art; 4],
     background: Art,
     draws: Vec<SpriteDraw>,
+    panel: Option<SpriteDraw>,
 }
 
 impl Scene {
     fn load(
         scene: &mut SceneSession<'_, '_>,
         bundles: &[CanonicalBundle; 4],
+        touch_enabled: bool,
     ) -> Result<Self, RenderError> {
         let [first, _, _, _] = bundles;
         let mut background = Art::load(scene, first, "scene/background")?;
@@ -290,7 +298,12 @@ impl Scene {
                 .try_into()
                 .map_err(|_error| failure("actor count"))?,
             background,
-            draws: Vec::with_capacity(9),
+            draws: Vec::with_capacity(10),
+            panel: if touch_enabled {
+                Some(touch::load(scene)?)
+            } else {
+                None
+            },
         })
     }
 
@@ -328,6 +341,9 @@ impl Scene {
                     station.facing == Facing::Left,
                 ));
             }
+        }
+        if let Some(panel) = self.panel {
+            self.draws.push(panel);
         }
         scene.present([24, 22, 30], &self.draws)
     }
@@ -452,12 +468,36 @@ fn poll(
                 let elapsed = input
                     .event_elapsed(&event)
                     .ok_or_else(|| failure("ambiguous event timestamp"))?;
-                controls.route(logical, elapsed, live)?;
+                if let Some(projected) = project_contact(scene, logical)? {
+                    controls.route(projected, elapsed, live)?;
+                }
             },
             None => {},
         }
     }
     Ok(true)
+}
+
+fn project_contact(
+    scene: &SceneSession<'_, '_>,
+    event: InputEvent,
+) -> Result<Option<InputEvent>, RenderError> {
+    let InputEvent::Contact { id, phase } = event else {
+        return Ok(Some(event));
+    };
+    let projected = match phase {
+        ContactPhase::Down(point) => {
+            let Some(logical) = scene.logical_touch(point)? else {
+                return Ok(None);
+            };
+            ContactPhase::Down(logical)
+        },
+        ContactPhase::Motion(Some(point)) => {
+            ContactPhase::Motion(scene.logical_touch(point)?)
+        },
+        ContactPhase::Motion(None) | ContactPhase::Up => phase,
+    };
+    Ok(Some(InputEvent::Contact { id, phase: projected }))
 }
 
 /// Launch interactive preview or a hidden finite native smoke.
@@ -469,10 +509,14 @@ pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
     if smoke {
         let _flag = args.remove(0);
     }
+    let touch_enabled = args.first().is_some_and(|arg| arg == "--touch");
+    if touch_enabled {
+        let _flag = args.remove(0);
+    }
     let [directory, marge, homer, bart, lisa] = <[OsString; 5]>::try_from(args)
         .map_err(|_error| {
             String::from(concat!(
-                "usage: simpsons-arcade [--smoke] PARENT ",
+                "usage: simpsons-arcade [--smoke] [--touch] PARENT ",
                 "MARGE_SHA HOMER_SHA BART_SHA LISA_SHA"
             ))
         })?;
@@ -484,7 +528,7 @@ pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
         .and_then(|bundles| {
             bundles.try_into().map_err(|_error| failure("bundle count"))
         })
-        .and_then(|bundles| window(&bundles, smoke));
+        .and_then(|bundles| window(&bundles, smoke, touch_enabled));
     result.map_err(|error| format!("{error:?}"))
 }
 
@@ -495,14 +539,21 @@ fn size(value: usize) -> Result<NonZeroUsize, RenderError> {
 fn smoke(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
+    touch_enabled: bool,
 ) -> Result<(), RenderError> {
     let mut simulation = live()?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene
         .readback()
         .map_err(|error| failure(format!("initial readback: {error:?}")))?;
-    let mut controls = Controls::new();
-    for keys in KEYBOARD {
+    let mut controls = Controls::new(touch_enabled)?;
+    if touch_enabled {
+        smoke_touch(scene, &mut controls, &mut simulation)?;
+    }
+    for (player, keys) in Player::ALL.into_iter().zip(KEYBOARD) {
+        if touch_enabled && player == Player::Marge {
+            continue;
+        }
         for key in keys.into_iter().take(3) {
             for down in [true, false] {
                 controls.route(
@@ -523,7 +574,7 @@ fn smoke(
         .iter()
         .any(|station| station.participation != Participation::Playing)
     {
-        return Err(failure("four-player keyboard admission failed"));
+        return Err(failure("four-player admission failed"));
     }
     let _after_drawn = art.present(scene, simulation.state())?;
     if before
@@ -533,38 +584,122 @@ fn smoke(
     {
         return Err(failure("admitted players were not rendered"));
     }
+    if touch_enabled {
+        smoke_touch_movement(scene, &mut controls, &mut simulation)?;
+    }
+    Ok(())
+}
+
+fn smoke_touch(
+    scene: &SceneSession<'_, '_>,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let id = ContactId { device: 1, finger: 1 };
+    for control in [Control::Coin, Control::Start, Control::Primary] {
+        let point = touch::center(control)?;
+        for phase in [ContactPhase::Down(point), ContactPhase::Up] {
+            let event =
+                project_contact(scene, InputEvent::Contact { id, phase })?
+                    .ok_or_else(|| failure("touch smoke outside scene"))?;
+            controls.route(event, Duration::ZERO, simulation)?;
+        }
+    }
+    Ok(())
+}
+
+fn smoke_touch_movement(
+    scene: &SceneSession<'_, '_>,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let [before, _, _, _] = simulation.state().stations();
+    let horizontal = ContactId { device: 1, finger: 2 };
+    let vertical = ContactId { device: 1, finger: 3 };
+    for (id, control) in [(horizontal, Control::Right), (vertical, Control::Up)]
+    {
+        let event = project_contact(scene, InputEvent::Contact {
+            id,
+            phase: ContactPhase::Down(touch::center(control)?),
+        })?
+        .ok_or_else(|| failure("movement touch outside scene"))?;
+        controls.route(event, TICK_INTERVAL, simulation)?;
+    }
+    let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let [moving, _, _, _] = simulation.state().stations();
+    if moving.position.x != before.position.x.saturating_add(2)
+        || moving.position.y != before.position.y.saturating_sub(2)
+    {
+        return Err(failure("simultaneous touch movement failed"));
+    }
+    for id in [horizontal, vertical] {
+        controls.route(
+            InputEvent::Contact {
+                id,
+                phase: ContactPhase::Up,
+            },
+            TICK_INTERVAL.saturating_mul(2),
+            simulation,
+        )?;
+    }
+    let _release_step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let [stopped, _, _, _] = simulation.state().stations();
+    if stopped.position != moving.position {
+        return Err(failure("touch release failed"));
+    }
     Ok(())
 }
 
 fn window(
     bundles: &[CanonicalBundle; 4],
     hidden: bool,
+    touch_enabled: bool,
 ) -> Result<(), RenderError> {
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
         dimension(960)?,
-        dimension(672)?,
+        dimension(if touch_enabled {
+            912
+        } else {
+            672
+        })?,
         hidden,
     )?;
+    let height = if touch_enabled {
+        u32::from(touch::SCENE_HEIGHT)
+    } else {
+        224
+    };
     let layout =
-        FrameLayout::new(dimension(320)?, dimension(224)?, size(286_720)?)?;
+        FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)?;
     let limits = SceneLimits {
         atlas_bytes: size(2_097_152)?,
-        atlases: size(5)?,
-        sprites: size(9)?,
+        atlases: size(if touch_enabled {
+            6
+        } else {
+            5
+        })?,
+        sprites: size(if touch_enabled {
+            10
+        } else {
+            9
+        })?,
     };
     let startup = window.input(size(4)?)?;
     window.with_scene(layout, limits, |scene| {
-        let mut art = Scene::load(scene, bundles)?;
+        let mut art = Scene::load(scene, bundles, touch_enabled)?;
         if hidden {
-            return smoke(scene, &mut art);
+            return smoke(scene, &mut art, touch_enabled);
         }
         let mut simulation = live()?;
-        let mut controls = Controls::new();
+        let mut controls = Controls::new(touch_enabled)?;
         for event in startup.attached {
             controls.route(event, Duration::ZERO, &mut simulation)?;
         }
         let mut input = startup.input;
+        if touch_enabled {
+            input.enable_touch();
+        }
         let mut previous = Duration::ZERO;
         while poll(scene, &mut input, &mut controls, &mut simulation)? {
             let elapsed = input.elapsed();

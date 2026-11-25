@@ -450,3 +450,14 @@ verified changed logical pixels. The shared renderer now reads an
 explicit logical target rectangle, independent of window resolution.
 Controller mapping exists but physical controller play, animation,
 combat, scrolling, complete foreground and audio remain unverified.
+
+The native preview optionally appends a touch panel below the original
+logical scene. Its visual symbols and input zones use the same layout.
+The shared viewport transform rejects contacts in letterbox space; touch
+events map to Marge while other stations retain their existing controls.
+The native hidden smoke admits Marge with projected contact events,
+admits the other three stations by keyboard, and verifies simultaneous
+diagonal movement and release. The default preview remains unchanged.
+Fresh workspace validation passed in run 1795590044112489749-360869,
+and the native `--smoke --touch` launch succeeded with local art.
+Physical touchscreen, Android and browser integration remain open.

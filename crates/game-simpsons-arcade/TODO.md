@@ -33,3 +33,11 @@ Back inserts a coin, Start claims the station, A confirms, B is reserved,
 and the D-pad or left stick moves the character. For a finite hidden
 native smoke, insert `--smoke` before PARENT. This is a movement
 prototype, not a complete arcade recreation.
+
+Insert `--touch` before PARENT to append a touch panel below the scene.
+The panel controls Marge: the coin and triangle insert a virtual coin
+and start, A confirms, B remains reserved, and the four arrows move.
+Use two fingers for diagonal movement. Other stations retain keyboard
+and controller mappings. Combine the options as `--smoke --touch` to
+run the finite synthetic contact and native rendering check. Physical
+touch devices and Android/browser presentation remain unverified.
