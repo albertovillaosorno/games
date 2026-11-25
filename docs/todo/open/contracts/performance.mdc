@@ -352,3 +352,15 @@ work budget of 16.67 ms. The middle segment averaged 1.33 ms of work
 and 11.27 ms oldest applied input age over 30 samples. Before/after
 captures differed by 298,197 pixels. This is software OpenGL on Xvfb,
 not a physical display or GPU timing measurement.
+
+Live gameplay reports now separate host work from elapsed intervals
+between consecutive successful submissions. Both use the same shared
+bounded collector with separate 60 Hz targets; the cadence meter uses
+monotonic host timestamps and reports interval count, mean, maximum,
+p95, misses and rounded-down FPS. The first submission establishes the
+clock without fabricating an interval. Layout or display changes and
+suspension start a new segment, so a pause is not counted as a long
+frame. Synthetic tests distinguish 3 ms of work from 10 and 20 ms
+submission intervals, verify the corresponding 66 FPS and single
+interval miss, and check resets across resizing and pausing. These
+are host-observed submissions, not display scanout or GPU completions.

@@ -391,8 +391,10 @@ For an opt-in visible native performance report, use `--measure` before
 Startup reports the renderer, load interval, RSS and executable size.
 Gameplay reports are emitted when leaving play, changing logical or
 drawable extent, viewport or display settings, and closing the host.
-They include host work time
-through successful presentation, a 60 Hz budget, sampled RSS and the
-oldest applied local input age for frames with an observed event.
+They include host work time through successful presentation, intervals
+between consecutive successful submissions, separate 60 Hz budgets,
+sampled RSS and the oldest applied local input age for frames with an
+observed event. The first submission of each gameplay segment starts the
+interval clock; it contributes no interval or FPS sample.
 They exclude menu-only and failed submissions, remote input latency,
 physical scanout and GPU-completion timing.

@@ -32,13 +32,13 @@
 use std::collections::BTreeMap;
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
 use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
-use games_platform::performance::resident_bytes;
+use games_platform::performance::{FrameMeter, resident_bytes};
 use games_platform_graphics::linux::RenderError;
 
 use super::failure;
@@ -48,6 +48,7 @@ const RSS_SAMPLE_FRAMES: u64 = 120;
 /// Timing of one successful gameplay frame from host work to submission.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FrameSample {
+    pub(super) completed: Instant,
     pub(super) display: DisplaySettings,
     pub(super) elapsed: Duration,
     pub(super) layout: PresentationLayout,
@@ -55,6 +56,7 @@ pub(super) struct FrameSample {
 }
 
 struct Segment {
+    cadence: FrameMeter,
     collector: PerformanceCollector,
     display: DisplaySettings,
     layout: PresentationLayout,
@@ -65,8 +67,16 @@ impl Segment {
         profile: QualityProfile,
         display: DisplaySettings,
         layout: PresentationLayout,
+        first_submission: Instant,
     ) -> Self {
         Self {
+            cadence: FrameMeter::new(
+                PerformanceCollector::with_percentiles(
+                    profile,
+                    NonZeroU64::new(16_666_667),
+                ),
+                first_submission,
+            ),
             collector: PerformanceCollector::with_percentiles(
                 profile,
                 NonZeroU64::new(16_666_667),
@@ -79,12 +89,16 @@ impl Segment {
     fn report(&self) -> Result<(), RenderError> {
         let profile = self.collector.profile();
         let report = self.collector.report();
+        let cadence = self.cadence.collector();
+        let intervals = cadence.report();
         writeln!(
             stdout().lock(),
             concat!(
                 "Live gameplay {}x{} logical, {}x{} drawable {:?}: ",
                 "{} submitted frames; ",
                 "work mean {:?}; max {:?}; p95 {:?}; budget {:?}; ",
+                "submission intervals {} samples; mean {:?}; ",
+                "max {:?}; p95 {:?}; budget {:?}; whole FPS {:?}; ",
                 "oldest applied local input age {} samples; mean {:?}; ",
                 "p95 {:?}; sampled RSS peak {:?} bytes"
             ),
@@ -98,6 +112,12 @@ impl Segment {
             report.frame_time.maximum(),
             self.collector.frame_percentile(95),
             report.frame_budget,
+            intervals.frame_time.samples(),
+            intervals.frame_time.mean(),
+            intervals.frame_time.maximum(),
+            cadence.frame_percentile(95),
+            intervals.frame_budget,
+            cadence.frames_per_second(),
             report.input_latency.samples(),
             report.input_latency.mean(),
             self.collector.input_percentile(95),
@@ -168,8 +188,19 @@ impl LiveMeasurement {
         }) {
             self.finish()?;
         }
+        if let Some(segment) = &mut self.segment {
+            segment
+                .cadence
+                .observe_frame(sample.completed, None, None)
+                .map_err(failure)?;
+        }
         let segment = self.segment.get_or_insert_with(|| {
-            Segment::new(profile, sample.display, sample.layout)
+            Segment::new(
+                profile,
+                sample.display,
+                sample.layout,
+                sample.completed,
+            )
         });
         let resident_bytes = segment
             .collector
@@ -196,7 +227,8 @@ mod tests {
 
     use super::super::dimension;
     use super::{
-        DisplaySettings, Duration, FrameSample, LiveMeasurement, RenderError,
+        DisplaySettings, Duration, FrameSample, Instant, LiveMeasurement,
+        RenderError,
     };
 
     #[test]
@@ -224,6 +256,7 @@ mod tests {
         let surface = Dimensions::new(dimension(960)?, dimension(672)?);
         let layout = PresentationMode::AspectFit.layout(surface, design);
         let sample = FrameSample {
+            completed: Instant::now(),
             display: DisplaySettings::default(),
             elapsed: Duration::from_millis(30),
             layout,
@@ -256,6 +289,7 @@ mod tests {
         let first = Dimensions::new(dimension(960)?, dimension(672)?);
         let second = Dimensions::new(dimension(1200)?, dimension(672)?);
         let sample = FrameSample {
+            completed: Instant::now(),
             display: DisplaySettings::default(),
             elapsed: Duration::from_millis(30),
             layout: PresentationMode::AspectFit.layout(first, design),
@@ -274,7 +308,15 @@ mod tests {
             .ok_or(RenderError::InvalidSprite)?;
         if segment.layout != resized
             || segment.collector.report().frame_time.samples() != 1
+            || segment.cadence.collector().report().frame_time.samples() != 0
         {
+            return Err(RenderError::InvalidSprite);
+        }
+        measurement.finish()?;
+        measurement.observe(sample)?;
+        if measurement.segment.as_ref().is_none_or(|next| {
+            next.cadence.collector().report().frame_time.samples() != 0
+        }) {
             return Err(RenderError::InvalidSprite);
         }
         Ok(())
@@ -292,5 +334,51 @@ mod tests {
         assert_eq!(measurement.applied, None);
         measurement.advance(4);
         assert_eq!(measurement.applied, Some(next));
+    }
+
+    #[test]
+    fn cadence_distinguishes_work_from_submission_intervals()
+    -> Result<(), RenderError> {
+        let mut measurement = LiveMeasurement::default();
+        let design = Dimensions::new(dimension(320)?, dimension(224)?);
+        let surface = Dimensions::new(dimension(960)?, dimension(672)?);
+        let sample = FrameSample {
+            completed: Instant::now(),
+            display: DisplaySettings::default(),
+            elapsed: Duration::ZERO,
+            layout: PresentationMode::AspectFit.layout(surface, design),
+            work: Duration::from_millis(3),
+        };
+        measurement.observe(sample)?;
+        measurement.observe(FrameSample {
+            completed: sample
+                .completed
+                .checked_add(Duration::from_millis(20))
+                .ok_or(RenderError::InvalidSprite)?,
+            ..sample
+        })?;
+        measurement.observe(FrameSample {
+            completed: sample
+                .completed
+                .checked_add(Duration::from_millis(30))
+                .ok_or(RenderError::InvalidSprite)?,
+            ..sample
+        })?;
+        let segment = measurement
+            .segment
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?;
+        let cadence = segment.cadence.collector();
+        let intervals = cadence.report();
+        if intervals.frame_time.samples() != 2
+            || intervals.frame_time.mean() != Some(Duration::from_millis(15))
+            || cadence.frames_per_second() != Some(66)
+            || intervals.frame_budget.map(|budget| budget.missed) != Some(1)
+            || segment.collector.report().frame_time.mean()
+                != Some(Duration::from_millis(3))
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        Ok(())
     }
 }

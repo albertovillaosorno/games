@@ -758,11 +758,13 @@ impl<'preferences> Interactive<'preferences> {
             && let (Some(meter), Some(beginning), Some(submitted)) =
                 (&mut self.measurement, started, layout)
         {
+            let completed = Instant::now();
             meter.observe(measurement::FrameSample {
+                completed,
                 display: self.applied,
                 elapsed: self.input.elapsed(),
                 layout: submitted,
-                work: beginning.elapsed(),
+                work: completed.saturating_duration_since(beginning),
             })?;
         }
         Ok(())
