@@ -582,3 +582,15 @@ stored and catalogue values. Publication follows authenticated connection
 and successful native controller presentation setup. Regression tests
 exercise precedence, reset, relative paths and rejected combinations.
 Seat reservation and remote touch restrictions are unchanged.
+
+An optimized 0716299 native loopback used a dedicated settings directory
+for each endpoint, disposable mutual-TLS identities and Xvfb/software
+OpenGL. The cabinet ignored its former Right key and moved with Q;
+the controller ignored Right and moved with H. Both repeated this
+behavior after relaunch without explicit profile flags, preserving the
+stored file bytes. A malformed controller profile also left the prior
+file unchanged. Explicit reset restored default Right movement and
+disabled the old remapped keys on each endpoint. Before/after captures
+changed only for admitted controls, and release captures stabilized.
+Private key files were removed. This establishes native keyboard
+routing and persistence, not physical controllers or multi-device LAN.

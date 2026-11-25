@@ -935,3 +935,10 @@ bindings on later launches. Fresh workspace validation exercises relaunch
 precedence, malformed profiles, independent display preferences, and
 read-only smoke selection. Interactive remapping and physical-device
 acceptance remain open.
+
+The optimized native profile diagnostic at 0716299 confirmed cabinet
+keyboard remapping, persistence through relaunch, and restoration of the
+default binding after reset. The same test exercised an authenticated
+standalone controller with a separate settings directory. It used
+synthetic native X11 keyboard events and verified local art; physical
+controller and touchscreen acceptance remain open.
