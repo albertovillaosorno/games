@@ -515,7 +515,7 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
             .and_then(|layout| point.on_presentation(layout)))
     }
 
-    fn visible_layout(
+    pub(super) fn visible_layout(
         &self,
     ) -> Result<Option<PresentationLayout>, RenderError> {
         let current = drawable_viewport(

@@ -35,7 +35,10 @@ use std::io::ErrorKind;
 use std::time::Duration;
 use std::{mem, thread};
 
-use games_platform_graphics::linux::input::{HostEvent, InputStartup};
+use games::input::InputEvent;
+use games_platform_graphics::linux::input::{
+    HostEvent, InputStartup, NativeInput,
+};
 use games_platform_graphics::linux::sprites::{
     EventBatch, SceneLimits, SceneSession, SpriteDraw,
 };
@@ -245,6 +248,18 @@ fn route_event(
     Ok(deferred.is_empty())
 }
 
+fn discover_controllers(
+    input: &mut NativeInput,
+    controls: &mut Controls,
+    controller: &mut ClientLan,
+) -> Result<(), RenderError> {
+    for attached in input.discover_after_drain()? {
+        enqueue(controller, controls.actions(attached)?)
+            .map_err(|_rejected| connection_failure(ErrorKind::WouldBlock))?;
+    }
+    Ok(())
+}
+
 fn interactive(
     scene: &mut SceneSession<'_, '_>,
     startup: InputStartup,
@@ -281,6 +296,16 @@ fn interactive(
             thread::sleep(Duration::from_millis(1));
             continue;
         }
+        if input.synchronize_touch(scene)?.is_some()
+            && !route_event(
+                Some(HostEvent::Input(InputEvent::TouchCancelled)),
+                &mut controls,
+                &mut controller,
+                &mut deferred,
+            )?
+        {
+            continue;
+        }
         let batch =
             scene.dispatch_events(size(EVENT_BUDGET)?, 8, |view, native| {
                 route_event(
@@ -294,11 +319,7 @@ fn interactive(
             return Ok(());
         }
         if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
-            for attached in input.discover_after_drain()? {
-                enqueue(&mut controller, controls.actions(attached)?).map_err(
-                    |_rejected| connection_failure(ErrorKind::WouldBlock),
-                )?;
-            }
+            discover_controllers(&mut input, &mut controls, &mut controller)?;
         }
         if !presented || batch != EventBatch::Empty {
             presented = scene.present([24, 22, 30], &draws)?;
@@ -331,7 +352,6 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
 mod tests {
     use std::env;
 
-    use games::input::InputEvent;
     use games::input::touch::{ContactId, ContactPhase};
     use games_platform_graphics::linux::input::{
         Axis, Button, Scancode, axis_code, button_code, key_code,

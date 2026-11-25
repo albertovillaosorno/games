@@ -664,3 +664,22 @@ tests timely invalid and valid input, expiry for both schemas, channel
 closure and same-identity rejoin. Fresh validation passed in run
 1795618635421978978-3046471. This is host-side observation, not
 client-to-host transit or physical multi-device acceptance.
+
+The Linux host and remote controller now reconcile the last visible
+presentation transform before consuming another native input batch. A
+changed or lost transform cancels held contacts without releasing keys or
+controllers, even if no native resize notification arrives. Finger samples
+older than the observed invalidation are discarded rather than projected
+through the new geometry. A new visible transform after a gap refreshes
+that timestamp boundary. SDL millisecond timestamps cannot distinguish
+events within the same tick, and the cutoff deliberately uses the
+observation time rather than an inferred earlier presentation time.
+
+Table-driven geometry tests cover repeated observations, loss, redraw and
+stale timestamps. The accelerated native smoke holds a contact and a key,
+changes the display policy, verifies the contact release and continued key
+hold, then redraws and changes adaptive target width without polling an
+intermediate invalid layout. Fresh workspace validation including native
+rendering, dummy audio and Android/WebAssembly core compilation passed in
+run 1795624043736867909-3870414. Physical touch and complete platform
+acceptance remain unverified.

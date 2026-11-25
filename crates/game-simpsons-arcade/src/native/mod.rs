@@ -852,6 +852,11 @@ impl<'preferences> Interactive<'preferences> {
                 return Ok(EventBatch::Empty);
             }
         }
+        if let Some(elapsed) = self.input.synchronize_touch(scene)?
+            && !self.route_native(InputEvent::TouchCancelled, elapsed)?
+        {
+            return Ok(EventBatch::Limited);
+        }
         let batch = scene.dispatch_events(
             size(EVENT_BUDGET)?,
             wait_ms,

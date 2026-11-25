@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Assign players, define title actions or advance simulation.
 // - Allows:
-//   - Inputs: SDL events and an explicit native controller capacity.
+//   - Inputs: SDL events, presented geometry and native controller capacity.
 //   - Outputs: Platform-neutral input transitions and close requests.
 //   - Side effects: Opens and closes SDL controller handles.
 // - Split-When:
@@ -40,6 +40,7 @@ use std::time::Duration;
 
 use games::input::InputEvent;
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
+use games::presentation::PresentationLayout;
 use sdl2::controller::GameController;
 pub use sdl2::controller::{Axis, Button};
 use sdl2::event::{Event, WindowEvent};
@@ -47,6 +48,7 @@ pub use sdl2::keyboard::Scancode;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
 use super::RenderError;
+use super::sprites::SceneSession;
 
 /// Events a host can forward to its action router or application loop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +68,37 @@ pub struct NativeInput {
     subsystem: GameControllerSubsystem,
     timer: TimerSubsystem,
     touch_enabled: bool,
+    touch_geometry: TouchGeometry,
     window: u32,
+}
+
+#[derive(Debug, Default)]
+struct TouchGeometry {
+    cutoff: Option<Duration>,
+    layout: Option<PresentationLayout>,
+}
+
+impl TouchGeometry {
+    fn accepts(&self, stamp: Option<Duration>) -> bool {
+        self.cutoff
+            .is_none_or(|cutoff| stamp.is_some_and(|elapsed| elapsed >= cutoff))
+    }
+
+    fn observe(
+        &mut self,
+        layout: Option<PresentationLayout>,
+        elapsed: Duration,
+    ) -> bool {
+        if self.layout == layout {
+            return false;
+        }
+        let invalidated = self.layout.is_some();
+        self.layout = layout;
+        if invalidated || self.cutoff.is_some() {
+            self.cutoff = Some(elapsed);
+        }
+        invalidated
+    }
 }
 
 /// Input adapter and initial controller attachments for the shared router.
@@ -182,10 +214,35 @@ impl NativeInput {
             subsystem,
             timer,
             touch_enabled: false,
+            touch_geometry: TouchGeometry::default(),
             window,
         };
         let attached = input.discover_available()?;
         Ok(InputStartup { attached, input })
+    }
+
+    /// Reconcile touch input with the scene before polling native events.
+    ///
+    /// A changed or lost presented transform invalidates held contacts.
+    /// Route `TouchCancelled` at the returned elapsed time before later
+    /// native transitions.
+    /// Once invalidated, queued finger events older than the observation
+    /// are ignored rather than projected onto a different presentation.
+    /// # Errors
+    /// Reports a failed drawable query.
+    pub fn synchronize_touch(
+        &mut self,
+        scene: &SceneSession<'_, '_>,
+    ) -> Result<Option<Duration>, RenderError> {
+        if !self.touch_enabled {
+            return Ok(None);
+        }
+        let layout = scene.visible_layout()?;
+        let elapsed = self.elapsed();
+        Ok(self
+            .touch_geometry
+            .observe(layout, elapsed)
+            .then_some(elapsed))
     }
 
     /// Translate one polled native event, recording device changes.
@@ -209,6 +266,9 @@ impl NativeInput {
             });
         }
         if self.touch_enabled && event.is_finger() {
+            if !self.touch_geometry.accepts(self.event_elapsed(event)) {
+                return None;
+            }
             return route_contact(event);
         }
         let routed = route(event, self.window);
@@ -490,17 +550,18 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
     use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
+    use games::presentation::{Dimensions, PresentationMode};
     use sdl2::event::{Event, WindowEvent};
     use sdl2::keyboard::Mod;
 
     use super::{
-        Axis, Button, HostEvent, Scancode, admit_discovery, axis_code,
-        button_code, event_elapsed, key_code, open_candidate, route,
+        Axis, Button, HostEvent, Scancode, TouchGeometry, admit_discovery,
+        axis_code, button_code, event_elapsed, key_code, open_candidate, route,
         route_contact,
     };
     use crate::linux::RenderError;
@@ -560,6 +621,33 @@ mod tests {
             controllers,
             BTreeMap::from([(10, "old"), (20, "second"), (30, "first"),])
         );
+    }
+
+    #[test]
+    fn touch_geometry_cancels_once_and_rejects_stale_samples() {
+        let surface = Dimensions::new(
+            NonZeroU32::new(96).unwrap_or(NonZeroU32::MIN),
+            NonZeroU32::new(48).unwrap_or(NonZeroU32::MIN),
+        );
+        let design = Dimensions::new(NonZeroU32::MIN, NonZeroU32::MIN);
+        let first = Some(PresentationMode::AspectFit.layout(surface, design));
+        let second = Some(PresentationMode::Stretch.layout(surface, design));
+        let mut geometry = TouchGeometry::default();
+        let at = Duration::from_millis;
+        for (layout, tick, cancelled, accepted) in [
+            (None, 1, false, [true; 4]),
+            (first, 2, false, [true; 4]),
+            (first, 3, false, [true; 4]),
+            (second, 4, true, [false, false, true, true]),
+            (second, 5, false, [false, false, true, true]),
+            (None, 6, true, [false, false, false, true]),
+            (None, 7, false, [false, false, false, true]),
+            (first, 8, false, [false, false, false, true]),
+        ] {
+            assert_eq!(geometry.observe(layout, at(tick)), cancelled);
+            let stamps = [None, Some(at(1)), Some(at(4)), Some(at(8))];
+            assert_eq!(stamps.map(|stamp| geometry.accepts(stamp)), accepted);
+        }
     }
 
     #[test]

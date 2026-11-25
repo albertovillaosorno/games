@@ -456,7 +456,9 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
-    use games::input::touch::{ContactId, ContactPhase, TouchPoint};
+    use games::input::touch::{
+        ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone,
+    };
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
@@ -739,6 +741,8 @@ mod tests {
         })?;
         let events = window.sdl.event().map_err(RenderError::Backend)?;
         let window_id = window.canvas.window().id();
+        let mut touch_input = window.input(budget(1))?.input;
+        touch_input.enable_touch();
         window.with_scene(
             extent()?,
             SceneLimits {
@@ -748,7 +752,7 @@ mod tests {
             },
             |scene| {
                 verify_native_batches(scene, &events, window_id)?;
-                verify_sprite_scene(scene)
+                verify_sprite_scene(scene, &mut touch_input)
             },
         )?;
         drop(window);
@@ -757,11 +761,13 @@ mod tests {
 
     fn verify_sprite_scene(
         scene: &mut SceneSession<'_, '_>,
+        input: &mut NativeInput,
     ) -> Result<(), RenderError> {
         let center = TouchPoint { x: 32_768, y: 32_768 };
         require(
             scene.logical_touch(center)?.is_none()
-                && scene.surface_touch(center)?.is_none(),
+                && scene.surface_touch(center)?.is_none()
+                && input.synchronize_touch(scene)?.is_none(),
             "unpresented scene admitted touch",
         )?;
         let atlas = scene
@@ -780,7 +786,7 @@ mod tests {
             source: rect,
         };
         require(scene.present([0; 3], &[sprite])?, "no sprite scene")?;
-        verify_touch_redraw(scene, sprite)?;
+        verify_touch_redraw(scene, input, sprite)?;
         require(
             scene.present([0; 3], &[SpriteDraw {
                 flip_horizontal: true,
@@ -792,28 +798,23 @@ mod tests {
 
     fn verify_touch_redraw(
         scene: &mut SceneSession<'_, '_>,
+        input: &mut NativeInput,
         sprite: SpriteDraw,
     ) -> Result<(), RenderError> {
         let edge = TouchPoint { x: 0, y: 32_768 };
         let center = TouchPoint { x: 32_768, y: 32_768 };
         require(
             scene.logical_touch(edge)?.is_none()
-                && scene.logical_touch(center)?.is_some(),
+                && scene.logical_touch(center)?.is_some()
+                && input.synchronize_touch(scene)?.is_none(),
             "aspect-fit touch did not reject letterbox space",
         )?;
-        scene.apply_display_settings(DisplaySettings {
-            presentation: PresentationMode::Stretch,
-            ..DisplaySettings::default()
-        })?;
-        require(
-            scene.logical_touch(center)?.is_none()
-                && scene.surface_touch(center)?.is_none(),
-            "touch used a layout not yet drawn",
-        )?;
+        verify_touch_release(scene, input, center)?;
         require(scene.present([0; 3], &[sprite])?, "no stretched scene")?;
         require(
             scene.logical_touch(edge)? == Some(edge)
-                && scene.surface_touch(edge)? == Some(edge),
+                && scene.surface_touch(edge)? == Some(edge)
+                && input.synchronize_touch(scene)?.is_none(),
             "redrawn stretch touch did not use the full surface",
         )?;
         scene.apply_display_settings(DisplaySettings {
@@ -833,8 +834,87 @@ mod tests {
         require(scene.present([0; 3], &[sprite])?, "no adaptive scene")?;
         require(
             scene.logical_touch(edge)? == Some(edge)
-                && scene.surface_touch(edge)? == Some(edge),
-            "redrawn adaptive touch did not use the new extent",
+                && scene.surface_touch(edge)? == Some(edge)
+                && input.synchronize_touch(scene)?.is_some()
+                && input.synchronize_touch(scene)?.is_none(),
+            "redrawn adaptive touch did not cancel old geometry",
+        )
+    }
+
+    fn touch_smoke_router() -> Result<InputRouter<&'static str>, RenderError> {
+        let mut mapping = InputMapping::new();
+        let zone = TouchZone::new(1, TouchPoint { x: 0, y: 0 }, TouchPoint {
+            x: u16::MAX,
+            y: u16::MAX,
+        })
+        .ok_or_else(|| {
+            RenderError::Backend(String::from("invalid test zone"))
+        })?;
+        mapping.bind_touch(1, "jump");
+        mapping.bind_key(key_code(Scancode::Space), "move");
+        mapping.set_touch_layout(TouchLayout::new(vec![zone], budget(1)));
+        Ok(InputRouter::new(mapping))
+    }
+
+    fn verify_touch_release(
+        scene: &mut SceneSession<'_, '_>,
+        input: &mut NativeInput,
+        center: TouchPoint,
+    ) -> Result<(), RenderError> {
+        let mut router = touch_smoke_router()?;
+        let contact = |phase| InputEvent::Contact {
+            id: ContactId { device: 1, finger: 1 },
+            phase,
+        };
+        let key = |down| InputEvent::Key {
+            code: key_code(Scancode::Space),
+            down,
+        };
+        let action = |action, down| LogicalAction { action, down };
+        let pressed = scene.logical_touch(center)?.ok_or_else(|| {
+            RenderError::Backend(String::from("center touch not projected"))
+        })?;
+        require(
+            router.handle(contact(ContactPhase::Down(pressed)))
+                == [action("jump", true)],
+            "contact was not admitted",
+        )?;
+        require(
+            router.handle(key(true)) == [action("move", true)],
+            "missing key",
+        )?;
+        scene.apply_display_settings(DisplaySettings {
+            presentation: PresentationMode::Stretch,
+            ..DisplaySettings::default()
+        })?;
+        require(
+            scene.logical_touch(center)?.is_none()
+                && scene.surface_touch(center)?.is_none(),
+            "touch used a layout not yet drawn",
+        )?;
+        require(
+            input.synchronize_touch(scene)?.is_some(),
+            "missing cancellation",
+        )?;
+        require(
+            router.handle(InputEvent::TouchCancelled)
+                == [action("jump", false)],
+            "geometry change did not release the held contact",
+        )?;
+        require(
+            input.synchronize_touch(scene)?.is_none(),
+            "duplicate cancellation",
+        )?;
+        require(
+            router
+                .handle(contact(ContactPhase::Motion(Some(pressed))))
+                .is_empty()
+                && router.handle(contact(ContactPhase::Up)).is_empty(),
+            "old contact resumed after cancellation",
+        )?;
+        require(
+            router.handle(key(false)) == [action("move", false)],
+            "geometry cancellation released a held keyboard key",
         )
     }
 
