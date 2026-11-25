@@ -24,7 +24,8 @@ Produce portable Linux x86-64 executables with local asset discovery.
   resizable aspect-fit, integer scaling, fill/crop, stretch and fullscreen.
 - Verify resize, high-DPI and touch-coordinate mapping across display modes.
 - Verify adaptive height-fit rendering with real additional scene content,
-  uniform scale, safe camera bounds and aspect-fit fallback where unsupported.
+  uniform scale and safe camera bounds. Manually adapt unsupported scenes;
+  temporary aspect-fit fallback does not satisfy adaptive acceptance.
 - Verify remappable per-player keyboard, controller and touch profiles.
 
 ## Evidence
@@ -68,3 +69,15 @@ A fresh package after the atomic publication change contains a
 1,013,360-byte executable whose independently calculated SHA-256
 matches its receipt. Its complete hidden native smoke passed with the
 adjacent local catalogue from an unrelated working directory.
+
+Shared display settings admit aspect-fit, integer, fill, stretch and
+adaptive selections, with desktop fullscreen or resizable windowed
+presentation. The first title reads optional catalogue fields and
+command-line overrides. Fresh accelerated validation verified fullscreen
+and windowed transitions, and software pixel tests cover the display
+transforms. Touch projection uses the same rendered source and destination,
+including a logical-to-surface inverse used by synthetic contact smoke.
+Adaptive world extension, responsive HUD, high-DPI hardware, independent
+touch overlays, automatic settings persistence and remapping remain open.
+The current title rejects fill with its fixed touch panel to avoid
+cropping essential controls.

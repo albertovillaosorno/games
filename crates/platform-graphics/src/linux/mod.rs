@@ -39,7 +39,8 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::presentation::{
-    Dimensions, PresentationLayout, PresentationMode, Viewport,
+    Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
+    Viewport, WindowMode,
 };
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -48,6 +49,7 @@ use sdl2::render::{
     BlendMode, Canvas, RenderTarget, ScaleMode, Texture, TextureCreator,
     WindowCanvas,
 };
+use sdl2::video::FullscreenType;
 use sdl2::{EventPump, Sdl};
 
 use self::input::{InputStartup, NativeInput};
@@ -145,6 +147,26 @@ impl Debug for NativeWindow {
 }
 
 impl NativeWindow {
+    /// Apply portable display settings before starting a render session.
+    /// Fullscreen uses the desktop mode, not a resolution change.
+    /// # Errors
+    /// Reports a native window mode transition failure.
+    pub fn apply_display_settings(
+        &mut self,
+        settings: DisplaySettings,
+    ) -> Result<(), RenderError> {
+        let fullscreen = match settings.window {
+            WindowMode::Fullscreen => FullscreenType::Desktop,
+            WindowMode::Windowed => FullscreenType::Off,
+        };
+        self.canvas
+            .window_mut()
+            .set_fullscreen(fullscreen)
+            .map_err(RenderError::Backend)?;
+        self.set_presentation_mode(settings.presentation);
+        Ok(())
+    }
+
     /// Open native input and return initial controller attachment events.
     ///
     /// Feed the initial events to the shared router before polling new
@@ -419,13 +441,14 @@ mod tests {
     use std::time::Duration;
 
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
-    use games::presentation::PresentationMode;
+    use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
     use games::timing::StepClock;
     use sdl2::event::Event;
     use sdl2::keyboard::Mod;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
+    use sdl2::video::FullscreenType;
 
     use super::input::{
         Axis, Button, HostEvent, NativeInput, Scancode, key_code,
@@ -676,6 +699,7 @@ mod tests {
         let mut window =
             NativeWindow::open("games native smoke", nz(64), nz(64), true)?;
         verify_native_input(&window)?;
+        verify_window_mode(&mut window)?;
         let renderer_name = window.renderer_name();
         require(!renderer_name.is_empty(), "missing renderer name")?;
         let expected_name = renderer_name.clone();
@@ -725,6 +749,25 @@ mod tests {
         )?;
         drop(window);
         require(renderer_name == expected_name, "renderer name changed")
+    }
+
+    fn verify_window_mode(
+        window: &mut NativeWindow,
+    ) -> Result<(), RenderError> {
+        for (mode, expected) in [
+            (WindowMode::Fullscreen, FullscreenType::Desktop),
+            (WindowMode::Windowed, FullscreenType::Off),
+        ] {
+            window.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::Integer,
+                window: mode,
+            })?;
+            require(
+                window.canvas.window().fullscreen_state() == expected,
+                "wrong fullscreen state",
+            )?;
+        }
+        window.apply_display_settings(DisplaySettings::default())
     }
 
     fn verify_native_input(window: &NativeWindow) -> Result<(), RenderError> {

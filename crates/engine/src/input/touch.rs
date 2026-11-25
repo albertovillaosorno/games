@@ -92,6 +92,18 @@ impl TouchPoint {
             )?,
         })
     }
+
+    /// Project a visible logical point onto the physical surface.
+    /// Returns None for cropped-out content or invalid geometry.
+    #[must_use]
+    pub fn on_presentation(self, layout: PresentationLayout) -> Option<Self> {
+        self.in_presentation(PresentationLayout {
+            design: layout.surface,
+            destination: layout.source,
+            source: layout.destination,
+            surface: layout.design,
+        })
+    }
 }
 
 /// A contact identity scoped to the originating touch device.
@@ -333,6 +345,16 @@ mod tests {
         assert_eq!(
             center.in_presentation(fill),
             Some(TouchPoint { x: 32767, y: 32768 })
+        );
+        assert_eq!(first.on_presentation(fill), None);
+        assert_eq!(last.on_presentation(fill), None);
+        let visible = TouchPoint { x: 24000, y: 48000 };
+        let round_trip = visible
+            .on_presentation(fill)
+            .and_then(|point| point.in_presentation(fill));
+        assert!(
+            round_trip.is_some_and(|point| point.x.abs_diff(visible.x) <= 2
+                && point.y.abs_diff(visible.y) <= 2)
         );
         assert_eq!(first.in_presentation(stretch), Some(first));
         assert_eq!(last.in_presentation(stretch), Some(last));

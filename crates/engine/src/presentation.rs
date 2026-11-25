@@ -194,6 +194,77 @@ impl PresentationMode {
             surface,
         }
     }
+
+    /// Parse a portable settings value.
+    ///
+    /// # Errors
+    /// Rejects unknown or ambiguous presentation modes.
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "adaptive" => Ok(Self::Adaptive),
+            "aspect-fit" => Ok(Self::AspectFit),
+            "fill" => Ok(Self::Fill),
+            "integer" => Ok(Self::Integer),
+            "stretch" => Ok(Self::Stretch),
+            _ => Err("expected adaptive, aspect-fit, fill, integer or stretch"),
+        }
+    }
+}
+
+/// Whether the host uses a normal or desktop-fullscreen window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WindowMode {
+    /// Occupy the current desktop without changing the display resolution.
+    Fullscreen,
+    /// Keep the window resizable on the desktop.
+    #[default]
+    Windowed,
+}
+
+impl WindowMode {
+    /// Parse a portable settings value.
+    ///
+    /// # Errors
+    /// Rejects unknown or ambiguous window modes.
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "fullscreen" => Ok(Self::Fullscreen),
+            "windowed" => Ok(Self::Windowed),
+            _ => Err("expected fullscreen or windowed"),
+        }
+    }
+}
+
+/// Persistent presentation choices independent of a game's logical layout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DisplaySettings {
+    /// Select how the logical frame occupies the window.
+    pub presentation: PresentationMode,
+    /// Select desktop-fullscreen or resizable windowed presentation.
+    pub window: WindowMode,
+}
+
+impl DisplaySettings {
+    /// Resolve explicitly supplied values over an existing configuration.
+    ///
+    /// # Errors
+    /// Rejects unknown presentation or window mode names.
+    pub fn configured(
+        self,
+        presentation: Option<&str>,
+        window: Option<&str>,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            presentation: presentation
+                .map(PresentationMode::parse)
+                .transpose()?
+                .unwrap_or(self.presentation),
+            window: window
+                .map(WindowMode::parse)
+                .transpose()?
+                .unwrap_or(self.window),
+        })
+    }
 }
 
 /// A policy for whether the host should cap rendering frequency.

@@ -47,12 +47,12 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use games::input::touch::{ContactId, ContactPhase};
+use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{AxisBinding, InputEvent, InputMapping, InputRouter};
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
-use games::presentation::FramePacing;
+use games::presentation::{DisplaySettings, FramePacing};
 use games::replay::{LiveInputLimits, LiveSimulation, QueueRejection};
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
@@ -658,6 +658,7 @@ fn project_contact(
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
     let launch::Launch {
         assets,
+        display,
         smoke,
         touch_enabled,
     } = launch::Launch::parse(args)?;
@@ -674,7 +675,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             enemy: assets.enemy,
             poses: catalogue,
         })
-        .and_then(|source| window(&source, smoke, touch_enabled));
+        .and_then(|source| window(&source, smoke, touch_enabled, display));
     result.map_err(|error| format!("{error:?}"))
 }
 
@@ -912,7 +913,7 @@ fn smoke_touch(
 ) -> Result<(), RenderError> {
     let id = ContactId { device: 1, finger: 1 };
     for control in [Control::Coin, Control::Start, Control::Primary] {
-        let point = touch::center(control)?;
+        let point = smoke_touch_point(scene, control)?;
         for phase in [ContactPhase::Down(point), ContactPhase::Up] {
             let event =
                 project_contact(scene, InputEvent::Contact { id, phase })?
@@ -935,7 +936,7 @@ fn smoke_touch_movement(
     {
         let event = project_contact(scene, InputEvent::Contact {
             id,
-            phase: ContactPhase::Down(touch::center(control)?),
+            phase: ContactPhase::Down(smoke_touch_point(scene, control)?),
         })?
         .ok_or_else(|| failure("movement touch outside scene"))?;
         controls.route(event, TICK_INTERVAL, simulation)?;
@@ -965,10 +966,20 @@ fn smoke_touch_movement(
     Ok(())
 }
 
+fn smoke_touch_point(
+    scene: &SceneSession<'_, '_>,
+    control: Control,
+) -> Result<TouchPoint, RenderError> {
+    scene
+        .surface_touch(touch::center(control)?)?
+        .ok_or_else(|| failure("touch control outside visible scene"))
+}
+
 fn window(
     source: &Sources<'_>,
     hidden: bool,
     touch_enabled: bool,
+    display: DisplaySettings,
 ) -> Result<(), RenderError> {
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
@@ -980,6 +991,7 @@ fn window(
         })?,
         hidden,
     )?;
+    window.apply_display_settings(display)?;
     let layout = preview_layout(touch_enabled)?;
     let limits = scene_limits(source, touch_enabled)?;
     let startup = window.input(size(4)?)?;

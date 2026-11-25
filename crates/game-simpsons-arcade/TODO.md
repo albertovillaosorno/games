@@ -110,3 +110,20 @@ arguments, the executable reads its adjacent catalogue. It does not scan
 for original media, and bundle identity and source checks still apply.
 The catalogue is trusted local configuration, not authenticated metadata,
 and is not included in the executable package.
+
+### Display selection
+
+After the optional `--smoke --touch` flags, pass
+`--display MODE` and/or `--window MODE` before the asset selection.
+Display choices are `aspect-fit` (default), `integer`, `fill`,
+`stretch` and `adaptive`. Window choices are `windowed` (default)
+and `fullscreen` (desktop resolution). Alternatively, set the
+optional `display` and `window` fields in the local launch catalogue;
+explicit command-line choices override those fields.
+
+Integer mode uses aspect-fit below native logical resolution. Adaptive
+currently falls back to aspect-fit for this fixed scene; real camera,
+scene and HUD extension remains open. Fill may crop the game HUD and
+is rejected when the current fixed touch panel is enabled. Responsive
+HUD placement and independent touch overlays remain open. Settings
+are edited in the catalogue, not saved automatically by an in-game menu.

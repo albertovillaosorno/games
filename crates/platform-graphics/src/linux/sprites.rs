@@ -35,7 +35,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::input::touch::TouchPoint;
-use games::presentation::PresentationMode;
+use games::presentation::{PresentationLayout, PresentationMode};
 use sdl2::EventPump;
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -324,15 +324,9 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         &self,
         point: TouchPoint,
     ) -> Result<Option<TouchPoint>, RenderError> {
-        let Some(drawable) = drawable_viewport(
-            self.canvas,
-            self.textures.layout,
-            self.textures.mode,
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(point.in_presentation(drawable))
+        Ok(self
+            .presentation_layout()?
+            .and_then(|layout| point.in_presentation(layout)))
     }
 
     pub(super) fn new(
@@ -369,6 +363,12 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(drawn)
     }
 
+    fn presentation_layout(
+        &self,
+    ) -> Result<Option<PresentationLayout>, RenderError> {
+        drawable_viewport(self.canvas, self.textures.layout, self.textures.mode)
+    }
+
     /// Read the current logical scene as RGBA bytes.
     ///
     /// Call only immediately after successful presentation. This diagnostic
@@ -379,6 +379,18 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
     /// Rejects failed native readback or an unexpected byte extent.
     pub fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
         self.textures.readback(self.canvas)
+    }
+
+    /// Project a visible logical point onto the physical surface.
+    /// # Errors
+    /// Reports failure to query the drawable dimensions.
+    pub fn surface_touch(
+        &self,
+        point: TouchPoint,
+    ) -> Result<Option<TouchPoint>, RenderError> {
+        Ok(self
+            .presentation_layout()?
+            .and_then(|layout| point.on_presentation(layout)))
     }
 }
 

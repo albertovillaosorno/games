@@ -627,3 +627,10 @@ vertical drift for the other stations and combat hitboxes remain unverified.
 Inline regression tests cover diagonal movement, all four stations' attack
 facing and drift, recovery, and turning during jump. This supersedes the
 previous provisional attack immobility rule.
+
+Native display settings now select shared scaling and desktop fullscreen
+through the local launch catalogue or command-line overrides. The fixed
+street preview uses temporary aspect-fit fallback for adaptive mode;
+real camera extension with additional imported scene content and responsive
+HUD/touch placement is still required. Fill is unavailable with the fixed
+touch panel to prevent clipping essential controls.

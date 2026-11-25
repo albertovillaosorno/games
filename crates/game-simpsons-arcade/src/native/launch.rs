@@ -36,6 +36,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::{env, str, vec};
 
+use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
 use games_platform_storage::file::snapshot;
 
@@ -43,6 +44,7 @@ const FILE_NAME: &str = "simpsons-arcade.local";
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke] [--touch] ",
+    "[--display MODE] [--window MODE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -50,6 +52,7 @@ const USAGE: &str = concat!(
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
+type ConfiguredAssets = (Assets, DisplaySettings);
 type Fields<'text> = BTreeMap<&'text str, &'text str>;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -62,7 +65,7 @@ pub(super) struct Assets {
 }
 
 impl Assets {
-    fn catalogue(path: &Path, text: &str) -> Result<Self, String> {
+    fn catalogue(path: &Path, text: &str) -> Result<ConfiguredAssets, String> {
         if u64::try_from(text.len()).map_or(true, |len| len > MAX_BYTES.get()) {
             return Err(String::from("launch catalogue exceeds byte limit"));
         }
@@ -90,16 +93,21 @@ impl Assets {
         };
         let audio = values.remove("audio").map(hash).transpose()?;
         let poses = values.remove("poses").map(|value| base.join(value));
+        let display = DisplaySettings::default()
+            .configured(values.remove("display"), values.remove("window"))?;
         if !values.is_empty() {
             return Err(String::from("unknown launch catalogue field"));
         }
-        Ok(Self {
-            actors,
-            audio,
-            directory,
-            enemy,
-            poses,
-        })
+        Ok((
+            Self {
+                actors,
+                audio,
+                directory,
+                enemy,
+                poses,
+            },
+            display,
+        ))
     }
 
     fn explicit(mut args: Arguments) -> Result<Self, String> {
@@ -130,7 +138,7 @@ impl Assets {
         })
     }
 
-    fn open(path: &Path) -> Result<Self, String> {
+    fn open(path: &Path) -> Result<ConfiguredAssets, String> {
         let bytes = snapshot(path, MAX_BYTES).map_err(|error| {
             format!("launch catalogue {}: {error:?}", path.display())
         })?;
@@ -142,6 +150,7 @@ impl Assets {
 #[derive(Debug)]
 pub(super) struct Launch {
     pub(super) assets: Assets,
+    pub(super) display: DisplaySettings,
     pub(super) smoke: bool,
     pub(super) touch_enabled: bool,
 }
@@ -151,7 +160,9 @@ impl Launch {
         let mut remaining = args.into_iter().peekable();
         let smoke = flag(&mut remaining, "--smoke");
         let touch_enabled = flag(&mut remaining, "--touch");
-        let assets = if flag(&mut remaining, "--config") {
+        let mode = optional_value(&mut remaining, "--display")?;
+        let window = optional_value(&mut remaining, "--window")?;
+        let (assets, defaults) = if flag(&mut remaining, "--config") {
             let config = PathBuf::from(next(&mut remaining)?);
             if remaining.next().is_some() {
                 return Err(String::from(USAGE));
@@ -162,10 +173,18 @@ impl Launch {
                 .map_err(|error| format!("executable path: {error}"))?;
             Assets::open(&sibling_catalogue(&executable)?)?
         } else {
-            Assets::explicit(remaining)?
+            (Assets::explicit(remaining)?, DisplaySettings::default())
         };
+        let display =
+            defaults.configured(mode.as_deref(), window.as_deref())?;
+        if touch_enabled && display.presentation == PresentationMode::Fill {
+            return Err(String::from(
+                "fill can crop touch controls; choose another display mode",
+            ));
+        }
         Ok(Self {
             assets,
+            display,
             smoke,
             touch_enabled,
         })
@@ -208,6 +227,20 @@ fn next(args: &mut Arguments) -> Result<OsString, String> {
     args.next().ok_or_else(|| String::from(USAGE))
 }
 
+fn optional_value(
+    args: &mut Arguments,
+    name: &str,
+) -> Result<Option<String>, String> {
+    if flag(args, name) {
+        next(args)?
+            .into_string()
+            .map(Some)
+            .map_err(|_error| String::from(USAGE))
+    } else {
+        Ok(None)
+    }
+}
+
 fn required<'text>(
     values: &mut Fields<'text>,
     key: &str,
@@ -226,6 +259,8 @@ fn sibling_catalogue(executable: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    use games::presentation::WindowMode;
+
     use super::*;
 
     const DIGEST: &str =
@@ -246,7 +281,7 @@ mod tests {
              enemy_approach={DIGEST}\nenemy_strike={DIGEST}\n",
             catalogue()
         );
-        let assets = Assets::catalogue(path, &text)?;
+        let (assets, display) = Assets::catalogue(path, &text)?;
         let expected = Assets {
             actors: [DIGEST, DIGEST, DIGEST, DIGEST].map(OsString::from),
             audio: Some(DIGEST.into()),
@@ -254,7 +289,7 @@ mod tests {
             enemy: Some([DIGEST.into(), DIGEST.into()]),
             poses: Some(PathBuf::from("/package/poses.txt")),
         };
-        if assets != expected {
+        if assets != expected || display != DisplaySettings::default() {
             return Err(String::from("incorrect catalogue selection"));
         }
         Ok(())
@@ -308,6 +343,50 @@ mod tests {
     }
 
     #[test]
+    fn launch_display_values_are_optional_strict_and_overridable()
+    -> Result<(), String> {
+        let path = Path::new("local");
+        let text =
+            format!("{}display=integer\nwindow=fullscreen\n", catalogue());
+        let (_, settings) = Assets::catalogue(path, &text)?;
+        let expected = DisplaySettings {
+            presentation: PresentationMode::Integer,
+            window: WindowMode::Fullscreen,
+        };
+        if settings != expected
+            || settings.configured(Some("stretch"), None)?.window
+                != expected.window
+        {
+            return Err(String::from("incorrect catalogue display settings"));
+        }
+        let args = [
+            "--display",
+            "fill",
+            "--window",
+            "windowed",
+            "parent",
+            "m",
+            "h",
+            "b",
+            "l",
+        ];
+        let launch = Launch::parse(args.map(OsString::from).into())?;
+        if launch.display.presentation != PresentationMode::Fill
+            || launch.display.window != WindowMode::Windowed
+        {
+            return Err(String::from("incorrect explicit display settings"));
+        }
+        for suffix in ["display=unknown\n", "window=unknown\n"] {
+            if Assets::catalogue(path, &format!("{}{suffix}", catalogue()))
+                .is_ok()
+            {
+                return Err(String::from("invalid display setting accepted"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn implicit_path_is_executable_adjacent() {
         assert_eq!(
             sibling_catalogue(Path::new("/package/simpsons-arcade")),
@@ -317,6 +396,7 @@ mod tests {
             vec!["--config"],
             vec!["--config", "local", "extra"],
             vec!["--poses"],
+            vec!["--touch", "--display", "fill", "parent", "m", "h", "b", "l"],
             vec!["parent", "m", "h", "b"],
         ] {
             assert!(
