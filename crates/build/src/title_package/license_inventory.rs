@@ -42,11 +42,13 @@ use crate::title_build::{NATIVE_TARGET, PREVIEW_FEATURE, Title};
 
 const REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const SDL_VERSION: &str = "0.39.0";
-const DOCUMENTS: [&str; 11] = [
+const DOCUMENTS: [&str; 13] = [
     "COPYING",
     "COPYRIGHT",
     "LICENSE",
     "LICENSE-APACHE",
+    "LICENSE-BSD",
+    "LICENSE-ISC",
     "LICENSE-MIT",
     "LICENSE-UNICODE",
     "LICENSE.txt",
@@ -54,6 +56,15 @@ const DOCUMENTS: [&str; 11] = [
     "NOTICE.md",
     "NOTICES.md",
     "UNLICENSE",
+];
+const RING_VERSION: &str = "0.17.14";
+const RING_DOCUMENTS: [&str; 6] = [
+    "LICENSE",
+    "LICENSE-BoringSSL",
+    "LICENSE-other-bits",
+    "src/polyfill/once_cell/LICENSE-APACHE",
+    "src/polyfill/once_cell/LICENSE-MIT",
+    "third_party/fiat/LICENSE",
 ];
 
 type Documents = BTreeMap<String, PathBuf>;
@@ -247,7 +258,13 @@ impl Package {
         if self.name == "sdl2-sys" {
             return self.sdl_documents(selected);
         }
-        for name in DOCUMENTS {
+        // Preserve the actual Ring licence texts and their relative paths.
+        let names = if self.name == "ring" {
+            RING_DOCUMENTS.as_slice()
+        } else {
+            DOCUMENTS.as_slice()
+        };
+        for &name in names {
             let path = directory.join(name);
             match fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.is_file() => {
@@ -337,9 +354,18 @@ impl Package {
         let has = |name| files.contains_key(name);
         let mit = has("LICENSE-MIT") || has("LICENSE");
         let apache = has("LICENSE-APACHE");
+        let isc = has("LICENSE-ISC") || has("LICENSE") || has("LICENSE.txt");
         let admitted = match self.license.as_deref() {
             Some("MIT") => mit,
             Some("MIT OR Apache-2.0" | "Apache-2.0 OR MIT") => mit || apache,
+            Some("Apache-2.0 OR ISC OR MIT") => apache || isc || mit,
+            Some("ISC") => isc,
+            Some("BSD-3-Clause") => has("LICENSE-BSD") || has("LICENSE"),
+            Some("Apache-2.0 AND ISC") => {
+                self.name == "ring"
+                    && self.version == RING_VERSION
+                    && RING_DOCUMENTS.iter().all(|name| has(name))
+            },
             Some("Unlicense OR MIT") => mit || has("UNLICENSE"),
             Some("(MIT OR Apache-2.0) AND Unicode-3.0") => {
                 (mit || apache) && has("LICENSE-UNICODE")
@@ -440,5 +466,45 @@ mod tests {
                 .is_err()
         );
         assert!(package("../escape", "MIT").label().is_err());
+    }
+
+    #[test]
+    fn ring_requires_every_reviewed_licence_document() {
+        let mut ring = package("ring", "Apache-2.0 AND ISC");
+        ring.version = RING_VERSION.to_owned();
+        let files: Documents = RING_DOCUMENTS
+            .into_iter()
+            .map(|name| (name.to_owned(), PathBuf::from(name)))
+            .collect();
+        assert!(ring.validate_documents(&files).is_ok());
+        for name in RING_DOCUMENTS {
+            let mut incomplete = files.clone();
+            let _removed = incomplete.remove(name);
+            assert!(ring.validate_documents(&incomplete).is_err());
+        }
+        ring.version = String::from("0.17.15");
+        assert!(ring.validate_documents(&files).is_err());
+        assert!(
+            package("unknown", "Apache-2.0 AND ISC")
+                .validate_documents(&files)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn tls_licences_require_a_recognized_text() {
+        for (expression, filename) in [
+            ("Apache-2.0 OR ISC OR MIT", "LICENSE-ISC"),
+            ("ISC", "LICENSE.txt"),
+            ("BSD-3-Clause", "LICENSE"),
+        ] {
+            let dependency = package("tls", expression);
+            assert!(dependency.validate_documents(&Documents::new()).is_err());
+            let files = Documents::from([(
+                filename.to_owned(),
+                PathBuf::from(filename),
+            )]);
+            assert!(dependency.validate_documents(&files).is_ok());
+        }
     }
 }

@@ -52,3 +52,21 @@ entry points. This is structural admission, not loader emulation or
 cross-host ABI verification. Fresh validation passed in run
 1795616397517689693-2582351. A current package attempt exposed a separate
 licence inventory blocker for Ring; no new package was published.
+
+The native licence inventory now admits the locked TLS dependency set.
+Ring 0.17.14 requires its six reviewed licence documents, retaining the
+relative paths for BoringSSL, ISC, once_cell and fiat-crypto material.
+Synthetic checks reject each missing document and unreviewed versions.
+ISC, BSD-3-Clause and the Rustls alternative licence expression are
+admitted only with recognized licence documents. This is an inventory
+check, not a legal clearance or system-library licence audit.
+
+The current Linux x86-64 package succeeded: 48 declared dependencies,
+88 files, a 3,224,528-byte executable and matching receipt SHA-256.
+From an unrelated working directory, its explicit local launch catalogue
+and touch smoke passed on the host OpenGL renderer with dummy audio.
+The smoke submitted 600 movement frames and 51 combat frames without
+missing its measured frame-submission budget. The dummy video backend
+was rejected because it could not provide accelerated rendering.
+Original media and assets remained outside the package. Physical input,
+GPU presentation latency and cross-host compatibility remain unverified.
