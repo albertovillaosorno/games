@@ -30,6 +30,8 @@
 //   - Require acceleration; do not request vertical synchronization.
 
 //! Accelerated SDL2 RGBA presentation for Linux hosts.
+/// Bounded native keyboard and game-controller event admission.
+pub mod input;
 /// Bounded GPU-resident sprite atlases and ordered scene composition.
 pub mod sprites;
 
@@ -46,6 +48,7 @@ use sdl2::render::{
 };
 use sdl2::{EventPump, Sdl};
 
+use self::input::{InputStartup, NativeInput};
 use self::sprites::{SceneLimits, SceneSession, SceneTextures};
 // SDL_RENDERER_ACCELERATED in the public SDL2 renderer flags.
 const ACCELERATED_FLAG: u32 = 2;
@@ -139,6 +142,20 @@ impl Debug for NativeWindow {
 }
 
 impl NativeWindow {
+    /// Open native input and return initial controller attachment events.
+    ///
+    /// Feed the initial events to the shared router before polling new
+    /// events. The adapter owns at most the requested controller count.
+    ///
+    /// # Errors
+    /// Reports unavailable controller enumeration or failed device opens.
+    pub fn input(
+        &self,
+        limit: NonZeroUsize,
+    ) -> Result<InputStartup, RenderError> {
+        NativeInput::open(&self.sdl, self.canvas.window().id(), limit)
+    }
+
     /// Open a resizable window without requesting vertical synchronization.
     ///
     /// A hidden window is useful for explicit native smoke tests. No
@@ -365,9 +382,13 @@ mod tests {
     use std::env;
     use std::num::{NonZeroU32, NonZeroUsize};
 
+    use games::input::InputEvent;
+    use sdl2::event::Event;
+    use sdl2::keyboard::Mod;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
 
+    use super::input::{Button, HostEvent, Scancode, key_code};
     use super::sprites::{SceneLimits, SpriteDraw, SpriteRect};
     use super::{
         FrameLayout, NativeWindow, RenderError, create_texture, draw_frame,
@@ -476,6 +497,7 @@ mod tests {
         }
         let mut window =
             NativeWindow::open("games native smoke", nz(64), nz(64), true)?;
+        verify_native_input(&window)?;
         let renderer_name = window.renderer_name();
         require(!renderer_name.is_empty(), "missing renderer name")?;
         let expected_name = renderer_name.clone();
@@ -525,5 +547,57 @@ mod tests {
         )?;
         drop(window);
         require(renderer_name == expected_name, "renderer name changed")
+    }
+
+    fn verify_native_input(window: &NativeWindow) -> Result<(), RenderError> {
+        let mut startup = window.input(budget(4))?;
+        require(startup.attached.len() <= 4, "controller limit exceeded")?;
+        require(
+            startup
+                .attached
+                .iter()
+                .all(|event| matches!(event, InputEvent::Attached { .. })),
+            "initial event is not an attachment",
+        )?;
+        let unknown = Event::ControllerButtonDown {
+            timestamp: 0,
+            which: u32::MAX,
+            button: Button::A,
+        };
+        require(
+            startup.input.translate(&unknown)?.is_none(),
+            "unknown controller produced an action",
+        )?;
+        let removed = Event::ControllerDeviceRemoved {
+            timestamp: 0,
+            which: u32::MAX,
+        };
+        require(
+            startup.input.translate(&removed)?.is_none(),
+            "unknown controller removal produced a detach",
+        )?;
+        let event = Event::KeyDown {
+            timestamp: 0,
+            window_id: window.canvas.window().id(),
+            keycode: None,
+            scancode: Some(Scancode::Space),
+            keymod: Mod::NOMOD,
+            repeat: false,
+        };
+        let events = window.sdl.event().map_err(RenderError::Backend)?;
+        events.push_event(event).map_err(RenderError::Backend)?;
+        let mut pump = window.sdl.event_pump().map_err(RenderError::Backend)?;
+        let expected = HostEvent::Input(InputEvent::Key {
+            code: key_code(Scancode::Space),
+            down: true,
+        });
+        for native in pump.poll_iter().take(256) {
+            if startup.input.translate(&native)? == Some(expected) {
+                return Ok(());
+            }
+        }
+        Err(RenderError::Backend(String::from(
+            "queued native key did not reach the input router",
+        )))
     }
 }

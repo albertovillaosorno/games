@@ -93,3 +93,16 @@ player actions, reject fallback for unbound buttons on assigned devices,
 and release old actions on reassignment or detach without cancelling other
 held inputs. Window focus loss releases keyboard and touch holds while
 preserving controller input. Native device integration remains pending.
+
+The GNU/Linux SDL adapter opens a bounded number of mapped game
+controllers and reports initial attachments before the event loop.
+Discovery indices are not treated as persistent controller identities;
+only admitted instance IDs produce button or removal transitions.
+Physical keyboard scancodes, repeat suppression, focus loss and window
+close handling are routed independently from title action mapping.
+Synthetic tests verify the shared router composition and instance IDs.
+An explicitly enabled native smoke in run
+1795583972574077445-3709665 opened the input subsystem and delivered a
+queued SDL key through its real event pump; unknown controller events
+were ignored. Physical controller hot-plug, analogue axes, remapping and
+touch-device integration remain unverified.
