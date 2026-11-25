@@ -811,6 +811,53 @@ mod tests {
     }
 
     #[test]
+    fn large_tls_frame_keeps_following_frame_boundary() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let mut settings = config()?;
+        settings.max_bytes = 16_385;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let (host_result, remote_result) =
+            pair(&listener, settings, &keys.client, HOST)?;
+        let mut host = host_result?;
+        let mut remote = remote_result?;
+        let payload = vec![0x5a; 16_385];
+        remote.send(&payload)?;
+        remote.send(b"next")?;
+        let deadline = poll_accept(|| {
+            require(host.poll_receive()?.is_none(), "large partial frame")?;
+            Ok(host.channel.read_deadline)
+        })?;
+        poll_accept(|| {
+            require(host.poll_receive()?.is_none(), "payload chunk")?;
+            Ok(host
+                .channel
+                .reader
+                .payload
+                .as_ref()
+                .filter(|frame| !frame.bytes.is_empty())
+                .map(|_frame| ()))
+        })?;
+        require(
+            host.channel.read_deadline == Some(deadline),
+            "payload chunks do not renew the deadline",
+        )?;
+        require(
+            host.receive()? == payload,
+            "blocking receive resumes chunked TLS frame",
+        )?;
+        require(
+            host.channel.read_deadline.is_none(),
+            "whole-frame deadline is cleared only after completion",
+        )?;
+        require(
+            poll_accept(|| host.poll_receive())? == b"next",
+            "next TLS frame preserved",
+        )
+    }
+
+    #[test]
     fn polled_frames_preserve_partial_data_and_blocking_compatibility()
     -> io::Result<()> {
         let issuer = authority()?;

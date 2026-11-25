@@ -497,3 +497,14 @@ can resume it; dragging into another seat cannot operate its controls.
 An initial press outside every panel does not acquire a seat mid-drag.
 The single-panel layout retains its existing unrestricted routing.
 Engine and native title regressions exercise these transitions.
+
+Incoming native frames now retain the admitted length without allocating
+its full payload on receipt of the header. Reads use a fixed-size scratch
+chunk and fallible, geometrically grown storage bounded by the declared
+length. The existing whole-frame deadline does not renew across chunks.
+Synthetic controls admit a one-MiB header without allocation and retain
+only the received prefix, then check exact multi-chunk frame boundaries.
+A real mutual-TLS loopback transfers a 16,385-byte frame across polled and
+blocking reads, preserves the deadline, and receives the next frame.
+Fresh validation passed in run 1795608554975522202-455815. This bounds
+allocation requests, not allocator-internal overhead or measured latency.

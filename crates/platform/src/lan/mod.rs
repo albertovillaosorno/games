@@ -38,6 +38,8 @@ use std::time::{Duration, Instant};
 
 use games::network::SessionConfig;
 
+const RECEIVE_CHUNK: usize = 4096;
+
 /// Explicit native transport limits inherited from a session.
 #[derive(Clone, Copy, Debug)]
 pub struct LanConfig {
@@ -199,10 +201,51 @@ impl TimedStream for DeadlineSocket {
 }
 
 #[derive(Debug)]
+struct PendingFrame {
+    bytes: Vec<u8>,
+    length: usize,
+}
+
+impl PendingFrame {
+    fn advance<Read>(&mut self, read: Read) -> io::Result<bool>
+    where
+        Read: FnOnce(&mut [u8]) -> io::Result<usize>,
+    {
+        // A length header alone must not allocate the advertised payload.
+        // Read only a bounded chunk, then reserve for actual received bytes.
+        let remaining = self.length.saturating_sub(self.bytes.len());
+        let mut scratch = [0u8; RECEIVE_CHUNK];
+        let target = scratch
+            .get_mut(..remaining.min(RECEIVE_CHUNK))
+            .ok_or(ErrorKind::InvalidData)?;
+        let count = read_frame_chunk(target, read)?;
+        let received = target.get(..count).ok_or(ErrorKind::InvalidData)?;
+        let required = self
+            .bytes
+            .len()
+            .checked_add(count)
+            .ok_or(ErrorKind::InvalidData)?;
+        if required > self.bytes.capacity() {
+            let capacity = self
+                .bytes
+                .capacity()
+                .saturating_mul(2)
+                .max(required)
+                .min(self.length);
+            self.bytes
+                .try_reserve_exact(capacity.saturating_sub(self.bytes.len()))
+                .map_err(|_error| ErrorKind::OutOfMemory)?;
+        }
+        self.bytes.extend_from_slice(received);
+        Ok(self.bytes.len() == self.length)
+    }
+}
+
+#[derive(Debug)]
 struct FrameReader {
     filled: usize,
     header: [u8; 4],
-    payload: Option<Vec<u8>>,
+    payload: Option<PendingFrame>,
 }
 
 impl FrameReader {
@@ -214,41 +257,34 @@ impl FrameReader {
     where
         Read: FnOnce(&mut [u8]) -> io::Result<usize>,
     {
-        let buffer = match &mut self.payload {
-            Some(payload) => payload.as_mut_slice(),
-            None => self.header.as_mut_slice(),
-        };
-        let target = buffer
+        if let Some(payload) = &mut self.payload {
+            return if payload.advance(read)? {
+                Ok(self.payload.take().map(|frame| frame.bytes))
+            } else {
+                Ok(None)
+            };
+        }
+        let target = self
+            .header
             .get_mut(self.filled..)
             .ok_or(ErrorKind::InvalidData)?;
-        let count = read(target)?;
-        if count == 0 {
-            return Err(ErrorKind::UnexpectedEof.into());
-        }
-        if count > target.len() {
-            return Err(ErrorKind::InvalidData.into());
-        }
+        let count = read_frame_chunk(target, read)?;
         self.filled = self
             .filled
             .checked_add(count)
             .ok_or(ErrorKind::InvalidData)?;
-        if self.filled < buffer.len() {
+        if self.filled < self.header.len() {
             return Ok(None);
         }
         self.filled = 0;
-        if let Some(frame) = self.payload.take() {
-            return Ok(Some(frame));
-        }
         let length = config.frame_length(u32::from_be_bytes(self.header))?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(length)
-            .map_err(|_error| ErrorKind::OutOfMemory)?;
-        bytes.resize(length, 0);
-        if bytes.is_empty() {
-            return Ok(Some(bytes));
+        if length == 0 {
+            return Ok(Some(Vec::new()));
         }
-        self.payload = Some(bytes);
+        self.payload = Some(PendingFrame {
+            bytes: Vec::new(),
+            length,
+        });
         Ok(None)
     }
 
@@ -581,6 +617,20 @@ const fn private_address(address: SocketAddr) -> bool {
     }
 }
 
+fn read_frame_chunk<Read>(target: &mut [u8], read: Read) -> io::Result<usize>
+where
+    Read: FnOnce(&mut [u8]) -> io::Result<usize>,
+{
+    let count = read(target)?;
+    if count == 0 {
+        return Err(ErrorKind::UnexpectedEof.into());
+    }
+    if count > target.len() {
+        return Err(ErrorKind::InvalidData.into());
+    }
+    Ok(count)
+}
+
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
@@ -615,7 +665,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, ErrorKind, Write as _};
+    use std::io::{self, ErrorKind, Read as _, Write as _};
     use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream};
     use std::num::{NonZeroU8, NonZeroUsize};
     use std::thread;
@@ -624,8 +674,8 @@ mod tests {
     use games::network::{MessageSchema, PeerKind, Session, SessionConfig};
 
     use super::{
-        FrameChannel, FrameStream, LanConfig, LanListener, SendProgress,
-        TimedStream, connect_socket,
+        FrameChannel, FrameReader, FrameStream, LanConfig, LanListener,
+        RECEIVE_CHUNK, SendProgress, TimedStream, connect_socket,
     };
 
     pub(super) const LOOPBACK: SocketAddr =
@@ -716,6 +766,92 @@ mod tests {
         result: io::Result<Value>,
     ) -> Option<ErrorKind> {
         result.err().map(|error| error.kind())
+    }
+
+    #[test]
+    fn frame_allocation_follows_received_payload() -> io::Result<()> {
+        let settings = LanConfig::new(
+            SessionConfig {
+                max_message_bytes: NonZeroUsize::new(1_048_576)
+                    .unwrap_or(NonZeroUsize::MIN),
+                ..session_config(true)
+            },
+            TIMEOUT,
+        )?;
+        let mut reader = FrameReader::new();
+        let header = 1_048_576u32.to_be_bytes();
+        require(
+            reader
+                .advance(settings, |target| {
+                    target.copy_from_slice(&header);
+                    Ok(header.len())
+                })?
+                .is_none(),
+            "header must remain incomplete",
+        )?;
+        let pending = reader.payload.as_ref().ok_or(ErrorKind::InvalidData)?;
+        require(pending.bytes.capacity() == 0, "no header allocation")?;
+        require(
+            error_kind(reader.advance(settings, |_target| {
+                Err(ErrorKind::WouldBlock.into())
+            })) == Some(ErrorKind::WouldBlock),
+            "idle payload read",
+        )?;
+        require(
+            reader
+                .advance(settings, |target| {
+                    let first =
+                        target.first_mut().ok_or(ErrorKind::InvalidData)?;
+                    *first = 42;
+                    Ok(1)
+                })?
+                .is_none(),
+            "partial payload is not delivered",
+        )?;
+        let partial = reader.payload.as_ref().ok_or(ErrorKind::InvalidData)?;
+        require(
+            partial.bytes == [42] && partial.bytes.capacity() < RECEIVE_CHUNK,
+            "allocation follows actual payload instead of declared length",
+        )
+    }
+
+    #[test]
+    fn chunked_frames_preserve_exact_boundaries() -> io::Result<()> {
+        let length = RECEIVE_CHUNK.saturating_mul(2).saturating_add(1);
+        let settings = LanConfig::new(
+            SessionConfig {
+                max_message_bytes: NonZeroUsize::new(length)
+                    .ok_or(ErrorKind::InvalidInput)?,
+                ..session_config(true)
+            },
+            TIMEOUT,
+        )?;
+        let mut wire = u32::try_from(length)
+            .map_err(|_error| ErrorKind::InvalidInput)?
+            .to_be_bytes()
+            .to_vec();
+        wire.resize(wire.len().saturating_add(length), 42);
+        wire.extend_from_slice(&1u32.to_be_bytes());
+        wire.push(7);
+        let mut bytes = wire.as_slice();
+        let mut reader = FrameReader::new();
+        let mut frames = Vec::new();
+        while !bytes.is_empty() {
+            if let Some(frame) =
+                reader.advance(settings, |target| bytes.read(target))?
+            {
+                frames.push(frame);
+            }
+        }
+        let [first, second] = frames.as_slice() else {
+            return Err(ErrorKind::InvalidData.into());
+        };
+        require(
+            first.len() == length
+                && first.iter().all(|&byte| byte == 42)
+                && second == &[7],
+            "multiple chunks and the following frame must remain distinct",
+        )
     }
 
     #[test]
