@@ -37,6 +37,7 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use games::input::InputEvent;
+use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use sdl2::controller::GameController;
 pub use sdl2::controller::{Axis, Button};
 use sdl2::event::{Event, WindowEvent};
@@ -61,6 +62,7 @@ pub struct NativeInput {
     origin: u64,
     subsystem: GameControllerSubsystem,
     timer: TimerSubsystem,
+    touch_enabled: bool,
     window: u32,
 }
 
@@ -113,6 +115,15 @@ impl NativeInput {
         Duration::from_millis(self.timer.ticks64().saturating_sub(self.origin))
     }
 
+    /// Enable touch events for a host that owns the only SDL window.
+    ///
+    /// SDL2 finger events do not expose a window ID through this adapter.
+    /// Coordinates are normalized over the entire surface, not the fitted
+    /// game viewport. Configure a shared title touch layout separately.
+    pub const fn enable_touch(&mut self) {
+        self.touch_enabled = true;
+    }
+
     /// Map an SDL event's timestamp onto the input session's elapsed time.
     ///
     /// Events queued before startup belong to time zero. Poll frequently:
@@ -138,6 +149,7 @@ impl NativeInput {
             origin: timer.ticks64(),
             subsystem,
             timer,
+            touch_enabled: false,
             window,
         };
         let mut attached = Vec::new();
@@ -172,6 +184,9 @@ impl NativeInput {
             return Ok(self.controllers.remove(&device).map(|_controller| {
                 HostEvent::Input(InputEvent::Detached { device })
             }));
+        }
+        if self.touch_enabled && event.is_finger() {
+            return Ok(route_contact(event));
         }
         let routed = route(event, self.window);
         if let Some(HostEvent::Input(
@@ -226,6 +241,26 @@ pub const fn axis_code(axis: Axis) -> u16 {
 )]
 pub const fn button_code(button: Button) -> u16 {
     button as u16
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "finite normalized coordinates are checked before conversion"
+)]
+fn normalized_coordinate(value: f32) -> Option<u16> {
+    if !(0.0..=1.0).contains(&value) {
+        return None;
+    }
+    Some((value * f32::from(u16::MAX)).round() as u16)
+}
+
+fn normalized_point(horizontal: f32, vertical: f32) -> Option<TouchPoint> {
+    Some(TouchPoint {
+        x: normalized_coordinate(horizontal)?,
+        y: normalized_coordinate(vertical)?,
+    })
 }
 
 fn route(event: &Event, window: u32) -> Option<HostEvent> {
@@ -289,18 +324,126 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
     }))
 }
 
+fn route_contact(event: &Event) -> Option<HostEvent> {
+    let (device, finger, phase) = if let Event::FingerDown {
+        touch_id,
+        finger_id,
+        x,
+        y,
+        ..
+    } = *event
+    {
+        (
+            touch_id,
+            finger_id,
+            ContactPhase::Down(normalized_point(x, y)?),
+        )
+    } else if let Event::FingerMotion {
+        touch_id,
+        finger_id,
+        x,
+        y,
+        ..
+    } = *event
+    {
+        (
+            touch_id,
+            finger_id,
+            ContactPhase::Motion(normalized_point(x, y)),
+        )
+    } else if let Event::FingerUp { touch_id, finger_id, .. } = *event {
+        (touch_id, finger_id, ContactPhase::Up)
+    } else {
+        return None;
+    };
+    Some(HostEvent::Input(InputEvent::Contact {
+        id: ContactId { device, finger },
+        phase,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use sdl2::event::{Event, WindowEvent};
     use sdl2::keyboard::Mod;
 
     use super::{
         Axis, Button, HostEvent, Scancode, axis_code, button_code,
-        event_elapsed, key_code, route,
+        event_elapsed, key_code, route, route_contact,
     };
+
+    #[test]
+    fn native_touch_coordinates_are_checked_and_rounded() {
+        for (horizontal, vertical, expected) in [
+            (0.0, 1.0, Some(TouchPoint { x: 0, y: u16::MAX })),
+            (0.5, 0.5, Some(TouchPoint { x: 32_768, y: 32_768 })),
+            (-0.1, 0.5, None),
+            (1.1, 0.5, None),
+            (0.5, f32::NAN, None),
+            (f32::INFINITY, 0.5, None),
+        ] {
+            let event = Event::FingerDown {
+                timestamp: 0,
+                touch_id: i64::MIN,
+                finger_id: i64::MAX,
+                x: horizontal,
+                y: vertical,
+                dx: 0.0,
+                dy: 0.0,
+                pressure: 1.0,
+            };
+            assert_eq!(
+                route_contact(&event),
+                expected.map(|point| HostEvent::Input(InputEvent::Contact {
+                    id: ContactId {
+                        device: i64::MIN,
+                        finger: i64::MAX
+                    },
+                    phase: ContactPhase::Down(point),
+                }))
+            );
+            assert_eq!(route(&event, 1), None);
+        }
+    }
+
+    #[test]
+    fn invalid_motion_and_release_still_reach_the_contact_router() {
+        let motion = Event::FingerMotion {
+            timestamp: 0,
+            touch_id: 2,
+            finger_id: 3,
+            x: f32::NAN,
+            y: -1.0,
+            dx: 0.0,
+            dy: 0.0,
+            pressure: 1.0,
+        };
+        let up = Event::FingerUp {
+            timestamp: 0,
+            touch_id: 2,
+            finger_id: 3,
+            x: f32::NAN,
+            y: -1.0,
+            dx: 0.0,
+            dy: 0.0,
+            pressure: 0.0,
+        };
+        for (event, phase) in
+            [(motion, ContactPhase::Motion(None)), (up, ContactPhase::Up)]
+        {
+            assert_eq!(
+                route_contact(&event),
+                Some(HostEvent::Input(InputEvent::Contact {
+                    id: ContactId { device: 2, finger: 3 },
+                    phase,
+                }))
+            );
+        }
+    }
 
     #[test]
     fn controller_axes_preserve_signed_values_and_instance_identity() {

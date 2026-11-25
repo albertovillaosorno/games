@@ -196,3 +196,18 @@ controller calibration and hot-plug testing remain open.
 The opt-in native accelerated smoke also rejected an unknown controller's
 axis event. Fresh validation passed with the smoke enabled in run
 1795589083936501060-186109.
+
+The shared touch router now accepts device-scoped finger contacts through
+an explicit, ordered normalized zone layout. A configured contact limit
+bounds admitted fingers; unknown motion and release events are ignored.
+Moving between zones changes the existing aggregated logical actions,
+and two fingers on one action do not release it until both leave.
+Focus loss clears contacts while preserving controller holds.
+
+The SDL adapter offers explicit single-window touch opt-in, with checked
+normalized coordinates and position-independent releases. Invalid motion
+releases the old action rather than leaving it held. Tests cover zone
+priority, contact limits, overlapping actions, focus loss and native event
+conversion. Physical touch hardware, title layout integration and Android
+and browser adapters remain unverified.
+Fresh validation passed in run 1795589553236816708-281632.

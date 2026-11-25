@@ -31,8 +31,15 @@
 //
 //! Platform-independent input mapping with robust device disconnects.
 
+/// Normalized touch geometry and bounded contact lifetimes.
+pub mod touch;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::RangeInclusive;
+
+use self::touch::{
+    ContactId, ContactPhase, ContactUpdate, Contacts, TouchLayout,
+};
 
 /// A platform-neutral input event from a native host adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +66,13 @@ pub enum InputEvent {
         code: u16,
         /// Whether the button is pressed.
         down: bool,
+    },
+    /// A normalized touch contact changed position or lifetime.
+    Contact {
+        /// Stable identity of this device and finger.
+        id: ContactId,
+        /// Press, motion or release of the contact.
+        phase: ContactPhase,
     },
     /// A controller disconnected and must release all held controls.
     Detached {
@@ -124,6 +138,7 @@ pub struct InputMapping<Action> {
     buttons: BTreeMap<u16, Action>,
     keys: BTreeMap<u32, Action>,
     touch: BTreeMap<u16, Action>,
+    touch_layout: Option<TouchLayout>,
 }
 
 /// A logical action changed its aggregate pressed state.
@@ -139,6 +154,7 @@ pub struct LogicalAction<Action> {
 enum Source {
     Axis(u64, u16, AxisDirection),
     Button(u64, u16),
+    Contact(ContactId),
     Key(u32),
     Touch(u16),
 }
@@ -159,6 +175,7 @@ struct ControllerMapping<Action> {
 #[derive(Debug)]
 pub struct InputRouter<Action: Clone + Ord> {
     connected: BTreeSet<u64>,
+    contacts: Contacts,
     controller_maps: BTreeMap<u64, ControllerMapping<Action>>,
     held: BTreeMap<Source, Action>,
     mapping: InputMapping<Action>,
@@ -200,7 +217,13 @@ impl<Action> InputMapping<Action> {
             buttons: BTreeMap::new(),
             keys: BTreeMap::new(),
             touch: BTreeMap::new(),
+            touch_layout: None,
         }
+    }
+
+    /// Enable bounded touch-contact routing with title-selected zones.
+    pub fn set_touch_layout(&mut self, layout: TouchLayout) {
+        self.touch_layout = Some(layout);
     }
 }
 
@@ -243,10 +266,43 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         changes
     }
 
+    fn contact(
+        &mut self,
+        id: ContactId,
+        phase: ContactPhase,
+    ) -> Vec<LogicalAction<Action>> {
+        let Some(layout) = &self.mapping.touch_layout else {
+            return Vec::new();
+        };
+        let ContactUpdate::Zone(zone) = self.contacts.update(layout, id, phase)
+        else {
+            return Vec::new();
+        };
+        let candidate = zone.and_then(|number| self.mapping.touch.get(&number));
+        let source = Source::Contact(id);
+        if self.held.get(&source) == candidate {
+            return Vec::new();
+        }
+        let selected = candidate.cloned();
+        let mut changes: Vec<_> = self.release(source).into_iter().collect();
+        changes.extend(selected.and_then(|action| self.press(source, action)));
+        changes
+    }
+
     fn detach(&mut self, device: u64) -> Vec<LogicalAction<Action>> {
         let _connected = self.connected.remove(&device);
         let _mapping = self.controller_maps.remove(&device);
         self.release_controller(device)
+    }
+
+    fn focus_lost(&mut self) -> Vec<LogicalAction<Action>> {
+        self.contacts.clear();
+        self.release_range(
+            Source::Contact(ContactId {
+                device: i64::MIN,
+                finger: i64::MIN,
+            })..=Source::Touch(u16::MAX),
+        )
     }
 
     /// Process an event and return only changed logical action states.
@@ -274,9 +330,9 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                     .cloned();
                 self.transition(Source::Button(device, code), mapping, down)
             },
+            InputEvent::Contact { id, phase } => self.contact(id, phase),
             InputEvent::Detached { device } => self.detach(device),
-            InputEvent::FocusLost => self
-                .release_range(Source::Key(u32::MIN)..=Source::Touch(u16::MAX)),
+            InputEvent::FocusLost => self.focus_lost(),
             InputEvent::Key { code, down } => {
                 let mapping = self.mapping.keys.get(&code).cloned();
                 self.transition(Source::Key(code), mapping, down)
@@ -293,6 +349,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
     pub const fn new(mapping: InputMapping<Action>) -> Self {
         Self {
             connected: BTreeSet::new(),
+            contacts: Contacts::new(),
             controller_maps: BTreeMap::new(),
             held: BTreeMap::new(),
             mapping,

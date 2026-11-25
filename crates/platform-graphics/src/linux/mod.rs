@@ -30,7 +30,7 @@
 //   - Require acceleration; do not request vertical synchronization.
 
 //! Accelerated SDL2 RGBA presentation for Linux hosts.
-/// Bounded native keyboard and game-controller event admission.
+/// Bounded native keyboard, game-controller and touch event admission.
 pub mod input;
 /// Bounded GPU-resident sprite atlases and ordered scene composition.
 pub mod sprites;
