@@ -56,7 +56,7 @@ impl From<PerformanceError> for MeasurementError {
 }
 
 /// Measures elapsed time between explicit native presentation completions.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct FrameMeter {
     collector: PerformanceCollector,
     previous: Instant,
@@ -69,16 +69,19 @@ impl FrameMeter {
         &self.collector
     }
 
+    /// Recover the collector, including its optional distributions.
+    #[must_use]
+    pub fn into_collector(self) -> PerformanceCollector {
+        self.collector
+    }
+
     /// Begin measurement at the preceding presentation or workload start.
     #[must_use]
     pub const fn new(
-        collector: &PerformanceCollector,
+        collector: PerformanceCollector,
         previous: Instant,
     ) -> Self {
-        Self {
-            collector: *collector,
-            previous,
-        }
+        Self { collector, previous }
     }
 
     /// Record a completed presentation and optional applied input timestamp.
@@ -190,7 +193,7 @@ mod tests {
 
     fn meter(started: Instant) -> FrameMeter {
         FrameMeter::new(
-            &PerformanceCollector::new(QualityProfile {
+            PerformanceCollector::new(QualityProfile {
                 frame_pacing: FramePacing::Uncapped,
                 height: 720,
                 optional_effects: false,

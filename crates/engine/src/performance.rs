@@ -36,6 +36,10 @@ use std::time::Duration;
 
 use crate::presentation::FramePacing;
 
+// Duration::MAX has a 94-bit nanosecond representation. Each doubling
+// beginning at eight nanoseconds consumes eight counters, plus 0..=7.
+const HISTOGRAM_BUCKETS: usize = 736;
+
 /// A comparable presentation setup supplied by a title's host adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QualityProfile {
@@ -58,6 +62,91 @@ pub struct FrameObservation {
     pub input_latency: Option<Duration>,
     /// Approximate working set bytes, if supported by the platform.
     pub resident_bytes: Option<u64>,
+}
+
+/// Inclusive bounds on the nearest-rank percentile of measured durations.
+///
+/// The histogram resolves the eight smallest nanosecond values exactly and
+/// uses eight subdivisions per doubling thereafter. A range is not an exact
+/// measured sample, and should not be printed as a point estimate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PercentileRange {
+    /// Smallest possible duration at this rank.
+    pub lower: Duration,
+    /// Largest possible duration at this rank.
+    pub upper: Duration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TimingHistogram {
+    counts: [u64; HISTOGRAM_BUCKETS],
+}
+
+impl TimingHistogram {
+    const EMPTY: Self = Self {
+        counts: [0; HISTOGRAM_BUCKETS],
+    };
+
+    fn bucket_mut(
+        &mut self,
+        duration: Duration,
+    ) -> Result<&mut u64, PerformanceError> {
+        let index =
+            histogram_index(duration).ok_or(PerformanceError::Overflow)?;
+        self.counts.get_mut(index).ok_or(PerformanceError::Overflow)
+    }
+
+    fn percentile(
+        &self,
+        summary: &TimingSummary,
+        percentile: u8,
+    ) -> Option<PercentileRange> {
+        if !(1..=100).contains(&percentile) {
+            return None;
+        }
+        let maximum = summary.maximum()?;
+        if percentile == 100 {
+            return Some(PercentileRange {
+                lower: maximum,
+                upper: maximum,
+            });
+        }
+        let mut rank = u128::from(summary.samples())
+            .saturating_mul(u128::from(percentile))
+            .div_ceil(100);
+        for (index, count) in self.counts.iter().copied().enumerate() {
+            if rank <= u128::from(count) {
+                return histogram_range(index, maximum);
+            }
+            rank = rank.saturating_sub(u128::from(count));
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Distributions {
+    frame: TimingHistogram,
+    input: TimingHistogram,
+}
+
+impl Distributions {
+    fn record(
+        &mut self,
+        observation: FrameObservation,
+    ) -> Result<(), PerformanceError> {
+        let frame = self.frame.bucket_mut(observation.frame_time)?;
+        let frame_count =
+            frame.checked_add(1).ok_or(PerformanceError::Overflow)?;
+        if let Some(latency) = observation.input_latency {
+            let input = self.input.bucket_mut(latency)?;
+            let input_count =
+                input.checked_add(1).ok_or(PerformanceError::Overflow)?;
+            *input = input_count;
+        }
+        *frame = frame_count;
+        Ok(())
+    }
 }
 
 /// Constant-memory duration statistics without fabricated observations.
@@ -145,9 +234,10 @@ pub struct PerformanceReport {
 }
 
 /// Bounded instrumentation that does not retain individual frame samples.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PerformanceCollector {
     binary_bytes: Option<u64>,
+    distributions: Option<Box<Distributions>>,
     load_time: Option<Duration>,
     profile: QualityProfile,
     report: PerformanceReport,
@@ -160,6 +250,18 @@ impl PerformanceCollector {
         self.binary_bytes
     }
 
+    /// Estimate the nearest-rank frame percentile as an inclusive range.
+    ///
+    /// Returns no range when distributions were not enabled, no samples were
+    /// observed, or the requested percentile is outside 1 through 100.
+    #[must_use]
+    pub fn frame_percentile(&self, percentile: u8) -> Option<PercentileRange> {
+        self.distributions
+            .as_ref()?
+            .frame
+            .percentile(&self.report.frame_time, percentile)
+    }
+
     /// Return the mean frame throughput, rounded down to whole FPS.
     #[must_use]
     pub fn frames_per_second(&self) -> Option<u64> {
@@ -167,6 +269,18 @@ impl PerformanceCollector {
         let numerator = u128::from(self.report.frame_time.samples())
             .checked_mul(1_000_000_000)?;
         u64::try_from(numerator.checked_div(elapsed_ns)?).ok()
+    }
+
+    /// Estimate the nearest-rank percentile of measured input ages.
+    ///
+    /// Unobserved input is not counted as zero. Returns no range when
+    /// distributions are disabled or the percentile or sample set is invalid.
+    #[must_use]
+    pub fn input_percentile(&self, percentile: u8) -> Option<PercentileRange> {
+        self.distributions
+            .as_ref()?
+            .input
+            .percentile(&self.report.input_latency, percentile)
     }
 
     /// Return the most recently reported full-load duration.
@@ -180,6 +294,7 @@ impl PerformanceCollector {
     pub const fn new(profile: QualityProfile) -> Self {
         Self {
             binary_bytes: None,
+            distributions: None,
             load_time: None,
             profile,
             report: PerformanceReport {
@@ -217,6 +332,9 @@ impl PerformanceCollector {
         }
         report.peak_resident_bytes =
             report.peak_resident_bytes.max(frame.resident_bytes);
+        if let Some(distributions) = &mut self.distributions {
+            distributions.record(frame)?;
+        }
         self.report = report;
         Ok(())
     }
@@ -258,6 +376,26 @@ impl PerformanceCollector {
         });
         collector
     }
+
+    /// Begin measurement with bounded optional timing distributions.
+    ///
+    /// Allocates two fixed histograms, not a growing frame history.
+    /// Ordinary collectors allocate neither histogram.
+    #[must_use]
+    pub fn with_percentiles(
+        profile: QualityProfile,
+        target_ns: Option<NonZeroU64>,
+    ) -> Self {
+        let mut collector = target_ns.map_or_else(
+            || Self::new(profile),
+            |target| Self::with_frame_budget(profile, target),
+        );
+        collector.distributions = Some(Box::new(Distributions {
+            frame: TimingHistogram::EMPTY,
+            input: TimingHistogram::EMPTY,
+        }));
+        collector
+    }
 }
 
 /// A measurement could not be represented without losing information.
@@ -267,14 +405,48 @@ pub enum PerformanceError {
     Overflow,
 }
 
+fn histogram_index(duration: Duration) -> Option<usize> {
+    let nanos = duration.as_nanos();
+    if nanos < 8 {
+        return usize::try_from(nanos).ok();
+    }
+    let shift = nanos.ilog2().checked_sub(3)?;
+    let bucket = u128::from(shift)
+        .checked_mul(8)?
+        .checked_add(nanos.checked_shr(shift)?)?;
+    usize::try_from(bucket).ok()
+}
+
+fn histogram_range(index: usize, maximum: Duration) -> Option<PercentileRange> {
+    if index < 8 {
+        let exact = Duration::from_nanos(u64::try_from(index).ok()?);
+        return Some(PercentileRange {
+            lower: exact,
+            upper: exact,
+        });
+    }
+    let shift = u32::try_from(index.checked_sub(8)?.checked_div(8)?).ok()?;
+    let mantissa =
+        u128::try_from(index.checked_rem(8)?).ok()?.checked_add(8)?;
+    let lower = mantissa.checked_shl(shift)?;
+    let upper = mantissa
+        .checked_add(1)?
+        .checked_shl(shift)?
+        .checked_sub(1)?;
+    Some(PercentileRange {
+        lower: Duration::from_nanos_u128(lower),
+        upper: Duration::from_nanos_u128(upper.min(maximum.as_nanos())),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU32, NonZeroU64};
     use std::time::Duration;
 
     use super::{
-        FrameBudgetReport, FrameObservation, PerformanceCollector,
-        PerformanceError, QualityProfile,
+        FrameBudgetReport, FrameObservation, PercentileRange,
+        PerformanceCollector, PerformanceError, QualityProfile,
     };
     use crate::presentation::FramePacing;
 
@@ -501,5 +673,134 @@ mod tests {
             Err(PerformanceError::Overflow)
         );
         assert_eq!(collector.report(), before);
+    }
+    #[test]
+    fn percentile_ranges_contain_the_exact_nearest_rank() {
+        let samples = [
+            0,
+            1,
+            7,
+            8,
+            15,
+            16,
+            17,
+            31,
+            32,
+            33,
+            1000,
+            500_000,
+            16_666_667,
+            30_000_000,
+            1_000_000_000,
+        ];
+        let mut collector =
+            PerformanceCollector::with_percentiles(profile(), None);
+        for nanos in samples {
+            let duration = Duration::from_nanos(nanos);
+            assert_eq!(
+                collector.observe(FrameObservation {
+                    frame_time: duration,
+                    input_latency: Some(duration),
+                    resident_bytes: None,
+                }),
+                Ok(())
+            );
+        }
+        for percentile in 1..=100 {
+            let index = usize::from(percentile)
+                .saturating_mul(samples.len())
+                .div_ceil(100)
+                .saturating_sub(1);
+            let expected =
+                samples.get(index).copied().map(Duration::from_nanos);
+            let range = collector.frame_percentile(percentile);
+            assert_eq!(range, collector.input_percentile(percentile));
+            assert!(range.zip(expected).is_some_and(|(bounds, exact)| {
+                bounds.lower <= exact && exact <= bounds.upper
+            }));
+        }
+    }
+
+    #[test]
+    fn percentiles_distinguish_disabled_missing_and_measured_zero() {
+        let mut collector =
+            PerformanceCollector::with_percentiles(profile(), None);
+        assert_eq!(collector.frame_percentile(50), None);
+        let zero = FrameObservation {
+            frame_time: Duration::ZERO,
+            input_latency: None,
+            resident_bytes: None,
+        };
+        assert_eq!(collector.observe(zero), Ok(()));
+        assert_eq!(
+            collector.frame_percentile(50),
+            Some(PercentileRange {
+                lower: Duration::ZERO,
+                upper: Duration::ZERO,
+            })
+        );
+        assert_eq!(collector.input_percentile(50), None);
+        assert_eq!(
+            collector.observe(FrameObservation {
+                input_latency: Some(Duration::ZERO),
+                ..zero
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            collector.input_percentile(99),
+            collector.frame_percentile(99)
+        );
+    }
+
+    #[test]
+    fn disabled_distributions_and_invalid_percentiles_are_unobserved() {
+        let zero = FrameObservation {
+            frame_time: Duration::ZERO,
+            input_latency: None,
+            resident_bytes: None,
+        };
+        let mut ordinary = PerformanceCollector::new(profile());
+        assert_eq!(ordinary.observe(zero), Ok(()));
+        assert_eq!(ordinary.frame_percentile(50), None);
+        let mut enabled =
+            PerformanceCollector::with_percentiles(profile(), None);
+        assert_eq!(enabled.observe(zero), Ok(()));
+        assert_eq!(enabled.frame_percentile(0), None);
+        assert_eq!(enabled.frame_percentile(101), None);
+    }
+
+    #[test]
+    fn maximum_duration_and_failed_observations_preserve_distributions() {
+        let mut collector =
+            PerformanceCollector::with_percentiles(profile(), None);
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_nanos(1),
+                input_latency: Some(Duration::MAX),
+                resident_bytes: None,
+            }),
+            Ok(())
+        );
+        assert!(collector.input_percentile(50).is_some_and(|range| {
+            range.lower <= Duration::MAX && range.upper == Duration::MAX
+        }));
+        assert_eq!(
+            collector.input_percentile(100),
+            Some(PercentileRange {
+                lower: Duration::MAX,
+                upper: Duration::MAX,
+            })
+        );
+        let before = collector.clone();
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_nanos(20),
+                input_latency: Some(Duration::from_nanos(1)),
+                resident_bytes: Some(100),
+            }),
+            Err(PerformanceError::Overflow)
+        );
+        assert_eq!(collector, before);
     }
 }

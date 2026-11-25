@@ -123,3 +123,24 @@ This is a hidden, uncapped, static imported-asset workload, not a
 representative moving game scene. Submission throughput is not physical
 display FPS. Actual GPU utilisation, VRAM, input-to-photon latency,
 frame percentiles and true peak memory still need measurement.
+
+The collector now optionally allocates two fixed 736-counter histograms
+for frame durations and measured input ages. Nearest-rank percentile
+ranges use eight subdivisions per doubling, resolving 0–7 ns exactly.
+Ordinary collectors allocate neither histogram. Tests compare every
+integer percentile with exact nearest-rank samples, distinguish missing
+and zero input ages, cover the largest representable duration and preserve
+the entire distribution on rejected observations. The native frame meter
+transfers collector ownership without copying sample counters.
+
+The release diagnostic now reports p50, p95 and p99 inclusive ranges.
+Two further 600-frame trials of the same 1,024-draw 256x256 hidden atlas
+scene yielded:
+
+- p50 and p95: 360,448–393,215 ns in both trials.
+- p99: 425,984–458,751 ns and 458,752–491,519 ns.
+- Mean: 389,190–404,121 ns; all 1,200 frames met the 60 Hz target.
+
+These are host completion intervals; input ages, physical display latency
+and GPU/VRAM use were not measured. The static workload is not a game.
+The shared tests passed in fresh run 1795584639072641475-3814930.

@@ -36,7 +36,9 @@ use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::time::{Duration, Instant};
 
-use games::performance::{PerformanceCollector, QualityProfile};
+use games::performance::{
+    PercentileRange, PerformanceCollector, QualityProfile,
+};
 use games::presentation::FramePacing;
 use games_platform::performance::{FrameMeter, resident_bytes};
 use games_platform_graphics::linux::sprites::{SceneSession, SpriteDraw};
@@ -77,8 +79,8 @@ pub fn measure(
         width: layout.width().get(),
     };
     let collector =
-        PerformanceCollector::with_frame_budget(profile, SIXTY_HZ_NS);
-    let mut meter = FrameMeter::new(&collector, Instant::now());
+        PerformanceCollector::with_percentiles(profile, Some(SIXTY_HZ_NS));
+    let mut meter = FrameMeter::new(collector, Instant::now());
     for frame in 1..=schedule.frames.get() {
         present(scene, commands)?;
         let completed = Instant::now();
@@ -102,7 +104,7 @@ pub fn measure(
     meter
         .record_artifact(&path)
         .map_err(|error| RenderError::Backend(error.to_string()))?;
-    Ok(*meter.collector())
+    Ok(meter.into_collector())
 }
 
 /// Report measured quantities without inventing latency or VRAM data.
@@ -118,6 +120,9 @@ pub fn report(
     let frames = report.frame_time;
     let mean = duration(frames.mean());
     let maximum = duration(frames.maximum());
+    let p50 = percentile(collector.frame_percentile(50));
+    let p95 = percentile(collector.frame_percentile(95));
+    let p99 = percentile(collector.frame_percentile(99));
     let fps = observed(collector.frames_per_second());
     let load = duration(collector.load_duration());
     let rss = observed(report.peak_resident_bytes);
@@ -134,6 +139,12 @@ pub fn report(
             out,
             "Frames: {}, mean: {mean}, max: {maximum}, FPS: {fps}",
             frames.samples(),
+        )
+    })
+    .and_then(|()| {
+        writeln!(
+            out,
+            "Frame percentile ranges: p50 {p50}, p95 {p95}, p99 {p99}"
         )
     })
     .and_then(|()| writeln!(out, "60 Hz target misses: {misses}, load: {load}"))
@@ -156,6 +167,19 @@ fn duration(value: Option<Duration>) -> String {
     value.map_or_else(
         || String::from("unobserved"),
         |time| format!("{} ns", time.as_nanos()),
+    )
+}
+
+fn percentile(range: Option<PercentileRange>) -> String {
+    range.map_or_else(
+        || String::from("unobserved"),
+        |bounds| {
+            format!(
+                "{}..={} ns",
+                bounds.lower.as_nanos(),
+                bounds.upper.as_nanos()
+            )
+        },
     )
 }
 
