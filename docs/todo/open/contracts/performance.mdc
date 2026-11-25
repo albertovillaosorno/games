@@ -241,3 +241,27 @@ The lower lifetime readings demonstrate that these approximate kernel
 counters must not be treated as exact or interchangeable. VmHWM includes
 earlier process activity; neither probe measures VRAM or a precise
 benchmark-only memory peak.
+
+The hidden title smoke now submits all 17 fixed-tick poses of each of
+three attacks against the first enemy. It checks that the maneuver
+advances and each frame is submitted, retaining the existing health and
+logical pixel assertions after each strike. The timed region contains
+simulation and host sprite submission, not diagnostic readback. A
+separate observation measures the age of the injected logical attack
+at its first submitted pose.
+
+Four release trials used the same migrated local art catalogue, touch
+panel, Xvfb software OpenGL and dummy audio. Two aspect-fit trials at
+320x304 and two adaptive trials at 400x304 each submitted 51 combat
+frames and three synthetic input-age samples:
+
+- Aspect-fit: mean 44,411–48,768 ns; maximum 77,077 ns.
+- Adaptive: mean 46,598–48,690 ns; maximum 99,459 ns.
+- Synthetic input-to-submission mean across all trials:
+  53,627–61,882 ns, maximum 70,944 ns.
+- All 204 measured combat frames met the 16,666,667 ns target;
+  each run also verified the 600-frame four-player movement slice.
+
+This measures a controlled one-player encounter, not complete gameplay.
+The input samples exclude the physical device and real event pump, and
+neither time measure establishes display latency or GPU execution time.

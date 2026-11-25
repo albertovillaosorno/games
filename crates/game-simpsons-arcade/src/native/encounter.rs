@@ -31,7 +31,15 @@
 
 //! Native presentation of the optional first-street encounter.
 
+use std::io::{Write as _, stdout};
+use std::num::NonZeroU64;
+use std::time::Instant;
+
 use games::input::InputEvent;
+use games::performance::{
+    FrameObservation, PerformanceCollector, QualityProfile,
+};
+use games::presentation::FramePacing;
 use games::replay::LiveSimulation;
 use games_platform_graphics::linux::input::{Scancode, key_code};
 use games_platform_graphics::linux::sprites::{
@@ -44,8 +52,8 @@ use super::{
     Art, Controls, Scene, dimension, failure, ground_position, live, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing, Participation, Phase,
-    Point, Station, TICK_INTERVAL,
+    CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing, Maneuver,
+    Participation, Phase, Point, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -241,6 +249,25 @@ pub(super) fn smoke(
     let mut simulation = live(true)?;
     let mut controls = Controls::new(touch_enabled)?;
     approach(&mut controls, &mut simulation)?;
+    smoke_strikes(scene, art, &mut controls, &mut simulation)?;
+    let _settle = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let _defeated = art.present(scene, simulation.state())?;
+    let final_pixels = scene.readback().map_err(failure)?;
+    advance(&mut simulation, 60)?;
+    let _stable = art.present(scene, simulation.state())?;
+    if final_pixels != scene.readback().map_err(failure)? {
+        return Err(failure("defeated enemy continued to affect the scene"));
+    }
+    smoke_counterstrike(scene, art, touch_enabled)?;
+    smoke_expiry(scene, art, touch_enabled)
+}
+
+fn smoke_strikes(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
     let _drawn = art.present(scene, simulation.state())?;
     let initial = scene.readback().map_err(failure)?;
     verify_enemy_health(
@@ -250,14 +277,24 @@ pub(super) fn smoke(
         scene.layout().width().get(),
     )?;
     let mut previous = initial;
+    let layout = scene.layout();
+    let mut collector = PerformanceCollector::with_percentiles(
+        QualityProfile {
+            frame_pacing: FramePacing::Uncapped,
+            height: layout.height().get(),
+            optional_effects: false,
+            width: layout.width().get(),
+        },
+        NonZeroU64::new(16_666_667),
+    );
     for health in [2, 1, 0] {
-        pulse(&mut controls, &mut simulation, Scancode::Z)?;
-        advance(&mut simulation, 17)?;
+        let injected = Instant::now();
+        pulse(controls, simulation, Scancode::Z)?;
+        measure_strike(scene, art, simulation, (&mut collector, injected))?;
         if simulation.state().enemy().map(|enemy| enemy.health) != Some(health)
         {
             return Err(failure("native strike did not change enemy health"));
         }
-        let _draw = art.present(scene, simulation.state())?;
         let pixels = scene.readback().map_err(failure)?;
         if previous == pixels {
             return Err(failure("enemy damage was not presented"));
@@ -270,16 +307,60 @@ pub(super) fn smoke(
         )?;
         previous = pixels;
     }
-    let _settle = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    let _defeated = art.present(scene, simulation.state())?;
-    let final_pixels = scene.readback().map_err(failure)?;
-    advance(&mut simulation, 60)?;
-    let _stable = art.present(scene, simulation.state())?;
-    if final_pixels != scene.readback().map_err(failure)? {
-        return Err(failure("defeated enemy continued to affect the scene"));
+    report_strikes(&collector)
+}
+
+fn measure_strike(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    measurement: (&mut PerformanceCollector, Instant),
+) -> Result<(), RenderError> {
+    let (collector, injected) = measurement;
+    for tick in 0..17u8 {
+        let started = Instant::now();
+        advance(simulation, 1)?;
+        let [marge, ..] = simulation.state().stations();
+        if marge.maneuver != (Maneuver::Attack { tick }) {
+            return Err(failure("strike timeline did not advance"));
+        }
+        if !art.present(scene, simulation.state())? {
+            return Err(failure("combat frame was not submitted"));
+        }
+        let completed = Instant::now();
+        collector
+            .observe(FrameObservation {
+                frame_time: completed.duration_since(started),
+                input_latency: (tick == 0)
+                    .then(|| completed.duration_since(injected)),
+                resident_bytes: None,
+            })
+            .map_err(failure)?;
     }
-    smoke_counterstrike(scene, art, touch_enabled)?;
-    smoke_expiry(scene, art, touch_enabled)
+    Ok(())
+}
+
+fn report_strikes(collector: &PerformanceCollector) -> Result<(), RenderError> {
+    let report = collector.report();
+    let frames = report.frame_time;
+    let input = report.input_latency;
+    writeln!(
+        stdout().lock(),
+        concat!(
+            "Combat strike submission: {} frames; mean {:?}; ",
+            "max {:?}; p95 {:?}; budget {:?}\n",
+            "Synthetic input-to-submission: {} samples; mean {:?}; max {:?}"
+        ),
+        frames.samples(),
+        frames.mean(),
+        frames.maximum(),
+        collector.frame_percentile(95),
+        report.frame_budget,
+        input.samples(),
+        input.mean(),
+        input.maximum(),
+    )
+    .map_err(failure)
 }
 
 fn smoke_counterstrike(
