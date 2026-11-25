@@ -345,3 +345,14 @@ This is a parsed-token policy, not arbitrary macro expansion or semantic
 Rust name resolution. Tool and title host API migration remains incomplete.
 The combined fresh gate 1795644803982258193-120270 passed 1,353 test
 executions, including the new fixtures in both feature configurations.
+
+Fresh validation 1795648068577282747-194399 passed with the six mandatory
+portable core targets and independent all-feature checks. Runtime
+normal/build graphs and the asset-build graph are checked across all Cargo
+targets; source decoder and authenticated transport isolation are tested
+without original media. Installed Rust targets contribute to the cache
+fingerprint. The gate rejects authored private configuration, misplaced
+reference ledgers, weakened lint levels and incomplete completion evidence.
+The download tool now receives the host-independence check. Remaining
+contributor and title host access, full semantic resolution, and native
+execution on other targets are not established by these checks.

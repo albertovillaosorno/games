@@ -140,6 +140,8 @@
   workspace member's independent all-feature graph; also run aggregate
   workspace tests and compilation with all features. Do not disable a
   lint or omit any member. Asset build must never activate secure LAN.
+  Each title and engine normal/build all-feature dependency graph must
+  exclude source decoders, even through transitive platform features.
 - All dependency versions and lints are owned by the root manifest.
   Member manifests inherit metadata, dependencies and lints. Each direct
   dependency has one canonical workspace declaration; reject aliases that
@@ -240,6 +242,27 @@
   in project-owned code; third-party reference files are excluded.
 - The only designated reusable upstream project is
   `storytold/craft-libs`. Verify its licences and actual suitability.
+- Configure persistent publication roots and the requested target in local
+  `.env` using `GAMES_ASSET_ROOT`, `GAMES_OUTPUT_ROOT` and `GAMES_TARGET`.
+  Use explicit absolute roots; do not expand shell expressions. Track only
+  a non-private `.env.example` template.
+- Keep one canonical content-addressed asset store per title at
+  `<asset-root>/<title>/assets`, shared by every build and target. Publish
+  executable packages under `<output-root>/<title>/bin/<os>-<arch>`.
+  Do not duplicate assets into packages or build-specific directories.
+- Publish new manifests against the shared object store. Legacy writers
+  may exist only in test fixtures; never create new legacy stores. Preserve
+  existing local assets until a verified migration explicitly admits them.
+  Use tiny generated payloads in isolated test fixtures, not real asset
+  copies. Never delete, move or overwrite original media as a shortcut.
+- Keep durable local reference ledgers in `.reference/ledger/`; keep
+  downloaded originals in `.reference/games/` and tools in
+  `.reference/tools/`. These directories survive cache cleanup.
+  Everything in `.cache/` and `.temp/` must be disposable and
+  regenerable; never place authoritative research records or the sole
+  copy of costly downloaded inputs there. Do not delete reference
+  storage during cache cleanup. Preserve durable acceptance evidence
+  in the canonical task records.
 - Reference inputs, tool downloads, caches and logs are local only.
   Never execute game files during import or distribute proprietary material.
   Use controlled reference emulation for lawful original gameplay tests.

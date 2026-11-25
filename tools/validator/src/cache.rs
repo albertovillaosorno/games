@@ -42,15 +42,11 @@ use std::time::SystemTime;
 use games_platform::ir::toolchain::{ValidationTool, probe_version};
 use sha2::{Digest as _, Sha256};
 
-use crate::files::authored;
+use crate::files::{authored, ledger_location};
 use crate::{cargo_config, portability};
 
-pub(crate) const PORTABLE_CORE_FLAG: &str = "GAMES_PORTABLE_CORE_CHECK";
-const FRESH_CHECK_FLAGS: [&str; 3] = [
-    "GAMES_NATIVE_AUDIO_SMOKE",
-    "GAMES_NATIVE_RENDER_SMOKE",
-    PORTABLE_CORE_FLAG,
-];
+const FRESH_CHECK_FLAGS: [&str; 2] =
+    ["GAMES_NATIVE_AUDIO_SMOKE", "GAMES_NATIVE_RENDER_SMOKE"];
 
 /// Function signature for a complete validation pass.
 pub type Check = fn(&Path, &mut File) -> Result<(), String>;
@@ -164,6 +160,7 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
         ValidationTool::Cargo,
         ValidationTool::Clippy,
         ValidationTool::Rustfmt,
+        ValidationTool::RustupTargets,
         ValidationTool::Markdown,
         ValidationTool::Ripgrep,
     ] {
@@ -198,6 +195,7 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
 }
 
 fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
+    ledger_location(root)?;
     portability::preflight(root)?;
     let mut hash = Sha256::new();
     tool_versions(root, &mut hash)?;
@@ -251,8 +249,8 @@ fn announce(message: &str) -> Result<(), String> {
 
 /// Serialize validation and reuse only successful unchanged results.
 ///
-/// Explicit native smoke and portable core checks always run fresh because
-/// devices and installed target components can change independently.
+/// Explicit native smoke requests run fresh.
+/// The fingerprint also includes the installed Rust target inventory.
 ///
 /// # Errors
 ///
@@ -319,8 +317,9 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        FRESH_CHECK_FLAGS, fresh_check_requested, hash_build_overrides,
-        hash_cargo_config_files, hash_environment, run_with,
+        FRESH_CHECK_FLAGS, fingerprint, fresh_check_requested,
+        hash_build_overrides, hash_cargo_config_files, hash_environment,
+        run_with,
     };
     use crate::fixtures::{directory, require};
 
@@ -382,9 +381,27 @@ mod tests {
     }
 
     #[test]
-    fn forbidden_source_invalidates_cached_success() -> Result<(), String> {
-        use super::fingerprint;
+    fn ignored_disposable_ledger_invalidates_cached_success()
+    -> Result<(), String> {
+        let root = directory("cache-ledger")?;
+        fs::write(root.join("input"), b"previously admitted")
+            .map_err(|error| error.to_string())?;
+        run_with(&root, false, pass, key)?;
+        let marker = root.join(".cache/validate/success");
+        require(marker.exists(), "fixture success marker")?;
+        fs::create_dir_all(root.join(".temp/ledger"))
+            .map_err(|error| error.to_string())?;
+        let result = run_with(&root, false, pass, fingerprint);
+        require(
+            result.is_err_and(|error| error.contains(".reference/ledger")),
+            "durable ledger must fail before cache lookup",
+        )?;
+        require(!marker.exists(), "stale marker must be removed")?;
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
 
+    #[test]
+    fn forbidden_source_invalidates_cached_success() -> Result<(), String> {
         let root = directory("cache-portability")?;
         let source = root.join("crates/games/example/src");
         fs::create_dir_all(&source).map_err(|error| error.to_string())?;

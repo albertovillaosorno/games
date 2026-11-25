@@ -273,3 +273,14 @@ other hosts return explicit unsupported errors. Build and validator
 consumers use the shared contract. Fresh full validation passed in run
 1795645061242257303-199510 (1,355 test executions). This does not migrate
 all contributor process, environment or storage operations.
+
+Commit 895d4ef moves LAN identity, authenticated frame streams and host
+input pumps to neutral public handles with private backend ports. Local
+verification, native TLS configuration and socket scheduling remain in
+software; unavailable builds report explicit errors. Download commands
+now use the contributor toolchain IR for arguments, reference acquisition
+and status. Native configuration uses shared opaque role-specific handles;
+only the selected adapter resolves their concrete type on connection or
+binding. The fresh validation 1795647945634452273-176012 passed 1,413
+aggregate test executions and all six portable core targets. This does not
+verify a native runtime on each target or physical LAN performance.

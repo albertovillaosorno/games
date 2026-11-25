@@ -147,8 +147,11 @@ fn section(name: &str, content: &str, status: &str) -> Result<(), String> {
         )?;
     }
     if name == "Evidence" && status == "completed" {
+        let evidence = content.trim_start().to_ascii_lowercase();
         require(
-            !content.trim().starts_with("Pending."),
+            !["pending", "blocked", "partial evidence"]
+                .iter()
+                .any(|prefix| evidence.starts_with(prefix)),
             "completed task lacks evidence",
         )?;
     }
@@ -415,10 +418,22 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Task, dependency_order, direct_link, index, metadata, record,
+        Task, dependency_order, direct_link, index, metadata, record, section,
         unique_roadmap, validate,
     };
     use crate::fixtures::{directory, require};
+
+    #[test]
+    fn incomplete_evidence_cannot_close_task() {
+        for evidence in
+            ["Pending.", "BLOCKED: missing media", "Partial evidence"]
+        {
+            assert!(section("Evidence", evidence, "open").is_ok());
+            assert!(section("Evidence", evidence, "completed").is_err());
+        }
+        let evidence = "Validated with recorded tests.";
+        assert!(section("Evidence", evidence, "completed").is_ok());
+    }
 
     #[test]
     fn only_root_roadmap_is_allowed() {

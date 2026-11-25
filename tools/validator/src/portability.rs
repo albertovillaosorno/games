@@ -462,6 +462,7 @@ mod tests {
             "crates/importer/src/lib.rs",
             "crates/platform/src/ir/example/mod.rs",
             "crates/platform/src/hardware/example/mod.rs",
+            "tools/download/src/download.rs",
             "crates/platform/src/software/linux/example/mod.rs",
         ]
         .map(PathBuf::from);
@@ -481,7 +482,7 @@ mod tests {
         let result = validate(&root, &authored, &toml::Table::new());
         fs::remove_dir_all(root).map_err(|error| error.to_string())?;
         let error = result.err().ok_or("accepted compile-time host inputs")?;
-        for relative in authored.iter().take(4) {
+        for relative in authored.iter().take(5) {
             require(
                 error.contains(relative.to_string_lossy().as_ref()),
                 "missing portable path",

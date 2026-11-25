@@ -61,7 +61,11 @@ use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{env, str};
+use std::str;
+
+use games_platform::ir::toolchain::{self, Target};
+
+use crate::contracts::Package;
 
 const CHECKS: &[&[&str]] = &[
     &[
@@ -113,10 +117,6 @@ const CHECKS: &[&[&str]] = &[
     ],
 ];
 
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
 fn execute(command: &mut Command, log: &mut File) -> Result<(), String> {
     let output = command.output().map_err(|error| error.to_string())?;
     log.write_all(&output.stdout)
@@ -142,9 +142,77 @@ fn build_dependency_graph(graph: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn runtime_dependency_graph(graph: &str) -> Result<(), String> {
+    for line in graph.lines() {
+        let name = line.split_whitespace().next().unwrap_or_default();
+        if name == "games-importer" {
+            return Err(String::from(
+                "runtime graph must exclude source decoders",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_runtime_graph(root: &Path, package: &str) -> Result<(), String> {
+    let graph = Command::new("cargo")
+        .current_dir(root)
+        .args([
+            "tree",
+            "--locked",
+            "-p",
+            package,
+            "--all-features",
+            "--target",
+            "all",
+            "--edges",
+            "normal,build",
+            "--prefix",
+            "none",
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !graph.status.success() {
+        return Err(format!("runtime dependency graph failed: {package}"));
+    }
+    runtime_dependency_graph(
+        str::from_utf8(&graph.stdout).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("{package}: {error}"))
+}
+
+fn portable_arguments(target: Target, packages: &[Package]) -> Vec<&str> {
+    let mut args = vec![
+        "check",
+        "--locked",
+        "--target",
+        target.triple(),
+        "--lib",
+        "--no-default-features",
+    ];
+    for package in packages.iter().filter(|package| package.portable) {
+        args.extend(["-p", package.name.as_str()]);
+    }
+    args
+}
+
+fn validate_portable(
+    root: &Path,
+    packages: &[Package],
+    log: &mut File,
+) -> Result<(), String> {
+    for target in Target::portable_checks() {
+        let args = portable_arguments(target, packages);
+        writeln!(log, "cargo {}", args.join(" "))
+            .map_err(|error| error.to_string())?;
+        execute(Command::new("cargo").current_dir(root).args(args), log)?;
+    }
+    Ok(())
+}
+
 fn validate_feature_graphs(
     root: &Path,
-    packages: &[String],
+    packages: &[Package],
     log: &mut File,
 ) -> Result<(), String> {
     let graph = Command::new("cargo")
@@ -155,6 +223,8 @@ fn validate_feature_graphs(
             "-p",
             "games-build",
             "--all-features",
+            "--target",
+            "all",
             "--edges",
             "normal,build,dev",
             "--prefix",
@@ -171,11 +241,14 @@ fn validate_feature_graphs(
     writeln!(log, "Independent all-feature deliverable graphs")
         .map_err(|error| error.to_string())?;
     for package in packages {
+        if package.runtime {
+            validate_runtime_graph(root, &package.name)?;
+        }
         let args = [
             "clippy",
             "--locked",
             "-p",
-            package,
+            &package.name,
             "--all-targets",
             "--all-features",
             "--",
@@ -202,37 +275,7 @@ fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
         execute(Command::new("cargo").current_dir(root).args(*args), log)?;
     }
     validate_feature_graphs(root, &packages, log)?;
-    if env::var_os(cache::PORTABLE_CORE_FLAG).is_some() {
-        for target in [
-            "aarch64-unknown-linux-gnu",
-            "x86_64-unknown-linux-gnu",
-            "aarch64-pc-windows-gnullvm",
-            "aarch64-linux-android",
-            "wasm32-unknown-unknown",
-            "x86_64-pc-windows-gnu",
-        ] {
-            let args = [
-                "check",
-                "--locked",
-                "--target",
-                target,
-                "--lib",
-                "-p",
-                "games",
-                "-p",
-                "games-assets",
-                "-p",
-                "games-importer",
-                "-p",
-                "games-simpsons-arcade",
-                "-p",
-                "games-platform",
-            ];
-            writeln!(log, "cargo {}", args.join(" "))
-                .map_err(|error| error.to_string())?;
-            execute(Command::new("cargo").current_dir(root).args(args), log)?;
-        }
-    }
+    validate_portable(root, &packages, log)?;
     let paths = files::authored(root)?;
     let markdown = paths.iter().filter(|path| {
         path.extension()
@@ -248,11 +291,14 @@ fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
 }
 
 fn main() -> Result<(), String> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
+    let args = toolchain::arguments().map_err(|error| error.to_string())?;
+    let root = PathBuf::from(
+        toolchain::workspace_root().map_err(|error| error.to_string())?,
+    );
     match args.as_slice() {
-        [] => cache::run(&root(), false, run_validation),
+        [] => cache::run(&root, false, run_validation),
         [mode] if mode == "--no-cache" => {
-            cache::run(&root(), true, run_validation)
+            cache::run(&root, true, run_validation)
         },
         _ => Err(String::from("usage: cargo validate [--no-cache]")),
     }
@@ -260,7 +306,54 @@ fn main() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_dependency_graph;
+    use super::{
+        Package, Target, build_dependency_graph, portable_arguments,
+        runtime_dependency_graph,
+    };
+
+    #[test]
+    fn runtime_graph_rejects_transitive_importer_activation() {
+        assert!(
+            runtime_dependency_graph(
+                "new-title v0.1.0\ngames-platform v0.1.0\n"
+            )
+            .is_ok()
+        );
+        let graph = concat!(
+            "new-title v0.1.0\ngames-platform v0.1.0\n",
+            "games-importer v0.1.0\n",
+        );
+        assert!(runtime_dependency_graph(graph).is_err());
+    }
+
+    #[test]
+    fn portable_matrix_includes_every_library_not_host_tools() {
+        let packages = [
+            Package {
+                name: String::from("new-title"),
+                portable: true,
+                runtime: true,
+            },
+            Package {
+                name: String::from("new-shared"),
+                portable: true,
+                runtime: false,
+            },
+            Package {
+                name: String::from("host-tool"),
+                portable: false,
+                runtime: false,
+            },
+        ];
+        for target in Target::portable_checks() {
+            let args = portable_arguments(target, &packages);
+            assert!(args.contains(&target.triple()));
+            assert!(args.contains(&"new-title"));
+            assert!(args.contains(&"new-shared"));
+            assert!(args.contains(&"--no-default-features"));
+            assert!(!args.contains(&"host-tool"));
+        }
+    }
 
     #[test]
     fn asset_build_excludes_runtime_authentication_dependencies() {

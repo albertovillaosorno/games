@@ -45,6 +45,12 @@ use crate::todo::roadmap_width;
 /// Returns an error if discovery fails.
 pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
     let paths = discover(&mut authored_command(root))?;
+    if let Some(path) = paths.iter().find(|path| private_configuration(path)) {
+        return Err(format!(
+            "private configuration cannot be authored: {}",
+            path.display()
+        ));
+    }
     if root.join(".git").exists() {
         verify_git_inventory(root, &paths)?;
     }
@@ -129,6 +135,15 @@ fn discover(command: &mut Command) -> Result<Vec<PathBuf>, String> {
         .map_err(|error| error.to_string())?;
     paths.sort();
     Ok(paths)
+}
+
+fn private_configuration(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name == ".env"
+                || (name.starts_with(".env.") && name != ".env.example")
+        })
 }
 
 fn python(path: &Path, bytes: &[u8]) -> bool {
@@ -216,11 +231,42 @@ fn line_width(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+fn local_storage_policy(root: &Path) -> Result<(), String> {
+    let ignore = fs::read_to_string(root.join(".gitignore"))
+        .map_err(|error| error.to_string())?;
+    for directory in [".reference", ".cache", ".temp"] {
+        let pattern = format!("/{directory}/");
+        if !ignore.lines().any(|line| line == pattern) {
+            return Err(format!("missing local storage ignore: {pattern}"));
+        }
+    }
+    ledger_location(root)
+}
+
+/// Reject a durable ledger in disposable storage even before cache admission.
+pub(crate) fn ledger_location(root: &Path) -> Result<(), String> {
+    for directory in [".cache", ".temp"] {
+        let path = root.join(directory).join("ledger");
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                return Err(format!(
+                    "durable ledger belongs in .reference/ledger: {}",
+                    path.display(),
+                ));
+            },
+            Err(error) if error.kind() == ErrorKind::NotFound => {},
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
 /// Check authored languages and line width using shared file discovery.
 ///
 /// # Errors
 /// Returns an error for prohibited source, malformed text or excessive width.
 pub fn validate(root: &Path) -> Result<(), String> {
+    local_storage_policy(root)?;
     for path in authored(root)? {
         let bytes =
             fs::read(root.join(&path)).map_err(|error| error.to_string())?;
@@ -240,8 +286,49 @@ mod tests {
 
     use games_platform::ir::storage::fixtures as platform_fixtures;
 
-    use super::{authored, authored_command, discover, line_width, python};
+    use super::{
+        authored, authored_command, discover, line_width, local_storage_policy,
+        private_configuration, python,
+    };
     use crate::fixtures::{directory, require};
+
+    #[test]
+    fn durable_ledgers_are_not_disposable() -> Result<(), String> {
+        let root = directory("ledger-policy")?;
+        fs::write(root.join(".gitignore"), "/.reference/\n/.cache/\n/.temp/\n")
+            .map_err(|error| error.to_string())?;
+        fs::create_dir_all(root.join(".reference/ledger"))
+            .map_err(|error| error.to_string())?;
+        require(local_storage_policy(&root).is_ok(), "persistent ledger")?;
+        for name in [".cache/ledger", ".temp/ledger"] {
+            let path = root.join(name);
+            fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+            require(local_storage_policy(&root).is_err(), "disposable ledger")?;
+            fs::remove_dir(&path).map_err(|error| error.to_string())?;
+        }
+        fs::write(root.join(".gitignore"), "/.cache/\n/.temp/\n")
+            .map_err(|error| error.to_string())?;
+        require(local_storage_policy(&root).is_err(), "reference ignore")?;
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn private_configuration_is_not_authored() -> Result<(), String> {
+        let root = directory("private-configuration")?;
+        fs::write(root.join(".gitignore"), "")
+            .map_err(|error| error.to_string())?;
+        fs::write(root.join(".env.example"), "EXAMPLE=1\n")
+            .map_err(|error| error.to_string())?;
+        require(authored(&root).is_ok(), "example template is authored")?;
+        fs::write(root.join(".env"), "LOCAL=1\n")
+            .map_err(|error| error.to_string())?;
+        require(authored(&root).is_err(), "private configuration rejected")?;
+        require(
+            private_configuration(Path::new("local/.env.production")),
+            "private variant rejected",
+        )?;
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
 
     #[test]
     fn prohibits_python_source_and_scripts() {

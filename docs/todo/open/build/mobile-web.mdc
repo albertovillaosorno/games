@@ -27,20 +27,19 @@ Support Android ARM64 and browser targets where compatible.
 Pending. Record actual checks and remaining limitations before completion.
 
 Install the official Rust standard-library targets for the selected stable
-toolchain, then request the optional cross-target library checks through
-the shared validator:
+toolchain. Cross-target library checks are mandatory in the shared
+validator:
 
 ```sh
 rustup target add aarch64-linux-android wasm32-unknown-unknown \
-  x86_64-pc-windows-gnu
-GAMES_PORTABLE_CORE_CHECK=1 cargo validate --no-cache
+  aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu \
+  aarch64-pc-windows-gnullvm x86_64-pc-windows-gnu
+cargo validate --no-cache
 ```
 
-This checks the shared engine, canonical asset library, importer, first
-title's platform-independent library and storage adapter without native
-preview features.
-The opt-in gate always runs fresh because installed target components
-can change independently of tracked source. It does not link an Android
+This checks every workspace library under crates without default features.
+New title packages enter the matrix automatically. The validation cache
+includes the installed target inventory. It does not link an Android
 application, produce a browser module, or execute either target.
 
 On GNU/Linux with Rust 1.100.0, both official target components installed

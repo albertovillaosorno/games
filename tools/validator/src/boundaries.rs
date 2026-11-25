@@ -94,10 +94,11 @@ fn role(path: &str) -> Option<Role> {
 
 /// Whether a crate role must remain independent of native host APIs.
 pub(crate) fn host_independent(path: &str) -> bool {
-    matches!(
-        role(path),
-        Some(Role::Shared | Role::Runtime | Role::Importer)
-    )
+    path.starts_with("tools/download/")
+        || matches!(
+            role(path),
+            Some(Role::Shared | Role::Runtime | Role::Importer)
+        )
 }
 
 const fn dependency_allowed(owner: Role, target: Role) -> bool {
@@ -463,6 +464,21 @@ fn metadata_members(
     Ok(manifests)
 }
 
+fn lint_level(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.get("level").and_then(Value::as_str))
+}
+
+fn strict_levels(lints: &toml::Table) -> Result<(), String> {
+    for (name, value) in lints {
+        if !matches!(lint_level(value), Some("deny" | "forbid")) {
+            return Err(format!("workspace lint must remain strict: {name}"));
+        }
+    }
+    Ok(())
+}
+
 fn workspace_lints(workspace: &toml::Table) -> Result<(), String> {
     let lints = workspace
         .get("lints")
@@ -472,8 +488,46 @@ fn workspace_lints(workspace: &toml::Table) -> Result<(), String> {
         .get("rust")
         .and_then(Value::as_table)
         .ok_or("missing workspace rust lints")?;
-    if !lints.get("clippy").is_some_and(Value::is_table) {
-        return Err(String::from("missing workspace clippy lints"));
+    let clippy = lints
+        .get("clippy")
+        .and_then(Value::as_table)
+        .ok_or("missing workspace clippy lints")?;
+    strict_levels(rust)?;
+    strict_levels(clippy)?;
+    for group in [
+        "all",
+        "cargo",
+        "complexity",
+        "correctness",
+        "nursery",
+        "pedantic",
+        "perf",
+        "style",
+        "suspicious",
+    ] {
+        if clippy.get(group).and_then(lint_level) != Some("deny") {
+            return Err(format!("required strict Clippy family: {group}"));
+        }
+    }
+    for name in [
+        "allow_attributes",
+        "todo",
+        "unimplemented",
+        "unwrap_used",
+        "panic",
+        "arithmetic_side_effects",
+        "indexing_slicing",
+        "host_endian_bytes",
+        "as_conversions",
+        "absolute_paths",
+    ] {
+        if !clippy
+            .get(name)
+            .and_then(lint_level)
+            .is_some_and(|level| matches!(level, "deny" | "forbid"))
+        {
+            return Err(format!("required restriction lint: {name}"));
+        }
     }
     for (lint, required) in [
         ("unsafe_code", "forbid"),
@@ -1062,6 +1116,10 @@ serde_json = "1""#;
             ("unsafe_code = \"forbid\"", "unsafe_code = \"deny\""),
             ("warnings = \"deny\"", "warnings = \"warn\""),
             ("unfulfilled_lint_expectations = \"deny\"", ""),
+            ("todo = \"deny\"", ""),
+            ("unwrap_used = \"deny\"", "unwrap_used = \"allow\""),
+            ("missing_docs = \"deny\"", "missing_docs = \"warn\""),
+            ("pedantic = { level = \"deny\", priority = -1 }", ""),
         ] {
             let altered = source.replacen(from, to, 1);
             require(altered != source, "fixture must change")?;

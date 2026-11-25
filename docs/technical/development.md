@@ -35,13 +35,23 @@ cargo validate
 The validator orchestrates formatting, Clippy, MarkdownLint, task contracts,
 tests and compilation checks. Validation uses a content-based local cache;
 use `cargo validate --no-cache` for a fresh run or after changing local
-reference test inputs. Logs are stored under
+reference test inputs. Every fresh run checks all workspace libraries on
+Linux and Windows ARM64/x86-64, Android ARM64 and WebAssembly. Install
+the corresponding Rust targets; missing targets are errors. Runtime
+dependency graphs must exclude source decoders. The installed target
+inventory contributes to the cache fingerprint. Logs are stored under
 `.temp/validate/`.
 
 Place lawfully obtained original files in `.reference/games/<id>/` using
 the task ID in [TODO.md](../../TODO.md). Run `cargo download` to fetch upstream
 reference sources under `.reference/tools/`. These directories are local.
 See the [asset pipeline](asset-pipeline.md) for import and publication.
+
+Local reference data survives cleanup: `.reference/games/` contains
+original media, `.reference/tools/` contains downloaded tools and sources,
+and `.reference/ledger/` contains durable local reference ledgers.
+`.cache/` and `.temp/` are regenerable scratch space, never the only
+copy of durable records. Do not remove reference storage during cleanup.
 
 Build the available GNU/Linux x86-64 title preview with:
 
