@@ -40,37 +40,65 @@ use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
 use super::{
-    Controls, DEFAULT_PROFILES, LocalActions, dimension, failure, lan, size,
+    Controls, LocalActions, Profiles, dimension, failure, key_label, lan, size,
 };
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
 
 const WIDTH: u16 = 320;
-const HEIGHT: u16 = 120;
-const BYTES: usize = 153_600;
+const HEIGHT: u16 = 176;
+const BYTES: usize = 225_280;
 
 fn enqueue(
     controller: &mut ClientLan,
     actions: LocalActions,
 ) -> Result<(), RenderError> {
-    for value in actions.into_iter().filter_map(|change| {
-        RemoteControl::new(change.action.control, change.down)
-    }) {
+    for value in remote_controls(actions) {
         controller.enqueue(value).map_err(failure)?;
     }
     Ok(())
 }
 
-fn panel(scene: &mut SceneSession<'_, '_>) -> Result<SpriteDraw, RenderError> {
+fn remote_controls(
+    actions: LocalActions,
+) -> impl Iterator<Item = RemoteControl> {
+    actions.into_iter().filter_map(|change| {
+        RemoteControl::new(change.action.control, change.down)
+    })
+}
+
+fn binding_hints(profiles: &Profiles) -> Vec<String> {
+    let [keys, ..] = profiles.keys;
+    let [buttons, ..] = profiles.buttons;
+    ["JOIN", "ATTACK", "JUMP", "LEFT", "RIGHT", "UP", "DOWN"]
+        .into_iter()
+        .zip(keys.into_iter().zip(buttons).skip(1))
+        .map(|(label, (key, button))| {
+            format!("{label}: {} / {}", key_label(key), button.string())
+        })
+        .collect()
+}
+
+fn panel(
+    scene: &mut SceneSession<'_, '_>,
+    profiles: &Profiles,
+) -> Result<SpriteDraw, RenderError> {
+    let bindings = binding_hints(profiles);
     let lines = [
-        ("REMOTE CONTROLLER", 8u16, 3u16),
-        ("WATCH THE HOST SCREEN", 30, 2),
-        ("ENTER OR START TO JOIN", 48, 2),
-        ("Z / A ATTACK    X / B JUMP", 64, 2),
-        ("ARROW KEYS OR GAMEPAD", 80, 2),
-        ("CLOSE WINDOW TO LEAVE", 100, 2),
+        ("REMOTE CONTROLLER", 8, 3),
+        ("WATCH THE HOST SCREEN", 28, 2),
     ]
     .into_iter()
+    .chain(
+        [44, 58, 72, 86, 100, 114, 128]
+            .into_iter()
+            .zip(&bindings)
+            .map(|(top, hint)| (hint.as_str(), top, 2)),
+    )
+    .chain([
+        ("LEFT STICK ALSO MOVES", 144, 2),
+        ("CLOSE WINDOW TO LEAVE", 160, 2),
+    ])
     .map(|(text, top, scale)| {
         TextLine {
             color: [245, 240, 220, 255],
@@ -98,15 +126,15 @@ fn interactive(
     scene: &mut SceneSession<'_, '_>,
     startup: InputStartup,
     mut controller: ClientLan,
+    profiles: &Profiles,
 ) -> Result<(), RenderError> {
     let mut input = startup.input;
-    let mut controls = Controls::with_reserved(false, &DEFAULT_PROFILES, [
-        false, true, true, true,
-    ])?;
+    let mut controls =
+        Controls::with_reserved(false, profiles, [false, true, true, true])?;
     for event in startup.attached {
         enqueue(&mut controller, controls.actions(event)?)?;
     }
-    let sprite = panel(scene)?;
+    let sprite = panel(scene, profiles)?;
     let _initial = scene.present([24, 22, 30], &[sprite])?;
     loop {
         controller.poll().map_err(failure)?;
@@ -136,13 +164,13 @@ fn interactive(
 }
 
 pub(super) fn run(path: &Path) -> Result<(), String> {
-    let stream = lan::open_client(path)?;
+    let (stream, profiles) = lan::open_client(path)?;
     let controller = ClientLan::new(stream);
     let result = (|| {
         let mut window = NativeWindow::open(
             "The Simpsons Arcade - remote controller",
             dimension(640)?,
-            dimension(240)?,
+            dimension(352)?,
             false,
         )?;
         let startup = window.input(size(1)?)?;
@@ -157,7 +185,7 @@ pub(super) fn run(path: &Path) -> Result<(), String> {
             sprites: size(1)?,
         };
         window.with_scene(layout, limits, |scene| {
-            interactive(scene, startup, controller)
+            interactive(scene, startup, controller, &profiles)
         })
     })();
     result.map_err(|error: RenderError| format!("{error:?}"))
@@ -167,7 +195,89 @@ pub(super) fn run(path: &Path) -> Result<(), String> {
 mod tests {
     use std::env;
 
+    use games_platform_graphics::linux::input::{
+        Button, Scancode, button_code, key_code,
+    };
+
+    use super::super::{ACTION_NAMES, DEFAULT_PROFILES};
     use super::*;
+    use crate::Control;
+
+    fn remapped_profiles() -> Result<Profiles, RenderError> {
+        DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\nkey 1 primary=Space\n",
+                    "button 1 primary=x\nkey 1 right=H\n",
+                ),
+            )
+            .map_err(failure)
+    }
+
+    fn check_edge(
+        controls: &mut Controls,
+        event: InputEvent,
+        expected: Option<RemoteControl>,
+    ) -> Result<(), RenderError> {
+        if !remote_controls(controls.actions(event)?).eq(expected) {
+            return Err(failure("unexpected controller wire transition"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remapped_bindings_match_hints() -> Result<(), RenderError> {
+        let profiles = remapped_profiles()?;
+        let hints = binding_hints(&profiles);
+        if !hints.iter().any(|line| line == "ATTACK: Space / x")
+            || !hints.iter().any(|line| line == "RIGHT: H / dpright")
+        {
+            return Err(failure("controller hints ignored profile"));
+        }
+        let mut controls = Controls::with_reserved(false, &profiles, [
+            false, true, true, true,
+        ])?;
+        for key in [Scancode::Z, Scancode::Right, Scancode::Escape] {
+            check_edge(
+                &mut controls,
+                InputEvent::Key {
+                    code: key_code(key),
+                    down: true,
+                },
+                None,
+            )?;
+        }
+        check_edge(
+            &mut controls,
+            InputEvent::Key {
+                code: key_code(Scancode::H),
+                down: true,
+            },
+            RemoteControl::new(Control::Right, true),
+        )?;
+        // Losing focus must release the mapped direction.
+        check_edge(
+            &mut controls,
+            InputEvent::FocusLost,
+            RemoteControl::new(Control::Right, false),
+        )?;
+        check_edge(&mut controls, InputEvent::Attached { device: 1 }, None)?;
+        check_edge(
+            &mut controls,
+            InputEvent::Button {
+                device: 1,
+                code: button_code(Button::X),
+                down: true,
+            },
+            RemoteControl::new(Control::Primary, true),
+        )?;
+        check_edge(
+            &mut controls,
+            InputEvent::Detached { device: 1 },
+            RemoteControl::new(Control::Primary, false),
+        )
+    }
 
     #[test]
     fn opt_in_native_panels_smoke() -> Result<(), RenderError> {
@@ -193,7 +303,7 @@ mod tests {
                 sprites: size(1)?,
             },
             |scene| {
-                let sprite = panel(scene)?;
+                let sprite = panel(scene, &remapped_profiles()?)?;
                 if !scene.present([24, 22, 30], &[sprite])? {
                     return Err(failure("controller panel not drawn"));
                 }

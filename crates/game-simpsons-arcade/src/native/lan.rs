@@ -41,6 +41,7 @@ use games_platform_storage::file::{snapshot, snapshot_secret};
 use rustls::pki_types::{PrivateKeyDer, ServerName};
 
 use super::launch::{Fields, fields, required};
+use super::{Profiles, load_profiles};
 use crate::lan::{HostLan, session_config};
 
 const MAX_CATALOGUE: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
@@ -185,6 +186,7 @@ impl HostSelection {
 #[derive(Debug, Eq, PartialEq)]
 struct ClientSelection {
     address: SocketAddr,
+    controls: Option<PathBuf>,
     host: PublicFiles,
     identity: LocalFiles,
     name: String,
@@ -212,11 +214,15 @@ impl ClientSelection {
             Endpoint::parse(base, &mut values)?;
         let host = PublicFiles::parse(base, &mut values, "host_")?
             .ok_or("missing approved host certificate paths")?;
+        let controls = values
+            .remove("controls")
+            .map(|relative| base.join(relative));
         if !values.is_empty() {
             return Err(String::from("unknown controller field"));
         }
         Ok(Self {
             address,
+            controls,
             host,
             identity,
             name,
@@ -224,8 +230,12 @@ impl ClientSelection {
     }
 }
 
-pub(super) fn open_client(path: &Path) -> Result<SecureFrameStream, String> {
-    ClientSelection::parse(path, &catalogue(path)?)?.connect()
+type ControllerConnection = (SecureFrameStream, Profiles);
+
+pub(super) fn open_client(path: &Path) -> Result<ControllerConnection, String> {
+    let selection = ClientSelection::parse(path, &catalogue(path)?)?;
+    let profiles = load_profiles(selection.controls.as_deref())?;
+    Ok((selection.connect()?, profiles))
 }
 
 fn certificate(path: &Path) -> Result<Vec<u8>, String> {
@@ -305,14 +315,25 @@ mod tests {
         let selection = ClientSelection::parse(path, &text)?;
         if selection.host.root != Path::new("client/approved-root.der")
             || selection.host.leaf != Path::new("client/approved-leaf.der")
+            || selection.controls.is_some()
         {
             return Err(String::from("host paths not anchored"));
+        }
+        let configured = ClientSelection::parse(
+            path,
+            &format!("{text}controls=profiles/remote.local\n"),
+        )?;
+        if configured.controls.as_deref()
+            != Some(Path::new("client/profiles/remote.local"))
+        {
+            return Err(String::from("controller profile path not anchored"));
         }
         for invalid in [
             String::from(BASE),
             format!("{BASE}host_leaf=l\n"),
             format!("{text}peer2_leaf=l\n"),
             format!("{text}name=override\n"),
+            format!("{text}controls=a\ncontrols=b\n"),
         ] {
             if ClientSelection::parse(path, &invalid).is_ok() {
                 return Err(String::from("invalid controller trust accepted"));
