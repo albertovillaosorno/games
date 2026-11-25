@@ -400,13 +400,15 @@ impl ArchiveStaging {
     }
 }
 
+type PayloadSizes = BTreeMap<ContentHash, u64>;
+
 /// A private canonical bundle, built from content-addressed payloads.
 ///
 /// Only hashes become paths; completion requires an exact manifest match.
 /// The archive budget includes the manifest file and payload directory.
 #[derive(Debug)]
 pub struct CanonicalStaging {
-    payloads: BTreeMap<ContentHash, u64>,
+    payloads: PayloadSizes,
     stage: ArchiveStaging,
 }
 
@@ -426,20 +428,19 @@ impl CanonicalStaging {
         source: &CanonicalBundle,
         limits: ManifestLimits,
     ) -> Result<StagedBundle, StagingError> {
-        drop(source.manifest().encode(limits)?);
+        let manifest = source.manifest();
+        let bytes = manifest.encode(limits)?;
+        let expected = manifest_payloads(manifest)?;
+        admit_copy(budget, &bytes, &expected)?;
         let mut stage = Self::new(parent, budget)?;
-        for record in source.manifest().records() {
-            match stage.payloads.get(&record.digest) {
-                Some(size) if *size != record.size => {
-                    return Err(AssetError::PayloadMismatch.into());
-                },
-                Some(_) => continue,
-                None => {},
+        for record in manifest.records() {
+            if stage.payloads.contains_key(&record.digest) {
+                continue;
             }
-            let bytes = source.read_payload(&record.key)?;
-            stage.write_payload(record.digest, &bytes)?;
+            let payload = source.read_payload(&record.key)?;
+            stage.write_payload(record.digest, &payload)?;
         }
-        stage.finish(source.manifest(), limits)
+        stage.finish_encoded(&bytes, &expected)
     }
 
     /// Finish a bundle only if every staged payload is declared and present.
@@ -447,7 +448,7 @@ impl CanonicalStaging {
     /// # Errors
     /// Rejects failed staging, mismatches and invalid or oversized metadata.
     pub fn finish(
-        mut self,
+        self,
         manifest: &AssetManifest,
         limits: ManifestLimits,
     ) -> Result<StagedBundle, StagingError> {
@@ -455,28 +456,27 @@ impl CanonicalStaging {
             return Err(StagingError::Aborted);
         }
         let bytes = manifest.encode(limits)?;
-        let mut expected = BTreeMap::new();
-        for record in manifest.records() {
-            if expected
-                .insert(record.digest, record.size)
-                .is_some_and(|size| size != record.size)
-            {
-                return Err(AssetError::PayloadMismatch.into());
-            }
-        }
-        if expected != self.payloads {
+        let expected = manifest_payloads(manifest)?;
+        self.finish_encoded(&bytes, &expected)
+    }
+
+    fn finish_encoded(
+        mut self,
+        mut bytes: &[u8],
+        expected: &PayloadSizes,
+    ) -> Result<StagedBundle, StagingError> {
+        if expected != &self.payloads {
             return Err(AssetError::PayloadMismatch.into());
         }
+        let digest = ContentHash::calculate(bytes);
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
                 path: MANIFEST_NAME,
-                size: u64::try_from(bytes.len())
-                    .map_err(|_error| AssetError::TooLarge)?,
+                size: manifest_size(bytes)?,
             },
-            &mut bytes.as_slice(),
+            &mut bytes,
         )?;
-        let digest = ContentHash::calculate(&bytes);
         publication::finish(self.stage, digest, expected.keys())
     }
 
@@ -518,7 +518,7 @@ impl CanonicalStaging {
             self.stage.failed = true;
             return Err(AssetError::TooLarge.into());
         };
-        let path = format!("{PAYLOADS_DIRECTORY}/{digest}");
+        let path = payload_path(digest);
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
@@ -542,6 +542,48 @@ impl StagedArchive {
     pub fn path(&self) -> &Path {
         &self.0.path
     }
+}
+
+fn admit_copy(
+    mut budget: ArchiveBudget,
+    bytes: &[u8],
+    payloads: &PayloadSizes,
+) -> Result<(), StagingError> {
+    let _manifest =
+        budget.admit(MANIFEST_NAME, EntryKind::File, manifest_size(bytes)?)?;
+    if !payloads.is_empty() {
+        budget
+            .admit(PAYLOADS_DIRECTORY, EntryKind::Directory, 0)?
+            .finish()?;
+    }
+    for (&digest, &size) in payloads {
+        let _payload =
+            budget.admit(&payload_path(digest), EntryKind::File, size)?;
+    }
+    Ok(())
+}
+
+fn manifest_payloads(
+    manifest: &AssetManifest,
+) -> Result<PayloadSizes, AssetError> {
+    let mut expected = BTreeMap::new();
+    for record in manifest.records() {
+        if expected
+            .insert(record.digest, record.size)
+            .is_some_and(|size| size != record.size)
+        {
+            return Err(AssetError::PayloadMismatch);
+        }
+    }
+    Ok(expected)
+}
+
+fn manifest_size(bytes: &[u8]) -> Result<u64, AssetError> {
+    u64::try_from(bytes.len()).map_err(|_error| AssetError::TooLarge)
+}
+
+fn payload_path(digest: ContentHash) -> String {
+    format!("{PAYLOADS_DIRECTORY}/{digest}")
 }
 
 fn copy_bounded<Source, Destination>(
@@ -584,6 +626,9 @@ mod tests {
 
     use super::*;
     use crate::bundle::TestRoot;
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    type CopyFixture = (CanonicalBundle, PublishedBundle);
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
@@ -1121,15 +1166,7 @@ mod tests {
         let parent = fixture()?;
         let digest = ContentHash::calculate(b"tile");
         let manifest = manifest(digest)?;
-        let mut stage =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
-        stage.write_payload(digest, b"tile")?;
-        let staged = stage.finish(&manifest, canonical_limits())?;
-        let address = staged.digest();
-        let published = staged.publish()?;
-        require(published.durability.is_ok())?;
-        let source =
-            CanonicalBundle::open(&parent.path, address, canonical_limits())?;
+        let (source, published) = publish_copy_fixture(&parent, &manifest)?;
         fs::write(
             published
                 .path
@@ -1162,6 +1199,122 @@ mod tests {
             )))
         ))?;
         require(fs::read_dir(&parent.path)?.count() == 1)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn publish_copy_fixture(
+        parent: &TestRoot,
+        manifest: &AssetManifest,
+    ) -> Result<CopyFixture, StagingError> {
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(ContentHash::calculate(b"tile"), b"tile")?;
+        let staged = stage.finish(manifest, canonical_limits())?;
+        let address = staged.digest();
+        let published = staged.publish()?;
+        require(published.durability.is_ok())?;
+        let source =
+            CanonicalBundle::open(&parent.path, address, canonical_limits())?;
+        Ok((source, published))
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn copy_budget_rejects_before_reading_damaged_payload()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let (source, published) = publish_copy_fixture(&parent, &manifest)?;
+        let size = manifest_size(&manifest.encode(canonical_limits())?)?;
+        let bound = |value| NonZeroU64::new(value).ok_or(AssetError::TooLarge);
+        let exact = ArchiveBudget::new(
+            bound(size)?,
+            bound(size.saturating_add(4))?,
+            bound(3)?,
+        );
+        let copied = CanonicalStaging::copy_bundle(
+            &parent.path,
+            exact,
+            &source,
+            canonical_limits(),
+        )?;
+        require(copied.digest() == source.digest())?;
+        require(
+            fs::read_dir(copied.path().join(PAYLOADS_DIRECTORY))?.count() == 1,
+        )?;
+        drop(copied);
+        fs::write(
+            published
+                .path
+                .join(PAYLOADS_DIRECTORY)
+                .join(digest.to_string()),
+            b"evil",
+        )?;
+        for deficient in [
+            ArchiveBudget::new(
+                bound(size.saturating_sub(1))?,
+                bound(size.saturating_add(4))?,
+                bound(3)?,
+            ),
+            ArchiveBudget::new(
+                bound(size)?,
+                bound(size.saturating_add(3))?,
+                bound(3)?,
+            ),
+            ArchiveBudget::new(
+                bound(size)?,
+                bound(size.saturating_add(4))?,
+                bound(2)?,
+            ),
+        ] {
+            require(matches!(
+                CanonicalStaging::copy_bundle(
+                    &parent.path,
+                    deficient,
+                    &source,
+                    canonical_limits(),
+                ),
+                Err(StagingError::Safety(ArchiveError::TooLarge))
+            ))?;
+        }
+        require(fs::read_dir(&parent.path)?.count() == 1)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn empty_bundle_copy_needs_only_the_manifest_entry()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let manifest = AssetManifest::new(
+            SourceIdentity {
+                title: String::from("synthetic"),
+                revision: String::from("empty"),
+            },
+            Vec::new(),
+            canonical_limits(),
+        )?;
+        let bytes = manifest.encode(canonical_limits())?;
+        let size = NonZeroU64::new(manifest_size(&bytes)?)
+            .ok_or(AssetError::TooLarge)?;
+        let budget = ArchiveBudget::new(size, size, NonZeroU64::MIN);
+        let stage = CanonicalStaging::new(&parent.path, budget)?;
+        let published =
+            stage.finish(&manifest, canonical_limits())?.publish()?;
+        require(published.durability.is_ok())?;
+        let source = CanonicalBundle::open(
+            &parent.path,
+            ContentHash::calculate(&bytes),
+            canonical_limits(),
+        )?;
+        let copied = CanonicalStaging::copy_bundle(
+            &parent.path,
+            budget,
+            &source,
+            canonical_limits(),
+        )?;
+        require(fs::read(copied.path().join(MANIFEST_NAME))? == bytes)?;
+        require(!copied.path().join(PAYLOADS_DIRECTORY).exists())
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]

@@ -207,3 +207,16 @@ The exact ZIP 9.8.2 pin follows the upstream unstable API contract.
 This improves early admission, not a universal heap bound: individual
 metadata fields and ambiguous malformed footer candidates remain subject
 to the source byte limit and upstream parser allocation behavior.
+
+Canonical bundle copying now admits all destination entries before creating
+a private stage or opening any payload. The preflight uses the shared
+archive budget for the normalized encoded manifest, implicit payload
+directory and each distinct content address. Declared lengths for a shared
+digest must agree. The copy reuses the exact preflighted manifest bytes
+and checks the resulting staged set before completion; each file still
+passes the existing streaming admission and integrity checks.
+Synthetic tests accept exact byte and entry limits including deduplicated
+records, reject individual, aggregate and entry deficits before reading a
+deliberately damaged payload, and copy an empty manifest with one entry
+and no payload directory. Fresh validation passed in run
+1795606104464597010-17255.
