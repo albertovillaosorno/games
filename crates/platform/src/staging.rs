@@ -9,12 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Private native staging of validated, bounded archive data.
+//   - Private native staging of bounded archive and canonical asset data.
 // - Must-Not:
 //   - Parse source media, execute imported data or publish runtime assets.
 // - Allows:
-//   - Inputs: Trusted parent directory, entry metadata and decoded streams.
-//   - Outputs: Completed temporary directory or explicit rejection.
+//   - Inputs: Trusted parent, bounded streams, canonical payloads and
+//     manifests.
+//   - Outputs: Completed temporary archive or canonical bundle, or rejection.
 //   - Side effects: Owner-only files and directories under the staging root.
 // - Split-When:
 //   - Publication or source-format decoding requires a separate adapter.
@@ -25,7 +26,7 @@
 // - Description:
 //   - Applies shared archive budgets and a portable case-insensitive namespace.
 // - Usage:
-//   - Stage decoded entries, then finish before consuming the result.
+//   - Stage decoded entries or canonical assets, then finish before use.
 // - Defaults:
 //   - Reject links, executables, collisions and partial imports.
 
@@ -41,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use games_assets::archive::{
     ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
 };
+use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{Mode, fstat, mkdirat};
@@ -58,6 +60,8 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub enum StagingError {
     /// A previous entry failed; this transaction cannot be completed.
     Aborted,
+    /// Canonical manifest or payload validation failed.
+    Asset(AssetError),
     /// A duplicate path, case collision or file/directory conflict.
     Collision,
     /// The filesystem or decoded stream failed.
@@ -68,6 +72,12 @@ pub enum StagingError {
     UnsupportedPath,
     /// The parent is not owned by the effective user or permits other writers.
     UntrustedParent,
+}
+
+impl From<AssetError> for StagingError {
+    fn from(error: AssetError) -> Self {
+        Self::Asset(error)
+    }
 }
 
 impl From<Errno> for StagingError {
@@ -346,6 +356,106 @@ impl ArchiveStaging {
     }
 }
 
+/// A private canonical bundle, built from content-addressed payloads.
+///
+/// Only hashes become paths; completion requires an exact manifest match.
+/// The archive budget includes the manifest file and payload directory.
+#[derive(Debug)]
+pub struct CanonicalStaging {
+    payloads: BTreeMap<ContentHash, u64>,
+    stage: ArchiveStaging,
+}
+
+impl CanonicalStaging {
+    /// Finish a bundle only if every staged payload is declared and present.
+    ///
+    /// # Errors
+    /// Rejects failed staging, mismatches and invalid or oversized metadata.
+    pub fn finish(
+        mut self,
+        manifest: &AssetManifest,
+        limits: ManifestLimits,
+    ) -> Result<StagedArchive, StagingError> {
+        if self.stage.failed {
+            return Err(StagingError::Aborted);
+        }
+        let bytes = manifest.encode(limits)?;
+        let mut expected = BTreeMap::new();
+        for record in manifest.records() {
+            if expected
+                .insert(record.digest, record.size)
+                .is_some_and(|size| size != record.size)
+            {
+                return Err(AssetError::PayloadMismatch.into());
+            }
+        }
+        if expected != self.payloads {
+            return Err(AssetError::PayloadMismatch.into());
+        }
+        self.stage.write_entry(
+            StagingEntry {
+                kind: EntryKind::File,
+                path: "manifest.json",
+                size: u64::try_from(bytes.len())
+                    .map_err(|_error| AssetError::TooLarge)?,
+            },
+            &mut bytes.as_slice(),
+        )?;
+        self.stage.finish()
+    }
+
+    /// Create a private canonical bundle transaction.
+    ///
+    /// # Errors
+    /// Rejects untrusted parents and filesystem failures.
+    pub fn new(
+        parent: &Path,
+        budget: ArchiveBudget,
+    ) -> Result<Self, StagingError> {
+        Ok(Self {
+            payloads: BTreeMap::new(),
+            stage: ArchiveStaging::new(parent, budget)?,
+        })
+    }
+
+    /// Verify and stage one unique canonical payload.
+    ///
+    /// # Errors
+    /// Rejects hash mismatch, duplicate content, exhausted budgets or I/O.
+    pub fn write_payload(
+        &mut self,
+        digest: ContentHash,
+        mut bytes: &[u8],
+    ) -> Result<(), StagingError> {
+        if self.stage.failed {
+            return Err(StagingError::Aborted);
+        }
+        if self.payloads.contains_key(&digest) {
+            self.stage.failed = true;
+            return Err(StagingError::Collision);
+        }
+        if ContentHash::calculate(bytes) != digest {
+            self.stage.failed = true;
+            return Err(AssetError::PayloadMismatch.into());
+        }
+        let Ok(size) = u64::try_from(bytes.len()) else {
+            self.stage.failed = true;
+            return Err(AssetError::TooLarge.into());
+        };
+        let path = format!("payloads/{digest}");
+        self.stage.write_entry(
+            StagingEntry {
+                kind: EntryKind::File,
+                path: &path,
+                size,
+            },
+            &mut bytes,
+        )?;
+        let _previous = self.payloads.insert(digest, size);
+        Ok(())
+    }
+}
+
 /// A verified staging directory with best-effort cleanup on drop.
 #[derive(Debug)]
 pub struct StagedArchive(PrivateDirectory);
@@ -386,8 +496,10 @@ where
 #[cfg(test)]
 mod tests {
     use std::env;
-    use std::num::NonZeroU64;
+    use std::num::{NonZeroU64, NonZeroUsize};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
 
     use super::*;
 
@@ -623,5 +735,123 @@ mod tests {
         )?;
         require(matches!(other.finish(), Err(StagingError::Aborted)))?;
         require(fs::read(&outside)? == b"untouched")
+    }
+
+    fn canonical_limits() -> ManifestLimits {
+        ManifestLimits {
+            manifest_bytes: NonZeroUsize::new(4096)
+                .unwrap_or(NonZeroUsize::MIN),
+            payload_bytes: NonZeroU64::new(16).unwrap_or(NonZeroU64::MIN),
+            records: NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN),
+            total_bytes: NonZeroU64::new(64).unwrap_or(NonZeroU64::MIN),
+        }
+    }
+
+    fn canonical_budget() -> ArchiveBudget {
+        ArchiveBudget::new(
+            NonZeroU64::new(4096).unwrap_or(NonZeroU64::MIN),
+            NonZeroU64::new(8192).unwrap_or(NonZeroU64::MIN),
+            NonZeroU64::new(8).unwrap_or(NonZeroU64::MIN),
+        )
+    }
+
+    fn manifest(digest: ContentHash) -> Result<AssetManifest, StagingError> {
+        Ok(AssetManifest::new(
+            SourceIdentity {
+                digest: ContentHash::calculate(b"source"),
+                title: String::from("synthetic"),
+                revision: String::from("fixture"),
+            },
+            vec![
+                AssetRecord {
+                    digest,
+                    format: AssetFormat::Data,
+                    key: String::from("tile"),
+                    size: 4,
+                },
+                AssetRecord {
+                    digest,
+                    format: AssetFormat::Data,
+                    key: String::from("tile-copy"),
+                    size: 4,
+                },
+            ],
+            canonical_limits(),
+        )?)
+    }
+
+    #[test]
+    fn canonical_bundle_contains_exact_manifest_and_content()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(digest, b"tile")?;
+        let bundle = stage.finish(&manifest, canonical_limits())?;
+        let encoded = fs::read(bundle.path().join("manifest.json"))?;
+        let decoded = AssetManifest::parse(&encoded, canonical_limits())?;
+        require(decoded == manifest)?;
+        require(fs::read_dir(bundle.path().join("payloads"))?.count() == 1)?;
+        require(
+            fs::read(bundle.path().join(format!("payloads/{digest}")))?
+                == b"tile",
+        )?;
+        let path = bundle.path().to_owned();
+        drop(bundle);
+        require(!path.exists())
+    }
+
+    #[test]
+    fn canonical_bundle_rejects_missing_extra_or_wrong_content()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let missing = CanonicalStaging::new(&parent.path, canonical_budget())?;
+        require(matches!(
+            missing.finish(&manifest, canonical_limits()),
+            Err(StagingError::Asset(AssetError::PayloadMismatch))
+        ))?;
+        let mut extra =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        extra.write_payload(digest, b"tile")?;
+        extra.write_payload(ContentHash::calculate(b"other"), b"other")?;
+        require(matches!(
+            extra.finish(&manifest, canonical_limits()),
+            Err(StagingError::Asset(AssetError::PayloadMismatch))
+        ))?;
+        let mut wrong =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        require(
+            wrong.write_payload(digest, b"evil")
+                == Err(StagingError::Asset(AssetError::PayloadMismatch)),
+        )?;
+        require(matches!(
+            wrong.finish(&manifest, canonical_limits()),
+            Err(StagingError::Aborted)
+        ))
+    }
+
+    #[test]
+    fn canonical_manifest_consumes_staging_budget() -> Result<(), StagingError>
+    {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let limits = ArchiveBudget::new(
+            NonZeroU64::new(4096).unwrap_or(NonZeroU64::MIN),
+            NonZeroU64::new(8192).unwrap_or(NonZeroU64::MIN),
+            NonZeroU64::new(2).unwrap_or(NonZeroU64::MIN),
+        );
+        let mut stage = CanonicalStaging::new(&parent.path, limits)?;
+        stage.write_payload(digest, b"tile")?;
+        let path = stage.stage.temporary.path.clone();
+        require(matches!(
+            stage.finish(&manifest, canonical_limits()),
+            Err(StagingError::Safety(ArchiveError::TooLarge))
+        ))?;
+        require(!path.exists())
     }
 }

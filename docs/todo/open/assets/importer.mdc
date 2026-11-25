@@ -36,5 +36,7 @@ It decoded 14 members and 7,209,088 bytes without extraction or execution.
 Synthetic conversion tests cover deterministic manifest ordering, payload
 deduplication, output budget enforcement and rejection after source or
 staging errors. The staging sink is caller-owned and must discard all
-outputs on failure. Title-specific conversion and filesystem publication
-remain open.
+outputs on failure. The Linux adapter verifies the exact content-addressed
+payload set and stages the manifest in the same private directory. Native
+tests exercise bundle integrity and rejection of missing, extra and wrong
+content. Title-specific conversion and durable publication remain open.

@@ -84,6 +84,8 @@ content identities and checked RGBA8 and PCM16 payload descriptors.
 The importer validates a pinned immutable ZIP source and checks each flat
 archive member before conversion. The conversion interface assembles a
 canonical manifest with deduplicated, validated payload staging requests.
+The Linux platform stages content by SHA-256 and completes a private bundle
+only when its exact payload set matches the manifest.
 Use `cargo run --locked -p games-importer --` with the archive path, title ID,
 revision ID, SHA-256, source-byte limit, entry-byte limit, total-byte limit
 and entry-count limit for local read-only verification. Title-specific
