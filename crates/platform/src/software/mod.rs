@@ -33,11 +33,67 @@
 
 mod linux;
 
-/// Explicit absence of the authenticated LAN capability.
+/// Explicit absence of authenticated LAN; no backend handles can exist.
 #[cfg(any(not(feature = "secure-lan"), target_arch = "wasm32"))]
-pub mod lan {
-    /// Whether the selected host supports LAN.
-    pub const AVAILABLE: bool = false;
+mod unavailable_lan {
+    use core::net::SocketAddr;
+    use std::io::{ErrorKind, Result};
+
+    use games::network::MessageSchema;
+
+    use crate::ir::lan::identity::IdentityPort;
+    use crate::ir::lan::pump::{HostInputConfig, PumpPort};
+    use crate::ir::lan::{
+        ClientTls, FramePort, LanAvailability, LanConfig, LanFactory, ServerTls,
+    };
+
+    impl LanAvailability for () {
+        const SUPPORTED: bool = false;
+    }
+
+    impl LanFactory for () {
+        fn bind<Message, Codec>(
+            _config: HostInputConfig<'_>,
+            _tls: ServerTls,
+            _codec: Codec,
+        ) -> Result<PumpPort<Message>>
+        where
+            Message: Send + 'static,
+            Codec: MessageSchema<Message = Message> + Send + 'static,
+        {
+            Err(ErrorKind::Unsupported.into())
+        }
+
+        fn client_identity(
+            _root_der: &[u8],
+            _leaf_der: &[u8],
+            _key_der: &[u8],
+        ) -> Result<IdentityPort> {
+            Err(ErrorKind::Unsupported.into())
+        }
+
+        fn connect(
+            _address: SocketAddr,
+            _config: LanConfig,
+            _tls: &ClientTls,
+            _name: &str,
+        ) -> Result<FramePort> {
+            Err(ErrorKind::Unsupported.into())
+        }
+
+        fn host_identity(
+            _name: &str,
+            _root_der: &[u8],
+            _leaf_der: &[u8],
+            _key_der: &[u8],
+        ) -> Result<IdentityPort> {
+            Err(ErrorKind::Unsupported.into())
+        }
+
+        fn validate_root(_root_der: &[u8]) -> Result<()> {
+            Err(ErrorKind::Unsupported.into())
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -52,8 +108,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
-#[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
-pub use linux::lan;
 pub use linux::storage::*;
 
 use crate::ir::audio::{
@@ -70,6 +124,7 @@ use crate::ir::storage::ExecutableLocation;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::{
     Target, ToolVersion, ToolchainError, ToolchainFactory, ValidationTool,
+    reference::ReferenceTool,
 };
 
 #[cfg(all(feature = "interactive", target_os = "linux"))]
@@ -191,6 +246,10 @@ impl ExecutableLocation for () {
 
 #[cfg(not(target_os = "linux"))]
 impl ToolchainFactory for () {
+    fn arguments() -> Result<Vec<OsString>, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
     fn available(_target: Target) -> bool {
         false
     }
@@ -199,6 +258,12 @@ impl ToolchainFactory for () {
         _args: CargoArguments<'_>,
         _root: &OsStr,
         _target: Target,
+    ) -> Result<OsString, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn download_reference(
+        _tool: ReferenceTool,
     ) -> Result<OsString, ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
     }
@@ -219,6 +284,10 @@ impl ToolchainFactory for () {
     }
 
     fn workspace_root() -> Result<OsString, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn write_line(_line: &str) -> Result<(), ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
     }
 }

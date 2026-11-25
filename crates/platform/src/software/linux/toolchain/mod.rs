@@ -31,21 +31,35 @@
 
 //! Linux toolchain execution for independently authored workspace artifacts.
 
+mod reference;
+
+use std::env;
 use std::ffi::{OsStr, OsString};
+use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::ir::security::toolchain::CargoArguments;
+use crate::ir::toolchain::reference::ReferenceTool;
 use crate::ir::toolchain::{
     Target, ToolVersion, ToolchainError, ToolchainFactory, ValidationTool,
 };
 
 impl ToolchainFactory for () {
+    fn arguments() -> Result<Vec<OsString>, ToolchainError> {
+        Ok(env::args_os().skip(1).collect())
+    }
+
     fn available(target: Target) -> bool {
         match target {
             Target::LinuxX86_64Gnu => {
                 cfg!(all(target_arch = "x86_64", target_env = "gnu"))
             },
+            Target::AndroidArm64
+            | Target::LinuxArm64Gnu
+            | Target::WebAssembly
+            | Target::WindowsArm64Gnullvm
+            | Target::WindowsX86_64Gnu => false,
         }
     }
 
@@ -77,6 +91,13 @@ impl ToolchainFactory for () {
             return Err(ToolchainError::MissingArtifact);
         }
         Ok(executable.into_os_string())
+    }
+
+    fn download_reference(
+        tool: ReferenceTool,
+    ) -> Result<OsString, ToolchainError> {
+        let workspace = PathBuf::from(Self::workspace_root()?);
+        reference::download(&workspace, tool)
     }
 
     fn metadata(
@@ -137,6 +158,15 @@ impl ToolchainFactory for () {
                 operation: "workspace root",
                 source,
             })
+    }
+
+    fn write_line(line: &str) -> Result<(), ToolchainError> {
+        writeln!(stdout().lock(), "{line}").map_err(|source| {
+            ToolchainError::Io {
+                operation: "write status",
+                source,
+            }
+        })
     }
 }
 

@@ -29,14 +29,15 @@
 // - Defaults:
 //   - No anonymous peers, public root stores or session resumption.
 
+mod factory;
 /// Host-side enrolment and session admission.
-pub mod host;
+mod host;
 /// Local credential import and explicit public trust exchange.
-pub mod identity;
+mod identity;
 /// Fair, bounded scheduling of inbound host operations.
-pub mod pump;
+mod pump;
 /// Bounded off-thread host session commands.
-pub mod worker;
+mod worker;
 
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::SocketAddr;
@@ -60,45 +61,18 @@ use rustls::{
     DigitallySignedStruct, DistinguishedName, Error, RootCertStore,
     ServerConfig, ServerConnection, SignatureScheme,
 };
-use sha2::{Digest as _, Sha256};
 
 use super::{
     DeadlineSocket, FrameChannel, LanConfig, LanListener, SendProgress,
-    TimedStream, connect_socket, remaining,
+    TimedStream, connect_socket, deadline, remaining,
 };
+use crate::ir::lan::{FrameBackend, PeerFingerprint};
 
 const PROTOCOL: &[u8] = b"games-lan/1";
 
-/// SHA-256 identity of a verified leaf certificate.
-///
-/// A host must explicitly associate the fingerprint with a player slot;
-/// certification alone is not an authorisation to join a specific session.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct PeerFingerprint([u8; 32]);
-
-impl PeerFingerprint {
-    /// Restore an enrolled fingerprint from its canonical bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Derive the fingerprint of a certificate supplied for local enrolment.
-    #[must_use]
-    pub fn from_der(certificate: &[u8]) -> Self {
-        Self(Sha256::digest(certificate).into())
-    }
-
-    /// Return the canonical fingerprint bytes for host-side enrolment.
-    #[must_use]
-    pub const fn to_bytes(self) -> [u8; 32] {
-        self.0
-    }
-}
-
 /// Client credentials, local trust roots and an explicitly approved host.
 #[derive(Clone, Debug)]
-pub struct ClientTls(Arc<ClientConfig>);
+struct ClientTls(Arc<ClientConfig>);
 
 impl ClientTls {
     fn from_identity(
@@ -217,7 +191,7 @@ impl ServerCertVerifier for PinnedHost {
 
 /// Host credentials and explicitly supplied trusted client roots.
 #[derive(Clone, Debug)]
-pub struct ServerTls(Arc<ServerConfig>);
+struct ServerTls(Arc<ServerConfig>);
 
 impl ServerTls {
     fn from_identity(
@@ -261,7 +235,7 @@ impl ServerTls {
 
 /// A nonblocking listener which accepts only private-address TLS peers.
 #[derive(Debug)]
-pub struct SecureLanListener {
+struct SecureLanListener {
     listener: LanListener,
     pending: Arc<AtomicU8>,
     tls: ServerTls,
@@ -273,7 +247,7 @@ impl SecureLanListener {
     /// # Errors
     ///
     /// Rejects public or wildcard interfaces and operating-system errors.
-    pub fn bind(
+    fn bind(
         address: SocketAddr,
         config: LanConfig,
         tls: ServerTls,
@@ -291,7 +265,7 @@ impl SecureLanListener {
     /// # Errors
     ///
     /// Propagates socket inspection failures.
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+    fn local_addr(&self) -> io::Result<SocketAddr> {
         self.listener.local_addr()
     }
 
@@ -302,10 +276,10 @@ impl SecureLanListener {
     /// # Errors
     ///
     /// Rejects non-private peers and propagates socket failures.
-    pub fn try_accept(&self) -> io::Result<Option<PendingConnection>> {
+    fn try_accept(&self) -> io::Result<Option<PendingConnection>> {
         let Some(permit) = PendingPermit::acquire(
             &self.pending,
-            self.listener.config.limits.max_pending(),
+            self.listener.config.limits().max_pending(),
         ) else {
             return Ok(None);
         };
@@ -349,7 +323,7 @@ impl Drop for PendingPermit {
 
 /// An untrusted accepted socket that can only be authenticated or dropped.
 #[derive(Debug)]
-pub struct PendingConnection {
+struct PendingConnection {
     config: LanConfig,
     state: Option<PendingState>,
 }
@@ -366,7 +340,8 @@ impl PendingConnection {
     /// # Errors
     ///
     /// Rejects anonymous, untrusted or incompatible peers and timed-out I/O.
-    pub fn authenticate(self) -> io::Result<SecureFrameStream> {
+    #[cfg(test)]
+    fn authenticate(self) -> io::Result<SecureFrameStream> {
         let PendingState { permit: _permit, stream } =
             self.state.ok_or(ErrorKind::NotConnected)?;
         handshake(stream, self.config)
@@ -380,9 +355,7 @@ impl PendingConnection {
     /// # Errors
     ///
     /// Rejects expired, incompatible or untrusted peers and consumed state.
-    pub fn poll_authenticate(
-        &mut self,
-    ) -> io::Result<Option<SecureFrameStream>> {
+    fn poll_authenticate(&mut self) -> io::Result<Option<SecureFrameStream>> {
         let state = self.state.as_mut().ok_or(ErrorKind::NotConnected)?;
         match state.stream.poll_handshake() {
             Ok(false) => Ok(None),
@@ -403,7 +376,7 @@ impl PendingConnection {
 ///
 /// Frames can block for the configured deadline. Only use on I/O workers.
 #[derive(Debug)]
-pub struct SecureFrameStream {
+struct SecureFrameStream {
     channel: FrameChannel<TlsSocket>,
     fingerprint: PeerFingerprint,
 }
@@ -417,7 +390,7 @@ impl SecureFrameStream {
     ///
     /// Rejects malformed names, public endpoints, untrusted hosts and I/O
     /// failures. Invalid names are rejected before opening a socket.
-    pub fn connect(
+    fn connect(
         address: SocketAddr,
         config: LanConfig,
         tls: &ClientTls,
@@ -426,7 +399,7 @@ impl SecureFrameStream {
         let server_name = ServerName::try_from(name)
             .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?
             .to_owned();
-        let socket = connect_socket(address, config.deadline()?)?;
+        let socket = connect_socket(address, deadline(config)?)?;
         let connection = ClientConnection::new(Arc::clone(&tls.0), server_name)
             .map_err(io::Error::other)?;
         handshake(
@@ -437,16 +410,16 @@ impl SecureFrameStream {
             config,
         )
     }
+}
 
+impl FrameBackend for SecureFrameStream {
     /// Whether an outgoing frame is queued or partially transmitted.
-    #[must_use]
-    pub const fn has_pending_send(&self) -> bool {
+    fn has_pending_send(&self) -> bool {
         self.channel.has_pending_send()
     }
 
     /// Get the authenticated peer's leaf certificate fingerprint.
-    #[must_use]
-    pub const fn peer_fingerprint(&self) -> PeerFingerprint {
+    fn peer_fingerprint(&self) -> PeerFingerprint {
         self.fingerprint
     }
 
@@ -457,7 +430,7 @@ impl SecureFrameStream {
     ///
     /// # Errors
     /// Closes the connection on invalid frames, partial-frame timeout or EOF.
-    pub fn poll_receive(&mut self) -> io::Result<Option<Vec<u8>>> {
+    fn poll_receive(&mut self) -> io::Result<Option<Vec<u8>>> {
         self.channel.poll_receive()
     }
 
@@ -465,7 +438,7 @@ impl SecureFrameStream {
     ///
     /// # Errors
     /// Closes the connection on a failed or expired transfer.
-    pub fn poll_send(&mut self) -> io::Result<SendProgress> {
+    fn poll_send(&mut self) -> io::Result<SendProgress> {
         self.channel.poll_send()
     }
 
@@ -473,7 +446,7 @@ impl SecureFrameStream {
     ///
     /// # Errors
     /// Rejects a closed connection, oversize or another outstanding frame.
-    pub fn queue_send(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+    fn queue_send(&mut self, bytes: Vec<u8>) -> io::Result<()> {
         self.channel.queue_send(bytes)
     }
 
@@ -482,7 +455,7 @@ impl SecureFrameStream {
     /// # Errors
     ///
     /// Closes the connection after a failed, oversized or incomplete frame.
-    pub fn receive(&mut self) -> io::Result<Vec<u8>> {
+    fn receive(&mut self) -> io::Result<Vec<u8>> {
         self.channel.receive()
     }
 
@@ -492,7 +465,7 @@ impl SecureFrameStream {
     ///
     /// Rejects oversized data or an outstanding queued frame, and closes
     /// the connection on transfer failure.
-    pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+    fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.channel.send(bytes)
     }
 }
@@ -699,8 +672,9 @@ mod tests {
         session_config,
     };
     use super::{
-        ClientTls, ErrorKind, LanConfig, PeerFingerprint, RootCertStore,
-        SecureFrameStream, SecureLanListener, ServerTls, finish_handshake, io,
+        ClientTls, ErrorKind, FrameBackend as _, LanConfig, PeerFingerprint,
+        RootCertStore, SecureFrameStream, SecureLanListener, ServerTls,
+        finish_handshake, io,
     };
 
     const HOST: &str = "games.test";
@@ -911,7 +885,7 @@ mod tests {
         let mut host = host_result?;
         let mut remote = remote_result?;
         let idle_until = Instant::now()
-            .checked_add(settings.limits.timeout())
+            .checked_add(settings.limits().timeout())
             .ok_or(ErrorKind::TimedOut)?;
         poll_accept(|| {
             require(

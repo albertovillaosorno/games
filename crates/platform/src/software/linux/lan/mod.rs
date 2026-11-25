@@ -32,63 +32,16 @@
 //! Native LAN transport over explicitly admitted local connections.
 
 /// Locally provisioned, mutually authenticated TLS transport.
-#[cfg(feature = "secure-lan")]
-pub mod secure;
+mod secure;
 
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use games::network::SessionConfig;
-
-pub use crate::ir::security::lan::framing::SendProgress;
+use crate::ir::lan::{LanConfig, SendProgress};
+use crate::ir::security::lan::admit_endpoint;
 use crate::ir::security::lan::framing::{FrameReader, FrameWriter};
-use crate::ir::security::lan::{LanAdmissionError, LanLimits, admit_endpoint};
 
-/// Whether the selected host includes the native LAN implementation.
-pub const AVAILABLE: bool = true;
-
-/// Explicit native transport limits inherited from a session.
-#[derive(Clone, Copy, Debug)]
-pub struct LanConfig {
-    limits: LanLimits,
-}
-
-impl LanConfig {
-    fn deadline(self) -> io::Result<Instant> {
-        Instant::now()
-            .checked_add(self.limits.timeout())
-            .ok_or_else(|| ErrorKind::InvalidInput.into())
-    }
-
-    /// Derive a native transport configuration from an opted-in session.
-    ///
-    /// # Errors
-    /// Rejects disabled LAN, an unrepresentable frame budget or timeout.
-    pub fn new(session: SessionConfig, timeout: Duration) -> io::Result<Self> {
-        let config = Self {
-            limits: LanLimits::new(session, timeout)?,
-        };
-        // Native clock representability is a backend-specific guard.
-        let _deadline = config.deadline()?;
-        Ok(config)
-    }
-}
-
-impl From<LanAdmissionError> for io::Error {
-    fn from(error: LanAdmissionError) -> Self {
-        match error {
-            LanAdmissionError::Disabled | LanAdmissionError::PublicEndpoint => {
-                ErrorKind::PermissionDenied
-            },
-            LanAdmissionError::FrameBudget
-            | LanAdmissionError::OutboundLength
-            | LanAdmissionError::ZeroTimeout => ErrorKind::InvalidInput,
-            LanAdmissionError::InboundLength => ErrorKind::InvalidData,
-        }
-        .into()
-    }
-}
 #[derive(Debug)]
 struct LanListener {
     config: LanConfig,
@@ -98,6 +51,7 @@ struct LanListener {
 impl LanListener {
     fn bind(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
         admit_endpoint(address)?;
+        let _deadline = deadline(config)?;
         let listener = TcpListener::bind(address)?;
         listener.set_nonblocking(true)?;
         Ok(Self { config, listener })
@@ -120,7 +74,7 @@ impl LanListener {
         match self.listener.accept() {
             Ok((stream, address)) => {
                 admit_endpoint(address)?;
-                DeadlineSocket::new(stream, self.config.deadline()?).map(Some)
+                DeadlineSocket::new(stream, deadline(self.config)?).map(Some)
             },
             Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
             Err(error) => Err(error),
@@ -225,7 +179,7 @@ where
     fn close(&mut self) {
         drop(self.stream.take());
         self.pending_send = None;
-        self.reader = FrameReader::new(self.config.limits);
+        self.reader = FrameReader::new(self.config.limits());
         self.read_deadline = None;
     }
 
@@ -238,7 +192,7 @@ where
             config,
             pending_send: None,
             read_deadline: None,
-            reader: FrameReader::new(config.limits),
+            reader: FrameReader::new(config.limits()),
             stream: Some(stream),
         }
     }
@@ -274,7 +228,7 @@ where
             },
             Ok(None) => {
                 if self.read_deadline.is_none() {
-                    self.read_deadline = Some(self.config.deadline()?);
+                    self.read_deadline = Some(deadline(self.config)?);
                 }
                 Ok(None)
             },
@@ -321,7 +275,7 @@ where
     }
 
     fn queue_send(&mut self, bytes: Vec<u8>) -> io::Result<()> {
-        let writer = FrameWriter::new(bytes, self.config.limits)?;
+        let writer = FrameWriter::new(bytes, self.config.limits())?;
         if self.stream.is_none() {
             return Err(ErrorKind::NotConnected.into());
         }
@@ -329,7 +283,7 @@ where
             return Err(ErrorKind::AlreadyExists.into());
         }
         self.pending_send = Some(PendingSend {
-            deadline: self.config.deadline()?,
+            deadline: deadline(self.config)?,
             writer,
         });
         Ok(())
@@ -344,8 +298,7 @@ where
     }
 
     fn receive_blocking(&mut self) -> io::Result<Vec<u8>> {
-        let deadline =
-            self.active_deadline().unwrap_or(self.config.deadline()?);
+        let deadline = self.active_deadline().unwrap_or(deadline(self.config)?);
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         stream.reset_deadline(deadline);
         loop {
@@ -364,7 +317,7 @@ where
     }
 
     fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let mut writer = FrameWriter::new(bytes, self.config.limits)?;
+        let mut writer = FrameWriter::new(bytes, self.config.limits())?;
         if self.has_pending_send() {
             return Err(ErrorKind::AlreadyExists.into());
         }
@@ -380,8 +333,7 @@ where
     where
         Operation: FnOnce(&mut Stream, LanConfig) -> io::Result<Output>,
     {
-        let deadline =
-            self.active_deadline().unwrap_or(self.config.deadline()?);
+        let deadline = self.active_deadline().unwrap_or(deadline(self.config)?);
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         stream.reset_deadline(deadline);
         let result = remaining(deadline)
@@ -403,7 +355,7 @@ struct FrameStream {
 #[cfg(test)]
 impl FrameStream {
     fn connect(address: SocketAddr, config: LanConfig) -> io::Result<Self> {
-        let socket = connect_socket(address, config.deadline()?)?;
+        let socket = connect_socket(address, deadline(config)?)?;
         Ok(Self {
             channel: FrameChannel::new(socket, config),
         })
@@ -425,6 +377,12 @@ fn connect_socket(
     admit_endpoint(address)?;
     let stream = TcpStream::connect_timeout(&address, remaining(deadline)?)?;
     DeadlineSocket::new(stream, deadline)
+}
+
+fn deadline(config: LanConfig) -> io::Result<Instant> {
+    Instant::now()
+        .checked_add(config.limits().timeout())
+        .ok_or_else(|| ErrorKind::InvalidInput.into())
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
@@ -465,7 +423,7 @@ mod tests {
 
     use super::{
         FrameChannel, FrameStream, LanConfig, LanListener, SendProgress,
-        TimedStream, connect_socket,
+        TimedStream, connect_socket, deadline,
     };
 
     pub(super) const LOOPBACK: SocketAddr =
@@ -576,7 +534,7 @@ mod tests {
     ) -> io::Result<FrameChannel<LateStream<'_>>> {
         let settings =
             LanConfig::new(session_config(true), Duration::from_millis(100))?;
-        let deadline = settings.deadline()?;
+        let deadline = deadline(settings)?;
         let mut channel = FrameChannel::new(
             LateStream {
                 attempted,
@@ -929,7 +887,7 @@ mod tests {
                 && listener.try_accept()?.is_none(),
             "expired deadline must not open a socket",
         )?;
-        let deadline = settings.deadline()?;
+        let deadline = deadline(settings)?;
         let socket = connect_socket(address, deadline)?;
         let _host = accepted(&listener)?;
         require(
@@ -948,6 +906,12 @@ mod tests {
             error_kind(LanConfig::new(session_config(true), Duration::ZERO))
                 == Some(ErrorKind::InvalidInput),
             "zero timeout",
+        )?;
+        let huge = LanConfig::new(session_config(true), Duration::MAX)?;
+        require(
+            error_kind(LanListener::bind(LOOPBACK, huge))
+                == Some(ErrorKind::InvalidInput),
+            "native deadline must fit before binding",
         )?;
         let settings = config()?;
         for address in [

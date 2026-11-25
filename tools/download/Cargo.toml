@@ -13,5 +13,8 @@ categories.workspace = true
 name = "games-download"
 path = "src/download.rs"
 
+[dependencies]
+games-platform.workspace = true
+
 [lints]
 workspace = true

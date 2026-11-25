@@ -37,7 +37,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
-use games::network::{MessageSchema, SessionConfig, SessionError};
+use games::network::{MessageSchema, SessionError};
 
 use super::host::{HostError, HostSession};
 use super::worker::{
@@ -45,44 +45,12 @@ use super::worker::{
     HostWorker, OperationError, RejectionReason,
 };
 use super::{
-    LanConfig, PeerFingerprint, PendingConnection, SecureLanListener,
-    SendProgress, ServerTls,
+    LanConfig, PendingConnection, SecureLanListener, SendProgress, ServerTls,
+};
+use crate::ir::lan::pump::{
+    HostInputConfig, PumpBackend, PumpProgress, RemoteEvent,
 };
 use crate::software::linux::performance::now;
-
-/// One verified remote lifecycle or schema-checked input event.
-#[derive(Debug)]
-pub enum RemoteEvent<Message> {
-    /// A host-enrolled peer joined or reclaimed its reserved identity.
-    Connected(u64),
-    /// A transfer failure closed the peer's channel and reserved its identity.
-    Disconnected {
-        /// Host-approved peer identity.
-        peer: u64,
-        /// Transport failure that ended the active connection.
-        reason: ErrorKind,
-    },
-    /// An authenticated peer supplied a valid application message.
-    Message {
-        /// Host monotonic time when the worker completed valid decoding.
-        completed_at: Duration,
-        /// Host-approved peer identity, independent of the frame payload.
-        peer: u64,
-        /// Decoded application message.
-        value: Message,
-    },
-}
-
-/// Result of one nonblocking scheduler poll.
-#[derive(Debug)]
-pub enum PumpProgress<Message> {
-    /// The caller owns this event and must deliver it before the next poll.
-    Event(RemoteEvent<Message>),
-    /// Nothing could progress immediately; a worker may still be busy.
-    Idle,
-    /// Internal work progressed without a deliverable application event.
-    Progress,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PollKind {
@@ -129,24 +97,6 @@ impl PollTask {
     }
 }
 
-/// Explicit endpoint, transport limits and pre-approved player identities.
-#[derive(Clone, Copy, Debug)]
-pub struct HostInputConfig<'roster> {
-    /// Private interface and port chosen by the host.
-    pub address: SocketAddr,
-    /// Approved certificate fingerprints mapped to host player identities.
-    pub enrolments: &'roster [(PeerFingerprint, u64)],
-    /// Optional maximum time between completed valid application frames.
-    /// Caller stalls and completions observed after expiry do not renew it.
-    pub idle_timeout: Option<Duration>,
-    /// Host-owned local player identities.
-    pub local_peers: &'roster [u64],
-    /// Opted-in roster and frame limits.
-    pub session: SessionConfig,
-    /// Deadline for each handshake or in-progress transfer.
-    pub timeout: Duration,
-}
-
 /// Nonblocking host input and reply scheduler over the authenticated worker.
 ///
 /// Pending sockets are bounded by the listener permit count. Active
@@ -160,7 +110,7 @@ pub struct HostInputConfig<'roster> {
 /// One bounded reply can replace a ready receive task; it cannot grow the
 /// queue or renew an inbound lease. It does not publish world state.
 #[derive(Debug)]
-pub struct HostInputPump<Message> {
+pub(super) struct HostInputPump<Message> {
     frame_budget: usize,
     idle_timeout: Option<Duration>,
     in_flight: BTreeMap<u64, PollKind>,
@@ -202,7 +152,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// # Errors
     /// Rejects disabled LAN, empty or excess enrolments, invalid identities,
     /// unrepresentable limits, or listener and worker creation failures.
-    pub fn bind<Codec>(
+    pub(super) fn bind<Codec>(
         config: HostInputConfig<'_>,
         tls: ServerTls,
         codec: Codec,
@@ -405,69 +355,6 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             .transpose()
     }
 
-    /// Return the bound address, including an assigned ephemeral port.
-    ///
-    /// # Errors
-    /// Propagates socket inspection failures.
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.listener.local_addr()
-    }
-
-    /// Advance at most one completion, or accept and submit one poll.
-    ///
-    /// Authentication failures and malformed application frames do not
-    /// produce a gameplay event or stop unrelated peers. A transfer failure
-    /// produces one explicit disconnect; verified rejoin is a new connection.
-    /// Leases use worker completion time, rejecting stale admissions and
-    /// decoded input when a caller resumes polling after an extended stall.
-    /// # Errors
-    /// Reports listener, worker or internal correlation failures.
-    pub fn poll(&mut self) -> io::Result<PumpProgress<Message>> {
-        if let Some(completion) = self.worker.poll()? {
-            return self.complete(completion, now());
-        }
-        let accepted = self.accept_one()?;
-        let submitted = self.submit_one()?;
-        if accepted || submitted {
-            Ok(PumpProgress::Progress)
-        } else {
-            Ok(PumpProgress::Idle)
-        }
-    }
-
-    /// Schedule a bounded reply before the next receive for this peer.
-    ///
-    /// Call before polling again after receiving the peer event. The same
-    /// round-robin slot handles send progress and resumes receive on success.
-    ///
-    /// # Errors
-    /// Rejects oversized replies and unavailable or already busy peers.
-    pub fn queue_reply(&mut self, peer: u64, bytes: Vec<u8>) -> io::Result<()> {
-        if bytes.len() > self.frame_budget {
-            return Err(ErrorKind::InvalidInput.into());
-        }
-        for task in &mut self.ready {
-            if let PollKind::Receive(actual, deadline) = task.kind
-                && actual == peer
-            {
-                *task = PollTask {
-                    kind: PollKind::Reply(peer, deadline),
-                    operation: HostOperation::QueueSend { peer, bytes },
-                };
-                return Ok(());
-            }
-        }
-        Err(ErrorKind::WouldBlock.into())
-    }
-
-    /// Close the listener, cancel queued work and join the I/O worker.
-    ///
-    /// # Errors
-    /// Reports worker shutdown failure.
-    pub fn shutdown(self) -> io::Result<()> {
-        self.worker.shutdown()
-    }
-
     fn submit_one(&mut self) -> io::Result<bool> {
         let Some(task) = self.ready.pop_front() else {
             return Ok(false);
@@ -510,6 +397,71 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     }
 }
 
+impl<Message: Send + 'static> PumpBackend<Message> for HostInputPump<Message> {
+    /// Return the bound address, including an assigned ephemeral port.
+    ///
+    /// # Errors
+    /// Propagates socket inspection failures.
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.listener.local_addr()
+    }
+
+    /// Advance at most one completion, or accept and submit one poll.
+    ///
+    /// Authentication failures and malformed application frames do not
+    /// produce a gameplay event or stop unrelated peers. A transfer failure
+    /// produces one explicit disconnect; verified rejoin is a new connection.
+    /// Leases use worker completion time, rejecting stale admissions and
+    /// decoded input when a caller resumes polling after an extended stall.
+    /// # Errors
+    /// Reports listener, worker or internal correlation failures.
+    fn poll(&mut self) -> io::Result<PumpProgress<Message>> {
+        if let Some(completion) = self.worker.poll()? {
+            return self.complete(completion, now());
+        }
+        let accepted = self.accept_one()?;
+        let submitted = self.submit_one()?;
+        if accepted || submitted {
+            Ok(PumpProgress::Progress)
+        } else {
+            Ok(PumpProgress::Idle)
+        }
+    }
+
+    /// Schedule a bounded reply before the next receive for this peer.
+    ///
+    /// Call before polling again after receiving the peer event. The same
+    /// round-robin slot handles send progress and resumes receive on success.
+    ///
+    /// # Errors
+    /// Rejects oversized replies and unavailable or already busy peers.
+    fn queue_reply(&mut self, peer: u64, bytes: Vec<u8>) -> io::Result<()> {
+        if bytes.len() > self.frame_budget {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        for task in &mut self.ready {
+            if let PollKind::Receive(actual, deadline) = task.kind
+                && actual == peer
+            {
+                *task = PollTask {
+                    kind: PollKind::Reply(peer, deadline),
+                    operation: HostOperation::QueueSend { peer, bytes },
+                };
+                return Ok(());
+            }
+        }
+        Err(ErrorKind::WouldBlock.into())
+    }
+
+    /// Close the listener, cancel queued work and join the I/O worker.
+    ///
+    /// # Errors
+    /// Reports worker shutdown failure.
+    fn shutdown(self: Box<Self>) -> io::Result<()> {
+        self.worker.shutdown()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::TcpStream;
@@ -525,6 +477,7 @@ mod tests {
     };
     use super::super::{ClientTls, SecureFrameStream};
     use super::*;
+    use crate::ir::lan::FrameBackend as _;
 
     struct TestPeers {
         first: ClientTls,
@@ -679,7 +632,7 @@ mod tests {
         malformed_frame(&mut pump, &mut first, &mut second)?;
         disconnect_rejoin(&mut pump, first, &first_keys, &mut second)?;
         drop(silent);
-        pump.shutdown()
+        Box::new(pump).shutdown()
     }
 
     #[test]
@@ -728,7 +681,7 @@ mod tests {
         )?;
         first.send(b"M\x07")?;
         expect_message(&mut pump, 1, 7)?;
-        pump.shutdown()
+        Box::new(pump).shutdown()
     }
 
     #[test]
@@ -832,7 +785,7 @@ mod tests {
             }),
             "malformed frames neither publish input nor renew the lease",
         )?;
-        pump.shutdown()
+        Box::new(pump).shutdown()
     }
 
     fn poll_admission_completion(
@@ -923,7 +876,7 @@ mod tests {
         let mut rejoined = connect(&mut pump, &keys.client, 1)?;
         rejoined.send(b"M\x06")?;
         expect_message(&mut pump, 1, 6)?;
-        pump.shutdown()
+        Box::new(pump).shutdown()
     }
 
     fn message_completion(
@@ -1033,6 +986,6 @@ mod tests {
         // Model a worker operation that completed exactly at expiry.
         late.completed_at = rejoined_deadline;
         expect_expired(&mut pump, late, rejoined_deadline)?;
-        pump.shutdown()
+        Box::new(pump).shutdown()
     }
 }

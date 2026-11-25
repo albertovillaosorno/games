@@ -38,7 +38,7 @@ pub(super) mod graphics;
 #[cfg(all(feature = "interactive", target_os = "linux"))]
 pub(super) mod input;
 #[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
-pub mod lan;
+mod lan;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod performance;
 pub(super) mod storage;

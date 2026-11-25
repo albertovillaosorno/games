@@ -29,21 +29,19 @@
 // - Defaults:
 //   - No implicit network access or account service.
 
+use core::net::SocketAddr;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::mem;
-use std::net::SocketAddr;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::time::Duration;
 
 use games::network::SessionConfig;
 use games::replay::{LiveSimulation, QueueRejection};
-use games_platform::ir::lan::secure::pump::{
+use games_platform::ir::lan::pump::{
     HostInputConfig, HostInputPump, PumpProgress, RemoteEvent,
 };
-use games_platform::ir::lan::secure::{
-    PeerFingerprint, SecureFrameStream, ServerTls,
-};
+use games_platform::ir::lan::{PeerFingerprint, SecureFrameStream, ServerTls};
 use games_platform::ir::measurement::now;
 
 use super::Cabinet;
@@ -402,9 +400,8 @@ mod tests {
     use games::input::LogicalAction;
     use games::replay::LiveInputLimits;
     use games::timing::StepClock;
-    use games_platform::ir::lan::LanConfig;
-    use games_platform::ir::lan::secure::ClientTls;
-    use games_platform::ir::lan::secure::identity::LocalIdentity;
+    use games_platform::ir::lan::identity::LocalIdentity;
+    use games_platform::ir::lan::{ClientTls, LanConfig};
     use rcgen::{
         BasicConstraints, CertificateParams, CertifiedIssuer,
         ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,

@@ -47,51 +47,8 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::sign::CertifiedKey;
 
 use super::{ClientTls, PeerFingerprint, ServerTls};
+use crate::ir::lan::identity::PublicIdentity;
 use crate::ir::security::lan::CredentialKind;
-
-/// Public material to exchange and verify through a trusted local channel.
-///
-/// The leaf fingerprint is independent of the root's certificate hash.
-/// Receiving this value does not itself establish trust or enrol a player.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PublicIdentity {
-    fingerprint: PeerFingerprint,
-    root: CertificateDer<'static>,
-}
-
-impl PublicIdentity {
-    /// The fingerprint that must match the verified TLS leaf certificate.
-    #[must_use]
-    pub const fn fingerprint(&self) -> PeerFingerprint {
-        self.fingerprint
-    }
-
-    /// Admit one public root certificate and its separately approved pin.
-    ///
-    /// # Errors
-    /// Rejects malformed roots or DER larger than 4,096 bytes.
-    pub fn from_der(
-        root_der: &[u8],
-        fingerprint: PeerFingerprint,
-    ) -> io::Result<Self> {
-        let root = certificate(root_der)?;
-        let identity = Self { fingerprint, root };
-        let _validated = identity.roots()?;
-        Ok(identity)
-    }
-
-    /// DER-encoded public root, suitable for out-of-band exchange.
-    #[must_use]
-    pub fn root_der(&self) -> &[u8] {
-        self.root.as_ref()
-    }
-
-    fn roots(&self) -> io::Result<RootCertStore> {
-        let mut roots = RootCertStore::empty();
-        roots.add(self.root.clone()).map_err(io::Error::other)?;
-        Ok(roots)
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Role {
@@ -103,7 +60,7 @@ enum Role {
 ///
 /// Accepts a leaf directly signed by an independent local root, with no
 /// intermediate chain. Certificate issuance and storage remain external.
-pub struct LocalIdentity {
+pub(super) struct LocalIdentity {
     certified: Arc<CertifiedKey>,
     public: PublicIdentity,
     role: Role,
@@ -113,7 +70,7 @@ impl Debug for LocalIdentity {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalIdentity")
             .field("role", &self.role)
-            .field("fingerprint", &self.public.fingerprint)
+            .field("fingerprint", &self.public.fingerprint())
             .finish_non_exhaustive()
     }
 }
@@ -125,14 +82,14 @@ impl LocalIdentity {
     ///
     /// # Errors
     /// Rejects malformed, oversized, mismatched or untrusted credentials.
-    pub fn client(
+    pub(super) fn client(
         root_der: &[u8],
         leaf_der: &[u8],
         key_der: &[u8],
     ) -> io::Result<Self> {
         let identity = Self::import(Role::Client, root_der, leaf_der, key_der)?;
         let verifier = WebPkiClientVerifier::builder_with_provider(
-            Arc::new(identity.public.roots()?),
+            Arc::new(root_store(identity.public.root_der())?),
             Arc::new(default_provider()),
         )
         .build()
@@ -154,14 +111,17 @@ impl LocalIdentity {
     ///
     /// # Errors
     /// Rejects host-role credentials or invalid TLS configuration.
-    pub fn client_tls(&self, host: &PublicIdentity) -> io::Result<ClientTls> {
+    pub(super) fn client_tls(
+        &self,
+        host: &PublicIdentity,
+    ) -> io::Result<ClientTls> {
         if self.role != Role::Client {
             return Err(ErrorKind::InvalidInput.into());
         }
         ClientTls::from_identity(
-            host.roots()?,
+            root_store(host.root_der())?,
             Arc::clone(&self.certified),
-            host.fingerprint,
+            host.fingerprint(),
         )
     }
 
@@ -172,7 +132,7 @@ impl LocalIdentity {
     /// # Errors
     /// Rejects malformed, oversized, mismatched or untrusted credentials,
     /// including certificates issued for a different server name.
-    pub fn host(
+    pub(super) fn host(
         name: &str,
         root_der: &[u8],
         leaf_der: &[u8],
@@ -182,7 +142,7 @@ impl LocalIdentity {
         let server_name =
             ServerName::try_from(name).map_err(io::Error::other)?;
         let verifier = WebPkiServerVerifier::builder_with_provider(
-            Arc::new(identity.public.roots()?),
+            Arc::new(root_store(identity.public.root_der())?),
             Arc::new(default_provider()),
         )
         .build()
@@ -229,7 +189,7 @@ impl LocalIdentity {
 
     /// Public trust material; never contains either private key.
     #[must_use]
-    pub const fn public(&self) -> &PublicIdentity {
+    pub(super) const fn public(&self) -> &PublicIdentity {
         &self.public
     }
 
@@ -241,7 +201,7 @@ impl LocalIdentity {
     /// # Errors
     /// Rejects disabled LAN, wrong role, empty or excessive approval lists,
     /// duplicate fingerprints and invalid TLS configuration.
-    pub fn server_tls(
+    pub(super) fn server_tls(
         &self,
         config: SessionConfig,
         clients: &[PublicIdentity],
@@ -258,10 +218,12 @@ impl LocalIdentity {
         let mut roots = RootCertStore::empty();
         let mut fingerprints = BTreeSet::new();
         for client in clients {
-            if !fingerprints.insert(client.fingerprint) {
+            if !fingerprints.insert(client.fingerprint()) {
                 return Err(ErrorKind::InvalidInput.into());
             }
-            roots.add(client.root.clone()).map_err(io::Error::other)?;
+            roots
+                .add(CertificateDer::from(client.root_der()))
+                .map_err(io::Error::other)?;
         }
         ServerTls::from_identity(roots, Arc::clone(&self.certified))
     }
@@ -272,6 +234,18 @@ fn certificate(der: &[u8]) -> io::Result<CertificateDer<'static>> {
         .admit(der)
         .map_err(|_error| ErrorKind::InvalidInput)?;
     Ok(CertificateDer::from(der.to_vec()))
+}
+
+fn root_store(root_der: &[u8]) -> io::Result<RootCertStore> {
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(CertificateDer::from(root_der))
+        .map_err(io::Error::other)?;
+    Ok(roots)
+}
+
+pub(super) fn validate_root(root_der: &[u8]) -> io::Result<()> {
+    root_store(root_der).map(drop)
 }
 
 #[cfg(test)]
@@ -288,6 +262,7 @@ mod tests {
     use super::super::tests::{authority, pair};
     use super::super::{PeerFingerprint, SecureLanListener};
     use super::{LocalIdentity, PublicIdentity};
+    use crate::ir::lan::FrameBackend as _;
 
     const HOST: &str = "games.test";
 

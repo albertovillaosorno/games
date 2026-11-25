@@ -31,6 +31,9 @@
 
 //! Portable contributor toolchain requests and outcomes.
 
+/// Portable reference acquisition.
+pub mod reference;
+
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::Error;
@@ -41,8 +44,18 @@ pub use super::security::toolchain::{ToolVersion, ValidationTool};
 /// Authored executable build target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Target {
+    /// Android ARM64 core target.
+    AndroidArm64,
+    /// GNU/Linux ARM64 core target.
+    LinuxArm64Gnu,
     /// GNU/Linux x86-64 distribution target.
     LinuxX86_64Gnu,
+    /// Browser-independent WebAssembly core target.
+    WebAssembly,
+    /// Windows ARM64 core target.
+    WindowsArm64Gnullvm,
+    /// Windows x86-64 core target.
+    WindowsX86_64Gnu,
 }
 
 impl Target {
@@ -56,15 +69,38 @@ impl Target {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::AndroidArm64 => "android-arm64",
+            Self::LinuxArm64Gnu => "linux-arm64",
             Self::LinuxX86_64Gnu => "linux-x86-64",
+            Self::WebAssembly => "webassembly",
+            Self::WindowsArm64Gnullvm => "windows-arm64",
+            Self::WindowsX86_64Gnu => "windows-x86-64",
         }
+    }
+
+    /// Mandatory portable core checks, independent of executable support.
+    #[must_use]
+    pub const fn portable_checks() -> [Self; 6] {
+        [
+            Self::LinuxArm64Gnu,
+            Self::LinuxX86_64Gnu,
+            Self::WindowsArm64Gnullvm,
+            Self::WindowsX86_64Gnu,
+            Self::AndroidArm64,
+            Self::WebAssembly,
+        ]
     }
 
     /// Cargo target triple and artifact subdirectory.
     #[must_use]
     pub const fn triple(self) -> &'static str {
         match self {
+            Self::AndroidArm64 => "aarch64-linux-android",
+            Self::LinuxArm64Gnu => "aarch64-unknown-linux-gnu",
             Self::LinuxX86_64Gnu => "x86_64-unknown-linux-gnu",
+            Self::WebAssembly => "wasm32-unknown-unknown",
+            Self::WindowsArm64Gnullvm => "aarch64-pc-windows-gnullvm",
+            Self::WindowsX86_64Gnu => "x86_64-pc-windows-gnu",
         }
     }
 }
@@ -81,6 +117,8 @@ pub enum ToolchainError {
     },
     /// The requested package, binary or feature was not an identifier.
     InvalidIdentifier,
+    /// An upstream reference revision is invalid.
+    InvalidReferenceRevision,
     /// The host failed to start the requested operation.
     Io {
         /// Operation that could not start.
@@ -103,6 +141,9 @@ impl fmt::Display for ToolchainError {
             Self::InvalidIdentifier => f.write_str(
                 "expected Cargo package, binary and feature identifiers",
             ),
+            Self::InvalidReferenceRevision => {
+                f.write_str("invalid upstream reference revision")
+            },
             Self::Io { operation, source } => {
                 write!(f, "{operation}: {source}")
             },
@@ -118,11 +159,15 @@ impl fmt::Display for ToolchainError {
 
 /// Private adapter for admitted workspace toolchain requests.
 pub(crate) trait ToolchainFactory {
+    fn arguments() -> Result<Vec<OsString>, ToolchainError>;
     fn available(target: Target) -> bool;
     fn compile(
         args: CargoArguments<'_>,
         root: &OsStr,
         target: Target,
+    ) -> Result<OsString, ToolchainError>;
+    fn download_reference(
+        tool: reference::ReferenceTool,
     ) -> Result<OsString, ToolchainError>;
     fn metadata(
         args: CargoArguments<'_>,
@@ -134,6 +179,7 @@ pub(crate) trait ToolchainFactory {
         tool: ValidationTool,
     ) -> Result<ToolVersion, ToolchainError>;
     fn workspace_root() -> Result<OsString, ToolchainError>;
+    fn write_line(line: &str) -> Result<(), ToolchainError>;
 }
 
 /// Fixed Cargo request for one independently authored workspace binary.
@@ -208,6 +254,22 @@ impl<'name> CargoTitle<'name> {
     }
 }
 
+/// Observe the arguments supplied to a contributor command.
+///
+/// # Errors
+/// Reports an unavailable contributor command capability.
+pub fn arguments() -> Result<Vec<OsString>, ToolchainError> {
+    <() as ToolchainFactory>::arguments()
+}
+
+/// Write one contributor status line.
+///
+/// # Errors
+/// Reports an unavailable capability or output failure.
+pub fn write_line(line: &str) -> Result<(), ToolchainError> {
+    <() as ToolchainFactory>::write_line(line)
+}
+
 /// Read the exact version of a known contributor tool.
 ///
 /// # Errors
@@ -235,6 +297,10 @@ mod tests {
     struct Recording<const AVAILABLE: bool>;
 
     impl<const AVAILABLE: bool> ToolchainFactory for Recording<AVAILABLE> {
+        fn arguments() -> Result<Vec<OsString>, ToolchainError> {
+            Err(ToolchainError::UnsupportedHost)
+        }
+
         fn available(_target: Target) -> bool {
             AVAILABLE
         }
@@ -254,6 +320,12 @@ mod tests {
                 });
             }
             Ok(OsString::from(args.binary()))
+        }
+
+        fn download_reference(
+            _tool: reference::ReferenceTool,
+        ) -> Result<OsString, ToolchainError> {
+            Err(ToolchainError::UnsupportedHost)
         }
 
         fn metadata(
@@ -282,6 +354,27 @@ mod tests {
 
         fn workspace_root() -> Result<OsString, ToolchainError> {
             Err(ToolchainError::UnsupportedHost)
+        }
+
+        fn write_line(_line: &str) -> Result<(), ToolchainError> {
+            Err(ToolchainError::UnsupportedHost)
+        }
+    }
+
+    #[test]
+    fn portable_matrix_names_exact_required_targets() {
+        assert_eq!(Target::portable_checks().map(Target::triple), [
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-pc-windows-gnullvm",
+            "x86_64-pc-windows-gnu",
+            "aarch64-linux-android",
+            "wasm32-unknown-unknown",
+        ],);
+        for target in Target::portable_checks() {
+            if target != Target::LinuxX86_64Gnu {
+                assert!(!target.available(), "unsupported executable target");
+            }
         }
     }
 

@@ -38,10 +38,11 @@ use games::network::{
 use rustls::Connection;
 
 use super::{PeerFingerprint, SecureFrameStream, SendProgress};
+use crate::ir::lan::FrameBackend as _;
 
 /// Host admission, session policy or transport failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostError {
+pub(super) enum HostError {
     /// A fingerprint or player identity is already enrolled.
     DuplicateEnrollment,
     /// The stream is closed, outbound or uses a different frame budget.
@@ -67,14 +68,14 @@ impl From<SessionError> for HostError {
 }
 
 /// Result of polling a peer for a complete, schema-checked message.
-pub type HostPoll<Message> = Result<Option<Message>, HostError>;
+pub(super) type HostPoll<Message> = Result<Option<Message>, HostError>;
 
 /// A host-owned roster with one authenticated channel per active LAN player.
 ///
 /// Admission uses only the verified certificate, never a client-supplied ID.
 /// This synchronous adapter belongs on an I/O worker, not the simulation loop.
 #[derive(Debug)]
-pub struct HostSession {
+pub(super) struct HostSession {
     channels: BTreeMap<u64, SecureFrameStream>,
     enrolled: BTreeMap<PeerFingerprint, u64>,
     frame_budget: usize,
@@ -86,7 +87,7 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects unenrolled or incompatible streams and roster policy failures.
-    pub fn admit(
+    pub(super) fn admit(
         &mut self,
         stream: SecureFrameStream,
     ) -> Result<u64, HostError> {
@@ -95,7 +96,7 @@ impl HostSession {
         });
         if !inbound
             || u32::try_from(self.frame_budget)
-                != Ok(stream.channel.config.limits.max_bytes())
+                != Ok(stream.channel.config.limits().max_bytes())
         {
             return Err(HostError::InvalidTransport);
         }
@@ -117,7 +118,7 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects identities without an active roster entry.
-    pub fn disconnect(&mut self, peer: u64) -> Result<(), HostError> {
+    pub(super) fn disconnect(&mut self, peer: u64) -> Result<(), HostError> {
         self.roster.disconnect(peer)?;
         drop(self.channels.remove(&peer));
         Ok(())
@@ -138,7 +139,7 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects LAN-enrolled identities, duplicates and full sessions.
-    pub fn join_local(&mut self, peer: u64) -> Result<(), HostError> {
+    pub(super) fn join_local(&mut self, peer: u64) -> Result<(), HostError> {
         if self.enrolled.values().any(|identity| *identity == peer) {
             return Err(HostError::LocalIdentityReserved);
         }
@@ -150,7 +151,7 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects enrolments when LAN is disabled, duplicates and excess entries.
-    pub fn new(
+    pub(super) fn new(
         config: SessionConfig,
         enrolments: &[(PeerFingerprint, u64)],
     ) -> Result<Self, HostError> {
@@ -181,7 +182,7 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects unknown peers, schema failures and invalid or expired frames.
-    pub fn poll_receive<Codec>(
+    pub(super) fn poll_receive<Codec>(
         &mut self,
         peer: u64,
         codec: &Codec,
@@ -206,7 +207,10 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects unknown peers and disconnects a failed or expired transfer.
-    pub fn poll_send(&mut self, peer: u64) -> Result<SendProgress, HostError> {
+    pub(super) fn poll_send(
+        &mut self,
+        peer: u64,
+    ) -> Result<SendProgress, HostError> {
         self.channels
             .get_mut(&peer)
             .ok_or(SessionError::UnknownPeer)?
@@ -218,7 +222,7 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects missing channels, oversized frames and outstanding sends.
-    pub fn queue_send(
+    pub(super) fn queue_send(
         &mut self,
         peer: u64,
         bytes: Vec<u8>,
@@ -241,7 +245,8 @@ impl HostSession {
     /// # Errors
     /// Rejects inactive channels and invalid messages. A transport failure
     /// closes the channel and reserves the player's slot for verified rejoin.
-    pub fn receive<Codec>(
+    #[cfg(test)]
+    pub(super) fn receive<Codec>(
         &mut self,
         peer: u64,
         codec: &Codec,
@@ -263,7 +268,11 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects unknown or differently originated reserved identities.
-    pub fn reconnect_local(&mut self, peer: u64) -> Result<(), HostError> {
+    #[cfg(test)]
+    pub(super) fn reconnect_local(
+        &mut self,
+        peer: u64,
+    ) -> Result<(), HostError> {
         self.roster.reconnect(peer, PeerKind::Local)?;
         Ok(())
     }
@@ -272,7 +281,8 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects identities absent from the roster.
-    pub fn remove(&mut self, peer: u64) -> Result<(), HostError> {
+    #[cfg(test)]
+    pub(super) fn remove(&mut self, peer: u64) -> Result<(), HostError> {
         self.roster.remove(peer)?;
         drop(self.channels.remove(&peer));
         Ok(())
@@ -286,7 +296,8 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects unknown fingerprints and unexpected roster failures.
-    pub fn revoke_enrollment(
+    #[cfg(test)]
+    pub(super) fn revoke_enrollment(
         &mut self,
         fingerprint: &PeerFingerprint,
     ) -> Result<(), HostError> {
@@ -307,7 +318,12 @@ impl HostSession {
     /// # Errors
     /// Rejects missing channels, oversized messages and queued sends. A
     /// transport failure closes the channel and reserves the identity.
-    pub fn send(&mut self, peer: u64, bytes: &[u8]) -> Result<(), HostError> {
+    #[cfg(test)]
+    pub(super) fn send(
+        &mut self,
+        peer: u64,
+        bytes: &[u8],
+    ) -> Result<(), HostError> {
         self.roster.accept(peer, bytes)?;
         let stream = self
             .channels
@@ -338,6 +354,7 @@ mod tests {
     };
     use super::super::{PeerFingerprint, SecureLanListener};
     use super::{HostError, HostSession};
+    use crate::ir::lan::FrameBackend as _;
 
     #[test]
     fn enrolment_is_explicit_unique_and_bounded() {

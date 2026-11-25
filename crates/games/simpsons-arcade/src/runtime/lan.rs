@@ -29,16 +29,13 @@
 // - Defaults:
 //   - No network, credential generation, discovery or implicit approval.
 
-use std::net::SocketAddr;
+use core::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use games_platform::ir::lan::LanConfig;
-use games_platform::ir::lan::secure::identity::{
-    LocalIdentity, PublicIdentity,
-};
-use games_platform::ir::lan::secure::{PeerFingerprint, SecureFrameStream};
+use games_platform::ir::lan::identity::{LocalIdentity, PublicIdentity};
+use games_platform::ir::lan::{LanConfig, PeerFingerprint, SecureFrameStream};
 use games_platform::ir::security::lan::CredentialKind;
 use games_platform::ir::storage::file::{snapshot, snapshot_secret};
 

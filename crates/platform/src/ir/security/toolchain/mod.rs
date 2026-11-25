@@ -30,6 +30,8 @@
 //   - Reject empty names, option-like names and path components.
 
 //! Host-independent authored Cargo argument admission.
+/// Allowlisted reference request and revision admission.
+pub mod reference;
 
 /// The request contains an invalid package, binary or feature identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +129,8 @@ pub enum ValidationTool {
     Rustc,
     /// Pinned nightly formatting driver.
     Rustfmt,
+    /// Installed Rust target inventory for validation fingerprints.
+    RustupTargets,
 }
 
 /// Exact version output for validation fingerprints.
@@ -149,6 +153,9 @@ impl ValidationTool {
             Self::Ripgrep => ("rg", &["--version"]),
             Self::Rustc => ("rustc", &["-vV"]),
             Self::Rustfmt => ("cargo", &["+nightly", "fmt", "--version"]),
+            Self::RustupTargets => {
+                ("rustup", &["target", "list", "--installed"])
+            },
         }
     }
 }

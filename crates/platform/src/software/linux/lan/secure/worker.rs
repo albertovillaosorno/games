@@ -44,19 +44,21 @@ use std::time::Duration;
 use games::network::{MessageSchema, SessionError};
 
 use super::host::{HostError, HostSession};
-use super::{PeerFingerprint, PendingConnection, SendProgress};
+use super::{PendingConnection, SendProgress};
 use crate::software::linux::performance::now;
 
 const MAX_QUEUE_CAPACITY: usize = 1024;
 
 /// One locally requested host operation.
 #[derive(Debug)]
-pub enum HostOperation {
+pub(super) enum HostOperation {
     /// Authenticate the admitted pending socket and join its approved slot.
+    #[cfg(test)]
     Authenticate(Box<PendingConnection>),
     /// Disconnect an active identity, reserving its slot.
     Disconnect(u64),
     /// Join a directly connected local controller.
+    #[cfg(test)]
     JoinLocal(u64),
     /// Advance a pending handshake without blocking on an untrusted socket.
     PollAuthenticate(Box<PendingConnection>),
@@ -72,14 +74,13 @@ pub enum HostOperation {
         bytes: Vec<u8>,
     },
     /// Receive one protocol-expected frame; an idle timeout disconnects.
+    #[cfg(test)]
     Receive(u64),
     /// Reconnect a previously reserved local controller.
+    #[cfg(test)]
     ReconnectLocal(u64),
-    /// Remove an active or reserved slot.
-    Remove(u64),
-    /// Revoke a locally approved certificate.
-    Revoke(PeerFingerprint),
     /// Send an application payload to an active LAN player.
+    #[cfg(test)]
     Send {
         /// Host-approved player identity.
         peer: u64,
@@ -90,16 +91,16 @@ pub enum HostOperation {
 
 /// A command paired with a caller-owned correlation identifier.
 #[derive(Debug)]
-pub struct HostRequest {
+pub(super) struct HostRequest {
     /// Identifier echoed in the corresponding completion.
-    pub id: u64,
+    pub(super) id: u64,
     /// Work to perform on the I/O thread.
-    pub operation: HostOperation,
+    pub(super) operation: HostOperation,
 }
 
 /// Successful host operation result.
 #[derive(Debug)]
-pub enum HostOutcome<Message> {
+pub(super) enum HostOutcome<Message> {
     /// Verified peer admitted or reconnected.
     Admitted(u64),
     /// Roster or transport operation completed without a value.
@@ -121,7 +122,7 @@ pub enum HostOutcome<Message> {
 
 /// Failure of an operation performed by the worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OperationError {
+pub(super) enum OperationError {
     /// Mutual TLS authentication failed.
     Authentication(ErrorKind),
     /// The host roster, transfer or schema rejected the operation.
@@ -135,22 +136,23 @@ impl From<HostError> for OperationError {
 }
 
 /// Result of a worker operation.
-pub type HostResult<Message> = Result<HostOutcome<Message>, OperationError>;
+pub(super) type HostResult<Message> =
+    Result<HostOutcome<Message>, OperationError>;
 
 /// One correlated completion, including failures.
 #[derive(Debug)]
-pub struct HostCompletion<Message> {
+pub(super) struct HostCompletion<Message> {
     /// Process-local monotonic time immediately after the operation completed.
-    pub completed_at: Duration,
+    pub(super) completed_at: Duration,
     /// Identifier supplied with the original command.
-    pub id: u64,
+    pub(super) id: u64,
     /// Operation success or failure.
-    pub result: HostResult<Message>,
+    pub(super) result: HostResult<Message>,
 }
 
 /// Reason a request was not admitted to the bounded queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RejectionReason {
+pub(super) enum RejectionReason {
     /// The worker is no longer accepting requests.
     Closed,
     /// The request queue has reached its configured capacity.
@@ -161,11 +163,11 @@ pub enum RejectionReason {
 
 /// A rejected command returned unchanged to the caller.
 #[derive(Debug)]
-pub struct RejectedRequest {
+pub(super) struct RejectedRequest {
     /// Why the command was not enqueued.
-    pub reason: RejectionReason,
+    pub(super) reason: RejectionReason,
     /// Original command, including ownership of any pending connection.
-    pub request: HostRequest,
+    pub(super) request: HostRequest,
 }
 
 // The caller's application lease is distinct from the transport deadline.
@@ -202,7 +204,7 @@ struct Channels<Message> {
 /// Shutdown cancels queued operations and joins the worker. It may wait for
 /// an in-flight bounded transfer; do not shut down on the rendering path.
 #[derive(Debug)]
-pub struct HostWorker<Message> {
+pub(super) struct HostWorker<Message> {
     channels: Option<Channels<Message>>,
     frame_budget: usize,
     stopped: Arc<AtomicBool>,
@@ -214,7 +216,7 @@ impl<Message: Send + 'static> HostWorker<Message> {
     ///
     /// # Errors
     /// Reports a closed worker after all deliverable completions are read.
-    pub fn poll(&self) -> io::Result<Option<HostCompletion<Message>>> {
+    pub(super) fn poll(&self) -> io::Result<Option<HostCompletion<Message>>> {
         let channels = self.channels.as_ref().ok_or(ErrorKind::BrokenPipe)?;
         match channels.results.try_recv() {
             Ok(completion) => Ok(Some(completion)),
@@ -229,7 +231,7 @@ impl<Message: Send + 'static> HostWorker<Message> {
     ///
     /// # Errors
     /// Reports a worker panic. An active transfer uses its existing deadline.
-    pub fn shutdown(mut self) -> io::Result<()> {
+    pub(super) fn shutdown(mut self) -> io::Result<()> {
         self.stop()
     }
 
@@ -237,7 +239,7 @@ impl<Message: Send + 'static> HostWorker<Message> {
     ///
     /// # Errors
     /// Rejects capacities above 1024 and reports thread creation failure.
-    pub fn spawn<Codec>(
+    pub(super) fn spawn<Codec>(
         session: HostSession,
         codec: Codec,
         capacity: NonZeroUsize,
@@ -275,7 +277,8 @@ impl<Message: Send + 'static> HostWorker<Message> {
     ///
     /// # Errors
     /// Returns the original request on saturation, shutdown or oversize.
-    pub fn try_submit(
+    #[cfg(test)]
+    pub(super) fn try_submit(
         &self,
         request: HostRequest,
     ) -> Result<(), RejectedRequest> {
@@ -289,9 +292,8 @@ impl<Message: Send + 'static> HostWorker<Message> {
         request: HostRequest,
         lease: Option<(u64, Duration)>,
     ) -> Result<(), RejectedRequest> {
-        if let HostOperation::Send { bytes, .. }
-        | HostOperation::QueueSend { bytes, .. } = &request.operation
-            && bytes.len() > self.frame_budget
+        if outgoing_bytes(&request.operation)
+            .is_some_and(|bytes| bytes > self.frame_budget)
         {
             return Err(RejectedRequest {
                 reason: RejectionReason::Oversized,
@@ -341,6 +343,17 @@ impl<Message> Drop for HostWorker<Message> {
     }
 }
 
+const fn outgoing_bytes(operation: &HostOperation) -> Option<usize> {
+    if let HostOperation::QueueSend { bytes, .. } = operation {
+        return Some(bytes.len());
+    }
+    #[cfg(test)]
+    if let HostOperation::Send { bytes, .. } = operation {
+        return Some(bytes.len());
+    }
+    None
+}
+
 fn execute<Codec>(
     session: &mut HostSession,
     codec: &Codec,
@@ -350,6 +363,7 @@ where
     Codec: MessageSchema,
 {
     match operation {
+        #[cfg(test)]
         HostOperation::Authenticate(pending) => {
             let stream = pending.authenticate().map_err(|error| {
                 OperationError::Authentication(error.kind())
@@ -360,6 +374,7 @@ where
             session.disconnect(peer)?;
             Ok(HostOutcome::Applied)
         },
+        #[cfg(test)]
         HostOperation::JoinLocal(peer) => {
             session.join_local(peer)?;
             Ok(HostOutcome::Applied)
@@ -388,22 +403,17 @@ where
             session.queue_send(peer, bytes)?;
             Ok(HostOutcome::Applied)
         },
+        #[cfg(test)]
         HostOperation::Receive(peer) => {
             let value = session.receive(peer, codec)?;
             Ok(HostOutcome::Message { peer, value })
         },
+        #[cfg(test)]
         HostOperation::ReconnectLocal(peer) => {
             session.reconnect_local(peer)?;
             Ok(HostOutcome::Applied)
         },
-        HostOperation::Remove(peer) => {
-            session.remove(peer)?;
-            Ok(HostOutcome::Applied)
-        },
-        HostOperation::Revoke(fingerprint) => {
-            session.revoke_enrollment(&fingerprint)?;
-            Ok(HostOutcome::Applied)
-        },
+        #[cfg(test)]
         HostOperation::Send { peer, bytes } => {
             session.send(peer, &bytes)?;
             Ok(HostOutcome::Applied)
@@ -497,6 +507,7 @@ mod tests {
         ClientTls, LanConfig, SecureFrameStream, SecureLanListener,
     };
     use super::*;
+    use crate::ir::lan::FrameBackend as _;
 
     #[derive(Debug)]
     struct GatedCodec {

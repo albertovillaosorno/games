@@ -42,6 +42,8 @@ pub mod hardware;
 pub mod importer;
 /// Portable device input sessions.
 pub mod input;
+/// Portable authenticated LAN capability.
+pub mod lan;
 /// Clock-independent measurement.
 pub mod measurement;
 /// Mandatory shared host admission policies.
@@ -59,10 +61,6 @@ use std::fmt::Debug;
 /// Shared RGBA layout and rendering failures.
 pub use security::frame;
 pub use ui::{menu, scene};
-
-/// Selected service interfaces; concrete implementation paths stay
-/// private.
-pub use crate::selected::lan;
 
 #[cfg(test)]
 pub(crate) fn check<T, U>(
