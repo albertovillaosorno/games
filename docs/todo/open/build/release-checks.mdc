@@ -83,3 +83,18 @@ had owner-only execute permission. Fresh validation passed in run
 1795618311474658738-2984730. The staging parent and its ancestors must
 remain trusted; this is not isolation against a malicious same-user
 process or proof of power-loss recovery.
+
+The native package receipt is now admitted through the same file and
+aggregate byte budgets as every other package entry. Portable lexical
+paths are checked before staging; missing or executable receipts are
+rejected. Inline regressions cover the exact limits, receipt collisions,
+overflow and nonportable paths.
+
+Fresh validation passed in run 1795619096982768231-3110704.
+The local Simpsons package contained 88 files totalling 3,626,411
+bytes, including its receipt. The 3,225,872-byte executable matched
+the receipt's SHA-256, with executable mode 0700 and receipt mode 0600.
+The packaged binary passed its configured offscreen OpenGL and dummy
+audio smoke with touch enabled, 600 movement and 60 combat frames and
+no missed frame budgets. These are local prototype checks, not portable
+release or physical-device acceptance.

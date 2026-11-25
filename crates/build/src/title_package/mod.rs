@@ -36,10 +36,11 @@ use std::collections::BTreeMap;
 use std::fs::DirBuilder;
 use std::io::{ErrorKind, Write as _, stdout};
 use std::num::NonZeroU64;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::{fs, str};
 
 use games_assets::ContentHash;
+use games_assets::archive::validate_path;
 use games_platform_storage::file::snapshot;
 use games_platform_storage::staging::AuthoredStaging;
 
@@ -67,12 +68,6 @@ struct Prepared {
     files: BTreeMap<PathBuf, PackageFile>,
 }
 
-#[derive(Debug)]
-struct PreparedReceipt {
-    prepared: Prepared,
-    receipt: String,
-}
-
 impl Prepared {
     fn add(
         &mut self,
@@ -80,25 +75,24 @@ impl Prepared {
         bytes: Vec<u8>,
         executable: bool,
     ) -> Result<(), String> {
-        if path.as_os_str().is_empty()
-            || !path
-                .components()
-                .all(|part| matches!(part, Component::Normal(_)))
-            || path == Path::new(RECEIPT)
-            || self.files.contains_key(&path)
-            || self.files.len() >= MAX_FILES
-        {
+        let name = path.to_str().ok_or("non-UTF-8 package entry")?;
+        validate_path(name)
+            .map_err(|error| format!("package entry {name}: {error:?}"))?;
+        if self.files.contains_key(&path) || self.files.len() >= MAX_FILES {
             return Err(String::from("invalid or excessive package entries"));
         }
-        let total = self
-            .bytes
-            .checked_add(bytes.len())
-            .filter(|total| *total <= MAX_PACKAGE)
-            .ok_or_else(|| String::from("package byte budget exceeded"))?;
+        let total = self.admit_length(bytes.len())?;
         let _previous =
             self.files.insert(path, PackageFile { bytes, executable });
         self.bytes = total;
         Ok(())
+    }
+
+    fn admit_length(&self, length: usize) -> Result<usize, String> {
+        self.bytes
+            .checked_add(length)
+            .filter(|total| *total <= MAX_PACKAGE)
+            .ok_or_else(|| String::from("package byte budget exceeded"))
     }
 
     fn prepare(
@@ -106,7 +100,7 @@ impl Prepared {
         title: Title,
         executable: &Path,
         inventory: Inventory,
-    ) -> Result<PreparedReceipt, String> {
+    ) -> Result<Self, String> {
         let bytes = snapshot(executable, MAX_EXECUTABLE)
             .map_err(|error| format!("authored executable: {error:?}"))?;
         if !native_elf(&bytes) {
@@ -124,6 +118,7 @@ impl Prepared {
             ContentHash::calculate(&bytes),
         );
         let mut prepared = Self::default();
+        prepared.add(RECEIPT.into(), receipt.into_bytes(), false)?;
         prepared.add(title.binary().into(), bytes, true)?;
         for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
             prepared.add(name.into(), document(&root.join(name))?, false)?;
@@ -136,10 +131,17 @@ impl Prepared {
             inventory.report.into_bytes(),
             false,
         )?;
-        Ok(PreparedReceipt { prepared, receipt })
+        Ok(prepared)
     }
 
-    fn publish(self, output: &Path, receipt: &str) -> Result<(), String> {
+    fn publish(self, output: &Path) -> Result<(), String> {
+        if self
+            .files
+            .get(Path::new(RECEIPT))
+            .is_none_or(|file| file.executable)
+        {
+            return Err(String::from("missing or executable package receipt"));
+        }
         let name = output
             .file_name()
             .ok_or("package needs a destination name")?;
@@ -157,9 +159,6 @@ impl Prepared {
                     format!("package entry {}: {error:?}", path.display())
                 })?;
         }
-        stage
-            .write_file(RECEIPT, receipt.as_bytes(), false)
-            .map_err(|error| format!("package receipt: {error:?}"))?;
         let published = stage
             .publish(name)
             .map_err(|error| format!("package publish: {error:?}"))?;
@@ -188,9 +187,8 @@ pub fn run(title: Title, output: &Path) -> Result<(), String> {
     let root = workspace_root()?;
     let executable = title.compile(&root)?;
     let inventory = Inventory::load(&root, title)?;
-    let PreparedReceipt { prepared, receipt } =
-        Prepared::prepare(&root, title, &executable, inventory)?;
-    prepared.publish(output, &receipt)?;
+    let prepared = Prepared::prepare(&root, title, &executable, inventory)?;
+    prepared.publish(output)?;
     writeln!(stdout().lock(), "Package: {}", output.display())
         .map_err(|error| error.to_string())
 }
@@ -388,6 +386,51 @@ mod tests {
     }
 
     #[test]
+    fn receipt_is_included_in_package_file_and_byte_budgets()
+    -> Result<(), String> {
+        let mut prepared = Prepared::default();
+        prepared.add(RECEIPT.into(), b"receipt".to_vec(), false)?;
+        require(prepared.admit_length(MAX_PACKAGE - 7) == Ok(MAX_PACKAGE))?;
+        require(prepared.admit_length(MAX_PACKAGE - 6).is_err())?;
+        require(prepared.admit_length(usize::MAX).is_err())?;
+        require(prepared.add(RECEIPT.into(), vec![], false).is_err())?;
+        for index in 1..MAX_FILES {
+            prepared.add(format!("entry-{index}").into(), vec![], false)?;
+        }
+        require(prepared.add("overflow".into(), vec![], false).is_err())
+    }
+
+    #[test]
+    fn package_requires_a_receipt_and_rejects_nonportable_paths()
+    -> Result<(), String> {
+        let root = TestRoot::new()?;
+        let output = root.0.join("package");
+        let mut prepared = Prepared::default();
+        for path in [
+            "licenses//MIT",
+            "licenses/./MIT",
+            "licenses/../MIT",
+            "licenses/CON.txt",
+            "licenses/invalid:name",
+            "licenses/trailing.",
+            "/absolute",
+        ] {
+            require(prepared.add(path.into(), vec![], false).is_err())?;
+        }
+        prepared.add("title".into(), vec![1], true)?;
+        require(prepared.publish(&output).is_err())?;
+        let mut executable_receipt = Prepared::default();
+        executable_receipt.add(RECEIPT.into(), b"receipt".to_vec(), true)?;
+        require(executable_receipt.publish(&output).is_err())?;
+        require(
+            fs::read_dir(&root.0)
+                .map_err(|error| error.to_string())?
+                .count()
+                == 0,
+        )
+    }
+
+    #[test]
     fn package_never_replaces_an_existing_directory() -> Result<(), String> {
         let root = TestRoot::new()?;
         let output = root.0.join("package");
@@ -396,10 +439,12 @@ mod tests {
         prepared.add("licenses/MIT".into(), b"text".to_vec(), false)?;
         require(prepared.add("../escape".into(), vec![1], false).is_err())?;
         require(prepared.add("title".into(), vec![4], false).is_err())?;
-        prepared.publish(&output, "complete")?;
+        prepared.add(RECEIPT.into(), b"complete".to_vec(), false)?;
+        prepared.publish(&output)?;
         let mut replacement = Prepared::default();
         replacement.add("title".into(), vec![4], true)?;
-        require(replacement.publish(&output, "replacement").is_err())?;
+        replacement.add(RECEIPT.into(), b"replacement".to_vec(), false)?;
+        require(replacement.publish(&output).is_err())?;
         require(
             fs::read(output.join("title"))
                 .map_err(|error| error.to_string())?
@@ -426,7 +471,8 @@ mod tests {
         let mut prepared = Prepared::default();
         prepared.add("licenses".into(), vec![1], false)?;
         prepared.add("licenses/MIT".into(), vec![2], false)?;
-        require(prepared.publish(&output, "incomplete").is_err())?;
+        prepared.add(RECEIPT.into(), b"incomplete".to_vec(), false)?;
+        require(prepared.publish(&output).is_err())?;
         require(!output.exists())?;
         require(
             fs::read_dir(&root.0)
