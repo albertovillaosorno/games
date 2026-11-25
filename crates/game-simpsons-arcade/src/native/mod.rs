@@ -59,7 +59,7 @@ use games::performance::{
 };
 use games::presentation::{DisplaySettings, FramePacing, WindowMode};
 use games::replay::{
-    InputStep, LiveInputLimits, LiveSimulation, QueueRejection,
+    EnqueueResult, InputStep, LiveInputLimits, LiveSimulation, QueueRejection,
 };
 use games::session::LocalSession;
 use games::timing::StepClock;
@@ -89,7 +89,7 @@ use super::{
     Point, Station, StreetLayout, TICK_INTERVAL,
 };
 use crate::lan::HostLan;
-use crate::remote::HostedCabinet;
+use crate::remote::{HostedCabinet, HostedInput};
 
 // Leave transport, fixed updates and presentation time between input bursts.
 const EVENT_BUDGET: usize = 32;
@@ -284,17 +284,8 @@ impl Controls {
     {
         let actions: Vec<_> =
             self.actions(event)?.into_iter().map(Into::into).collect();
-        if actions.is_empty() {
-            return Ok(());
-        }
-        if let Err(rejected) = live.enqueue_at(elapsed, actions) {
-            if rejected.reason != QueueRejection::Late {
-                return Err(failure(rejected.reason));
-            }
-            live.enqueue(live.next_tick(), rejected.actions)
-                .map_err(|error| failure(error.reason))?;
-        }
-        Ok(())
+        enqueue_local(live, elapsed, actions)
+            .map_err(|rejected| failure(rejected.reason))
     }
 
     fn with_profiles(
@@ -672,9 +663,31 @@ struct PreviewOptions<'profiles> {
     touch_enabled: bool,
 }
 
+/// One already translated native event, retained across fixed-step catch-up.
+///
+/// Stop consuming the native queue while this batch cannot enter the live
+/// input window. Replaying physical events would duplicate router mutation.
+#[derive(Debug)]
+struct NativeBatch {
+    actions: Vec<HostedInput>,
+    elapsed: Duration,
+}
+
+impl NativeBatch {
+    fn submit(self, live: &mut LiveSimulation<HostedCabinet>) -> Option<Self> {
+        enqueue_local(live, self.elapsed, self.actions)
+            .err()
+            .map(|rejected| Self {
+                actions: rejected.actions,
+                elapsed: self.elapsed,
+            })
+    }
+}
+
 struct Interactive<'preferences> {
     applied: DisplaySettings,
     controls: Controls,
+    deferred: Option<NativeBatch>,
     host: Option<HostLan>,
     input: NativeInput,
     preferences: Option<&'preferences DisplayStore>,
@@ -709,6 +722,7 @@ impl<'preferences> Interactive<'preferences> {
         Ok(Self {
             applied: options.display,
             controls,
+            deferred: None,
             host,
             input,
             preferences: options.preferences,
@@ -723,6 +737,12 @@ impl<'preferences> Interactive<'preferences> {
         scene: &mut SceneSession<'_, '_>,
         wait_ms: u32,
     ) -> Result<EventBatch, RenderError> {
+        if let Some(pending) = self.deferred.take() {
+            self.deferred = pending.submit(&mut self.simulation);
+            if self.deferred.is_some() {
+                return Ok(EventBatch::Empty);
+            }
+        }
         let batch = scene.dispatch_events(
             size(EVENT_BUDGET)?,
             wait_ms,
@@ -737,15 +757,14 @@ impl<'preferences> Interactive<'preferences> {
                     .event_elapsed(event)
                     .ok_or_else(|| failure("ambiguous event timestamp"))?;
                 if let Some(projected) = project_contact(view, logical)? {
-                    self.controls.route(
-                        projected,
-                        elapsed,
-                        &mut self.simulation,
-                    )?;
+                    return self.route_native(projected, elapsed);
                 }
                 Ok(true)
             },
         )?;
+        if self.deferred.is_some() {
+            return Ok(EventBatch::Limited);
+        }
         if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
             let attached = self.input.discover_after_drain()?;
             let elapsed = self.input.elapsed();
@@ -754,6 +773,22 @@ impl<'preferences> Interactive<'preferences> {
             }
         }
         Ok(batch)
+    }
+
+    fn route_native(
+        &mut self,
+        event: InputEvent,
+        elapsed: Duration,
+    ) -> Result<bool, RenderError> {
+        let actions = self
+            .controls
+            .actions(event)?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        self.deferred =
+            NativeBatch { actions, elapsed }.submit(&mut self.simulation);
+        Ok(self.deferred.is_none())
     }
 
     fn run(
@@ -806,6 +841,25 @@ impl<'preferences> Interactive<'preferences> {
 }
 
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
+
+fn enqueue_local<Simulation>(
+    live: &mut LiveSimulation<Simulation>,
+    elapsed: Duration,
+    actions: Vec<Simulation::Input>,
+) -> EnqueueResult<Simulation::Input>
+where
+    Simulation: InputStep,
+{
+    if actions.is_empty() {
+        return Ok(());
+    }
+    match live.enqueue_at(elapsed, actions) {
+        Err(rejected) if rejected.reason == QueueRejection::Late => {
+            live.enqueue(live.next_tick(), rejected.actions)
+        },
+        result => result,
+    }
+}
 
 fn frame_due(
     current: &HostedCabinet,
@@ -1847,8 +1901,9 @@ mod tests {
 
     use super::{
         ACTION_NAMES, Action, Cabinet, Control, Controls, DEFAULT_PROFILES,
-        Phase, Player, Profiles, Station, StreetLayout, TICK_INTERVAL, failure,
-        frame_due, live, presentation_wait,
+        LiveInputLimits, NativeBatch, Phase, Player, Profiles, Station,
+        StepClock, StreetLayout, TICK_INTERVAL, dimension, failure, frame_due,
+        live, presentation_wait, size,
     };
     use crate::remote::{HostedCabinet, HostedInput};
 
@@ -1894,6 +1949,94 @@ mod tests {
         }
         let _stations = advance(&mut simulation)?;
         Ok((controls, simulation))
+    }
+
+    fn limited_host() -> Result<LiveSimulation<HostedCabinet>, RenderError> {
+        let cabinet = Cabinet::new(StreetLayout::DOWNTOWN).map_err(failure)?;
+        let hosted = HostedCabinet::new(&cabinet, [false; 4])
+            .ok_or_else(|| failure("invalid hosted fixture"))?;
+        let clock =
+            StepClock::new(TICK_INTERVAL, dimension(8)?).map_err(failure)?;
+        Ok(LiveSimulation::new(hosted, clock, LiveInputLimits {
+            future_ticks: 1,
+            pending_actions: size(1)?,
+        }))
+    }
+
+    fn native_batch(control: Control, down: bool, tick: u32) -> NativeBatch {
+        NativeBatch {
+            actions: vec![HostedInput::Local(LogicalAction {
+                action: Action {
+                    control,
+                    player: Player::Marge,
+                },
+                down,
+            })],
+            elapsed: TICK_INTERVAL.saturating_mul(tick),
+        }
+    }
+
+    #[test]
+    fn future_native_event_retains_its_fixed_tick_during_catchup()
+    -> Result<(), RenderError> {
+        let mut host = limited_host()?;
+        let pending = native_batch(Control::Start, true, 3)
+            .submit(&mut host)
+            .ok_or_else(|| {
+            failure("future batch was admitted too early")
+        })?;
+        let _catchup = host
+            .advance(TICK_INTERVAL.saturating_mul(2))
+            .map_err(failure)?;
+        if pending.submit(&mut host).is_some() {
+            return Err(failure("batch rejected within future window"));
+        }
+        let _before_event = host.advance(TICK_INTERVAL).map_err(failure)?;
+        if host.state().state().phase() != Phase::MainMenu {
+            return Err(failure("future event executed before its tick"));
+        }
+        let _at_event = host.advance(TICK_INTERVAL).map_err(failure)?;
+        if host.state().state().phase() != Phase::Playing {
+            return Err(failure("retained native event did not execute"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn capacity_rejected_native_release_is_retried_without_losing_input()
+    -> Result<(), RenderError> {
+        let mut host = limited_host()?;
+        for (control, tick) in [(Control::Start, 0), (Control::Right, 1)] {
+            if native_batch(control, true, tick)
+                .submit(&mut host)
+                .is_some()
+            {
+                return Err(failure("initial native input rejected"));
+            }
+            let _step = host.advance(TICK_INTERVAL).map_err(failure)?;
+        }
+        if native_batch(Control::Start, false, 2)
+            .submit(&mut host)
+            .is_some()
+        {
+            return Err(failure("could not fill live queue"));
+        }
+        let pending = native_batch(Control::Right, false, 2)
+            .submit(&mut host)
+            .ok_or_else(|| failure("full live queue accepted release"))?;
+        let _full_tick = host.advance(TICK_INTERVAL).map_err(failure)?;
+        let [before, ..] = host.state().state().stations();
+        if pending.submit(&mut host).is_some() {
+            return Err(failure("late release was not readmitted"));
+        }
+        let _released_ticks = host
+            .advance(TICK_INTERVAL.saturating_mul(3))
+            .map_err(failure)?;
+        let [after, ..] = host.state().state().stations();
+        if before.position != after.position {
+            return Err(failure("rejected release left movement held"));
+        }
+        Ok(())
     }
 
     #[test]

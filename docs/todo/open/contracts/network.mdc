@@ -432,3 +432,20 @@ the unpublished connection and reserves its roster slot without sending
 a phantom connect/disconnect pair to the simulation. A real TLS
 regression controls the observation timestamp, queues a stale input,
 requires silent cleanup, and verifies same-identity rejoin and input.
+
+Native local input now retains one translated action batch when the
+fixed-step queue is full or the event lies beyond its bounded future
+window. The host stops draining further native events until that batch
+can enter the queue, while transport polling and fixed updates continue.
+The original timestamp is retained; the existing late-event policy
+retries an already elapsed tick on the next unexecuted tick. Synthetic
+tests verify that a future Start does not execute early and a rejected
+movement release eventually stops movement.
+
+A native keyboard diagnostic used the same verified art and Xvfb
+software OpenGL before and after the change. Suspending the host process
+for 3.4 seconds and sending Right just before resumption caused the
+baseline executable (96c56f2) to exit with a future-input error.
+The revised release executable survived, changed 23,400 host pixels
+during movement, and produced identical captures after release.
+This is a process-stall observation, not a hard input-latency bound.
