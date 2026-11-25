@@ -431,3 +431,12 @@ Inline tests exercise admission, simultaneous independent movement,
 opposed directions, credits, bounds and frame-partition-independent
 replay. The prototype skips the introduction and does not yet implement
 camera, collision, combat, enemies, scoring, continuing or presentation.
+
+The generic MAME `art-publish` command verifies the full reference
+scene pixel-for-pixel before publishing a tile-only background and
+named, disjoint object groups as cropped straight-alpha RGBA8 assets.
+Four isolated single-player observations produced local canonical art
+bundles for all four characters. Other observations differed from the
+reconstruction and were rejected. Art groups are explicitly selected
+by the caller; this does not establish automatic actor classification,
+complete animation coverage or accurate dynamic shadows.

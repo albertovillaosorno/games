@@ -106,6 +106,8 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame publish|audio-publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: mame check|audio-check MACHINE REV PARENT MANIFEST_SHA256\n",
+    "GNU/Linux: mame art-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS KEY:INDEX,...\n",
     "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "GNU/Linux: mame scene-check MACHINE REV PARENT SHA256 ",
@@ -213,6 +215,8 @@ impl Arguments {
 
 #[derive(Debug)]
 enum Command {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    ArtPublish(Machine, reference_background::art::Art),
     #[cfg(all(
         feature = "native-preview",
         target_os = "linux",
@@ -349,6 +353,11 @@ impl Command {
         }
         match action {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            "art-publish" => Ok(Self::ArtPublish(
+                selected,
+                reference_background::art::Art::parse(args.collect())?,
+            )),
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "background-check" | "scene-check" | "scene-render-check" => {
                 Ok(Self::BackgroundCheck(
                     selected,
@@ -459,6 +468,8 @@ impl Command {
 
     fn run(self) -> Result<(), String> {
         match self {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::ArtPublish(machine, args) => args.run(machine),
             #[cfg(all(
                 feature = "native-preview",
                 target_os = "linux",

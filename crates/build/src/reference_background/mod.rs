@@ -31,6 +31,8 @@
 
 //! Host-side comparison of original background and complete screen pixels.
 
+/// Bounded canonical scene art publication.
+pub mod art;
 #[cfg(feature = "native-preview")]
 /// Bounded changing-scene reconstruction and presentation benchmark.
 pub mod sequence;

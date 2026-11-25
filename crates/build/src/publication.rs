@@ -34,7 +34,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_assets::archive::ArchiveBudget;
-use games_assets::{ContentHash, ManifestLimits};
+use games_assets::{AssetManifest, ContentHash, ManifestLimits};
 use games_importer::conversion::ConversionLimits;
 use games_importer::mame::AssetSelection;
 use games_importer::{ImportError, VerifiedSource};
@@ -98,8 +98,20 @@ pub fn publish(
                 |failure| format!("stage: {failure:?}"),
             )
         })?;
+    finish(stage, &converted, manifest)
+}
+
+/// Finish and publish a prepared canonical bundle.
+///
+/// # Errors
+/// Rejects invalid staging, publication or durability failures.
+pub fn finish(
+    stage: CanonicalStaging,
+    converted: &AssetManifest,
+    manifest: ManifestLimits,
+) -> Result<(), String> {
     let staged = stage
-        .finish(&converted, manifest)
+        .finish(converted, manifest)
         .map_err(|error| format!("complete: {error:?}"))?;
     let digest = staged.digest();
     let receipt = staged
@@ -117,10 +129,12 @@ pub fn publish(
         receipt.path.display()
     )
     .map_err(|error| error.to_string())?;
-    super::report_manifest(&converted, manifest)
+    super::report_manifest(converted, manifest)
 }
 
-fn staging_budget(limits: ManifestLimits) -> Result<ArchiveBudget, String> {
+pub(crate) fn staging_budget(
+    limits: ManifestLimits,
+) -> Result<ArchiveBudget, String> {
     let overflow = || String::from("staging budget overflow");
     let metadata = u64::try_from(limits.manifest_bytes.get())
         .map_err(|_error| overflow())?;
