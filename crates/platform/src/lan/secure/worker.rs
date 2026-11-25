@@ -41,7 +41,7 @@ use std::sync::mpsc::{
 use std::thread::{Builder, JoinHandle};
 use std::time::Instant;
 
-use games::network::MessageSchema;
+use games::network::{MessageSchema, SessionError};
 
 use super::host::{HostError, HostSession};
 use super::{PeerFingerprint, PendingConnection, SendProgress};
@@ -410,9 +410,9 @@ where
     }
 }
 
-fn expired_peer(lease: Option<(u64, Instant)>) -> Option<u64> {
+fn expired_peer(lease: Option<(u64, Instant)>, now: Instant) -> Option<u64> {
     lease
-        .filter(|&(_peer, deadline)| Instant::now() >= deadline)
+        .filter(|&(_peer, deadline)| now >= deadline)
         .map(|(peer, _deadline)| peer)
 }
 
@@ -428,21 +428,36 @@ fn execute_scheduled<Codec>(
     session: &mut HostSession,
     codec: &Codec,
     scheduled: ScheduledRequest,
-) -> HostResult<Codec::Message>
+    mut now: impl FnMut() -> Instant,
+) -> HostCompletion<Codec::Message>
 where
     Codec: MessageSchema,
 {
     let ScheduledRequest { lease, request } = scheduled;
-    if let Some(peer) = expired_peer(lease) {
-        return expire(session, peer);
+    let id = request.id;
+    if let Some(peer) = expired_peer(lease, now()) {
+        let result = expire(session, peer);
+        return HostCompletion {
+            completed_at: now(),
+            id,
+            result,
+        };
     }
-    let result = execute(session, codec, request.operation);
-    if result.is_ok()
-        && let Some(peer) = expired_peer(lease)
-    {
-        return expire(session, peer);
+    let mut result = execute(session, codec, request.operation);
+    let completed_at = now();
+    // A schema rejection leaves the channel active, unlike a transport
+    // failure. It must not postpone expiry or renew the application lease.
+    let active = result.is_ok()
+        || matches!(
+            result,
+            Err(OperationError::Host(HostError::Session(
+                SessionError::MalformedMessage
+            )))
+        );
+    if active && let Some(peer) = expired_peer(lease, completed_at) {
+        result = expire(session, peer);
     }
-    result
+    HostCompletion { completed_at, id, result }
 }
 
 fn serve<Codec>(
@@ -456,13 +471,8 @@ fn serve<Codec>(
         if channels.stopped.load(Ordering::Acquire) {
             break;
         }
-        let id = scheduled.request.id;
-        let result = execute_scheduled(&mut session, codec, scheduled);
-        let completion = HostCompletion {
-            completed_at: Instant::now(),
-            id,
-            result,
-        };
+        let completion =
+            execute_scheduled(&mut session, codec, scheduled, Instant::now);
         if channels.outgoing.send(completion).is_err() {
             break;
         }
@@ -471,18 +481,17 @@ fn serve<Codec>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::net::TcpStream;
     use std::num::NonZeroU8;
     use std::thread;
-
-    use games::network::SessionError;
 
     use super::super::super::tests::{
         LOOPBACK, TIMEOUT, TestCodec, config, poll_accept, require,
         session_config,
     };
     use super::super::tests::{
-        authority, client_credentials, credentials, send_unframed,
+        authority, client_credentials, credentials, pair, send_unframed,
     };
     use super::super::{
         ClientTls, LanConfig, SecureFrameStream, SecureLanListener, ServerName,
@@ -501,6 +510,20 @@ mod tests {
         fn decode(&self, bytes: &[u8]) -> Option<Self::Message> {
             self.entered.send(()).ok()?;
             self.release.recv_timeout(TIMEOUT).ok()?;
+            TestCodec.decode(bytes)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ObservedCodec {
+        decoded: Cell<bool>,
+    }
+
+    impl MessageSchema for ObservedCodec {
+        type Message = u8;
+
+        fn decode(&self, bytes: &[u8]) -> Option<Self::Message> {
+            self.decoded.set(true);
             TestCodec.decode(bytes)
         }
     }
@@ -866,6 +889,125 @@ mod tests {
             "completed frame releases its slot",
         )?;
         worker.shutdown()
+    }
+
+    fn receive_at(
+        host: &mut HostSession,
+        deadline: Instant,
+        observed_at: Instant,
+    ) -> io::Result<HostCompletion<u8>> {
+        let before = deadline
+            .checked_sub(TIMEOUT)
+            .ok_or(ErrorKind::InvalidInput)?;
+        let codec = ObservedCodec {
+            decoded: Cell::new(false),
+        };
+        let observe = || {
+            if codec.decoded.get() {
+                observed_at
+            } else {
+                before
+            }
+        };
+        poll_accept(|| {
+            codec.decoded.set(false);
+            let completion = execute_scheduled(
+                host,
+                &codec,
+                ScheduledRequest {
+                    lease: Some((2, deadline)),
+                    request: HostRequest {
+                        id: 1,
+                        operation: HostOperation::PollReceive(2),
+                    },
+                },
+                observe,
+            );
+            if matches!(completion.result, Ok(HostOutcome::Pending)) {
+                Ok(None)
+            } else {
+                Ok(Some(completion))
+            }
+        })
+    }
+
+    fn timely_schema_results(
+        host: &mut HostSession,
+        client: &mut SecureFrameStream,
+        deadline: Instant,
+        now: Instant,
+    ) -> io::Result<()> {
+        client.send(b"bad")?;
+        let timely = receive_at(host, deadline, now)?;
+        require(
+            timely.completed_at == now
+                && matches!(
+                    timely.result,
+                    Err(OperationError::Host(HostError::Session(
+                        SessionError::MalformedMessage
+                    )))
+                ),
+            "timely schema rejection preserves active channel",
+        )?;
+        client.send(b"M\x05")?;
+        let valid = receive_at(host, deadline, now)?;
+        require(
+            valid.completed_at == now
+                && matches!(
+                    valid.result,
+                    Ok(HostOutcome::Message { peer: 2, value: 5 })
+                ),
+            "timely decoded input uses the lease observation timestamp",
+        )
+    }
+
+    #[test]
+    fn exact_worker_completion_lease_applies_to_schema_rejection()
+    -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let mut host =
+            HostSession::new(session_config(true), &[(keys.client_id, 2)])
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let now = Instant::now();
+        let deadline =
+            now.checked_add(TIMEOUT).ok_or(ErrorKind::InvalidInput)?;
+        for payload in [b"bad".as_slice(), b"M\x06".as_slice()] {
+            let (incoming, outgoing) =
+                pair(&listener, settings, &keys.client, "games.test")?;
+            require(
+                host.admit(incoming?) == Ok(2),
+                "same authenticated identity admitted",
+            )?;
+            let mut client = outgoing?;
+            timely_schema_results(&mut host, &mut client, deadline, now)?;
+            client.send(payload)?;
+            let expired = receive_at(&mut host, deadline, deadline)?;
+            require(
+                expired.completed_at == deadline
+                    && matches!(
+                        expired.result,
+                        Err(OperationError::Host(HostError::Transport(
+                            ErrorKind::TimedOut
+                        )))
+                    ),
+                "exact-boundary decode closes channel regardless of schema",
+            )?;
+            require(
+                host.poll_receive(2, &TestCodec)
+                    == Err(HostError::Session(SessionError::UnknownPeer)),
+                "expired worker channel is disconnected",
+            )?;
+            poll_accept(|| match client.poll_receive() {
+                Ok(None) => Ok(None),
+                Ok(Some(_bytes)) => Err(io::Error::other("unexpected frame")),
+                Err(_closed) => Ok(Some(())),
+            })?;
+        }
+        Ok(())
     }
 
     #[test]

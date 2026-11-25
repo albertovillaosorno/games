@@ -653,3 +653,14 @@ that remapping an admitted controller stops only its station and preserves
 that controller's ability to move the same station with a subsequent axis
 input. These are synthetic event and fixed-step regressions, not physical
 device or window-manager acceptance.
+
+The host worker now uses a single post-operation observation both for
+application lease admission and the correlated completion timestamp.
+A malformed message finishing at or after expiry closes the still-active
+channel just like a successful or pending poll; a timely malformed
+message remains rejected without disconnecting or renewing its lease.
+A deterministic exact-boundary regression on real mutual-TLS loopback
+tests timely invalid and valid input, expiry for both schemas, channel
+closure and same-identity rejoin. Fresh validation passed in run
+1795618635421978978-3046471. This is host-side observation, not
+client-to-host transit or physical multi-device acceptance.
