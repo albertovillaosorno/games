@@ -31,13 +31,12 @@
 //
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
 use toml::Value;
 
-use crate::files;
+use crate::{cargo_config, files};
 
 const HEADER_KEYS: &[&str] = &[
     "Owns:",
@@ -475,25 +474,51 @@ fn reject_indirect_paths(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn repository_cargo_config(root: &Path) -> Result<(), String> {
+fn repository_cargo_config(
+    root: &Path,
+    authored: &[PathBuf],
+) -> Result<(), String> {
+    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
     for name in [".cargo/config", ".cargo/config.toml"] {
-        let source = match fs::read_to_string(root.join(name)) {
-            Ok(content) => content,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => return Err(format!("{name}: {error}")),
-        };
-        let value = Value::Table(
-            source
-                .parse::<toml::Table>()
-                .map_err(|error| format!("{name}: {error}"))?,
-        );
-        reject_indirect_paths(&value)
-            .map_err(|error| format!("{name}: {error}"))?;
+        let _present = cargo_config::visit(
+            &canonical.join(name),
+            true,
+            &mut |path, document| {
+                let Some((_text, value)) = document else {
+                    return Ok(());
+                };
+                let raw = path
+                    .strip_prefix(&canonical)
+                    .map_err(|_error| "Cargo include outside repository")?;
+                if !files::regular_path(&canonical, raw)? {
+                    return Err(String::from("Cargo include disappeared"));
+                }
+                let target =
+                    path.canonicalize().map_err(|error| error.to_string())?;
+                let relative = target
+                    .strip_prefix(&canonical)
+                    .map_err(|_error| "Cargo include outside repository")?;
+                if authored
+                    .binary_search_by(|candidate| {
+                        candidate.as_path().cmp(relative)
+                    })
+                    .is_err()
+                {
+                    return Err(String::from("Cargo include is not authored"));
+                }
+                reject_indirect_paths(value)
+                    .map_err(|error| format!("{}: {error}", relative.display()))
+            },
+        )?;
     }
     Ok(())
 }
 
-fn manifests(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
+fn manifests(
+    root: &Path,
+    members: &BTreeSet<PathBuf>,
+    authored: &[PathBuf],
+) -> Result<(), String> {
     let root_manifest = Value::Table(
         fs::read_to_string(root.join("Cargo.toml"))
             .map_err(|error| error.to_string())?
@@ -501,7 +526,7 @@ fn manifests(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
             .map_err(|error| error.to_string())?,
     );
     reject_indirect_paths(&root_manifest)?;
-    repository_cargo_config(root)?;
+    repository_cargo_config(root, authored)?;
     let workspace = table(&root_manifest, "workspace")?;
     let dependencies = workspace
         .get("dependencies")
@@ -564,7 +589,7 @@ pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
     let authored = files::authored(root)?;
     let members = metadata_members(&canonical, metadata, &authored)?;
     sources(root, &members, &authored)?;
-    manifests(root, &members)
+    manifests(root, &members, &authored)
 }
 
 #[cfg(test)]
@@ -888,8 +913,10 @@ mod tests {
         let root = directory("cargo-overrides")?;
         fs::create_dir_all(root.join(".cargo"))
             .map_err(|error| error.to_string())?;
+        let authored =
+            [".cargo/config", ".cargo/config.toml"].map(PathBuf::from);
         require(
-            repository_cargo_config(&root).is_ok(),
+            repository_cargo_config(&root, &authored).is_ok(),
             "missing optional config",
         )?;
         for name in ["config", "config.toml"] {
@@ -897,7 +924,7 @@ mod tests {
             fs::write(&config, "paths = [\"../outside\"]")
                 .map_err(|error| error.to_string())?;
             require(
-                repository_cargo_config(&root).is_err(),
+                repository_cargo_config(&root, &authored).is_err(),
                 "both Cargo config names must reject local path overrides",
             )?;
             fs::remove_file(config).map_err(|error| error.to_string())?;
@@ -932,5 +959,79 @@ mod tests {
             )?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn checks_nested_repository_cargo_includes() -> Result<(), String> {
+        let fixture = directory("cargo-nested-overrides")?;
+        let root = fixture.join("repo");
+        let config = root.join(".cargo");
+        fs::create_dir_all(config.join("nested"))
+            .map_err(|error| error.to_string())?;
+        let primary = config.join("config.toml");
+        let first = config.join("nested/first.toml");
+        let shared = config.join("shared.toml");
+        fs::write(&primary, "include = [\"nested/first.toml\"]")
+            .map_err(|error| error.to_string())?;
+        fs::write(&first, "include = [\"../shared.toml\"]")
+            .map_err(|error| error.to_string())?;
+        fs::write(&shared, "[build]\njobs = 2")
+            .map_err(|error| error.to_string())?;
+        let authored = [
+            ".cargo/config.toml",
+            ".cargo/nested/first.toml",
+            ".cargo/shared.toml",
+        ]
+        .map(PathBuf::from);
+        require(
+            repository_cargo_config(&root, &authored).is_ok(),
+            "ordinary authored nested configuration",
+        )?;
+        let omitted = [".cargo/config.toml", ".cargo/nested/first.toml"]
+            .map(PathBuf::from);
+        require(
+            repository_cargo_config(&root, &omitted).is_err(),
+            "omitted from authored inventory",
+        )?;
+        fs::write(&shared, "paths = [\"../outside\"]")
+            .map_err(|error| error.to_string())?;
+        require(
+            repository_cargo_config(&root, &authored).is_err(),
+            "nested path override must not bypass boundary check",
+        )?;
+        fs::write(fixture.join("outside.toml"), "[build]\njobs = 2")
+            .map_err(|error| error.to_string())?;
+        fs::write(&first, "include = [\"../../../outside.toml\"]")
+            .map_err(|error| error.to_string())?;
+        require(
+            repository_cargo_config(&root, &authored).is_err(),
+            "repository includes must not leave the repository",
+        )?;
+        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_cargo_include_rejects_hidden_alias() -> Result<(), String> {
+        use std::os::unix::fs::symlink;
+
+        let root = directory("cargo-include-alias")?;
+        let config = root.join(".cargo");
+        fs::create_dir_all(&config).map_err(|error| error.to_string())?;
+        let primary = config.join("config.toml");
+        let actual = config.join("actual.toml");
+        fs::write(&primary, "include = [\"alias.toml\"]")
+            .map_err(|error| error.to_string())?;
+        fs::write(&actual, "[build]\njobs = 2")
+            .map_err(|error| error.to_string())?;
+        symlink(&actual, config.join("alias.toml"))
+            .map_err(|error| error.to_string())?;
+        let authored =
+            [".cargo/actual.toml", ".cargo/config.toml"].map(PathBuf::from);
+        require(
+            repository_cargo_config(&root, &authored).is_err(),
+            "include aliases cannot hide outside authored inventory",
+        )?;
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 }

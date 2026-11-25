@@ -111,3 +111,17 @@ function declarations and skips nested signature delimiters, including
 array lengths and const-generic expressions. Synthetic tests exercise
 substantial exact clones containing these constructs. This is still a
 conservative lexical check, not a full Rust parser.
+
+Cargo configuration discovery now follows the documented directory hierarchy,
+Cargo home and recursive relative includes. Validation fingerprints active
+configuration contents and the presence of optional include paths without
+printing private values. The repository boundary gate also inspects both
+primary configuration names and all existing included documents, requiring
+ordinary authored paths inside the repository and rejecting indirect local
+dependency substitutions. Traversal rejects cycles, excessive depth and
+exhausted document budgets. Synthetic controls cover nested overrides,
+ignored or aliased paths, missing required includes, optional additions
+and removals, inherited config changes and extensionless precedence.
+This does not sandbox machine-level configuration or guarantee the
+identity of executables selected by an external config.
+Fresh validation passed in run 1795609385573902295-576011.

@@ -41,6 +41,7 @@ use std::time::SystemTime;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::cargo_config;
 use crate::files::authored;
 
 const NATIVE_SMOKE_FLAGS: [&str; 2] =
@@ -92,6 +93,33 @@ fn native_smoke_requested(enabled: impl FnMut(&str) -> bool) -> bool {
     NATIVE_SMOKE_FLAGS.into_iter().any(enabled)
 }
 
+fn cargo_home(root: &Path) -> Result<PathBuf, String> {
+    if let Some(home) =
+        env::var_os("CARGO_HOME").filter(|path| !path.is_empty())
+    {
+        return Ok(root.join(home));
+    }
+    env::home_dir()
+        .map(|home| home.join(".cargo"))
+        .ok_or_else(|| String::from("cannot resolve Cargo home"))
+}
+
+fn hash_cargo_config_files(
+    root: &Path,
+    home: &Path,
+    hash: &mut Sha256,
+) -> Result<(), String> {
+    hash_value(hash, b"cargo-config-files");
+    cargo_config::visit_active(root, home, &mut |path, document| {
+        hash_value(hash, path.as_os_str().as_encoded_bytes());
+        hash_value(hash, &[u8::from(document.is_some())]);
+        if let Some((text, _value)) = document {
+            hash_value(hash, text.as_bytes());
+        }
+        Ok(())
+    })
+}
+
 fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
     for (tool, args) in [
         ("rustc", &["-vV"][..]),
@@ -140,6 +168,8 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
 fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
     let mut hash = Sha256::new();
     tool_versions(root, &mut hash)?;
+    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    hash_cargo_config_files(&canonical, &cargo_home(&canonical)?, &mut hash)?;
     if root.join(".git").exists() {
         let head = Command::new("git")
             .current_dir(root)
@@ -247,8 +277,8 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        NATIVE_SMOKE_FLAGS, hash_cargo_overrides, hash_environment,
-        native_smoke_requested, run_with,
+        NATIVE_SMOKE_FLAGS, hash_cargo_config_files, hash_cargo_overrides,
+        hash_environment, native_smoke_requested, run_with,
     };
     use crate::fixtures::{directory, require};
 
@@ -373,6 +403,50 @@ mod tests {
             fingerprint(&[]),
             fingerprint(&[("CARGO_MAKEFLAGS", "jobserver")])
         );
+    }
+
+    #[test]
+    fn cargo_config_fingerprint_tracks_hierarchy_and_includes()
+    -> Result<(), String> {
+        let fixture = directory("cargo-config-cache")?;
+        let root = fixture.join("repo");
+        let parent = fixture.join(".cargo");
+        let home = fixture.join("cargo-home");
+        for path in [&root, &parent, &home] {
+            fs::create_dir_all(path).map_err(|error| error.to_string())?;
+        }
+        let fingerprint = || -> Result<_, String> {
+            let mut hash = Sha256::new();
+            hash_cargo_config_files(&root, &home, &mut hash)?;
+            Ok(hash.finalize())
+        };
+        let original = fingerprint()?;
+        let config = parent.join("config.toml");
+        let include = parent.join("child.toml");
+        fs::write(&config, "include = [{path=\"child.toml\", optional=true}]")
+            .map_err(|error| error.to_string())?;
+        let missing = fingerprint()?;
+        require(original != missing, "ancestor config added")?;
+        fs::write(&include, "[build]\njobs = 1")
+            .map_err(|error| error.to_string())?;
+        let present = fingerprint()?;
+        require(missing != present, "optional include added")?;
+        fs::write(&include, "[build]\njobs = 2")
+            .map_err(|error| error.to_string())?;
+        require(present != fingerprint()?, "include content changed")?;
+        fs::remove_file(include).map_err(|error| error.to_string())?;
+        require(missing == fingerprint()?, "optional include removed")?;
+        fs::write(parent.join("config"), "[build]\njobs = 3")
+            .map_err(|error| error.to_string())?;
+        let legacy = fingerprint()?;
+        require(missing != legacy, "extensionless config added")?;
+        fs::write(config, "[build]\njobs = 4")
+            .map_err(|error| error.to_string())?;
+        require(legacy == fingerprint()?, "shadow config ignored")?;
+        fs::write(home.join("config.toml"), "[build]\njobs = 5")
+            .map_err(|error| error.to_string())?;
+        require(legacy != fingerprint()?, "Cargo home config added")?;
+        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
     }
 
     #[test]

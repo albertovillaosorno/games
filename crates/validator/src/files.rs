@@ -51,7 +51,8 @@ pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
-fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
+/// Check every component of an authored path without following symlinks.
+pub(crate) fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
     let mut current = root.to_path_buf();
     let mut components = path.components().peekable();
     while let Some(component) = components.next() {

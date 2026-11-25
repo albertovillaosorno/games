@@ -39,6 +39,8 @@ pub mod clones;
 
 /// Cached validation and isolated run logs.
 pub mod cache;
+/// Cargo configuration discovery and include admission.
+pub mod cargo_config;
 /// Repository contract checks.
 pub mod contracts;
 /// Authored file discovery and language policy.
