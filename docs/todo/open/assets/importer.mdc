@@ -18,6 +18,9 @@ Provide one shared import and conversion interface.
 
 ## Acceptance
 
+- Use the public importer IR for all ordinary conversion, publication and
+  profile validation. Keep pure format implementations and canonical
+  metadata in their respective shared crates. No runtime import dependency.
 - Identify supported media formats and layouts without requiring a known
   source SHA or checksum inventory. Attempt bounded extraction of supplied
   media and report unsupported structures; preserve all safety checks.
@@ -185,3 +188,14 @@ Fresh combined validation at 222ce3d passed in run
 native render and native audio opt-ins enabled. The render check used
 an isolated Xvfb display and audio used the SDL dummy driver; neither
 establishes physical-device acceptance.
+
+The unified optional importer IR now owns profile selection, format and
+family dispatch, verification and canonical conversion. Ordinary build,
+publication, bundle checks and audio diagnostics consume that interface.
+The former separate selection module is removed. Regression checks reject
+direct production conversion outside the IR and malformed sources before
+staging. New and existing command forms share the same import transaction.
+Local unified imports reproduced the pinned Simpsons graphics and audio
+manifests and the Metal Slug graphics manifest; independent pinned bundle
+read-back verified all three without modifying the original sources.
+This does not complete unadmitted formats or later encrypted layouts.

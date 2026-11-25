@@ -256,6 +256,7 @@ version = "0.1.0"
 dependencies = [
  "games",
  "games-assets",
+ "games-importer",
  "nix",
  "rcgen",
  "rustls",

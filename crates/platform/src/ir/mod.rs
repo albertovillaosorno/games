@@ -37,6 +37,9 @@ pub mod audio;
 pub mod graphics;
 /// Portable physical-device bridge.
 pub mod hardware;
+#[cfg(feature = "importer")]
+/// Shared bounded asset import capability.
+pub mod importer;
 /// Portable device input sessions.
 pub mod input;
 /// Clock-independent measurement.

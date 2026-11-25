@@ -18,7 +18,7 @@ native-preview = [
 [dependencies]
 games-assets.workspace = true
 games-importer.workspace = true
-games-platform.workspace = true
+games-platform = { workspace = true, features = ["importer"] }
 
 serde.workspace = true
 serde_json.workspace = true

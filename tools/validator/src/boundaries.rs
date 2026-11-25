@@ -115,7 +115,7 @@ const fn dependency_allowed(owner: Role, target: Role) -> bool {
                 Role::Shared,
                 Role::Runtime | Role::Importer | Role::Platform
             )
-            | (Role::Runtime | Role::Platform, Role::Importer)
+            | (Role::Runtime | Role::Title, Role::Importer)
             | (Role::Importer, Role::Runtime | Role::Platform)
     )
 }
@@ -757,12 +757,13 @@ serde_json = "1""#;
             (Role::Runtime, Role::Importer),
             (Role::Importer, Role::Platform),
             (Role::Importer, Role::Runtime),
-            (Role::Platform, Role::Importer),
+            (Role::Title, Role::Importer),
             (Role::Title, Role::Title),
         ] {
             assert!(!dependency_allowed(owner, target));
         }
         for (owner, target) in [
+            (Role::Platform, Role::Importer),
             (Role::Tool, Role::Shared),
             (Role::Title, Role::Runtime),
             (Role::Importer, Role::Shared),

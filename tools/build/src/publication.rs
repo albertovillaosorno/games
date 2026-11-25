@@ -37,10 +37,10 @@ use games_assets::archive::ArchiveBudget;
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
-use games_importer::conversion::ConversionLimits;
-use games_importer::selection::AssetSelection;
 use games_importer::wave::{WAVE_HEADER_BYTES, WavePcm};
-use games_importer::{ImportError, SourceSnapshot};
+use games_platform::ir::importer::{
+    ImportError, ImportProfile, SourceSnapshot, import,
+};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::{CanonicalStaging, StagedBundle};
@@ -150,7 +150,7 @@ impl MediaReplacement {
 /// # Errors
 /// Returns conversion, staging, publication or output failures.
 pub fn publish(
-    selection: AssetSelection,
+    selection: ImportProfile,
     parent: &Path,
     source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
@@ -159,23 +159,18 @@ pub fn publish(
     let mut stage = CanonicalStaging::new(parent, staging_budget(manifest)?)
         .map_err(|error| format!("stage: {error:?}"))?;
     let mut staging_error = None;
-    let converted = selection
-        .convert(
-            source,
-            ConversionLimits { archive, manifest },
-            |digest, bytes| {
-                stage.write_payload(digest, bytes).map_err(|error| {
-                    staging_error = Some(error);
-                    ImportError::StageFailed
-                })
-            },
+    let converted = import(selection, source, archive, |digest, bytes| {
+        stage.write_payload(digest, bytes).map_err(|error| {
+            staging_error = Some(error);
+            ImportError::StageFailed
+        })
+    })
+    .map_err(|error| {
+        staging_error.map_or_else(
+            || format!("assets: {error:?}"),
+            |failure| format!("stage: {failure:?}"),
         )
-        .map_err(|error| {
-            staging_error.map_or_else(
-                || format!("assets: {error:?}"),
-                |failure| format!("stage: {failure:?}"),
-            )
-        })?;
+    })?;
     finish(stage, &converted, manifest)
 }
 
@@ -276,7 +271,7 @@ mod tests {
     use std::{env, fs};
 
     use games_assets::SourceIdentity;
-    use games_importer::mame::Machine;
+    use games_platform::ir::importer::{AssetFamily, SourceFormat};
     use games_platform::ir::storage::staging::AuthoredStaging;
 
     use super::*;
@@ -536,8 +531,12 @@ mod tests {
 
     #[test]
     fn staging_budget_rejects_overflow() -> Result<(), ImportError> {
-        let machine = Machine::select("simpsons", "world-4p-set-1")?;
-        let selection = AssetSelection::Graphics(machine);
+        let selection = ImportProfile::select(
+            SourceFormat::Mame,
+            AssetFamily::Graphics,
+            "simpsons",
+            "world-4p-set-1",
+        )?;
         let mut limits = selection.limits();
         limits.total_bytes = NonZeroU64::MAX;
         (staging_budget(limits).is_err()

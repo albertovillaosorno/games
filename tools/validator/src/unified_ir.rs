@@ -223,6 +223,32 @@ fn capability_source(path: &str, source: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn import_boundary(path: &str, source: &str) -> Result<(), String> {
+    if path.starts_with("crates/importer/")
+        || path.starts_with("crates/platform/src/ir/importer/")
+    {
+        return Ok(());
+    }
+    for token in tokens(source) {
+        if matches!(
+            token.text.as_str(),
+            "AssetSelection"
+                | "ConversionLimits"
+                | "CartridgeGraphics"
+                | "convert_audio"
+                | "convert_graphics"
+                | "convert_flat_zip"
+                | "convert_snapshot"
+        ) {
+            return Err(format!(
+                "production conversion belongs in importer IR: {}",
+                token.text,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn consumer_source(source: &str) -> Result<(), String> {
     let found = external_members(source);
     if let Some(name) = found.first() {
@@ -266,7 +292,9 @@ pub(crate) fn validate(
         } else {
             consumer_source(&source)
         };
-        result.map_err(|error| format!("{name}: {error}"))?;
+        result
+            .and_then(|()| import_boundary(&name, &source))
+            .map_err(|error| format!("{name}: {error}"))?;
     }
     Ok(())
 }
@@ -275,8 +303,42 @@ pub(crate) fn validate(
 mod tests {
     use super::{
         capability_source, consumer_source, device_source, external_members,
-        public_root, vendor_free,
+        import_boundary, public_root, vendor_free,
     };
+
+    #[test]
+    fn production_conversion_requires_import_ir() {
+        for source in [
+            "use games_importer::conversion::ConversionLimits as Limits;",
+            "let result = machine.convert_graphics(source, limits, stage);",
+            "use games_importer::{neo::CartridgeGraphics as Profile};",
+        ] {
+            assert!(
+                import_boundary("tools/build/src/main.rs", source).is_err()
+            );
+            assert!(
+                import_boundary(
+                    "crates/platform/src/ir/importer/import.rs",
+                    source,
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            import_boundary(
+                "tools/build/src/main.rs",
+                "use games_platform::ir::importer::{ImportProfile, import};",
+            )
+            .is_ok()
+        );
+        assert!(
+            import_boundary(
+                "tools/build/src/reference_audio.rs",
+                "use games_importer::mame::samples::compare_observations;",
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn titles_request_rendering_not_vendor_specific_implementations() {

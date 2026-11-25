@@ -1,5 +1,19 @@
 # Asset pipeline
 
+The public import boundary is `platform::ir::importer`. A typed
+format, asset family and profile select one conversion transaction in
+`import.rs`. The pure importer crate retains format-specific decoders;
+the assets crate owns canonical metadata and payload integrity. The
+optional importer capability is not enabled by runtime-only titles.
+
+New imports use the unified command (existing format commands delegate
+to the same IR):
+
+```sh
+cargo run --locked -p games-build -- import mame graphics simpsons \
+  world-4p-set-1 PATH SOURCE ENTRY TOTAL COUNT
+```
+
 The host build tool selects arcade originals by MAME machine and revision.
 The importer owns supported media layouts, word-lane assembly, reusable
 chip layouts and canonical graphics conversion. Unknown profiles fail closed.

@@ -32,7 +32,7 @@
 use std::path::Path;
 
 use games_assets::ContentHash;
-use games_importer::selection::AssetSelection;
+use games_platform::ir::importer::ImportProfile;
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
 /// Independently verify a published asset bundle.
@@ -40,7 +40,7 @@ use games_platform::ir::storage::bundle::CanonicalBundle;
 /// # Errors
 /// Rejects unexpected identities, invalid assets or output failures.
 pub fn check(
-    selection: AssetSelection,
+    selection: ImportProfile,
     parent: &Path,
     digest: ContentHash,
 ) -> Result<(), String> {

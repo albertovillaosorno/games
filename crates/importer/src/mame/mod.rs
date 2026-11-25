@@ -104,7 +104,9 @@ struct Profile {
 pub struct Machine(&'static Profile);
 
 impl Machine {
-    pub(crate) const fn audio_limits(self) -> ManifestLimits {
+    /// Exact canonical audio resource limits for this revision.
+    #[must_use]
+    pub const fn audio_limits(self) -> ManifestLimits {
         self.0.audio_limits
     }
 
@@ -125,7 +127,10 @@ impl Machine {
         self.0.object_transfer.compare(cpu, device)
     }
 
-    pub(crate) fn convert_audio<Stage>(
+    /// Convert the declared audio catalogue to a private canonical sink.
+    /// # Errors
+    /// Rejects mismatched sources, invalid sample data and staging failures.
+    pub fn convert_audio<Stage>(
         self,
         source: &SourceSnapshot<'_>,
         limits: ConversionLimits,
@@ -228,6 +233,12 @@ impl Machine {
         }
     }
 
+    /// Source-format machine identifier.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.0.machine
+    }
+
     /// Exact number of entries in the machine palette RAM.
     #[must_use]
     pub const fn palette_entries(self) -> NonZeroUsize {
@@ -290,7 +301,10 @@ impl Machine {
         )
     }
 
-    pub(crate) fn validate_audio_manifest(
+    /// Check canonical audio descriptors against the selected source.
+    /// # Errors
+    /// Rejects mismatched identities and invalid audio catalogues.
+    pub fn validate_audio_manifest(
         self,
         manifest: &AssetManifest,
     ) -> Result<(), ImportError> {

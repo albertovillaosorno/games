@@ -73,12 +73,12 @@ use games_assets::archive::ArchiveBudget;
 use games_assets::{
     AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
-use games_importer::conversion::ConversionLimits;
 use games_importer::mame::Machine;
 use games_importer::mame::samples::compare_observations;
-use games_importer::neo::CartridgeGraphics;
-use games_importer::selection::AssetSelection;
-use games_importer::{ImportError, SourceSnapshot};
+use games_platform::ir::importer::{
+    AssetFamily, ImportProfile, SourceFormat, SourceSnapshot, Verification,
+    import, verify,
+};
 use games_platform::ir::storage::snapshot;
 
 const USAGE: &str = concat!(
@@ -95,6 +95,8 @@ const USAGE: &str = concat!(
     "neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL COUNT\n",
     "neo check TITLE REV PARENT MANIFEST_SHA256\n",
     "games-build zip|neo verify PATH TITLE REV ",
+    "SOURCE ENTRY TOTAL COUNT\n",
+    "games-build import FORMAT FAMILY PROFILE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import ",
     "MACHINE REV PATH ",
@@ -190,13 +192,6 @@ impl Arguments {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Verification {
-    Mame(Machine),
-    Neo,
-    Zip,
-}
-
 #[derive(Debug)]
 enum Command {
     ArtPublish(Machine, reference_background::art::Art),
@@ -204,13 +199,13 @@ enum Command {
     AudioCheck(Machine, audio_check::Arguments),
     BackgroundCheck(Machine, reference_background::Arguments),
     BuildTitle(title_build::Title),
-    Check(AssetSelection, PathBuf, ContentHash),
-    Import(AssetSelection, Arguments),
+    Check(ImportProfile, PathBuf, ContentHash),
+    Import(ImportProfile, Arguments),
     ObjectCheck(Machine, PathBuf, PathBuf),
     PackageTitle(title_build::Title, PathBuf),
     PaletteCheck(Machine, PathBuf, PathBuf),
     PriorityCheck(Machine, PathBuf, PathBuf),
-    Publish(AssetSelection, PathBuf, Arguments),
+    Publish(ImportProfile, PathBuf, Arguments),
     #[cfg(feature = "native-preview")]
     RenderCheck(Machine, render_check::Arguments),
     ReplaceMedia(publication::MediaReplacement),
@@ -232,6 +227,9 @@ impl Command {
         let format = args.next().ok_or_else(|| String::from(USAGE))?;
         let action = args.next().ok_or_else(|| String::from(USAGE))?;
         match (format.to_str(), action.to_str()) {
+            (Some("import"), Some(source_format)) => {
+                Self::parse_import(source_format, args)
+            },
             (Some("build"), Some(title)) => Ok(Self::BuildTitle(
                 title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
             )),
@@ -300,7 +298,7 @@ impl Command {
 
     fn parse_assets<Args>(
         action: &str,
-        selection: AssetSelection,
+        selection: ImportProfile,
         mut args: Args,
     ) -> Result<Self, String>
     where
@@ -333,7 +331,7 @@ impl Command {
     }
 
     fn parse_check(
-        selection: AssetSelection,
+        selection: ImportProfile,
         args: Vec<OsString>,
     ) -> Result<Self, String> {
         let [parent, digest_argument] = <[OsString; 2]>::try_from(args)
@@ -342,6 +340,36 @@ impl Command {
             .parse()
             .map_err(|_error| String::from("invalid manifest hash"))?;
         Ok(Self::Check(selection, parent.into(), digest))
+    }
+
+    fn parse_import<Args>(
+        format_name: &str,
+        mut args: Args,
+    ) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        let format = match format_name {
+            "mame" => SourceFormat::Mame,
+            "neo" => SourceFormat::Neo,
+            _ => return Err(String::from(USAGE)),
+        };
+        let family_name = args.next().ok_or_else(|| String::from(USAGE))?;
+        let family = match text(&family_name)? {
+            "audio" => AssetFamily::Audio,
+            "graphics" => AssetFamily::Graphics,
+            _ => return Err(String::from(USAGE)),
+        };
+        let profile = args.next().ok_or_else(|| String::from(USAGE))?;
+        let revision = args.next().ok_or_else(|| String::from(USAGE))?;
+        let selection = ImportProfile::select(
+            format,
+            family,
+            text(&profile)?,
+            text(&revision)?,
+        )
+        .map_err(|error| format!("import profile: {error:?}"))?;
+        Self::parse_assets("import", selection, args)
     }
 
     fn parse_mame<Args>(action: &str, mut args: Args) -> Result<Self, String>
@@ -372,7 +400,15 @@ impl Command {
             },
             "sample-check" => Self::parse_sample(selected, args),
             "verify" => Ok(Self::Verify(
-                Verification::Mame(selected),
+                Verification::Mame(
+                    ImportProfile::select(
+                        SourceFormat::Mame,
+                        AssetFamily::Graphics,
+                        selected.name(),
+                        &selected.identity().revision,
+                    )
+                    .map_err(|error| format!("machine profile: {error:?}"))?,
+                ),
                 Arguments::parse_profile(selected.identity(), args.collect())?,
             )),
             "object-check" | "palette-check" | "priority-check"
@@ -401,11 +437,19 @@ impl Command {
     where
         Args: Iterator<Item = OsString>,
     {
-        let selection = if action.starts_with("audio-") {
-            AssetSelection::Audio(machine)
+        let family = if action.starts_with("audio-") {
+            AssetFamily::Audio
         } else {
-            AssetSelection::Graphics(machine)
+            AssetFamily::Graphics
         };
+        let identity = machine.identity();
+        let selection = ImportProfile::select(
+            SourceFormat::Mame,
+            family,
+            machine.name(),
+            &identity.revision,
+        )
+        .map_err(|error| format!("machine profile: {error:?}"))?;
         Self::parse_assets(action, selection, args)
     }
 
@@ -437,10 +481,14 @@ impl Command {
         }
         let title = args.next().ok_or_else(|| String::from(USAGE))?;
         let revision = args.next().ok_or_else(|| String::from(USAGE))?;
-        let profile =
-            CartridgeGraphics::select(text(&title)?, text(&revision)?)
-                .map_err(|error| format!("cartridge profile: {error:?}"))?;
-        Self::parse_assets(action, AssetSelection::Cartridge(profile), args)
+        let profile = ImportProfile::select(
+            SourceFormat::Neo,
+            AssetFamily::Graphics,
+            text(&title)?,
+            text(&revision)?,
+        )
+        .map_err(|error| format!("cartridge profile: {error:?}"))?;
+        Self::parse_assets(action, profile, args)
     }
 
     fn parse_reference(
@@ -667,26 +715,10 @@ fn verify_source(
     archive: ArchiveBudget,
     format: Verification,
 ) -> Result<(), String> {
-    let mut count = 0u64;
-    let mut total = 0u64;
-    let visit = |_name: &str, payload: &[u8]| {
-        count = count.checked_add(1).ok_or(ImportError::TooLarge)?;
-        total = total
-            .checked_add(
-                u64::try_from(payload.len())
-                    .map_err(|_error| ImportError::TooLarge)?,
-            )
-            .ok_or(ImportError::TooLarge)?;
-        Ok(())
-    };
-    match format {
-        Verification::Mame(selected) => {
-            selected.visit_layout(source, archive, visit)
-        },
-        Verification::Neo => source.visit_neo(archive, visit),
-        Verification::Zip => source.visit_flat_zip(archive, visit),
-    }
-    .map_err(|error| format!("archive: {error:?}"))?;
+    let report = verify(source, archive, format)
+        .map_err(|error| format!("archive: {error:?}"))?;
+    let count = report.members;
+    let total = report.decoded_bytes;
     let identity = source.identity();
     writeln!(
         stdout().lock(),
@@ -744,18 +776,14 @@ fn report_manifest(
 }
 
 fn report_assets(
-    selection: AssetSelection,
+    selection: ImportProfile,
     source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
     let manifest = selection.limits();
-    let converted = selection
-        .convert(
-            source,
-            ConversionLimits { archive, manifest },
-            |_digest, _bytes| Ok(()),
-        )
-        .map_err(|error| format!("assets: {error:?}"))?;
+    let converted =
+        import(selection, source, archive, |_digest, _bytes| Ok(()))
+            .map_err(|error| format!("assets: {error:?}"))?;
     let encoded = converted
         .encode(manifest)
         .map_err(|error| format!("manifest: {error:?}"))?;
@@ -945,6 +973,30 @@ mod tests {
     }
 
     #[test]
+    fn universal_import_selects_format_and_family() {
+        let mut args = [
+            "import",
+            "neo",
+            "graphics",
+            "metal-slug",
+            "mvs-aes-neo-v1",
+            "cartridge.neo",
+            "27529216",
+            "16777216",
+            "27525120",
+            "5",
+        ];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::Import(profile, _))
+                if profile.format() == SourceFormat::Neo
+                    && profile.family() == AssetFamily::Graphics
+        ));
+        args[2] = "audio";
+        assert!(Command::parse(args.into_iter().map(OsString::from)).is_err());
+    }
+
+    #[test]
     fn cartridge_import_requires_known_graphics_profile() {
         let mut args = [
             "neo",
@@ -957,9 +1009,11 @@ mod tests {
             "27525120",
             "5",
         ];
+        let expected_format = SourceFormat::Neo;
         assert!(matches!(
             Command::parse(args.into_iter().map(OsString::from)),
-            Ok(Command::Import(AssetSelection::Cartridge(_), _))
+            Ok(Command::Import(profile, _))
+                if profile.format() == expected_format
         ));
         args[1] = "audio-import";
         assert!(Command::parse(args.into_iter().map(OsString::from)).is_err());
@@ -1005,15 +1059,17 @@ mod tests {
             "14",
         ];
         let command = Command::parse(args.into_iter().map(OsString::from));
+        let expected = AssetFamily::Graphics;
         assert!(matches!(
             command,
-            Ok(Command::Import(AssetSelection::Graphics(_), _))
+            Ok(Command::Import(profile, _)) if profile.family() == expected
         ));
         let mut audio = args;
         audio[1] = "audio-import";
+        let audio_family = AssetFamily::Audio;
         assert!(matches!(
             Command::parse(audio.into_iter().map(OsString::from)),
-            Ok(Command::Import(AssetSelection::Audio(_), _))
+            Ok(Command::Import(profile, _)) if profile.family() == audio_family
         ));
         let wrong = [
             "mame",

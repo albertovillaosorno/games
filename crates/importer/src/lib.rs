@@ -39,8 +39,6 @@ pub mod graphics;
 pub mod mame;
 /// NEO cartridge admission and selected graphics profiles.
 pub mod neo;
-/// Shared asset-family selection and conversion dispatch.
-pub mod selection;
 /// Strict PCM16 WAVE reference capture admission.
 pub mod wave;
 

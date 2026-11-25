@@ -118,6 +118,14 @@
   interface; do not create title-specific importer commands or pipelines.
   MAME is a reference format and emulator, never a remake runtime.
   Verify supported profiles individually; do not assume universal compatibility.
+- Import through the optional public `platform::ir::importer` capability:
+  one import entry point, typed format/family/profile requests, shared
+  canonical asset contracts and bounded transactions. The importer crate
+  owns pure format decoders (MAME, NEO and subsequent formats), never
+  host access or title runtimes. The IR delegates; do not duplicate
+  format conversion in tools, engine or titles. Keep import dependencies
+  out of runtime-only builds. Research diagnostics may inspect format
+  adapters directly; production conversion must use the import IR.
 - No reverse dependencies from shared crates to games, apps or tools.
   No title-to-title dependencies. Use a single Cargo workspace.
 - Runtime Rust lives under `crates/`, titles under `crates/games/<id>/`
@@ -218,6 +226,15 @@
   `cargo download craft-libs` to fetch just that repository. Tools and
   sources live under `.reference/tools/`. Each snapshot has a revision
   directory and a LATEST pointer. Use ripgrep to inspect them.
+- Use lawful local reference emulators (MAME, and other appropriate
+  systems) to investigate original behaviour and asset layouts. Fetch
+  upstream source snapshots under `.reference/tools/` and use ripgrep
+  (`rg`) to locate device definitions, memory maps, rendering, audio and
+  timing implementations. Record the exact revision and independent
+  observations in the canonical task. Observe and compare in controlled
+  runs; do not execute originals during import. Do not copy incompatible
+  emulator code or turn the remake into an emulator. Implement reusable
+  mechanisms once in their correct shared owner.
 - Download only tools needed for the current task. Official release
   archives are not automatically installed or executed. Use no Python
   in project-owned code; third-party reference files are excluded.

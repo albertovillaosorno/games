@@ -41,8 +41,8 @@ use games::audio::{Channels, Clip, Mixer, StereoGain};
 use games_assets::ContentHash;
 use games_assets::pcm::PcmSamples;
 use games_importer::mame::Machine;
-use games_importer::selection::AssetSelection;
 use games_platform::ir::audio::{NativeAudio, PlaybackSpec};
+use games_platform::ir::importer::{AssetFamily, ImportProfile, SourceFormat};
 use games_platform::ir::measurement::now;
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
@@ -91,7 +91,13 @@ impl Arguments {
     /// # Errors
     /// Rejects invalid assets, allocation, divergent mix or queue failures.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
-        let selection = AssetSelection::Audio(machine);
+        let selection = ImportProfile::select(
+            SourceFormat::Mame,
+            AssetFamily::Audio,
+            machine.name(),
+            &machine.identity().revision,
+        )
+        .map_err(|error| format!("audio profile: {error:?}"))?;
         let bundle = CanonicalBundle::open(
             &self.parent,
             self.digest,
