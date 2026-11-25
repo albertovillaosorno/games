@@ -19,6 +19,39 @@ independently.
 
 ## Acceptance
 
+- Study the maintainer's local remaster under
+  `.reference/games/simpsons-hit-and-run/src/` and its accompanying
+  documentation before designing the 3D implementation. Identify reusable
+  mechanisms, including cameras, animation, vehicle physics, world
+  streaming, rendering and spatial audio; extend the shared Rust engine,
+  platform IR and importer rather than creating a title-specific engine.
+- Review component provenance and licence compatibility before using any
+  code. Use only lawfully available reference material; independently
+  implement observable behaviour where reuse is not authorized. Do not
+  ship the reference source, documentation or original media.
+- Admit only files verified as part of the selected original PC edition.
+  The required runtime data must be reconstructible from original retail
+  RCF archives, RMV movies and other verified retail data. Inspect full
+  container indexes before defining mandatory loose files. Resolve P3D
+  assets and other resources from admitted containers when present.
+  Require a loose P3D only when it is necessary, absent from the admitted
+  containers and verified as independently distributed retail data.
+  Never require an extracted duplicate or infer retail provenance from
+  a filename or extension alone.
+- Treat maintainer-added art, extracted scripts, converted movies, design
+  documents and other derived material as optional research only. Never
+  require the remaster source, extra assets, modified executables, no-CD
+  variants, common-byte artifacts or proprietary runtime DLLs to import,
+  build or play the independent reconstruction.
+- Implement original-format admission and conversion through the shared
+  importer IR. Verify a minimal retail-only fixture, with optional
+  reference materials absent. Test equivalent container-backed and loose
+  retail resource admission without requiring duplicate external files.
+  Reject missing required data and malformed
+  containers; never silently substitute maintainer-added content.
+- Preserve the single configured canonical asset store and use bounded,
+  preferably in-memory tests. Do not duplicate the retail input set.
+
 - Use only a selected lawful original edition and locally imported assets.
 - Reuse shared engine mechanisms and extend them where necessary.
 - Verify observable gameplay or application behaviour, saves and input.
@@ -32,4 +65,20 @@ independently.
 
 ## Evidence
 
-Blocked: required original media is not present in the reference directory.
+Local input is present; original-edition admission and playable parity are
+not yet verified. A read-only inspection on 2026-11-25 found 13 RCF files,
+17 RMV files and 1,965 P3D files in the mixed local assets directory.
+Sample headers were consistent with Radcore Cement Library, Bink and P3D
+containers. Bounded inspection of the first 256 KiB of each RCF showed
+audio resource paths and audio scripts in scripts.rcf. It did not
+establish full container contents or the necessity of loose P3D files.
+The local assets README explicitly identifies executable
+comparison artifacts and no-CD variants; they are not required inputs.
+The maintainer confirms that other extra materials are also present.
+
+The local remaster contains 2,055 C++ source/header files, including
+distinct renderer, simulation, camera, loading, mission and sound
+subsystems. Its shader migration notes describe OpenGL 3.3+ skinning
+and CPU fallback. Reference study is required, but provenance, build
+status, the exact minimal original file set and import support remain
+unverified. Keep this task open.
