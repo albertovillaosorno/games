@@ -803,3 +803,22 @@ samples. A visible X11 window resized to 1194-by-672 reproduced all
 exited through its menu. This covers the opening street at approximately
 16:9 without changing simulation bounds or proving stage progression.
 The observed scroll limit and later street geometry remain open.
+
+The verified strip also enables bounded rightward movement in world
+coordinates. The fixed-step cabinet advances a provisional original-width
+camera by at most two pixels per tick, constrained by the leftmost active
+station, living enemy and admitted strip extent. Late joins and free
+rejoins spawn in the current camera area; pause freezes travel and a
+world reset restores the starting origin. Presentation independently
+projects the camera, actors and enemy health into the selected viewport;
+a wider viewport shows more of the same gameplay state. Tests exercise
+a waiting cooperative player, camera cap, late join, pause and reset.
+The native X11 smoke reached the 80-column camera limit and checked
+unobscured street rows against the source strip in both fixed-width and
+adaptive presentations, with and without touch. Both 600-frame workloads
+missed zero samples. The original camera trigger, collision rules, enemy
+gates and progression beyond the imported street remain provisional.
+A separate visible X11 keyboard run without the optional encounter held
+Right in aspect-fit mode until the 80-column camera cap; all 864-by-84
+captured unobscured street pixels matched the three-times-scaled strip,
+and the game exited normally through the menu.

@@ -11,7 +11,7 @@
 // - Owns:
 //   - Verified local street art extension and responsive viewport geometry.
 // - Must-Not:
-//   - Invent world pixels, modify simulation or change camera collision.
+//   - Invent world pixels or own simulation and camera collision.
 // - Allows:
 //   - Inputs: Base street art, canonical strip, logical frame extent.
 //   - Outputs: Pixel-preserving background and placement offsets.
@@ -33,6 +33,9 @@
 
 use std::io::{Write as _, stdout};
 
+use games::input::LogicalAction;
+use games::presentation::{DisplaySettings, PresentationMode};
+use games::replay::InputStep as _;
 use games_assets::AssetFormat;
 use games_platform_graphics::linux::sprites::{
     SceneSession, SpriteDraw, SpriteRect,
@@ -41,8 +44,8 @@ use games_platform_graphics::linux::{FrameLayout, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
-    Art, Control, Controls, Player, Profiles, Scene, dimension, failure, live,
-    size, smoke_press,
+    Action, Art, Cabinet, Control, Controls, Player, Point, PreviewOptions,
+    Scene, StreetLayout, dimension, failure, live, size, smoke_press,
 };
 
 pub(super) const BASE_WIDTH: u32 = 320;
@@ -55,6 +58,21 @@ const TOP: u32 = 28;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct WorldArt {
     art: Art,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct View {
+    pub(super) origin: i16,
+    pub(super) width: u32,
+}
+
+impl View {
+    pub(super) const fn project(self, point: Point) -> Point {
+        Point {
+            x: point.x.saturating_sub(self.origin),
+            ..point
+        }
+    }
 }
 
 impl WorldArt {
@@ -92,10 +110,11 @@ impl WorldArt {
     pub(super) fn queue(
         self,
         original: Art,
-        width: u32,
+        view: View,
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<(), RenderError> {
-        if width == BASE_WIDTH {
+        let width = view.width;
+        if width == BASE_WIDTH && view.origin == 0 {
             draws.push(original.draw(original.rect, false));
             return Ok(());
         }
@@ -128,6 +147,7 @@ impl WorldArt {
         let world = Art {
             rect: SpriteRect {
                 width: inner,
+                x: i32::from(view.origin),
                 ..self.art.rect
             },
             ..self.art
@@ -142,6 +162,72 @@ impl WorldArt {
         ));
         Ok(())
     }
+
+    pub(super) fn scroll_limit(self) -> Result<u16, RenderError> {
+        u16::try_from(
+            self.art
+                .rect
+                .width
+                .get()
+                .saturating_add(SIDE * 2)
+                .saturating_sub(BASE_WIDTH),
+        )
+        .map_err(failure)
+    }
+
+    pub(super) fn view(
+        self,
+        width: u32,
+        camera: i16,
+    ) -> Result<View, RenderError> {
+        let maximum = self.art.rect.width.get().saturating_add(SIDE * 2);
+        if width < BASE_WIDTH || width > maximum || camera < 0 {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let remaining =
+            i16::try_from(maximum.saturating_sub(width)).map_err(failure)?;
+        Ok(View {
+            origin: camera.min(remaining),
+            width,
+        })
+    }
+}
+
+fn camera_at_limit(limit: u16) -> Result<Cabinet, RenderError> {
+    let mut cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
+        .map_err(failure)?
+        .with_scroll_limit(limit)
+        .map_err(failure)?;
+    let start = Action {
+        control: Control::Start,
+        player: Player::Marge,
+    };
+    let right = Action {
+        control: Control::Right,
+        player: Player::Marge,
+    };
+    cabinet.input_step(0, &[
+        LogicalAction {
+            action: start,
+            down: true,
+        },
+        LogicalAction {
+            action: start,
+            down: false,
+        },
+        LogicalAction {
+            action: right,
+            down: true,
+        },
+    ]);
+    for tick in 1..400 {
+        cabinet.input_step(tick, &[]);
+    }
+    let origin = i16::try_from(limit).map_err(failure)?;
+    if cabinet.camera_origin() != origin {
+        return Err(failure("camera did not reach verified street limit"));
+    }
+    Ok(cabinet)
 }
 
 pub(super) fn centered_offset(width: u32) -> u32 {
@@ -152,10 +238,11 @@ pub(super) fn smoke(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     bundle: &CanonicalBundle,
-    profiles: &Profiles,
+    options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
-    let mut controls = Controls::with_profiles(art.panel.is_some(), profiles)?;
+    let mut controls =
+        Controls::with_profiles(art.panel.is_some(), options.profiles)?;
     smoke_press(&mut controls, &mut simulation, Control::Start)?;
     let _drawn = art.present(scene, simulation.state())?;
     let layout = scene.layout();
@@ -178,7 +265,34 @@ pub(super) fn smoke(
         layout.height(),
         layout.width().get().saturating_sub(BASE_WIDTH),
     )
-    .map_err(failure)
+    .map_err(failure)?;
+    smoke_camera(scene, art, options.display, (width.get(), &expected))
+}
+
+fn smoke_camera(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    display: DisplaySettings,
+    strip: (u32, &[u8]),
+) -> Result<(), RenderError> {
+    let limit = art
+        .world_art
+        .ok_or(RenderError::InvalidSprite)?
+        .scroll_limit()?;
+    let cabinet = camera_at_limit(limit)?;
+    let origin = cabinet.camera_origin();
+    scene.apply_display_settings(DisplaySettings {
+        presentation: PresentationMode::AspectFit,
+        ..display
+    })?;
+    let _drawn = art.present(scene, &cabinet)?;
+    verify_camera_rows(scene.layout(), &scene.readback()?, strip, origin)?;
+    scene.apply_display_settings(display)?;
+    let _redrawn = art.present(scene, &cabinet)?;
+    let view = art.presentation_view(scene, &cabinet)?;
+    verify_camera_rows(scene.layout(), &scene.readback()?, strip, view.origin)?;
+    writeln!(stdout().lock(), "Street camera: {origin} columns verified")
+        .map_err(failure)
 }
 
 pub(super) fn station_offset(
@@ -291,6 +405,36 @@ fn verify_extension(
                 .any(|pixel| *pixel != [0, 0, 0, 255])
         {
             return Err(failure("extended native world pixels differ"));
+        }
+    }
+    Ok(())
+}
+
+fn verify_camera_rows(
+    layout: FrameLayout,
+    actual: &[u8],
+    (strip_width, strip): (u32, &[u8]),
+    origin: i16,
+) -> Result<(), RenderError> {
+    let stride = usize::try_from(layout.width().get().saturating_mul(4))
+        .map_err(failure)?;
+    let strip_stride =
+        usize::try_from(strip_width.saturating_mul(4)).map_err(failure)?;
+    let margin = usize::try_from(SIDE * 4).map_err(failure)?;
+    let start = usize::try_from(origin).map_err(failure)?.saturating_mul(4);
+    let end =
+        start.saturating_add(stride.saturating_sub(margin.saturating_mul(2)));
+    let top = usize::try_from(TOP).map_err(failure)?;
+    for (frame, world) in actual
+        .chunks_exact(stride)
+        .skip(top)
+        .take(28)
+        .zip(strip.chunks_exact(strip_stride))
+    {
+        if frame.get(margin..stride.saturating_sub(margin))
+            != world.get(start..end)
+        {
+            return Err(failure("scrolled street pixels differ"));
         }
     }
     Ok(())

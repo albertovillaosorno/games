@@ -428,24 +428,24 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
     ) -> Result<bool, RenderError> {
-        let width = if let Some(art) = self.world_art {
-            let maximum = art.maximum(preview_layout(self.panel.is_some())?)?;
-            scene.fit_adaptive_width(maximum)?.width().get()
-        } else {
-            scene.layout().width().get()
-        };
+        let view = self.presentation_view(scene, cabinet)?;
+        let width = view.width;
         let center =
             i32::try_from(world::centered_offset(width)).map_err(failure)?;
         self.draws.clear();
         if let Some(art) = self.world_art {
-            art.queue(self.background, width, &mut self.draws)?;
+            art.queue(self.background, view, &mut self.draws)?;
         } else {
             self.draws
                 .push(self.background.draw(self.background.rect, false));
         }
         self.world.clear();
-        self.queue_visible_stations(cabinet, width)?;
-        if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
+        self.queue_visible_stations(cabinet, view)?;
+        let projected_enemy = cabinet.enemy().map(|mut enemy| {
+            enemy.position = view.project(enemy.position);
+            enemy
+        });
+        if let (Some(combat), Some(enemy)) = (&self.combat, projected_enemy)
             && cabinet.session().world_visible()
             && enemy.health > 0
         {
@@ -454,7 +454,7 @@ impl Scene {
         }
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
-        if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
+        if let (Some(combat), Some(enemy)) = (&self.combat, projected_enemy)
             && cabinet.session().world_visible()
             && enemy.health > 0
         {
@@ -484,13 +484,30 @@ impl Scene {
         scene.present([24, 22, 30], &self.draws)
     }
 
+    fn presentation_view(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        cabinet: &Cabinet,
+    ) -> Result<world::View, RenderError> {
+        let width = if let Some(art) = self.world_art {
+            let maximum = art.maximum(preview_layout(self.panel.is_some())?)?;
+            scene.fit_adaptive_width(maximum)?.width().get()
+        } else {
+            scene.layout().width().get()
+        };
+        self.world_art
+            .map_or(Ok(world::View { origin: 0, width }), |art| {
+                art.view(width, cabinet.camera_origin())
+            })
+    }
+
     fn queue_station(
         &mut self,
         (player, seat): (Player, Player),
         station: Station,
-        width: u32,
+        view: world::View,
     ) -> Result<(), RenderError> {
-        let offset = world::station_offset(width, player)?;
+        let offset = world::station_offset(view.width, player)?;
         if let Some(mut prompt) =
             self.hud.draw(player, seat, station.participation)?
         {
@@ -515,7 +532,7 @@ impl Scene {
                 pose.draw(
                     ground_position(
                         pose,
-                        station.position,
+                        view.project(station.position),
                         station.maneuver.elevation(),
                     )?,
                     station.facing == Facing::Left,
@@ -528,7 +545,7 @@ impl Scene {
     fn queue_visible_stations(
         &mut self,
         cabinet: &Cabinet,
-        width: u32,
+        view: world::View,
     ) -> Result<(), RenderError> {
         if !cabinet.session().world_visible() {
             return Ok(());
@@ -539,7 +556,7 @@ impl Scene {
             let station = *stations
                 .get(character.index())
                 .ok_or(RenderError::InvalidSprite)?;
-            self.queue_station((character, seat), station, width)?;
+            self.queue_station((character, seat), station, view)?;
         }
         Ok(())
     }
@@ -614,10 +631,11 @@ impl<'preferences> Interactive<'preferences> {
         startup: InputStartup,
         options: PreviewOptions<'preferences>,
         combat: bool,
+        scroll_limit: u16,
     ) -> Result<Self, RenderError> {
         let session =
             LocalSession::with_display(options.display, options.touch_enabled);
-        let mut simulation = live_with_session(combat, session)?;
+        let mut simulation = live_with_scroll(combat, session, scroll_limit)?;
         let mut controls =
             Controls::with_profiles(options.touch_enabled, options.profiles)?;
         for event in startup.attached {
@@ -806,6 +824,14 @@ fn live_with_session(
     combat: bool,
     session: LocalSession,
 ) -> Result<LiveSimulation<Cabinet>, RenderError> {
+    live_with_scroll(combat, session, 0)
+}
+
+fn live_with_scroll(
+    combat: bool,
+    session: LocalSession,
+    scroll_limit: u16,
+) -> Result<LiveSimulation<Cabinet>, RenderError> {
     let mut cabinet = if combat {
         Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
             x: 246,
@@ -815,6 +841,7 @@ fn live_with_session(
         Cabinet::new(StreetLayout::DOWNTOWN)
     }
     .map_err(failure)?;
+    cabinet = cabinet.with_scroll_limit(scroll_limit).map_err(failure)?;
     cabinet.session = session;
     let clock =
         StepClock::new(TICK_INTERVAL, dimension(8)?).map_err(failure)?;
@@ -1526,7 +1553,7 @@ fn window(
         if options.hidden {
             smoke_settings(scene, &mut art, options)?;
             if let Some(bundle) = &source.world {
-                world::smoke(scene, &mut art, bundle, options.profiles)?;
+                world::smoke(scene, &mut art, bundle, options)?;
             }
             smoke_character_selection(scene, &mut art, options)?;
             smoke_controller_selection(options.profiles)?;
@@ -1541,8 +1568,14 @@ fn window(
                 playback.as_mut(),
             );
         }
-        let preview =
-            Interactive::new(startup, options, source.enemy.is_some())?;
+        let scroll_limit =
+            art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
+        let preview = Interactive::new(
+            startup,
+            options,
+            source.enemy.is_some(),
+            scroll_limit,
+        )?;
         preview.run(scene, &mut art, playback.as_mut())
     })
 }

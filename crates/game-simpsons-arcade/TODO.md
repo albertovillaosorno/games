@@ -152,7 +152,11 @@ selected base art. The currently verified strip supports up to 400
 logical columns (320 plus 80 additional pixels); wider surfaces use
 aspect-fit without stretching the world. The four station indicators
 spread across the width, menus and touch panel center, and hit regions
-follow the panel. Movement bounds and stage progression remain unchanged.
+follow the panel. With a verified strip, the same fixed-step camera and
+movement bounds
+apply in every display mode. The provisional opening street advances
+rightward while retaining the active party and living enemy within the
+original-width play area. Full stage progression remains open.
 Fill may crop the game HUD and is rejected with touch enabled.
 Independent simultaneous touch overlays remain open. Settings
 can also be changed through the main or pause menu: Up/Down selects,

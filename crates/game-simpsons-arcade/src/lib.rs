@@ -147,7 +147,7 @@ pub enum Participation {
     Playing,
 }
 
-/// Integer screen-space foot position in the first street prototype.
+/// Integer world-space foot position in the first street prototype.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Point {
     /// Horizontal location.
@@ -203,6 +203,8 @@ impl StreetLayout {
 /// Invalid prototype movement configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LayoutError {
+    /// The configured camera travel exceeds the coordinate range.
+    ScrollOverflow,
     /// A spawn point is outside the walkable area.
     SpawnOutside,
 }
@@ -364,7 +366,7 @@ impl Slot {
         }
     }
 
-    const fn start(&mut self) {
+    const fn start(&mut self, camera: i16) {
         if !matches!(
             self.station.participation,
             Participation::Absent | Participation::Continuing { .. }
@@ -373,7 +375,10 @@ impl Slot {
         }
         self.attack_quarters = 0;
         self.station.health = PLAYER_HEALTH;
-        self.station.position = self.spawn;
+        self.station.position = Point {
+            x: self.spawn.x.saturating_add(camera),
+            ..self.spawn
+        };
         self.station.facing = Facing::Right;
         self.station.maneuver = Maneuver::Idle;
         self.station.walking_ticks = None;
@@ -383,19 +388,50 @@ impl Slot {
 
 /// Deterministic first-street title state, independent of the host platform.
 ///
-/// The prototype omits the original intro, camera, collision and scoring.
-/// Optional combat, continuing and maneuver timings are provisional.
-/// It is not a gameplay parity claim.
+/// The prototype omits the original intro, full stage progression, collision
+/// and scoring. Optional combat, continuing and maneuver timings are
+/// provisional. It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
+    camera: i16,
     choices: [Player; 4],
     enemy: Option<Enemy>,
     layout: StreetLayout,
+    scroll_limit: i16,
     session: LocalSession,
     slots: [Slot; 4],
 }
 
 impl Cabinet {
+    fn advance_camera(&mut self) {
+        if self.camera == self.scroll_limit {
+            return;
+        }
+        let mut active =
+            self.slots.iter().filter(|slot| slot.station.can_fight());
+        let Some(first) = active.next() else {
+            return;
+        };
+        let first_x = first.station.position.x;
+        let (mut left, right) =
+            active.fold((first_x, first_x), |(left, right), slot| {
+                let x = slot.station.position.x;
+                (left.min(x), right.max(x))
+            });
+        if let Some(enemy) = self.enemy.filter(|enemy| enemy.health > 0) {
+            left = left.min(enemy.position.x);
+        }
+        // Provisional rightward anchor, not an original collision rule.
+        let anchor =
+            self.layout.max.x.saturating_sub(80).max(self.layout.min.x);
+        let target = right
+            .saturating_sub(anchor)
+            .min(left.saturating_sub(self.layout.min.x))
+            .min(self.scroll_limit);
+        self.camera =
+            self.camera.max(target.min(self.camera.saturating_add(2)));
+    }
+
     fn advance_continue(&mut self) {
         if self.phase() != Phase::Playing || self.enemy.is_none() {
             return;
@@ -458,13 +494,19 @@ impl Cabinet {
             | Control::Up => return,
         };
         match self.session.input(command) {
-            SessionEffect::Join => slot.start(),
+            SessionEffect::Join => slot.start(self.camera),
             SessionEffect::Reset => self.reset_world(),
             SessionEffect::None | SessionEffect::Exit => {},
         }
         if self.phase() != Phase::Playing {
             *pending = [None; 4];
         }
+    }
+
+    /// Rightward travel of the original-width gameplay camera.
+    #[must_use]
+    pub const fn camera_origin(&self) -> i16 {
+        self.camera
     }
 
     /// Selected character for each input seat, in physical seat order.
@@ -506,6 +548,13 @@ impl Cabinet {
         self.enemy
     }
 
+    const fn movement_layout(&self) -> StreetLayout {
+        let mut layout = self.layout;
+        layout.min.x = layout.min.x.saturating_add(self.camera);
+        layout.max.x = layout.max.x.saturating_add(self.camera);
+        layout
+    }
+
     /// Construct a cabinet with explicit spawn and movement boundaries.
     ///
     /// # Errors
@@ -515,9 +564,11 @@ impl Cabinet {
             return Err(LayoutError::SpawnOutside);
         }
         Ok(Self {
+            camera: 0,
             choices: Player::ALL,
             enemy: None,
             layout,
+            scroll_limit: 0,
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
         })
@@ -541,6 +592,7 @@ impl Cabinet {
     }
 
     fn reset_world(&mut self) {
+        self.camera = 0;
         self.enemy = self.enemy.map(Enemy::restart);
         for slot in &mut self.slots {
             let held = slot.held;
@@ -604,6 +656,26 @@ impl Cabinet {
         cabinet.enemy = Some(Enemy::new(spawn));
         Ok(cabinet)
     }
+
+    /// Enable bounded rightward opening-street travel.
+    ///
+    /// The host supplies the extent of verified additional world art.
+    /// Rendering dimensions are not simulation inputs.
+    /// # Errors
+    /// Rejects travel outside the representable world coordinates.
+    pub fn with_scroll_limit(
+        mut self,
+        travel: u16,
+    ) -> Result<Self, LayoutError> {
+        let limit = i16::try_from(travel)
+            .map_err(|_error| LayoutError::ScrollOverflow)?;
+        if self.layout.max.x.checked_add(limit).is_none() || limit < self.camera
+        {
+            return Err(LayoutError::ScrollOverflow);
+        }
+        self.scroll_limit = limit;
+        Ok(self)
+    }
 }
 
 impl InputStep for Cabinet {
@@ -627,14 +699,16 @@ impl InputStep for Cabinet {
         }
         self.advance_continue();
         if self.phase() == Phase::Playing {
+            let layout = self.movement_layout();
             for slot in &mut self.slots {
-                slot.move_tick(self.layout);
+                slot.move_tick(layout);
             }
             if let Some(enemy) = &mut self.enemy
                 && self.slots.iter().any(|slot| slot.station.can_fight())
             {
-                enemy.advance(self.layout, &mut self.slots);
+                enemy.advance(layout, &mut self.slots);
             }
+            self.advance_camera();
             self.record_attack_cues();
         }
     }
@@ -666,6 +740,7 @@ fn queue_maneuver(
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
+    use std::ops::Range;
 
     use games::replay::{InputScript, Scripted};
     use games::timing::StepClock;
@@ -678,9 +753,11 @@ mod tests {
         // A valid constant layout cannot fail; keep fixture construction
         // independent from any mutable global or host input.
         result.unwrap_or_else(|_error| Cabinet {
+            camera: 0,
             choices: Player::ALL,
             enemy: None,
             layout: StreetLayout::DOWNTOWN,
+            scroll_limit: 0,
             session: LocalSession::default(),
             slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
         })
@@ -1122,6 +1199,62 @@ mod tests {
             assert!(fast_clock.advance(TICK_INTERVAL, &mut fast).is_ok());
         }
         assert_eq!(slow.state(), fast.state());
+    }
+
+    fn advance_empty(state: &mut Cabinet, ticks: Range<u64>) {
+        for tick in ticks {
+            state.input_step(tick, &[]);
+        }
+    }
+
+    #[test]
+    fn scroll_preserves_cooperation_and_join() {
+        let result = cabinet().with_scroll_limit(80);
+        assert!(result.is_ok());
+        let Ok(mut state) = result else {
+            return;
+        };
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.input_step(1, &pulse(Player::Homer, Control::Start));
+        state.input_step(2, &[change(Player::Homer, Control::Left, true)]);
+        advance_empty(&mut state, 3..50);
+        state.input_step(50, &[
+            change(Player::Homer, Control::Left, false),
+            change(Player::Marge, Control::Right, true),
+        ]);
+        advance_empty(&mut state, 51..180);
+        assert_eq!(state.camera_origin(), 0);
+        let [leader, laggard, ..] = state.stations();
+        assert_eq!(leader.position.x, StreetLayout::DOWNTOWN.max.x);
+        assert_eq!(laggard.position.x, StreetLayout::DOWNTOWN.min.x);
+        state.input_step(180, &[change(Player::Homer, Control::Right, true)]);
+        advance_empty(&mut state, 181..250);
+        assert_eq!(state.camera_origin(), 80);
+        let [advanced, following, ..] = state.stations();
+        assert_eq!(advanced.position.x, 368);
+        assert!(following.position.x >= 112);
+        state.input_step(250, &pulse(Player::Bart, Control::Start));
+        let [_, _, joined, _] = state.stations();
+        assert_eq!(joined.position.x, 212);
+        assert_scroll_pause_reset(state);
+    }
+
+    fn assert_scroll_pause_reset(mut state: Cabinet) {
+        state.input_step(251, &pulse(Player::Marge, Control::Pause));
+        let paused = state;
+        state.input_step(252, &[]);
+        assert_eq!(state, paused);
+        state.reset_world();
+        assert_eq!(state.camera_origin(), 0);
+    }
+
+    #[test]
+    fn excessive_scroll_is_rejected() {
+        let state = cabinet();
+        assert_eq!(
+            state.with_scroll_limit(u16::MAX),
+            Err(LayoutError::ScrollOverflow)
+        );
     }
 
     #[test]
