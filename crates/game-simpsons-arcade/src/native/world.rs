@@ -104,7 +104,15 @@ impl WorldArt {
         base: FrameLayout,
     ) -> Result<FrameLayout, RenderError> {
         let width = self.art.rect.width.get().saturating_add(SIDE * 2);
-        FrameLayout::new(dimension(width)?, base.height(), size(622_592)?)
+        FrameLayout::new(
+            dimension(width)?,
+            base.height(),
+            size(
+                512usize
+                    .saturating_mul(usize::from(super::touch::MAX_SCENE_HEIGHT))
+                    .saturating_mul(4),
+            )?,
+        )
     }
 
     pub(super) fn queue(

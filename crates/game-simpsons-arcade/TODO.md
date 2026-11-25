@@ -158,7 +158,7 @@ apply in every display mode. The provisional opening street advances
 rightward while retaining the active party and living enemy within the
 original-width play area. Full stage progression remains open.
 Fill may crop the game HUD and is rejected with touch enabled.
-Independent simultaneous touch overlays remain open. Settings
+Settings
 can also be changed through the main or pause menu: Up/Down selects,
 Primary cycles display or toggles desktop fullscreen, and Back returns.
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
@@ -215,7 +215,7 @@ these digital profiles; the remote controller uses station 1's
 profile. Proportional movement, an interactive remapping menu and
 automatic settings persistence remain open.
 
-For the optional single touch panel, select a station and swap button
+For optional touch panels, select stations and swap button
 positions in the same profile, using the default action names as slots:
 
 ```text
@@ -228,8 +228,14 @@ touch 3 left=right
 
 Each station's complete slot mapping must be a permutation. Symbols and
 hit regions move together; the other stations retain keyboard/controller
-input. The default remains station 1. Simultaneous independent touch
-panels and actual touchscreen testing remain open.
+input. The default remains station 1. To enable several local stations,
+use `touch-players=1,2,3,4` instead of `touch-player=3`. Select any nonempty
+subset; duplicate seats or selection records are rejected. Panels stack
+in ascending seat order below the game, with visible seat numbers when
+more than one is enabled. All selected seats can hold controls at once;
+keyboard and controllers remain usable. A LAN host rejects any selection
+that includes a reserved remote seat. Physical touchscreen testing and
+interactive panel layout editing remain open.
 
 ### Explicit LAN hosting
 

@@ -481,3 +481,12 @@ defaults are preserved. Synthetic regressions exercise malformed
 profiles, station isolation, inclusive thresholds, replacement
 controller assignment and remote wire-edge routing. Actual
 controller hardware and proportional analog movement remain open.
+
+The native touch profile accepts a nonempty subset of local stations,
+retaining the existing single-seat selection syntax and default.
+The title stacks labelled panels, shares each station's remapped
+button geometry between rendering and routing, and bounds contacts
+by eight times the panel count. It rejects remote-reserved seats
+before startup. Synthetic multi-contact tests check simultaneous
+independent actions and releases across adaptive widths.
+Physical touchscreen admission and device capacity remain unverified.

@@ -98,7 +98,9 @@ impl TextLine<'_> {
                 .is_some_and(|bottom| bottom <= height)
     }
 
-    fn pixel(self, column: u16, row: u16, width: u16) -> bool {
+    /// Test ink at a pixel relative to a centered text plate.
+    #[must_use]
+    pub fn pixel(self, column: u16, row: u16, width: u16) -> bool {
         let Some(extent) = self.extent() else {
             return false;
         };

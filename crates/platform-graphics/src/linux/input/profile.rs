@@ -132,8 +132,8 @@ pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
     pub buttons: [[Button; ACTIONS]; PLAYERS],
     /// Globally unique keyboard bindings.
     pub keys: [[Scancode; ACTIONS]; PLAYERS],
-    /// Zero-based station selected for the visible touch panel.
-    pub touch_player: usize,
+    /// Stations selected for visible touch panels, in station order.
+    pub touch_players: [bool; PLAYERS],
     /// Per-station logical-action to physical touch-slot permutation.
     pub touch_slots: [[usize; ACTIONS]; PLAYERS],
 }
@@ -175,7 +175,8 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// `axis-threshold PLAYER AXIS=PRESS/RELEASE`. Axis names follow SDL;
     /// use `none` to disable a direction.
     /// Player numbers start at one; touch slots use the action names.
-    /// Optional `touch-player=N` selects one station for the panel.
+    /// Optional `touch-player=N` or `touch-players=N,M` selects stations.
+    /// The selection is nonempty, unique and ordered by station number.
     /// The first nonempty line must be `version=1`.
     /// # Errors
     /// Rejects oversized, ambiguous, unknown or invalid mappings.
@@ -195,15 +196,8 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         let mut seen = BTreeSet::new();
         let mut touch_selected = false;
         for line in lines {
-            if touch_selected && line.starts_with("touch-player=") {
-                return Err(String::from("duplicate touch-player"));
-            }
-            if let Some(value) = line.strip_prefix("touch-player=") {
-                self.touch_player = value
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|number| number.checked_sub(1))
-                    .ok_or("invalid touch player")?;
+            if let Some(value) = touch_selection(line, touch_selected)? {
+                self.touch_players = selected_players(value)?;
                 touch_selected = true;
                 continue;
             }
@@ -279,7 +273,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// Rejects duplicate keyboard keys, same-station controller buttons,
     /// invalid axis slots or thresholds and invalid touch permutations.
     pub fn validate(&self) -> Result<(), String> {
-        if self.touch_player >= PLAYERS {
+        if !self.touch_players.contains(&true) {
             return Err(String::from("invalid touch player"));
         }
         for row in &self.axes {
@@ -326,6 +320,39 @@ enum Kind {
 }
 
 type Record<'text> = (Kind, usize, usize, &'text str);
+
+fn touch_selection(line: &str, selected: bool) -> Result<Option<&str>, String> {
+    if let Some(value) = line.strip_prefix("touch-player=") {
+        if selected || value.contains(',') {
+            return Err(String::from("invalid touch-player selection"));
+        }
+        return Ok(Some(value));
+    }
+    let value = line.strip_prefix("touch-players=");
+    if selected && value.is_some() {
+        return Err(String::from("duplicate touch selection"));
+    }
+    Ok(value)
+}
+
+fn selected_players<const PLAYERS: usize>(
+    value: &str,
+) -> Result<[bool; PLAYERS], String> {
+    let mut selected = [false; PLAYERS];
+    for field in value.split(',') {
+        let slot = field
+            .parse::<usize>()
+            .ok()
+            .and_then(|number| number.checked_sub(1))
+            .and_then(|index| selected.get_mut(index))
+            .ok_or("invalid touch player")?;
+        if *slot {
+            return Err(String::from("duplicate touch player"));
+        }
+        *slot = true;
+    }
+    Ok(selected)
+}
 
 fn axis_action(value: &str, actions: &[&str]) -> Result<Option<usize>, String> {
     if value == "none" {
@@ -385,7 +412,7 @@ mod tests {
         axes: [[AxisProfile::UNBOUND; NATIVE_AXES.len()]; 2],
         buttons: [[Button::A, Button::B]; 2],
         keys: [[Scancode::A, Scancode::B], [Scancode::C, Scancode::D]],
-        touch_player: 0,
+        touch_players: [true, false],
         touch_slots: [[0, 1]; 2],
     };
     const ACTIONS: [&str; 2] = ["primary", "secondary"];
@@ -409,7 +436,7 @@ mod tests {
                     Scancode::Space,
                     Scancode::D
                 ]],
-                touch_player: 1,
+                touch_players: [false, true],
                 touch_slots: [[0, 1], [1, 0]],
             })
         );
@@ -439,6 +466,23 @@ mod tests {
     }
 
     #[test]
+    fn multiple_touch_seats_are_canonical_and_backward_compatible() {
+        let configured =
+            DEFAULT.configured(ACTIONS, "version=1\ntouch-players=2,1");
+        assert_eq!(
+            configured,
+            Ok(DigitalProfiles {
+                touch_players: [true, true],
+                ..DEFAULT
+            })
+        );
+        assert_eq!(
+            DEFAULT.configured(ACTIONS, "version=1\ntouch-players=2"),
+            DEFAULT.configured(ACTIONS, "version=1\ntouch-player=2")
+        );
+    }
+
+    #[test]
     fn rejects_ambiguous_or_invalid_mappings() {
         for invalid in [
             "version=2",
@@ -464,6 +508,14 @@ mod tests {
             "version=1\nbutton 2 primary=not-a-button",
             "version=1\nkey 1 primary=Q\nkey 1 primary=R",
             "version=1\ntouch-player=3",
+            "version=1\ntouch-players=",
+            "version=1\ntouch-players=1,1",
+            "version=1\ntouch-players=1,3",
+            "version=1\ntouch-players=0",
+            "version=1\ntouch-players=1,",
+            "version=1\ntouch-player=1,2",
+            "version=1\ntouch-player=1\ntouch-players=2",
+            "version=1\ntouch-players=2\ntouch-player=1",
             "version=1\ntouch 2 primary=secondary",
             "version=1\ntouch-player=1\ntouch-player=2",
         ] {

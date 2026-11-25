@@ -860,3 +860,22 @@ the verified strip passed, with zero missed 16.666667 ms budget samples
 across each 600-frame movement workload. The strip run verified the
 400-column logical scene and 80-column camera travel. These runs do not
 establish physical display or remote-device acceptance.
+
+The optional native touch surface supports one to four independently
+remappable local stations, with panels stacked in station order below
+the verified gameplay extent. The existing single-panel default and
+profile syntax remain compatible. Multi-panel rendering uses one
+static atlas and sprite; the input router admits at most eight
+contacts per configured panel in total. A reserved LAN seat cannot
+be assigned a touch panel. Physical touchscreen testing remains open.
+
+Three optimized native smoke runs used verified local version-two art,
+Xvfb software OpenGL and dummy audio: four seats at adaptive 400x544,
+seats two and four at aspect-fit 320x384, and the legacy seat-three
+selection at 320x304. All selected seats joined through their panels,
+held two movement contacts at once, moved independently and stopped
+on release. The four-seat profile swapped seat two's horizontal slots;
+the two-seat profile swapped seat four's action slots. Each run also
+verified the 80-column street camera, 600 movement submissions and
+51 combat submissions without missing the 60 Hz budget. These are
+synthetic contacts through the native projection, not physical devices.

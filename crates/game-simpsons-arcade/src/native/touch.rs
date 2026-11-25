@@ -27,11 +27,9 @@
 // - Usage:
 //   - Install and draw only when touch controls are explicitly enabled.
 // - Defaults:
-//   - One touch-controlled station; other input devices remain usable.
+//   - One touch-controlled station unless multiple seats are configured.
 
 //! Optional native touch controls with matched button geometry.
-
-use std::num::NonZeroUsize;
 
 use games::input::InputMapping;
 use games::input::touch::{TouchLayout, TouchPoint, TouchZone};
@@ -44,7 +42,9 @@ use super::{
     Action, CONTROLS, Control, Player, Profiles, dimension, size, world,
 };
 
-pub(super) const SCENE_HEIGHT: u16 = 304;
+pub(super) const MAX_SCENE_HEIGHT: u16 = PANEL_TOP + PANEL_HEIGHT * 4;
+const MAX_PANEL_BYTES: usize = 409_600;
+const CONTACTS_PER_PANEL: usize = 8;
 const PANEL_HEIGHT: u16 = 80;
 const PANEL_TOP: u16 = 224;
 const WIDTH: u16 = 320;
@@ -87,18 +87,18 @@ struct PanelButton {
 }
 
 impl PanelButton {
-    fn bounds(self) -> Option<[TouchPoint; 2]> {
-        let top = self.top.checked_add(PANEL_TOP)?;
+    fn bounds(self, offset: u16, height: u16) -> Option<[TouchPoint; 2]> {
+        let top = self.top.checked_add(offset)?;
         let right = self.left.checked_add(self.width)?;
         let bottom = top.checked_add(self.height)?;
         Some([
             TouchPoint {
                 x: boundary(self.left, WIDTH)?,
-                y: boundary(top, SCENE_HEIGHT)?,
+                y: boundary(top, height)?,
             },
             TouchPoint {
                 x: boundary(right, WIDTH)?.checked_sub(1)?,
-                y: boundary(bottom, SCENE_HEIGHT)?.checked_sub(1)?,
+                y: boundary(bottom, height)?.checked_sub(1)?,
             },
         ])
     }
@@ -160,14 +160,64 @@ fn boundary(pixel: u16, extent: u16) -> Option<u16> {
     u16::try_from(numerator.div_ceil(u32::from(extent))).ok()
 }
 
+/// Selected physical seats, in ascending order.
+pub(super) fn seats(profiles: &Profiles) -> impl Iterator<Item = Player> {
+    Player::ALL
+        .into_iter()
+        .zip(profiles.touch_players)
+        .filter_map(|(player, selected)| selected.then_some(player))
+}
+
+pub(super) fn reserved(profiles: &Profiles, reserved: [bool; 4]) -> bool {
+    profiles
+        .touch_players
+        .into_iter()
+        .zip(reserved)
+        .any(|(selected, remote)| selected && remote)
+}
+
+pub(super) fn extra_bytes(profiles: &Profiles) -> usize {
+    seats(profiles).count().saturating_sub(1).saturating_mul(
+        usize::from(WIDTH)
+            .saturating_mul(usize::from(PANEL_HEIGHT))
+            .saturating_mul(4),
+    )
+}
+
+pub(super) fn height(profiles: &Profiles) -> Result<u16, RenderError> {
+    let count = u16::try_from(seats(profiles).count())
+        .map_err(|_error| RenderError::TooLarge)?;
+    PANEL_TOP
+        .checked_add(
+            PANEL_HEIGHT
+                .checked_mul(count)
+                .ok_or(RenderError::TooLarge)?,
+        )
+        .ok_or(RenderError::TooLarge)
+}
+
+fn panel_top(index: usize) -> Result<u16, RenderError> {
+    u16::try_from(index)
+        .ok()
+        .and_then(|row| row.checked_mul(PANEL_HEIGHT))
+        .and_then(|row| PANEL_TOP.checked_add(row))
+        .ok_or(RenderError::TooLarge)
+}
+
 pub(super) fn center(
+    player: Player,
     control: Control,
     profiles: &Profiles,
 ) -> Result<TouchPoint, RenderError> {
-    let [min, max] = panel(profiles)?
+    let index = seats(profiles)
+        .position(|seat| seat == player)
+        .ok_or(RenderError::InvalidSprite)?;
+    let offset = panel_top(index)?;
+    let height = height(profiles)?;
+    let [min, max] = panel(profiles, player)?
         .iter()
         .find(|button| button.control == control)
-        .and_then(|button| button.bounds())
+        .and_then(|button| button.bounds(offset, height))
         .ok_or(RenderError::InvalidDimensions)?;
     Ok(TouchPoint {
         x: min.x.midpoint(max.x),
@@ -179,26 +229,29 @@ pub(super) fn install(
     mapping: &mut InputMapping<Action>,
     profiles: &Profiles,
 ) -> Result<(), RenderError> {
-    let mut zones = Vec::with_capacity(BUTTONS.len());
-    let player = *Player::ALL
-        .get(profiles.touch_player)
-        .ok_or(RenderError::InvalidSprite)?;
-    for (index, button) in panel(profiles)?.into_iter().enumerate() {
-        let id =
-            u16::try_from(index).map_err(|_error| RenderError::TooLarge)?;
-        let [min, max] =
-            button.bounds().ok_or(RenderError::InvalidDimensions)?;
-        let zone = TouchZone::new(id, min, max)
-            .ok_or(RenderError::InvalidDimensions)?;
-        mapping.bind_touch(id, Action {
-            control: button.control,
-            player,
-        });
-        zones.push(zone);
+    let count = seats(profiles).count();
+    let mut zones = Vec::with_capacity(count.saturating_mul(BUTTONS.len()));
+    let height = height(profiles)?;
+    for (row, player) in seats(profiles).enumerate() {
+        let offset = panel_top(row)?;
+        for button in panel(profiles, player)? {
+            let id = u16::try_from(zones.len())
+                .map_err(|_error| RenderError::TooLarge)?;
+            let [min, max] = button
+                .bounds(offset, height)
+                .ok_or(RenderError::InvalidDimensions)?;
+            let zone = TouchZone::new(id, min, max)
+                .ok_or(RenderError::InvalidDimensions)?;
+            mapping.bind_touch(id, Action {
+                control: button.control,
+                player,
+            });
+            zones.push(zone);
+        }
     }
     mapping.set_touch_layout(TouchLayout::new(
         zones,
-        NonZeroUsize::new(8).ok_or(RenderError::TooLarge)?,
+        size(count.saturating_mul(CONTACTS_PER_PANEL))?,
     ));
     Ok(())
 }
@@ -207,21 +260,25 @@ pub(super) fn load(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
 ) -> Result<SpriteDraw, RenderError> {
+    let count = seats(profiles).count();
+    let panel_height = height(profiles)?.saturating_sub(PANEL_TOP);
     let layout = FrameLayout::new(
         dimension(u32::from(WIDTH))?,
-        dimension(u32::from(PANEL_HEIGHT))?,
-        size(102_400)?,
+        dimension(u32::from(panel_height))?,
+        size(MAX_PANEL_BYTES)?,
     )?;
-    let buttons = panel(profiles)?;
     let mut pixels = Vec::with_capacity(layout.bytes());
-    for y in 0..PANEL_HEIGHT {
-        for x in 0..WIDTH {
-            let color = buttons
-                .iter()
-                .find_map(|button| button.color(x, y))
-                .unwrap_or([23, 27, 38, 255]);
-            pixels.extend_from_slice(&color);
-        }
+    for player in seats(profiles) {
+        let buttons = panel(profiles, player)?;
+        let label = if count > 1 {
+            ["SEAT 1", "SEAT 2", "SEAT 3", "SEAT 4"]
+                .get(player.index())
+                .copied()
+                .ok_or(RenderError::InvalidSprite)?
+        } else {
+            ""
+        };
+        raster_panel(&mut pixels, &buttons, label);
     }
     let atlas = scene.load_atlas(layout, &pixels)?;
     let source = SpriteRect {
@@ -242,10 +299,47 @@ pub(super) fn load(
     })
 }
 
-fn panel(profiles: &Profiles) -> Result<[PanelButton; 8], RenderError> {
+fn raster_panel(pixels: &mut Vec<u8>, buttons: &[PanelButton; 8], label: &str) {
+    let line = ui::TextLine {
+        color: [242, 245, 250, 255],
+        scale: 2,
+        text: label,
+        top: 35,
+    };
+    for y in 0..PANEL_HEIGHT {
+        for x in 0..WIDTH {
+            let color = buttons
+                .iter()
+                .find_map(|button| button.color(x, y))
+                .unwrap_or_else(|| panel_background(line, x, y));
+            pixels.extend_from_slice(&color);
+        }
+    }
+}
+
+fn panel_background(
+    line: ui::TextLine<'_>,
+    horizontal: u16,
+    vertical: u16,
+) -> [u8; 4] {
+    if !line.text.is_empty()
+        && horizontal
+            .checked_sub(120)
+            .is_some_and(|local| line.pixel(local, vertical, 60))
+    {
+        line.color
+    } else {
+        [23, 27, 38, 255]
+    }
+}
+
+fn panel(
+    profiles: &Profiles,
+    player: Player,
+) -> Result<[PanelButton; 8], RenderError> {
     let slots = profiles
         .touch_slots
-        .get(profiles.touch_player)
+        .get(player.index())
         .ok_or(RenderError::InvalidSprite)?;
     let mut result = BUTTONS;
     for ((control, slot), button) in
@@ -322,7 +416,8 @@ mod tests {
             .into_iter()
             .flat_map(|width| BUTTONS.map(|button| (width, button)))
         {
-            let center = center(button.control, &DEFAULT_PROFILES)?;
+            let center =
+                center(Player::Marge, button.control, &DEFAULT_PROFILES)?;
             let surface = to_scene(center, width)
                 .ok_or(RenderError::InvalidDimensions)?;
             let local = to_panel(surface, width)
@@ -358,7 +453,8 @@ mod tests {
         let mut router = InputRouter::new(mapping);
         let id = ContactId { device: 1, finger: 2 };
         for button in BUTTONS {
-            let point = center(button.control, &DEFAULT_PROFILES)?;
+            let point =
+                center(Player::Marge, button.control, &DEFAULT_PROFILES)?;
             let action = Action {
                 control: button.control,
                 player: Player::Marge,
@@ -382,6 +478,112 @@ mod tests {
     }
 
     #[test]
+    fn independent_panels_route_simultaneous_contacts_at_all_widths()
+    -> Result<(), RenderError> {
+        use super::super::ACTION_NAMES;
+
+        let profiles = DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\ntouch-players=4,1,3,2\n",
+                    "touch 2 left=right\ntouch 2 right=left\n",
+                ),
+            )
+            .map_err(RenderError::Backend)?;
+        if super::height(&profiles)? != super::MAX_SCENE_HEIGHT {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, &profiles)?;
+        let mut router = InputRouter::new(mapping);
+        for width in [320u32, 362, 512] {
+            verify_panel_contacts(&mut router, &profiles, width)?;
+        }
+        Ok(())
+    }
+
+    fn verify_panel_contacts(
+        router: &mut InputRouter<Action>,
+        profiles: &super::Profiles,
+        width: u32,
+    ) -> Result<(), RenderError> {
+        use crate::Control;
+        for player in Player::ALL {
+            let action = Action {
+                control: Control::Right,
+                player,
+            };
+            let center = center(player, action.control, profiles)?;
+            let point = to_scene(center, width)
+                .and_then(|surface| to_panel(surface, width))
+                .ok_or(RenderError::InvalidDimensions)?;
+            let id = ContactId {
+                device: 1,
+                finger: i64::try_from(player.index())
+                    .map_err(|_error| RenderError::TooLarge)?,
+            };
+            if router.handle(InputEvent::Contact {
+                id,
+                phase: ContactPhase::Down(point),
+            }) != [LogicalAction { action, down: true }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        for player in Player::ALL.into_iter().rev() {
+            let id = ContactId {
+                device: 1,
+                finger: i64::try_from(player.index())
+                    .map_err(|_error| RenderError::TooLarge)?,
+            };
+            let action = Action {
+                control: Control::Right,
+                player,
+            };
+            if router.handle(InputEvent::Contact {
+                id,
+                phase: ContactPhase::Up,
+            }) != [LogicalAction { action, down: false }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multi_panel_raster_labels_and_slot_geometry_match()
+    -> Result<(), RenderError> {
+        use super::super::ACTION_NAMES;
+        use crate::Control;
+
+        let profiles = DEFAULT_PROFILES
+            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+            .map_err(RenderError::Backend)?;
+        let first = center(Player::Marge, Control::Primary, &profiles)?;
+        let second = center(Player::Bart, Control::Primary, &profiles)?;
+        if first.x != second.x
+            || first.y >= second.y
+            || center(Player::Homer, Control::Primary, &profiles).is_ok()
+        {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let mut first_pixels = Vec::new();
+        let mut second_pixels = Vec::new();
+        let buttons = super::panel(&profiles, Player::Marge)?;
+        super::raster_panel(&mut first_pixels, &buttons, "SEAT 1");
+        super::raster_panel(&mut second_pixels, &buttons, "SEAT 3");
+        if first_pixels == second_pixels
+            || first_pixels.len() != 102_400
+            || second_pixels.len() != 102_400
+        {
+            return Err(RenderError::InvalidLength);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn swapped_touch_slots_move_symbols_and_route_selected_station()
     -> Result<(), RenderError> {
         use super::super::ACTION_NAMES;
@@ -400,21 +602,23 @@ mod tests {
         let mut mapping = InputMapping::new();
         install(&mut mapping, &profiles)?;
         let mut router = InputRouter::new(mapping);
-        let point = center(Control::Secondary, &DEFAULT_PROFILES)?;
-        if center(Control::Primary, &profiles)? != point {
+        let point =
+            center(Player::Marge, Control::Secondary, &DEFAULT_PROFILES)?;
+        if center(Player::Bart, Control::Primary, &profiles)? != point {
             return Err(RenderError::InvalidDimensions);
         }
         let original = BUTTONS
             .iter()
             .find(|button| button.control == Control::Primary)
             .ok_or(RenderError::InvalidSprite)?;
-        let buttons = panel(&profiles)?;
+        let buttons = panel(&profiles, Player::Bart)?;
         let remapped = buttons
             .iter()
             .find(|button| button.control == Control::Primary)
             .ok_or(RenderError::InvalidSprite)?;
         if remapped.glyph != original.glyph
-            || remapped.bounds() == original.bounds()
+            || remapped.bounds(super::PANEL_TOP, 304)
+                == original.bounds(super::PANEL_TOP, 304)
         {
             return Err(RenderError::InvalidSprite);
         }

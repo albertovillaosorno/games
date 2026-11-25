@@ -187,7 +187,7 @@ const DEFAULT_PROFILES: Profiles = Profiles {
     ]; 4],
     buttons: [BUTTONS; 4],
     keys: KEYBOARD,
-    touch_player: 0,
+    touch_players: [true, false, false, false],
     touch_slots: [[0, 1, 2, 3, 4, 5, 6, 7]; 4],
 };
 type LocalActions = Vec<LogicalAction<Action>>;
@@ -332,7 +332,7 @@ impl Controls {
             }
         }
         if touch_enabled {
-            if reserved.get(profiles.touch_player) != Some(&false) {
+            if touch::reserved(profiles, reserved) {
                 return Err(failure("touch seat reserved for remote input"));
             }
             touch::install(&mut mapping, profiles)?;
@@ -557,7 +557,7 @@ impl Scene {
         cabinet: &Cabinet,
     ) -> Result<world::View, RenderError> {
         let width = if let Some(art) = self.world_art {
-            let maximum = art.maximum(preview_layout(self.panel.is_some())?)?;
+            let maximum = art.maximum(scene.layout())?;
             scene.fit_adaptive_width(maximum)?.width().get()
         } else {
             scene.layout().width().get()
@@ -1327,13 +1327,18 @@ fn smoke_touch_selection(
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
     let mut controls = Controls::with_profiles(true, profiles)?;
-    smoke_touch(scene, &mut controls, &mut simulation, &[
-        Control::Right,
-        Control::Start,
-    ])?;
+    let player = touch::seats(profiles)
+        .next()
+        .ok_or(RenderError::InvalidSprite)?;
+    smoke_touch(
+        scene,
+        &mut controls,
+        &mut simulation,
+        (player, &[Control::Right, Control::Start]),
+    )?;
     let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    let next = profiles
-        .touch_player
+    let next = player
+        .index()
         .saturating_add(1)
         .checked_rem(Player::ALL.len())
         .ok_or(RenderError::InvalidSprite)?;
@@ -1427,11 +1432,19 @@ fn smoke_admission(
     simulation: &mut LiveSimulation<Cabinet>,
     touch_enabled: bool,
 ) -> Result<(), RenderError> {
-    if touch_enabled {
-        smoke_touch(scene, controls, simulation, &[Control::Start])?;
-    }
-    for (player, keys) in Player::ALL.into_iter().zip(controls.profiles.keys) {
-        if touch_enabled && player.index() == controls.profiles.touch_player {
+    let profiles = controls.profiles;
+    for ((player, keys), touch) in Player::ALL
+        .into_iter()
+        .zip(profiles.keys)
+        .zip(profiles.touch_players)
+    {
+        if touch_enabled && touch {
+            smoke_touch(
+                scene,
+                controls,
+                simulation,
+                (player, &[Control::Start]),
+            )?;
             continue;
         }
         let [_, key, ..] = keys;
@@ -1673,11 +1686,13 @@ fn smoke_touch(
     scene: &SceneSession<'_, '_>,
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
-    actions: &[Control],
+    commands: (Player, &[Control]),
 ) -> Result<(), RenderError> {
+    let (player, actions) = commands;
     let id = ContactId { device: 1, finger: 1 };
     for control in actions.iter().copied() {
-        let point = smoke_touch_point(scene, control, &controls.profiles)?;
+        let point =
+            smoke_touch_point(scene, player, control, &controls.profiles)?;
         for phase in [ContactPhase::Down(point), ContactPhase::Up] {
             let event =
                 project_contact(scene, InputEvent::Contact { id, phase })?
@@ -1693,37 +1708,30 @@ fn smoke_touch_movement(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    let index = controls.profiles.touch_player;
-    let station = |stations: [Station; 4]| {
-        stations
-            .get(index)
-            .copied()
-            .ok_or(RenderError::InvalidSprite)
-    };
-    let before = station(simulation.state().stations())?;
-    let horizontal = ContactId { device: 1, finger: 2 };
-    let vertical = ContactId { device: 1, finger: 3 };
-    for (id, control) in [(horizontal, Control::Right), (vertical, Control::Up)]
-    {
-        let event = project_contact(scene, InputEvent::Contact {
-            id,
-            phase: ContactPhase::Down(smoke_touch_point(
-                scene,
-                control,
-                &controls.profiles,
-            )?),
-        })?
-        .ok_or_else(|| failure("movement touch outside scene"))?;
-        controls.route(event, TICK_INTERVAL, simulation)?;
+    let profiles = controls.profiles;
+    let before = simulation.state().stations();
+    let mut contacts = Vec::new();
+    for player in touch::seats(&profiles) {
+        for control in [Control::Right, Control::Up] {
+            let id = ContactId {
+                device: 1,
+                finger: i64::try_from(contacts.len()).map_err(failure)?,
+            };
+            let event = project_contact(scene, InputEvent::Contact {
+                id,
+                phase: ContactPhase::Down(smoke_touch_point(
+                    scene, player, control, &profiles,
+                )?),
+            })?
+            .ok_or_else(|| failure("movement touch outside scene"))?;
+            controls.route(event, TICK_INTERVAL, simulation)?;
+            contacts.push(id);
+        }
     }
     let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    let moving = station(simulation.state().stations())?;
-    if moving.position.x != before.position.x.saturating_add(2)
-        || moving.position.y != before.position.y.saturating_sub(2)
-    {
-        return Err(failure("simultaneous touch movement failed"));
-    }
-    for id in [horizontal, vertical] {
+    let moving = simulation.state().stations();
+    verify_touch_movement(&before, &moving, profiles.touch_players)?;
+    for id in contacts {
         controls.route(
             InputEvent::Contact {
                 id,
@@ -1734,22 +1742,48 @@ fn smoke_touch_movement(
         )?;
     }
     let _release_step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    let stopped = station(simulation.state().stations())?;
-    if stopped.position != moving.position {
+    let stopped = simulation.state().stations();
+    if stopped
+        .into_iter()
+        .zip(moving)
+        .any(|(after, previous)| after.position != previous.position)
+    {
         return Err(failure("touch release failed"));
+    }
+    Ok(())
+}
+
+fn verify_touch_movement(
+    initial: &[Station; 4],
+    moved: &[Station; 4],
+    selected: [bool; 4],
+) -> Result<(), RenderError> {
+    for ((before, moving), touch) in initial.iter().zip(moved).zip(selected) {
+        let expected = if touch {
+            Point {
+                x: before.position.x.saturating_add(2),
+                y: before.position.y.saturating_sub(2),
+            }
+        } else {
+            before.position
+        };
+        if moving.position != expected {
+            return Err(failure("simultaneous touch movement failed"));
+        }
     }
     Ok(())
 }
 
 fn smoke_touch_point(
     scene: &SceneSession<'_, '_>,
+    player: Player,
     control: Control,
     profiles: &Profiles,
 ) -> Result<TouchPoint, RenderError> {
     scene
         .surface_touch(
             touch::to_scene(
-                touch::center(control, profiles)?,
+                touch::center(player, control, profiles)?,
                 scene.layout().width().get(),
             )
             .ok_or(RenderError::InvalidDimensions)?,
@@ -1777,9 +1811,7 @@ fn host_reservations(
     host: Option<&HostLan>,
 ) -> Result<[bool; 4], RenderError> {
     let reserved = host.map_or([false; 4], HostLan::reserved);
-    if options.touch_enabled
-        && reserved.get(options.profiles.touch_player) != Some(&false)
-    {
+    if options.touch_enabled && touch::reserved(options.profiles, reserved) {
         return Err(failure("touch seat reserved for remote input"));
     }
     if let Some(listener) = host {
@@ -1816,8 +1848,8 @@ fn window(
         options.hidden,
     )?;
     window.apply_display_settings(options.display)?;
-    let layout = preview_layout(touch_enabled)?;
-    let limits = scene_limits(source, touch_enabled, reserved)?;
+    let layout = preview_layout(touch_enabled, options.profiles)?;
+    let limits = scene_limits(source, options, reserved)?;
     let startup = window
         .input(size(reserved.into_iter().filter(|remote| !remote).count())?)?;
     let mut playback = source
@@ -1856,9 +1888,10 @@ fn window(
 
 fn scene_limits(
     source: &Sources<'_>,
-    touch_enabled: bool,
+    options: PreviewOptions<'_>,
     reserved: [bool; 4],
 ) -> Result<SceneLimits, RenderError> {
+    let touch_enabled = options.touch_enabled;
     let enemy_atlases = if source.enemy.is_some() {
         3
     } else {
@@ -1875,6 +1908,11 @@ fn scene_limits(
         atlas_bytes: size(
             3_407_872usize
                 .saturating_add(station_hud::extra_bytes(reserved))
+                .saturating_add(if touch_enabled {
+                    touch::extra_bytes(options.profiles)
+                } else {
+                    0
+                })
                 .saturating_add(count.saturating_mul(65_536))
                 .saturating_add(extension.saturating_mul(401_408)),
         )?,
@@ -1897,16 +1935,23 @@ fn scene_limits(
     })
 }
 
-fn preview_layout(touch_enabled: bool) -> Result<FrameLayout, RenderError> {
+fn preview_layout(
+    touch_enabled: bool,
+    profiles: &Profiles,
+) -> Result<FrameLayout, RenderError> {
     let height = if touch_enabled {
-        u32::from(touch::SCENE_HEIGHT)
+        u32::from(touch::height(profiles)?)
     } else {
         world::BASE_HEIGHT
     };
     FrameLayout::new(
         dimension(world::BASE_WIDTH)?,
         dimension(height)?,
-        size(389_120)?,
+        size(
+            320usize
+                .saturating_mul(usize::from(touch::MAX_SCENE_HEIGHT))
+                .saturating_mul(4),
+        )?,
     )
 }
 
@@ -2224,6 +2269,28 @@ mod tests {
             code: axis_code(axis),
             value,
         }
+    }
+
+    #[test]
+    fn touch_panels_cannot_claim_reserved_remote_stations()
+    -> Result<(), RenderError> {
+        let profiles = DEFAULT_PROFILES
+            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+            .map_err(failure)?;
+        if Controls::with_reserved(true, &profiles, [false, true, false, true])
+            .is_err()
+            || Controls::with_reserved(true, &profiles, [
+                false, false, true, false,
+            ])
+            .is_ok()
+            || Controls::with_reserved(false, &profiles, [
+                false, false, true, false,
+            ])
+            .is_err()
+        {
+            return Err(failure("touch reservation admission mismatch"));
+        }
+        Ok(())
     }
 
     #[test]
