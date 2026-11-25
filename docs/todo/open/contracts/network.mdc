@@ -220,3 +220,10 @@ vacant-slot assignment and rejection of the detached instance's input.
 Fresh validation with the native renderer smoke enabled passed in run
 1795594686600422366-1677369; repeated discovery did not report duplicate
 attachments. Physical controller replacement remains unverified.
+
+The framed transport uses the earliest outstanding inbound or outbound
+deadline for subsequent socket work in either direction. An expired
+partial receive now closes the connection even when the caller polls
+only outbound progress or attempts a blocking send. A loopback test
+covers idle outbound polling, queued outbound polling and blocking
+transmission with a previously admitted partial header.

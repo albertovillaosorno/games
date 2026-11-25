@@ -358,6 +358,13 @@ impl<Stream> FrameChannel<Stream>
 where
     Stream: TimedStream,
 {
+    fn active_deadline(&self) -> Option<Instant> {
+        self.read_deadline
+            .into_iter()
+            .chain(self.pending_send.as_ref().map(|send| send.deadline))
+            .min()
+    }
+
     fn close(&mut self) {
         drop(self.stream.take());
         self.pending_send = None;
@@ -388,13 +395,10 @@ where
     }
 
     fn poll_receive_inner(&mut self) -> io::Result<Option<Vec<u8>>> {
-        if let Some(pending) = &self.pending_send {
-            let _remaining = remaining(pending.deadline)?;
-        }
-        let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
-        if let Some(deadline) = self.read_deadline {
+        if let Some(deadline) = self.active_deadline() {
             let _time = remaining(deadline)?;
         }
+        let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         match self
             .reader
             .advance(self.config, |bytes| stream.poll_read_chunk(bytes))
@@ -430,11 +434,13 @@ where
     }
 
     fn poll_send_inner(&mut self) -> io::Result<SendProgress> {
+        if let Some(deadline) = self.active_deadline() {
+            let _time = remaining(deadline)?;
+        }
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         let Some(pending) = &mut self.pending_send else {
             return Ok(SendProgress::Idle);
         };
-        let _time = remaining(pending.deadline)?;
         match pending
             .writer
             .advance(&pending.bytes, |bytes| stream.poll_write_chunk(bytes))
@@ -481,15 +487,9 @@ where
     }
 
     fn receive_blocking(&mut self) -> io::Result<Vec<u8>> {
+        let deadline =
+            self.active_deadline().unwrap_or(self.config.deadline()?);
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
-        let receive_deadline =
-            self.read_deadline.unwrap_or(self.config.deadline()?);
-        let deadline = self
-            .pending_send
-            .as_ref()
-            .map_or(receive_deadline, |pending| {
-                receive_deadline.min(pending.deadline)
-            });
         stream.reset_deadline(deadline);
         loop {
             let _time = remaining(deadline)?;
@@ -524,9 +524,12 @@ where
     where
         Operation: FnOnce(&mut Stream, LanConfig) -> io::Result<Output>,
     {
+        let deadline =
+            self.active_deadline().unwrap_or(self.config.deadline()?);
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
-        stream.reset_deadline(self.config.deadline()?);
-        let result = operation(stream, self.config);
+        stream.reset_deadline(deadline);
+        let result = remaining(deadline)
+            .and_then(|_time| operation(stream, self.config));
         if result.is_err() {
             self.close();
         }
@@ -823,6 +826,42 @@ mod tests {
                     == Some(ErrorKind::NotConnected),
             "receiving cannot extend an expired outgoing deadline",
         )
+    }
+
+    #[test]
+    fn expired_incoming_frame_closes_both_send_paths() -> io::Result<()> {
+        for (blocking, queued) in [(false, false), (false, true), (true, false)]
+        {
+            let settings = config()?;
+            let listener = LanListener::bind(LOOPBACK, settings)?;
+            let mut client = TcpStream::connect(listener.local_addr()?)?;
+            let mut host = accepted(&listener)?;
+            client.write_all(&[0, 0])?;
+            let _deadline = poll_accept(|| {
+                require(
+                    host.channel.poll_receive()?.is_none(),
+                    "partial header cannot deliver a frame",
+                )?;
+                Ok(host.channel.read_deadline)
+            })?;
+            // Inject expiry instead of waiting for the host clock.
+            host.channel.read_deadline = Some(Instant::now());
+            if queued {
+                host.channel.queue_send(b"reply".to_vec())?;
+            }
+            let error = if blocking {
+                error_kind(host.send(b"reply"))
+            } else {
+                error_kind(host.channel.poll_send())
+            };
+            require(
+                error == Some(ErrorKind::TimedOut)
+                    && error_kind(host.channel.poll_receive())
+                        == Some(ErrorKind::NotConnected),
+                "sending cannot extend an expired incoming deadline",
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
