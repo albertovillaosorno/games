@@ -238,3 +238,10 @@ payload bytes or allocating an owned key. The existing record validation
 uses the same check. A synthetic oversized-key case confirms rejection
 without staging and permanent transaction abort; the malformed format
 regression continues to exercise the same policy.
+
+Both supported manifest versions now admit source identity before decoding
+any asset descriptor. The legacy wire identity and normalized identity
+share the same field checks, and legacy canonical byte verification is
+retained. A synthetic document with an invalid title and a malformed
+record confirms early identity rejection in both versions. The initial
+syntax scan remains bounded by the input manifest length.

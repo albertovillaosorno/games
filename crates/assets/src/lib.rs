@@ -243,7 +243,11 @@ impl SourceIdentity {
     /// # Errors
     /// Rejects noncanonical identities.
     pub fn validate(&self) -> Result<(), AssetError> {
-        if !valid_slug(&self.title) || !valid_slug(&self.revision) {
+        Self::validate_fields(&self.title, &self.revision)
+    }
+
+    fn validate_fields(title: &str, revision: &str) -> Result<(), AssetError> {
+        if !valid_slug(title) || !valid_slug(revision) {
             return Err(AssetError::InvalidIdentity);
         }
         Ok(())
@@ -688,6 +692,36 @@ mod tests {
         require(
             AssetManifest::parse_canonical(noncanonical.as_bytes(), limits())
                 == Err(AssetError::InvalidEncoding),
+        )
+    }
+
+    #[test]
+    fn invalid_source_precedes_record_admission() -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(
+            source(),
+            vec![record("first", b"x")],
+            limits(),
+        )?;
+        let document = String::from_utf8(manifest.encode(limits())?)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let malformed = document
+            .replace("\"title\":\"synthetic-title\"", "\"title\":\"../x\"")
+            .replace("\"key\":\"first\"", "\"key\":false");
+        require(
+            AssetManifest::parse(malformed.as_bytes(), limits())
+                == Err(AssetError::InvalidIdentity),
+        )?;
+        let digest = serde_json::to_string(&ContentHash::from_bytes([7; 32]))
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let legacy = malformed
+            .replace(
+                "\"source\":{",
+                &format!("\"source\":{{\"digest\":{digest},"),
+            )
+            .replace("\"version\":2", "\"version\":1");
+        require(
+            AssetManifest::parse_canonical(legacy.as_bytes(), limits())
+                == Err(AssetError::InvalidIdentity),
         )
     }
 

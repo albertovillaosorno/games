@@ -311,17 +311,17 @@ fn decode(
     if !matches!(document.version, 1 | VERSION) {
         return Err(AssetError::UnsupportedVersion);
     }
-    let records = decode_records(document.records, limits)?;
     if document.version == 1 {
-        return decode_legacy(bytes, document.source, records, limits);
+        return decode_legacy(bytes, document.source, document.records, limits);
     }
+    let source: SourceIdentity = serde_json::from_str(document.source.get())
+        .map_err(|_error| AssetError::InvalidEncoding)?;
+    source.validate()?;
     let manifest = ManifestDocument {
-        records,
-        source: serde_json::from_str(document.source.get())
-            .map_err(|_error| AssetError::InvalidEncoding)?,
+        records: decode_records(document.records, limits)?,
+        source,
         version: VERSION,
     };
-    manifest.source.validate()?;
     if canonical && encode(&manifest, limits.manifest_bytes)? != bytes {
         return Err(AssetError::InvalidEncoding);
     }
@@ -331,13 +331,19 @@ fn decode(
 fn decode_legacy(
     bytes: &[u8],
     raw_source: &RawValue,
-    records: Vec<AssetRecord>,
+    raw_records: &RawValue,
     limits: ManifestLimits,
 ) -> Result<ManifestDocument, AssetError> {
+    let legacy_source: LegacySource = serde_json::from_str(raw_source.get())
+        .map_err(|_error| AssetError::InvalidEncoding)?;
+    SourceIdentity::validate_fields(
+        &legacy_source.title,
+        &legacy_source.revision,
+    )?;
+    let records = decode_records(raw_records, limits)?;
     let legacy = LegacyDocument {
         records: &records,
-        source: serde_json::from_str(raw_source.get())
-            .map_err(|_error| AssetError::InvalidEncoding)?,
+        source: legacy_source,
         version: 1,
     };
     if encode(&legacy, limits.manifest_bytes)? != bytes {
@@ -347,7 +353,6 @@ fn decode_legacy(
         revision: legacy.source.revision,
         title: legacy.source.title,
     };
-    source.validate()?;
     Ok(ManifestDocument {
         records,
         source,
