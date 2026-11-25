@@ -641,3 +641,10 @@ reject old bindings and verify the replacement controller receives the
 vacant station's profile. A combined hidden title run passed with a
 custom profile and integer scaling. Touch and analog remapping,
 interactive settings and physical devices remain open.
+
+The optional single touch panel is now selectable for any station, with
+per-station button-position profiles. Inline tests verify moved glyphs,
+hit regions and station routing. The combined hidden title run passed
+with Bart selected, swapped attack/jump and left/right touch positions,
+custom keyboard bindings and integer mode. Independent simultaneous
+touch panels and hardware testing remain open.

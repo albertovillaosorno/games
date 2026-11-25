@@ -156,6 +156,8 @@ const ACTION_NAMES: [&str; 8] = [
 const DEFAULT_PROFILES: Profiles = Profiles {
     buttons: [BUTTONS; 4],
     keys: KEYBOARD,
+    touch_player: 0,
+    touch_slots: [[0, 1, 2, 3, 4, 5, 6, 7]; 4],
 };
 type Profiles = DigitalProfiles<4, 8>;
 
@@ -269,7 +271,7 @@ impl Controls {
             }
         }
         if touch_enabled {
-            touch::install(&mut mapping)?;
+            touch::install(&mut mapping, profiles)?;
         }
         Ok(Self {
             devices: [None; 4],
@@ -341,6 +343,7 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         source: &Sources<'_>,
         touch_enabled: bool,
+        profiles: &Profiles,
     ) -> Result<Self, RenderError> {
         let [first, _, _, _] = &source.actors;
         let mut background = Art::load(scene, first, "scene/background")?;
@@ -376,7 +379,7 @@ impl Scene {
                 10
             }),
             panel: if touch_enabled {
-                Some(touch::load(scene)?)
+                Some(touch::load(scene, profiles)?)
             } else {
                 None
             },
@@ -780,26 +783,7 @@ fn smoke(
         .readback()
         .map_err(|error| failure(format!("initial readback: {error:?}")))?;
     let mut controls = Controls::with_profiles(touch_enabled, profiles)?;
-    if touch_enabled {
-        smoke_touch(scene, &mut controls, &mut simulation)?;
-    }
-    for (player, keys) in Player::ALL.into_iter().zip(KEYBOARD) {
-        if touch_enabled && player == Player::Marge {
-            continue;
-        }
-        for key in keys.into_iter().take(3) {
-            for down in [true, false] {
-                controls.route(
-                    InputEvent::Key {
-                        code: key_code(key),
-                        down,
-                    },
-                    Duration::ZERO,
-                    &mut simulation,
-                )?;
-            }
-        }
-    }
+    smoke_admission(scene, &mut controls, &mut simulation, touch_enabled)?;
     let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
     if simulation
         .state()
@@ -825,6 +809,53 @@ fn smoke(
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
     smoke_movement_benchmark(scene, art, &mut controls, &mut simulation)
+}
+
+fn smoke_admission(
+    scene: &SceneSession<'_, '_>,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    touch_enabled: bool,
+) -> Result<(), RenderError> {
+    if touch_enabled {
+        smoke_touch(scene, controls, simulation, &[
+            Control::Coin,
+            Control::Start,
+        ])?;
+    }
+    for (player, keys) in Player::ALL.into_iter().zip(controls.profiles.keys) {
+        if touch_enabled && player.index() == controls.profiles.touch_player {
+            continue;
+        }
+        for key in keys.into_iter().take(2) {
+            for down in [true, false] {
+                controls.route(
+                    InputEvent::Key {
+                        code: key_code(key),
+                        down,
+                    },
+                    Duration::ZERO,
+                    simulation,
+                )?;
+            }
+        }
+    }
+    if touch_enabled {
+        smoke_touch(scene, controls, simulation, &[Control::Primary])?;
+    } else {
+        let key = controls.key(Player::Marge, Control::Primary)?;
+        for down in [true, false] {
+            controls.route(
+                InputEvent::Key {
+                    code: key_code(key),
+                    down,
+                },
+                Duration::ZERO,
+                simulation,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn smoke_jump(
@@ -998,10 +1029,11 @@ fn smoke_touch(
     scene: &SceneSession<'_, '_>,
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
+    actions: &[Control],
 ) -> Result<(), RenderError> {
     let id = ContactId { device: 1, finger: 1 };
-    for control in [Control::Coin, Control::Start, Control::Primary] {
-        let point = smoke_touch_point(scene, control)?;
+    for control in actions.iter().copied() {
+        let point = smoke_touch_point(scene, control, &controls.profiles)?;
         for phase in [ContactPhase::Down(point), ContactPhase::Up] {
             let event =
                 project_contact(scene, InputEvent::Contact { id, phase })?
@@ -1017,20 +1049,31 @@ fn smoke_touch_movement(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    let [before, _, _, _] = simulation.state().stations();
+    let index = controls.profiles.touch_player;
+    let station = |stations: [Station; 4]| {
+        stations
+            .get(index)
+            .copied()
+            .ok_or(RenderError::InvalidSprite)
+    };
+    let before = station(simulation.state().stations())?;
     let horizontal = ContactId { device: 1, finger: 2 };
     let vertical = ContactId { device: 1, finger: 3 };
     for (id, control) in [(horizontal, Control::Right), (vertical, Control::Up)]
     {
         let event = project_contact(scene, InputEvent::Contact {
             id,
-            phase: ContactPhase::Down(smoke_touch_point(scene, control)?),
+            phase: ContactPhase::Down(smoke_touch_point(
+                scene,
+                control,
+                &controls.profiles,
+            )?),
         })?
         .ok_or_else(|| failure("movement touch outside scene"))?;
         controls.route(event, TICK_INTERVAL, simulation)?;
     }
     let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    let [moving, _, _, _] = simulation.state().stations();
+    let moving = station(simulation.state().stations())?;
     if moving.position.x != before.position.x.saturating_add(2)
         || moving.position.y != before.position.y.saturating_sub(2)
     {
@@ -1047,7 +1090,7 @@ fn smoke_touch_movement(
         )?;
     }
     let _release_step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    let [stopped, _, _, _] = simulation.state().stations();
+    let stopped = station(simulation.state().stations())?;
     if stopped.position != moving.position {
         return Err(failure("touch release failed"));
     }
@@ -1057,9 +1100,10 @@ fn smoke_touch_movement(
 fn smoke_touch_point(
     scene: &SceneSession<'_, '_>,
     control: Control,
+    profiles: &Profiles,
 ) -> Result<TouchPoint, RenderError> {
     scene
-        .surface_touch(touch::center(control)?)?
+        .surface_touch(touch::center(control, profiles)?)?
         .ok_or_else(|| failure("touch control outside visible scene"))
 }
 
@@ -1088,7 +1132,8 @@ fn window(
         .map(audio::Playback::open)
         .transpose()?;
     window.with_scene(layout, limits, |scene| {
-        let mut art = Scene::load(scene, source, touch_enabled)?;
+        let mut art =
+            Scene::load(scene, source, touch_enabled, options.profiles)?;
         if options.hidden {
             smoke(scene, &mut art, touch_enabled, options.profiles)?;
             if source.enemy.is_some() {

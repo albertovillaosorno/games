@@ -149,5 +149,21 @@ mapping names. Unspecified controls keep the defaults. Duplicate
 keyboard bindings across stations and duplicate buttons within a
 station are rejected, as are unknown names and repeated overrides.
 Controller replacement inherits the vacant station's profile.
-Analog axes and touch layouts remain unchanged; an interactive
+Analog axes remain unchanged; an interactive
 remapping menu and automatic settings persistence remain open.
+
+For the optional single touch panel, select a station and swap button
+positions in the same profile, using the default action names as slots:
+
+```text
+touch-player=3
+touch 3 primary=secondary
+touch 3 secondary=primary
+touch 3 right=left
+touch 3 left=right
+```
+
+Each station's complete slot mapping must be a permutation. Symbols and
+hit regions move together; the other stations retain keyboard/controller
+input. The default remains station 1. Simultaneous independent touch
+panels, adaptive layout and actual touchscreen testing remain open.

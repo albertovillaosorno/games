@@ -14,7 +14,7 @@
 //   - Interpret native events, advance simulation or import original media.
 // - Allows:
 //   - Inputs: Title input mapping and native scene atlas allocation.
-//   - Outputs: Digital Marge controls and one static panel sprite.
+//   - Outputs: Selected station controls and one static panel sprite.
 //   - Side effects: Loads authored control art into the scene atlas.
 // - Split-When:
 //   - Another title needs shared control-panel presentation primitives.
@@ -40,7 +40,9 @@ use games_platform_graphics::linux::sprites::{
 };
 use games_platform_graphics::linux::{FrameLayout, RenderError};
 
-use super::{Action, Control, Player, dimension, glyph, size};
+use super::{
+    Action, CONTROLS, Control, Player, Profiles, dimension, glyph, size,
+};
 
 pub(super) const SCENE_HEIGHT: u16 = 304;
 const PANEL_HEIGHT: u16 = 80;
@@ -158,8 +160,11 @@ fn boundary(pixel: u16, extent: u16) -> Option<u16> {
     u16::try_from(numerator.div_ceil(u32::from(extent))).ok()
 }
 
-pub(super) fn center(control: Control) -> Result<TouchPoint, RenderError> {
-    let [min, max] = BUTTONS
+pub(super) fn center(
+    control: Control,
+    profiles: &Profiles,
+) -> Result<TouchPoint, RenderError> {
+    let [min, max] = panel(profiles)?
         .iter()
         .find(|button| button.control == control)
         .and_then(|button| button.bounds())
@@ -172,9 +177,13 @@ pub(super) fn center(control: Control) -> Result<TouchPoint, RenderError> {
 
 pub(super) fn install(
     mapping: &mut InputMapping<Action>,
+    profiles: &Profiles,
 ) -> Result<(), RenderError> {
     let mut zones = Vec::with_capacity(BUTTONS.len());
-    for (index, button) in BUTTONS.into_iter().enumerate() {
+    let player = *Player::ALL
+        .get(profiles.touch_player)
+        .ok_or(RenderError::InvalidSprite)?;
+    for (index, button) in panel(profiles)?.into_iter().enumerate() {
         let id =
             u16::try_from(index).map_err(|_error| RenderError::TooLarge)?;
         let [min, max] =
@@ -183,7 +192,7 @@ pub(super) fn install(
             .ok_or(RenderError::InvalidDimensions)?;
         mapping.bind_touch(id, Action {
             control: button.control,
-            player: Player::Marge,
+            player,
         });
         zones.push(zone);
     }
@@ -196,16 +205,18 @@ pub(super) fn install(
 
 pub(super) fn load(
     scene: &mut SceneSession<'_, '_>,
+    profiles: &Profiles,
 ) -> Result<SpriteDraw, RenderError> {
     let layout = FrameLayout::new(
         dimension(u32::from(WIDTH))?,
         dimension(u32::from(PANEL_HEIGHT))?,
         size(102_400)?,
     )?;
+    let buttons = panel(profiles)?;
     let mut pixels = Vec::with_capacity(layout.bytes());
     for y in 0..PANEL_HEIGHT {
         for x in 0..WIDTH {
-            let color = BUTTONS
+            let color = buttons
                 .iter()
                 .find_map(|button| button.color(x, y))
                 .unwrap_or([23, 27, 38, 255]);
@@ -231,23 +242,51 @@ pub(super) fn load(
     })
 }
 
+fn panel(profiles: &Profiles) -> Result<[PanelButton; 8], RenderError> {
+    let slots = profiles
+        .touch_slots
+        .get(profiles.touch_player)
+        .ok_or(RenderError::InvalidSprite)?;
+    let mut result = BUTTONS;
+    for ((control, slot), button) in
+        CONTROLS.into_iter().zip(slots).zip(&mut result)
+    {
+        let action = BUTTONS
+            .iter()
+            .find(|candidate| candidate.control == control)
+            .ok_or(RenderError::InvalidSprite)?;
+        let position = CONTROLS.get(*slot).ok_or(RenderError::InvalidSprite)?;
+        let geometry = BUTTONS
+            .iter()
+            .find(|candidate| candidate.control == *position)
+            .ok_or(RenderError::InvalidSprite)?;
+        *button = PanelButton {
+            control,
+            glyph: action.glyph,
+            ..*geometry
+        };
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use games::input::touch::{ContactId, ContactPhase};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use games_platform_graphics::linux::RenderError;
 
+    use super::super::DEFAULT_PROFILES;
     use super::{BUTTONS, center, install};
     use crate::{Action, Player};
 
     #[test]
     fn visible_buttons_route_to_one_station() -> Result<(), RenderError> {
         let mut mapping = InputMapping::new();
-        install(&mut mapping)?;
+        install(&mut mapping, &DEFAULT_PROFILES)?;
         let mut router = InputRouter::new(mapping);
         let id = ContactId { device: 1, finger: 2 };
         for button in BUTTONS {
-            let point = center(button.control)?;
+            let point = center(button.control, &DEFAULT_PROFILES)?;
             let action = Action {
                 control: button.control,
                 player: Player::Marge,
@@ -264,6 +303,62 @@ mod tests {
                 return Err(RenderError::Backend(format!(
                     "incorrect touch routing for {:?}",
                     button.control
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn swapped_touch_slots_move_symbols_and_route_selected_station()
+    -> Result<(), RenderError> {
+        use super::super::ACTION_NAMES;
+        use super::panel;
+        use crate::Control;
+
+        let profiles = DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\ntouch-player=3\n",
+                    "touch 3 primary=secondary\ntouch 3 secondary=primary\n"
+                ),
+            )
+            .map_err(RenderError::Backend)?;
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, &profiles)?;
+        let mut router = InputRouter::new(mapping);
+        let point = center(Control::Secondary, &DEFAULT_PROFILES)?;
+        if center(Control::Primary, &profiles)? != point {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let original = BUTTONS
+            .iter()
+            .find(|button| button.control == Control::Primary)
+            .ok_or(RenderError::InvalidSprite)?;
+        let buttons = panel(&profiles)?;
+        let remapped = buttons
+            .iter()
+            .find(|button| button.control == Control::Primary)
+            .ok_or(RenderError::InvalidSprite)?;
+        if remapped.glyph != original.glyph
+            || remapped.bounds() == original.bounds()
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        let action = Action {
+            control: Control::Primary,
+            player: Player::Bart,
+        };
+        let id = ContactId { device: 1, finger: 2 };
+        for (phase, down) in
+            [(ContactPhase::Down(point), true), (ContactPhase::Up, false)]
+        {
+            if router.handle(InputEvent::Contact { id, phase })
+                != [LogicalAction { action, down }]
+            {
+                return Err(RenderError::Backend(String::from(
+                    "wrong remapped touch action",
                 )));
             }
         }

@@ -90,3 +90,12 @@ only to remapped stations and replacement-controller inheritance. A hidden
 title run with the custom profile, integer mode, touch, original poses,
 enemy art and dummy audio passed. Analog axis remapping, touch profiles,
 interactive settings and hardware validation remain open.
+
+The same local profile now selects a station for the single optional
+touch panel and permits per-station permutations of the digital button
+slots. The symbols and hit regions are derived from the same remapped
+geometry. Tests reject invalid and repeated slots and verify a moved
+button routes to the selected station. A combined hidden title run
+passed with Bart selected, swapped touch buttons and custom keyboard
+bindings. Independent simultaneous touch panels, analog axes and
+hardware validation remain open.

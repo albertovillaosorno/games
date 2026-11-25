@@ -30,7 +30,7 @@
 // - Defaults:
 //   - Reject unknown controls, duplicates and malformed values.
 
-//! Bounded, reusable native keyboard and controller-button profiles.
+//! Bounded, reusable native digital input profiles.
 
 use std::collections::BTreeSet;
 
@@ -46,6 +46,10 @@ pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
     pub buttons: [[Button; ACTIONS]; PLAYERS],
     /// Globally unique keyboard bindings.
     pub keys: [[Scancode; ACTIONS]; PLAYERS],
+    /// Zero-based station selected for the visible touch panel.
+    pub touch_player: usize,
+    /// Per-station logical-action to physical touch-slot permutation.
+    pub touch_slots: [[usize; ACTIONS]; PLAYERS],
 }
 
 impl<const PLAYERS: usize, const ACTIONS: usize>
@@ -54,7 +58,9 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// Apply explicit overrides to a complete set of default bindings.
     ///
     /// Each record is `key PLAYER ACTION=NAME` or
-    /// `button PLAYER ACTION=NAME`; player numbers start at one.
+    /// `button PLAYER ACTION=NAME` or `touch PLAYER ACTION=SLOT`.
+    /// Player numbers start at one; touch slots use the action names.
+    /// Optional `touch-player=N` selects one station for the panel.
     /// The first nonempty line must be `version=1`.
     /// # Errors
     /// Rejects oversized, ambiguous, unknown or invalid mappings.
@@ -72,18 +78,35 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
             return Err(String::from("expected control profile version=1"));
         }
         let mut seen = BTreeSet::new();
+        let mut touch_selected = false;
         for line in lines {
+            if touch_selected && line.starts_with("touch-player=") {
+                return Err(String::from("duplicate touch-player"));
+            }
+            if let Some(value) = line.strip_prefix("touch-player=") {
+                self.touch_player = value
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|number| number.checked_sub(1))
+                    .ok_or("invalid touch player")?;
+                touch_selected = true;
+                continue;
+            }
             let (kind, player, action, name) = parse_line(line, &actions)?;
             if !seen.insert((kind, player, action)) {
                 return Err(String::from("duplicate control override"));
             }
-            self.override_binding((kind, player, action, name))?;
+            self.override_binding((kind, player, action, name), &actions)?;
         }
         self.validate()?;
         Ok(self)
     }
 
-    fn override_binding(&mut self, record: Record<'_>) -> Result<(), String> {
+    fn override_binding(
+        &mut self,
+        record: Record<'_>,
+        actions: &[&str],
+    ) -> Result<(), String> {
         let (kind, player, action, name) = record;
         let invalid = || String::from("unknown player, action or binding");
         match kind {
@@ -94,6 +117,17 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
                     .and_then(|row| row.get_mut(action))
                     .ok_or_else(invalid)?;
                 *slot = Button::from_string(name).ok_or_else(invalid)?;
+            },
+            Kind::Touch => {
+                let slot = self
+                    .touch_slots
+                    .get_mut(player)
+                    .and_then(|row| row.get_mut(action))
+                    .ok_or_else(invalid)?;
+                *slot = actions
+                    .iter()
+                    .position(|position| *position == name)
+                    .ok_or_else(invalid)?;
             },
             Kind::Key => {
                 let slot = self
@@ -111,6 +145,16 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// # Errors
     /// Rejects duplicate keyboard keys or same-station controller buttons.
     pub fn validate(&self) -> Result<(), String> {
+        if self.touch_player >= PLAYERS {
+            return Err(String::from("invalid touch player"));
+        }
+        for row in &self.touch_slots {
+            if row.iter().any(|slot| *slot >= ACTIONS)
+                || row.iter().collect::<BTreeSet<_>>().len() != ACTIONS
+            {
+                return Err(String::from("invalid or duplicate touch slot"));
+            }
+        }
         let mut keys = BTreeSet::new();
         for key in self.keys.iter().flatten().copied() {
             if !keys.insert(key_code(key)) {
@@ -137,6 +181,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
 enum Kind {
     Button,
     Key,
+    Touch,
 }
 
 type Record<'text> = (Kind, usize, usize, &'text str);
@@ -151,6 +196,7 @@ fn parse_line<'text>(
     let kind = match fields.next() {
         Some("key") => Kind::Key,
         Some("button") => Kind::Button,
+        Some("touch") => Kind::Touch,
         _ => return Err(invalid()),
     };
     let player = fields
@@ -179,6 +225,8 @@ mod tests {
     const DEFAULT: DigitalProfiles<2, 2> = DigitalProfiles {
         buttons: [[Button::A, Button::B]; 2],
         keys: [[Scancode::A, Scancode::B], [Scancode::C, Scancode::D]],
+        touch_player: 0,
+        touch_slots: [[0, 1]; 2],
     };
     const ACTIONS: [&str; 2] = ["primary", "secondary"];
 
@@ -186,7 +234,11 @@ mod tests {
     fn profile_overrides_only_selected_station_and_binding() {
         let configured = DEFAULT.configured(
             ACTIONS,
-            "version=1\nkey 2 primary=Space\nbutton 2 primary=x\n",
+            concat!(
+                "version=1\nkey 2 primary=Space\nbutton 2 primary=x\n",
+                "touch-player=2\ntouch 2 primary=secondary\n",
+                "touch 2 secondary=primary\n"
+            ),
         );
         assert_eq!(
             configured,
@@ -196,6 +248,8 @@ mod tests {
                     Scancode::Space,
                     Scancode::D
                 ]],
+                touch_player: 1,
+                touch_slots: [[0, 1], [1, 0]],
             })
         );
     }
@@ -212,6 +266,9 @@ mod tests {
             "version=1\nkey 1 primary=not-a-key",
             "version=1\nbutton 2 primary=not-a-button",
             "version=1\nkey 1 primary=Q\nkey 1 primary=R",
+            "version=1\ntouch-player=3",
+            "version=1\ntouch 2 primary=secondary",
+            "version=1\ntouch-player=1\ntouch-player=2",
         ] {
             assert!(DEFAULT.configured(ACTIONS, invalid).is_err());
         }
