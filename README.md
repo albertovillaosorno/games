@@ -168,30 +168,34 @@ revisions will be selected when onboarding each title.
 | 08 | Metal Slug 6 | Atomiswave |
 | 09 | Metal Slug 7 | Nintendo DS |
 | 10 | Metal Slug XX | Steam PC |
-| 11 | Angry Birds Space | Android |
-| 12 | Angry Birds Star Wars (2012) | Android |
-| 13 | Angry Birds Star Wars II | Android |
-| 14 | SUSH | Android |
-| 15 | Plants vs. Zombies: Replanted | PC Replanted |
-| 16 | Bugs Bunny: Lost in Time | Windows PC |
-| 17 | Bugs Bunny & Taz: Time Busters | Windows PC |
-| 18 | The Simpsons: Road Rage | Xbox |
-| 19 | Taz: Wanted | Windows PC |
-| 20 | SpongeBob: Revenge of the Flying Dutchman | GameCube |
-| 21 | The Simpsons: Hit & Run | Windows PC |
-| 22 | Crash Twinsanity | Xbox |
-| 23 | Sly Cooper and the Thievius Raccoonus | PS3 HD |
-| 24 | Sly 2: Band of Thieves | PS3 HD |
-| 25 | Sly 3: Honor Among Thieves | PS3 HD |
-| 26 | The Simpsons Game | PS3 |
-| 27 | El Chavo Kart | Xbox 360 |
-| 28 | Sly Cooper: Thieves in Time | PS3 |
-| 29 | Crash Team Racing Nitro-Fueled | PS4 |
-| 30 | Plants vs. Zombies 2 | Android |
-| 31 | Plants vs. Zombies 3: Evolved | Android Evolved |
-| 32 | SimCity BuildIt | Android |
-| 33 | Hytale | PC |
-| 34 | Grand Theft Auto VI | PS5 |
+| 11 | Super Mario Bros. | NES |
+| 12 | Super Mario Bros. 2 | NES (Western) |
+| 13 | Super Mario Bros. 3 | NES |
+| 14 | Angry Birds Space | Android |
+| 15 | Angry Birds Star Wars (2012) | Android |
+| 16 | Angry Birds Star Wars II | Android |
+| 17 | SUSH | Android |
+| 18 | Plants vs. Zombies: Replanted | PC Replanted |
+| 19 | Bugs Bunny: Lost in Time | Windows PC |
+| 20 | Bugs Bunny & Taz: Time Busters | Windows PC |
+| 21 | Luigi's Mansion | GameCube |
+| 22 | The Simpsons: Road Rage | Xbox |
+| 23 | Taz: Wanted | Windows PC |
+| 24 | SpongeBob: Revenge of the Flying Dutchman | GameCube |
+| 25 | The Simpsons: Hit & Run | Windows PC |
+| 26 | Crash Twinsanity | Xbox |
+| 27 | Sly Cooper and the Thievius Raccoonus | PS3 HD |
+| 28 | Sly 2: Band of Thieves | PS3 HD |
+| 29 | Sly 3: Honor Among Thieves | PS3 HD |
+| 30 | The Simpsons Game | PS3 |
+| 31 | El Chavo Kart | Xbox 360 |
+| 32 | Sly Cooper: Thieves in Time | PS3 |
+| 33 | Crash Team Racing Nitro-Fueled | PS4 |
+| 34 | Plants vs. Zombies 2 | Android |
+| 35 | Plants vs. Zombies 3: Evolved | Android Evolved |
+| 36 | SimCity BuildIt | Android |
+| 37 | Hytale | PC |
+| 38 | Grand Theft Auto VI | PS5 |
 
 ## Contributions
 

@@ -31,4 +31,13 @@ original Neo Geo arcade assets.
 
 ## Evidence
 
-Blocked: required original media is not present in the reference directory.
+Local Neo Geo container extracted from a single-member ZIP; the ZIP
+integrity check passed and the container begins with NEO version 1 magic.
+The original archive is retained locally in source-archives/.
+An alternate chip-ROM archive also passed ZIP integrity checks. Compare
+its member identities and the NEO container before pinning one edition.
+
+Media absence is cleared. Inspect media structure, edition and importer
+compatibility. Attempt
+bounded extraction without requiring a pre-known source checksum.
+No implementation or parity completion is claimed.

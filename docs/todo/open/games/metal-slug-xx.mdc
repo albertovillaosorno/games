@@ -33,4 +33,12 @@ superior source sprites.
 
 ## Evidence
 
-Blocked: required original media is not present in the reference directory.
+Local Windows PC files supplied under pc/, including data.snk and the
+application-ID marker 975680. All 15 supplied files were retained.
+No executables or installers were run. Authenticity, exact build and
+completeness against official distribution metadata remain unverified.
+
+Media absence is cleared. Inspect media structure, edition and importer
+compatibility. Attempt
+bounded extraction without requiring a pre-known source checksum.
+No implementation or parity completion is claimed.

@@ -32,4 +32,10 @@ resources.
 
 ## Evidence
 
-Blocked: required original media is not present in the reference directory.
+Local Atomiswave ROM archive and BIOS archive supplied. Both passed ZIP
+integrity checks. Preserve the archives for the shared MAME adapter.
+
+Media absence is cleared. Inspect media structure, edition and importer
+compatibility. Attempt
+bounded extraction without requiring a pre-known source checksum.
+No implementation or parity completion is claimed.

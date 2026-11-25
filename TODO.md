@@ -168,6 +168,27 @@ superior source sprites.
 
 [TODO - Metal Slug XX](docs/todo/open/games/metal-slug-xx.mdc)
 
+### TODO - Super Mario Bros. (1985)
+
+Original NES release; preserve side-scrolling platforming, levels, power-ups
+and original two-player turn-taking.
+
+[TODO - Super Mario Bros. (1985)](docs/todo/open/games/super-mario-bros.mdc)
+
+### TODO - Super Mario Bros. 2
+
+Western NES release, not The Lost Levels; preserve character abilities,
+vegetable throwing, doors and horizontal and vertical stage traversal.
+
+[TODO - Super Mario Bros. 2](docs/todo/open/games/super-mario-bros-2.mdc)
+
+### TODO - Super Mario Bros. 3
+
+Original NES release; preserve world-map navigation, stage routes, suits,
+power-ups, airships and original campaign.
+
+[TODO - Super Mario Bros. 3](docs/todo/open/games/super-mario-bros-3.mdc)
+
 ### TODO - Angry Birds Space
 
 latest complete accessible official Android release, subject to checking content
@@ -222,6 +243,13 @@ Preserve cooperative gameplay.
 
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Bugs Bunny & Taz: Time Busters](docs/todo/open/games/bugs-bunny-taz-time-busters.mdc)
+
+### TODO - Luigi's Mansion
+
+Original 2001 Nintendo GameCube release; preserve mansion exploration,
+ghost capture, puzzles, rooms, bosses and original campaign. No sequels.
+
+[TODO - Luigi's Mansion](docs/todo/open/games/luigis-mansion.mdc)
 
 ### TODO - The Simpsons: Road Rage
 

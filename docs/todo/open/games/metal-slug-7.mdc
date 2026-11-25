@@ -31,4 +31,11 @@ original Nintendo DS release, preserving its distinctive content.
 
 ## Evidence
 
-Blocked: required original media is not present in the reference directory.
+Local Nintendo DS image extracted from the supplied single-member ZIP.
+ZIP integrity passed; the header identifies METALSLUG7, YM7P, revision 00.
+The original archive is retained locally in source-archives/.
+
+Media absence is cleared. Inspect media structure, edition and importer
+compatibility. Attempt
+bounded extraction without requiring a pre-known source checksum.
+No implementation or parity completion is claimed.

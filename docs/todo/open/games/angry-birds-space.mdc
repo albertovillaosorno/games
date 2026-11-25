@@ -6,7 +6,7 @@ priority: "p4"
 area: "games"
 task: "TODO - Angry Birds Space"
 depends_on:
-  - "metal-slug-xx"
+  - "super-mario-bros-3"
 validation:
   - "cargo validate"
 ---

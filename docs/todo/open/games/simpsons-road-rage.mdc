@@ -6,7 +6,7 @@ priority: "p4"
 area: "games"
 task: "TODO - The Simpsons: Road Rage"
 depends_on:
-  - "bugs-bunny-taz-time-busters"
+  - "luigis-mansion"
 validation:
   - "cargo validate"
 ---
