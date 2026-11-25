@@ -490,3 +490,10 @@ by eight times the panel count. It rejects remote-reserved seats
 before startup. Synthetic multi-contact tests check simultaneous
 independent actions and releases across adaptive widths.
 Physical touchscreen admission and device capacity remain unverified.
+
+Multi-panel touch contacts retain the region of their initial press.
+Dragging outside that region releases the current action, and returning
+can resume it; dragging into another seat cannot operate its controls.
+An initial press outside every panel does not acquire a seat mid-drag.
+The single-panel layout retains its existing unrestricted routing.
+Engine and native title regressions exercise these transitions.

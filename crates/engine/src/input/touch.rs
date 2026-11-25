@@ -31,7 +31,8 @@
 
 //! Bounded touch contact geometry and lifetime tracking.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use crate::presentation::{PresentationLayout, Viewport};
@@ -160,6 +161,7 @@ impl TouchZone {
 #[derive(Clone, Debug)]
 pub struct TouchLayout {
     limit: NonZeroUsize,
+    regions: Vec<TouchZone>,
     zones: Vec<TouchZone>,
 }
 
@@ -170,7 +172,36 @@ impl TouchLayout {
     /// do not hold an action but still occupy a contact slot until release.
     #[must_use]
     pub const fn new(zones: Vec<TouchZone>, limit: NonZeroUsize) -> Self {
-        Self { limit, zones }
+        Self {
+            limit,
+            regions: Vec::new(),
+            zones,
+        }
+    }
+
+    fn scope_at(&self, point: TouchPoint) -> ContactScope {
+        if self.regions.is_empty() {
+            return ContactScope::Unrestricted;
+        }
+        ContactScope::Region(
+            self.regions
+                .iter()
+                .find(|region| region.contains(point))
+                .map(|region| region.id),
+        )
+    }
+
+    /// Limit each contact to the region containing its initial press.
+    ///
+    /// The first containing region determines the scope for the entire
+    /// contact lifetime. Equal region identifiers denote the same scope.
+    /// Motion outside that scope releases the current action; returning
+    /// reactivates it. A press outside every region cannot activate any
+    /// zone until released. An empty region list leaves routing unrestricted.
+    #[must_use]
+    pub fn with_regions(mut self, regions: Vec<TouchZone>) -> Self {
+        self.regions = regions;
+        self
     }
 
     /// Look up a zone on the entire normalized control surface.
@@ -181,6 +212,18 @@ impl TouchLayout {
             .find(|zone| zone.contains(point))
             .map(|zone| zone.id)
     }
+
+    fn zone_in_scope(
+        &self,
+        point: TouchPoint,
+        scope: ContactScope,
+    ) -> Option<u16> {
+        if scope == ContactScope::Region(None) || self.scope_at(point) != scope
+        {
+            return None;
+        }
+        self.zone_at(point)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,9 +232,15 @@ pub(super) enum ContactUpdate {
     Zone(Option<u16>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContactScope {
+    Region(Option<u16>),
+    Unrestricted,
+}
+
 #[derive(Debug)]
 pub(super) struct Contacts {
-    active: BTreeSet<ContactId>,
+    active: BTreeMap<ContactId, ContactScope>,
 }
 
 impl Contacts {
@@ -200,7 +249,24 @@ impl Contacts {
     }
 
     pub(super) const fn new() -> Self {
-        Self { active: BTreeSet::new() }
+        Self { active: BTreeMap::new() }
+    }
+
+    fn press(
+        &mut self,
+        layout: &TouchLayout,
+        contact: ContactId,
+        point: TouchPoint,
+    ) -> ContactUpdate {
+        if self.active.len() >= layout.limit.get() {
+            return ContactUpdate::Ignored;
+        }
+        let Entry::Vacant(entry) = self.active.entry(contact) else {
+            return ContactUpdate::Ignored;
+        };
+        let scope = layout.scope_at(point);
+        let _scope = entry.insert(scope);
+        ContactUpdate::Zone(layout.zone_in_scope(point, scope))
     }
 
     pub(super) fn update(
@@ -209,29 +275,25 @@ impl Contacts {
         contact: ContactId,
         phase: ContactPhase,
     ) -> ContactUpdate {
-        let point = match phase {
-            ContactPhase::Down(point) => {
-                if self.active.len() >= layout.limit.get()
-                    || !self.active.insert(contact)
-                {
-                    return ContactUpdate::Ignored;
-                }
-                Some(point)
-            },
+        match phase {
+            ContactPhase::Down(point) => self.press(layout, contact, point),
             ContactPhase::Motion(point) => {
-                if !self.active.contains(&contact) {
+                let Some(&scope) = self.active.get(&contact) else {
                     return ContactUpdate::Ignored;
-                }
-                point
+                };
+                ContactUpdate::Zone(
+                    point.and_then(|position| {
+                        layout.zone_in_scope(position, scope)
+                    }),
+                )
             },
             ContactPhase::Up => {
-                if !self.active.remove(&contact) {
+                if self.active.remove(&contact).is_none() {
                     return ContactUpdate::Ignored;
                 }
-                None
+                ContactUpdate::Zone(None)
             },
-        };
-        ContactUpdate::Zone(point.and_then(|position| layout.zone_at(position)))
+        }
     }
 }
 
@@ -322,6 +384,41 @@ mod tests {
         down: bool,
     ) -> LogicalAction<&'static str> {
         LogicalAction { action, down }
+    }
+
+    #[test]
+    fn contact_scope_releases_on_exit_and_does_not_cross_regions() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_touch(1, "left");
+        mapping.bind_touch(2, "right");
+        mapping.set_touch_layout(
+            TouchLayout::new(
+                vec![zone(1, 0, 199), zone(2, 400, 699)],
+                NonZeroUsize::MIN,
+            )
+            .with_regions(vec![zone(10, 0, 399), zone(20, 400, 799)]),
+        );
+        let mut router = InputRouter::new(mapping);
+        let input = |phase| event(1, 1, phase);
+        assert_eq!(router.handle(input(ContactPhase::Down(LEFT))), [action(
+            "left", true
+        )]);
+        assert_eq!(router.handle(input(ContactPhase::Motion(Some(RIGHT)))), [
+            action("left", false)
+        ]);
+        assert_eq!(router.handle(input(ContactPhase::Motion(Some(RIGHT)))), []);
+        assert_eq!(router.handle(input(ContactPhase::Motion(Some(LEFT)))), [
+            action("left", true)
+        ]);
+        assert_eq!(router.handle(input(ContactPhase::Up)), [action(
+            "left", false
+        )]);
+        assert_eq!(router.handle(input(ContactPhase::Down(OUTSIDE))), []);
+        assert_eq!(router.handle(input(ContactPhase::Motion(Some(RIGHT)))), []);
+        assert_eq!(router.handle(input(ContactPhase::Up)), []);
+        assert_eq!(router.handle(input(ContactPhase::Down(RIGHT))), [action(
+            "right", true
+        )]);
     }
 
     #[test]

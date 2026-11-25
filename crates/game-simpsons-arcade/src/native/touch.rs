@@ -204,6 +204,28 @@ fn panel_top(index: usize) -> Result<u16, RenderError> {
         .ok_or(RenderError::TooLarge)
 }
 
+fn panel_region(
+    row: usize,
+    top: u16,
+    height: u16,
+) -> Result<TouchZone, RenderError> {
+    let bottom = top
+        .checked_add(PANEL_HEIGHT)
+        .ok_or(RenderError::InvalidDimensions)?;
+    let min = TouchPoint {
+        x: 0,
+        y: boundary(top, height).ok_or(RenderError::InvalidDimensions)?,
+    };
+    let max = TouchPoint {
+        x: u16::MAX,
+        y: boundary(bottom, height)
+            .and_then(|edge| edge.checked_sub(1))
+            .ok_or(RenderError::InvalidDimensions)?,
+    };
+    let id = u16::try_from(row).map_err(|_error| RenderError::TooLarge)?;
+    TouchZone::new(id, min, max).ok_or(RenderError::InvalidDimensions)
+}
+
 pub(super) fn center(
     player: Player,
     control: Control,
@@ -231,9 +253,13 @@ pub(super) fn install(
 ) -> Result<(), RenderError> {
     let count = seats(profiles).count();
     let mut zones = Vec::with_capacity(count.saturating_mul(BUTTONS.len()));
+    let mut regions = Vec::new();
     let height = height(profiles)?;
     for (row, player) in seats(profiles).enumerate() {
         let offset = panel_top(row)?;
+        if count > 1 {
+            regions.push(panel_region(row, offset, height)?);
+        }
         for button in panel(profiles, player)? {
             let id = u16::try_from(zones.len())
                 .map_err(|_error| RenderError::TooLarge)?;
@@ -249,10 +275,13 @@ pub(super) fn install(
             zones.push(zone);
         }
     }
-    mapping.set_touch_layout(TouchLayout::new(
-        zones,
-        size(count.saturating_mul(CONTACTS_PER_PANEL))?,
-    ));
+    mapping.set_touch_layout(
+        TouchLayout::new(
+            zones,
+            size(count.saturating_mul(CONTACTS_PER_PANEL))?,
+        )
+        .with_regions(regions),
+    );
     Ok(())
 }
 
@@ -545,6 +574,58 @@ mod tests {
                 id,
                 phase: ContactPhase::Up,
             }) != [LogicalAction { action, down: false }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multi_panel_drag_stays_with_initial_seat() -> Result<(), RenderError> {
+        use super::super::ACTION_NAMES;
+        use crate::Control;
+
+        let profiles = DEFAULT_PROFILES
+            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+            .map_err(RenderError::Backend)?;
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, &profiles)?;
+        let mut router = InputRouter::new(mapping);
+        let id = ContactId { device: 1, finger: 2 };
+        let first = center(Player::Marge, Control::Right, &profiles)?;
+        let second = center(Player::Bart, Control::Right, &profiles)?;
+        let blank = TouchPoint { x: 30_000, ..first };
+        let action = Action {
+            control: Control::Right,
+            player: Player::Marge,
+        };
+        let press = || Some(LogicalAction { action, down: true });
+        let release = || Some(LogicalAction { action, down: false });
+        for (phase, expected) in [
+            (ContactPhase::Down(blank), None),
+            (ContactPhase::Motion(Some(second)), None),
+            (ContactPhase::Motion(Some(first)), press()),
+            (ContactPhase::Motion(Some(second)), release()),
+            (ContactPhase::Motion(Some(first)), press()),
+            (ContactPhase::Motion(None), release()),
+            (ContactPhase::Up, None),
+            (ContactPhase::Down(TouchPoint { x: first.x, y: 0 }), None),
+            (ContactPhase::Motion(Some(first)), None),
+            (ContactPhase::Up, None),
+            (
+                ContactPhase::Down(second),
+                Some(LogicalAction {
+                    action: Action {
+                        player: Player::Bart,
+                        ..action
+                    },
+                    down: true,
+                }),
+            ),
+        ] {
+            if router.handle(InputEvent::Contact { id, phase }).as_slice()
+                != expected.as_slice()
             {
                 return Err(RenderError::InvalidSprite);
             }

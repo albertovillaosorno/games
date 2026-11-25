@@ -233,7 +233,9 @@ use `touch-players=1,2,3,4` instead of `touch-player=3`. Select any nonempty
 subset; duplicate seats or selection records are rejected. Panels stack
 in ascending seat order below the game, with visible seat numbers when
 more than one is enabled. All selected seats can hold controls at once;
-keyboard and controllers remain usable. A LAN host rejects any selection
+keyboard and controllers remain usable. A contact stays assigned to the
+initial panel until release; dragging elsewhere releases held actions
+without activating another panel. A LAN host rejects any selection
 that includes a reserved remote seat. Physical touchscreen testing and
 interactive panel layout editing remain open.
 
