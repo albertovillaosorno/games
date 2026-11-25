@@ -56,8 +56,8 @@ enum Kind {
 impl Kind {
     const fn duration(self, player: Player) -> u8 {
         match self {
-            Self::Attack => Maneuver::Attack { tick: 0 }.duration(player),
-            Self::Jump => Maneuver::Jump { tick: 0 }.duration(player),
+            Self::Attack => Maneuver::Attack { tick: 0 }.pose_duration(player),
+            Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Walk => walk_duration(player),
         }
     }
@@ -146,7 +146,7 @@ impl PoseArt {
     ) -> Option<Art> {
         let (kind, tick) = match station.maneuver {
             Maneuver::Attack { tick } => (Kind::Attack, tick),
-            Maneuver::Jump { tick } => (Kind::Jump, tick),
+            Maneuver::Jump(motion) => (Kind::Jump, motion.pose_tick()),
             Maneuver::Idle => {
                 (Kind::Walk, walking_offset(player, station.walking_ticks?)?)
             },

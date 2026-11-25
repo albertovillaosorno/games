@@ -55,7 +55,9 @@ The isolated attack and jump timings are now modeled. Jump visibly
 raises the idle actor art using an approximate elevation curve. Attack
 retains its opening facing, with approximate slow horizontal drift and
 no vertical drift. Jump permits direction changes. The pose catalogue and
-combat encounter extend this preview. Held-jump variants are omitted.
+combat encounter extend this preview. Hold Jump for a longer, higher
+flight; a short tap lasts 31 ticks and a full hold 58 ticks. The existing
+short-jump art is reused, so original held-jump poses remain unverified.
 
 For original attack and jump poses, optionally pass
 `--poses FILE` after `--touch` (if used) and before PARENT. The local

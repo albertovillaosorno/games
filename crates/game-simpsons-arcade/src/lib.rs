@@ -58,7 +58,7 @@ use games::input::LogicalAction;
 use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
 use games::session::{LocalSession, MenuInput, SessionEffect};
-pub use maneuver::Maneuver;
+pub use maneuver::{JumpMotion, Maneuver};
 
 /// Fixed reference screen period: 384 by 264 clocks at 6 MHz.
 pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
@@ -284,7 +284,18 @@ impl Slot {
         }
     }
 
-    const fn edge(&mut self, control: Control, down: bool) -> bool {
+    fn edge(
+        &mut self,
+        control: Control,
+        down: bool,
+        pending: &mut Option<Maneuver>,
+    ) -> bool {
+        if control == Control::Secondary && !down {
+            self.station.maneuver.release_jump();
+            if let Some(maneuver) = pending {
+                maneuver.release_jump();
+            }
+        }
         let mask = control.mask();
         let was_held = self.held & mask != 0;
         if down {
@@ -469,11 +480,13 @@ impl Cabinet {
             return;
         };
         let index = character.index();
-        let Some(slot) = self.slots.get_mut(index) else {
+        let (Some(slot), Some(queued)) =
+            (self.slots.get_mut(index), pending.get_mut(index))
+        else {
             return;
         };
         let control = change.action.control;
-        if !slot.edge(control, change.down) {
+        if !slot.edge(control, change.down, queued) {
             return;
         }
         let playing = self.session.phase() == Phase::Playing;
@@ -564,7 +577,10 @@ impl Cabinet {
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
         {
-            slot.station.maneuver = slot.station.maneuver.advance(player);
+            slot.station.maneuver = slot
+                .station
+                .maneuver
+                .advance(player, slot.held(Control::Secondary));
             if let Some(maneuver) = queued {
                 slot.begin_maneuver(maneuver);
             }
@@ -743,7 +759,7 @@ fn queue_maneuver(
     let maneuver = if control == Control::Primary {
         Maneuver::Attack { tick: 0 }
     } else {
-        Maneuver::Jump { tick: 0 }
+        Maneuver::jump()
     };
     if let Some(queued) = pending.get_mut(index) {
         let _first = queued.get_or_insert(maneuver);
@@ -1034,7 +1050,8 @@ mod tests {
     }
 
     fn assert_attack_recovery(mut state: Cabinet, player: Player) {
-        let end = 3 + u64::from(Maneuver::Attack { tick: 0 }.duration(player));
+        let end =
+            3 + u64::from(Maneuver::Attack { tick: 0 }.pose_duration(player));
         for tick in 15..end {
             state.input_step(tick, &[]);
         }
@@ -1064,7 +1081,7 @@ mod tests {
             change(Player::Marge, Control::Up, true),
         ]);
         let [turned, ..] = state.stations();
-        assert_eq!(turned.maneuver, Maneuver::Jump { tick: 1 });
+        assert!(matches!(turned.maneuver, Maneuver::Jump(j) if j.tick() == 1));
         assert_eq!(turned.facing, Facing::Left);
         assert_eq!(turned.position.x, before.position.x.saturating_sub(2));
         assert_eq!(turned.position.y, before.position.y - 2);
@@ -1104,7 +1121,7 @@ mod tests {
         let [attacking, jumping, ..] = state.stations();
         assert_eq!(attacking.maneuver, Maneuver::Attack { tick: 0 });
         assert_eq!(attacking.position, before.position);
-        assert_eq!(jumping.maneuver, Maneuver::Jump { tick: 0 });
+        assert_eq!(jumping.maneuver, Maneuver::jump());
         assert_eq!(jumping.position, homer.position);
         state.input_step(4, &pulse(Player::Marge, Control::Secondary));
         for tick in 5..20 {
@@ -1119,10 +1136,12 @@ mod tests {
     }
 
     fn assert_maneuvers_at_end(state: &Cabinet, position: Point) {
-        let [attack_end, still_airborne, ..] = state.stations();
+        let [attack_end, airborne, ..] = state.stations();
         assert_eq!(attack_end.position, position);
         assert_eq!(attack_end.maneuver, Maneuver::Attack { tick: 16 });
-        assert_eq!(still_airborne.maneuver, Maneuver::Jump { tick: 16 });
+        assert!(
+            matches!(airborne.maneuver, Maneuver::Jump(j) if j.tick() == 16)
+        );
     }
 
     #[test]
@@ -1157,31 +1176,79 @@ mod tests {
     }
 
     #[test]
+    fn held_jump_lift_is_station_local_and_requires_unbroken_hold() {
+        let mut state = four_playing();
+        let ground = state.stations().map(|station| station.position);
+        state.input_step(3, &[
+            change(Player::Marge, Control::Secondary, true),
+            change(Player::Homer, Control::Secondary, true),
+            change(Player::Homer, Control::Secondary, false),
+            change(Player::Homer, Control::Secondary, true),
+        ]);
+        for tick in 4..34 {
+            state.input_step(tick, &[]);
+        }
+        assert_independent_lift(&mut state);
+        for tick in 35..61 {
+            state.input_step(tick, &[]);
+        }
+        assert_held_jump_lands(&mut state);
+        assert_eq!(state.stations().map(|station| station.position), ground);
+    }
+
+    fn assert_independent_lift(state: &mut Cabinet) {
+        let [marge, homer, bart, lisa] = state.stations();
+        assert!(marge.maneuver.elevation() > homer.maneuver.elevation());
+        assert_eq!(bart.maneuver, Maneuver::Idle);
+        assert_eq!(lisa.maneuver, Maneuver::Idle);
+        state.input_step(34, &[]);
+        let [long, short, ..] = state.stations();
+        assert!(matches!(long.maneuver, Maneuver::Jump(_)));
+        assert_eq!(short.maneuver, Maneuver::Idle);
+    }
+
+    fn assert_held_jump_lands(state: &mut Cabinet) {
+        assert!(matches!(
+            state.stations().first().map(|station| station.maneuver),
+            Some(Maneuver::Jump(_))
+        ));
+        state.input_step(61, &[]);
+        assert!(
+            state
+                .stations()
+                .iter()
+                .all(|station| { station.maneuver == Maneuver::Idle })
+        );
+    }
+
+    #[test]
     fn jump_requires_new_press_after_landing() {
         let mut state = four_playing();
         let [_, homer, ..] = state.stations();
         state.input_step(3, &[change(Player::Homer, Control::Secondary, true)]);
-        for tick in 4..35 {
+        for tick in 4..62 {
             state.input_step(tick, &[]);
         }
         let [_, landed, ..] = state.stations();
         assert_eq!(landed.maneuver, Maneuver::Idle);
         assert_eq!(landed.position, homer.position);
-        state.input_step(35, &[change(
+        state.input_step(62, &[change(
             Player::Homer,
             Control::Secondary,
             true,
         )]);
         let [_, held, ..] = state.stations();
         assert_eq!(held.maneuver, Maneuver::Idle);
-        state.input_step(36, &[change(
+        state.input_step(63, &[change(
             Player::Homer,
             Control::Secondary,
             false,
         )]);
-        state.input_step(37, &pulse(Player::Homer, Control::Secondary));
+        state.input_step(64, &pulse(Player::Homer, Control::Secondary));
         let [_, restarted, ..] = state.stations();
-        assert_eq!(restarted.maneuver, Maneuver::Jump { tick: 0 });
+        assert!(
+            matches!(restarted.maneuver, Maneuver::Jump(j) if j.tick() == 0)
+        );
     }
 
     #[test]

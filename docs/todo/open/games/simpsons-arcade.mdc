@@ -879,3 +879,26 @@ the two-seat profile swapped seat four's action slots. Each run also
 verified the 80-column street camera, 600 movement submissions and
 51 combat submissions without missing the 60 Hz budget. These are
 synthetic contacts through the native projection, not physical devices.
+
+The reference now distinguishes short and held jumps: Marge's 3-, 20-
+and 60-tick button holds produced 31, 51 and 58 displayed airborne
+ticks. Fresh isolated 60-tick holds for Bart and Lisa also produced
+58-tick sequences; Homer's late landing was interrupted by an enemy.
+The title implements bounded quarter-pixel lift with stronger upward
+deceleration after release and ordinary descent. A short tap lasts
+31 ticks, a 20-tick hold 49 ticks, and an uninterrupted hold 58 ticks.
+Release is latched for the current flight; another press cannot renew
+lift. Each station retains independent ground movement and attack
+admission. The existing short-jump pose catalogue is reused and its
+final pose is held beyond its range. This is a timing and height
+approximation, not reconstructed original physics or new long-jump
+art. Intermediate original timings, pivots, collisions and full
+enemy interaction remain unverified.
+
+Fresh normal workspace validation and native offscreen touch smoke
+with locally verified poses, encounter and audio passed. The native
+smoke now also checks prolonged lift after the short-tap landing
+time, changed frame pixels, unchanged ground anchor and landing.
+The separate opt-in workspace controller smoke exposed concurrent
+SDL initialization between its two test threads; that issue was
+reported to the network-contract owner for independent correction.

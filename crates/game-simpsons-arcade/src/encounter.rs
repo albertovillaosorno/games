@@ -129,7 +129,7 @@ impl Enemy {
         if next == ENEMY_STRIKE {
             for slot in slots.iter_mut().filter(|slot| {
                 slot.station.can_fight()
-                    && !matches!(slot.station.maneuver, Maneuver::Jump { .. })
+                    && !matches!(slot.station.maneuver, Maneuver::Jump(_))
                     && in_range(
                         self.position,
                         self.facing,

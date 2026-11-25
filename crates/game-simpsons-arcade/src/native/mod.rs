@@ -1340,6 +1340,7 @@ fn smoke(
         smoke_touch_movement(scene, &mut controls, &mut simulation)?;
     }
     smoke_jump(scene, art, &mut controls, &mut simulation)?;
+    smoke_held_jump(scene, art, &mut controls, &mut simulation)?;
     if !art.poses.is_empty() {
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
@@ -1549,6 +1550,41 @@ fn smoke_admission(
     Ok(())
 }
 
+fn smoke_held_jump(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let [before, ..] = simulation.state().stations();
+    let _drawn = art.present(scene, simulation.state())?;
+    let pixels = scene.readback().map_err(failure)?;
+    smoke_jump_edge(controls, simulation, true)?;
+    for _ in 0..32u8 {
+        let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    }
+    let [airborne, ..] = simulation.state().stations();
+    if airborne.maneuver.elevation() <= 51
+        || airborne.position != before.position
+    {
+        return Err(failure("held jump did not extend lift"));
+    }
+    let _redrawn = art.present(scene, simulation.state())?;
+    if pixels == scene.readback().map_err(failure)? {
+        return Err(failure("held jump not visibly presented"));
+    }
+    for _ in 32..59u8 {
+        let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    }
+    let [landed, ..] = simulation.state().stations();
+    if landed.maneuver != Maneuver::Idle || landed.position != before.position {
+        return Err(failure("held jump did not return to ground"));
+    }
+    smoke_jump_edge(controls, simulation, false)?;
+    let _released = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    Ok(())
+}
+
 fn smoke_jump(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -1558,22 +1594,12 @@ fn smoke_jump(
     let [before, ..] = simulation.state().stations();
     let _drawn = art.present(scene, simulation.state())?;
     let pixels = scene.readback().map_err(failure)?;
-    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
     for down in [true, false] {
-        controls.route(
-            InputEvent::Key {
-                code: key_code(
-                    controls.key(Player::Marge, Control::Secondary)?,
-                ),
-                down,
-            },
-            TICK_INTERVAL.saturating_mul(tick),
-            simulation,
-        )?;
+        smoke_jump_edge(controls, simulation, down)?;
     }
     let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
     let [airborne, ..] = simulation.state().stations();
-    if airborne.maneuver != (Maneuver::Jump { tick: 0 })
+    if !matches!(airborne.maneuver, Maneuver::Jump(j) if j.tick() == 0)
         || airborne.position != before.position
     {
         return Err(failure("jump did not preserve ground position"));
@@ -1589,6 +1615,23 @@ fn smoke_jump(
     if landed.maneuver != Maneuver::Idle || landed.position != before.position {
         return Err(failure("jump did not return to ground"));
     }
+    Ok(())
+}
+
+fn smoke_jump_edge(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    down: bool,
+) -> Result<(), RenderError> {
+    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+    controls.route(
+        InputEvent::Key {
+            code: key_code(controls.key(Player::Marge, Control::Secondary)?),
+            down,
+        },
+        TICK_INTERVAL.saturating_mul(tick),
+        simulation,
+    )?;
     Ok(())
 }
 
