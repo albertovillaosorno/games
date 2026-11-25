@@ -40,8 +40,9 @@ use games_platform::lan::secure::{PeerFingerprint, SecureFrameStream};
 use games_platform_storage::file::{snapshot, snapshot_secret};
 use rustls::pki_types::{PrivateKeyDer, ServerName};
 
-use super::launch::{Fields, fields, required};
-use super::{Profiles, load_profiles};
+use super::launch::{
+    ControllerLaunch, Fields, ResolvedControls, fields, required,
+};
 use crate::lan::{HostLan, session_config};
 
 const MAX_CATALOGUE: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
@@ -190,6 +191,7 @@ struct ClientSelection {
     host: PublicFiles,
     identity: LocalFiles,
     name: String,
+    settings: Option<PathBuf>,
     touch_enabled: bool,
 }
 
@@ -218,6 +220,9 @@ impl ClientSelection {
         let controls = values
             .remove("controls")
             .map(|relative| base.join(relative));
+        let settings = values
+            .remove("settings")
+            .map(|relative| base.join(relative));
         let touch_enabled = match values.remove("touch") {
             None | Some("off") => false,
             Some("on") => true,
@@ -234,27 +239,36 @@ impl ClientSelection {
             host,
             identity,
             name,
+            settings,
             touch_enabled,
         })
     }
 }
 
 pub(super) struct ControllerConnection {
-    pub(super) profiles: Profiles,
+    pub(super) controls: ResolvedControls,
     pub(super) stream: SecureFrameStream,
     pub(super) touch_enabled: bool,
 }
 
-pub(super) fn open_client(path: &Path) -> Result<ControllerConnection, String> {
-    let selection = ClientSelection::parse(path, &catalogue(path)?)?;
-    let profiles = load_profiles(selection.controls.as_deref())?;
+pub(super) fn open_client(
+    launch: ControllerLaunch,
+) -> Result<ControllerConnection, String> {
+    let selection = ClientSelection::parse(
+        &launch.catalogue,
+        &catalogue(&launch.catalogue)?,
+    )?;
+    let controls = launch.select_controls(
+        selection.controls.as_deref(),
+        selection.settings.as_deref(),
+    )?;
     if selection.touch_enabled
-        && profiles.touch_players != [true, false, false, false]
+        && controls.profiles.touch_players != [true, false, false, false]
     {
         return Err(String::from("remote touch requires station 1 only"));
     }
     Ok(ControllerConnection {
-        profiles,
+        controls,
         stream: selection.connect()?,
         touch_enabled: selection.touch_enabled,
     })
@@ -338,16 +352,22 @@ mod tests {
         if selection.host.root != Path::new("client/approved-root.der")
             || selection.host.leaf != Path::new("client/approved-leaf.der")
             || selection.controls.is_some()
+            || selection.settings.is_some()
             || selection.touch_enabled
         {
             return Err(String::from("host paths not anchored"));
         }
         let configured = ClientSelection::parse(
             path,
-            &format!("{text}controls=profiles/remote.local\ntouch=on\n"),
+            &format!(
+                "{text}controls=profiles/remote.local\n\
+                 settings=preferences\ntouch=on\n"
+            ),
         )?;
         if configured.controls.as_deref()
             != Some(Path::new("client/profiles/remote.local"))
+            || configured.settings.as_deref()
+                != Some(Path::new("client/preferences"))
             || !configured.touch_enabled
         {
             return Err(String::from("controller profile path not anchored"));
@@ -358,6 +378,7 @@ mod tests {
             format!("{text}peer2_leaf=l\n"),
             format!("{text}name=override\n"),
             format!("{text}controls=a\ncontrols=b\n"),
+            format!("{text}settings=a\nsettings=b\n"),
             format!("{text}touch=maybe\n"),
             format!("{text}touch=on\ntouch=off\n"),
         ] {

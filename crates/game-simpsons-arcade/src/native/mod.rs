@@ -1235,12 +1235,7 @@ fn project_contact(
 /// Rejects invalid inputs, missing art, unsupported native device or input.
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "--lan-controller") {
-        let [_, path] = args.as_slice() else {
-            return Err(String::from(
-                "usage: simpsons-arcade --lan-controller FILE",
-            ));
-        };
-        return controller::run(Path::new(path));
+        return controller::run(args);
     }
     let load_started = Instant::now();
     let launch::Launch {
@@ -1285,13 +1280,6 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             )
         });
     result.map_err(|error| format!("{error:?}"))
-}
-
-fn load_profiles(selection: Option<&Path>) -> Result<Profiles, String> {
-    let Some(path) = selection else {
-        return Ok(DEFAULT_PROFILES);
-    };
-    DEFAULT_PROFILES.configured(ACTION_NAMES, &read_profile(path)?)
 }
 
 fn profile_limit() -> Result<NonZeroU64, String> {

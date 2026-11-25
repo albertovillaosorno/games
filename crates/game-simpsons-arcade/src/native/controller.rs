@@ -30,8 +30,8 @@
 // - Defaults:
 //   - No discovery, automatic connections, account service or world display.
 
+use std::ffi::OsString;
 use std::io::ErrorKind;
-use std::path::Path;
 use std::time::Duration;
 use std::{mem, thread};
 
@@ -42,9 +42,10 @@ use games_platform_graphics::linux::sprites::{
 use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
+use super::launch::ControllerLaunch;
 use super::{
     Controls, DEFAULT_PROFILES, EVENT_BUDGET, LocalActions, Profiles,
-    dimension, key_label, lan, project_contact, size, touch,
+    dimension, failure, key_label, lan, project_contact, size, touch,
 };
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
@@ -250,13 +251,13 @@ fn interactive(
     connection: lan::ControllerConnection,
 ) -> Result<(), RenderError> {
     let lan::ControllerConnection {
-        profiles,
+        controls: resolved,
         stream,
         touch_enabled,
     } = connection;
     let mut controller = ClientLan::new(stream);
     let mut input = startup.input;
-    let mut controls = controller_controls(&profiles, touch_enabled)?;
+    let mut controls = controller_controls(&resolved.profiles, touch_enabled)?;
     if touch_enabled {
         input.enable_touch();
     }
@@ -264,8 +265,9 @@ fn interactive(
         enqueue(&mut controller, controls.actions(event)?)
             .map_err(|_rejected| connection_failure(ErrorKind::WouldBlock))?;
     }
-    let draws = controller_draws(scene, &profiles, touch_enabled)?;
+    let draws = controller_draws(scene, &resolved.profiles, touch_enabled)?;
     let mut presented = scene.present([24, 22, 30], &draws)?;
+    resolved.persist().map_err(failure)?;
     let mut deferred = Vec::new();
     loop {
         controller
@@ -304,11 +306,12 @@ fn interactive(
     }
 }
 
-pub(super) fn run(path: &Path) -> Result<(), String> {
-    let connection = lan::open_client(path)?;
+pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
+    let connection = lan::open_client(ControllerLaunch::parse(args)?)?;
     let touch_enabled = connection.touch_enabled;
     let result = (|| {
-        let layout = controller_layout(&connection.profiles, touch_enabled)?;
+        let layout =
+            controller_layout(&connection.controls.profiles, touch_enabled)?;
         let mut window = NativeWindow::open(
             "The Simpsons Arcade - remote controller",
             dimension(layout.width().get().saturating_mul(2))?,
@@ -334,7 +337,7 @@ mod tests {
         Axis, Button, Scancode, axis_code, button_code, key_code,
     };
 
-    use super::super::{ACTION_NAMES, failure};
+    use super::super::ACTION_NAMES;
     use super::*;
     use crate::{Control, Player};
 

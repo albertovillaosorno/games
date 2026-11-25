@@ -237,8 +237,8 @@ bindings. Press magnitudes must be 1-32767 and release magnitudes
 must be smaller (including zero). Defaults remain 16000 to press
 and 10000 to release. Both the host and remote controller support
 these digital profiles; the remote controller uses station 1's
-profile. Proportional movement, an interactive remapping menu and
-remote-controller settings persistence remain open.
+profile. Proportional movement and an interactive remapping menu
+remain open.
 
 For optional touch panels, select stations and swap button
 positions in the same profile, using the default action names as slots:
@@ -324,6 +324,12 @@ started the world. Arrow keys or the D-pad/left stick move; Z/A attacks
 and X/B jumps by default. The controller panel shows its effective digital
 bindings. Optionally add `controls=FILE` to its catalogue, resolving the
 existing version-one control profile relative to the catalogue directory.
+Use `settings=DIR` in the controller catalogue or append `--settings DIR`
+to select a dedicated controller settings directory. Append
+`--controls FILE` to override and persist the profile after successful
+connection and native startup. Append `--reset-controls` instead to
+persist default bindings. Saved profiles override catalogue defaults;
+use a different settings directory for each controller and the host.
 Only station 1 bindings are used on a standalone controller, regardless of
 the host-assigned seat. Optionally add `touch=on` to show the seven shared
 touch controls below the hints; only station 1 may be touch-enabled in

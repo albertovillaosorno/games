@@ -574,3 +574,11 @@ publishing success. This does not retract bytes already submitted to
 the transport. A real TLS regression queues an acknowledgement and then
 dispatches its poll with an expired lease, verifies that no frame is
 delivered, and reconnects the same approved identity for valid input.
+
+The standalone controller now uses the same persistent digital profile
+selection as the cabinet. A catalogue or explicit settings directory
+holds the versioned profile; explicit selection and reset override
+stored and catalogue values. Publication follows authenticated connection
+and successful native controller presentation setup. Regression tests
+exercise precedence, reset, relative paths and rejected combinations.
+Seat reservation and remote touch restrictions are unchanged.

@@ -59,7 +59,8 @@ const USAGE: &str = concat!(
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local ",
     "beside the binary.\n",
-    "usage: simpsons-arcade --lan-controller FILE"
+    "usage: simpsons-arcade --lan-controller FILE [--settings DIR] ",
+    "[--controls FILE | --reset-controls]"
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
@@ -227,6 +228,25 @@ impl Assets {
 }
 
 #[derive(Debug)]
+struct ControlOptions {
+    explicit: Option<PathBuf>,
+    reset: bool,
+}
+
+impl ControlOptions {
+    fn parse(args: &mut Arguments, smoke: bool) -> Result<Self, String> {
+        let explicit = optional_path(args, "--controls")?;
+        let reset = flag(args, "--reset-controls");
+        if reset && (smoke || explicit.is_some()) {
+            return Err(String::from(
+                "reset controls is exclusive with smoke and explicit controls",
+            ));
+        }
+        Ok(Self { explicit, reset })
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct ControlSelection {
     explicit: Option<PathBuf>,
     fallback: Option<PathBuf>,
@@ -236,6 +256,22 @@ pub(super) struct ControlSelection {
 }
 
 impl ControlSelection {
+    fn open(
+        options: ControlOptions,
+        fallback: Option<PathBuf>,
+        settings: Option<&Path>,
+        smoke: bool,
+    ) -> Result<Self, String> {
+        let store = open_control_store(settings, options.reset)?;
+        Ok(Self {
+            explicit: options.explicit,
+            fallback,
+            reset: options.reset,
+            smoke,
+            store,
+        })
+    }
+
     pub(super) fn resolve(self) -> Result<ResolvedControls, String> {
         let Self {
             explicit,
@@ -293,6 +329,48 @@ impl ResolvedControls {
 }
 
 #[derive(Debug)]
+pub(super) struct ControllerLaunch {
+    pub(super) catalogue: PathBuf,
+    options: ControlOptions,
+    settings: Option<PathBuf>,
+}
+
+impl ControllerLaunch {
+    pub(super) fn parse(args: Vec<OsString>) -> Result<Self, String> {
+        let mut remaining = args.into_iter().peekable();
+        if !flag(&mut remaining, "--lan-controller") {
+            return Err(String::from(USAGE));
+        }
+        let catalogue = PathBuf::from(next(&mut remaining)?);
+        let settings = optional_path(&mut remaining, "--settings")?;
+        let options = ControlOptions::parse(&mut remaining, false)?;
+        if remaining.next().is_some() {
+            return Err(String::from(USAGE));
+        }
+        Ok(Self {
+            catalogue,
+            options,
+            settings,
+        })
+    }
+
+    pub(super) fn select_controls(
+        self,
+        fallback: Option<&Path>,
+        settings: Option<&Path>,
+    ) -> Result<ResolvedControls, String> {
+        let directory = self.settings.as_deref().or(settings);
+        ControlSelection::open(
+            self.options,
+            fallback.map(Path::to_path_buf),
+            directory,
+            false,
+        )?
+        .resolve()
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct Launch {
     pub(super) assets: Assets,
     pub(super) controls: ControlSelection,
@@ -313,21 +391,13 @@ impl Launch {
         let mode = optional_value(&mut remaining, "--display")?;
         let window = optional_value(&mut remaining, "--window")?;
         let explicit_settings = optional_path(&mut remaining, "--settings")?;
-        let explicit_controls = optional_path(&mut remaining, "--controls")?;
-        let reset_controls = flag(&mut remaining, "--reset-controls");
-        if reset_controls && (smoke || explicit_controls.is_some()) {
-            return Err(String::from(
-                "reset controls is exclusive with smoke and explicit controls",
-            ));
-        }
+        let control_options = ControlOptions::parse(&mut remaining, smoke)?;
         let host = optional_path(&mut remaining, "--lan-host")?;
         if smoke && host.is_some() {
             return Err(String::from("smoke cannot open a LAN host"));
         }
         let (assets, defaults, paths) = Assets::select(remaining)?;
         let settings = explicit_settings.or(paths.settings);
-        let control_store =
-            open_control_store(settings.as_deref(), reset_controls)?;
         let preferences = settings
             .as_deref()
             .map(DisplayStore::open)
@@ -348,13 +418,12 @@ impl Launch {
 
         Ok(Self {
             assets,
-            controls: ControlSelection {
-                explicit: explicit_controls,
-                fallback: paths.controls,
-                reset: reset_controls,
+            controls: ControlSelection::open(
+                control_options,
+                paths.controls,
+                settings.as_deref(),
                 smoke,
-                store: control_store,
-            },
+            )?,
             display,
             host,
             measure,
@@ -924,6 +993,44 @@ mod tests {
             != Some(FALLBACK_PROFILE)
         {
             return Err("invalid selection replaced saved controls".into());
+        }
+        Ok(())
+    }
+    #[test]
+    fn controller_controls_share_persistence_and_reset() -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let fallback = fixture.0.join("fallback.txt");
+        let explicit = fixture.0.join("explicit.txt");
+        let path = explicit.to_str().ok_or("invalid test path")?;
+        let select = |options: &[&str]| {
+            let args = ["--lan-controller", "client.local"]
+                .into_iter()
+                .chain(options.iter().copied())
+                .map(OsString::from)
+                .collect();
+            ControllerLaunch::parse(args)?
+                .select_controls(Some(&fallback), Some(&fixture.0))
+        };
+        let expected = |text| DEFAULT_PROFILES.configured(ACTION_NAMES, text);
+        if select(&[])?.profiles != expected(FALLBACK_PROFILE)? {
+            return Err("controller fallback not applied".into());
+        }
+        let explicit_selection = select(&["--controls", path])?;
+        if explicit_selection.profiles != expected(EXPLICIT_PROFILE)? {
+            return Err("controller explicit profile not applied".into());
+        }
+        explicit_selection.persist()?;
+        if select(&[])?.profiles != explicit_selection.profiles {
+            return Err("controller saved profile not applied".into());
+        }
+        select(&["--reset-controls"])?.persist()?;
+        if select(&[])?.profiles != DEFAULT_PROFILES {
+            return Err("controller reset did not persist".into());
+        }
+        if select(&["--controls", path, "--reset-controls"]).is_ok()
+            || select(&["--smoke"]).is_ok()
+        {
+            return Err("invalid controller controls accepted".into());
         }
         Ok(())
     }
