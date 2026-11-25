@@ -186,3 +186,21 @@ The same 31-scene exact admission and two 620-frame release trials passed:
 The measured mean submission interval decreased by about 74% at the
 same logical extent, scene corpus and renderer settings. These timings
 include presentation overhead and remain host-side diagnostics.
+
+The title's hidden native smoke now measures 600 fixed-step movement
+frames with four active stations, alternating horizontal directions every
+30 ticks. The shared percentile collector measures simulation plus native
+sprite submission; actual gameplay time remains independent of wall time.
+Two release-mode trials with the touch panel, verified external assets,
+and dummy audio completed all frames without missing the 60 Hz budget:
+
+- Mean: 64,701 ns and 69,938 ns.
+- p95 inclusive: 65,536–73,727 ns in both trials.
+- Maximum: 3,175,987 ns and 3,215,266 ns.
+
+This is a controlled movement slice without an active enemy; combat and
+audio are exercised separately by the smoke. No physical display FPS,
+GPU execution time, input latency or memory claim follows from this test.
+A third release run with per-station position checks passed (600 frames,
+66,188 ns mean, 3,130,330 ns maximum, zero misses). Fresh validation
+passed in run 1795593147156550715-1327130.

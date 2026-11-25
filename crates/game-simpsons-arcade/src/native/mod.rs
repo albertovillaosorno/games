@@ -42,12 +42,17 @@ mod touch;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Debug;
+use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use games::input::touch::{ContactId, ContactPhase};
 use games::input::{AxisBinding, InputEvent, InputMapping, InputRouter};
+use games::performance::{
+    FrameObservation, PerformanceCollector, QualityProfile,
+};
+use games::presentation::FramePacing;
 use games::replay::{LiveInputLimits, LiveSimulation, QueueRejection};
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
@@ -723,7 +728,7 @@ fn smoke(
     if !art.poses.is_empty() {
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
-    Ok(())
+    smoke_movement_benchmark(scene, art, &mut controls, &mut simulation)
 }
 
 fn smoke_jump(
@@ -765,6 +770,86 @@ fn smoke_jump(
         return Err(failure("jump did not return to ground"));
     }
     Ok(())
+}
+
+fn smoke_movement_benchmark(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let layout = preview_layout(art.panel.is_some())?;
+    let mut collector = PerformanceCollector::with_percentiles(
+        QualityProfile {
+            frame_pacing: FramePacing::Uncapped,
+            height: layout.height().get(),
+            optional_effects: false,
+            width: layout.width().get(),
+        },
+        NonZeroU64::new(16_666_667),
+    );
+    for cycle in 0..20u8 {
+        let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+        let elapsed = TICK_INTERVAL.saturating_mul(tick);
+        let before = simulation.state().stations();
+        for [_, _, _, _, left, right, ..] in KEYBOARD {
+            let (release, press) = if cycle.is_multiple_of(2) {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            for (key, down) in [(release, false), (press, true)] {
+                controls.route(
+                    InputEvent::Key {
+                        code: key_code(key),
+                        down,
+                    },
+                    elapsed,
+                    simulation,
+                )?;
+            }
+        }
+        for _frame in 0..30u8 {
+            let started = Instant::now();
+            let _advanced =
+                simulation.advance(TICK_INTERVAL).map_err(failure)?;
+            let _drawn = art.present(scene, simulation.state())?;
+            collector
+                .observe(FrameObservation {
+                    frame_time: started.elapsed(),
+                    input_latency: None,
+                    resident_bytes: None,
+                })
+                .map_err(failure)?;
+        }
+        if before
+            .into_iter()
+            .zip(simulation.state().stations())
+            .any(|(previous, current)| previous.position == current.position)
+        {
+            return Err(failure("movement workload did not advance"));
+        }
+    }
+    smoke_movement_report(&collector)
+}
+
+fn smoke_movement_report(
+    collector: &PerformanceCollector,
+) -> Result<(), RenderError> {
+    let report = collector.report();
+    writeln!(
+        stdout().lock(),
+        concat!(
+            "Four-player movement: {} frames; mean {:?}; ",
+            "max {:?}; p95 {:?}; budget {:?}"
+        ),
+        report.frame_time.samples(),
+        report.frame_time.mean(),
+        report.frame_time.maximum(),
+        collector.frame_percentile(95),
+        report.frame_budget,
+    )
+    .map_err(failure)
 }
 
 fn smoke_poses(
