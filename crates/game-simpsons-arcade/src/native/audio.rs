@@ -53,6 +53,29 @@ const MAX_CHUNKS: u8 = 4;
 const QUEUE_FRAMES: u32 = 1024;
 const RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(47_999);
 const SOURCE_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
+// Observed PCM pitch 0xe9b with the 3,579,545 Hz chip clock:
+// round(3,579,545 / (4096 - 0xe9b)). The catalogue stays nominal.
+const ATTACK_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(10_026);
+// Observed volume and pan mapped to the shared 16-bit gain scale,
+// including the reference board half-gain stereo routes.
+const GAINS: [StereoGain; 4] = [
+    StereoGain {
+        left: 10_904,
+        right: 4_888,
+    },
+    StereoGain {
+        left: 14_768,
+        right: 10_366,
+    },
+    StereoGain {
+        left: 6_862,
+        right: 9_776,
+    },
+    StereoGain {
+        left: 4_056,
+        right: 9_048,
+    },
+];
 const CLIPS: [(&str, u64); 4] = [
     ("audio/sample-0004", 8335),
     ("audio/sample-0005", 3916),
@@ -68,7 +91,7 @@ impl Samples {
     fn clips(&self) -> Result<[Clip<'_>; 4], RenderError> {
         let [marge, homer, bart, lisa] = &self.clips;
         let clip = |samples| {
-            Clip::new(samples, Channels::Mono, SOURCE_RATE).map_err(failure)
+            Clip::new(samples, Channels::Mono, ATTACK_RATE).map_err(failure)
         };
         Ok([clip(marge)?, clip(homer)?, clip(bart)?, clip(lisa)?])
     }
@@ -198,8 +221,8 @@ impl<'samples> Playback<'samples> {
         cabinet: &Cabinet,
     ) -> Result<(), RenderError> {
         let current = cabinet.stations().map(|station| station.attack_cues);
-        for ((previous, count), clip) in
-            self.cues.iter_mut().zip(current).zip(self.clips)
+        for (((previous, count), clip), gain) in
+            self.cues.iter_mut().zip(current).zip(self.clips).zip(GAINS)
         {
             let new_cues = count.saturating_sub(*previous);
             *previous = count;
@@ -208,7 +231,7 @@ impl<'samples> Playback<'samples> {
                 return Err(failure("attack cue count exceeded tick budget"));
             }
             for _ in 0..new_cues {
-                play(&mut self.mixer, clip)?;
+                play(&mut self.mixer, clip, gain)?;
             }
         }
         self.fill()
@@ -228,9 +251,8 @@ impl<'samples> Playback<'samples> {
 fn play<'samples>(
     mixer: &mut Mixer<'samples>,
     clip: Clip<'samples>,
+    gain: StereoGain,
 ) -> Result<(), RenderError> {
-    // Conservative prototype gain; no original panning claim.
-    let gain = StereoGain { left: 8192, right: 8192 };
     match mixer.play(clip, gain) {
         Ok(_) | Err(AudioError::VoicesFull) => Ok(()),
         Err(error) => Err(failure(error)),
@@ -269,4 +291,36 @@ fn smoke_entry() -> Result<LiveSimulation<Cabinet>, RenderError> {
         )?;
     }
     Ok(simulation)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::array;
+
+    use super::*;
+
+    #[test]
+    fn isolated_attack_clips_use_observed_stereo_ratios_and_rate()
+    -> Result<(), RenderError> {
+        let samples = Samples {
+            clips: array::from_fn(|_| vec![i16::MAX; 2]),
+        };
+        let expected = [[5451, 2443], [7383, 5182], [3430, 4887], [2027, 4523]];
+        for ((clip, gain), frame) in
+            samples.clips()?.into_iter().zip(GAINS).zip(expected)
+        {
+            if clip.rate().get() != 10_027 {
+                return Err(failure("attack clip rate did not match pitch"));
+            }
+            let mut mixer =
+                Mixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+            play(&mut mixer, clip, gain)?;
+            let mut output = [[0; 2]];
+            mixer.render(&mut output);
+            if output != [frame] {
+                return Err(failure("attack clip stereo gain mismatch"));
+            }
+        }
+        Ok(())
+    }
 }

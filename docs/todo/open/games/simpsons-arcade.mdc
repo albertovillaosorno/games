@@ -594,3 +594,13 @@ Combined native smoke passed with touch, original pose catalogue, enemy
 art and dummy-device attack audio. Additional native input and pixel
 checks cover countdown changes, paid expiry, retained-credit selection
 and a new street entry with restored player and enemy health.
+
+The four isolated attack voices all used forward non-looping PCM at
+pitch register 0xe9b. With the verified 3,579,545 Hz chip clock and
+4096-minus-pitch period, the effective average rate rounds to 10027 Hz.
+The active voice volume/pan pairs for Marge, Homer, Bart and Lisa were
+47/2, 71/3, 47/5 and 39/6. Native attack playback now uses the observed
+rate and channel gain ratios, accounting for the reference half-gain
+stereo routes. Catalogue metadata remains at its nominal source rate.
+This approximates each isolated voice through the shared mixer; it does
+not reconstruct the chip's stepwise interpolation, music or full mix.
