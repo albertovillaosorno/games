@@ -609,4 +609,49 @@ mod tests {
             "at least one explicit remote approval is required",
         )
     }
+
+    #[test]
+    fn malformed_frames_cannot_renew_an_idle_lease() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let mut pump = HostInputPump::bind(
+            HostInputConfig {
+                address: LOOPBACK,
+                enrolments: &[(keys.client_id, 1)],
+                idle_timeout: Some(Duration::from_millis(500)),
+                local_peers: &[0],
+                session: session_config(true),
+                timeout: TIMEOUT,
+            },
+            keys.server,
+            TestCodec,
+        )?;
+        let mut client = connect(&mut pump, &keys.client, 1)?;
+        let mut next_send = Instant::now();
+        let event = poll_accept(|| {
+            if let PumpProgress::Event(event) = pump.poll()? {
+                return Ok(Some(event));
+            }
+            if Instant::now() < next_send {
+                return Ok(None);
+            }
+            next_send = Instant::now()
+                .checked_add(Duration::from_millis(25))
+                .ok_or(ErrorKind::TimedOut)?;
+            if client.send(b"bad").is_err() {
+                // The worker can close the socket before its event
+                // reaches this caller. Still require lease expiry.
+                return next_event(&mut pump).map(Some);
+            }
+            Ok(None)
+        })?;
+        require(
+            matches!(event, RemoteEvent::Disconnected {
+                peer: 1,
+                reason: ErrorKind::TimedOut,
+            }),
+            "malformed frames neither publish input nor renew the lease",
+        )?;
+        pump.shutdown()
+    }
 }
