@@ -48,3 +48,13 @@ Fresh validation passed in run 1795578729856852353-3030117 (147 tests).
 A trusted caller must supply the expected manifest digest; this is not
 an authenticity or same-user sandbox guarantee. Android device and browser
 consumption remain unverified.
+
+A shared borrowed indexed-tile view verifies the canonical descriptor and
+payload digest at binding time. Runtimes can borrow individual row-major
+tiles or the complete index array without per-tile hashing or copying.
+Caller-provided palettes expand selected tiles into straight-alpha RGBA
+buffers without allocating. Synthetic tests check tile boundaries, exact
+color and alpha order, tampered payloads, and atomic rejection of invalid
+indices, palettes and output lengths. Fresh validation passed in run
+1795582081880825184-3442644. Palette reconstruction and a hardware-backed
+renderer remain unverified.
