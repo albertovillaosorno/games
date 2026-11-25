@@ -31,6 +31,7 @@
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
+mod cooperative;
 mod encounter;
 #[cfg(all(
     feature = "native-preview",
@@ -53,6 +54,7 @@ pub mod native;
 use std::mem;
 use std::time::Duration;
 
+pub use cooperative::{Pair, PairMotion, PairPose};
 pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
     EnemyAction,
@@ -621,6 +623,20 @@ impl Slot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PairState {
+    enabled: bool,
+    idle_ticks: u8,
+    motion: Option<PairMotion>,
+    walking: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cooperation {
+    bart_lisa: PairState,
+    marge_homer: PairState,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Encounter {
     enemies: [Option<Enemy>; ENEMY_CAPACITY],
@@ -636,6 +652,7 @@ struct Encounter {
 pub struct Cabinet {
     camera: i16,
     choices: [Player; 4],
+    cooperation: Cooperation,
     encounter: Option<Encounter>,
     layout: StreetLayout,
     scroll_limit: i16,
@@ -811,9 +828,7 @@ impl Cabinet {
         self.advance_continue();
         if self.phase() == Phase::Playing {
             let layout = self.movement_layout();
-            for slot in &mut self.slots {
-                slot.move_tick(layout);
-            }
+            self.cooperation.advance(&mut self.slots, layout);
             if let Some(encounter) = &mut self.encounter {
                 encounter.advance(
                     layout,
@@ -821,6 +836,7 @@ impl Cabinet {
                     &mut self.slots,
                 );
             }
+            self.cooperation.invalidate(&self.slots);
             self.advance_camera();
             if let Some(encounter) = &mut self.encounter {
                 encounter.admit(self.camera);
@@ -847,12 +863,19 @@ impl Cabinet {
         Ok(Self {
             camera: 0,
             choices: Player::ALL,
+            cooperation: Cooperation::default(),
             encounter: None,
             layout,
             scroll_limit: 0,
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
         })
+    }
+
+    /// Inspect the shared pose of an admitted character pair.
+    #[must_use]
+    pub const fn pair_pose(&self, pair: Pair) -> Option<PairPose> {
+        self.cooperation.pose(pair, &self.slots)
     }
 
     /// Current cabinet phase.
@@ -873,6 +896,7 @@ impl Cabinet {
     }
 
     fn reset_world(&mut self) {
+        self.cooperation.reset();
         self.camera = 0;
         if let Some(encounter) = &mut self.encounter {
             encounter.restart();
@@ -922,6 +946,16 @@ impl Cabinet {
         mem::swap(&mut first.held, &mut second.held);
         self.choices.swap(seat.index(), other);
         true
+    }
+
+    /// Enable optional pair locomotion in cabinet pair order.
+    ///
+    /// Solo actions and damage separate the pair until neutral admission.
+    /// This remains provisional rather than a cooperative combat claim.
+    #[must_use]
+    pub const fn with_cooperative_pairs(mut self, enabled: [bool; 2]) -> Self {
+        self.cooperation = Cooperation::configure(enabled);
+        self
     }
 
     /// Enable one provisional enemy at a specified walkable ground position.
@@ -1020,6 +1054,24 @@ fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {
 }
 
 #[cfg(test)]
+fn cabinet() -> Cabinet {
+    let result = Cabinet::new(StreetLayout::DOWNTOWN);
+    assert!(result.is_ok());
+    // A valid constant layout cannot fail; keep fixture construction
+    // independent from any mutable global or host input.
+    result.unwrap_or_else(|_error| Cabinet {
+        camera: 0,
+        choices: Player::ALL,
+        cooperation: Cooperation::default(),
+        encounter: None,
+        layout: StreetLayout::DOWNTOWN,
+        scroll_limit: 0,
+        session: LocalSession::default(),
+        slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
     use std::ops::Range;
@@ -1028,22 +1080,6 @@ mod tests {
     use games::timing::StepClock;
 
     use super::*;
-
-    fn cabinet() -> Cabinet {
-        let result = Cabinet::new(StreetLayout::DOWNTOWN);
-        assert!(result.is_ok());
-        // A valid constant layout cannot fail; keep fixture construction
-        // independent from any mutable global or host input.
-        result.unwrap_or_else(|_error| Cabinet {
-            camera: 0,
-            choices: Player::ALL,
-            encounter: None,
-            layout: StreetLayout::DOWNTOWN,
-            scroll_limit: 0,
-            session: LocalSession::default(),
-            slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
-        })
-    }
 
     fn change(
         player: Player,

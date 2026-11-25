@@ -45,10 +45,10 @@ use games_platform_storage::file::snapshot;
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
 use crate::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, EnemyAction,
-    JumpMotion, WalkMotion,
+    JumpMotion, Pair, PairMotion, WalkMotion,
 };
 
-const MAX_POSES: usize = 180;
+const MAX_POSES: usize = 200;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -57,6 +57,7 @@ enum Kind {
     AttackMoving,
     Defeat,
     Hurt,
+    Idle,
     Jump,
     Lift,
     Special,
@@ -72,7 +73,7 @@ impl Kind {
                 Maneuver::Attack { moving: false, tick: 0 }
                     .pose_duration(player)
             },
-            Self::Defeat => 0,
+            Self::Defeat | Self::Idle => 0,
             Self::Hurt => Maneuver::Hurt { tick: 0 }.pose_duration(player),
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
@@ -88,6 +89,7 @@ type Key = (Subject, Kind, u8);
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Subject {
     Enemy,
+    Pair(Pair),
     Station(Player),
 }
 
@@ -117,6 +119,8 @@ impl Catalogue {
                 (Subject::Enemy, Kind::Walk) => &"enemy/approach",
                 (Subject::Enemy, Kind::Defeat) => &"enemy/defeat",
                 (Subject::Enemy, _) => &"enemy/strike",
+                (Subject::Pair(Pair::MargeHomer), _) => &"actor/duo",
+                (Subject::Pair(Pair::BartLisa), _) => &"actor/bart-lisa",
             };
             let art = Art::load(scene, &bundle, name)?;
             if art.rect.width.get() > 128 || art.rect.height.get() > 128 {
@@ -159,7 +163,11 @@ impl Catalogue {
         ]
         .into_iter()
         .all(|kind| optional_complete(&entries, kind));
-        if !complete || !complete_optional || !enemy_complete(&entries) {
+        if !complete
+            || !complete_optional
+            || !enemy_complete(&entries)
+            || !pair_complete(&entries)
+        {
             return Err(failure("missing tick-zero pose"));
         }
         Ok(Self { entries })
@@ -183,6 +191,21 @@ impl PoseArt {
 
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub(super) fn pair(&self, pair: Pair, motion: PairMotion) -> Option<Art> {
+        let (kind, tick) = match motion {
+            PairMotion::Idle { tick } => (Kind::Idle, tick),
+            PairMotion::Walk { tick } => (Kind::Walk, tick),
+        };
+        select_entry(&self.entries, (Subject::Pair(pair), kind, tick)).copied()
+    }
+
+    pub(super) fn paired_families(&self) -> [bool; 2] {
+        Pair::ALL.map(|pair| {
+            self.entries
+                .contains_key(&(Subject::Pair(pair), Kind::Idle, 0))
+        })
     }
 
     pub(super) fn restore_enemy(&mut self, mut enemy: Self) {
@@ -313,6 +336,16 @@ fn jump_entry<Value>(
     select_entry(entries, station_key(player, Kind::Jump, motion.pose_tick()))
 }
 
+fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
+    Pair::ALL.into_iter().all(|pair| {
+        let subject = Subject::Pair(pair);
+        !entries.keys().any(|(existing, _, _)| *existing == subject)
+            || [Kind::Idle, Kind::Walk]
+                .into_iter()
+                .all(|kind| entries.contains_key(&(subject, kind, 0)))
+    })
+}
+
 fn parse_line(line: &str) -> Result<Entry, RenderError> {
     let [name, action, elapsed, digest] =
         <[&str; 4]>::try_from(line.split_whitespace().collect::<Vec<_>>())
@@ -323,6 +356,8 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         "bart" => Subject::Station(Player::Bart),
         "lisa" => Subject::Station(Player::Lisa),
         "enemy" => Subject::Enemy,
+        "marge-homer" => Subject::Pair(Pair::MargeHomer),
+        "bart-lisa" => Subject::Pair(Pair::BartLisa),
         _ => return Err(failure("unknown pose subject")),
     };
     let kind = match action {
@@ -331,6 +366,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         "attack-moving" => Kind::AttackMoving,
         "defeat" => Kind::Defeat,
         "hurt" => Kind::Hurt,
+        "idle" => Kind::Idle,
         "jump" => Kind::Jump,
         "jump-lift" => Kind::Lift,
         "special" => Kind::Special,
@@ -344,6 +380,11 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         (Subject::Enemy, Kind::Attack) => ENEMY_ATTACK_TICKS,
         (Subject::Enemy, Kind::Defeat) => ENEMY_DEFEAT_TICKS,
         (Subject::Enemy, Kind::Walk) => ENEMY_WALK_TICKS,
+        (Subject::Pair(pair), Kind::Idle) => pair.idle_end().saturating_add(1),
+        (Subject::Pair(pair), Kind::Walk) => pair.walk_duration(),
+        (Subject::Pair(_), _) => {
+            return Err(failure("unknown pair pose maneuver"));
+        },
         (Subject::Enemy, _) => {
             return Err(failure("unknown enemy pose maneuver"));
         },
@@ -683,11 +724,68 @@ mod tests {
     }
 
     #[test]
+    fn pair_catalogue_requires_both_sequences_and_bounds_ticks() {
+        let base = complete();
+        assert!(
+            Catalogue::parse(&format!("{base}marge-homer idle 0 {HASH}"))
+                .is_err()
+        );
+        let pair = format!(
+            "{base}marge-homer idle 0 {HASH}\n\
+             marge-homer walk 0 {HASH}\n"
+        );
+        assert!(Catalogue::parse(&pair).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{pair}marge-homer idle 13 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{pair}marge-homer idle 14 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{pair}marge-homer walk 32 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{pair}bart-lisa attack 0 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{pair}marge idle 0 {HASH}")).is_err()
+        );
+    }
+
+    #[test]
+    fn second_pair_catalogue_bounds_ticks() {
+        let pair = complete();
+        let both = format!(
+            "{pair}bart-lisa idle 0 {HASH}\n\
+             bart-lisa walk 0 {HASH}\n"
+        );
+        assert!(
+            Catalogue::parse(&format!("{both}bart-lisa idle 9 {HASH}")).is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{both}bart-lisa idle 10 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{both}bart-lisa walk 23 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{both}bart-lisa walk 24 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn catalogue_enforces_total_pose_budget() {
         let extra: String = ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
-                (0u8..43).map(move |tick| {
+                (0u8..48).map(move |tick| {
                     format!("{name} air-attack {tick} {HASH}\n")
                 })
             })
@@ -698,7 +796,7 @@ mod tests {
             Some(MAX_POSES)
         );
         assert!(
-            Catalogue::parse(&format!("{text}marge air-attack 43 {HASH}\n"))
+            Catalogue::parse(&format!("{text}marge air-attack 48 {HASH}\n"))
                 .is_err()
         );
     }

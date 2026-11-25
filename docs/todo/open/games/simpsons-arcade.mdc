@@ -1625,3 +1625,43 @@ respectively in adaptive mode; lifetime peak RSS was 92,602,368 bytes.
 These timing samples do not represent worst-case reinforcement combat.
 The older 80-column strip also passed a separate smoke with the first
 reinforcement only. Physical hardware acceptance remains open.
+
+Independent original-machine pair controls observed Marge/Homer and
+Bart/Lisa joining while close and inactive, including after moving
+together away from their initial positions. Short rightward and depth
+pulses delayed admission to 38 displayed frames after the last held
+direction; moving a member outward by two pixels from the initial
+separation prevented admission in the same observation window.
+Either member can move the pair; conflicting directional controls
+give the first member priority. Sustained movement and blocked-edge
+observations established repeating 32- and 24-tick locomotion cycles.
+All 14 distinct left-facing movement phases and five opening poses
+passed complete-scene pixel comparison before local publication.
+
+The optional pair locomotion slice preserves independent station
+health and relative ground spacing, counts 38 neutral ticks within
+provisional 32-by-24-pixel proximity bounds and uses one shared
+bounded translation. A solo action or hurt breaks the pair, rather
+than inventing cooperative attack behavior. The native catalogue
+accepts pair-specific idle and walk sequences independently of the
+four solo stations; the 200-record limit accommodates 19 additional
+poses without changing the 16 KiB text or per-pose extent bounds.
+One depth-sorted combined actor is rendered in place of the two solo
+actors while both individual HUDs remain. The movement priority,
+release poses and animation phase are fixed-step state, including
+at a blocked edge. Mirroring, exact pivots, precise proximity bounds,
+pair-specific buttons, shared damage and original combat behavior
+remain unverified. No original assets are tracked.
+
+Fresh workspace validation, including native render and audio gates,
+passed in run 1795626809634923782-4185697. The 3,314,000-byte Linux
+executable passed native offscreen NVIDIA OpenGL ES smoke with both
+pair families and 189 locally verified poses (15,307 catalogue bytes),
+adaptive 426-by-304 touch presentation, and dummy audio. Both combined
+actors changed the GPU readback on admission and locomotion; all three
+reinforcement meters remained visible. Independent aspect-fit smokes
+with only Marge/Homer enabled and with no pair catalogue also passed.
+All 600 movement and 20 first-strike submissions in the adaptive run
+met the 16.667 ms budget; lifetime peak RSS was 92,467,200 bytes.
+This smoke is not physical multiplayer or original cooperative combat
+acceptance.

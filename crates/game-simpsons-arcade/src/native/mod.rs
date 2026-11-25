@@ -86,8 +86,8 @@ use games_platform_storage::file::snapshot;
 use games_platform_storage::preferences::DisplayStore;
 
 use super::{
-    Action, Cabinet, Control, Facing, Maneuver, Participation, Phase, Player,
-    Point, Station, StreetLayout, TICK_INTERVAL,
+    Action, Cabinet, Control, Facing, Maneuver, Pair, Participation, Phase,
+    Player, Point, Station, StreetLayout, TICK_INTERVAL,
 };
 use crate::lan::HostLan;
 use crate::remote::{HostedCabinet, HostedInput};
@@ -612,10 +612,37 @@ impl Scene {
         Ok(())
     }
 
+    fn queue_pairs(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+    ) -> Result<(), RenderError> {
+        for pair in Pair::ALL {
+            if let Some(joined) = cabinet.pair_pose(pair) {
+                let pose = self
+                    .poses
+                    .pair(pair, joined.motion)
+                    .ok_or(RenderError::InvalidSprite)?;
+                self.world.push((
+                    joined.position.y,
+                    pose.draw(
+                        ground_position(
+                            pose,
+                            view.project(joined.position),
+                            0,
+                        )?,
+                        joined.facing == Facing::Right,
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn queue_station(
         &mut self,
         (player, seat): (Player, Player),
-        station: Station,
+        (station, paired): (Station, bool),
         view: world::View,
     ) -> Result<(), RenderError> {
         let offset = world::station_offset(view.width, player)?;
@@ -642,7 +669,9 @@ impl Scene {
         if let Some(combat) = &self.combat {
             combat.station_health(&mut self.draws, icon.x, station)?;
         }
-        if station.participation == Participation::Playing && station.health > 0
+        if !paired
+            && station.participation == Participation::Playing
+            && station.health > 0
         {
             let position = view.project(station.position);
             if let Some(shadow) = &self.shadow
@@ -680,9 +709,11 @@ impl Scene {
             let station = *stations
                 .get(character.index())
                 .ok_or(RenderError::InvalidSprite)?;
-            self.queue_station((character, seat), station, view)?;
+            let paired =
+                cabinet.pair_pose(Pair::for_player(character)).is_some();
+            self.queue_station((character, seat), (station, paired), view)?;
         }
-        Ok(())
+        self.queue_pairs(cabinet, view)
     }
 }
 
@@ -2095,12 +2126,79 @@ fn smoke_touch_point(
         .ok_or_else(|| failure("touch control outside visible scene"))
 }
 
+fn smoke_cooperation(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+) -> Result<(), RenderError> {
+    let enabled = art.poses.paired_families();
+    let families = enabled.into_iter().filter(|active| *active).count();
+    if families == 0 {
+        return Ok(());
+    }
+    let mut cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
+        .map_err(failure)?
+        .with_cooperative_pairs(enabled);
+    for player in Player::ALL {
+        cabinet.input_step(0, &[
+            LogicalAction {
+                action: Action {
+                    control: Control::Start,
+                    player,
+                },
+                down: true,
+            },
+            LogicalAction {
+                action: Action {
+                    control: Control::Start,
+                    player,
+                },
+                down: false,
+            },
+        ]);
+    }
+    let _drawn = art.present(scene, &cabinet)?;
+    let before = scene.readback()?;
+    for tick in 1..40 {
+        cabinet.input_step(tick, &[]);
+    }
+    let _paired = art.present(scene, &cabinet)?;
+    if art.world.len() != Player::ALL.len().saturating_sub(families)
+        || before == scene.readback()?
+    {
+        return Err(failure("cooperative actors not visibly combined"));
+    }
+    let still = scene.readback()?;
+    let actions = [Player::Homer, Player::Lisa].map(|player| LogicalAction {
+        action: Action {
+            control: Control::Right,
+            player,
+        },
+        down: true,
+    });
+    cabinet.input_step(40, &actions);
+    for tick in 41..49 {
+        cabinet.input_step(tick, &[]);
+    }
+    let _moving = art.present(scene, &cabinet)?;
+    if art.world.len() != Player::ALL.len().saturating_sub(families)
+        || still == scene.readback()?
+    {
+        return Err(failure("cooperative locomotion not visibly presented"));
+    }
+    writeln!(
+        stdout().lock(),
+        "Cooperative pose smoke: {families} families"
+    )
+    .map_err(failure)
+}
+
 fn smoke_optional(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     touch_enabled: bool,
     playback: Option<&mut audio::Playback<'_>>,
 ) -> Result<(), RenderError> {
+    smoke_cooperation(scene, art)?;
     if art.combat.is_some() {
         encounter::smoke(scene, art, touch_enabled)?;
     }
@@ -2189,7 +2287,8 @@ fn window(
         let session =
             LocalSession::with_display(options.display, touch_enabled);
         let cabinet =
-            cabinet_with_scroll(source.enemy.is_some(), session, scroll_limit)?;
+            cabinet_with_scroll(source.enemy.is_some(), session, scroll_limit)?
+                .with_cooperative_pairs(art.poses.paired_families());
         let preview = Interactive::new(startup, options, &cabinet, host)?;
         options.controls.persist().map_err(failure)?;
         preview.run(scene, &mut art, playback.as_mut())

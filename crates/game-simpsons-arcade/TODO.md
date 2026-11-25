@@ -82,7 +82,7 @@ air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 180 poses and
+record or maneuver end. The catalogue is limited to 200 poses and
 16 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
@@ -118,6 +118,17 @@ every 48 ticks and resets when an attack ends.
 An optional `enemy defeat TICK SHA256` sequence begins at zero, permits
 offsets through 65 and uses the bundle record `enemy/defeat`.
 Without it, the approach sprite is retained during the defeat timeline.
+
+The optional pair subjects marge-homer and bart-lisa use idle and walk
+sequences, each beginning at tick zero. Idle permits offsets through 13
+and 9 respectively; walking through 31 and 23. Their bundle actor keys
+are actor/duo and actor/bart-lisa. A complete pair catalogue enables
+that pair only. Nearby active members join after 38 neutral simulation
+ticks; either can move, with the first member taking priority for
+conflicting directions. Both stations retain their individual health,
+HUD and ground points. A solo attack, jump or hurt separates the pair.
+This is an optional locomotion prototype: cooperative strikes and
+secondary-button actions are not yet implemented.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated
