@@ -6,7 +6,8 @@ The engine uses SHA-2 for save integrity. The shared asset crate uses
 SHA-2 and Serde JSON for canonical manifests. The importer uses ZIP
 and the pure-Rust zlib-rs Deflate backend. The native platform
 adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
-Nix for descriptor-relative archive staging. No
+Nix for descriptor-relative archive staging. Linux graphics uses Rust-SDL2
+with the system SDL2 library (Zlib licence), linked dynamically. No
 original game assets, original game code or candidate project source is
 incorporated or distributed by this repository. The development validator
 uses Serde JSON, TOML and SHA-2; platform tests use Rcgen.
@@ -74,6 +75,7 @@ for the current lockfile. They are not a completed distribution audit.
 | `num-traits` | MIT OR Apache-2.0 |
 | `oid-registry` | MIT OR Apache-2.0 |
 | `once_cell` | MIT OR Apache-2.0 |
+| `pkg-config` | MIT OR Apache-2.0 |
 | `powerfmt` | MIT OR Apache-2.0 |
 | `proc-macro2` | MIT OR Apache-2.0 |
 | `quote` | MIT OR Apache-2.0 |
@@ -85,6 +87,8 @@ for the current lockfile. They are not a completed distribution audit.
 | `rustls-webpki` | ISC |
 | `rustls` | Apache-2.0 OR ISC OR MIT |
 | `rustversion` | MIT OR Apache-2.0 |
+| `sdl2` | MIT |
+| `sdl2-sys` | MIT AND Zlib |
 | `serde_core` | MIT OR Apache-2.0 |
 | `serde_derive` | MIT OR Apache-2.0 |
 | `serde_json` | MIT OR Apache-2.0 |
@@ -108,6 +112,7 @@ for the current lockfile. They are not a completed distribution audit.
 | `typenum` | MIT OR Apache-2.0 |
 | `unicode-ident` | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `untrusted` | ISC |
+| `version-compare` | MIT |
 | `wasi` | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | `wasm-bindgen-macro-support` | MIT OR Apache-2.0 |
 | `wasm-bindgen-macro` | MIT OR Apache-2.0 |

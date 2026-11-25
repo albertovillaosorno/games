@@ -36,6 +36,14 @@ Linux x86-64 is the primary development and testing target. Android ARM64 and
 browser (WASM, WebGPU or compatible fallback) are intended targets. Other 64-bit
 operating systems and architectures are welcome through community contributions.
 No blanket compatibility promise.
+Linux development requires the system SDL2 library and its pkg-config
+development metadata. The native graphics adapter requests acceleration
+without requiring vertical synchronization. A display-enabled smoke test
+can be explicitly included with:
+
+```sh
+GAMES_NATIVE_RENDER_SMOKE=1 cargo validate --no-cache
+```
 
 ## Development
 
@@ -78,7 +86,9 @@ adapter provides bounded mutual TLS 1.3 and explicit player enrolment.
 On Linux, descriptor-relative archive staging enforces private files,
 no-overwrite creation, exact payload lengths and collision rejection. Physical
 LAN verification and credential provisioning remain pending. Mod sandboxing,
-rendering and playable titles remain open.
+GPU scene composition and playable titles remain open. The Linux graphics
+adapter presents bounded RGBA frames through one reusable accelerated
+texture, nearest-neighbor scaling and aspect-preserving letterboxing.
 The shared asset crate defines deterministic versioned manifests, SHA-256
 content identities and checked RGBA8, PCM16 and indexed-tile descriptors.
 The importer validates a pinned immutable ZIP source and checks each flat

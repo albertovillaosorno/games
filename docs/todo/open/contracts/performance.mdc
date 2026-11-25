@@ -68,3 +68,16 @@ Tests include the real test executable and Linux process resident size.
 The native tests passed in fresh run 1795577633179381736-2865763.
 Host completion age is not a physical display or GPU latency measurement.
 Android procfs availability and actual game workloads remain unverified.
+
+The Linux graphics adapter uses one bounded streaming RGBA texture for a
+presentation session. The shared viewport determines the drawable fit,
+and SDL uses nearest-neighbor sampling without requested vertical sync.
+A display-independent software-canvas read-back verifies all pixels in
+a scaled, letterboxed frame and a subsequent upload; a rejected short
+frame leaves the previous pixels unchanged. An explicitly enabled hidden
+native window also presented two frames and reported SDL's accelerated
+renderer capability. Fresh validation with GAMES_NATIVE_RENDER_SMOKE=1
+passed in run 1795582311633882091-3468901 (164 workspace tests).
+The host emitted a nonfatal libdecor plugin initialization warning.
+The capability flag does not prove physical GPU execution, measured
+frame latency, scene throughput or title parity.

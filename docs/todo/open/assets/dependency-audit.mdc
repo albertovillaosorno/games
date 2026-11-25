@@ -39,3 +39,16 @@ Serde 1.0.228 and the wasm-bindgen 0.2.127 family are retained to use one
 compatible syn major version with the ZIP backend and TLS dependencies.
 The pins must be revisited as upstream dependencies converge.
 Full portability, performance and distribution audits remain pending.
+
+Native graphics evaluation found no suitable Craft Libraries window or
+GPU presentation backend in the inspected snapshot. Rust-SDL2 0.39.0
+(MIT; its sys crate MIT and Zlib) provides a safe interface to accelerated
+2D textures, scaling and native events. Adopted with pkg-config dynamic
+linking to the installed Linux SDL2 2.32.74 interface; no bundled C source
+or optional image, audio or font libraries. The lockfile adds no duplicate
+dependency versions. A software read-back and an opt-in accelerated
+window smoke test passed in run 1795582311633882091-3468901.
+A separate platform graphics crate keeps this dependency out of headless
+engine, importer, native storage and TLS consumers. The current adapter
+is Linux-only; Android, browser, distribution and physical GPU performance
+remain unverified.

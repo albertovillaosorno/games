@@ -74,7 +74,9 @@ fn role(path: &str) -> Option<Role> {
         "crates" => Some(match name {
             "engine" | "runtime" => Role::Runtime,
             "importer" => Role::Importer,
-            "platform" | "platform-storage" => Role::Platform,
+            "platform" | "platform-storage" | "platform-graphics" => {
+                Role::Platform
+            },
             "validator" | "download" | "build" => Role::Tool,
             _ if name.starts_with("game-") || name.starts_with("app-") => {
                 Role::Title
@@ -516,7 +518,7 @@ mod tests {
 
     use super::{
         Role, dependency, dependency_allowed, header, member, metadata_members,
-        source_layout, workspace_lints,
+        role, source_layout, workspace_lints,
     };
     use crate::fixtures::require;
 
@@ -553,6 +555,7 @@ mod tests {
 
     #[test]
     fn blocks_reverse_dependencies_and_mixed_adapters() {
+        assert_eq!(role("crates/platform-graphics"), Some(Role::Platform));
         for (owner, target) in [
             (Role::Shared, Role::Tool),
             (Role::Shared, Role::Title),
