@@ -31,14 +31,15 @@
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::ffi::OsStr;
-use std::fs::File;
+use std::fs::{self, File};
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::Path;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::{io, path::PathBuf};
 
 use games_assets::ContentHash;
 use nix::fcntl::openat;
-use nix::sys::stat::Mode;
+use nix::sys::stat::{FileStat, Mode};
 use nix::unistd::fsync;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use nix::{
@@ -48,19 +49,27 @@ use nix::{
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::PrivateDirectory;
-use super::{ArchiveStaging, PayloadSizes, StagedArchive, StagingError};
+use super::{ArchiveStaging, PayloadStamps, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::bundle::bundle_name;
 use crate::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
-use crate::file::{DIRECTORY_FLAGS, FileReadError, sync_regular};
+use crate::file::{
+    DIRECTORY_FLAGS, FileReadError, sync_regular, trusted_directory,
+    verify_staged_regular,
+};
 
 /// A complete canonical bundle that has not yet been published.
 ///
-/// The trusted host must not modify the staged files.
+/// The trusted host must not modify the staged files. Observable metadata
+/// changes and unexpected directory entries are rejected before publication.
 #[derive(Debug)]
 pub struct StagedBundle {
     archive: StagedArchive,
     digest: ContentHash,
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    manifest: FileStat,
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    payloads: PayloadStamps,
 }
 
 impl StagedBundle {
@@ -85,6 +94,13 @@ impl StagedBundle {
     /// post-rename directory sync failure is reported in the receipt instead.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     pub fn publish(mut self) -> Result<PublishedBundle, StagingError> {
+        self.archive.0.verify_location()?;
+        check_files(
+            &self.archive.0.root,
+            &self.manifest,
+            &self.payloads,
+            false,
+        )?;
         let name = bundle_name(self.digest);
         publish_directory(&mut self.archive.0, OsStr::new(&name))
     }
@@ -147,30 +163,79 @@ impl AuthoredStaging {
 pub(super) fn finish(
     stage: ArchiveStaging,
     digest: ContentHash,
-    manifest_size: u64,
-    payloads: &PayloadSizes,
+    manifest: &FileStat,
+    payloads: PayloadStamps,
 ) -> Result<StagedBundle, StagingError> {
     stage.temporary.verify_location()?;
-    if !payloads.is_empty() {
-        let directory = openat(
-            &stage.temporary.root,
-            PAYLOADS_DIRECTORY,
-            DIRECTORY_FLAGS,
-            Mode::empty(),
-        )?;
-        for (hash, size) in payloads {
-            sync_regular(&directory, &hash.to_string(), *size)
-                .map_err(sync_error)?;
-        }
-        File::from(directory).sync_all()?;
-    }
-    sync_regular(&stage.temporary.root, MANIFEST_NAME, manifest_size)
-        .map_err(sync_error)?;
-    fsync(&stage.temporary.root)?;
+    check_files(&stage.temporary.root, manifest, &payloads, true)?;
     Ok(StagedBundle {
         archive: stage.finish()?,
         digest,
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        manifest: *manifest,
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        payloads,
     })
+}
+
+// Check the exact file set through the pinned directories, and require every
+// file to retain the metadata observed when its writer completed.
+fn check_files(
+    root: &OwnedFd,
+    manifest: &FileStat,
+    payloads: &PayloadStamps,
+    sync: bool,
+) -> Result<(), StagingError> {
+    let check = if sync {
+        sync_regular
+    } else {
+        verify_staged_regular
+    };
+    check_entry_count(
+        root,
+        if payloads.is_empty() {
+            1
+        } else {
+            2
+        },
+    )?;
+    if !payloads.is_empty() {
+        let directory =
+            openat(root, PAYLOADS_DIRECTORY, DIRECTORY_FLAGS, Mode::empty())?;
+        check_entry_count(&directory, payloads.len())?;
+        for (hash, stamp) in payloads {
+            check(&directory, &hash.to_string(), stamp).map_err(sync_error)?;
+        }
+        if sync {
+            File::from(directory).sync_all()?;
+        }
+    }
+    check(root, MANIFEST_NAME, manifest).map_err(sync_error)?;
+    if sync {
+        fsync(root)?;
+    }
+    Ok(())
+}
+
+fn check_entry_count(
+    directory: &OwnedFd,
+    expected: usize,
+) -> Result<(), StagingError> {
+    if !trusted_directory(directory)? {
+        return Err(StagingError::ChangedStorage);
+    }
+    let path = format!("/proc/self/fd/{}", directory.as_raw_fd());
+    let mut remaining = expected;
+    for result in fs::read_dir(path)? {
+        let _entry = result?;
+        remaining = remaining
+            .checked_sub(1)
+            .ok_or(StagingError::ChangedStorage)?;
+    }
+    if remaining != 0 {
+        return Err(StagingError::ChangedStorage);
+    }
+    Ok(())
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]

@@ -286,26 +286,52 @@ fn staged_regular(stat: &FileStat) -> bool {
     private_regular(stat) && stat.st_nlink == 1
 }
 
-// Unlike a snapshot, a completed stage must not contain an unlinked inode.
-pub(crate) fn sync_regular(
+// A staged file cannot legitimately change identity, length, ownership,
+// permissions or content timestamps after the writer closes it.
+fn check_staged_metadata(
+    expected: &FileStat,
+    current: &FileStat,
+) -> Result<(), FileReadError> {
+    if !staged_regular(current)
+        || !same_content_metadata(expected, current)
+        || expected.st_mode != current.st_mode
+        || expected.st_uid != current.st_uid
+        || expected.st_gid != current.st_gid
+        || expected.st_ctime != current.st_ctime
+        || expected.st_ctime_nsec != current.st_ctime_nsec
+    {
+        return Err(FileReadError::UnsafeFile);
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_staged_regular(
     parent: &impl AsFd,
     name: &str,
-    expected: u64,
+    expected: &FileStat,
 ) -> Result<(), FileReadError> {
     if !trusted_directory(parent)? {
         return Err(FileReadError::UnsafeFile);
     }
     let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())?;
-    let (file, before) = reopen_pinned(&pinned, expected, staged_regular)?;
-    if file_size(&before)? != expected {
+    check_staged_metadata(expected, &fstat(&pinned)?)
+}
+
+pub(crate) fn sync_regular(
+    parent: &impl AsFd,
+    name: &str,
+    expected: &FileStat,
+) -> Result<(), FileReadError> {
+    if !trusted_directory(parent)? {
         return Err(FileReadError::UnsafeFile);
     }
+    let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())?;
+    let (file, before) =
+        reopen_pinned(&pinned, file_size(expected)?, staged_regular)?;
+    check_staged_metadata(expected, &before)?;
     file.sync_all()?;
-    let after = fstat(&file)?;
-    if !staged_regular(&after) || !same_content_metadata(&before, &after) {
-        return Err(FileReadError::UnsafeFile);
-    }
-    Ok(())
+    check_staged_metadata(expected, &fstat(&file)?)?;
+    verify_staged_regular(parent, name, expected)
 }
 
 #[cfg(test)]

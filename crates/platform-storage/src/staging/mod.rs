@@ -47,7 +47,7 @@ use games_assets::archive::{
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
-use nix::sys::stat::{Mode, fstat, mkdirat};
+use nix::sys::stat::{FileStat, Mode, fstat, mkdirat};
 pub use publication::StagedBundle;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
@@ -329,6 +329,39 @@ impl ArchiveStaging {
         })
     }
 
+    fn record_entry<Source>(
+        &mut self,
+        metadata: StagingEntry<'_>,
+        input: &mut Source,
+    ) -> Result<Option<FileStat>, StagingError>
+    where
+        Source: Read,
+    {
+        if self.failed {
+            return Err(StagingError::Aborted);
+        }
+        let result = self.write_member(metadata, input);
+        self.failed = result.is_err();
+        result
+    }
+
+    fn record_file(
+        &mut self,
+        path: &str,
+        size: u64,
+        bytes: &mut &[u8],
+    ) -> Result<FileStat, StagingError> {
+        self.record_entry(
+            StagingEntry {
+                kind: EntryKind::File,
+                path,
+                size,
+            },
+            bytes,
+        )?
+        .ok_or(StagingError::ChangedStorage)
+    }
+
     /// Validate one declared member and stream its exact payload into staging.
     ///
     /// Paths use portable ASCII components and at most 64 levels. Directory
@@ -345,19 +378,14 @@ impl ArchiveStaging {
     where
         Source: Read,
     {
-        if self.failed {
-            return Err(StagingError::Aborted);
-        }
-        let result = self.write_member(metadata, input);
-        self.failed = result.is_err();
-        result
+        self.record_entry(metadata, input).map(|_stat| ())
     }
 
     fn write_member<Source>(
         &mut self,
         metadata: StagingEntry<'_>,
         input: &mut Source,
-    ) -> Result<(), StagingError>
+    ) -> Result<Option<FileStat>, StagingError>
     where
         Source: Read,
     {
@@ -387,11 +415,12 @@ impl ArchiveStaging {
             EntryKind::Directory => {
                 copy_bounded(input, &mut io::sink(), entry)?;
                 let _directory = directory.open_child(parent, leaf, None)?;
-                Ok(())
+                Ok(None)
             },
             EntryKind::File => {
                 let mut output = directory.create_file(parent, leaf)?;
-                copy_bounded(input, &mut output, entry)
+                copy_bounded(input, &mut output, entry)?;
+                Ok(Some(fstat(&output)?))
             },
             EntryKind::Hardlink | EntryKind::Other | EntryKind::Symlink => {
                 Err(ArchiveError::LinkOrSpecial.into())
@@ -401,6 +430,7 @@ impl ArchiveStaging {
 }
 
 type PayloadSizes = BTreeMap<ContentHash, u64>;
+type PayloadStamps = BTreeMap<ContentHash, FileStat>;
 
 /// A private canonical bundle, built from content-addressed payloads.
 ///
@@ -408,7 +438,7 @@ type PayloadSizes = BTreeMap<ContentHash, u64>;
 /// The archive budget includes the manifest file and payload directory.
 #[derive(Debug)]
 pub struct CanonicalStaging {
-    payloads: PayloadSizes,
+    payloads: PayloadStamps,
     stage: ArchiveStaging,
 }
 
@@ -465,22 +495,22 @@ impl CanonicalStaging {
         mut bytes: &[u8],
         expected: &PayloadSizes,
     ) -> Result<StagedBundle, StagingError> {
-        if expected != &self.payloads {
+        if expected.len() != self.payloads.len()
+            || expected.iter().any(|(hash, size)| {
+                self.payloads
+                    .get(hash)
+                    .and_then(|stat| u64::try_from(stat.st_size).ok())
+                    != Some(*size)
+            })
+        {
             return Err(AssetError::PayloadMismatch.into());
         }
         let size = manifest_size(bytes)?;
         let mut budget = self.stage.budget;
         let _entry = budget.admit(MANIFEST_NAME, EntryKind::File, size)?;
         let digest = ContentHash::calculate(bytes);
-        self.stage.write_entry(
-            StagingEntry {
-                kind: EntryKind::File,
-                path: MANIFEST_NAME,
-                size,
-            },
-            &mut bytes,
-        )?;
-        publication::finish(self.stage, digest, size, expected)
+        let stamp = self.stage.record_file(MANIFEST_NAME, size, &mut bytes)?;
+        publication::finish(self.stage, digest, &stamp, self.payloads)
     }
 
     /// Create a private canonical bundle transaction.
@@ -530,15 +560,8 @@ impl CanonicalStaging {
             self.stage.failed = true;
             return Err(AssetError::PayloadMismatch.into());
         }
-        self.stage.write_entry(
-            StagingEntry {
-                kind: EntryKind::File,
-                path: &path,
-                size,
-            },
-            &mut bytes,
-        )?;
-        let _previous = self.payloads.insert(digest, size);
+        let stamp = self.stage.record_file(&path, size, &mut bytes)?;
+        let _previous = self.payloads.insert(digest, stamp);
         Ok(())
     }
 }
@@ -639,8 +662,10 @@ fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::FileTimes;
     use std::num::{NonZeroU64, NonZeroUsize};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::time::UNIX_EPOCH;
 
     use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
     use nix::unistd::mkfifo;
@@ -1056,6 +1081,7 @@ mod tests {
             "hardlink",
             "short",
             "long",
+            "same-length",
             "writable",
         ] {
             let mut stage =
@@ -1063,6 +1089,7 @@ mod tests {
             stage.write_payload(digest, b"tile")?;
             let path = stage.stage.temporary.path.clone();
             let payload = path.join(payload_path(digest));
+            let _original = File::open(&payload)?;
             fs::remove_file(&payload)?;
             match replacement {
                 "fifo" => mkfifo(&payload, Mode::S_IRUSR)?,
@@ -1071,6 +1098,7 @@ mod tests {
                 "hardlink" => fs::hard_link(&sentinel, &payload)?,
                 "short" => fs::write(&payload, b"x")?,
                 "long" => fs::write(&payload, b"tiles")?,
+                "same-length" => fs::write(&payload, b"evil")?,
                 "writable" => {
                     fs::write(&payload, b"tile")?;
                     fs::set_permissions(
@@ -1086,6 +1114,71 @@ mod tests {
             ))?;
             require(!path.exists())?;
             require(fs::read(&sentinel)? == b"tile")?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_completion_rejects_in_place_changes_and_extra_files()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        for extra in ["", "extra", "payloads/extra"] {
+            let mut stage =
+                CanonicalStaging::new(&parent.path, canonical_budget())?;
+            stage.write_payload(digest, b"tile")?;
+            let path = stage.stage.temporary.path.clone();
+            if extra.is_empty() {
+                let payload = path.join(payload_path(digest));
+                fs::write(&payload, b"evil")?;
+                File::open(&payload)?
+                    .set_times(FileTimes::new().set_modified(UNIX_EPOCH))?;
+            } else {
+                fs::write(path.join(extra), b"unlisted")?;
+            }
+            require(matches!(
+                stage.finish(&manifest, canonical_limits()),
+                Err(StagingError::ChangedStorage)
+            ))?;
+            require(!path.exists())?;
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn canonical_publication_rejects_changes_after_completion()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let payload = payload_path(digest);
+        for name in [MANIFEST_NAME, payload.as_str(), "payloads/extra", "extra"]
+        {
+            let mut stage =
+                CanonicalStaging::new(&parent.path, canonical_budget())?;
+            stage.write_payload(digest, b"tile")?;
+            let staged = stage.finish(&manifest, canonical_limits())?;
+            let path = staged.path().to_owned();
+            let destination =
+                parent.path.join(format!("bundle-{}", staged.digest()));
+            let changed = path.join(name);
+            if changed.exists() {
+                let mut bytes = fs::read(&changed)?;
+                bytes.fill(b'x');
+                fs::write(&changed, bytes)?;
+                File::open(&changed)?
+                    .set_times(FileTimes::new().set_modified(UNIX_EPOCH))?;
+            } else {
+                fs::write(changed, b"unlisted")?;
+            }
+            require(matches!(
+                staged.publish(),
+                Err(StagingError::ChangedStorage)
+            ))?;
+            require(!destination.exists())?;
+            require(!path.exists())?;
         }
         Ok(())
     }

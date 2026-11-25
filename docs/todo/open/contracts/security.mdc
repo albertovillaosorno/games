@@ -363,3 +363,19 @@ were each rejected; subsequent read-back remained identical and no
 staging directory survived. No original binary was executed. This is
 local GNU/Linux evidence for an externally applied isolation policy,
 not a mandatory sandbox supplied by the importer or Android acceptance.
+
+Canonical staging now retains each file's metadata when the bounded
+writer completes. Completion verifies that same inode, length, permissions
+and timestamps before and after synchronisation. Publication rechecks
+the recorded metadata and the exact physical directory entry counts;
+same-length replacements, observed in-place edits and unlisted files
+cannot be published under the original manifest identity. This adds
+metadata checks without rehashing the payload or retaining its bytes.
+It detects observable changes, not arbitrary concurrent writes by a
+hostile same-user process; the trusted-parent requirement remains.
+Fresh workspace validation passed, including same-length replacement,
+in-place modification and extra-file regressions. The local Simpsons
+archive also published with the exact 14-member, 7,209,088-byte budget;
+a duplicate publication was rejected, and both read-backs verified
+the unchanged 10,485,760-byte graphics payload set with no staging
+directory left behind.
