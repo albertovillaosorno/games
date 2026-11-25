@@ -220,6 +220,13 @@ pub enum Maneuver {
     Idle,
     /// Station is airborne.
     Jump(JumpMotion),
+    /// Station is performing a stationary simultaneous-button attack.
+    Special {
+        /// Whether the provisional encounter strike has been consumed.
+        hit: bool,
+        /// Zero-based displayed maneuver tick.
+        tick: u8,
+    },
 }
 
 impl Maneuver {
@@ -243,6 +250,14 @@ impl Maneuver {
                 Some(next) => Self::Jump(next),
                 None => Self::Idle,
             },
+            Self::Special { hit, tick } => {
+                let next = tick.saturating_add(1);
+                if next < self.pose_duration(player) {
+                    Self::Special { hit, tick: next }
+                } else {
+                    Self::Idle
+                }
+            },
         }
     }
 
@@ -251,7 +266,10 @@ impl Maneuver {
     }
 
     pub(super) const fn airborne(self) -> bool {
-        matches!(self, Self::Jump(_) | Self::AirAttack(_))
+        matches!(
+            self,
+            Self::Jump(_) | Self::AirAttack(_) | Self::Special { .. }
+        )
     }
 
     pub(super) const fn attack_cue(self, player: Player) -> bool {
@@ -271,6 +289,12 @@ impl Maneuver {
             motion.hit = true;
             return true;
         }
+        if let Self::Special { hit, .. } = self
+            && !*hit
+        {
+            *hit = true;
+            return true;
+        }
         false
     }
 
@@ -284,6 +308,14 @@ impl Maneuver {
             Self::Jump(motion) => motion.elevation(),
             Self::AirAttack(motion) => motion.elevation(),
             Self::Attack { .. } | Self::Idle => 0,
+            Self::Special { tick, .. } => {
+                let elapsed = i16::from(tick).saturating_add(1);
+                elapsed
+                    .saturating_mul(31i16.saturating_sub(elapsed))
+                    .saturating_mul(3)
+                    .checked_div(16)
+                    .unwrap_or(0)
+            },
         }
     }
 
@@ -299,6 +331,7 @@ impl Maneuver {
             Self::Idle => 0,
             Self::Jump(_) => SHORT_JUMP_TICKS,
             Self::AirAttack(_) => 60,
+            Self::Special { .. } => 30,
         }
     }
 
@@ -369,6 +402,23 @@ mod tests {
         assert_eq!(air_trace(30), (apex.to_vec(), 96));
         assert_eq!(air_trace(10).0.first(), Some(&63));
         assert_eq!(air_trace(11).0.first(), Some(&64));
+    }
+
+    #[test]
+    fn stationary_special_matches_observed_arc() {
+        let expected = [
+            5, 10, 15, 20, 24, 28, 31, 34, 37, 39, 41, 42, 43, 44, 45, 45, 44,
+            43, 42, 41, 39, 37, 34, 31, 28, 24, 20, 15, 10, 5,
+        ];
+        for player in Player::ALL {
+            let mut state = Maneuver::Special { hit: false, tick: 0 };
+            for height in expected {
+                assert_eq!(state.elevation(), height);
+                assert!(state.airborne());
+                state = state.advance(player, true);
+            }
+            assert_eq!(state, Maneuver::Idle);
+        }
     }
 
     #[test]

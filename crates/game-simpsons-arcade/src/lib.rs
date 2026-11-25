@@ -341,6 +341,25 @@ impl Slot {
         self.held & control.mask() != 0
     }
 
+    fn maneuver_step(&mut self, dx: i16, dy: i16) -> (i16, i16) {
+        match self.station.maneuver {
+            Maneuver::AirAttack(motion) => {
+                let forward = if self.station.facing == Facing::Left {
+                    -1
+                } else {
+                    1
+                };
+                (motion.step().saturating_mul(forward), 0)
+            },
+            Maneuver::Special { .. } => (0, 0),
+            Maneuver::Attack { .. } => (self.attack_step(dx), 0),
+            Maneuver::Idle | Maneuver::Jump(_) => {
+                self.attack_quarters = 0;
+                (dx, dy)
+            },
+        }
+    }
+
     fn move_tick(&mut self, layout: StreetLayout) {
         if !self.station.can_fight() {
             return;
@@ -349,7 +368,9 @@ impl Slot {
         let dy = axis(self.held(Control::Up), self.held(Control::Down));
         if !matches!(
             self.station.maneuver,
-            Maneuver::Attack { tick: 1.. } | Maneuver::AirAttack(_)
+            Maneuver::Attack { tick: 1.. }
+                | Maneuver::AirAttack(_)
+                | Maneuver::Special { .. }
         ) && dx != 0
         {
             self.station.facing = if dx < 0 {
@@ -358,20 +379,7 @@ impl Slot {
                 Facing::Right
             };
         }
-        let (step_x, step_y) =
-            if let Maneuver::AirAttack(motion) = self.station.maneuver {
-                let forward = if self.station.facing == Facing::Left {
-                    -1
-                } else {
-                    1
-                };
-                (motion.step().saturating_mul(forward), 0)
-            } else if matches!(self.station.maneuver, Maneuver::Attack { .. }) {
-                (self.attack_step(dx), 0)
-            } else {
-                self.attack_quarters = 0;
-                (dx, dy)
-            };
+        let (step_x, step_y) = self.maneuver_step(dx, dy);
         let previous = self.station.position;
         let position = &mut self.station.position;
         position.x = position
@@ -528,7 +536,7 @@ impl Cabinet {
             Control::Pause => MenuInput::Pause,
             Control::Primary | Control::Secondary if playing => {
                 if slot.station.can_fight() {
-                    queue_maneuver(pending, index, control);
+                    queue_maneuver(queued, slot, control);
                 }
                 return;
             },
@@ -772,16 +780,26 @@ const fn axis(negative: bool, positive: bool) -> i16 {
 }
 
 fn queue_maneuver(
-    pending: &mut [Option<Maneuver>; 4],
-    index: usize,
+    queued: &mut Option<Maneuver>,
+    slot: &Slot,
     control: Control,
 ) {
-    let maneuver = if control == Control::Primary {
-        Maneuver::Attack { tick: 0 }
+    let (maneuver, other, combines) = if control == Control::Primary {
+        (
+            Maneuver::Attack { tick: 0 },
+            Control::Secondary,
+            matches!(queued, Some(Maneuver::Jump(_))),
+        )
     } else {
-        Maneuver::jump()
+        (
+            Maneuver::jump(),
+            Control::Primary,
+            matches!(queued, Some(Maneuver::Attack { .. })),
+        )
     };
-    if let Some(queued) = pending.get_mut(index) {
+    if slot.station.maneuver == Maneuver::Idle && combines && slot.held(other) {
+        *queued = Some(Maneuver::Special { hit: false, tick: 0 });
+    } else {
         let _first = queued.get_or_insert(maneuver);
     }
 }
@@ -915,6 +933,40 @@ mod tests {
             state.input_step(2, &pulse(player, Control::Start));
         }
         state
+    }
+
+    #[test]
+    fn overlapping_buttons_start_one_stationary_special() {
+        let mut state = four_playing();
+        let original = state.stations();
+        state.input_step(3, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Marge, Control::Secondary, true),
+            change(Player::Homer, Control::Secondary, true),
+            change(Player::Homer, Control::Primary, true),
+        ]);
+        let [marge, homer, bart, lisa] = state.stations();
+        assert_eq!(marge.maneuver, Maneuver::Special { hit: false, tick: 0 });
+        assert_eq!(homer.maneuver, marge.maneuver);
+        assert_eq!(bart.maneuver, Maneuver::Idle);
+        assert_eq!(lisa.maneuver, Maneuver::Idle);
+        for tick in 4..34 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations(), original);
+    }
+
+    #[test]
+    fn sequential_pulses_do_not_start_special() {
+        let mut state = four_playing();
+        state.input_step(3, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Marge, Control::Secondary, true),
+            change(Player::Marge, Control::Secondary, false),
+        ]);
+        let [marge, ..] = state.stations();
+        assert_eq!(marge.maneuver, Maneuver::Attack { tick: 0 });
     }
 
     #[test]

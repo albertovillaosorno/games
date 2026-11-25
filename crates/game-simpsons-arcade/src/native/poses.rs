@@ -53,6 +53,7 @@ enum Kind {
     Attack,
     Jump,
     Lift,
+    Special,
     Walk,
 }
 
@@ -63,6 +64,7 @@ impl Kind {
             Self::Attack => Maneuver::Attack { tick: 0 }.pose_duration(player),
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
+            Self::Special => 30,
             Self::Walk => walk_duration(player),
         }
     }
@@ -122,9 +124,10 @@ impl Catalogue {
                 .into_iter()
                 .all(|kind| entries.contains_key(&(player, kind, 0)))
         });
-        let complete_optional = [Kind::AirAttack, Kind::Lift, Kind::Walk]
-            .into_iter()
-            .all(|kind| optional_complete(&entries, kind));
+        let complete_optional =
+            [Kind::AirAttack, Kind::Lift, Kind::Special, Kind::Walk]
+                .into_iter()
+                .all(|kind| optional_complete(&entries, kind));
         if !complete || !complete_optional {
             return Err(failure("missing tick-zero pose"));
         }
@@ -152,6 +155,14 @@ impl PoseArt {
             Maneuver::AirAttack(motion) => {
                 return air_attack_entry(&self.entries, player, motion.tick())
                     .copied();
+            },
+            Maneuver::Special { tick, .. } => {
+                return select_entry(
+                    &self.entries,
+                    (player, Kind::Special, tick),
+                )
+                .or_else(|| air_attack_entry(&self.entries, player, tick))
+                .copied();
             },
             Maneuver::Jump(motion) => {
                 return jump_entry(&self.entries, player, motion).copied();
@@ -215,6 +226,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         "attack" => Kind::Attack,
         "jump" => Kind::Jump,
         "jump-lift" => Kind::Lift,
+        "special" => Kind::Special,
         "walk" => Kind::Walk,
         _ => return Err(failure("unknown pose maneuver")),
     };
@@ -376,6 +388,25 @@ mod tests {
         );
         assert!(
             Catalogue::parse(&format!("{base}{air}lisa air-attack 60 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn special_poses_require_each_station_and_bound_ticks() {
+        let base = complete();
+        let special = ["marge", "homer", "bart", "lisa"]
+            .map(|name| format!("{name} special 0 {HASH}\n"))
+            .concat();
+        assert!(
+            Catalogue::parse(&format!("{base}marge special 0 {HASH}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{special}lisa special 29 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{special}lisa special 30 {HASH}"))
                 .is_err()
         );
     }

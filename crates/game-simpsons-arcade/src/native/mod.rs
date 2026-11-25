@@ -1338,8 +1338,51 @@ fn smoke(
     if !art.poses.is_empty() {
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
+    smoke_special(scene, art, &mut controls, &mut simulation)?;
     smoke_air_attack(scene, art, &mut controls, &mut simulation)?;
     smoke_movement_benchmark(scene, art, &mut controls, &mut simulation)
+}
+
+fn smoke_special(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let [before, ..] = simulation.state().stations();
+    let _drawn = art.present(scene, simulation.state())?;
+    let pixels = scene.readback()?;
+    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+    for down in [true, false] {
+        for control in [Control::Primary, Control::Secondary] {
+            let code = key_code(controls.key(Player::Marge, control)?);
+            controls.route(
+                InputEvent::Key { code, down },
+                TICK_INTERVAL.saturating_mul(tick),
+                simulation,
+            )?;
+        }
+    }
+    let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let [attack, ..] = simulation.state().stations();
+    if !matches!(attack.maneuver, Maneuver::Special { tick: 0, .. })
+        || attack.position != before.position
+    {
+        return Err(failure("stationary special did not start"));
+    }
+    let _draw = art.present(scene, simulation.state())?;
+    if pixels == scene.readback()? {
+        return Err(failure("stationary special not visibly presented"));
+    }
+    for _ in 0..30u8 {
+        let _cycle_step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        let _cycle_draw = art.present(scene, simulation.state())?;
+    }
+    let [landed, ..] = simulation.state().stations();
+    if landed.maneuver != Maneuver::Idle || landed.position != before.position {
+        return Err(failure("special did not land at original position"));
+    }
+    Ok(())
 }
 
 fn smoke_air_attack(
