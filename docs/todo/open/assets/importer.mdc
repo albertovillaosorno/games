@@ -114,3 +114,23 @@ entry, aggregate and count limits. A one-byte reduction in the entry
 budget rejected the same source. This proves structural admission only:
 cartridge-specific graphics/audio conversion, edition authenticity,
 and gameplay are not established by the parser.
+
+The NEO adapter now selects the Metal Slug MVS/AES cartridge layout by
+exact region sizes, with an explicit revision identifier. Local
+comparison against the public Neo Geo board layout found that the
+container's two interleaved sprite banks correspond to the original
+chip lanes. The alternate ZIP uses a different sprite encoding and is
+not admitted by this profile. The shared tile decoder converts both
+the Neo Geo fixed layer and sprites without separate payload assembly
+or publication logic. No original-media checksum inventory is stored.
+
+Local import, publication and independent pinned read-back produced
+262,144 fixed-layer bytes and 33,554,432 sprite index bytes, for
+33,816,576 canonical bytes. Repeated publication rejected replacement;
+read-back remained unchanged. The existing Simpsons graphics and audio
+imports reproduced their previously published manifest identities.
+All extracted payloads remain under the ignored reference directory.
+Synthetic tests exercise nibble order, sprite bit and half order, exact
+region and output budgets, deterministic manifests and identity rejection.
+Live palette matching, original scene comparison, audio conversion and
+title gameplay remain open.

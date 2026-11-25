@@ -100,9 +100,11 @@ use games_assets::ManifestLimits;
 use games_assets::archive::ArchiveBudget;
 use games_assets::{AssetManifest, ContentHash, SourceIdentity};
 use games_importer::conversion::ConversionLimits;
+use games_importer::mame::Machine;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_importer::mame::samples::compare_observations;
-use games_importer::mame::{AssetSelection, Machine};
+use games_importer::neo::CartridgeGraphics;
+use games_importer::selection::AssetSelection;
 use games_importer::{ImportError, SourceSnapshot};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_platform_storage::file::snapshot;
@@ -116,6 +118,9 @@ const USAGE: &str = concat!(
     "RAW MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "GNU/Linux: games-build bundle replace-wave PARENT BASE_SHA256 KEY ",
     "WAV MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
+    "games-build neo import TITLE REV PATH SOURCE ENTRY TOTAL COUNT\n",
+    "GNU/Linux: neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL COUNT\n",
+    "GNU/Linux: neo check TITLE REV PARENT MANIFEST_SHA256\n",
     "games-build zip|neo verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
@@ -177,14 +182,13 @@ impl Arguments {
         Self::with_identity(identity, path, [source, entry, total, count])
     }
 
-    fn parse_mame(
-        machine: Machine,
+    fn parse_profile(
+        identity: SourceIdentity,
         args: Vec<OsString>,
     ) -> Result<Self, String> {
         let [path, source, entry, total, count] =
             <[OsString; 5]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
-        let identity = machine.identity();
         Self::with_identity(identity, path, [source, entry, total, count])
     }
 
@@ -341,6 +345,7 @@ impl Command {
                     parse_limit(&limit)?,
                 ))
             },
+            (Some("neo"), Some(operation)) => Self::parse_neo(operation, args),
             (Some("mame"), Some(operation)) => {
                 Self::parse_mame(operation, args)
             },
@@ -369,21 +374,19 @@ impl Command {
 
     fn parse_assets<Args>(
         action: &str,
-        selected: Machine,
+        selection: AssetSelection,
         mut args: Args,
     ) -> Result<Self, String>
     where
         Args: Iterator<Item = OsString>,
     {
-        let selection = if action.starts_with("audio-") {
-            AssetSelection::Audio(selected)
-        } else {
-            AssetSelection::Graphics(selected)
-        };
         match action {
             "import" | "audio-import" => Ok(Self::Import(
                 selection,
-                Arguments::parse_mame(selected, args.by_ref().collect())?,
+                Arguments::parse_profile(
+                    selection.identity(),
+                    args.by_ref().collect(),
+                )?,
             )),
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "publish" | "audio-publish" => {
@@ -391,7 +394,10 @@ impl Command {
                 Ok(Self::Publish(
                     selection,
                     PathBuf::from(parent),
-                    Arguments::parse_mame(selected, args.collect())?,
+                    Arguments::parse_profile(
+                        selection.identity(),
+                        args.collect(),
+                    )?,
                 ))
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -451,7 +457,7 @@ impl Command {
             "sample-check" => Self::parse_sample(selected, args),
             "verify" => Ok(Self::Verify(
                 Verification::Mame(selected),
-                Arguments::parse_mame(selected, args.collect())?,
+                Arguments::parse_profile(selected.identity(), args.collect())?,
             )),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             "object-check" | "palette-check" | "priority-check"
@@ -476,8 +482,24 @@ impl Command {
                 selected,
                 render_check::Arguments::parse_benchmark(args.collect())?,
             )),
-            _ => Self::parse_assets(action, selected, args),
+            _ => Self::parse_mame_assets(action, selected, args),
         }
+    }
+
+    fn parse_mame_assets<Args>(
+        action: &str,
+        machine: Machine,
+        args: Args,
+    ) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        let selection = if action.starts_with("audio-") {
+            AssetSelection::Audio(machine)
+        } else {
+            AssetSelection::Graphics(machine)
+        };
+        Self::parse_assets(action, selection, args)
     }
 
     #[cfg(all(
@@ -501,6 +523,21 @@ impl Command {
             )),
             _ => Err(String::from(USAGE)),
         }
+    }
+
+    fn parse_neo<Args>(action: &str, mut args: Args) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        if !matches!(action, "import" | "publish" | "check") {
+            return Err(String::from(USAGE));
+        }
+        let title = args.next().ok_or_else(|| String::from(USAGE))?;
+        let revision = args.next().ok_or_else(|| String::from(USAGE))?;
+        let profile =
+            CartridgeGraphics::select(text(&title)?, text(&revision)?)
+                .map_err(|error| format!("cartridge profile: {error:?}"))?;
+        Self::parse_assets(action, AssetSelection::Cartridge(profile), args)
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -560,7 +597,7 @@ impl Command {
             machine,
             raw.into(),
             parse_limit(&limit)?,
-            Arguments::parse_mame(machine, args.collect())?,
+            Arguments::parse_profile(machine.identity(), args.collect())?,
         ))
     }
 
@@ -1049,6 +1086,30 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn cartridge_import_requires_known_graphics_profile() {
+        let mut args = [
+            "neo",
+            "import",
+            "metal-slug",
+            "mvs-aes-neo-v1",
+            "cartridge.neo",
+            "27529216",
+            "16777216",
+            "27525120",
+            "5",
+        ];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::Import(AssetSelection::Cartridge(_), _))
+        ));
+        args[1] = "audio-import";
+        assert!(Command::parse(args.into_iter().map(OsString::from)).is_err());
+        args[1] = "import";
+        args[3] = "unknown";
+        assert!(Command::parse(args.into_iter().map(OsString::from)).is_err());
     }
 
     #[test]

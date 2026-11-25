@@ -48,7 +48,7 @@ pub mod tilemap;
 
 use std::collections::BTreeMap;
 use std::iter::once;
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use games_assets::archive::ArchiveBudget;
 use games_assets::{
@@ -56,7 +56,7 @@ use games_assets::{
 };
 
 use crate::conversion::{ConversionLimits, convert_snapshot};
-use crate::graphics::{TileLayout, interleave_words};
+use crate::graphics::{TileLayout, allocated_bytes, interleave_words};
 use crate::{ImportError, SourceSnapshot};
 
 #[derive(Clone, Copy, Debug)]
@@ -70,21 +70,7 @@ struct Region {
 
 impl Region {
     fn format(self) -> Result<AssetFormat, ImportError> {
-        let dimension = |value: usize| {
-            u32::try_from(value)
-                .ok()
-                .and_then(NonZeroU32::new)
-                .ok_or(ImportError::UnsupportedMember)
-        };
-        Ok(AssetFormat::IndexedTiles8 {
-            height: dimension(self.layout.row_bits.len())?,
-            tiles: dimension(
-                self.source_bytes()?
-                    .checked_div(self.layout.tile_bytes.get())
-                    .ok_or(ImportError::UnsupportedMember)?,
-            )?,
-            width: dimension(self.layout.column_bits.len())?,
-        })
+        Ok(self.layout.indexed_format(self.source_bytes()?)?)
     }
 
     fn source_bytes(self) -> Result<usize, ImportError> {
@@ -111,85 +97,15 @@ struct Profile {
     video: priority::Wiring,
 }
 
-/// The selected canonical asset family for a supported machine.
-#[derive(Clone, Copy, Debug)]
-pub enum AssetSelection {
-    /// Mono PCM sound samples at their source-declared nominal rates.
-    Audio(Machine),
-    /// Indexed background and sprite graphics.
-    Graphics(Machine),
-}
-
-impl AssetSelection {
-    /// Convert a complete asset family using the shared transaction.
-    /// # Errors
-    /// Rejects invalid source identity, assets or staging failures.
-    pub fn convert<Stage>(
-        self,
-        source: &SourceSnapshot<'_>,
-        limits: ConversionLimits,
-        stage: Stage,
-    ) -> Result<AssetManifest, ImportError>
-    where
-        Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
-    {
-        match self {
-            Self::Graphics(machine) => {
-                machine.convert_graphics(source, limits, stage)
-            },
-            Self::Audio(machine) => convert_snapshot(
-                source,
-                limits.manifest,
-                stage,
-                |verified, output| {
-                    let rom = machine.sample_rom(verified, limits.archive)?;
-                    samples::catalogue::convert(
-                        &rom,
-                        machine.0.audio_limits,
-                        limits.manifest,
-                        output,
-                    )
-                },
-            ),
-        }
-    }
-
-    /// The selected machine's independent canonical output limits.
-    #[must_use]
-    pub const fn limits(self) -> ManifestLimits {
-        match self {
-            Self::Audio(machine) => machine.0.audio_limits,
-            Self::Graphics(machine) => machine.graphics_limits(),
-        }
-    }
-
-    /// Check identity and declared family shape of a pinned manifest.
-    /// # Errors
-    /// Rejects another source or unexpected asset keys or types.
-    pub fn validate_manifest(
-        self,
-        manifest: &AssetManifest,
-    ) -> Result<(), ImportError> {
-        match self {
-            Self::Graphics(machine) => machine.validate_manifest(manifest),
-            Self::Audio(machine) => {
-                if manifest.source() != &machine.identity() {
-                    return Err(ImportError::IncorrectSource);
-                }
-                samples::catalogue::validate_manifest(
-                    manifest,
-                    machine.0.audio_limits.records,
-                )
-            },
-        }
-    }
-}
-
 /// A supported machine and source layout, selected by name.
 #[derive(Clone, Copy, Debug)]
 pub struct Machine(&'static Profile);
 
 impl Machine {
+    pub(crate) const fn audio_limits(self) -> ManifestLimits {
+        self.0.audio_limits
+    }
+
     /// Fixed visible raster geometry and tile-layer alignment.
     #[must_use]
     pub const fn background_raster(self) -> background::Raster {
@@ -205,6 +121,26 @@ impl Machine {
         device: &[u8],
     ) -> Result<objects::TransferReport, ImportError> {
         self.0.object_transfer.compare(cpu, device)
+    }
+
+    pub(crate) fn convert_audio<Stage>(
+        self,
+        source: &SourceSnapshot<'_>,
+        limits: ConversionLimits,
+        stage: Stage,
+    ) -> Result<AssetManifest, ImportError>
+    where
+        Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
+    {
+        convert_snapshot(source, limits.manifest, stage, |verified, output| {
+            let rom = self.sample_rom(verified, limits.archive)?;
+            samples::catalogue::convert(
+                &rom,
+                self.audio_limits(),
+                limits.manifest,
+                output,
+            )
+        })
     }
 
     /// Convert every declared graphics region to a private canonical sink.
@@ -345,6 +281,19 @@ impl Machine {
         )
     }
 
+    pub(crate) fn validate_audio_manifest(
+        self,
+        manifest: &AssetManifest,
+    ) -> Result<(), ImportError> {
+        if manifest.source() != &self.identity() {
+            return Err(ImportError::IncorrectSource);
+        }
+        samples::catalogue::validate_manifest(
+            manifest,
+            self.audio_limits().records,
+        )
+    }
+
     /// Check the selected source and exact graphics manifest shape.
     ///
     /// # Errors
@@ -466,17 +415,7 @@ impl RegionLanes {
             .map_err(|_error| ImportError::UnsupportedMember)?;
         drop(sources);
         drop(self.lanes);
-        let output = self
-            .region
-            .layout
-            .output_len(size)
-            .map_err(|_error| ImportError::UnsupportedMember)?;
-        let mut indices = allocated_bytes(output)?;
-        self.region
-            .layout
-            .decode(&region, &mut indices)
-            .map_err(|_error| ImportError::UnsupportedMember)?;
-        Ok(indices)
+        Ok(self.region.layout.decode_owned(&region)?)
     }
 
     fn new(region: Region) -> Self {
@@ -485,15 +424,6 @@ impl RegionLanes {
             region,
         }
     }
-}
-
-fn allocated_bytes(size: usize) -> Result<Vec<u8>, ImportError> {
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(size)
-        .map_err(|_error| ImportError::TooLarge)?;
-    bytes.resize(size, 0);
-    Ok(bytes)
 }
 
 #[cfg(test)]

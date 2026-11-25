@@ -39,7 +39,8 @@ use std::path::PathBuf;
 use games::audio::{Channels, Clip, Mixer, StereoGain};
 use games_assets::ContentHash;
 use games_assets::pcm::PcmSamples;
-use games_importer::mame::{AssetSelection, Machine};
+use games_importer::mame::Machine;
+use games_importer::selection::AssetSelection;
 use games_platform_audio::linux::{NativeAudio, PlaybackSpec};
 use games_platform_storage::bundle::CanonicalBundle;
 

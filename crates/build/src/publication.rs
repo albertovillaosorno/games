@@ -38,7 +38,7 @@ use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
 use games_importer::conversion::ConversionLimits;
-use games_importer::mame::AssetSelection;
+use games_importer::selection::AssetSelection;
 use games_importer::wave::{WAVE_HEADER_BYTES, WavePcm};
 use games_importer::{ImportError, SourceSnapshot};
 use games_platform_storage::bundle::CanonicalBundle;

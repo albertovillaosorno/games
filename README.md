@@ -147,6 +147,22 @@ establishes authenticity of original media. New version-two manifests record
 only the selected title and layout; canonical payload and manifest hashes
 remain required. Existing canonical version-one bundles remain readable at
 their original addresses without propagating source fingerprints.
+
+For the admitted unencrypted Neo Geo cartridge layout, use the same
+conversion and publication transaction with the `neo` source adapter:
+
+```sh
+cargo run --locked -p games-build -- neo import metal-slug mvs-aes-neo-v1 \
+  .reference/games/metal-slug/metal-slug.neo 27529216 16777216 27525120 5
+```
+
+`neo verify PATH TITLE REV SOURCE ENTRY TOTAL COUNT` checks structural
+container bounds only. The selected profile additionally validates the
+exact source region sizes and converts fixed-layer and sprite indices.
+GNU/Linux supports `neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL
+COUNT` and `neo check TITLE REV PARENT MANIFEST_SHA256`. Original program
+regions are not executed or retained in canonical bundles. Audio, palettes,
+scene reconstruction and gameplay are not provided by this profile.
 On GNU/Linux, republish legacy canonical bundles with
 
 ```text

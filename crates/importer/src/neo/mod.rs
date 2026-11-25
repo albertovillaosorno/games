@@ -29,7 +29,12 @@
 // - Defaults:
 //   - Reject unknown versions, incomplete extents and trailing bytes.
 
+//! Bounded NEO containers and their admitted graphics profiles.
+
+mod graphics;
+
 use games_assets::archive::{ArchiveBudget, EntryKind};
+pub use graphics::CartridgeGraphics;
 
 use crate::{ImportError, SourceSnapshot};
 

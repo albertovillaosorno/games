@@ -37,7 +37,10 @@ pub mod conversion;
 pub mod graphics;
 /// MAME machine profiles and shared arcade ROM-set conversion.
 pub mod mame;
-mod neo;
+/// NEO cartridge admission and selected graphics profiles.
+pub mod neo;
+/// Shared asset-family selection and conversion dispatch.
+pub mod selection;
 /// Strict PCM16 WAVE reference capture admission.
 pub mod wave;
 
@@ -88,6 +91,17 @@ pub enum ImportError {
 impl From<AssetError> for ImportError {
     fn from(error: AssetError) -> Self {
         Self::Asset(error)
+    }
+}
+
+impl From<graphics::GraphicsError> for ImportError {
+    fn from(error: graphics::GraphicsError) -> Self {
+        match error {
+            graphics::GraphicsError::Allocation
+            | graphics::GraphicsError::Overflow => Self::TooLarge,
+            graphics::GraphicsError::InvalidLayout
+            | graphics::GraphicsError::SizeMismatch => Self::UnsupportedMember,
+        }
     }
 }
 

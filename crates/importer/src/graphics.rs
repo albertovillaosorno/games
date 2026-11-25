@@ -15,13 +15,13 @@
 // - Allows:
 //   - Inputs: Source slices, explicit bit layouts and output buffers.
 //   - Outputs: Interleaved source regions or row-major palette indices.
-//   - Side effects: Writes only to the supplied output buffer.
+//   - Side effects: Writes to supplied or exactly allocated output buffers.
 // - Split-When:
 //   - A distinct encoding requires independent source-format admission.
 // - Merge-When:
 //   - A shared decoder implements equivalent bounded conversion.
 // - Summary:
-//   - Decode source graphics without filesystem access or allocations.
+//   - Decode source graphics without filesystem access.
 // - Description:
 //   - Keep title hardware layout parameters separate from decoding.
 // - Usage:
@@ -31,11 +31,15 @@
 
 //! Bounded source-region assembly and indexed tile decoding.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
+
+use games_assets::AssetFormat;
 
 /// A source graphics layout or buffer is not representable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphicsError {
+    /// Could not allocate the exact bounded output.
+    Allocation,
     /// A dimension, plane count or bit offset is invalid.
     InvalidLayout,
     /// Arithmetic exceeded the supported buffer size.
@@ -86,6 +90,18 @@ impl TileLayout<'_> {
         Ok(())
     }
 
+    /// Allocate and decode a complete canonical index buffer.
+    /// # Errors
+    /// Rejects malformed layouts, overflow and allocation failure.
+    pub fn decode_owned(
+        &self,
+        source: &[u8],
+    ) -> Result<Vec<u8>, GraphicsError> {
+        let mut decoded = allocated_bytes(self.output_len(source.len())?)?;
+        self.decode(source, &mut decoded)?;
+        Ok(decoded)
+    }
+
     fn decode_pixel(
         &self,
         tile: &[u8],
@@ -121,6 +137,31 @@ impl TileLayout<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Describe the canonical indexed tiles for a complete source region.
+    /// # Errors
+    /// Rejects invalid layouts, partial tiles and unrepresentable dimensions.
+    pub fn indexed_format(
+        &self,
+        source_bytes: usize,
+    ) -> Result<AssetFormat, GraphicsError> {
+        let _size = self.output_len(source_bytes)?;
+        let dimension = |value: usize| {
+            u32::try_from(value)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .ok_or(GraphicsError::Overflow)
+        };
+        Ok(AssetFormat::IndexedTiles8 {
+            height: dimension(self.row_bits.len())?,
+            tiles: dimension(
+                source_bytes
+                    .checked_div(self.tile_bytes.get())
+                    .ok_or(GraphicsError::InvalidLayout)?,
+            )?,
+            width: dimension(self.column_bits.len())?,
+        })
     }
 
     /// Return the exact number of bytes required for the decoded indices.
@@ -169,6 +210,15 @@ impl TileLayout<'_> {
             .checked_mul(self.row_bits.len())
             .ok_or(GraphicsError::Overflow)
     }
+}
+
+pub(crate) fn allocated_bytes(size: usize) -> Result<Vec<u8>, GraphicsError> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(size)
+        .map_err(|_error| GraphicsError::Allocation)?;
+    bytes.resize(size, 0);
+    Ok(bytes)
 }
 
 /// Interleave equal-length source lanes one complete word at a time.
