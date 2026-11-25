@@ -83,11 +83,12 @@ impl CombatArt {
         enemy: Enemy,
         animated: Option<Art>,
     ) -> Result<SpriteDraw, RenderError> {
-        let pose = if matches!(enemy.action, EnemyAction::Attack { .. }) {
-            animated.unwrap_or(self.strike)
+        let fallback = if matches!(enemy.action, EnemyAction::Attack { .. }) {
+            self.strike
         } else {
             self.approach
         };
+        let pose = animated.unwrap_or(fallback);
         // The selected reference observations face left.
         Ok(pose.draw(
             ground_position(pose, enemy.position, 0)?,
@@ -320,6 +321,7 @@ pub(super) fn smoke(
     art: &mut Scene,
     touch_enabled: bool,
 ) -> Result<(), RenderError> {
+    smoke_enemy_walk(scene, art, touch_enabled)?;
     smoke_four_player_encounter(scene, art)?;
     let mut simulation = live(true)?;
     let mut controls = Controls::new(touch_enabled)?;
@@ -506,6 +508,27 @@ fn smoke_counterstrike(
     Err(failure("native enemy counterstrike did not damage Marge"))
 }
 
+fn smoke_enemy_walk(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+) -> Result<(), RenderError> {
+    let mut simulation = live(true)?;
+    let mut controls = Controls::new(touch_enabled)?;
+    pulse(&mut controls, &mut simulation, Scancode::Return)?;
+    advance(&mut simulation, 6)?;
+    let enemy = simulation
+        .state()
+        .enemy()
+        .ok_or(RenderError::InvalidSprite)?;
+    if enemy.action != (EnemyAction::Approach { tick: 6 }) {
+        return Err(failure("native enemy approach did not advance its phase"));
+    }
+    let _drawn = art.present(scene, simulation.state())?;
+    let pixels = scene.readback().map_err(failure)?;
+    verify_enemy_art(scene, art, simulation.state(), &pixels)
+}
+
 fn verify_enemy_art(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -513,8 +536,10 @@ fn verify_enemy_art(
     pixels: &[u8],
 ) -> Result<(), RenderError> {
     let enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
-    if !matches!(enemy.action, EnemyAction::Attack { tick: 12 })
-        || art.poses.enemy(enemy.action).is_none()
+    if !matches!(
+        enemy.action,
+        EnemyAction::Attack { tick: 12 } | EnemyAction::Approach { tick: 6 }
+    ) || art.poses.enemy(enemy.action).is_none()
     {
         return Ok(());
     }
@@ -523,9 +548,7 @@ fn verify_enemy_art(
     art.poses.restore_enemy(saved);
     let _fallback_presented = fallback?;
     if pixels == scene.readback().map_err(failure)? {
-        return Err(failure(
-            "optional enemy punch pose was not visibly presented",
-        ));
+        return Err(failure("optional enemy pose was not visibly presented"));
     }
     let _restored = art.present(scene, cabinet)?;
     Ok(())

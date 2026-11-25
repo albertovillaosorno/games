@@ -39,13 +39,18 @@ const ENEMY_STRIKE: u8 = 14;
 const ENEMY_DAMAGE: u8 = 3;
 /// Number of fixed-step ticks in the initial enemy punch.
 pub const ENEMY_ATTACK_TICKS: u8 = 34;
+/// Number of fixed-step ticks in the initial enemy walking cycle.
+pub const ENEMY_WALK_TICKS: u8 = 48;
 const STAGGER_TICKS: u8 = 12;
 
 /// Observable enemy action in the experimental encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EnemyAction {
     /// Moving toward a nearby active player.
-    Approach,
+    Approach {
+        /// Zero-based walking cycle tick.
+        tick: u8,
+    },
     /// Windup and recovery of a ground strike.
     Attack {
         /// Zero-based attack tick.
@@ -86,13 +91,15 @@ impl Enemy {
             return;
         }
         match self.action {
-            EnemyAction::Approach => self.approach(layout, slots),
+            EnemyAction::Approach { tick } => {
+                self.approach(layout, slots, tick);
+            },
             EnemyAction::Attack { tick } => {
                 self.attack(tick, slots);
             },
             EnemyAction::Stagger { remaining } => {
                 self.action = if remaining <= 1 {
-                    EnemyAction::Approach
+                    EnemyAction::Approach { tick: 0 }
                 } else {
                     EnemyAction::Stagger {
                         remaining: remaining.saturating_sub(1),
@@ -102,7 +109,7 @@ impl Enemy {
         }
     }
 
-    fn approach(&mut self, layout: StreetLayout, slots: &[Slot; 4]) {
+    fn approach(&mut self, layout: StreetLayout, slots: &[Slot; 4], tick: u8) {
         let Some(target) = slots
             .iter()
             .filter(|slot| slot.station.can_fight())
@@ -120,10 +127,20 @@ impl Enemy {
             self.action = EnemyAction::Attack { tick: 0 };
             return;
         }
+        let before = self.position;
         self.position.x = step_toward(self.position.x, target.x)
             .clamp(layout.min.x, layout.max.x);
         self.position.y = step_toward(self.position.y, target.y)
             .clamp(layout.min.y, layout.max.y);
+        if self.position != before {
+            self.action = EnemyAction::Approach {
+                tick: if tick.saturating_add(1) >= ENEMY_WALK_TICKS {
+                    0
+                } else {
+                    tick.saturating_add(1)
+                },
+            };
+        }
     }
 
     fn attack(&mut self, tick: u8, slots: &mut [Slot; 4]) {
@@ -143,7 +160,7 @@ impl Enemy {
             }
         }
         self.action = if next >= ENEMY_ATTACK_TICKS {
-            EnemyAction::Approach
+            EnemyAction::Approach { tick: 0 }
         } else {
             EnemyAction::Attack { tick: next }
         };
@@ -151,7 +168,7 @@ impl Enemy {
 
     pub(super) const fn new(position: Point) -> Self {
         Self {
-            action: EnemyAction::Approach,
+            action: EnemyAction::Approach { tick: 0 },
             facing: Facing::Left,
             health: ENEMY_HEALTH,
             position,
@@ -378,12 +395,44 @@ mod tests {
         }
         assert_eq!(
             cabinet.enemy().map(|enemy| enemy.action),
-            Some(EnemyAction::Approach)
+            Some(EnemyAction::Approach { tick: 0 })
         );
         cabinet.input_step(37, &[]);
         assert_eq!(
             cabinet.enemy().map(|enemy| enemy.action),
             Some(EnemyAction::Attack { tick: 0 })
+        );
+    }
+
+    #[test]
+    fn enemy_walk_cycle_wraps_and_freezes_during_pause() {
+        let result = playing(Point { x: 250, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        for step in 1..=ENEMY_WALK_TICKS {
+            let tick = if step == ENEMY_WALK_TICKS {
+                0
+            } else {
+                step
+            };
+            assert_eq!(
+                cabinet.enemy().map(|enemy| enemy.action),
+                Some(EnemyAction::Approach { tick })
+            );
+            cabinet.input_step(u64::from(step).saturating_add(2), &[]);
+        }
+        let walking = cabinet.enemy();
+        cabinet.input_step(51, &pulse(Control::Pause));
+        for step in 52..60 {
+            cabinet.input_step(step, &[]);
+        }
+        assert_eq!(cabinet.enemy(), walking);
+        cabinet.input_step(60, &pulse(Control::Pause));
+        assert_eq!(
+            cabinet.enemy().map(|enemy| enemy.action),
+            Some(EnemyAction::Approach { tick: 2 })
         );
     }
 

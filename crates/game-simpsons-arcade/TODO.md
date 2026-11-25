@@ -111,6 +111,10 @@ Without hurt art, the idle sprite is used during the reaction.
 An optional `enemy attack TICK SHA256` sequence starts at zero, permits
 offsets through 33 and uses the bundle record `enemy/strike`. The enemy
 uses the single strike bundle when that sequence is absent.
+An optional `enemy walk TICK SHA256` sequence similarly starts at zero,
+permits offsets through 47 and uses the bundle record `enemy/approach`.
+The walking phase advances only on approach displacement. It wraps
+every 48 ticks and resets when an attack or stagger ends.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated

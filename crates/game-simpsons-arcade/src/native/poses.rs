@@ -43,7 +43,9 @@ use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
-use crate::{ENEMY_ATTACK_TICKS, EnemyAction, JumpMotion, WalkMotion};
+use crate::{
+    ENEMY_ATTACK_TICKS, ENEMY_WALK_TICKS, EnemyAction, JumpMotion, WalkMotion,
+};
 
 const MAX_POSES: usize = 160;
 
@@ -105,11 +107,12 @@ impl Catalogue {
         for (&key, digest) in &self.entries {
             let bundle =
                 open_bundle(parent, &OsString::from(digest.to_string()))?;
-            let name = match key.0 {
-                Subject::Station(player) => KEYS
+            let name = match (key.0, key.1) {
+                (Subject::Station(player), _) => KEYS
                     .get(player.index())
                     .ok_or(RenderError::InvalidSprite)?,
-                Subject::Enemy => &"enemy/strike",
+                (Subject::Enemy, Kind::Walk) => &"enemy/approach",
+                (Subject::Enemy, _) => &"enemy/strike",
             };
             let art = Art::load(scene, &bundle, name)?;
             if art.rect.width.get() > 128 || art.rect.height.get() > 128 {
@@ -166,11 +169,12 @@ pub(super) struct PoseArt {
 
 impl PoseArt {
     pub(super) fn enemy(&self, action: EnemyAction) -> Option<Art> {
-        let EnemyAction::Attack { tick } = action else {
-            return None;
+        let (kind, tick) = match action {
+            EnemyAction::Approach { tick } => (Kind::Walk, tick),
+            EnemyAction::Attack { tick } => (Kind::Attack, tick),
+            EnemyAction::Stagger { .. } => return None,
         };
-        select_entry(&self.entries, (Subject::Enemy, Kind::Attack, tick))
-            .copied()
+        select_entry(&self.entries, (Subject::Enemy, kind, tick)).copied()
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -272,17 +276,19 @@ fn optional_complete<Value>(
     entries: &BTreeMap<Key, Value>,
     kind: Kind,
 ) -> bool {
-    !entries.keys().any(|(_, existing, _)| *existing == kind)
-        || Player::ALL
-            .into_iter()
-            .all(|player| entries.contains_key(&station_key(player, kind, 0)))
+    !entries.keys().any(|(subject, existing, _)| {
+        matches!(subject, Subject::Station(_)) && *existing == kind
+    }) || Player::ALL
+        .into_iter()
+        .all(|player| entries.contains_key(&station_key(player, kind, 0)))
 }
 
 fn enemy_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
-    !entries
-        .keys()
-        .any(|(subject, _, _)| *subject == Subject::Enemy)
-        || entries.contains_key(&(Subject::Enemy, Kind::Attack, 0))
+    [Kind::Attack, Kind::Walk].into_iter().all(|kind| {
+        !entries.keys().any(|(subject, existing, _)| {
+            *subject == Subject::Enemy && *existing == kind
+        }) || entries.contains_key(&(Subject::Enemy, kind, 0))
+    })
 }
 
 fn jump_entry<Value>(
@@ -329,6 +335,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
     let duration = match (subject, kind) {
         (Subject::Station(player), _) => kind.duration(player),
         (Subject::Enemy, Kind::Attack) => ENEMY_ATTACK_TICKS,
+        (Subject::Enemy, Kind::Walk) => ENEMY_WALK_TICKS,
         (Subject::Enemy, _) => {
             return Err(failure("unknown enemy pose maneuver"));
         },
@@ -430,6 +437,28 @@ mod tests {
                 station_key(Player::Marge, Kind::Attack, 33)
             ),
             Some(&"marge")
+        );
+    }
+
+    #[test]
+    fn optional_enemy_walk_is_independent_of_station_and_punch_sequences() {
+        let base = complete();
+        let walk = format!("{base}enemy walk 0 {HASH}\n");
+        assert!(Catalogue::parse(&walk).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{walk}enemy walk 47 {HASH}")).is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{walk}enemy walk 48 {HASH}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}enemy walk 6 {HASH}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{walk}enemy attack 3 {HASH}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{walk}marge walk 0 {HASH}")).is_err()
         );
     }
 

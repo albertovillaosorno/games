@@ -1489,3 +1489,26 @@ and 60 combat submissions met the 16.667 ms host-work budget with the
 microseconds respectively. Lifetime peak RSS was 147,611,648 bytes.
 Neither the animation nor timing establishes original hitboxes,
 pivots, enemy approach, alternate attacks, AI or full combat parity.
+
+The Marge and Homer isolated enemy approach traces show six-tick
+pose transitions. In Marge's control, one eight-pose walking sequence
+spans 48 ticks, with a changed orientation and pose variants as
+direction and depth change. Eight consecutive left-facing poses
+were isolated from the final approach after exact 71,680-pixel
+scene verification. The prototype selects this representative
+48-tick cycle, advancing only on approach displacement and resetting
+the phase when an attack or stagger ends. The right-facing preview
+mirrors the crops. Exact directional pose variants, continuous phase
+across actions, movement speeds, pivots and targeting remain open.
+
+The optional enemy walk sequence uses the existing bounded catalogue
+and the enemy approach record, independent of the punch and station
+sequences. The complete local catalogue occupies all 160 records
+and 12,910 bytes. Fresh validation with native render and audio
+smoke passed in run 1795624414269573891-3935014. Adaptive native smoke
+passed with the 160-pose catalogue and the earlier 152-pose fallback.
+Native readback isolates the walking pose at offset six against
+the static approach sprite. All 600 movement and 60 combat host
+submissions met the 16.667 ms budget with the new catalogue; mean
+submission work was 63.304 and 49.270 microseconds respectively.
+Lifetime peak RSS was 146,796,544 bytes.

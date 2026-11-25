@@ -53,7 +53,7 @@ pub mod native;
 use std::mem;
 use std::time::Duration;
 
-pub use encounter::{ENEMY_ATTACK_TICKS, Enemy, EnemyAction};
+pub use encounter::{ENEMY_ATTACK_TICKS, ENEMY_WALK_TICKS, Enemy, EnemyAction};
 use games::input::LogicalAction;
 use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
