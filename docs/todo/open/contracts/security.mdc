@@ -309,3 +309,11 @@ A local synthetic 16,670-byte PCM replacement was authored for attack
 slot 0004 against the verified Simpsons audio catalogue, then admitted
 by the native X11/llvmpipe and SDL dummy-audio smoke. The 600 movement
 and 51 strike frames completed; this is not physical audio or GPU evidence.
+
+Direct canonical staging now preflights each declared payload and its
+implicit directory against a copy of the remaining archive budget before
+hashing. Manifest completion likewise checks the remaining staging budget
+before hashing encoded metadata. Synthetic controls reject per-file,
+aggregate-byte and entry-count exhaustion even with a mismatching digest,
+leave no staged files and permanently abort the transaction. Fresh
+validation passed in run 1795608394182537080-425408.

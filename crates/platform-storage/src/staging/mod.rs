@@ -468,8 +468,10 @@ impl CanonicalStaging {
         if expected != &self.payloads {
             return Err(AssetError::PayloadMismatch.into());
         }
-        let digest = ContentHash::calculate(bytes);
         let size = manifest_size(bytes)?;
+        let mut budget = self.stage.budget;
+        let _entry = budget.admit(MANIFEST_NAME, EntryKind::File, size)?;
+        let digest = ContentHash::calculate(bytes);
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
@@ -511,15 +513,23 @@ impl CanonicalStaging {
             self.stage.failed = true;
             return Err(StagingError::Collision);
         }
-        if ContentHash::calculate(bytes) != digest {
-            self.stage.failed = true;
-            return Err(AssetError::PayloadMismatch.into());
-        }
         let Ok(size) = u64::try_from(bytes.len()) else {
             self.stage.failed = true;
             return Err(AssetError::TooLarge.into());
         };
         let path = payload_path(digest);
+        // Preflight on a copy; write_entry consumes the actual budget.
+        let mut budget = self.stage.budget;
+        if let Err(error) =
+            admit_payload(&mut budget, &path, size, self.payloads.is_empty())
+        {
+            self.stage.failed = true;
+            return Err(error);
+        }
+        if ContentHash::calculate(bytes) != digest {
+            self.stage.failed = true;
+            return Err(AssetError::PayloadMismatch.into());
+        }
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
@@ -552,14 +562,23 @@ fn admit_copy(
 ) -> Result<(), StagingError> {
     let _manifest =
         budget.admit(MANIFEST_NAME, EntryKind::File, manifest_size(bytes)?)?;
-    if !payloads.is_empty() {
+    for (index, (&digest, &size)) in payloads.iter().enumerate() {
+        admit_payload(&mut budget, &payload_path(digest), size, index == 0)?;
+    }
+    Ok(())
+}
+
+fn admit_payload(
+    budget: &mut ArchiveBudget,
+    path: &str,
+    size: u64,
+    first: bool,
+) -> Result<(), StagingError> {
+    let _payload = budget.admit(path, EntryKind::File, size)?;
+    if first {
         budget
             .admit(PAYLOADS_DIRECTORY, EntryKind::Directory, 0)?
             .finish()?;
-    }
-    for (&digest, &size) in payloads {
-        let _payload =
-            budget.admit(&payload_path(digest), EntryKind::File, size)?;
     }
     Ok(())
 }
@@ -1100,6 +1119,45 @@ mod tests {
             wrong.finish(&manifest, canonical_limits()),
             Err(StagingError::Aborted)
         ))
+    }
+
+    #[test]
+    fn canonical_budget_rejection_precedes_payload_hashing()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let wrong = ContentHash::calculate(b"wrong");
+        for limits in [
+            ArchiveBudget::new(
+                NonZeroU64::MIN,
+                NonZeroU64::MAX,
+                NonZeroU64::MAX,
+            ),
+            ArchiveBudget::new(
+                NonZeroU64::MAX,
+                NonZeroU64::MIN,
+                NonZeroU64::MAX,
+            ),
+            ArchiveBudget::new(
+                NonZeroU64::MAX,
+                NonZeroU64::MAX,
+                NonZeroU64::MIN,
+            ),
+        ] {
+            let mut stage = CanonicalStaging::new(&parent.path, limits)?;
+            let path = stage.stage.temporary.path.clone();
+            require(
+                stage.write_payload(wrong, b"tile")
+                    == Err(StagingError::Safety(ArchiveError::TooLarge)),
+            )?;
+            require(fs::read_dir(&path)?.count() == 0)?;
+            require(
+                stage.write_payload(wrong, b"wrong")
+                    == Err(StagingError::Aborted),
+            )?;
+            drop(stage);
+            require(!path.exists())?;
+        }
+        Ok(())
     }
 
     #[test]
