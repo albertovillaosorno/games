@@ -421,3 +421,26 @@ with p95 bounds 29.360 to 30.399 ms. Sampled peak RSS was 120,524,800
 bytes. The host exited through its menu. This establishes host-side
 age under an authenticated concurrent loopback workload, not physical
 multi-device networking, client-to-host transit or display latency.
+
+At 2295108 the optimized native executable was rebuilt and measured with
+SDL offscreen OpenGL ES, the NVIDIA EGL vendor, RTX 4060 driver 620.70.06,
+dummy audio, and the version-two world, encounter and pose catalogue.
+Four baseline trials and four trials with the added held-jump art each
+completed 600 movement and 51 combat frames, with zero host-work misses
+of the 16.667 ms target across all 5,208 frames.
+
+- Baseline: mean movement 98.776–103.742 microseconds, mean combat
+  72.832–79.378 microseconds, startup 136.0–183.3 ms and sampled lifetime
+  peak RSS 89,382,912–89,632,768 bytes.
+- Held-jump art: mean movement 100.792–122.833 microseconds, mean combat
+  76.027–119.969 microseconds, startup 134.8–151.2 ms and sampled lifetime
+  peak RSS 89,313,280–89,595,904 bytes. The largest movement interval was
+  3.589 ms; one slower trial had a movement p95 upper bound of 180.223
+  microseconds, compared with 122.879 in the other held-art trials.
+
+The executable measured 3,202,800 bytes, up 33,392 bytes from the prior
+c215846 diagnostic. NVIDIA's process monitor identified the same rebuilt
+executable as a graphics client in a separate idle observation, with
+10 MiB of sampled framebuffer memory. These are comparable host
+submission measurements and a device observation, not GPU execution
+latency, input-to-photon latency, display FPS or exact peak VRAM.
