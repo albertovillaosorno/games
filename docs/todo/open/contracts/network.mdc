@@ -86,3 +86,10 @@ ineligible for this host's application session even when a TLS handshake
 can still authenticate their chain. Loopback tests cover active, disconnected,
 never-connected and already-revoked identities. Fresh validation passed in
 run 1795578187013800242-2949531 (127 workspace tests).
+
+The shared input router now supports exclusive mappings for each attached
+controller. Synthetic tests route four simultaneous controllers to distinct
+player actions, reject fallback for unbound buttons on assigned devices,
+and release old actions on reassignment or detach without cancelling other
+held inputs. Window focus loss releases keyboard and touch holds while
+preserving controller input. Native device integration remains pending.

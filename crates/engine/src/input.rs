@@ -32,6 +32,7 @@
 //! Platform-independent input mapping with robust device disconnects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::RangeInclusive;
 
 /// A platform-neutral input event from a native host adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +56,8 @@ pub enum InputEvent {
         /// Identifier of the disconnected controller.
         device: u64,
     },
+    /// The host window lost keyboard and touch focus.
+    FocusLost,
     /// A keyboard scancode changed state.
     Key {
         /// Physical keyboard scancode.
@@ -95,10 +98,13 @@ enum Source {
     Touch(u16),
 }
 
+type ControllerButtons<Action> = BTreeMap<u16, Action>;
+
 /// Shared router that preserves logical state across multiple input devices.
 #[derive(Debug)]
 pub struct InputRouter<Action: Clone + Ord> {
     connected: BTreeSet<u64>,
+    controller_maps: BTreeMap<u64, ControllerButtons<Action>>,
     held: BTreeMap<Source, Action>,
     mapping: InputMapping<Action>,
     pressed: BTreeMap<Action, u32>,
@@ -140,21 +146,8 @@ impl<Action> InputMapping<Action> {
 impl<Action: Clone + Ord> InputRouter<Action> {
     fn detach(&mut self, device: u64) -> Vec<LogicalAction<Action>> {
         let _connected = self.connected.remove(&device);
-        let mut changes = Vec::new();
-        while let Some(source) = self
-            .held
-            .range(
-                Source::Button(device, u16::MIN)
-                    ..=Source::Button(device, u16::MAX),
-            )
-            .next()
-            .map(|(source, _action)| *source)
-        {
-            if let Some(change) = self.release(source) {
-                changes.push(change);
-            }
-        }
-        changes
+        let _mapping = self.controller_maps.remove(&device);
+        self.release_controller(device)
     }
 
     /// Process an event and return only changed logical action states.
@@ -171,10 +164,17 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                 if !self.connected.contains(&device) {
                     return Vec::new();
                 }
-                let mapping = self.mapping.buttons.get(&code).cloned();
+                let mapping = self
+                    .controller_maps
+                    .get(&device)
+                    .unwrap_or(&self.mapping.buttons)
+                    .get(&code)
+                    .cloned();
                 self.transition(Source::Button(device, code), mapping, down)
             },
             InputEvent::Detached { device } => self.detach(device),
+            InputEvent::FocusLost => self
+                .release_range(Source::Key(u32::MIN)..=Source::Touch(u16::MAX)),
             InputEvent::Key { code, down } => {
                 let mapping = self.mapping.keys.get(&code).cloned();
                 self.transition(Source::Key(code), mapping, down)
@@ -191,6 +191,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
     pub const fn new(mapping: InputMapping<Action>) -> Self {
         Self {
             connected: BTreeSet::new(),
+            controller_maps: BTreeMap::new(),
             held: BTreeMap::new(),
             mapping,
             pressed: BTreeMap::new(),
@@ -222,6 +223,53 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         Some(LogicalAction { action, down: false })
     }
 
+    fn release_controller(
+        &mut self,
+        device: u64,
+    ) -> Vec<LogicalAction<Action>> {
+        self.release_range(
+            Source::Button(device, u16::MIN)..=Source::Button(device, u16::MAX),
+        )
+    }
+
+    fn release_range(
+        &mut self,
+        range: RangeInclusive<Source>,
+    ) -> Vec<LogicalAction<Action>> {
+        let mut changes = Vec::new();
+        while let Some(source) = self
+            .held
+            .range(range.clone())
+            .next()
+            .map(|(source, _action)| *source)
+        {
+            if let Some(change) = self.release(source) {
+                changes.push(change);
+            }
+        }
+        changes
+    }
+
+    /// Assign an attached controller an exclusive, player-specific mapping.
+    ///
+    /// An empty mapping disables all its buttons. Unmapped buttons never
+    /// fall back to the shared mapping. Existing holds are released before
+    /// reassignment; a detached device must be assigned again.
+    /// Returns None if the device is not attached.
+    #[must_use]
+    pub fn set_controller_mapping(
+        &mut self,
+        device: u64,
+        buttons: BTreeMap<u16, Action>,
+    ) -> Option<Vec<LogicalAction<Action>>> {
+        if !self.connected.contains(&device) {
+            return None;
+        }
+        let changes = self.release_controller(device);
+        let _previous = self.controller_maps.insert(device, buttons);
+        Some(changes)
+    }
+
     fn transition(
         &mut self,
         source: Source,
@@ -239,6 +287,8 @@ impl<Action: Clone + Ord> InputRouter<Action> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{InputEvent, InputMapping, InputRouter, LogicalAction};
 
     #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -395,6 +445,149 @@ mod tests {
                 action: u16::MAX,
                 down: false
             }
+        ]);
+    }
+
+    fn assign_and_press(router: &mut InputRouter<u16>, player: u16) {
+        let device = u64::from(player);
+        assert_eq!(router.handle(InputEvent::Attached { device }), []);
+        assert_eq!(
+            router
+                .set_controller_mapping(device, BTreeMap::from([(1, player)])),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device,
+                code: 1,
+                down: true
+            }),
+            [LogicalAction {
+                action: player,
+                down: true
+            }]
+        );
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device,
+                code: 2,
+                down: true,
+            }),
+            []
+        );
+    }
+
+    #[test]
+    fn four_controllers_have_independent_player_actions() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_button(2, 99u16);
+        let mut router = InputRouter::new(mapping);
+        assert_eq!(router.set_controller_mapping(1, BTreeMap::new()), None);
+        for player in 1u16..=4 {
+            assign_and_press(&mut router, player);
+        }
+        for player in (1u16..=4).rev() {
+            assert_eq!(
+                router.handle(InputEvent::Detached {
+                    device: u64::from(player)
+                }),
+                [LogicalAction {
+                    action: player,
+                    down: false
+                }]
+            );
+        }
+        assert_eq!(router.handle(InputEvent::Attached { device: 1 }), []);
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 1,
+                code: 1,
+                down: true,
+            }),
+            []
+        );
+    }
+
+    #[test]
+    fn reassignment_releases_old_player_without_affecting_other_sources() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_key(10, 1u16);
+        mapping.bind_button(1, 1);
+        mapping.bind_button(2, 2);
+        let mut router = InputRouter::new(mapping);
+        assert_eq!(router.handle(InputEvent::Attached { device: 7 }), []);
+        assert_eq!(router.handle(InputEvent::Key { code: 10, down: true }), [
+            LogicalAction { action: 1, down: true },
+        ]);
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 7,
+                code: 1,
+                down: true,
+            }),
+            []
+        );
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 7,
+                code: 2,
+                down: true,
+            }),
+            [LogicalAction { action: 2, down: true }]
+        );
+        assert_eq!(
+            router.set_controller_mapping(7, BTreeMap::from([(1, 3)])),
+            Some(vec![LogicalAction { action: 2, down: false }])
+        );
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 7,
+                code: 1,
+                down: false,
+            }),
+            []
+        );
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 7,
+                code: 1,
+                down: true,
+            }),
+            [LogicalAction { action: 3, down: true }]
+        );
+        assert_eq!(router.handle(InputEvent::Key { code: 10, down: false }), [
+            LogicalAction { action: 1, down: false },
+        ]);
+    }
+
+    #[test]
+    fn focus_loss_releases_keys_and_touch_but_not_controllers() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_key(1, 1u16);
+        mapping.bind_touch(1, 2);
+        mapping.bind_key(2, 3);
+        mapping.bind_button(1, 1);
+        let mut router = InputRouter::new(mapping);
+        for event in [
+            InputEvent::Attached { device: 1 },
+            InputEvent::Key { code: 1, down: true },
+            InputEvent::Touch { zone: 1, down: true },
+            InputEvent::Key { code: 2, down: true },
+            InputEvent::Button {
+                device: 1,
+                code: 1,
+                down: true,
+            },
+        ] {
+            drop(router.handle(event));
+        }
+        assert_eq!(router.handle(InputEvent::FocusLost), [
+            LogicalAction { action: 3, down: false },
+            LogicalAction { action: 2, down: false },
+        ]);
+        assert_eq!(router.handle(InputEvent::FocusLost), []);
+        assert_eq!(router.handle(InputEvent::Detached { device: 1 }), [
+            LogicalAction { action: 1, down: false },
         ]);
     }
 }
