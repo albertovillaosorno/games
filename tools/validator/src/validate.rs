@@ -57,8 +57,7 @@ pub mod todo;
 /// Unified IR and device protocol boundaries.
 pub mod unified_ir;
 
-use std::fs::File;
-use std::io::Write as _;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str;
 
@@ -81,7 +80,7 @@ const CHECKS: [Request<'static>; 8] = [
 fn execute(
     root: &Path,
     request: Request<'_>,
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<(), String> {
     let output = validation::run(root.as_os_str(), request)
         .map_err(|error| error.to_string())?;
@@ -148,7 +147,7 @@ fn portable_packages(packages: &[Package]) -> Vec<&str> {
 fn validate_portable(
     root: &Path,
     packages: &[Package],
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<(), String> {
     let selected = portable_packages(packages);
     for target in Target::portable_checks() {
@@ -167,7 +166,7 @@ fn validate_portable(
 fn validate_feature_graphs(
     root: &Path,
     packages: &[Package],
-    log: &mut File,
+    log: &mut dyn Write,
 ) -> Result<(), String> {
     let graph = validation::run(root.as_os_str(), Request::BuildGraph)
         .map_err(|error| error.to_string())?;
@@ -188,7 +187,7 @@ fn validate_feature_graphs(
     Ok(())
 }
 
-fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
+fn run_validation(root: &Path, log: &mut dyn Write) -> Result<(), String> {
     writeln!(log, "Workspace and task contracts")
         .map_err(|error| error.to_string())?;
     let packages = contracts::validate(root)?;

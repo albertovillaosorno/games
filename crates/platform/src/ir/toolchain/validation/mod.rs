@@ -29,6 +29,9 @@
 // - Defaults:
 //   - Reject invalid inputs and unsupported host capabilities.
 
+/// Exclusive validation cache and log state.
+pub mod state;
+
 use std::ffi::OsStr;
 
 use super::ToolchainError;

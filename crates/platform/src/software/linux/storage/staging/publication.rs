@@ -29,15 +29,14 @@
 // - Defaults:
 //   - Keep the temporary directory private and reject existing destinations.
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use std::io;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::Path;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use std::{io, path::PathBuf};
 
 use games_assets::ContentHash;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -64,13 +63,18 @@ use super::pool::SharedPool;
 use super::{ArchiveStaging, Directory, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::{PrivateDirectory, staging_path};
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::ir::storage::staging::{
+    AuthoredFactory, AuthoredPort, OpenAuthored, PublishedDirectory,
+};
+use crate::ir::storage::staging::{CompletedBundlePort, PublishedBundle};
 
 /// A complete canonical bundle that has not yet been published.
 ///
 /// The trusted host must not modify the staged files. Observable metadata
 /// changes and unexpected directory entries are rejected before publication.
 #[derive(Debug)]
-pub struct StagedBundle {
+pub(super) struct StagedBundle {
     archive: StagedArchive,
     digest: ContentHash,
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -80,13 +84,13 @@ pub struct StagedBundle {
 impl StagedBundle {
     /// The SHA-256 of the exact canonical manifest bytes.
     #[must_use]
-    pub const fn digest(&self) -> ContentHash {
+    pub(super) const fn digest(&self) -> ContentHash {
         self.digest
     }
 
     /// The private, temporary path; dropping this handle removes it.
     #[must_use]
-    pub fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         self.archive.path()
     }
 
@@ -98,7 +102,7 @@ impl StagedBundle {
     /// Rejects collisions and pre-publication filesystem failures. A
     /// post-rename directory sync failure is reported in the receipt instead.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    pub fn publish(mut self) -> Result<PublishedBundle, StagingError> {
+    pub(super) fn publish(mut self) -> Result<PublishedBundle, StagingError> {
         self.archive.verify()?;
         if let Some(pool) = &self.pool {
             pool.recheck(&self.archive.temporary)?;
@@ -114,21 +118,6 @@ impl StagedBundle {
     }
 }
 
-/// Publication succeeded; the directory is visible and is not auto-deleted.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-#[derive(Debug)]
-pub struct PublishedDirectory {
-    /// The result of syncing the parent after publication. An error means
-    /// the rename succeeded but its crash durability is uncertain.
-    pub durability: Result<(), io::ErrorKind>,
-    /// Persistent, published directory.
-    pub path: PathBuf,
-}
-
-/// A published manifest-addressed canonical bundle.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-pub type PublishedBundle = PublishedDirectory;
-
 /// Private staging for already-authored, trusted host output.
 ///
 /// The caller supplies validated files and their byte and count budgets.
@@ -137,7 +126,7 @@ pub type PublishedBundle = PublishedDirectory;
 /// Observable file and directory changes prevent publication.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[derive(Debug)]
-pub struct AuthoredStaging {
+pub(super) struct AuthoredStaging {
     failed: bool,
     registry: Directory,
     temporary: PrivateDirectory,
@@ -149,7 +138,7 @@ impl AuthoredStaging {
     ///
     /// # Errors
     /// Rejects untrusted parents and filesystem failures.
-    pub fn new(parent: &Path) -> Result<Self, StagingError> {
+    pub(super) fn new(parent: &Path) -> Result<Self, StagingError> {
         Ok(Self {
             failed: false,
             registry: Directory::default(),
@@ -161,7 +150,7 @@ impl AuthoredStaging {
     ///
     /// Only files recorded through `write_file` may be published.
     #[must_use]
-    pub fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.temporary.path
     }
 
@@ -171,7 +160,7 @@ impl AuthoredStaging {
     /// Rejects aborted writes, changed storage, non-component destinations,
     /// collisions and pre-publication failures. The receipt reports a
     /// post-publication parent sync failure separately.
-    pub fn publish(
+    pub(super) fn publish(
         mut self,
         name: &OsStr,
     ) -> Result<PublishedDirectory, StagingError> {
@@ -191,7 +180,7 @@ impl AuthoredStaging {
     /// # Errors
     /// Rejects collisions, unsafe paths and observed directory substitution.
     /// Any write failure permanently aborts publication.
-    pub fn write_file(
+    pub(super) fn write_file(
         &mut self,
         path: &str,
         bytes: &[u8],
@@ -237,6 +226,60 @@ impl AuthoredStaging {
 // Verify the exact observed tree without rehashing or loading file contents.
 // Directories are pinned and checked once at each descent; regular files
 // must still have the metadata observed when their bounded writers finished.
+impl CompletedBundlePort for StagedBundle {
+    fn identity(&self) -> ContentHash {
+        self.digest()
+    }
+
+    fn location(&self) -> &OsStr {
+        self.path().as_os_str()
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn publish_complete(
+        self: Box<Self>,
+    ) -> Result<PublishedBundle, StagingError> {
+        (*self).publish()
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn publish_complete(
+        self: Box<Self>,
+    ) -> Result<PublishedBundle, StagingError> {
+        Err(StagingError::Io(std::io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+impl AuthoredFactory for () {
+    fn open_authored(parent: &OsStr) -> OpenAuthored {
+        Ok(Box::new(AuthoredStaging::new(Path::new(parent))?))
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+impl AuthoredPort for AuthoredStaging {
+    fn append_member(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        executable: bool,
+    ) -> Result<(), StagingError> {
+        self.write_file(path, bytes, executable)
+    }
+
+    fn location(&self) -> &OsStr {
+        self.path().as_os_str()
+    }
+
+    fn publish_complete(
+        self: Box<Self>,
+        name: &OsStr,
+    ) -> Result<PublishedDirectory, StagingError> {
+        (*self).publish(name)
+    }
+}
+
 pub(super) fn check_tree(
     directory: &Directory,
     fd: &OwnedFd,
@@ -325,7 +368,7 @@ pub(super) fn publish_directory(
     let durability = fsync(fd).map_err(|error| io::Error::from(error).kind());
     Ok(PublishedDirectory {
         durability,
-        path: destination,
+        path: destination.into_os_string(),
     })
 }
 

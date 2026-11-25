@@ -36,4 +36,5 @@ mod hardware;
 pub mod ir;
 mod software;
 
+#[cfg(any(test, feature = "test-fixtures"))]
 use software as selected;

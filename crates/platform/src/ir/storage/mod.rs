@@ -40,14 +40,14 @@ pub mod layout;
 pub mod preferences;
 /// Bounded integrity-checked numeric save slots.
 pub mod save;
+/// Private staging and atomic publication.
+pub mod staging;
 
 use std::ffi::{OsStr, OsString};
 use std::io::Result as IoResult;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use crate::selected::fixtures;
-pub use crate::selected::staging;
-
 /// Backend observation of the process executable location.
 pub(crate) trait ExecutableLocation {
     fn executable_path() -> IoResult<OsString>;

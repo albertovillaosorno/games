@@ -369,3 +369,12 @@ portable core checks. The validator's filesystem, environment, locking
 and test process fixtures still require migration. Earlier fresh native
 Xvfb rendering and dummy-audio validation passed at
 1795648148052171462-207773; these are not physical device acceptance.
+
+Contributor toolchain observations now include admitted environment values,
+Git repository identity and unique log names. Absent and empty values
+remain distinct, with redacted environment diagnostics. Native filesystem
+fixtures use the platform storage boundary. Fresh validation with Xvfb
+rendering and dummy audio passed in 1795649118946447489-319502; the
+corresponding signed toolchain and graphics commits passed their hooks.
+These synthetic and virtual-device checks do not establish physical
+hardware conformance or native execution on the other target platforms.

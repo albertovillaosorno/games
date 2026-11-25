@@ -32,14 +32,17 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use games_platform::ir::toolchain::environment::{
     self, Environment, FINGERPRINT_KEYS, FRESH_CHECK_FLAGS,
 };
 use games_platform::ir::toolchain::validation::repository_head;
+use games_platform::ir::toolchain::validation::state::{
+    ValidationKey, ValidationState,
+};
 use games_platform::ir::toolchain::{
     ValidationTool, probe_version, write_line,
 };
@@ -49,8 +52,8 @@ use crate::files::{authored, ledger_location};
 use crate::{cargo_config, portability};
 
 /// Function signature for a complete validation pass.
-pub type Check = fn(&Path, &mut File) -> Result<(), String>;
-type Fingerprint = fn(&Path) -> Result<Vec<u8>, String>;
+pub type Check = fn(&Path, &mut dyn Write) -> Result<(), String>;
+type Fingerprint = fn(&Path) -> Result<ValidationKey, String>;
 
 fn hash_value(hash: &mut Sha256, value: &[u8]) {
     hash.update(value.len().to_le_bytes());
@@ -132,7 +135,7 @@ fn tool_versions(
     Ok(())
 }
 
-fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
+fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
     ledger_location(root)?;
     portability::preflight(root)?;
     let mut hash = Sha256::new();
@@ -159,29 +162,7 @@ fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
             fs::read(root.join(path)).map_err(|error| error.to_string())?;
         hash_value(&mut hash, &bytes);
     }
-    Ok(hash.finalize().to_vec())
-}
-
-fn lock(root: &Path) -> Result<File, String> {
-    let directory = root.join(".cache/validate");
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(directory.join("lock"))
-        .map_err(|error| error.to_string())?;
-    file.lock().map_err(|error| error.to_string())?;
-    Ok(file)
-}
-
-fn log_path(root: &Path) -> Result<PathBuf, String> {
-    let directory = root.join(".temp/validate");
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let filename = environment::validation_log_name()
-        .map_err(|error| error.to_string())?;
-    Ok(directory.join(filename))
+    Ok(hash.finalize().into())
 }
 
 fn announce(message: &str) -> Result<(), String> {
@@ -209,77 +190,73 @@ fn run_with(
     check: Check,
     identify: Fingerprint,
 ) -> Result<(), String> {
-    let _guard = lock(root)?;
-    let path = log_path(root)?;
-    let mut log = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
+    let mut state = ValidationState::open(root.as_os_str())
         .map_err(|error| error.to_string())?;
-    announce(&format!("Validation log: {}", path.display()))?;
-    let marker = root.join(".cache/validate/success");
+    announce(&format!(
+        "Validation log: {}",
+        Path::new(state.log_path()).display()
+    ))?;
     let before = match identify(root) {
         Ok(value) => value,
         Err(error) => {
-            if marker.exists() {
-                fs::remove_file(&marker).map_err(|err| err.to_string())?;
-            }
-            writeln!(log, "FAILED: {error}").map_err(|err| err.to_string())?;
+            state.invalidate().map_err(|err| err.to_string())?;
+            writeln!(state.log_writer(), "FAILED: {error}")
+                .map_err(|err| err.to_string())?;
             return Err(error);
         },
     };
-    if !fresh && fs::read(&marker).is_ok_and(|key| key == before) {
-        writeln!(log, "Cache hit").map_err(|error| error.to_string())?;
+    if !fresh && state.matches(&before).map_err(|error| error.to_string())? {
+        writeln!(state.log_writer(), "Cache hit")
+            .map_err(|error| error.to_string())?;
         return announce("Validation passed (cache hit).");
     }
-    if marker.exists() {
-        fs::remove_file(&marker).map_err(|error| error.to_string())?;
-    }
-    if let Err(error) = check(root, &mut log) {
-        writeln!(log, "FAILED: {error}").map_err(|err| err.to_string())?;
+    state.invalidate().map_err(|error| error.to_string())?;
+    if let Err(error) = check(root, state.log_writer()) {
+        writeln!(state.log_writer(), "FAILED: {error}")
+            .map_err(|err| err.to_string())?;
         return Err(error);
     }
     if identify(root)? != before {
         return Err(String::from("source changed during validation; rerun"));
     }
-    writeln!(log, "PASS").map_err(|error| error.to_string())?;
-    let pending = root.join(".cache/validate/pending");
-    fs::write(&pending, before).map_err(|error| error.to_string())?;
-    fs::rename(pending, marker).map_err(|error| error.to_string())?;
+    writeln!(state.log_writer(), "PASS").map_err(|error| error.to_string())?;
+    state.publish(&before).map_err(|error| error.to_string())?;
     announce("Validation passed (fresh).")
 }
 
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
-    use std::fs::{self, File};
-    use std::io::Write as _;
+    use std::io::Write;
     use std::path::Path;
-    use std::thread;
+    use std::{fs, thread};
 
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        Environment, FRESH_CHECK_FLAGS, fingerprint, hash_build_overrides,
-        hash_cargo_config_files, hash_environment, run_with,
+        Environment, FRESH_CHECK_FLAGS, ValidationKey, fingerprint,
+        hash_build_overrides, hash_cargo_config_files, hash_environment,
+        run_with,
     };
     use crate::fixtures::{directory, require};
 
-    fn key(root: &Path) -> Result<Vec<u8>, String> {
-        fs::read(root.join("input")).map_err(|error| error.to_string())
+    fn key(root: &Path) -> Result<ValidationKey, String> {
+        let bytes =
+            fs::read(root.join("input")).map_err(|error| error.to_string())?;
+        Ok(Sha256::digest(bytes).into())
     }
 
-    fn pass(_root: &Path, log: &mut File) -> Result<(), String> {
+    fn pass(_root: &Path, log: &mut dyn Write) -> Result<(), String> {
         writeln!(log, "executed").map_err(|error| error.to_string())
     }
 
-    fn fail(root: &Path, _log: &mut File) -> Result<(), String> {
+    fn fail(root: &Path, _log: &mut dyn Write) -> Result<(), String> {
         fs::read(root.join("missing"))
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
 
-    fn mutate(root: &Path, _log: &mut File) -> Result<(), String> {
+    fn mutate(root: &Path, _log: &mut dyn Write) -> Result<(), String> {
         fs::write(root.join("input"), b"changed")
             .map_err(|error| error.to_string())
     }

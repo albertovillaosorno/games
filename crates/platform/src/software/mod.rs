@@ -100,7 +100,7 @@ mod unavailable_lan {
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(not(target_os = "linux"))]
 use std::io::ErrorKind;
 use std::num::NonZeroU32;
 #[cfg(not(target_arch = "wasm32"))]
@@ -108,7 +108,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
-pub use linux::storage::*;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use linux::storage::fixtures;
 
 use crate::ir::audio::{
     AudioDevices, PlaybackError, PlaybackFactory, PlaybackPort,
@@ -125,6 +126,8 @@ use crate::ir::security::toolchain::validation::Arguments;
 use crate::ir::storage::ExecutableLocation;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::environment::{Environment, EnvironmentBackend};
+#[cfg(not(target_os = "linux"))]
+use crate::ir::toolchain::validation::state::{StateFactory, StatePort};
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::validation::{Report, ValidationBackend};
 #[cfg(not(target_os = "linux"))]
@@ -244,7 +247,7 @@ impl MeasurementSource for () {
 impl ExecutableLocation for () {
     fn executable_path() -> io::Result<OsString> {
         #[cfg(not(target_arch = "wasm32"))]
-        return executable_path().map(PathBuf::into_os_string);
+        return linux::storage::executable_path().map(PathBuf::into_os_string);
         #[cfg(target_arch = "wasm32")]
         Err(ErrorKind::Unsupported.into())
     }
@@ -317,5 +320,12 @@ impl EnvironmentBackend for () {
 
     fn validation_log_name() -> Result<String, ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl StateFactory for () {
+    fn open_state(_root: &OsStr) -> io::Result<StatePort> {
+        Err(ErrorKind::Unsupported.into())
     }
 }

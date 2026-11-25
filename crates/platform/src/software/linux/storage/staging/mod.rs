@@ -36,6 +36,7 @@ mod publication;
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::os::fd::OwnedFd;
@@ -50,69 +51,29 @@ use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{FileStat, Mode, fstat, mkdirat};
-pub use publication::StagedBundle;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+use publication::AuthoredStaging;
+use publication::StagedBundle;
 
-use super::bundle::{
-    BundleError, CanonicalBundle, MANIFEST_NAME, PAYLOADS_DIRECTORY,
-};
+#[cfg(test)]
+use super::bundle::BundleError;
+use super::bundle::{CanonicalBundle, MANIFEST_NAME, PAYLOADS_DIRECTORY};
 use super::file::{
     DIRECTORY_FLAGS, same_inode, trusted_directory, trusted_directory_stat,
 };
-const MAX_DEPTH: usize = 64;
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+use crate::ir::storage::staging::PublishedBundle;
+use crate::ir::storage::staging::{
+    ArchiveFactory, ArchivePort, CanonicalFactory, CanonicalPort,
+    CompletedArchive, CompletedArchivePort, CompletedBundle, OpenArchive,
+    OpenCanonical, StagingEntry, StagingError, staging_path,
+};
+
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-/// A staging operation failed and the result must not be published.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StagingError {
-    /// A previous entry failed; this transaction cannot be completed.
-    Aborted,
-    /// Canonical manifest or payload validation failed.
-    Asset(AssetError),
-    /// A pinned source canonical bundle failed verification.
-    Bundle(BundleError),
-    /// Staged file metadata or its directory identity changed.
-    ChangedStorage,
-    /// A duplicate path, case collision or file/directory conflict.
-    Collision,
-    /// The filesystem or decoded stream failed.
-    Io(io::ErrorKind),
-    /// Shared archive admission or decoded-byte validation failed.
-    Safety(ArchiveError),
-    /// Output path is not within the portable ASCII namespace or depth.
-    UnsupportedPath,
-    /// The parent is not owned by the effective user or permits other writers.
-    UntrustedParent,
-}
-
-impl From<AssetError> for StagingError {
-    fn from(error: AssetError) -> Self {
-        Self::Asset(error)
-    }
-}
-
-impl From<BundleError> for StagingError {
-    fn from(error: BundleError) -> Self {
-        Self::Bundle(error)
-    }
-}
 
 impl From<Errno> for StagingError {
     fn from(error: Errno) -> Self {
         Self::Io(io::Error::from(error).kind())
-    }
-}
-
-impl From<io::Error> for StagingError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error.kind())
-    }
-}
-
-impl From<ArchiveError> for StagingError {
-    fn from(error: ArchiveError) -> Self {
-        Self::Safety(error)
     }
 }
 
@@ -148,7 +109,6 @@ impl Node {
 type CreatedFile<'directory> = (File, &'directory mut Node);
 type DescendedDirectory<'directory> =
     (&'directory mut Directory, Option<OwnedFd>);
-type PathParts<'path> = (&'path str, &'path str);
 
 #[derive(Debug)]
 enum DirectoryAdmission<'budget> {
@@ -352,24 +312,13 @@ impl Drop for PrivateDirectory {
     }
 }
 
-/// Metadata for one decoded archive entry.
-#[derive(Clone, Copy, Debug)]
-pub struct StagingEntry<'path> {
-    /// Original member kind; links and special files are not allowed.
-    pub kind: EntryKind,
-    /// Portable relative output path.
-    pub path: &'path str,
-    /// Exact decoded length.
-    pub size: u64,
-}
-
 /// An incomplete private archive transaction.
 ///
 /// The parent and its ancestors must be trusted host-controlled directories.
 /// All archive-controlled components are opened relative to directory handles
 /// without following symbolic links. Drop attempts cleanup of partial data.
 #[derive(Debug)]
-pub struct ArchiveStaging {
+struct ArchiveStaging {
     budget: ArchiveBudget,
     failed: bool,
     registry: Directory,
@@ -381,7 +330,7 @@ impl ArchiveStaging {
     ///
     /// # Errors
     /// Rejects an aborted transaction and discards its partial output.
-    pub fn finish(self) -> Result<StagedArchive, StagingError> {
+    fn finish(self) -> Result<StagedArchive, StagingError> {
         self.finish_with(false)
     }
 
@@ -403,10 +352,7 @@ impl ArchiveStaging {
     /// # Errors
     /// Rejects parents not owned by the current effective user,
     /// writable-by-others parents, symbolic-link parents and I/O failures.
-    pub fn new(
-        parent: &Path,
-        budget: ArchiveBudget,
-    ) -> Result<Self, StagingError> {
+    fn new(parent: &Path, budget: ArchiveBudget) -> Result<Self, StagingError> {
         Ok(Self {
             budget,
             failed: false,
@@ -439,7 +385,7 @@ impl ArchiveStaging {
     /// # Errors
     /// Rejects unsafe metadata, collisions, excess data and filesystem errors.
     /// Any failure aborts the whole staging transaction.
-    pub fn write_entry<Source>(
+    fn write_entry<Source>(
         &mut self,
         metadata: StagingEntry<'_>,
         input: &mut Source,
@@ -501,7 +447,7 @@ type PayloadSizes = BTreeMap<ContentHash, u64>;
 /// Only hashes become paths; completion requires an exact manifest match.
 /// The archive budget includes the manifest file and payload directory.
 #[derive(Debug)]
-pub struct CanonicalStaging {
+struct CanonicalStaging {
     #[cfg(test)]
     legacy: bool,
     payloads: PayloadSizes,
@@ -517,7 +463,7 @@ impl CanonicalStaging {
     /// Legacy roots must be migrated before re-publication.
     /// # Errors
     /// Rejects unsafe, corrupted or oversized input and staging failures.
-    pub fn copy_bundle(
+    fn copy_bundle(
         parent: &Path,
         budget: ArchiveBudget,
         source: &CanonicalBundle,
@@ -566,7 +512,7 @@ impl CanonicalStaging {
     ///
     /// # Errors
     /// Rejects failed staging, mismatches and invalid or oversized metadata.
-    pub fn finish(
+    fn finish(
         self,
         manifest: &AssetManifest,
         limits: ManifestLimits,
@@ -608,10 +554,7 @@ impl CanonicalStaging {
     /// # Errors
     /// Rejects mixed layouts, untrusted parents and storage failures.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    pub fn new(
-        parent: &Path,
-        budget: ArchiveBudget,
-    ) -> Result<Self, StagingError> {
+    fn new(parent: &Path, budget: ArchiveBudget) -> Result<Self, StagingError> {
         let stage = ArchiveStaging::new(parent, budget)?;
         let pool = pool::SharedPool::open(&stage.temporary)?;
         Ok(Self {
@@ -627,7 +570,7 @@ impl CanonicalStaging {
     /// # Errors
     /// Always reports unsupported shared publication on this target.
     #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-    pub const fn new(
+    const fn new(
         _parent: &Path,
         _budget: ArchiveBudget,
     ) -> Result<Self, StagingError> {
@@ -697,7 +640,7 @@ impl CanonicalStaging {
     ///
     /// # Errors
     /// Rejects hash mismatch, duplicate content, exhausted budgets or I/O.
-    pub fn write_payload(
+    fn write_payload(
         &mut self,
         digest: ContentHash,
         bytes: &[u8],
@@ -737,7 +680,7 @@ impl CanonicalStaging {
 
 /// A verified staging directory with best-effort cleanup on drop.
 #[derive(Debug)]
-pub struct StagedArchive {
+struct StagedArchive {
     registry: Directory,
     temporary: PrivateDirectory,
 }
@@ -745,7 +688,7 @@ pub struct StagedArchive {
 impl StagedArchive {
     /// Access the completed staging directory for subsequent conversion.
     #[must_use]
-    pub fn path(&self) -> &Path {
+    fn path(&self) -> &Path {
         &self.temporary.path
     }
 
@@ -753,8 +696,76 @@ impl StagedArchive {
     ///
     /// # Errors
     /// Rejects observed storage changes or filesystem errors.
-    pub fn verify(&self) -> Result<(), StagingError> {
+    fn verify(&self) -> Result<(), StagingError> {
         self.temporary.verify_tree(&self.registry, false)
+    }
+}
+
+impl ArchiveFactory for () {
+    fn open_archive(parent: &OsStr, budget: ArchiveBudget) -> OpenArchive {
+        Ok(Box::new(ArchiveStaging::new(Path::new(parent), budget)?))
+    }
+}
+
+impl ArchivePort for ArchiveStaging {
+    fn append_member(
+        &mut self,
+        metadata: StagingEntry<'_>,
+        mut input: &mut dyn Read,
+    ) -> Result<(), StagingError> {
+        self.write_entry(metadata, &mut input)
+    }
+
+    fn complete(self: Box<Self>) -> CompletedArchive {
+        Ok(Box::new((*self).finish()?))
+    }
+}
+
+impl CompletedArchivePort for StagedArchive {
+    fn location(&self) -> &OsStr {
+        self.path().as_os_str()
+    }
+
+    fn recheck(&self) -> Result<(), StagingError> {
+        self.verify()
+    }
+}
+
+impl CanonicalFactory for () {
+    fn copy_bundle(
+        parent: &OsStr,
+        budget: ArchiveBudget,
+        source: &CanonicalBundle,
+        limits: ManifestLimits,
+    ) -> CompletedBundle {
+        Ok(Box::new(CanonicalStaging::copy_bundle(
+            Path::new(parent),
+            budget,
+            source,
+            limits,
+        )?))
+    }
+
+    fn open_canonical(parent: &OsStr, budget: ArchiveBudget) -> OpenCanonical {
+        Ok(Box::new(CanonicalStaging::new(Path::new(parent), budget)?))
+    }
+}
+
+impl CanonicalPort for CanonicalStaging {
+    fn complete(
+        self: Box<Self>,
+        manifest: &AssetManifest,
+        limits: ManifestLimits,
+    ) -> CompletedBundle {
+        Ok(Box::new((*self).finish(manifest, limits)?))
+    }
+
+    fn write_verified(
+        &mut self,
+        digest: ContentHash,
+        bytes: &[u8],
+    ) -> Result<(), StagingError> {
+        self.write_payload(digest, bytes)
     }
 }
 
@@ -825,13 +836,6 @@ fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
     Ok(same_inode(&before, &after))
 }
 
-fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
-    if !path.is_ascii() || path.split('/').count() > MAX_DEPTH {
-        return Err(StagingError::UnsupportedPath);
-    }
-    Ok(path.rsplit_once('/').unwrap_or(("", path)))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs::FileTimes;
@@ -881,7 +885,7 @@ mod tests {
         stage.write_file("licenses/nested/OTHER", b"", false)?;
         let result = stage.publish(OsStr::new("published"))?;
         require(result.durability.is_ok())?;
-        let path = result.path;
+        let path = PathBuf::from(result.path);
         for (name, bytes, mode) in [
             ("program", b"program".as_slice(), 0o700),
             ("licenses/NOTICE", b"notice".as_slice(), 0o600),
@@ -1755,8 +1759,9 @@ mod tests {
         )?;
         require(!parent.path.join("objects").exists())?;
         require(
-            fs::read(previous.path.join(format!("payloads/{digest}")))?
-                == b"tile",
+            fs::read(
+                Path::new(&previous.path).join(format!("payloads/{digest}")),
+            )? == b"tile",
         )
     }
 
@@ -1797,7 +1802,7 @@ mod tests {
         let published = staged.publish()?;
         require(published.durability.is_ok())?;
         let expected = parent.path.join(format!("bundle-{manifest_digest}"));
-        require(published.path == expected)?;
+        require(published.path == expected.as_os_str())?;
         require(!temporary.exists())?;
         drop(published);
         require(fs::read(expected.join("manifest.json"))? == encoded)?;
@@ -1856,9 +1861,14 @@ mod tests {
         require(staged.digest() == current_digest)?;
         let published = staged.publish()?;
         require(published.durability.is_ok())?;
-        require(fs::read(published.path.join(MANIFEST_NAME))? == encoded)?;
         require(
-            fs::read_dir(published.path.join(PAYLOADS_DIRECTORY))?.count() == 1,
+            fs::read(Path::new(&published.path).join(MANIFEST_NAME))?
+                == encoded,
+        )?;
+        require(
+            fs::read_dir(Path::new(&published.path).join(PAYLOADS_DIRECTORY))?
+                .count()
+                == 1,
         )?;
         require(
             fs::read(legacy_path.join(MANIFEST_NAME))? == legacy.as_bytes(),
@@ -1875,8 +1885,7 @@ mod tests {
         let manifest = manifest(digest)?;
         let (source, published) = publish_copy_fixture(&parent, &manifest)?;
         fs::write(
-            published
-                .path
+            Path::new(&published.path)
                 .join(PAYLOADS_DIRECTORY)
                 .join(digest.to_string()),
             b"evil",
@@ -1952,8 +1961,7 @@ mod tests {
         )?;
         drop(copied);
         fs::write(
-            published
-                .path
+            Path::new(&published.path)
                 .join(PAYLOADS_DIRECTORY)
                 .join(digest.to_string()),
             b"evil",

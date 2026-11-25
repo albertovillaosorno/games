@@ -212,12 +212,12 @@ fn publish_staged(
     if let Err(error) = receipt.durability {
         return Err(format!(
             "published {digest} at {}, but directory sync failed: {error:?}",
-            receipt.path.display()
+            Path::new(&receipt.path).display()
         ));
     }
     toolchain::write_line(&format!(
         "Published canonical bundle {digest} at {}",
-        receipt.path.display()
+        Path::new(&receipt.path).display()
     ))
     .map_err(|error| error.to_string())?;
     super::report_manifest(converted, digest)

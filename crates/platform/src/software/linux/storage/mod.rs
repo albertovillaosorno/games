@@ -82,14 +82,7 @@ mod save;
 
 /// Private, bounded native archive staging.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod staging;
-
-/// Staging requires a verified descriptor-relative storage adapter.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub mod staging {
-    /// Whether the target provides private archive staging.
-    pub const AVAILABLE: bool = false;
-}
+mod staging;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
@@ -293,5 +286,51 @@ mod tests {
             ),
             Err(FileReadError::Io(io::ErrorKind::Unsupported))
         );
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use games_assets::archive::ArchiveBudget;
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use crate::ir::storage::staging::{
+    ArchiveFactory, CanonicalFactory, CompletedBundle, OpenArchive,
+    OpenCanonical,
+};
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+use crate::ir::storage::staging::{
+    AuthoredFactory, OpenAuthored, StagingError,
+};
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl ArchiveFactory for () {
+    fn open_archive(_parent: &OsStr, _budget: ArchiveBudget) -> OpenArchive {
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl CanonicalFactory for () {
+    fn copy_bundle(
+        _parent: &OsStr,
+        _budget: ArchiveBudget,
+        _source: &CanonicalBundle,
+        _limits: ManifestLimits,
+    ) -> CompletedBundle {
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
+    }
+
+    fn open_canonical(
+        _parent: &OsStr,
+        _budget: ArchiveBudget,
+    ) -> OpenCanonical {
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+impl AuthoredFactory for () {
+    fn open_authored(_parent: &OsStr) -> OpenAuthored {
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
     }
 }

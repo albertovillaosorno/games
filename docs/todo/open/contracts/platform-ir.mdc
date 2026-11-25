@@ -296,3 +296,25 @@ import the selected native file module or its target-dependent types.
 Portable fake-backend fixtures cover exact and empty reads, excess
 results, failure propagation and credential debug redaction. This does
 not implement new native storage backends.
+
+Commit 5442548 moves bounded save slots and display, audio and input
+preferences behind shared storage contracts. Portable admission checks
+slot size before writing and after reading; the Linux descriptor adapter
+retains atomic persistence and integrity validation. Fake storage and
+native integration regressions passed in fresh validation
+1795649010914026384-287888. This does not add new storage implementations.
+
+The coordinated graphics and input changes in commit 1280f79 migrate
+scene validation and touch admission into neutral contracts. Existing
+Linux rendering and simulated touch, with dummy audio, passed the fresh
+native gate 1795649118946447489-319502. Physical input latency and native
+support on other targets remain unverified.
+
+Private archive, canonical bundle and authored package staging now use
+neutral transaction and receipt handles. The shared fail-closed state
+rejects further writes and completion after an error; native descriptor
+admission, bounded stream copying, atomic publication and durability
+reporting remain in the adapter. Fake ports exercise stream handling,
+canonical identity, aborts and durability failure. Fresh joint validation
+1795649572277607920-390118 passed 1,453 aggregate test executions and all
+six portable core targets. Native staging support is not extended.

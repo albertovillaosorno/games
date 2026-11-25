@@ -165,7 +165,7 @@ impl Prepared {
         published.durability.map_err(|error| {
             format!(
                 "package published at {}, but directory sync failed: {error:?}",
-                published.path.display()
+                Path::new(&published.path).display()
             )
         })
     }
