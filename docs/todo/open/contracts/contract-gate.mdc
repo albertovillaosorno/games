@@ -92,3 +92,14 @@ specifications remain supported. Synthetic controls cover forbidden title
 and outside paths, both config filenames and a non-path patch. This is a
 repository policy gate, not a sandbox for machine-level Cargo configuration
 or untrusted external dependency build scripts.
+
+The cache fingerprints documentation compiler flags and executable overrides,
+including encoded flags, plus all present Cargo build, target and profile
+override variables in deterministic name order. Absent and empty overrides
+remain distinct. The transient Cargo jobserver environment is not included.
+A synthetic regression exercises additions, changes, removals and ordering.
+On the prior validator, a successful ordinary gate followed by
+`RUSTDOCFLAGS=--invalid-validation-probe cargo validate` reused the success
+(1795606875781646286-160251). The corrected validator ran doctests and
+rejected the invalid flag (1795606925003201188-166930).
+This does not fingerprint all machine-level Cargo configuration.

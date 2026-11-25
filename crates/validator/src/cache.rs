@@ -30,8 +30,9 @@
 //   - Fail closed on invalid inputs.
 //
 
+use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
@@ -59,6 +60,31 @@ fn hash_environment(hash: &mut Sha256, key: &str, value: Option<&OsStr>) {
     hash_value(hash, &[u8::from(value.is_some())]);
     if let Some(present) = value {
         hash_value(hash, present.as_encoded_bytes());
+    }
+}
+
+fn hash_cargo_overrides(
+    hash: &mut Sha256,
+    values: impl IntoIterator<Item = (OsString, OsString)>,
+) {
+    let overrides: BTreeMap<_, _> = values
+        .into_iter()
+        .filter(|(key, _value)| {
+            let name = key.as_encoded_bytes();
+            [
+                b"CARGO_BUILD_".as_slice(),
+                b"CARGO_TARGET_",
+                b"CARGO_PROFILE_",
+            ]
+            .into_iter()
+            .any(|prefix| name.starts_with(prefix))
+        })
+        .collect();
+    hash_value(hash, b"cargo-overrides");
+    hash_value(hash, &overrides.len().to_le_bytes());
+    for (key, value) in overrides {
+        hash_value(hash, key.as_encoded_bytes());
+        hash_value(hash, value.as_encoded_bytes());
     }
 }
 
@@ -90,15 +116,16 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
         "PATH",
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTDOCFLAGS",
+        "CARGO_ENCODED_RUSTDOCFLAGS",
         "RUSTUP_TOOLCHAIN",
         "CARGO_HOME",
         "RUSTUP_HOME",
-        "CARGO_TARGET_DIR",
         "RUSTC",
+        "RUSTDOC",
+        "RUSTC_BOOTSTRAP",
         "RUSTC_WRAPPER",
         "RUSTC_WORKSPACE_WRAPPER",
-        "CARGO_BUILD_TARGET",
-        "CARGO_PROFILE_DEV_DEBUG",
         "CLIPPY_CONF_DIR",
     ]
     .into_iter()
@@ -106,6 +133,7 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
     {
         hash_environment(hash, key, env::var_os(key).as_deref());
     }
+    hash_cargo_overrides(hash, env::vars_os());
     Ok(())
 }
 
@@ -210,7 +238,7 @@ fn run_with(
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use std::fs::{self, File};
     use std::io::Write as _;
     use std::path::Path;
@@ -219,7 +247,8 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        NATIVE_SMOKE_FLAGS, hash_environment, native_smoke_requested, run_with,
+        NATIVE_SMOKE_FLAGS, hash_cargo_overrides, hash_environment,
+        native_smoke_requested, run_with,
     };
     use crate::fixtures::{directory, require};
 
@@ -315,6 +344,35 @@ mod tests {
         assert_ne!(absent, empty);
         assert_ne!(empty, enabled);
         assert_ne!(absent, enabled);
+    }
+
+    #[test]
+    fn cargo_override_fingerprint_is_order_independent_and_sensitive() {
+        let fingerprint = |values: &[(&str, &str)]| {
+            let mut hash = Sha256::new();
+            hash_cargo_overrides(
+                &mut hash,
+                values.iter().map(|&(key, value)| {
+                    (OsString::from(key), OsString::from(value))
+                }),
+            );
+            hash.finalize()
+        };
+        let flags = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS";
+        let profile = "CARGO_PROFILE_TEST_DEBUG";
+        let build = "CARGO_BUILD_RUSTDOCFLAGS";
+        let baseline = fingerprint(&[(flags, "-D warnings"), (profile, "0")]);
+        assert_eq!(
+            baseline,
+            fingerprint(&[(profile, "0"), (flags, "-D warnings")])
+        );
+        assert_ne!(baseline, fingerprint(&[(flags, ""), (profile, "0")]));
+        assert_ne!(baseline, fingerprint(&[(flags, "-D warnings")]));
+        assert_ne!(fingerprint(&[]), fingerprint(&[(build, "")]));
+        assert_eq!(
+            fingerprint(&[]),
+            fingerprint(&[("CARGO_MAKEFLAGS", "jobserver")])
+        );
     }
 
     #[test]
