@@ -137,7 +137,7 @@ pub fn validate(root: &Path) -> Result<Vec<Package>, String> {
         .get("packages")
         .and_then(Value::as_array)
         .ok_or("missing workspace package inventory")?;
-    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    let canonical = files::canonical(root)?;
     let mut inventory = packages
         .iter()
         .map(|package| classify(package, &canonical))

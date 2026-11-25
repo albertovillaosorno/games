@@ -44,10 +44,20 @@ pub mod save;
 pub mod staging;
 
 use std::ffi::{OsStr, OsString};
-use std::io::Result as IoResult;
+use std::io::{ErrorKind, Result as IoResult};
+use std::num::NonZeroUsize;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use crate::selected::fixtures;
+/// A direct entry in a bounded local directory observation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectoryEntry {
+    /// The observed final entry kind.
+    pub kind: PathKind,
+    /// A single opaque path component.
+    pub name: OsString,
+}
+
 /// Backend observation of the process executable location.
 pub(crate) trait ExecutableLocation {
     fn executable_path() -> IoResult<OsString>;
@@ -72,7 +82,34 @@ pub enum PathKind {
 
 /// Native metadata observation without exposing a host metadata object.
 pub(crate) trait PathObservation {
+    fn canonical_path(path: &OsStr) -> IoResult<OsString>;
+    fn directory_entries(
+        path: &OsStr,
+        maximum: NonZeroUsize,
+    ) -> IoResult<Vec<DirectoryEntry>>;
     fn path_kind(path: &OsStr) -> IoResult<PathKind>;
+}
+
+/// Resolve the canonical local path, explicitly following links.
+/// This is an observation only, not a grant of file access.
+/// # Errors
+/// Returns an unavailable or failed native resolution.
+pub fn canonical_path(path: &OsStr) -> IoResult<OsString> {
+    <() as PathObservation>::canonical_path(path)
+}
+
+/// Observe the direct entries of a directory without following final links.
+/// # Errors
+/// Reports unavailable observation, excessive entries or invalid names.
+pub fn directory_entries(
+    path: &OsStr,
+    maximum: NonZeroUsize,
+) -> IoResult<Vec<DirectoryEntry>> {
+    let mut entries =
+        <() as PathObservation>::directory_entries(path, maximum)?;
+    admit_entries(&entries, maximum)?;
+    entries.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    Ok(entries)
 }
 
 /// Observe the running executable's location for explicit local resolution.
@@ -93,4 +130,51 @@ pub fn executable_path() -> IoResult<OsString> {
 /// Returns metadata or unavailable capability errors.
 pub fn path_kind(path: &OsStr) -> IoResult<PathKind> {
     <() as PathObservation>::path_kind(path)
+}
+
+fn admit_entries(
+    entries: &[DirectoryEntry],
+    maximum: NonZeroUsize,
+) -> IoResult<()> {
+    if entries.len() > maximum.get()
+        || entries.iter().any(|entry| {
+            let name = entry.name.as_encoded_bytes();
+            entry.kind == PathKind::Missing
+                || matches!(name, b"" | b"." | b"..")
+                || name.iter().any(|byte| matches!(byte, b'/' | b'\\' | 0))
+        })
+    {
+        return Err(ErrorKind::InvalidData.into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::slice::from_ref;
+
+    use super::*;
+
+    #[test]
+    fn directory_admission_rejects_invalid_names_and_counts() {
+        let valid = DirectoryEntry {
+            kind: PathKind::RegularFile,
+            name: OsString::from("file"),
+        };
+        let maximum = NonZeroUsize::MIN;
+        assert!(admit_entries(from_ref(&valid), maximum).is_ok());
+        assert!(admit_entries(&[valid.clone(), valid], maximum).is_err());
+        for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+            let entry = DirectoryEntry {
+                kind: PathKind::Directory,
+                name: OsString::from(name),
+            };
+            assert!(admit_entries(&[entry], maximum).is_err());
+        }
+        let missing = DirectoryEntry {
+            kind: PathKind::Missing,
+            name: OsString::from("missing"),
+        };
+        assert!(admit_entries(&[missing], maximum).is_err());
+    }
 }

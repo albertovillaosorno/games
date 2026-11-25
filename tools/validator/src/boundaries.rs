@@ -582,7 +582,7 @@ fn repository_cargo_config(
     root: &Path,
     authored: &[PathBuf],
 ) -> Result<(), String> {
-    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    let canonical = files::canonical(root)?;
     for name in [".cargo/config", ".cargo/config.toml"] {
         let _present = cargo_config::visit(
             &canonical.join(name),
@@ -597,8 +597,7 @@ fn repository_cargo_config(
                 if !files::regular_path(&canonical, raw)? {
                     return Err(String::from("Cargo include disappeared"));
                 }
-                let target =
-                    path.canonicalize().map_err(|error| error.to_string())?;
+                let target = files::canonical(path)?;
                 let relative = target
                     .strip_prefix(&canonical)
                     .map_err(|_error| "Cargo include outside repository")?;
@@ -680,7 +679,7 @@ fn manifests(
 ///
 /// Rejects missing source contracts, lint overrides and forbidden edges.
 pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
-    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    let canonical = files::canonical(root)?;
     let authored = files::authored(root)?;
     let members = metadata_members(&canonical, metadata, &authored)?;
     sources(root, &members, &authored)?;

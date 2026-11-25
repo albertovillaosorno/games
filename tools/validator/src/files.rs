@@ -36,7 +36,7 @@ use std::str::from_utf8;
 
 use games_platform::ir::security::toolchain::validation::admit_paths;
 use games_platform::ir::storage::file::snapshot;
-use games_platform::ir::storage::{PathKind, path_kind};
+use games_platform::ir::storage::{PathKind, canonical_path, path_kind};
 use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
 
 use crate::todo::roadmap_width;
@@ -106,6 +106,13 @@ pub(crate) fn repository_present(root: &Path) -> Result<bool, String> {
             Err(String::from("invalid Git repository entry"))
         },
     }
+}
+
+/// Canonicalize a trusted local path for contributor identity checks.
+pub(crate) fn canonical(path: &Path) -> Result<PathBuf, String> {
+    canonical_path(path.as_os_str())
+        .map(PathBuf::from)
+        .map_err(|error| error.to_string())
 }
 
 /// Read an authored regular file with the shared bounded snapshot.

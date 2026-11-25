@@ -31,12 +31,16 @@
 
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
+use std::iter;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::{fs, iter};
 
+use games_platform::ir::storage::canonical_path;
+use games_platform::ir::storage::file::snapshot;
 use toml::Value;
 
 const MAX_DEPTH: usize = 64;
+const MAX_CONFIG_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(1_048_575);
 const MAX_DOCUMENTS: usize = 1024;
 
 /// Contents and parsed values of one configuration file.
@@ -48,22 +52,23 @@ struct Traversal {
     remaining: usize,
 }
 
-fn source(path: &Path, optional: bool) -> Result<Option<String>, String> {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => {},
-        Ok(_metadata) => {
-            return Err(String::from("Cargo configuration is not a file"));
-        },
+type ConfigSource = (PathBuf, String);
+
+fn source(path: &Path, optional: bool) -> Result<Option<ConfigSource>, String> {
+    let canonical = match canonical_path(path.as_os_str()) {
+        Ok(value) => PathBuf::from(value),
         Err(error) if optional && error.kind() == ErrorKind::NotFound => {
             return Ok(None);
         },
         Err(error) => {
             return Err(format!("Cargo configuration: {}", error.kind()));
         },
-    }
-    fs::read_to_string(path)
-        .map(Some)
-        .map_err(|error| format!("Cargo configuration: {}", error.kind()))
+    };
+    let bytes = snapshot(canonical.as_os_str(), MAX_CONFIG_BYTES)
+        .map_err(|error| format!("Cargo configuration: {error:?}"))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_error| "invalid Cargo configuration encoding")?;
+    Ok(Some((canonical, text)))
 }
 
 fn inclusion(value: &Value) -> Result<Inclusion<'_>, String> {
@@ -102,13 +107,10 @@ where
         .remaining
         .checked_sub(1)
         .ok_or("Cargo configuration document limit")?;
-    let Some(text) = source(path, optional)? else {
+    let Some((canonical, text)) = source(path, optional)? else {
         inspect(path, None)?;
         return Ok(false);
     };
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("Cargo configuration: {}", error.kind()))?;
     if state.active.len() >= MAX_DEPTH
         || !state.active.insert(canonical.clone())
     {
@@ -179,7 +181,7 @@ where
 mod tests {
     use std::fs;
 
-    use super::{MAX_DOCUMENTS, visit};
+    use super::{MAX_CONFIG_BYTES, MAX_DOCUMENTS, visit};
     use crate::fixtures::{directory, require};
 
     #[test]
@@ -214,6 +216,20 @@ mod tests {
         )?;
         require(absent, "absent optional include is observable")?;
         Ok(())
+    }
+
+    #[test]
+    fn rejects_oversized_configuration() -> Result<(), String> {
+        let fixture = directory()?;
+        let path = fixture.path().join("config.toml");
+        let file =
+            fs::File::create(&path).map_err(|error| error.to_string())?;
+        file.set_len(MAX_CONFIG_BYTES.get().saturating_add(1))
+            .map_err(|error| error.to_string())?;
+        require(
+            visit(&path, false, &mut |_, _| Ok(())).is_err(),
+            "oversized config",
+        )
     }
 
     #[test]

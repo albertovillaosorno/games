@@ -86,9 +86,11 @@ mod staging;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::fs::{self, Metadata};
 use std::io;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
@@ -103,7 +105,7 @@ use crate::ir::storage::file::{
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::save::SaveError;
 use crate::ir::storage::save::{OpenSave, SaveFactory};
-use crate::ir::storage::{PathKind, PathObservation};
+use crate::ir::storage::{DirectoryEntry, PathKind, PathObservation};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl SaveFactory for () {
@@ -185,9 +187,33 @@ pub(in crate::software) fn executable_path() -> io::Result<PathBuf> {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl PathObservation for () {
-    fn path_kind(path: &OsStr) -> io::Result<PathKind> {
-        use std::fs;
+    fn canonical_path(path: &OsStr) -> io::Result<OsString> {
+        fs::canonicalize(Path::new(path)).map(PathBuf::into_os_string)
+    }
 
+    fn directory_entries(
+        path: &OsStr,
+        maximum: NonZeroUsize,
+    ) -> io::Result<Vec<DirectoryEntry>> {
+        if Self::path_kind(path)? != PathKind::Directory {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let mut entries = Vec::new();
+        for result in fs::read_dir(Path::new(path))? {
+            if entries.len() >= maximum.get() {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            let entry = result?;
+            entries.try_reserve(1).map_err(io::Error::other)?;
+            entries.push(DirectoryEntry {
+                kind: entry_kind(&entry.metadata()?),
+                name: entry.file_name(),
+            });
+        }
+        Ok(entries)
+    }
+
+    fn path_kind(path: &OsStr) -> io::Result<PathKind> {
         let metadata = match fs::symlink_metadata(Path::new(path)) {
             Ok(value) => value,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -195,22 +221,38 @@ impl PathObservation for () {
             },
             Err(error) => return Err(error),
         };
-        Ok(if metadata.is_file() {
-            PathKind::RegularFile
-        } else if metadata.is_dir() {
-            PathKind::Directory
-        } else if metadata.file_type().is_symlink() {
-            PathKind::SymbolicLink
-        } else {
-            PathKind::Other
-        })
+        Ok(entry_kind(&metadata))
     }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl PathObservation for () {
+    fn canonical_path(_path: &OsStr) -> io::Result<OsString> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn directory_entries(
+        _path: &OsStr,
+        _maximum: NonZeroUsize,
+    ) -> io::Result<Vec<DirectoryEntry>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
     fn path_kind(_path: &OsStr) -> io::Result<PathKind> {
         Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn entry_kind(kind: &Metadata) -> PathKind {
+    if kind.is_file() {
+        PathKind::RegularFile
+    } else if kind.is_dir() {
+        PathKind::Directory
+    } else if kind.file_type().is_symlink() {
+        PathKind::SymbolicLink
+    } else {
+        PathKind::Other
     }
 }
 
@@ -227,6 +269,39 @@ mod tests {
         let observed = observed_executable_path()?;
         let expected = env::current_exe()?;
         (expected.is_absolute() && observed == expected.into_os_string())
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn directory_observation_preserves_link_kind_and_budget() -> io::Result<()>
+    {
+        use crate::ir::storage::{canonical_path, directory_entries};
+        let root = fixtures::TestRoot::new()?;
+        let nested = root.path().join("nested");
+        fs::create_dir_all(&nested)?;
+        let file = root.path().join("file");
+        fs::write(&file, b"data")?;
+        let link = root.path().join("link");
+        fixtures::file_link(&nested, &link)?;
+        let maximum = NonZeroUsize::MIN.saturating_add(2);
+        let entries = directory_entries(root.path().as_os_str(), maximum)?;
+        let expected = [
+            ("file", PathKind::RegularFile),
+            ("link", PathKind::SymbolicLink),
+            ("nested", PathKind::Directory),
+        ];
+        let valid = entries.len() == expected.len()
+            && entries.iter().zip(expected).all(|(entry, (name, kind))| {
+                entry.name == name && entry.kind == kind
+            })
+            && directory_entries(root.path().as_os_str(), NonZeroUsize::MIN)
+                .is_err()
+            && directory_entries(link.as_os_str(), maximum).is_err()
+            && canonical_path(link.as_os_str())?
+                == canonical_path(nested.as_os_str())?;
+        valid
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())
     }

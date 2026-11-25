@@ -48,7 +48,7 @@ use games_platform::ir::toolchain::{
 use sha2::{Digest as _, Sha256};
 
 use crate::files::{
-    authored, ledger_location, read_authored, repository_present,
+    authored, canonical, ledger_location, read_authored, repository_present,
 };
 use crate::{cargo_config, portability};
 
@@ -142,7 +142,7 @@ fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
     let mut hash = Sha256::new();
     let observed = environment::capture().map_err(|error| error.to_string())?;
     tool_versions(root, &mut hash, &observed)?;
-    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    let canonical = canonical(root)?;
     hash_cargo_config_files(
         &canonical,
         &cargo_home(&canonical, &observed)?,

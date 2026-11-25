@@ -31,10 +31,15 @@
 //
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
+use games_platform::ir::storage::{PathKind, directory_entries};
+
 use crate::files;
+
+const MAX_TASK_DEPTH: usize = 64;
+const MAX_TASK_ENTRIES: NonZeroUsize = NonZeroUsize::MIN.saturating_add(65_535);
 
 type Fields = BTreeMap<String, Vec<String>>;
 type IdentifiedTask = (String, Task);
@@ -54,6 +59,11 @@ struct Task {
     priority: String,
     status: String,
     title: String,
+}
+
+struct TaskInventory {
+    remaining: usize,
+    tasks: BTreeMap<String, Task>,
 }
 
 fn require(condition: bool, message: &str) -> Result<(), String> {
@@ -221,15 +231,26 @@ fn record(text: &str, path: &str) -> Result<IdentifiedTask, String> {
 fn collect(
     root: &Path,
     directory: &Path,
-    tasks: &mut BTreeMap<String, Task>,
+    inventory: &mut TaskInventory,
+    depth: usize,
 ) -> Result<(), String> {
-    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
-        let item = entry.map_err(|error| error.to_string())?;
-        let kind = item.file_type().map_err(|error| error.to_string())?;
-        let path = item.path();
-        require(!kind.is_symlink(), "symlink in task directory")?;
-        if kind.is_dir() {
-            collect(root, &path, tasks)?;
+    require(depth < MAX_TASK_DEPTH, "task directory depth limit")?;
+    let maximum =
+        NonZeroUsize::new(inventory.remaining).unwrap_or(NonZeroUsize::MIN);
+    let entries = directory_entries(directory.as_os_str(), maximum)
+        .map_err(|error| error.to_string())?;
+    inventory.remaining = inventory
+        .remaining
+        .checked_sub(entries.len())
+        .ok_or("task directory entry limit")?;
+    for entry in entries {
+        let path = directory.join(entry.name);
+        require(
+            entry.kind != PathKind::SymbolicLink,
+            "symlink in task directory",
+        )?;
+        if entry.kind == PathKind::Directory {
+            collect(root, &path, inventory, depth.saturating_add(1))?;
         } else if path.extension().is_some_and(|ext| ext == "mdc") {
             let relative =
                 path.strip_prefix(root).map_err(|error| error.to_string())?;
@@ -237,7 +258,10 @@ fn collect(
             let text = files::read_text(root, relative)?;
             let (id, task) = record(&text, name)
                 .map_err(|error| format!("{name}: {error}"))?;
-            require(tasks.insert(id, task).is_none(), "duplicate task ID")?;
+            require(
+                inventory.tasks.insert(id, task).is_none(),
+                "duplicate task ID",
+            )?;
         }
     }
     Ok(())
@@ -398,8 +422,12 @@ fn unique_roadmap(authored: &[PathBuf]) -> Result<(), String> {
 /// Returns diagnostics for inconsistent or malformed task records.
 pub fn validate(root: &Path) -> Result<(), String> {
     unique_roadmap(&files::authored(root)?)?;
-    let mut tasks = BTreeMap::new();
-    collect(root, &root.join("docs/todo"), &mut tasks)?;
+    let mut inventory = TaskInventory {
+        remaining: MAX_TASK_ENTRIES.get(),
+        tasks: BTreeMap::new(),
+    };
+    collect(root, &root.join("docs/todo"), &mut inventory, 0)?;
+    let tasks = inventory.tasks;
     require(!tasks.is_empty(), "missing task inventory")?;
     for task in tasks.values() {
         predecessors(task, &tasks)?;
@@ -416,8 +444,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Task, dependency_order, direct_link, index, metadata, record, section,
-        unique_roadmap, validate,
+        MAX_TASK_DEPTH, Task, TaskInventory, collect, dependency_order,
+        direct_link, index, metadata, record, section, unique_roadmap,
+        validate,
     };
     use crate::fixtures::{directory, require};
 
@@ -431,6 +460,35 @@ mod tests {
         }
         let evidence = "Validated with recorded tests.";
         assert!(section("Evidence", evidence, "completed").is_ok());
+    }
+
+    #[test]
+    fn task_inventory_rejects_depth_and_entry_exhaustion() -> Result<(), String>
+    {
+        let fixture = directory()?;
+        let root = fixture.path();
+        let directory = root.join("records");
+        fs::create_dir_all(directory.join("nested"))
+            .map_err(|error| error.to_string())?;
+        fs::write(directory.join("ignored.txt"), "")
+            .map_err(|error| error.to_string())?;
+        let inventory = |remaining| TaskInventory {
+            remaining,
+            tasks: BTreeMap::new(),
+        };
+        require(
+            collect(root, &directory, &mut inventory(1), 0).is_err(),
+            "entry budget",
+        )?;
+        require(
+            collect(root, &directory, &mut inventory(2), MAX_TASK_DEPTH)
+                .is_err(),
+            "depth budget",
+        )?;
+        require(
+            collect(root, &directory, &mut inventory(2), 0).is_ok(),
+            "exact entry budget",
+        )
     }
 
     #[test]
