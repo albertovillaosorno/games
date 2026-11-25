@@ -317,3 +317,16 @@ catalogue parsing and an opt-in native controller panel readback passed.
 Fresh validation with Xvfb, software GL and dummy audio passed in run
 1795603183924768559-3103778. Physical multi-device input, remote world
 presentation, partition detection and credential issuance remain open.
+
+The shared input pump supports an optional authenticated application
+idle lease. Only a decoded message renews it; pending or malformed input
+does not. The Simpsons controller sends an idle heartbeat every 500 ms,
+without overtaking controls. Its host expires a silent peer after three
+seconds and delivers the ordinary disconnect event to the next eligible
+fixed tick. Heartbeats never enter the simulation input queue. A real
+TLS regression with a shorter lease kept an active heartbeat connection
+alive beyond expiry, stopped heartbeats without closing the client socket,
+verified held movement stopped, and rejoined with the same certificate.
+Fresh joint validation passed in run 1795603408838445579-3134552.
+Physical network interruption and multi-device latency remain unverified;
+host polling and queue backpressure can delay processing the expiry.

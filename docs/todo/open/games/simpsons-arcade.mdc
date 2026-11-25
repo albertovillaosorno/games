@@ -843,3 +843,9 @@ provides input instructions rather than replicating the game world.
 Loopback TLS tests verify ordered press and release delivery and
 bounded backpressure; an opt-in software-renderer native smoke
 verified the panel readback. Real multi-device acceptance remains open.
+
+The controller and host also negotiate liveness through authenticated
+heartbeat frames and an idle lease, without generating simulation input.
+Loopback evidence verifies that a silent client loses its held direction
+even when its local socket is still open, and its identity can rejoin.
+Physical network interruption and real-device latency remain unverified.

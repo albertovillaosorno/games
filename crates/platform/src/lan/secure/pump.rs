@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, ErrorKind};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use games::network::{MessageSchema, SessionConfig, SessionError};
 
@@ -83,7 +83,8 @@ pub enum PumpProgress<Message> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PollKind {
     Authenticate,
-    Receive(u64),
+    Disconnect(u64),
+    Receive(u64, Option<Instant>),
 }
 
 #[derive(Debug)]
@@ -100,9 +101,16 @@ impl PollTask {
         }
     }
 
-    const fn receive(peer: u64) -> Self {
+    const fn disconnect(peer: u64) -> Self {
         Self {
-            kind: PollKind::Receive(peer),
+            kind: PollKind::Disconnect(peer),
+            operation: HostOperation::Disconnect(peer),
+        }
+    }
+
+    const fn receive(peer: u64, deadline: Option<Instant>) -> Self {
+        Self {
+            kind: PollKind::Receive(peer, deadline),
             operation: HostOperation::PollReceive(peer),
         }
     }
@@ -115,6 +123,8 @@ pub struct HostInputConfig<'roster> {
     pub address: SocketAddr,
     /// Approved certificate fingerprints mapped to host player identities.
     pub enrolments: &'roster [(PeerFingerprint, u64)],
+    /// Optional maximum time without a valid application frame.
+    pub idle_timeout: Option<Duration>,
     /// Host-owned local player identities.
     pub local_peers: &'roster [u64],
     /// Opted-in roster and frame limits.
@@ -136,6 +146,7 @@ pub struct HostInputConfig<'roster> {
 /// This inbound scheduler does not publish game state to clients.
 #[derive(Debug)]
 pub struct HostInputPump<Message> {
+    idle_timeout: Option<Duration>,
     in_flight: BTreeMap<u64, PollKind>,
     listener: SecureLanListener,
     next_request: u64,
@@ -188,9 +199,15 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             session: limits,
             timeout,
             enrolments,
+            idle_timeout,
             local_peers,
         } = config;
         let settings = LanConfig::new(limits, timeout)?;
+        if idle_timeout.is_some_and(|limit| {
+            limit.is_zero() || Instant::now().checked_add(limit).is_none()
+        }) {
+            return Err(ErrorKind::InvalidInput.into());
+        }
         let players = NonZeroUsize::from(limits.max_players).get();
         if enrolments.is_empty()
             || enrolments.len().saturating_add(local_peers.len()) > players
@@ -209,6 +226,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let listener = SecureLanListener::bind(address, settings, tls)?;
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
+            idle_timeout,
             in_flight: BTreeMap::new(),
             listener,
             next_request: 0,
@@ -227,8 +245,17 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             .ok_or(ErrorKind::InvalidData)?;
         match kind {
             PollKind::Authenticate => self.complete_auth(completion.result),
-            PollKind::Receive(peer) => {
-                self.complete_receive(peer, completion.result)
+            PollKind::Disconnect(peer) => match completion.result {
+                Ok(HostOutcome::Applied) => {
+                    Ok(PumpProgress::Event(RemoteEvent::Disconnected {
+                        peer,
+                        reason: ErrorKind::TimedOut,
+                    }))
+                },
+                _ => Err(ErrorKind::InvalidData.into()),
+            },
+            PollKind::Receive(peer, deadline) => {
+                self.complete_receive(peer, deadline, completion.result)
             },
         }
     }
@@ -239,7 +266,8 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     ) -> io::Result<PumpProgress<Message>> {
         match result {
             Ok(HostOutcome::Admitted(peer)) => {
-                self.ready.push_back(PollTask::receive(peer));
+                self.ready
+                    .push_back(PollTask::receive(peer, self.deadline()?));
                 Ok(PumpProgress::Event(RemoteEvent::Connected(peer)))
             },
             Ok(HostOutcome::Authenticating(pending)) => {
@@ -263,6 +291,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     fn complete_receive(
         &mut self,
         peer: u64,
+        deadline: Option<Instant>,
         result: HostResult<Message>,
     ) -> io::Result<PumpProgress<Message>> {
         let progress = match result {
@@ -283,8 +312,23 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             },
             _ => return Err(ErrorKind::InvalidData.into()),
         };
-        self.ready.push_back(PollTask::receive(peer));
+        let next = if matches!(progress, PumpProgress::Event(_)) {
+            self.deadline()?
+        } else {
+            deadline
+        };
+        self.ready.push_back(PollTask::receive(peer, next));
         Ok(progress)
+    }
+
+    fn deadline(&self) -> io::Result<Option<Instant>> {
+        self.idle_timeout
+            .map(|timeout| {
+                Instant::now()
+                    .checked_add(timeout)
+                    .ok_or_else(|| ErrorKind::InvalidInput.into())
+            })
+            .transpose()
     }
 
     /// Return the bound address, including an assigned ephemeral port.
@@ -329,7 +373,16 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         };
         let id = self.next_request;
         let next = id.checked_add(1).ok_or(ErrorKind::InvalidData)?;
-        let PollTask { kind, operation } = task;
+        let PollTask { kind, operation } = match task.kind {
+            PollKind::Receive(peer, Some(deadline))
+                if Instant::now() >= deadline =>
+            {
+                PollTask::disconnect(peer)
+            },
+            PollKind::Authenticate
+            | PollKind::Disconnect(_)
+            | PollKind::Receive(..) => task,
+        };
         let request = HostRequest { id, operation };
         match self.worker.try_submit(request) {
             Ok(()) => {
@@ -475,6 +528,7 @@ mod tests {
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[(keys.client_id, 1), (second_id, 2)],
+                idle_timeout: None,
                 local_peers: &[0],
                 session,
                 timeout: TIMEOUT,
@@ -507,6 +561,7 @@ mod tests {
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &approved,
+                idle_timeout: None,
                 local_peers: &[0],
                 session: session_config(false),
                 timeout: TIMEOUT,
@@ -523,6 +578,7 @@ mod tests {
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &approved,
+                idle_timeout: None,
                 local_peers: &[0, 2],
                 session: session_config(true),
                 timeout: TIMEOUT,
@@ -539,6 +595,7 @@ mod tests {
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[],
+                idle_timeout: None,
                 local_peers: &[0],
                 session: session_config(true),
                 timeout: TIMEOUT,

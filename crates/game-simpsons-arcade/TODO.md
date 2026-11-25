@@ -273,3 +273,8 @@ started the world. Arrow keys or the D-pad/left stick move; Z/A attacks
 and X/B jumps. The host handles Pause and menus. Close the controller
 window to disconnect. Re-launch with the same approved identity to
 rejoin; no automatic discovery or reconnection is attempted.
+
+Use matching host and controller builds. An idle controller sends a
+heartbeat every 500 ms. The host disconnects a peer after three seconds
+without a valid decoded message and releases its held controls on the
+next eligible simulation tick. Re-launch to rejoin if the lease expires.

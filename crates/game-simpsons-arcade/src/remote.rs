@@ -77,17 +77,40 @@ impl RemoteControl {
     }
 }
 
+/// A validated controller message or liveness-only heartbeat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoteMessage {
+    /// A station control transition.
+    Control(RemoteControl),
+    /// Refresh the transport lease without affecting simulation.
+    Heartbeat,
+}
+
+impl RemoteMessage {
+    /// Encode a version-one message.
+    #[must_use]
+    pub fn encode(self) -> [u8; CONTROL_BYTES] {
+        match self {
+            Self::Control(value) => value.encode(),
+            Self::Heartbeat => [VERSION, 0, 0],
+        }
+    }
+}
+
 /// Strict version-one codec for an authenticated peer's station input.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RemoteCodec;
 
 impl MessageSchema for RemoteCodec {
-    type Message = RemoteControl;
+    type Message = RemoteMessage;
 
     fn decode(&self, bytes: &[u8]) -> Option<Self::Message> {
         let [VERSION, code, state] = *bytes else {
             return None;
         };
+        if code == 0 && state == 0 {
+            return Some(RemoteMessage::Heartbeat);
+        }
         let down = match state {
             0 => false,
             1 => true,
@@ -96,7 +119,7 @@ impl MessageSchema for RemoteCodec {
         let control = REMOTE_CONTROLS
             .into_iter()
             .find(|candidate| candidate.mask() == code)?;
-        RemoteControl::new(control, down)
+        RemoteControl::new(control, down).map(RemoteMessage::Control)
     }
 }
 
@@ -302,12 +325,17 @@ mod tests {
     fn check_wire_code(code: u8, control: Option<Control>) {
         for down in [false, true] {
             let encoded = [1, code, u8::from(down)];
-            let expected =
-                control.and_then(|value| RemoteControl::new(value, down));
+            let expected = if code == 0 && !down {
+                Some(RemoteMessage::Heartbeat)
+            } else {
+                control
+                    .and_then(|value| RemoteControl::new(value, down))
+                    .map(RemoteMessage::Control)
+            };
             let decoded = RemoteCodec.decode(&encoded);
             assert_eq!(decoded, expected);
             assert_eq!(
-                decoded.map(RemoteControl::encode),
+                decoded.map(RemoteMessage::encode),
                 expected.map(|_value| encoded)
             );
         }
@@ -420,6 +448,7 @@ mod tests {
         assert_eq!(
             roster.decode(1, &start, &RemoteCodec).ok(),
             RemoteControl::new(Control::Start, true)
+                .map(RemoteMessage::Control)
         );
     }
 
@@ -495,7 +524,10 @@ mod tests {
         let message = roster
             .decode(1, &[1, 2, 1], &RemoteCodec)
             .map_err(|_error| "decode approved start")?;
-        join_players(&mut host, message);
+        let RemoteMessage::Control(control) = message else {
+            return Err("unexpected heartbeat");
+        };
+        join_players(&mut host, control);
         move_players(&mut host);
         rejoin_player(&mut host);
         Ok(())

@@ -34,7 +34,7 @@ use std::io::{self, ErrorKind};
 use std::mem;
 use std::net::SocketAddr;
 use std::num::{NonZeroU8, NonZeroUsize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use games::network::SessionConfig;
 use games::replay::{LiveSimulation, QueueRejection};
@@ -48,15 +48,19 @@ use games_platform::lan::secure::{
 use super::Cabinet;
 use super::remote::{
     CONTROL_BYTES, HostedCabinet, HostedInput, RemoteCodec, RemoteControl,
+    RemoteMessage,
 };
 
 const POLL_BUDGET: usize = 32;
 const CLIENT_QUEUE: usize = 128;
 const TIMEOUT: Duration = Duration::from_secs(2);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Bounded outgoing controller channel for a shared-screen client.
 #[derive(Debug)]
 pub(crate) struct ClientLan {
+    last_sent: Instant,
     pending: VecDeque<RemoteControl>,
     stream: SecureFrameStream,
 }
@@ -70,8 +74,9 @@ impl ClientLan {
         Ok(())
     }
 
-    pub(crate) const fn new(stream: SecureFrameStream) -> Self {
+    pub(crate) fn new(stream: SecureFrameStream) -> Self {
         Self {
+            last_sent: Instant::now(),
             pending: VecDeque::new(),
             stream,
         }
@@ -95,10 +100,15 @@ impl ClientLan {
     }
 
     fn queue_next(&mut self) -> io::Result<bool> {
-        let Some(value) = self.pending.pop_front() else {
-            return Ok(false);
+        let message = match self.pending.pop_front() {
+            Some(value) => RemoteMessage::Control(value),
+            None if self.last_sent.elapsed() >= HEARTBEAT_INTERVAL => {
+                RemoteMessage::Heartbeat
+            },
+            None => return Ok(false),
         };
-        self.stream.queue_send(value.encode().to_vec())?;
+        self.stream.queue_send(message.encode().to_vec())?;
+        self.last_sent = Instant::now();
         Ok(true)
     }
 }
@@ -113,7 +123,7 @@ impl ClientLan {
 #[derive(Debug)]
 pub struct HostLan {
     pending: Vec<HostedInput>,
-    pump: HostInputPump<RemoteControl>,
+    pump: HostInputPump<RemoteMessage>,
     reserved: [bool; 4],
 }
 
@@ -127,6 +137,15 @@ impl HostLan {
         address: SocketAddr,
         tls: ServerTls,
         approved: &[Option<PeerFingerprint>; 4],
+    ) -> io::Result<Self> {
+        Self::bind_with_idle(address, tls, approved, IDLE_TIMEOUT)
+    }
+
+    fn bind_with_idle(
+        address: SocketAddr,
+        tls: ServerTls,
+        approved: &[Option<PeerFingerprint>; 4],
+        idle_timeout: Duration,
     ) -> io::Result<Self> {
         let reserved = approved.map(|peer| peer.is_some());
         if reserved.into_iter().all(|remote| remote) {
@@ -145,6 +164,7 @@ impl HostLan {
             HostInputConfig {
                 address,
                 enrolments: &enrolments,
+                idle_timeout: Some(idle_timeout),
                 local_peers: &local_peers,
                 session: session_config(),
                 timeout: TIMEOUT,
@@ -182,7 +202,7 @@ impl HostLan {
         for _step in 0..POLL_BUDGET {
             match self.pump.poll()? {
                 PumpProgress::Event(event) => {
-                    self.pending.push(hosted_input(&event));
+                    self.pending.extend(hosted_input(&event));
                 },
                 PumpProgress::Idle => break,
                 PumpProgress::Progress => {},
@@ -238,15 +258,19 @@ pub fn session_config() -> SessionConfig {
     }
 }
 
-const fn hosted_input(event: &RemoteEvent<RemoteControl>) -> HostedInput {
+const fn hosted_input(
+    event: &RemoteEvent<RemoteMessage>,
+) -> Option<HostedInput> {
     match *event {
-        RemoteEvent::Connected(peer) => HostedInput::Connected(peer),
+        RemoteEvent::Connected(peer) => Some(HostedInput::Connected(peer)),
         RemoteEvent::Disconnected { peer, reason: _reason } => {
-            HostedInput::Disconnected(peer)
+            Some(HostedInput::Disconnected(peer))
         },
-        RemoteEvent::Message { peer, value } => {
-            HostedInput::Remote { peer, value }
-        },
+        RemoteEvent::Message {
+            peer,
+            value: RemoteMessage::Control(value),
+        } => Some(HostedInput::Remote { peer, value }),
+        RemoteEvent::Message { .. } => None,
     }
 }
 
@@ -255,7 +279,6 @@ mod tests {
     use std::num::NonZeroU32;
     use std::slice::from_ref;
     use std::thread;
-    use std::time::Instant;
 
     use games::input::LogicalAction;
     use games::replay::LiveInputLimits;
@@ -308,17 +331,22 @@ mod tests {
     }
 
     fn host() -> io::Result<(HostLan, ClientTls)> {
+        host_with_idle(IDLE_TIMEOUT)
+    }
+
+    fn host_with_idle(
+        idle_timeout: Duration,
+    ) -> io::Result<(HostLan, ClientTls)> {
         let server = identity(true)?;
         let client = identity(false)?;
         let tls =
             server.server_tls(session_config(), from_ref(client.public()))?;
-        let listener =
-            HostLan::bind(SocketAddr::from(([127, 0, 0, 1], 0)), tls, &[
-                None,
-                Some(client.public().fingerprint()),
-                None,
-                None,
-            ])?;
+        let listener = HostLan::bind_with_idle(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tls,
+            &[None, Some(client.public().fingerprint()), None, None],
+            idle_timeout,
+        )?;
         Ok((listener, client.client_tls(server.public())?))
     }
 
@@ -549,6 +577,57 @@ mod tests {
                 == Some(ErrorKind::WouldBlock)
                 && client.pending.len() == CLIENT_QUEUE,
             "bounded outgoing queue",
+        )
+    }
+
+    fn maintain_lease(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        client: &mut ClientLan,
+    ) -> io::Result<()> {
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(1300))
+            .ok_or(ErrorKind::TimedOut)?;
+        while Instant::now() < deadline {
+            client.poll()?;
+            host.poll(live)?;
+            require(
+                live.pending_actions() == 0,
+                "heartbeats refresh the lease without simulation input",
+            )?;
+            thread::yield_now();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn silent_controller_expires_and_releases_direction() -> io::Result<()> {
+        let (mut host, credentials) = host_with_idle(Duration::from_secs(1))?;
+        let mut live = live(&host)?;
+        let mut stream = connect(&mut host, &mut live, &credentials)?;
+        join_and_move(&mut stream, &mut host, &mut live)?;
+        let mut client = ClientLan::new(stream);
+        maintain_lease(&mut host, &mut live, &mut client)?;
+
+        // Keep the TCP connection alive locally but stop sending heartbeats.
+        let [_, moving, ..] = live.state().state().stations();
+        await_poll(&mut host, &mut live, |_bridge, state| {
+            state.pending_actions() == 1
+        })?;
+        advance(&mut live)?;
+        advance(&mut live)?;
+        let [_, stopped, ..] = live.state().state().stations();
+        require(
+            stopped.position == moving.position,
+            "idle expiry released the direction without a client close",
+        )?;
+        let mut rejoined = connect(&mut host, &mut live, &credentials)?;
+        send(&mut rejoined, &mut host, &mut live, Control::Left)?;
+        let [_, reversed, ..] = live.state().state().stations();
+        drop(client);
+        require(
+            reversed.position.x < stopped.position.x,
+            "expired identity reclaimed its station",
         )
     }
 }
