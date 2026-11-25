@@ -669,6 +669,57 @@ mod tests {
     }
 
     #[test]
+    fn record_admission_rejects_before_decoding_later_descriptors()
+    -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(
+            source(),
+            vec![
+                record("first", b"1234"),
+                record("second", b"5678"),
+                record("third", b"9012"),
+            ],
+            limits(),
+        )?;
+        let bytes = manifest.encode(limits())?;
+        let document = String::from_utf8(bytes)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let malformed = document.replace("\"key\":\"third\"", "\"key\":false");
+        let mut restrictive = limits();
+        restrictive.payload_bytes =
+            NonZeroU64::new(3).ok_or(AssetError::TooLarge)?;
+        require(
+            AssetManifest::parse(malformed.as_bytes(), restrictive)
+                == Err(AssetError::TooLarge),
+        )?;
+        restrictive.payload_bytes =
+            NonZeroU64::new(4).ok_or(AssetError::TooLarge)?;
+        restrictive.total_bytes =
+            NonZeroU64::new(7).ok_or(AssetError::TooLarge)?;
+        require(
+            AssetManifest::parse_canonical(malformed.as_bytes(), restrictive)
+                == Err(AssetError::TooLarge),
+        )?;
+        let invalid_key =
+            malformed.replace("\"key\":\"first\"", "\"key\":\"../x\"");
+        require(
+            AssetManifest::parse(invalid_key.as_bytes(), limits())
+                == Err(AssetError::InvalidIdentity),
+        )?;
+        let duplicate =
+            malformed.replace("\"key\":\"second\"", "\"key\":\"first\"");
+        require(
+            AssetManifest::parse_canonical(duplicate.as_bytes(), limits())
+                == Err(AssetError::InvalidOrder),
+        )?;
+        restrictive.total_bytes =
+            NonZeroU64::new(12).ok_or(AssetError::TooLarge)?;
+        require(
+            AssetManifest::parse_canonical(document.as_bytes(), restrictive)
+                == Ok(manifest),
+        )
+    }
+
+    #[test]
     fn encoded_byte_budget_accepts_exact_length_without_changing_wire_bytes()
     -> Result<(), AssetError> {
         let manifest = AssetManifest::new(

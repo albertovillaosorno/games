@@ -190,9 +190,7 @@ impl AssetManifest {
         bytes: &[u8],
         limits: ManifestLimits,
     ) -> Result<Self, AssetError> {
-        let manifest = Self(decode(bytes, limits, false)?);
-        manifest.validate(limits)?;
-        Ok(manifest)
+        decode(bytes, limits, false).map(Self)
     }
 
     /// Decode only exact canonical wire bytes, including legacy v1 bundles.
@@ -207,9 +205,7 @@ impl AssetManifest {
         bytes: &[u8],
         limits: ManifestLimits,
     ) -> Result<Self, AssetError> {
-        let manifest = Self(decode(bytes, limits, true)?);
-        manifest.validate(limits)?;
-        Ok(manifest)
+        decode(bytes, limits, true).map(Self)
     }
 
     /// Return an exact logical-key match in the validated sorted manifest.
@@ -245,16 +241,7 @@ impl AssetManifest {
         let mut previous = None;
         let mut remaining = limits.total_bytes.get();
         for record in &self.0.records {
-            record.validate()?;
-            if previous.is_some_and(|key: &str| key >= record.key.as_str()) {
-                return Err(AssetError::InvalidOrder);
-            }
-            if record.size > limits.payload_bytes.get() {
-                return Err(AssetError::TooLarge);
-            }
-            remaining = remaining
-                .checked_sub(record.size)
-                .ok_or(AssetError::TooLarge)?;
+            admit_record(record, previous, &mut remaining, limits)?;
             previous = Some(record.key.as_str());
         }
         Ok(())
@@ -324,7 +311,7 @@ fn decode(
     if !matches!(document.version, 1 | VERSION) {
         return Err(AssetError::UnsupportedVersion);
     }
-    let records = decode_records(document.records, limits.records)?;
+    let records = decode_records(document.records, limits)?;
     if document.version == 1 {
         return decode_legacy(bytes, document.source, records, limits);
     }
@@ -334,6 +321,7 @@ fn decode(
             .map_err(|_error| AssetError::InvalidEncoding)?,
         version: VERSION,
     };
+    manifest.source.validate()?;
     if canonical && encode(&manifest, limits.manifest_bytes)? != bytes {
         return Err(AssetError::InvalidEncoding);
     }
@@ -359,6 +347,7 @@ fn decode_legacy(
         revision: legacy.source.revision,
         title: legacy.source.title,
     };
+    source.validate()?;
     Ok(ManifestDocument {
         records,
         source,
@@ -366,9 +355,28 @@ fn decode_legacy(
     })
 }
 
+fn admit_record(
+    record: &AssetRecord,
+    previous: Option<&str>,
+    remaining: &mut u64,
+    limits: ManifestLimits,
+) -> Result<(), AssetError> {
+    record.validate()?;
+    if previous.is_some_and(|key| key >= record.key.as_str()) {
+        return Err(AssetError::InvalidOrder);
+    }
+    if record.size > limits.payload_bytes.get() {
+        return Err(AssetError::TooLarge);
+    }
+    *remaining = remaining
+        .checked_sub(record.size)
+        .ok_or(AssetError::TooLarge)?;
+    Ok(())
+}
+
 fn decode_records(
     raw: &RawValue,
-    maximum: NonZeroUsize,
+    limits: ManifestLimits,
 ) -> Result<Vec<AssetRecord>, AssetError> {
     let mut remaining = raw
         .get()
@@ -376,9 +384,10 @@ fn decode_records(
         .and_then(|body| body.strip_suffix(']'))
         .ok_or(AssetError::InvalidEncoding)?
         .trim_start();
-    let mut records = Vec::new();
+    let mut records: Vec<AssetRecord> = Vec::new();
+    let mut payload_remaining = limits.total_bytes.get();
     while !remaining.is_empty() {
-        reserve_bounded(&mut records, 1, maximum.get())
+        reserve_bounded(&mut records, 1, limits.records.get())
             .ok_or(AssetError::TooLarge)?;
         let mut stream = serde_json::Deserializer::from_str(remaining)
             .into_iter::<AssetRecord>();
@@ -386,6 +395,12 @@ fn decode_records(
             .next()
             .ok_or(AssetError::InvalidEncoding)?
             .map_err(|_error| AssetError::InvalidEncoding)?;
+        admit_record(
+            &record,
+            records.last().map(|previous| previous.key.as_str()),
+            &mut payload_remaining,
+            limits,
+        )?;
         records.push(record);
         let rest = remaining
             .get(stream.byte_offset()..)

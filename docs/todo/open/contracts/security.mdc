@@ -169,3 +169,13 @@ snapshot into a second owned DER buffer. Key, certificate, role and name
 verification are unchanged. This uses the already locked zeroize dependency;
 it does not establish protection from process inspection, OS paging,
 filesystem caches or retained cryptographic provider signing-key state.
+
+Manifest admission now validates each decoded descriptor, key order and
+individual and aggregate declared payload sizes before constructing the
+next record. Encoding and decoding share the same admission checks.
+Synthetic tests place a malformed later descriptor after each earlier
+violation and verify rejection at the first failing admission, including
+exact individual and aggregate limits on accepted canonical metadata.
+The initial borrowed JSON syntax scan remains bounded by the manifest byte
+limit; this does not bound allocations within an individual JSON record
+independently of that limit.
