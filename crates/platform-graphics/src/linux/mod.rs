@@ -765,7 +765,8 @@ mod tests {
     ) -> Result<(), RenderError> {
         let center = TouchPoint { x: 32_768, y: 32_768 };
         require(
-            scene.logical_touch(center)?.is_none()
+            !scene.presentation_is_current()?
+                && scene.logical_touch(center)?.is_none()
                 && scene.surface_touch(center)?.is_none()
                 && input.synchronize_touch(scene)?.is_none(),
             "unpresented scene admitted touch",
@@ -804,7 +805,8 @@ mod tests {
         let edge = TouchPoint { x: 0, y: 32_768 };
         let center = TouchPoint { x: 32_768, y: 32_768 };
         require(
-            scene.logical_touch(edge)?.is_none()
+            scene.presentation_is_current()?
+                && scene.logical_touch(edge)?.is_none()
                 && scene.logical_touch(center)?.is_some()
                 && input.synchronize_touch(scene)?.is_none(),
             "aspect-fit touch did not reject letterbox space",
@@ -812,7 +814,8 @@ mod tests {
         verify_touch_release(scene, input, center)?;
         require(scene.present([0; 3], &[sprite])?, "no stretched scene")?;
         require(
-            scene.logical_touch(edge)? == Some(edge)
+            scene.presentation_is_current()?
+                && scene.logical_touch(edge)? == Some(edge)
                 && scene.surface_touch(edge)? == Some(edge)
                 && input.synchronize_touch(scene)?.is_none(),
             "redrawn stretch touch did not use the full surface",
@@ -827,13 +830,15 @@ mod tests {
             "adaptive test target did not widen",
         )?;
         require(
-            scene.logical_touch(center)?.is_none()
+            !scene.presentation_is_current()?
+                && scene.logical_touch(center)?.is_none()
                 && scene.surface_touch(center)?.is_none(),
             "touch used a new target before presentation",
         )?;
         require(scene.present([0; 3], &[sprite])?, "no adaptive scene")?;
         require(
-            scene.logical_touch(edge)? == Some(edge)
+            scene.presentation_is_current()?
+                && scene.logical_touch(edge)? == Some(edge)
                 && scene.surface_touch(edge)? == Some(edge)
                 && input.synchronize_touch(scene)?.is_some()
                 && input.synchronize_touch(scene)?.is_none(),
@@ -888,7 +893,8 @@ mod tests {
             ..DisplaySettings::default()
         })?;
         require(
-            scene.logical_touch(center)?.is_none()
+            !scene.presentation_is_current()?
+                && scene.logical_touch(center)?.is_none()
                 && scene.surface_touch(center)?.is_none(),
             "touch used a layout not yet drawn",
         )?;

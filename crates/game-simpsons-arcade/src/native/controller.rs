@@ -322,7 +322,7 @@ fn interactive(
             .map_err(|_rejected| connection_failure(ErrorKind::WouldBlock))?;
     }
     let draws = controller_draws(scene, &resolved.profiles, touch_enabled)?;
-    let mut presented = scene.present([24, 22, 30], &draws)?;
+    let _initial_drawn = scene.present([24, 22, 30], &draws)?;
     resolved.persist().map_err(failure)?;
     let mut deferred = Vec::new();
     loop {
@@ -362,8 +362,8 @@ fn interactive(
         if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
             discover_controllers(&mut input, &mut controls, &mut controller)?;
         }
-        if !presented || batch != EventBatch::Empty {
-            presented = scene.present([24, 22, 30], &draws)?;
+        if batch != EventBatch::Empty || !scene.presentation_is_current()? {
+            let _drawn = scene.present([24, 22, 30], &draws)?;
         }
     }
 }

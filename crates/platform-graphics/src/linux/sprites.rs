@@ -486,6 +486,14 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(drawable.is_some())
     }
 
+    /// Whether the last submitted frame matches the current geometry.
+    /// Idle renderers use this to redraw after silent drawable changes.
+    /// # Errors
+    /// Reports failure to query the drawable dimensions.
+    pub fn presentation_is_current(&self) -> Result<bool, RenderError> {
+        Ok(self.visible_layout()?.is_some())
+    }
+
     pub(super) const fn presentation_mode(&self) -> PresentationMode {
         self.textures.mode
     }

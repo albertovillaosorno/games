@@ -1029,7 +1029,9 @@ impl<'preferences> Interactive<'preferences> {
             if let Some(audio) = &mut playback {
                 audio.update(cabinet)?;
             }
-            if frame_due(hosted, presented.as_ref(), batch) {
+            if frame_due(hosted, presented.as_ref(), batch)
+                || !scene.presentation_is_current()?
+            {
                 let drawn = art.present(scene, cabinet)?;
                 presented = (drawn && cabinet.phase() != Phase::Playing)
                     .then_some(*hosted);
