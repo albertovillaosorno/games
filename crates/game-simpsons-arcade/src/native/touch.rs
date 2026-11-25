@@ -233,9 +233,13 @@ fn panel_region(
     };
     let max = TouchPoint {
         x: u16::MAX,
-        y: boundary(bottom, height)
-            .and_then(|edge| edge.checked_sub(1))
-            .ok_or(RenderError::InvalidDimensions)?,
+        y: if bottom == height {
+            u16::MAX
+        } else {
+            boundary(bottom, height)
+                .and_then(|edge| edge.checked_sub(1))
+                .ok_or(RenderError::InvalidDimensions)?
+        },
     };
     let id = u16::try_from(row).map_err(|_error| RenderError::TooLarge)?;
     TouchZone::new(id, min, max).ok_or(RenderError::InvalidDimensions)
@@ -273,9 +277,7 @@ pub(super) fn install(
     let height = height(profiles)?;
     for (row, player) in seats(profiles).enumerate() {
         let offset = panel_top(row)?;
-        if count > 1 {
-            regions.push(panel_region(row, offset, height)?);
-        }
+        regions.push(panel_region(row, offset, height)?);
         for button in panel(profiles, player)?
             .into_iter()
             .filter(|button| role.allows(button.control))
@@ -602,6 +604,53 @@ mod tests {
                 id,
                 phase: ContactPhase::Up,
             }) != [LogicalAction { action, down: false }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn single_panel_drag_requires_initial_panel_press()
+    -> Result<(), RenderError> {
+        verify_single_panel_scope(PanelRole::Cabinet)?;
+        verify_single_panel_scope(PanelRole::Controller)
+    }
+
+    fn verify_single_panel_scope(role: PanelRole) -> Result<(), RenderError> {
+        use crate::Control;
+
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, &DEFAULT_PROFILES, role)?;
+        let mut router = InputRouter::new(mapping);
+        let id = ContactId { device: 1, finger: 2 };
+        let button = center(Player::Marge, Control::Right, &DEFAULT_PROFILES)?;
+        let game = TouchPoint { y: 0, ..button };
+        let blank = TouchPoint { x: 30_000, ..button };
+        let bottom = TouchPoint { y: u16::MAX, ..button };
+        let action = Action {
+            control: Control::Right,
+            player: Player::Marge,
+        };
+        let press = || Some(LogicalAction { action, down: true });
+        let release = || Some(LogicalAction { action, down: false });
+        for (phase, expected) in [
+            (ContactPhase::Down(game), None),
+            (ContactPhase::Motion(Some(button)), None),
+            (ContactPhase::Up, None),
+            (ContactPhase::Down(blank), None),
+            (ContactPhase::Motion(Some(bottom)), None),
+            (ContactPhase::Motion(Some(button)), press()),
+            (ContactPhase::Motion(Some(game)), release()),
+            (ContactPhase::Motion(Some(button)), press()),
+            (ContactPhase::Up, release()),
+            (ContactPhase::Down(bottom), None),
+            (ContactPhase::Motion(Some(button)), press()),
+            (ContactPhase::Up, release()),
+        ] {
+            if router.handle(InputEvent::Contact { id, phase }).as_slice()
+                != expected.as_slice()
             {
                 return Err(RenderError::InvalidSprite);
             }
