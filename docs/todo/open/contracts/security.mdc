@@ -125,3 +125,10 @@ inadmissible. Tests pin a prior file across a rename and interleave
 128 save loads with 32 atomic replacements, requiring complete valid
 payloads and no staging residue. Native reads now require trusted
 procfs; Android and power-loss behavior are not established.
+
+The display preference writer also verifies any existing slot as valid
+portable display settings before replacing it. Direct use of the writer
+can no longer silently overwrite an unrelated game-progress payload or a
+corrupted save envelope. Existing valid preferences retain atomic
+replacement and first-use behavior. The dedicated-directory contract and
+trusted same-user writer assumption remain; this is not compare-and-swap.

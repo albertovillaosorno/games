@@ -92,18 +92,23 @@ impl DisplayStore {
     /// Atomically replace the saved preferences.
     ///
     /// # Errors
-    /// Reports unsafe storage or failures before publication. The receipt
-    /// reports whether the published file's directory sync succeeded.
+    /// Rejects unsafe storage, malformed existing preferences or failures
+    /// before publication. The receipt reports directory sync status.
+    /// The caller must dedicate the directory to preferences; this check
+    /// is not a compare-and-swap against other same-user writers.
     pub fn store(
         &self,
         settings: DisplaySettings,
     ) -> Result<SaveReceipt, DisplayStoreError> {
+        let _existing = self.load()?;
         Ok(self.store.store(SLOT, settings.encode().as_bytes())?)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use games::presentation::{PresentationMode, WindowMode};
 
     use super::*;
@@ -144,7 +149,26 @@ mod tests {
             DisplayStore::open(&root.path)?.load()
                 == Err(DisplayStoreError::InvalidPayload),
         )?;
+        require(
+            DisplayStore::open(&root.path)?.store(DisplaySettings::default())
+                == Err(DisplayStoreError::InvalidPayload),
+        )?;
         require(raw.load(SLOT)? == b"title-progress")?;
         Ok(())
+    }
+
+    #[test]
+    fn refuses_corrupt_envelopes_without_repairing_them()
+    -> Result<(), DisplayStoreError> {
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let path = root.path.join("slot-0.gms");
+        let corrupted = b"invalid envelope";
+        fs::write(&path, corrupted).map_err(SaveError::from)?;
+        let store = DisplayStore::open(&root.path)?;
+        require(matches!(
+            store.store(DisplaySettings::default()),
+            Err(DisplayStoreError::Storage(SaveError::Envelope(_)))
+        ))?;
+        require(fs::read(path).map_err(SaveError::from)? == corrupted)
     }
 }
