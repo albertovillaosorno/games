@@ -95,6 +95,7 @@ impl Region {
 
 #[derive(Debug)]
 struct Profile {
+    audio_limits: ManifestLimits,
     digest: &'static str,
     graphics: &'static [Region],
     limits: ManifestLimits,
@@ -108,6 +109,80 @@ struct Profile {
     tile_code_mask: u16,
     title: &'static str,
     video: priority::Wiring,
+}
+
+/// The selected canonical asset family for a pinned source machine.
+#[derive(Clone, Copy, Debug)]
+pub enum AssetSelection {
+    /// Mono PCM sound samples at their source-declared nominal rates.
+    Audio(Machine),
+    /// Indexed background and sprite graphics.
+    Graphics(Machine),
+}
+
+impl AssetSelection {
+    /// Convert a complete asset family using the shared transaction.
+    /// # Errors
+    /// Rejects invalid source identity, assets or staging failures.
+    pub fn convert<Stage>(
+        self,
+        source: &VerifiedSource<'_>,
+        limits: ConversionLimits,
+        stage: Stage,
+    ) -> Result<AssetManifest, ImportError>
+    where
+        Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
+    {
+        match self {
+            Self::Graphics(machine) => {
+                machine.convert_graphics(source, limits, stage)
+            },
+            Self::Audio(machine) => convert_verified(
+                source,
+                limits.manifest,
+                stage,
+                |verified, output| {
+                    let rom = machine.sample_rom(verified, limits.archive)?;
+                    samples::catalogue::convert(
+                        &rom,
+                        machine.0.audio_limits,
+                        limits.manifest,
+                        output,
+                    )
+                },
+            ),
+        }
+    }
+
+    /// The selected machine's independent canonical output limits.
+    #[must_use]
+    pub const fn limits(self) -> ManifestLimits {
+        match self {
+            Self::Audio(machine) => machine.0.audio_limits,
+            Self::Graphics(machine) => machine.graphics_limits(),
+        }
+    }
+
+    /// Check identity and declared family shape of a pinned manifest.
+    /// # Errors
+    /// Rejects another source or unexpected asset keys or types.
+    pub fn validate_manifest(
+        self,
+        manifest: &AssetManifest,
+    ) -> Result<(), ImportError> {
+        match self {
+            Self::Graphics(machine) => machine.validate_manifest(manifest),
+            Self::Audio(machine) => {
+                if manifest.source() != &machine.identity()? {
+                    return Err(ImportError::IncorrectSource);
+                }
+                samples::catalogue::validate_manifest(
+                    manifest,
+                    machine.0.audio_limits.records,
+                )
+            },
+        }
+    }
 }
 
 /// A supported machine and pinned original revision, selected by name.

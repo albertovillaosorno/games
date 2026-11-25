@@ -31,6 +31,8 @@
 
 //! Bounded Konami signed PCM and differential PCM sample conversion.
 
+pub(super) mod catalogue;
+
 use games_assets::archive::ArchiveBudget;
 
 use super::allocated_bytes;

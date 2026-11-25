@@ -375,3 +375,24 @@ Inactive voices are not counted as sample matches. This is sample
 decoding evidence, not pitch scheduling, reverse or looping behavior,
 YM2151 synthesis, panning, mixing or interactive audio parity.
 No original sound bytes or capture data are tracked.
+
+The pinned sample region includes a validated 161-entry catalogue with
+contiguous, inclusive sample ranges and nominal sample rates. The generic
+audio import decodes every listed PCM8 or differential clip into a mono
+PCM16 asset and preserves the declared rate. The separate audio manifest
+contains 3,798,888 payload bytes, SHA-256
+`9a74b8f50f47229d6e78b328013d6c23f8683e72aefaa4c3badcc2b22ad03b19`.
+The largest clip occupies 264,324 bytes. Commands for private output:
+
+```sh
+cargo run --locked -p games-build -- mame audio-publish simpsons \
+  world-4p-set-1 PARENT ARCHIVE 3000000 1048576 7209088 14
+cargo run --locked -p games-build -- mame audio-check simpsons \
+  world-4p-set-1 PARENT MANIFEST_SHA256
+```
+
+The actual pinned archive produced identical import and published
+read-back diagnostics; a repeated publication was refused and another
+read-back matched. The original graphics manifest is unchanged.
+Catalogue indices are not semantic sound-event IDs, and nominal rates
+do not establish original playback pitch, scheduling or audio parity.

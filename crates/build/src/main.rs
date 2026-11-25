@@ -84,9 +84,9 @@ use games_assets::{
     AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
 use games_importer::conversion::ConversionLimits;
-use games_importer::mame::Machine;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_importer::mame::samples::compare_observations;
+use games_importer::mame::{AssetSelection, Machine};
 use games_importer::{ImportError, VerifiedSource};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_platform_storage::file::snapshot;
@@ -94,11 +94,11 @@ use games_platform_storage::file::snapshot;
 const USAGE: &str = concat!(
     "usage: games-build zip verify PATH TITLE REV SHA256 ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "games-build mame verify|import MACHINE REV PATH ",
+    "games-build mame verify|import|audio-import MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: mame publish MACHINE REV PARENT PATH ",
+    "GNU/Linux: mame publish|audio-publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
+    "GNU/Linux: mame check|audio-check MACHINE REV PARENT MANIFEST_SHA256\n",
     "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "GNU/Linux: mame scene-check MACHINE REV PARENT SHA256 ",
@@ -204,8 +204,8 @@ enum Command {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     BackgroundCheck(Machine, reference_background::Arguments),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    Check(Machine, PathBuf, ContentHash),
-    Import(Machine, Arguments),
+    Check(AssetSelection, PathBuf, ContentHash),
+    Import(AssetSelection, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     ObjectCheck(Machine, PathBuf, PathBuf),
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -213,7 +213,7 @@ enum Command {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     PriorityCheck(Machine, PathBuf, PathBuf),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    Publish(Machine, PathBuf, Arguments),
+    Publish(AssetSelection, PathBuf, Arguments),
     #[cfg(all(
         feature = "native-preview",
         target_os = "linux",
@@ -258,9 +258,44 @@ impl Command {
         }
     }
 
+    fn parse_assets<Args>(
+        action: &str,
+        selected: Machine,
+        mut args: Args,
+    ) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        let selection = if action.starts_with("audio-") {
+            AssetSelection::Audio(selected)
+        } else {
+            AssetSelection::Graphics(selected)
+        };
+        match action {
+            "import" | "audio-import" => Ok(Self::Import(
+                selection,
+                Arguments::parse_mame(selected, args.by_ref().collect())?,
+            )),
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            "publish" | "audio-publish" => {
+                let parent = args.next().ok_or_else(|| String::from(USAGE))?;
+                Ok(Self::Publish(
+                    selection,
+                    PathBuf::from(parent),
+                    Arguments::parse_mame(selected, args.collect())?,
+                ))
+            },
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            "check" | "audio-check" => {
+                Self::parse_check(selection, args.collect())
+            },
+            _ => Err(String::from(USAGE)),
+        }
+    }
+
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn parse_check(
-        machine: Machine,
+        selection: AssetSelection,
         args: Vec<OsString>,
     ) -> Result<Self, String> {
         let [parent, digest_argument] = <[OsString; 2]>::try_from(args)
@@ -268,7 +303,7 @@ impl Command {
         let digest = text(&digest_argument)?
             .parse()
             .map_err(|_error| String::from("invalid manifest hash"))?;
-        Ok(Self::Check(machine, parent.into(), digest))
+        Ok(Self::Check(selection, parent.into(), digest))
     }
 
     fn parse_mame<Args>(action: &str, mut args: Args) -> Result<Self, String>
@@ -316,22 +351,7 @@ impl Command {
                 selected,
                 render_check::Arguments::parse_benchmark(args.collect())?,
             )),
-            "import" => Ok(Self::Import(
-                selected,
-                Arguments::parse_mame(selected, args.collect())?,
-            )),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            "publish" => {
-                let parent = args.next().ok_or_else(|| String::from(USAGE))?;
-                Ok(Self::Publish(
-                    selected,
-                    PathBuf::from(parent),
-                    Arguments::parse_mame(selected, args.collect())?,
-                ))
-            },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            "check" => Self::parse_check(selected, args.collect()),
-            _ => Err(String::from(USAGE)),
+            _ => Self::parse_assets(action, selected, args),
         }
     }
 
@@ -413,20 +433,20 @@ impl Command {
                 report_samples(machine, &raw, limit, &args)
             },
             Self::Verify(args) => with_source(&args, verify_archive),
-            Self::Import(machine, args) => {
+            Self::Import(selection, args) => {
                 with_source(&args, |source, archive| {
-                    report_graphics(machine, source, archive)
+                    report_assets(selection, source, archive)
                 })
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            Self::Publish(machine, parent, args) => {
+            Self::Publish(selection, parent, args) => {
                 with_source(&args, |source, archive| {
-                    publication::publish(machine, &parent, source, archive)
+                    publication::publish(selection, &parent, source, archive)
                 })
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            Self::Check(machine, parent, digest) => {
-                publication::check(machine, &parent, digest)
+            Self::Check(selection, parent, digest) => {
+                publication::check(selection, &parent, digest)
             },
         }
     }
@@ -567,19 +587,19 @@ fn report_manifest(
     .map_err(|error| error.to_string())
 }
 
-fn report_graphics(
-    machine: Machine,
+fn report_assets(
+    selection: AssetSelection,
     source: &VerifiedSource<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
-    let manifest = machine.graphics_limits();
-    let converted = machine
-        .convert_graphics(
+    let manifest = selection.limits();
+    let converted = selection
+        .convert(
             source,
             ConversionLimits { archive, manifest },
             |_digest, _bytes| Ok(()),
         )
-        .map_err(|error| format!("graphics: {error:?}"))?;
+        .map_err(|error| format!("assets: {error:?}"))?;
     report_manifest(&converted, manifest)
 }
 
@@ -681,7 +701,16 @@ mod tests {
             "14",
         ];
         let command = Command::parse(args.into_iter().map(OsString::from));
-        assert!(matches!(command, Ok(Command::Import(_, _))));
+        assert!(matches!(
+            command,
+            Ok(Command::Import(AssetSelection::Graphics(_), _))
+        ));
+        let mut audio = args;
+        audio[1] = "audio-import";
+        assert!(matches!(
+            Command::parse(audio.into_iter().map(OsString::from)),
+            Ok(Command::Import(AssetSelection::Audio(_), _))
+        ));
         let wrong = [
             "mame",
             "import",

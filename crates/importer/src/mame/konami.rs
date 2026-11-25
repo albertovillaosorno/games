@@ -43,6 +43,12 @@ use super::{Profile, Region};
 use crate::graphics::TileLayout;
 
 pub(super) static SIMPSONS: Profile = Profile {
+    audio_limits: ManifestLimits {
+        manifest_bytes: NonZeroUsize::MIN.saturating_add(65_536 - 1),
+        payload_bytes: NonZeroU64::MIN.saturating_add(264_324 - 1),
+        records: NonZeroUsize::MIN.saturating_add(161 - 1),
+        total_bytes: NonZeroU64::MIN.saturating_add(3_798_888 - 1),
+    },
     digest: "c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa",
     graphics: &[
         Region {

@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Composition of selected graphics conversion and native bundle access.
+//   - Composition of selected asset conversion and native bundle access.
 // - Must-Not:
 //   - Execute originals, decode media layouts or bypass platform storage.
 // - Allows:
@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - A common host composition can express all title policies.
 // - Summary:
-//   - Publish and independently check selected canonical graphics.
+//   - Publish and independently check selected canonical assets.
 // - Description:
 //   - Connect the verified importer sink to the platform transaction.
 // - Usage:
@@ -36,25 +36,25 @@ use std::path::Path;
 use games_assets::archive::ArchiveBudget;
 use games_assets::{ContentHash, ManifestLimits};
 use games_importer::conversion::ConversionLimits;
-use games_importer::mame::Machine;
+use games_importer::mame::AssetSelection;
 use games_importer::{ImportError, VerifiedSource};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::staging::CanonicalStaging;
 
-/// Independently verify a published graphics bundle.
+/// Independently verify a published asset bundle.
 ///
 /// # Errors
 /// Rejects unexpected identities, invalid assets or output failures.
 pub fn check(
-    machine: Machine,
+    selection: AssetSelection,
     parent: &Path,
     digest: ContentHash,
 ) -> Result<(), String> {
-    let limits = machine.graphics_limits();
+    let limits = selection.limits();
     let bundle = CanonicalBundle::open(parent, digest, limits)
         .map_err(|error| format!("bundle: {error:?}"))?;
     let manifest = bundle.manifest();
-    machine
+    selection
         .validate_manifest(manifest)
         .map_err(|error| format!("profile manifest: {error:?}"))?;
     for record in manifest.records() {
@@ -72,17 +72,17 @@ pub fn check(
 /// # Errors
 /// Returns conversion, staging, publication or output failures.
 pub fn publish(
-    machine: Machine,
+    selection: AssetSelection,
     parent: &Path,
     source: &VerifiedSource<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
-    let manifest = machine.graphics_limits();
+    let manifest = selection.limits();
     let mut stage = CanonicalStaging::new(parent, staging_budget(manifest)?)
         .map_err(|error| format!("stage: {error:?}"))?;
     let mut staging_error = None;
-    let converted = machine
-        .convert_graphics(
+    let converted = selection
+        .convert(
             source,
             ConversionLimits { archive, manifest },
             |digest, bytes| {
@@ -94,7 +94,7 @@ pub fn publish(
         )
         .map_err(|error| {
             staging_error.map_or_else(
-                || format!("graphics: {error:?}"),
+                || format!("assets: {error:?}"),
                 |failure| format!("stage: {failure:?}"),
             )
         })?;
@@ -142,15 +142,18 @@ fn staging_budget(limits: ManifestLimits) -> Result<ArchiveBudget, String> {
 
 #[cfg(test)]
 mod tests {
+    use games_importer::mame::Machine;
+
     use super::*;
 
     #[test]
     fn staging_budget_rejects_overflow() -> Result<(), ImportError> {
         let machine = Machine::select("simpsons", "world-4p-set-1")?;
-        let mut limits = machine.graphics_limits();
+        let selection = AssetSelection::Graphics(machine);
+        let mut limits = selection.limits();
         limits.total_bytes = NonZeroU64::MAX;
         (staging_budget(limits).is_err()
-            && staging_budget(machine.graphics_limits()).is_ok())
+            && staging_budget(selection.limits()).is_ok())
         .then_some(())
         .ok_or(ImportError::TooLarge)
     }

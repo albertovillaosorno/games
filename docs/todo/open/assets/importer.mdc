@@ -68,3 +68,13 @@ publish and check operations rather than title-specific flags. Local native
 round-trip verification reproduced the previously pinned manifest identity
 and both payload hashes. The old bundle also passed the new reader.
 Only the selected Simpsons profile is verified; other boards remain open.
+
+The same machine selection and transactional publication path now support
+a distinct canonical audio family. The KDSC catalogue parser checks every
+header and contiguous sample extent before converting one clip at a time.
+The pinned Simpsons source produced 161 mono PCM16 records, 3,798,888
+payload bytes in total, with declared nominal rates preserved. Two imports
+and native published read-back returned the same manifest; repeated
+publication rejected the destination and read-back remained unchanged.
+The graphics family retains its previous manifest identity. A cross-family
+read-back was rejected. This verifies asset conversion, not game audio.
