@@ -34,3 +34,7 @@
 /// Explicitly enabled native TLS framing on local network addresses.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lan;
+
+/// Private, bounded native archive staging.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub mod staging;

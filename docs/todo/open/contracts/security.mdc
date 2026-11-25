@@ -43,8 +43,23 @@ versions, using strict caller-provided limits. All truncated save prefixes
 are also rejected. Network message budgets are enforced separately by
 `games::network`.
 
-These checks do not yet protect actual archive extraction from filesystem
-races, duplicate destinations or case-folding collisions, or verify sandboxed
-mod execution, process privileges or real user file permissions. The importer
-and host platform adapters must integrate and test those constraints before
-task completion.
+The Linux native platform now stages decoded archive members in a private
+owner-only directory, using Nix descriptor-relative operations, exclusive
+file creation and no-follow opens. An owner-controlled, non-group-writable
+parent and trusted ancestors are required. The staging registry rejects
+duplicate, case-insensitive and file/directory collisions. Portable ASCII
+paths and a depth cap of 64 are enforced; implicit directories also consume
+the archive entry budget. An error permanently aborts the transaction;
+drop attempts cleanup, and no partial result is returned for conversion.
+
+Seven native synthetic tests exercise private permissions, successful
+staging and cleanup, malformed metadata and decoded sizes, exhausted
+budgets, existing symlinks and hardlinks, collisions and untrusted parents.
+Fresh workspace validation passed in run
+1795577220441162807-2787138 (93 tests).
+
+Real archive-format decoding, publication, Android device verification and
+mod/process sandboxing remain unverified. The trusted parent assumption does
+not protect against another process acting as the same user. Actual host
+and game adapters must integrate and test those constraints before task
+completion.

@@ -22,6 +22,7 @@ games = { path = "crates/engine" }
 serde_json = "*"
 toml = "*"
 sha2 = "0.11"
+nix = { version = "0.31.3", features = ["fs", "user"] }
 
 [workspace.dependencies.rustls]
 version = "0.23.46"

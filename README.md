@@ -75,8 +75,10 @@ The library also provides local-first multiplayer session rules, byte-bounded
 message/schema validation, archive-entry checks, integrity-checked save
 envelopes and constant-memory performance accounting. The native platform
 adapter provides bounded mutual TLS 1.3 and explicit player enrolment.
-Physical LAN verification and credential provisioning remain pending. Archive
-extraction, sandboxing, graphics and playable titles remain open work.
+On Linux, descriptor-relative archive staging enforces private files,
+no-overwrite creation, exact payload lengths and collision rejection. Physical
+LAN verification and credential provisioning remain pending. Archive format
+decoding, publication, sandboxing, graphics and playable titles remain open.
 
 ## Catalogue
 

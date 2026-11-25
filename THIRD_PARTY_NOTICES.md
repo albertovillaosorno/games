@@ -3,7 +3,8 @@
 ## Current scope
 
 The engine uses SHA-2 for save integrity. The native platform
-adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport. No
+adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
+Nix for descriptor-relative archive staging. No
 original game assets, original game code or candidate project source is
 incorporated or distributed by this repository. The development validator
 uses Serde JSON, TOML and SHA-2; platform tests use Rcgen.
@@ -34,9 +35,11 @@ for the current lockfile. They are not a completed distribution audit.
 | `asn1-rs` | MIT OR Apache-2.0 |
 | `autocfg` | Apache-2.0 OR MIT |
 | `bit-vec` | Apache-2.0 OR MIT |
+| `bitflags` | MIT OR Apache-2.0 |
 | `block-buffer` | MIT OR Apache-2.0 |
 | `cc` | MIT OR Apache-2.0 |
 | `cfg-if` | MIT OR Apache-2.0 |
+| `cfg_aliases` | MIT |
 | `const-oid` | Apache-2.0 OR MIT |
 | `cpufeatures` | MIT OR Apache-2.0 |
 | `crypto-common` | MIT OR Apache-2.0 |
@@ -56,6 +59,7 @@ for the current lockfile. They are not a completed distribution audit.
 | `libc` | MIT OR Apache-2.0 |
 | `memchr` | Unlicense OR MIT |
 | `minimal-lexical` | MIT/Apache-2.0 |
+| `nix` | MIT |
 | `nom` | MIT |
 | `num-bigint` | MIT OR Apache-2.0 |
 | `num-conv` | MIT OR Apache-2.0 |

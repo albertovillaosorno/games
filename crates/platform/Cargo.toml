@@ -17,5 +17,8 @@ sha2.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rcgen.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+nix.workspace = true
+
 [lints]
 workspace = true
