@@ -42,13 +42,13 @@ use games::capability::{
     HapticCommand, HapticEffect, HapticError, HapticSupport, Haptics,
 };
 use games::input::InputEvent;
+use games::input::physical::{ControllerAxis, ControllerButton, PointerButton};
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::presentation::PresentationLayout;
-use sdl2::controller::GameController;
-pub use sdl2::controller::{Axis, Button};
+use sdl2::controller::{Axis, Button, GameController};
 use sdl2::event::{Event, WindowEvent};
 pub use sdl2::keyboard::Scancode;
-pub use sdl2::mouse::MouseButton;
+use sdl2::mouse::MouseButton;
 use sdl2::video::Window;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
@@ -490,34 +490,57 @@ pub const fn key_code(scancode: Scancode) -> u32 {
     scancode as u32
 }
 
-/// SDL controller axis code for use in a title's shared axis mapping.
-#[must_use]
-#[expect(
-    clippy::as_conversions,
-    reason = "SDL controller axis C ABI discriminants are within u16"
-)]
-pub const fn axis_code(axis: Axis) -> u16 {
-    axis as u16
+const fn axis_code(axis: Axis) -> u16 {
+    match axis {
+        Axis::LeftX => ControllerAxis::LeftX,
+        Axis::LeftY => ControllerAxis::LeftY,
+        Axis::RightX => ControllerAxis::RightX,
+        Axis::RightY => ControllerAxis::RightY,
+        Axis::TriggerLeft => ControllerAxis::TriggerLeft,
+        Axis::TriggerRight => ControllerAxis::TriggerRight,
+    }
+    .code()
 }
 
-/// SDL controller button code for use in a title's shared button mapping.
-#[must_use]
-#[expect(
-    clippy::as_conversions,
-    reason = "SDL controller button C ABI discriminants are within u16"
-)]
-pub const fn button_code(button: Button) -> u16 {
-    button as u16
+const fn button_code(button: Button) -> u16 {
+    match button {
+        Button::A => ControllerButton::South,
+        Button::B => ControllerButton::East,
+        Button::X => ControllerButton::West,
+        Button::Y => ControllerButton::North,
+        Button::Back => ControllerButton::Back,
+        Button::Guide => ControllerButton::Guide,
+        Button::Start => ControllerButton::Start,
+        Button::LeftStick => ControllerButton::LeftStick,
+        Button::RightStick => ControllerButton::RightStick,
+        Button::LeftShoulder => ControllerButton::LeftShoulder,
+        Button::RightShoulder => ControllerButton::RightShoulder,
+        Button::DPadUp => ControllerButton::DPadUp,
+        Button::DPadDown => ControllerButton::DPadDown,
+        Button::DPadLeft => ControllerButton::DPadLeft,
+        Button::DPadRight => ControllerButton::DPadRight,
+        Button::Misc1 => ControllerButton::Misc1,
+        Button::Paddle1 => ControllerButton::Paddle1,
+        Button::Paddle2 => ControllerButton::Paddle2,
+        Button::Paddle3 => ControllerButton::Paddle3,
+        Button::Paddle4 => ControllerButton::Paddle4,
+        Button::Touchpad => ControllerButton::Touchpad,
+    }
+    .code()
 }
 
-/// SDL physical mouse button code for shared action mapping.
-#[must_use]
-#[expect(
-    clippy::as_conversions,
-    reason = "SDL mouse buttons have u8 C ABI discriminants"
-)]
-pub const fn mouse_code(button: MouseButton) -> u8 {
-    button as u8
+const fn mouse_code(button: MouseButton) -> Option<u8> {
+    Some(
+        match button {
+            MouseButton::Left => PointerButton::Left,
+            MouseButton::Middle => PointerButton::Middle,
+            MouseButton::Right => PointerButton::Right,
+            MouseButton::X1 => PointerButton::X1,
+            MouseButton::X2 => PointerButton::X2,
+            MouseButton::Unknown => return None,
+        }
+        .code(),
+    )
 }
 
 #[expect(
@@ -616,14 +639,11 @@ fn route_mouse(event: &Event, window: u32) -> Option<HostEvent> {
         return None;
     };
     // SDL_TOUCH_MOUSEID is not a physical mouse. Avoid double routing.
-    if window_id != window
-        || which == u32::MAX
-        || button == MouseButton::Unknown
-    {
+    if window_id != window || which == u32::MAX {
         return None;
     }
     Some(HostEvent::Input(InputEvent::Mouse {
-        code: mouse_code(button),
+        code: mouse_code(button)?,
         down,
     }))
 }
@@ -701,6 +721,9 @@ mod tests {
     use std::time::Duration;
 
     use games::capability::{HapticEffect, HapticError, HapticSupport};
+    use games::input::physical::{
+        ControllerAxis, ControllerButton, PointerButton,
+    };
     use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use games::presentation::{Dimensions, PresentationMode};
@@ -714,6 +737,32 @@ mod tests {
         mouse_code, open_candidate, route, route_contact,
     };
     use crate::linux::RenderError;
+
+    #[test]
+    fn native_control_names_translate_to_shared_codes() {
+        for axis in ControllerAxis::ALL {
+            assert_eq!(
+                Axis::from_string(axis.profile_name()).map(axis_code),
+                Some(axis.code())
+            );
+        }
+        for button in ControllerButton::ALL {
+            assert_eq!(
+                Button::from_string(button.profile_name()).map(button_code),
+                Some(button.code())
+            );
+        }
+        for (native, shared) in [
+            (MouseButton::Left, PointerButton::Left),
+            (MouseButton::Middle, PointerButton::Middle),
+            (MouseButton::Right, PointerButton::Right),
+            (MouseButton::X1, PointerButton::X1),
+            (MouseButton::X2, PointerButton::X2),
+        ] {
+            assert_eq!(mouse_code(native), Some(shared.code()));
+        }
+        assert_eq!(mouse_code(MouseButton::Unknown), None);
+    }
 
     #[test]
     fn feedback_delivers_only_bounded_supported_foreground_effects() {
@@ -766,7 +815,7 @@ mod tests {
         };
         let input = |down| {
             Some(HostEvent::Input(InputEvent::Mouse {
-                code: mouse_code(MouseButton::Left),
+                code: PointerButton::Left.code(),
                 down,
             }))
         };
@@ -951,7 +1000,7 @@ mod tests {
             assert_eq!(
                 route(&event, 1),
                 Some(HostEvent::Input(InputEvent::Axis {
-                    code: axis_code(Axis::LeftX),
+                    code: ControllerAxis::LeftX.code(),
                     device: u64::from(u32::MAX),
                     value,
                 }))
@@ -1094,7 +1143,7 @@ mod tests {
             route(&down, 1),
             Some(HostEvent::Input(InputEvent::Button {
                 device: u64::from(u32::MAX),
-                code: button_code(Button::DPadLeft),
+                code: ControllerButton::DPadLeft.code(),
                 down: true,
             }))
         );
@@ -1102,7 +1151,7 @@ mod tests {
             route(&up, 1),
             Some(HostEvent::Input(InputEvent::Button {
                 device: u64::from(u32::MAX),
-                code: button_code(Button::DPadLeft),
+                code: ControllerButton::DPadLeft.code(),
                 down: false,
             }))
         );

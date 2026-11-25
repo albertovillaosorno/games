@@ -31,6 +31,9 @@
 //
 //! Platform-independent input mapping with robust device disconnects.
 
+/// Stable standard gamepad and pointer identities.
+pub mod physical;
+
 /// Normalized touch geometry and bounded contact lifetimes.
 pub mod touch;
 
@@ -51,7 +54,7 @@ pub enum InputEvent {
     },
     /// A controller axis changed its signed native value.
     Axis {
-        /// Controller-specific axis code.
+        /// Physical axis routing code.
         code: u16,
         /// Host-local controller identifier.
         device: u64,
@@ -62,7 +65,7 @@ pub enum InputEvent {
     Button {
         /// Host-local controller identifier.
         device: u64,
-        /// Controller-specific button code.
+        /// Physical button routing code.
         code: u16,
         /// Whether the button is pressed.
         down: bool,
@@ -95,7 +98,7 @@ pub enum InputEvent {
     },
     /// A physical mouse button changed state.
     Mouse {
-        /// Platform-defined mouse button code.
+        /// Physical pointer button routing code.
         code: u8,
         /// Whether the button is pressed.
         down: bool,

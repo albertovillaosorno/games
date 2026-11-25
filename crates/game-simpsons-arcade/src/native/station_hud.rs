@@ -120,7 +120,7 @@ impl StationHud {
             .map(|([_, key, ..], [_, button, ..])| {
                 [
                     binding_hint("JOIN", key.map_or("NONE", key_label)),
-                    binding_hint("PAD", &button.string()),
+                    binding_hint("PAD", button.profile_name()),
                 ]
             })
             .collect();

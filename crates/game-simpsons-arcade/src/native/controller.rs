@@ -124,7 +124,7 @@ fn binding_hints(profiles: &Profiles) -> Vec<String> {
             });
             Some(format!(
                 "{label}: {key_name}{mouse_name} / {}",
-                button.string()
+                button.profile_name()
             ))
         })
         .collect()
@@ -148,7 +148,7 @@ fn axis_hints(profiles: &Profiles) -> Vec<String> {
             }
             Some(format!(
                 "{}: -{} +{}",
-                axis.string(),
+                axis.profile_name(),
                 negative.unwrap_or("NONE"),
                 positive.unwrap_or("NONE"),
             ))
@@ -401,10 +401,9 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
 mod tests {
     use std::env;
 
+    use games::input::physical::{ControllerAxis, ControllerButton};
     use games::input::touch::{ContactId, ContactPhase};
-    use games_platform_graphics::linux::input::{
-        Axis, Button, Scancode, axis_code, button_code, key_code,
-    };
+    use games_platform_graphics::linux::input::{Scancode, key_code};
 
     use super::super::{ACTION_NAMES, DEFAULT_PROFILES};
     use super::*;
@@ -501,7 +500,7 @@ mod tests {
             &mut controls,
             InputEvent::Button {
                 device: 1,
-                code: button_code(Button::X),
+                code: ControllerButton::West.code(),
                 down: true,
             },
             RemoteControl::new(Control::Primary, true),
@@ -534,16 +533,16 @@ mod tests {
         ])?;
         check_edge(&mut controls, InputEvent::Attached { device: 1 }, None)?;
         for (axis, value, expected) in [
-            (Axis::LeftX, 32_767, None),
-            (Axis::RightX, 19_999, None),
+            (ControllerAxis::LeftX, 32_767, None),
+            (ControllerAxis::RightX, 19_999, None),
             (
-                Axis::RightX,
+                ControllerAxis::RightX,
                 20_000,
                 RemoteControl::new(Control::Right, true),
             ),
-            (Axis::RightX, 5_001, None),
+            (ControllerAxis::RightX, 5_001, None),
             (
-                Axis::RightX,
+                ControllerAxis::RightX,
                 5_000,
                 RemoteControl::new(Control::Right, false),
             ),
@@ -552,7 +551,7 @@ mod tests {
                 &mut controls,
                 InputEvent::Axis {
                     device: 1,
-                    code: axis_code(axis),
+                    code: axis.code(),
                     value,
                 },
                 expected,

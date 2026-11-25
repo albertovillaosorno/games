@@ -52,6 +52,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use games::audio::MasterVolume;
+use games::input::physical::{ControllerButton, PointerButton};
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
@@ -73,8 +74,7 @@ use games_platform_graphics::linux::input::profile::{
     AxisProfile, DigitalProfiles, MAX_PROFILE_BYTES,
 };
 use games_platform_graphics::linux::input::{
-    Button, HostEvent, InputStartup, MouseButton, NativeInput, Scancode,
-    button_code, key_code, mouse_code,
+    HostEvent, InputStartup, NativeInput, Scancode, key_code,
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
@@ -152,15 +152,15 @@ const KEYBOARD: [[Option<Scancode>; 8]; 4] = [
         Some(Scancode::Kp5),
     ],
 ];
-const BUTTONS: [Button; 8] = [
-    Button::Back,
-    Button::Start,
-    Button::A,
-    Button::B,
-    Button::DPadLeft,
-    Button::DPadRight,
-    Button::DPadUp,
-    Button::DPadDown,
+const BUTTONS: [ControllerButton; 8] = [
+    ControllerButton::Back,
+    ControllerButton::Start,
+    ControllerButton::South,
+    ControllerButton::East,
+    ControllerButton::DPadLeft,
+    ControllerButton::DPadRight,
+    ControllerButton::DPadUp,
+    ControllerButton::DPadDown,
 ];
 
 const ACTION_NAMES: [&str; 8] = [
@@ -196,7 +196,7 @@ const DEFAULT_PROFILES: Profiles = Profiles {
         [
             None,
             None,
-            Some(MouseButton::Left),
+            Some(PointerButton::Left),
             None,
             None,
             None,
@@ -258,7 +258,7 @@ impl Controls {
             .copied()
             .zip(CONTROLS)
             .map(|(button, control)| {
-                (button_code(button), Action { control, player })
+                (button.code(), Action { control, player })
             })
             .collect();
         let axes = self
@@ -1140,7 +1140,7 @@ fn bind_desktop_seat(
     mapping: &mut InputMapping<Action>,
     player: Player,
     keys: [Option<Scancode>; 8],
-    buttons: [Option<MouseButton>; 8],
+    buttons: [Option<PointerButton>; 8],
 ) {
     for ((control, key), mouse) in CONTROLS.into_iter().zip(keys).zip(buttons) {
         if control != Control::Pause
@@ -1149,7 +1149,7 @@ fn bind_desktop_seat(
             mapping.bind_key(key_code(code), Action { control, player });
         }
         if let Some(button) = mouse {
-            mapping.bind_mouse(mouse_code(button), Action { control, player });
+            mapping.bind_mouse(button.code(), Action { control, player });
         }
     }
 }
@@ -1194,14 +1194,13 @@ fn save_volume(
     Ok(())
 }
 
-const fn mouse_label(button: MouseButton) -> &'static str {
+const fn mouse_label(button: PointerButton) -> &'static str {
     match button {
-        MouseButton::Left => "LEFT",
-        MouseButton::Middle => "MIDDLE",
-        MouseButton::Right => "RIGHT",
-        MouseButton::X1 => "X1",
-        MouseButton::X2 => "X2",
-        MouseButton::Unknown => "UNKNOWN",
+        PointerButton::Left => "LEFT",
+        PointerButton::Middle => "MIDDLE",
+        PointerButton::Right => "RIGHT",
+        PointerButton::X1 => "X1",
+        PointerButton::X2 => "X2",
     }
 }
 
@@ -1750,7 +1749,7 @@ fn smoke_controller_selection(profiles: &Profiles) -> Result<(), RenderError> {
             controls.route(
                 InputEvent::Button {
                     device,
-                    code: button_code(*button),
+                    code: button.code(),
                     down,
                 },
                 Duration::ZERO,
@@ -2758,12 +2757,11 @@ fn preview_layout(
 
 #[cfg(test)]
 mod tests {
+    use games::input::physical::{ControllerAxis, ControllerButton};
     use games::input::{InputEvent, LogicalAction};
     use games::replay::{InputStep as _, LiveSimulation};
     use games_platform_graphics::linux::RenderError;
-    use games_platform_graphics::linux::input::{
-        Axis, Button, Scancode, axis_code, button_code, key_code,
-    };
+    use games_platform_graphics::linux::input::{Scancode, key_code};
     use games_platform_graphics::linux::sprites::EventBatch;
 
     use super::{
@@ -2785,10 +2783,10 @@ mod tests {
         controls.route(event, TICK_INTERVAL.saturating_mul(tick), simulation)
     }
 
-    fn button(device: u64, button: Button, down: bool) -> InputEvent {
+    fn button(device: u64, button: ControllerButton, down: bool) -> InputEvent {
         InputEvent::Button {
             device,
-            code: button_code(button),
+            code: button.code(),
             down,
         }
     }
@@ -2808,8 +2806,8 @@ mod tests {
                 device,
             })?;
             for event in [
-                button(device, Button::Start, true),
-                button(device, Button::Start, false),
+                button(device, ControllerButton::Start, true),
+                button(device, ControllerButton::Start, false),
             ] {
                 route_now(&mut controls, &mut simulation, event)?;
             }
@@ -2942,7 +2940,7 @@ mod tests {
         }
         for down in [true, false] {
             route_now(&mut controls, &mut simulation, InputEvent::Mouse {
-                code: super::mouse_code(super::MouseButton::Left),
+                code: super::PointerButton::Left.code(),
                 down,
             })?;
         }
@@ -3057,7 +3055,8 @@ mod tests {
         if controls.devices != [None, Some(10), None, Some(11)] {
             return Err(failure("controller assigned a reserved seat"));
         }
-        let local = controls.actions(button(10, Button::Start, true))?;
+        let local =
+            controls.actions(button(10, ControllerButton::Start, true))?;
         if local.first().map(|change| change.action.player)
             != Some(Player::Homer)
         {
@@ -3089,7 +3088,7 @@ mod tests {
             route_now(
                 &mut controls,
                 &mut simulation,
-                button(device, Button::DPadRight, true),
+                button(device, ControllerButton::DPadRight, true),
             )?;
         }
         let moving = advance(&mut simulation)?;
@@ -3103,7 +3102,7 @@ mod tests {
         for event in [
             InputEvent::Detached { device: 11 },
             InputEvent::Attached { device: 14 },
-            button(11, Button::DPadLeft, true),
+            button(11, ControllerButton::DPadLeft, true),
         ] {
             route_now(&mut controls, &mut simulation, event)?;
         }
@@ -3118,7 +3117,7 @@ mod tests {
         route_now(
             &mut controls,
             &mut simulation,
-            button(14, Button::DPadRight, true),
+            button(14, ControllerButton::DPadRight, true),
         )?;
         let [_, resumed, ..] = advance(&mut simulation)?;
         let [_, old_homer, ..] = stopped;
@@ -3136,14 +3135,14 @@ mod tests {
             route_now(
                 &mut controls,
                 &mut simulation,
-                button(device, Button::DPadRight, true),
+                button(device, ControllerButton::DPadRight, true),
             )?;
         }
         let moving = advance(&mut simulation)?;
         for event in [
             InputEvent::ControllerRemapped { device: 11 },
             InputEvent::ControllerRemapped { device: 11 },
-            button(11, Button::DPadRight, false),
+            button(11, ControllerButton::DPadRight, false),
         ] {
             route_now(&mut controls, &mut simulation, event)?;
         }
@@ -3158,7 +3157,7 @@ mod tests {
         route_now(
             &mut controls,
             &mut simulation,
-            axis(11, Axis::LeftX, i16::MIN),
+            axis(11, ControllerAxis::LeftX, i16::MIN),
         )?;
         let [_, resumed, ..] = advance(&mut simulation)?;
         let [_, old_homer, ..] = stopped;
@@ -3168,10 +3167,10 @@ mod tests {
         Ok(())
     }
 
-    fn axis(device: u64, axis: Axis, value: i16) -> InputEvent {
+    fn axis(device: u64, axis: ControllerAxis, value: i16) -> InputEvent {
         InputEvent::Axis {
             device,
-            code: axis_code(axis),
+            code: axis.code(),
             value,
         }
     }
@@ -3213,9 +3212,9 @@ mod tests {
         let (mut controls, mut simulation) = cabinet(&profiles)?;
         let [first, second, ..] = simulation.state().stations();
         for event in [
-            axis(10, Axis::LeftX, 16_000),
-            axis(11, Axis::LeftX, 32_767),
-            axis(11, Axis::RightX, -19_999),
+            axis(10, ControllerAxis::LeftX, 16_000),
+            axis(11, ControllerAxis::LeftX, 32_767),
+            axis(11, ControllerAxis::RightX, -19_999),
         ] {
             route_now(&mut controls, &mut simulation, event)?;
         }
@@ -3226,8 +3225,8 @@ mod tests {
             return Err(failure("axis profiles affected wrong station"));
         }
         for event in [
-            axis(10, Axis::LeftX, 10_000),
-            axis(11, Axis::RightX, -20_000),
+            axis(10, ControllerAxis::LeftX, 10_000),
+            axis(11, ControllerAxis::RightX, -20_000),
         ] {
             route_now(&mut controls, &mut simulation, event)?;
         }
@@ -3240,7 +3239,7 @@ mod tests {
         route_now(
             &mut controls,
             &mut simulation,
-            axis(11, Axis::RightX, -5_001),
+            axis(11, ControllerAxis::RightX, -5_001),
         )?;
         let [_, held, ..] = advance(&mut simulation)?;
         if held.position.x <= pressed.position.x {
@@ -3249,7 +3248,7 @@ mod tests {
         route_now(
             &mut controls,
             &mut simulation,
-            axis(11, Axis::RightX, -5_000),
+            axis(11, ControllerAxis::RightX, -5_000),
         )?;
         let [_, released, ..] = advance(&mut simulation)?;
         if released.position != held.position {
@@ -3266,8 +3265,8 @@ mod tests {
         for event in [
             InputEvent::Detached { device: 11 },
             InputEvent::Attached { device: 14 },
-            axis(11, Axis::RightX, -32_767),
-            axis(14, Axis::RightX, 20_000),
+            axis(11, ControllerAxis::RightX, -32_767),
+            axis(14, ControllerAxis::RightX, 20_000),
         ] {
             route_now(controls, simulation, event)?;
         }
@@ -3294,7 +3293,7 @@ mod tests {
                 code: key_code(Scancode::D),
                 down: true,
             },
-            button(11, Button::DPadRight, true),
+            button(11, ControllerButton::DPadRight, true),
         ] {
             route_now(&mut controls, &mut simulation, event)?;
         }
@@ -3307,7 +3306,7 @@ mod tests {
                 code: key_code(Scancode::Q),
                 down: true,
             },
-            button(11, Button::X, true),
+            button(11, ControllerButton::West, true),
         ] {
             route_now(&mut controls, &mut simulation, event)?;
         }
@@ -3327,12 +3326,16 @@ mod tests {
         for event in [
             InputEvent::Detached { device: 11 },
             InputEvent::Attached { device: 14 },
-            button(14, Button::DPadRight, true),
+            button(14, ControllerButton::DPadRight, true),
         ] {
             route_now(controls, simulation, event)?;
         }
         let [_, waiting, ..] = advance(simulation)?;
-        route_now(controls, simulation, button(14, Button::X, true))?;
+        route_now(
+            controls,
+            simulation,
+            button(14, ControllerButton::West, true),
+        )?;
         let [_, moved, ..] = advance(simulation)?;
         if moved.position.x <= waiting.position.x {
             return Err(failure("replacement did not inherit profile"));

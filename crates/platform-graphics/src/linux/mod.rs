@@ -467,15 +467,14 @@ mod tests {
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
     use games::timing::StepClock;
     use sdl2::EventSubsystem;
+    use sdl2::controller::{Axis, Button};
     use sdl2::event::Event;
     use sdl2::keyboard::Mod;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
     use sdl2::video::FullscreenType;
 
-    use super::input::{
-        Axis, Button, HostEvent, NativeInput, Scancode, key_code,
-    };
+    use super::input::{HostEvent, NativeInput, Scancode, key_code};
     use super::sprites::{
         EventBatch, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
     };

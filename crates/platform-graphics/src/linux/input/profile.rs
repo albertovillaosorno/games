@@ -37,24 +37,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use games::input::AxisBinding;
+use games::input::physical::{ControllerAxis, ControllerButton, PointerButton};
 
-use super::{
-    Axis, Button, MouseButton, Scancode, axis_code, button_code, key_code,
-    mouse_code,
-};
+use super::{Scancode, key_code};
 
 /// Maximum UTF-8 profile size, in bytes.
 pub const MAX_PROFILE_BYTES: usize = 8192;
 
-/// Supported SDL controller axes, in profile storage order.
-pub const NATIVE_AXES: [Axis; 6] = [
-    Axis::LeftX,
-    Axis::LeftY,
-    Axis::RightX,
-    Axis::RightY,
-    Axis::TriggerLeft,
-    Axis::TriggerRight,
-];
+/// Standard controller axes, in profile storage order.
+pub const NATIVE_AXES: [ControllerAxis; 6] = ControllerAxis::ALL;
 
 /// One signed axis's digital action slots and hysteresis thresholds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,13 +94,19 @@ impl AxisProfile {
         .ok_or_else(|| String::from("invalid axis thresholds"))
     }
 
-    fn validate(self, axis: Axis, actions: usize) -> Result<(), String> {
+    fn validate(
+        self,
+        axis: ControllerAxis,
+        actions: usize,
+    ) -> Result<(), String> {
         if [self.negative, self.positive]
             .into_iter()
             .flatten()
             .any(|slot| slot >= actions)
-            || (matches!(axis, Axis::TriggerLeft | Axis::TriggerRight)
-                && self.negative.is_some())
+            || (matches!(
+                axis,
+                ControllerAxis::TriggerLeft | ControllerAxis::TriggerRight
+            ) && self.negative.is_some())
         {
             return Err(String::from("invalid axis action"));
         }
@@ -133,11 +130,11 @@ pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
     /// Per-station signed digital controller axes.
     pub axes: [[AxisProfile; NATIVE_AXES.len()]; PLAYERS],
     /// Per-station controller button bindings.
-    pub buttons: [[Button; ACTIONS]; PLAYERS],
+    pub buttons: [[ControllerButton; ACTIONS]; PLAYERS],
     /// Globally unique optional keyboard bindings.
     pub keys: [[Option<Scancode>; ACTIONS]; PLAYERS],
     /// Globally unique optional mouse button bindings.
-    pub mouse: [[Option<MouseButton>; ACTIONS]; PLAYERS],
+    pub mouse: [[Option<PointerButton>; ACTIONS]; PLAYERS],
     /// Stations selected for visible touch panels, in station order.
     pub touch_players: [bool; PLAYERS],
     /// Per-station logical-action to physical touch-slot permutation.
@@ -166,8 +163,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         for (axis, profile) in NATIVE_AXES.into_iter().zip(row) {
             profile.validate(axis, ACTIONS)?;
             if profile.negative.is_some() || profile.positive.is_some() {
-                let _old =
-                    mapped.insert(axis_code(axis), profile.bind(&actions)?);
+                let _old = mapped.insert(axis.code(), profile.bind(&actions)?);
             }
         }
         Ok(mapped)
@@ -178,7 +174,8 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// Each record is `key PLAYER ACTION=NAME`,
     /// `button PLAYER ACTION=NAME`, `touch PLAYER ACTION=SLOT`,
     /// `axis PLAYER AXIS=NEGATIVE/POSITIVE` or
-    /// `axis-threshold PLAYER AXIS=PRESS/RELEASE`. Axis names follow SDL;
+    /// `axis-threshold PLAYER AXIS=PRESS/RELEASE`. Axis names follow the
+    /// version-one profile contract;
     /// use `none` to disable a direction.
     /// Player numbers start at one; touch slots use the action names.
     /// Optional `touch-player=N` or `touch-players=N,M` selects stations.
@@ -249,7 +246,8 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
                     .get_mut(player)
                     .and_then(|row| row.get_mut(action))
                     .ok_or_else(invalid)?;
-                *slot = Button::from_string(name).ok_or_else(invalid)?;
+                *slot = ControllerButton::from_profile_name(name)
+                    .ok_or_else(invalid)?;
             },
             Kind::Touch => {
                 let slot = self
@@ -310,9 +308,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         }
         let mut mouse = BTreeSet::new();
         for button in self.mouse.iter().flatten().flatten().copied() {
-            if button == MouseButton::Unknown
-                || !mouse.insert(mouse_code(button))
-            {
+            if !mouse.insert(button.code()) {
                 return Err(String::from("invalid or duplicate mouse binding"));
             }
         }
@@ -320,7 +316,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
             if row
                 .iter()
                 .copied()
-                .map(button_code)
+                .map(ControllerButton::code)
                 .collect::<BTreeSet<_>>()
                 .len()
                 != ACTIONS
@@ -397,16 +393,13 @@ fn parse_key(name: &str) -> Result<Option<Scancode>, String> {
         .ok_or_else(|| String::from("unknown keyboard binding"))
 }
 
-fn parse_mouse(name: &str) -> Result<Option<MouseButton>, String> {
-    Ok(match name {
-        "none" => None,
-        "left" => Some(MouseButton::Left),
-        "middle" => Some(MouseButton::Middle),
-        "right" => Some(MouseButton::Right),
-        "x1" => Some(MouseButton::X1),
-        "x2" => Some(MouseButton::X2),
-        _ => return Err(String::from("unknown mouse binding")),
-    })
+fn parse_mouse(name: &str) -> Result<Option<PointerButton>, String> {
+    if name == "none" {
+        return Ok(None);
+    }
+    PointerButton::from_profile_name(name)
+        .map(Some)
+        .ok_or_else(|| String::from("unknown mouse binding"))
 }
 
 fn parse_line<'text>(
@@ -432,8 +425,11 @@ fn parse_line<'text>(
         .ok_or_else(invalid)?;
     let field = fields.next().ok_or_else(invalid)?;
     let action = match kind {
-        Kind::Axis | Kind::AxisThreshold => Axis::from_string(field)
-            .and_then(|axis| NATIVE_AXES.iter().position(|item| *item == axis)),
+        Kind::Axis | Kind::AxisThreshold => {
+            ControllerAxis::from_profile_name(field).and_then(|axis| {
+                NATIVE_AXES.iter().position(|item| *item == axis)
+            })
+        },
         Kind::Button | Kind::Key | Kind::Mouse | Kind::Touch => {
             actions.iter().position(|name| *name == field)
         },
@@ -455,7 +451,7 @@ mod tests {
 
     const DEFAULT: DigitalProfiles<2, 2> = DigitalProfiles {
         axes: [[AxisProfile::UNBOUND; NATIVE_AXES.len()]; 2],
-        buttons: [[Button::A, Button::B]; 2],
+        buttons: [[ControllerButton::South, ControllerButton::East]; 2],
         keys: [[Some(Scancode::A), Some(Scancode::B)], [
             Some(Scancode::C),
             Some(Scancode::D),
@@ -480,7 +476,10 @@ mod tests {
             configured,
             Ok(DigitalProfiles {
                 axes: DEFAULT.axes,
-                buttons: [[Button::A, Button::B], [Button::X, Button::B]],
+                buttons: [[ControllerButton::South, ControllerButton::East], [
+                    ControllerButton::West,
+                    ControllerButton::East
+                ]],
                 keys: [[Some(Scancode::A), Some(Scancode::B)], [
                     Some(Scancode::Space),
                     Some(Scancode::D)
@@ -501,9 +500,9 @@ mod tests {
         assert_eq!(
             configured,
             Ok(DigitalProfiles {
-                mouse: [[Some(MouseButton::Left), None], [
+                mouse: [[Some(PointerButton::Left), None], [
                     None,
-                    Some(MouseButton::Right)
+                    Some(PointerButton::Right)
                 ]],
                 ..DEFAULT
             })
@@ -541,8 +540,8 @@ mod tests {
         if profiles.axes.first() != DEFAULT.axes.first()
             || !profiles.axis_bindings(0, ACTIONS)?.is_empty()
             || axes.len() != 2
-            || !axes.contains_key(&axis_code(Axis::RightX))
-            || !axes.contains_key(&axis_code(Axis::TriggerLeft))
+            || !axes.contains_key(&ControllerAxis::RightX.code())
+            || !axes.contains_key(&ControllerAxis::TriggerLeft.code())
             || profiles.axis_bindings(2, ACTIONS).is_ok()
         {
             return Err(String::from("axis profile station mismatch"));
