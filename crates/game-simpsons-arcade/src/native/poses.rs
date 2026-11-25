@@ -43,9 +43,9 @@ use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
-use crate::{JumpMotion, WalkMotion};
+use crate::{ENEMY_ATTACK_TICKS, EnemyAction, JumpMotion, WalkMotion};
 
-const MAX_POSES: usize = 144;
+const MAX_POSES: usize = 160;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -78,7 +78,13 @@ impl Kind {
 }
 
 type Entry = (Key, ContentHash);
-type Key = (Player, Kind, u8);
+type Key = (Subject, Kind, u8);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Subject {
+    Enemy,
+    Station(Player),
+}
 
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
@@ -99,8 +105,12 @@ impl Catalogue {
         for (&key, digest) in &self.entries {
             let bundle =
                 open_bundle(parent, &OsString::from(digest.to_string()))?;
-            let name =
-                KEYS.get(key.0.index()).ok_or(RenderError::InvalidSprite)?;
+            let name = match key.0 {
+                Subject::Station(player) => KEYS
+                    .get(player.index())
+                    .ok_or(RenderError::InvalidSprite)?,
+                Subject::Enemy => &"enemy/strike",
+            };
             let art = Art::load(scene, &bundle, name)?;
             if art.rect.width.get() > 128 || art.rect.height.get() > 128 {
                 return Err(failure("unexpected pose extent"));
@@ -129,7 +139,7 @@ impl Catalogue {
         let complete = Player::ALL.into_iter().all(|player| {
             [Kind::Attack, Kind::Jump]
                 .into_iter()
-                .all(|kind| entries.contains_key(&(player, kind, 0)))
+                .all(|kind| entries.contains_key(&station_key(player, kind, 0)))
         });
         let complete_optional = [
             Kind::AirAttack,
@@ -142,7 +152,7 @@ impl Catalogue {
         ]
         .into_iter()
         .all(|kind| optional_complete(&entries, kind));
-        if !complete || !complete_optional {
+        if !complete || !complete_optional || !enemy_complete(&entries) {
             return Err(failure("missing tick-zero pose"));
         }
         Ok(Self { entries })
@@ -155,8 +165,20 @@ pub(super) struct PoseArt {
 }
 
 impl PoseArt {
+    pub(super) fn enemy(&self, action: EnemyAction) -> Option<Art> {
+        let EnemyAction::Attack { tick } = action else {
+            return None;
+        };
+        select_entry(&self.entries, (Subject::Enemy, Kind::Attack, tick))
+            .copied()
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub(super) fn restore_enemy(&mut self, mut enemy: Self) {
+        self.entries.append(&mut enemy.entries);
     }
 
     pub(super) fn select(
@@ -172,14 +194,17 @@ impl PoseArt {
             Maneuver::AirAttack(motion) => {
                 air_attack_entry(&self.entries, player, motion.tick()).copied()
             },
-            Maneuver::Special { tick, .. } => {
-                select_entry(&self.entries, (player, Kind::Special, tick))
-                    .or_else(|| air_attack_entry(&self.entries, player, tick))
-                    .copied()
-            },
-            Maneuver::Hurt { tick } => {
-                select_entry(&self.entries, (player, Kind::Hurt, tick)).copied()
-            },
+            Maneuver::Special { tick, .. } => select_entry(
+                &self.entries,
+                station_key(player, Kind::Special, tick),
+            )
+            .or_else(|| air_attack_entry(&self.entries, player, tick))
+            .copied(),
+            Maneuver::Hurt { tick } => select_entry(
+                &self.entries,
+                station_key(player, Kind::Hurt, tick),
+            )
+            .copied(),
             Maneuver::Jump(motion) => {
                 jump_entry(&self.entries, player, motion).copied()
             },
@@ -188,6 +213,19 @@ impl PoseArt {
             },
         }
     }
+
+    pub(super) fn take_enemy(&mut self) -> Self {
+        Self {
+            entries: self
+                .entries
+                .extract_if(.., |key, _| key.0 == Subject::Enemy)
+                .collect(),
+        }
+    }
+}
+
+const fn station_key(player: Player, kind: Kind, tick: u8) -> Key {
+    (Subject::Station(player), kind, tick)
 }
 
 fn ground_attack_entry<Value>(
@@ -198,11 +236,11 @@ fn ground_attack_entry<Value>(
 ) -> Option<&Value> {
     if moving
         && let Some(entry) =
-            select_entry(entries, (player, Kind::AttackMoving, tick))
+            select_entry(entries, station_key(player, Kind::AttackMoving, tick))
     {
         return Some(entry);
     }
-    select_entry(entries, (player, Kind::Attack, tick))
+    select_entry(entries, station_key(player, Kind::Attack, tick))
 }
 
 fn walking_entry<Value>(
@@ -212,11 +250,12 @@ fn walking_entry<Value>(
 ) -> Option<&Value> {
     let tick = walking_offset(player, motion.tick)?;
     if motion.away
-        && let Some(entry) = select_entry(entries, (player, Kind::WalkUp, tick))
+        && let Some(entry) =
+            select_entry(entries, station_key(player, Kind::WalkUp, tick))
     {
         return Some(entry);
     }
-    select_entry(entries, (player, Kind::Walk, tick))
+    select_entry(entries, station_key(player, Kind::Walk, tick))
 }
 
 fn air_attack_entry<Value>(
@@ -224,8 +263,9 @@ fn air_attack_entry<Value>(
     player: Player,
     tick: u8,
 ) -> Option<&Value> {
-    select_entry(entries, (player, Kind::AirAttack, tick))
-        .or_else(|| select_entry(entries, (player, Kind::Attack, tick)))
+    select_entry(entries, station_key(player, Kind::AirAttack, tick)).or_else(
+        || select_entry(entries, station_key(player, Kind::Attack, tick)),
+    )
 }
 
 fn optional_complete<Value>(
@@ -235,7 +275,14 @@ fn optional_complete<Value>(
     !entries.keys().any(|(_, existing, _)| *existing == kind)
         || Player::ALL
             .into_iter()
-            .all(|player| entries.contains_key(&(player, kind, 0)))
+            .all(|player| entries.contains_key(&station_key(player, kind, 0)))
+}
+
+fn enemy_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
+    !entries
+        .keys()
+        .any(|(subject, _, _)| *subject == Subject::Enemy)
+        || entries.contains_key(&(Subject::Enemy, Kind::Attack, 0))
 }
 
 fn jump_entry<Value>(
@@ -243,27 +290,28 @@ fn jump_entry<Value>(
     player: Player,
     motion: JumpMotion,
 ) -> Option<&Value> {
-    if let Some(lift) = entries.get(&(player, Kind::Lift, 0)) {
+    if let Some(lift) = entries.get(&station_key(player, Kind::Lift, 0)) {
         if motion.opening_pose() {
-            return entries.get(&(player, Kind::Jump, 0));
+            return entries.get(&station_key(player, Kind::Jump, 0));
         }
         if motion.raised_pose() {
             return Some(lift);
         }
     }
-    select_entry(entries, (player, Kind::Jump, motion.pose_tick()))
+    select_entry(entries, station_key(player, Kind::Jump, motion.pose_tick()))
 }
 
 fn parse_line(line: &str) -> Result<Entry, RenderError> {
     let [name, action, elapsed, digest] =
         <[&str; 4]>::try_from(line.split_whitespace().collect::<Vec<_>>())
             .map_err(|_error| failure("expected NAME ACTION TICK SHA256"))?;
-    let player = match name {
-        "marge" => Player::Marge,
-        "homer" => Player::Homer,
-        "bart" => Player::Bart,
-        "lisa" => Player::Lisa,
-        _ => return Err(failure("unknown pose station")),
+    let subject = match name {
+        "marge" => Subject::Station(Player::Marge),
+        "homer" => Subject::Station(Player::Homer),
+        "bart" => Subject::Station(Player::Bart),
+        "lisa" => Subject::Station(Player::Lisa),
+        "enemy" => Subject::Enemy,
+        _ => return Err(failure("unknown pose subject")),
     };
     let kind = match action {
         "air-attack" => Kind::AirAttack,
@@ -278,19 +326,26 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         _ => return Err(failure("unknown pose maneuver")),
     };
     let tick = elapsed.parse::<u8>().map_err(failure)?;
-    if tick >= kind.duration(player) {
+    let duration = match (subject, kind) {
+        (Subject::Station(player), _) => kind.duration(player),
+        (Subject::Enemy, Kind::Attack) => ENEMY_ATTACK_TICKS,
+        (Subject::Enemy, _) => {
+            return Err(failure("unknown enemy pose maneuver"));
+        },
+    };
+    if tick >= duration {
         return Err(failure("pose tick outside maneuver"));
     }
-    Ok(((player, kind, tick), digest.parse().map_err(failure)?))
+    Ok(((subject, kind, tick), digest.parse().map_err(failure)?))
 }
 
 fn select_entry<Value>(
     entries: &BTreeMap<Key, Value>,
     key: Key,
 ) -> Option<&Value> {
-    let (player, kind, tick) = key;
+    let (subject, kind, tick) = key;
     entries
-        .range((player, kind, 0)..=(player, kind, tick))
+        .range((subject, kind, 0)..=(subject, kind, tick))
         .next_back()
         .map(|(_, value)| value)
 }
@@ -325,6 +380,60 @@ mod tests {
     }
 
     #[test]
+    fn enemy_attack_requires_tick_zero_and_a_bounded_sequence() {
+        let base = complete();
+        assert!(
+            Catalogue::parse(&format!("{base}enemy attack 3 {HASH}")).is_err()
+        );
+        let opening = format!("{base}enemy attack 0 {HASH}\n");
+        assert!(Catalogue::parse(&opening).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{opening}enemy attack 33 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{opening}enemy attack 34 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{opening}enemy jump 0 {HASH}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{opening}enemy attack 0 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn enemy_attack_selects_latest_pose_without_using_station_art() {
+        let entries = BTreeMap::from([
+            (station_key(Player::Marge, Kind::Attack, 0), "marge"),
+            ((Subject::Enemy, Kind::Attack, 0), "windup"),
+            ((Subject::Enemy, Kind::Attack, 12), "strike"),
+            ((Subject::Enemy, Kind::Attack, 32), "recover"),
+        ]);
+        for (tick, pose) in [
+            (0, "windup"),
+            (11, "windup"),
+            (12, "strike"),
+            (31, "strike"),
+            (33, "recover"),
+        ] {
+            assert_eq!(
+                select_entry(&entries, (Subject::Enemy, Kind::Attack, tick)),
+                Some(&pose)
+            );
+        }
+        assert_eq!(
+            select_entry(
+                &entries,
+                station_key(Player::Marge, Kind::Attack, 33)
+            ),
+            Some(&"marge")
+        );
+    }
+
+    #[test]
     fn optional_hurt_art_requires_every_station_and_respects_duration() {
         let base = complete();
         let hurt = format!(
@@ -354,11 +463,11 @@ mod tests {
     #[test]
     fn hurt_pose_holds_until_the_next_observed_offset() {
         let entries = BTreeMap::from([
-            ((Player::Marge, Kind::Hurt, 0), "first"),
-            ((Player::Marge, Kind::Hurt, 6), "second"),
-            ((Player::Bart, Kind::Hurt, 0), "opening"),
-            ((Player::Bart, Kind::Hurt, 4), "middle"),
-            ((Player::Bart, Kind::Hurt, 9), "last"),
+            (station_key(Player::Marge, Kind::Hurt, 0), "first"),
+            (station_key(Player::Marge, Kind::Hurt, 6), "second"),
+            (station_key(Player::Bart, Kind::Hurt, 0), "opening"),
+            (station_key(Player::Bart, Kind::Hurt, 4), "middle"),
+            (station_key(Player::Bart, Kind::Hurt, 9), "last"),
         ]);
         for (player, tick, expected) in [
             (Player::Marge, 5, Some(&"first")),
@@ -369,7 +478,7 @@ mod tests {
             (Player::Lisa, 0, None),
         ] {
             assert_eq!(
-                select_entry(&entries, (player, Kind::Hurt, tick)),
+                select_entry(&entries, station_key(player, Kind::Hurt, tick)),
                 expected
             );
         }
@@ -395,10 +504,13 @@ mod tests {
     #[test]
     fn moving_ground_pose_is_optional_and_does_not_replace_neutral() {
         let entries = BTreeMap::from([
-            ((Player::Marge, Kind::Attack, 0), "neutral"),
-            ((Player::Marge, Kind::AttackMoving, 0), "moving"),
-            ((Player::Marge, Kind::AttackMoving, 4), "moving-late"),
-            ((Player::Bart, Kind::Attack, 0), "bart"),
+            (station_key(Player::Marge, Kind::Attack, 0), "neutral"),
+            (station_key(Player::Marge, Kind::AttackMoving, 0), "moving"),
+            (
+                station_key(Player::Marge, Kind::AttackMoving, 4),
+                "moving-late",
+            ),
+            (station_key(Player::Bart, Kind::Attack, 0), "bart"),
         ]);
         assert_eq!(
             ground_attack_entry(&entries, Player::Marge, true, 5),
@@ -472,11 +584,11 @@ mod tests {
     #[test]
     fn walking_selects_direction_at_shared_phase_and_falls_back() {
         let entries = BTreeMap::from([
-            ((Player::Marge, Kind::Walk, 0), "forward"),
-            ((Player::Marge, Kind::Walk, 5), "forward-late"),
-            ((Player::Marge, Kind::WalkUp, 0), "away"),
-            ((Player::Marge, Kind::WalkUp, 5), "away-late"),
-            ((Player::Bart, Kind::Walk, 0), "bart"),
+            (station_key(Player::Marge, Kind::Walk, 0), "forward"),
+            (station_key(Player::Marge, Kind::Walk, 5), "forward-late"),
+            (station_key(Player::Marge, Kind::WalkUp, 0), "away"),
+            (station_key(Player::Marge, Kind::WalkUp, 5), "away-late"),
+            (station_key(Player::Bart, Kind::Walk, 0), "bart"),
         ]);
         assert_eq!(
             walking_entry(&entries, Player::Marge, WalkMotion {
@@ -513,7 +625,7 @@ mod tests {
         let extra: String = ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
-                (0u8..34).map(move |tick| {
+                (0u8..38).map(move |tick| {
                     format!("{name} air-attack {tick} {HASH}\n")
                 })
             })
@@ -524,7 +636,7 @@ mod tests {
             Some(MAX_POSES)
         );
         assert!(
-            Catalogue::parse(&format!("{text}marge air-attack 34 {HASH}\n"))
+            Catalogue::parse(&format!("{text}marge air-attack 38 {HASH}\n"))
                 .is_err()
         );
     }
@@ -532,33 +644,36 @@ mod tests {
     #[test]
     fn selects_latest_pose_without_crossing_sequence() {
         let entries = BTreeMap::from([
-            ((Player::Marge, Kind::Attack, 0), "first"),
-            ((Player::Marge, Kind::Attack, 3), "second"),
-            ((Player::Marge, Kind::Jump, 0), "air"),
-            ((Player::Homer, Kind::Attack, 0), "homer"),
+            (station_key(Player::Marge, Kind::Attack, 0), "first"),
+            (station_key(Player::Marge, Kind::Attack, 3), "second"),
+            (station_key(Player::Marge, Kind::Jump, 0), "air"),
+            (station_key(Player::Homer, Kind::Attack, 0), "homer"),
         ]);
         assert_eq!(
-            select_entry(&entries, (Player::Marge, Kind::Attack, 2)),
+            select_entry(&entries, station_key(Player::Marge, Kind::Attack, 2)),
             Some(&"first")
         );
         assert_eq!(
-            select_entry(&entries, (Player::Marge, Kind::Attack, 3)),
+            select_entry(&entries, station_key(Player::Marge, Kind::Attack, 3)),
             Some(&"second")
         );
         assert_eq!(
-            select_entry(&entries, (Player::Marge, Kind::Attack, 16)),
+            select_entry(
+                &entries,
+                station_key(Player::Marge, Kind::Attack, 16)
+            ),
             Some(&"second")
         );
         assert_eq!(
-            select_entry(&entries, (Player::Marge, Kind::Jump, 16)),
+            select_entry(&entries, station_key(Player::Marge, Kind::Jump, 16)),
             Some(&"air")
         );
         assert_eq!(
-            select_entry(&entries, (Player::Homer, Kind::Jump, 16)),
+            select_entry(&entries, station_key(Player::Homer, Kind::Jump, 16)),
             None
         );
         assert_eq!(
-            select_entry(&entries, (Player::Bart, Kind::Attack, 16)),
+            select_entry(&entries, station_key(Player::Bart, Kind::Attack, 16)),
             None
         );
     }
@@ -649,9 +764,9 @@ mod tests {
     #[test]
     fn aerial_pose_selection_prefers_its_sequence_and_preserves_legacy() {
         let mut entries = BTreeMap::from([
-            ((Player::Marge, Kind::Attack, 0), "ground"),
-            ((Player::Marge, Kind::Attack, 3), "ground-late"),
-            ((Player::Lisa, Kind::AirAttack, 0), "other"),
+            (station_key(Player::Marge, Kind::Attack, 0), "ground"),
+            (station_key(Player::Marge, Kind::Attack, 3), "ground-late"),
+            (station_key(Player::Lisa, Kind::AirAttack, 0), "other"),
         ]);
         assert_eq!(
             air_attack_entry(&entries, Player::Marge, 2),
@@ -661,9 +776,10 @@ mod tests {
             air_attack_entry(&entries, Player::Marge, 4),
             Some(&"ground-late")
         );
-        let _prior = entries.insert((Player::Marge, Kind::AirAttack, 0), "air");
-        let _later =
-            entries.insert((Player::Marge, Kind::AirAttack, 4), "air-late");
+        let _prior = entries
+            .insert(station_key(Player::Marge, Kind::AirAttack, 0), "air");
+        let _later = entries
+            .insert(station_key(Player::Marge, Kind::AirAttack, 4), "air-late");
         assert_eq!(air_attack_entry(&entries, Player::Marge, 3), Some(&"air"));
         assert_eq!(
             air_attack_entry(&entries, Player::Marge, 31),
@@ -699,8 +815,8 @@ mod tests {
     #[test]
     fn held_pose_selection_preserves_legacy_and_short_tap() {
         let mut entries = BTreeMap::from([
-            ((Player::Marge, Kind::Jump, 0), "opening"),
-            ((Player::Marge, Kind::Jump, 4), "landing"),
+            (station_key(Player::Marge, Kind::Jump, 0), "opening"),
+            (station_key(Player::Marge, Kind::Jump, 4), "landing"),
         ]);
         let select = |map: &BTreeMap<_, _>, tick, hold| {
             jump_at(tick, hold)
@@ -708,7 +824,8 @@ mod tests {
                 .copied()
         };
         assert_eq!(select(&entries, 20, 60), Some("landing"));
-        let _prior = entries.insert((Player::Marge, Kind::Lift, 0), "raised");
+        let _prior =
+            entries.insert(station_key(Player::Marge, Kind::Lift, 0), "raised");
         for (tick, hold, expected) in [
             (10, 60, "opening"),
             (11, 60, "raised"),

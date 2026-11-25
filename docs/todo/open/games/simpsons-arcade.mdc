@@ -1458,3 +1458,34 @@ and 60 combat submissions met the 16.667 ms host-work budget; mean
 submission work was 64.834 and 50.515 microseconds, respectively.
 Lifetime peak RSS was 147,423,232 bytes. Original knockdown, damage,
 hit effects, invulnerability and exact pivots remain unresolved.
+
+Three isolated first-enemy punch observations against Marge, Homer
+and Lisa share the nine displayed pose transitions at offsets zero,
+three, six, nine, twelve, sixteen, twenty-one, twenty-seven and
+thirty-two. Each first player reaction starts at offset fourteen.
+Marge's next punch starts after 34 displayed ticks; Homer and Lisa
+after 35. Bart's distinct opponent action is not established.
+
+All nine Marge-control punch poses were isolated locally only after
+exact full-scene reconstruction. The prototype uses a representative
+34-tick punch with a single damage event at offset fourteen, then an
+approach tick that re-evaluates the next strike. A stationary in-range
+target therefore sees a 35-tick recurrence. Existing provisional
+range, target selection, stagger and damage rules remain unchanged.
+The catalogue admits a separate optional enemy attack sequence using
+the same bounded pose selection and bundle admission as station art;
+its total limit is now 160 records and 16 KiB. Missing enemy sequences
+retain the single strike sprite. The native meter tracks the currently
+selected enemy pose extent.
+
+Fresh workspace validation including native render and audio smoke
+passed in run 1795624184077725249-3892120. Adaptive native smoke
+passed with both the 152-pose extended catalogue and the 143-pose
+fallback. Readback compares the optional punch pose at offset twelve
+against the static fallback while preserving station art, and likewise
+isolates player hit reactions from enemy animation. All 600 movement
+and 60 combat submissions met the 16.667 ms host-work budget with the
+152-pose catalogue; mean submission work was 57.707 and 47.208
+microseconds respectively. Lifetime peak RSS was 147,611,648 bytes.
+Neither the animation nor timing establishes original hitboxes,
+pivots, enemy approach, alternate attacks, AI or full combat parity.

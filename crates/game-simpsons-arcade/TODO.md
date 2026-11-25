@@ -76,12 +76,13 @@ UTF-8 catalogue has one whitespace-separated record per line:
 NAME ACTION TICK SHA256
 ```
 
-NAME is marge, homer, bart or lisa; ACTION is attack, attack-moving,
+For stations, NAME is marge, homer, bart or lisa; ACTION is attack,
+attack-moving,
 air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 144 poses and
+record or maneuver end. The catalogue is limited to 160 poses and
 16 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
@@ -107,6 +108,9 @@ recovery are unchanged.
 An optional hurt sequence requires tick-zero art for each station.
 Marge, Homer and Lisa permit offsets through 13; Bart through 16.
 Without hurt art, the idle sprite is used during the reaction.
+An optional `enemy attack TICK SHA256` sequence starts at zero, permits
+offsets through 33 and uses the bundle record `enemy/strike`. The enemy
+uses the single strike bundle when that sequence is absent.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated
@@ -123,6 +127,8 @@ before PARENT. These are separately verified local canonical bundles
 with `enemy/approach` and `enemy/strike` records respectively. The
 first enemy approaches an active station, can be struck with Primary,
 and can damage grounded players. Jump evades a ground strike.
+The punch lasts 34 simulation ticks, dealing damage once at tick 14.
+The next approach tick re-evaluates whether a new punch can begin.
 A nonlethal light hit interrupts the current maneuver and prevents
 movement and action admission for 14 ticks (17 for Bart). Held
 directional input resumes on recovery; early button presses are lost.

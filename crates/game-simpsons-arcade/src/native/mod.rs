@@ -535,8 +535,10 @@ impl Scene {
             && cabinet.session().world_visible()
             && enemy.health > 0
         {
-            self.world
-                .push((enemy.position.y, combat.enemy_draw(enemy)?));
+            self.world.push((
+                enemy.position.y,
+                combat.enemy_draw(enemy, self.poses.enemy(enemy.action))?,
+            ));
         }
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
@@ -544,7 +546,11 @@ impl Scene {
             && cabinet.session().world_visible()
             && enemy.health > 0
         {
-            combat.enemy_health(&mut self.draws, enemy)?;
+            combat.enemy_health(
+                &mut self.draws,
+                enemy,
+                self.poses.enemy(enemy.action),
+            )?;
         }
         self.menu.queue(
             cabinet.session(),

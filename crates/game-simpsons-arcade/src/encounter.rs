@@ -35,9 +35,10 @@ use super::{Facing, Maneuver, Point, Slot, StreetLayout};
 
 const ENEMY_HEALTH: u8 = 3;
 const PLAYER_STRIKE: u8 = 5;
-const ENEMY_STRIKE: u8 = 8;
+const ENEMY_STRIKE: u8 = 14;
 const ENEMY_DAMAGE: u8 = 3;
-const ENEMY_RECOVERY: u8 = 18;
+/// Number of fixed-step ticks in the initial enemy punch.
+pub const ENEMY_ATTACK_TICKS: u8 = 34;
 const STAGGER_TICKS: u8 = 12;
 
 /// Observable enemy action in the experimental encounter.
@@ -141,7 +142,7 @@ impl Enemy {
                 slot.damage(ENEMY_DAMAGE);
             }
         }
-        self.action = if next >= ENEMY_RECOVERY {
+        self.action = if next >= ENEMY_ATTACK_TICKS {
             EnemyAction::Approach
         } else {
             EnemyAction::Attack { tick: next }
@@ -353,6 +354,40 @@ mod tests {
     }
 
     #[test]
+    fn enemy_punch_damages_once_and_repeats_after_recovery() {
+        let result = playing(Point { x: 128, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        for tick in 0..ENEMY_ATTACK_TICKS {
+            assert_eq!(
+                cabinet.enemy().map(|enemy| enemy.action),
+                Some(EnemyAction::Attack { tick })
+            );
+            let expected = if tick < ENEMY_STRIKE {
+                PLAYER_HEALTH
+            } else {
+                PLAYER_HEALTH.saturating_sub(ENEMY_DAMAGE)
+            };
+            assert_eq!(
+                cabinet.stations().first().map(|slot| slot.health),
+                Some(expected)
+            );
+            cabinet.input_step(u64::from(tick).saturating_add(3), &[]);
+        }
+        assert_eq!(
+            cabinet.enemy().map(|enemy| enemy.action),
+            Some(EnemyAction::Approach)
+        );
+        cabinet.input_step(37, &[]);
+        assert_eq!(
+            cabinet.enemy().map(|enemy| enemy.action),
+            Some(EnemyAction::Attack { tick: 0 })
+        );
+    }
+
+    #[test]
     fn jumping_dodges_ground_strike() {
         let spawn = Point { x: 128, y: 190 };
         let result = playing(spawn);
@@ -363,7 +398,7 @@ mod tests {
         let mut jumping = grounded;
         jumping.input_step(3, &pulse(Control::Secondary));
         grounded.input_step(3, &[]);
-        for tick in 4..11 {
+        for tick in 4..17 {
             grounded.input_step(tick, &[]);
             jumping.input_step(tick, &[]);
         }
@@ -613,17 +648,17 @@ mod tests {
         let Ok(mut cabinet) = result else {
             return;
         };
-        for tick in 3..11 {
+        for tick in 3..17 {
             cabinet.input_step(tick, &[]);
         }
         let [damaged, ..] = cabinet.stations();
         assert_eq!(damaged.health, PLAYER_HEALTH - ENEMY_DAMAGE);
         assert_eq!(damaged.display_health, PLAYER_HEALTH);
         assert_eq!(damaged.maneuver, Maneuver::Hurt { tick: 0 });
-        cabinet.input_step(11, &[]);
+        cabinet.input_step(17, &[]);
         let [first, ..] = cabinet.stations();
         assert_eq!(first.display_health, PLAYER_HEALTH - 1);
-        cabinet.input_step(12, &[]);
+        cabinet.input_step(18, &[]);
         let [between, ..] = cabinet.stations();
         assert_eq!(between, crate::Station {
             maneuver: Maneuver::Hurt { tick: 2 },
@@ -633,8 +668,8 @@ mod tests {
     }
 
     fn check_meter_pause(cabinet: &mut Cabinet, between: crate::Station) {
-        cabinet.input_step(13, &pulse(Control::Pause));
-        for tick in 14..100 {
+        cabinet.input_step(19, &pulse(Control::Pause));
+        for tick in 20..100 {
             cabinet.input_step(tick, &[]);
         }
         assert_eq!(cabinet.stations().first(), Some(&between));

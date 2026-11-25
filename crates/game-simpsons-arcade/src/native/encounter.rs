@@ -81,9 +81,10 @@ impl CombatArt {
     pub(super) fn enemy_draw(
         &self,
         enemy: Enemy,
+        animated: Option<Art>,
     ) -> Result<SpriteDraw, RenderError> {
         let pose = if matches!(enemy.action, EnemyAction::Attack { .. }) {
-            self.strike
+            animated.unwrap_or(self.strike)
         } else {
             self.approach
         };
@@ -98,10 +99,11 @@ impl CombatArt {
         &self,
         draws: &mut Vec<SpriteDraw>,
         enemy: Enemy,
+        animated: Option<Art>,
     ) -> Result<(), RenderError> {
         Self::health(
             draws,
-            self.enemy_health_position(enemy)?,
+            self.enemy_health_position(enemy, animated)?,
             Meter::enemy(enemy.health),
             [self.filled, self.missing],
         )
@@ -110,8 +112,9 @@ impl CombatArt {
     fn enemy_health_position(
         &self,
         enemy: Enemy,
+        animated: Option<Art>,
     ) -> Result<Point, RenderError> {
-        let rect = self.enemy_draw(enemy)?.destination;
+        let rect = self.enemy_draw(enemy, animated)?.destination;
         Ok(Point {
             x: enemy.position.x.saturating_sub(12),
             y: i16::try_from(rect.y).map_err(failure)?.saturating_sub(5),
@@ -486,6 +489,7 @@ fn smoke_counterstrike(
     for _ in 0..40u8 {
         let _drawn = art.present(scene, simulation.state())?;
         let pixels = scene.readback().map_err(failure)?;
+        verify_enemy_art(scene, art, simulation.state(), &pixels)?;
         let [marge, ..] = simulation.state().stations();
         verify_station_health(
             &pixels,
@@ -500,6 +504,31 @@ fn smoke_counterstrike(
         advance(&mut simulation, 1)?;
     }
     Err(failure("native enemy counterstrike did not damage Marge"))
+}
+
+fn verify_enemy_art(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    pixels: &[u8],
+) -> Result<(), RenderError> {
+    let enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
+    if !matches!(enemy.action, EnemyAction::Attack { tick: 12 })
+        || art.poses.enemy(enemy.action).is_none()
+    {
+        return Ok(());
+    }
+    let saved = art.poses.take_enemy();
+    let fallback = art.present(scene, cabinet);
+    art.poses.restore_enemy(saved);
+    let _fallback_presented = fallback?;
+    if pixels == scene.readback().map_err(failure)? {
+        return Err(failure(
+            "optional enemy punch pose was not visibly presented",
+        ));
+    }
+    let _restored = art.present(scene, cabinet)?;
+    Ok(())
 }
 
 fn smoke_hurt(
@@ -545,8 +574,10 @@ fn verify_hurt_art(
     }
     let _presented = art.present(scene, cabinet)?;
     let animated = scene.readback().map_err(failure)?;
-    let saved = take(&mut art.poses);
+    let mut saved = take(&mut art.poses);
+    art.poses = saved.take_enemy();
     let fallback = art.present(scene, cabinet);
+    saved.restore_enemy(take(&mut art.poses));
     art.poses = saved;
     let _fallback_presented = fallback?;
     if animated == scene.readback().map_err(failure)? {
@@ -564,7 +595,8 @@ fn verify_enemy_health(
 ) -> Result<(), RenderError> {
     let enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
     let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
-    let position = combat.enemy_health_position(enemy)?;
+    let position =
+        combat.enemy_health_position(enemy, art.poses.enemy(enemy.action))?;
     if enemy.health == 0 {
         let row = health_row(pixels, position, width, 24)?;
         if row.as_chunks::<4>().0.iter().all(|pixel| *pixel == MISSING) {
