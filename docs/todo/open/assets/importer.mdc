@@ -171,3 +171,17 @@ Synthetic tests verify exact profile output budgets and reject unknown
 revisions and the unadmitted later encrypted layout. Fresh validation
 passed in run 1795619352157930332-3184317. Palette, audio and gameplay
 remain separate tasks; no subsequent title implementation is claimed.
+
+Structural admission also succeeded for the supplied Metal Slug 3, 4
+and 5 version-one containers, with five nonempty regions and total
+decoded source extents of 94,371,840, 73,007,104 and 92,930,048 bytes
+respectively. Each rejected a one-byte-short aggregate budget. The
+original boards use encrypted graphics; the supplied containers'
+graphics encoding and full edition/revision remain to be independently
+verified. These three layouts are not accepted for graphics conversion.
+
+Fresh combined validation at 222ce3d passed in run
+1795619551671317693-3232776 with portable core, Android storage,
+native render and native audio opt-ins enabled. The render check used
+an isolated Xvfb display and audio used the SDL dummy driver; neither
+establishes physical-device acceptance.
