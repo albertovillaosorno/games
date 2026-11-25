@@ -25,3 +25,24 @@ Support Android ARM64 and browser targets where compatible.
 ## Evidence
 
 Pending. Record actual checks and remaining limitations before completion.
+
+Install the official Rust standard-library targets for the selected stable
+toolchain, then request the optional cross-target library checks through
+the shared validator:
+
+```sh
+rustup target add aarch64-linux-android wasm32-unknown-unknown
+GAMES_PORTABLE_CORE_CHECK=1 cargo validate --no-cache
+```
+
+This checks the shared engine, canonical asset library and the first
+title's platform-independent library without native preview features.
+The opt-in gate always runs fresh because installed target components
+can change independently of tracked source. It does not link an Android
+application, produce a browser module, or execute either target.
+
+On GNU/Linux with Rust 1.100.0, both official target components installed
+and all three libraries passed cross-target checking in fresh validation
+run 1795614497436019870-1973701. The Android SDK/NDK and browser packaging
+and runtime adapters remain unavailable or unimplemented. No device,
+WebAssembly module, graphics, touch or storage acceptance is claimed.

@@ -44,8 +44,12 @@ use sha2::{Digest as _, Sha256};
 use crate::cargo_config;
 use crate::files::authored;
 
-const NATIVE_SMOKE_FLAGS: [&str; 2] =
-    ["GAMES_NATIVE_AUDIO_SMOKE", "GAMES_NATIVE_RENDER_SMOKE"];
+pub(crate) const PORTABLE_CORE_FLAG: &str = "GAMES_PORTABLE_CORE_CHECK";
+const FRESH_CHECK_FLAGS: [&str; 3] = [
+    "GAMES_NATIVE_AUDIO_SMOKE",
+    "GAMES_NATIVE_RENDER_SMOKE",
+    PORTABLE_CORE_FLAG,
+];
 
 /// Function signature for a complete validation pass.
 pub type Check = fn(&Path, &mut File) -> Result<(), String>;
@@ -122,8 +126,8 @@ fn hash_build_overrides(
     }
 }
 
-fn native_smoke_requested(enabled: impl FnMut(&str) -> bool) -> bool {
-    NATIVE_SMOKE_FLAGS.into_iter().any(enabled)
+fn fresh_check_requested(enabled: impl FnMut(&str) -> bool) -> bool {
+    FRESH_CHECK_FLAGS.into_iter().any(enabled)
 }
 
 fn cargo_home(root: &Path) -> Result<PathBuf, String> {
@@ -190,7 +194,7 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
         "CLIPPY_CONF_DIR",
     ]
     .into_iter()
-    .chain(NATIVE_SMOKE_FLAGS)
+    .chain(FRESH_CHECK_FLAGS)
     {
         hash_environment(hash, key, env::var_os(key).as_deref());
     }
@@ -251,15 +255,15 @@ fn announce(message: &str) -> Result<(), String> {
 
 /// Serialize validation and reuse only successful unchanged results.
 ///
-/// Explicit native smoke tests always run fresh because display and audio
-/// devices can change independently of the source fingerprint.
+/// Explicit native smoke and portable core checks always run fresh because
+/// devices and installed target components can change independently.
 ///
 /// # Errors
 ///
 /// Returns an error for failed checks, I/O or concurrent source changes.
 pub fn run(root: &Path, fresh: bool, check: Check) -> Result<(), String> {
-    let native = native_smoke_requested(|key| env::var_os(key).is_some());
-    run_with(root, fresh || native, check, fingerprint)
+    let requested = fresh_check_requested(|key| env::var_os(key).is_some());
+    run_with(root, fresh || requested, check, fingerprint)
 }
 
 fn run_with(
@@ -310,8 +314,8 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        NATIVE_SMOKE_FLAGS, hash_build_overrides, hash_cargo_config_files,
-        hash_environment, native_smoke_requested, run_with,
+        FRESH_CHECK_FLAGS, fresh_check_requested, hash_build_overrides,
+        hash_cargo_config_files, hash_environment, run_with,
     };
     use crate::fixtures::{directory, require};
 
@@ -373,22 +377,22 @@ mod tests {
     }
 
     #[test]
-    fn native_smoke_requests_cannot_reuse_ordinary_cache() -> Result<(), String>
-    {
-        let root = directory("native-cache")?;
+    fn fresh_requests_cannot_reuse_ordinary_cache() -> Result<(), String> {
+        let root = directory("fresh-cache")?;
         fs::write(root.join("input"), b"unchanged")
             .map_err(|error| error.to_string())?;
         require(
-            !native_smoke_requested(|_flag| false),
+            !fresh_check_requested(|_flag| false),
             "ordinary validation may reuse cache",
         )?;
-        for flag in NATIVE_SMOKE_FLAGS {
+        for flag in FRESH_CHECK_FLAGS {
             run_with(&root, false, pass, key)?;
             run_with(&root, false, fail, key)?;
-            let native = native_smoke_requested(|candidate| candidate == flag);
+            let requested =
+                fresh_check_requested(|candidate| candidate == flag);
             require(
-                run_with(&root, native, fail, key).is_err(),
-                "explicit native smoke must execute instead of reusing success",
+                run_with(&root, requested, fail, key).is_err(),
+                "explicit check must execute instead of reusing success",
             )?;
         }
         fs::remove_dir_all(root).map_err(|error| error.to_string())
