@@ -44,7 +44,8 @@ touch devices and Android/browser presentation remain unverified.
 
 The isolated attack and jump timings are now modeled. Jump visibly
 raises the idle actor art using an approximate elevation curve. Attack
-currently locks ground displacement. The optional pose catalogue and
+retains its opening facing, with approximate slow horizontal drift and
+no vertical drift. Jump permits direction changes. The pose catalogue and
 combat encounter extend this preview. Held-jump variants are omitted.
 
 For original attack and jump poses, optionally pass

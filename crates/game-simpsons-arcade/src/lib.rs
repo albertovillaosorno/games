@@ -246,6 +246,7 @@ impl Station {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Slot {
+    attack_quarters: i16,
     held: u8,
     spawn: Point,
     station: Station,
@@ -287,14 +288,28 @@ impl Slot {
         false
     }
 
+    // Accumulate the observed approximate quarter-pixel horizontal rate.
+    const fn attack_step(&mut self, horizontal: i16) -> i16 {
+        let next = self.attack_quarters.saturating_add(horizontal.signum());
+        if next == -4 || next == 4 {
+            self.attack_quarters = 0;
+            next.signum()
+        } else {
+            self.attack_quarters = next;
+            0
+        }
+    }
+
     fn begin_maneuver(&mut self, maneuver: Maneuver) {
         if self.station.can_fight() && self.station.maneuver == Maneuver::Idle {
+            self.attack_quarters = 0;
             self.station.maneuver = maneuver;
             self.station.walking_ticks = None;
         }
     }
 
     const fn damage(&mut self) {
+        self.attack_quarters = 0;
         self.station.health = self.station.health.saturating_sub(1);
         self.station.maneuver = Maneuver::Idle;
         self.station.walking_ticks = None;
@@ -329,23 +344,31 @@ impl Slot {
         }
         let dx = axis(self.held(Control::Left), self.held(Control::Right));
         let dy = axis(self.held(Control::Up), self.held(Control::Down));
-        if dx < 0 {
-            self.station.facing = Facing::Left;
-        } else if dx > 0 {
-            self.station.facing = Facing::Right;
+        if !matches!(self.station.maneuver, Maneuver::Attack { tick: 1.. })
+            && dx != 0
+        {
+            self.station.facing = if dx < 0 {
+                Facing::Left
+            } else {
+                Facing::Right
+            };
         }
-        if matches!(self.station.maneuver, Maneuver::Attack { .. }) {
-            return;
-        }
+        let (step_x, step_y) =
+            if matches!(self.station.maneuver, Maneuver::Attack { .. }) {
+                (self.attack_step(dx), 0)
+            } else {
+                self.attack_quarters = 0;
+                (dx, dy)
+            };
         let previous = self.station.position;
         let position = &mut self.station.position;
         position.x = position
             .x
-            .saturating_add(dx)
+            .saturating_add(step_x)
             .clamp(layout.min.x, layout.max.x);
         position.y = position
             .y
-            .saturating_add(dy)
+            .saturating_add(step_y)
             .clamp(layout.min.y, layout.max.y);
         self.station.walking_ticks = if *position == previous
             || self.station.maneuver != Maneuver::Idle
@@ -362,6 +385,7 @@ impl Slot {
 
     const fn new(position: Point) -> Self {
         Self {
+            attack_quarters: 0,
             held: 0,
             spawn: position,
             station: Station {
@@ -386,6 +410,7 @@ impl Slot {
         {
             return;
         }
+        self.attack_quarters = 0;
         self.station.credits = self.station.credits.saturating_sub(1);
         self.station.health = PLAYER_HEALTH;
         self.station.position = self.spawn;
@@ -686,6 +711,107 @@ mod tests {
     }
 
     #[test]
+    // Original reference: nine moving ticks on each component.
+    fn diagonal_walk_preserves_both_observed_cardinal_components() {
+        let mut state = four_playing();
+        let [before, ..] = state.stations();
+        state.input_step(3, &[
+            change(Player::Marge, Control::Left, true),
+            change(Player::Marge, Control::Up, true),
+        ]);
+        for tick in 4..12 {
+            state.input_step(tick, &[]);
+        }
+        let [after, ..] = state.stations();
+        assert_eq!(after.position.x, before.position.x - 18);
+        assert_eq!(after.position.y, before.position.y - 18);
+        assert_eq!(after.facing, Facing::Left);
+    }
+
+    #[test]
+    fn attack_admits_initial_facing_but_retains_it_until_recovery() {
+        for player in Player::ALL {
+            verify_attack_motion(player);
+        }
+    }
+
+    fn station_for(state: &Cabinet, player: Player) -> Station {
+        let [marge, homer, bart, lisa] = state.stations();
+        match player {
+            Player::Marge => marge,
+            Player::Homer => homer,
+            Player::Bart => bart,
+            Player::Lisa => lisa,
+        }
+    }
+
+    fn verify_attack_motion(player: Player) {
+        let mut state = four_playing();
+        let before = station_for(&state, player);
+        state.input_step(3, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Left, true),
+            change(player, Control::Up, true),
+        ]);
+        for tick in 4..11 {
+            state.input_step(tick, &[]);
+        }
+        let left = station_for(&state, player);
+        assert_eq!(left.facing, Facing::Left);
+        assert_eq!(left.position.x, before.position.x.saturating_sub(2));
+        assert_eq!(left.position.y, before.position.y);
+        state.input_step(11, &[
+            change(player, Control::Left, false),
+            change(player, Control::Right, true),
+        ]);
+        for tick in 12..15 {
+            state.input_step(tick, &[]);
+        }
+        let reversed = station_for(&state, player);
+        assert_eq!(reversed.facing, Facing::Left);
+        assert_eq!(reversed.position.x, before.position.x.saturating_sub(1));
+        assert_eq!(reversed.position.y, before.position.y);
+        assert_attack_recovery(state, player);
+    }
+
+    fn assert_attack_recovery(mut state: Cabinet, player: Player) {
+        let end = 3 + u64::from(Maneuver::Attack { tick: 0 }.duration(player));
+        for tick in 15..end {
+            state.input_step(tick, &[]);
+        }
+        let last = station_for(&state, player);
+        assert_eq!(last.facing, Facing::Left);
+        assert_ne!(last.maneuver, Maneuver::Idle);
+        state.input_step(end, &[]);
+        let resumed = station_for(&state, player);
+        assert_eq!(resumed.facing, Facing::Right);
+        assert_eq!(resumed.maneuver, Maneuver::Idle);
+        assert_eq!(resumed.position.x, last.position.x.saturating_add(2));
+        assert_eq!(resumed.position.y, last.position.y.saturating_sub(2));
+    }
+
+    #[test]
+    fn jump_can_turn_and_move_after_takeoff() {
+        let mut state = four_playing();
+        state.input_step(3, &[
+            change(Player::Marge, Control::Right, true),
+            change(Player::Marge, Control::Secondary, true),
+        ]);
+        let [before, ..] = state.stations();
+        assert_eq!(before.facing, Facing::Right);
+        state.input_step(4, &[
+            change(Player::Marge, Control::Right, false),
+            change(Player::Marge, Control::Left, true),
+            change(Player::Marge, Control::Up, true),
+        ]);
+        let [turned, ..] = state.stations();
+        assert_eq!(turned.maneuver, Maneuver::Jump { tick: 1 });
+        assert_eq!(turned.facing, Facing::Left);
+        assert_eq!(turned.position.x, before.position.x.saturating_sub(2));
+        assert_eq!(turned.position.y, before.position.y - 2);
+    }
+
+    #[test]
     fn walking_ticks_track_actual_displacement_and_restart() {
         let mut state = four_playing();
         state.input_step(3, &[change(Player::Marge, Control::Right, true)]);
@@ -714,7 +840,6 @@ mod tests {
         let [before, homer, ..] = state.stations();
         state.input_step(3, &[
             change(Player::Marge, Control::Primary, true),
-            change(Player::Marge, Control::Right, true),
             change(Player::Homer, Control::Secondary, true),
         ]);
         let [attacking, jumping, ..] = state.stations();
@@ -727,7 +852,7 @@ mod tests {
             state.input_step(tick, &[]);
         }
         assert_maneuvers_at_end(&state, before.position);
-        state.input_step(20, &[]);
+        state.input_step(20, &[change(Player::Marge, Control::Right, true)]);
         let [walking, ..] = state.stations();
         assert_eq!(walking.maneuver, Maneuver::Idle);
         assert_eq!(walking.position.x, before.position.x + 2);

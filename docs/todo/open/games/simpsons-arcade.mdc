@@ -611,3 +611,19 @@ exercise four moving stations, a detached controller's released direction,
 a rejected stale button event and movement from its replacement. Repeated
 native discovery is covered by the opt-in platform smoke. Physical
 controller hot-plug and simultaneous hardware play remain unverified.
+
+Matched original-machine diagonal, left-only, up-only and idle Marge
+observations confirm two pixels per tick on each independent component.
+The two repeated diagonal runs matched all 576 raw and RGB captures.
+Isolated attacks for all four stations retained their opening facing
+until recovery, even when Left was subsequently held. Marge accepted a
+same-frame direction change on attack admission; a later direction
+change did not turn the attack. Jump permitted a later turn and full
+horizontal movement. Matched attack-direction observations show slow
+horizontal drift and no vertical drift for Marge. The title now retains
+attack facing after tick zero, models approximate quarter-pixel horizontal
+movement, and resumes normal walking at recovery. Fractional rounding,
+vertical drift for the other stations and combat hitboxes remain unverified.
+Inline regression tests cover diagonal movement, all four stations' attack
+facing and drift, recovery, and turning during jump. This supersedes the
+previous provisional attack immobility rule.
