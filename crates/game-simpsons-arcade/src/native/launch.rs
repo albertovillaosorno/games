@@ -44,9 +44,7 @@ use games_platform_storage::preferences::{
     ControlStore, DisplayStore, VolumeStore,
 };
 
-use super::{
-    ACTION_NAMES, DEFAULT_PROFILES, Profiles, profile_limit, read_profile,
-};
+use super::{Profiles, configured_profiles, profile_limit, read_profile};
 
 const DEFAULT_PROFILE: &str = "version=1\n";
 const FILE_NAME: &str = "simpsons-arcade.local";
@@ -316,7 +314,7 @@ impl ControlSelection {
         } else {
             DEFAULT_PROFILE.to_owned()
         };
-        let profiles = DEFAULT_PROFILES.configured(ACTION_NAMES, &text)?;
+        let profiles = configured_profiles(&text)?;
         let [_, other @ ..] = profiles.keys;
         if other.iter().any(|[pause, ..]| pause.is_some()) {
             return Err("keyboard pause belongs to seat 1 only".into());
@@ -647,6 +645,7 @@ mod tests {
     use games::presentation::WindowMode;
     use games_platform_storage::fixtures::TestRoot;
 
+    use super::super::DEFAULT_PROFILES;
     use super::*;
 
     const FALLBACK_PROFILE: &str = "version=1\nkey 1 right=Q\n";
@@ -753,8 +752,7 @@ mod tests {
         let launch = Launch::parse(args.into())?;
         if launch.volume != MasterVolume::Half
             || launch.controls.resolve()?.profiles
-                != DEFAULT_PROFILES
-                    .configured(ACTION_NAMES, FALLBACK_PROFILE)?
+                != configured_profiles(FALLBACK_PROFILE)?
         {
             return Err("volume or controls not restored".into());
         }
@@ -1076,7 +1074,7 @@ mod tests {
     #[test]
     fn controls_precedence_and_reset_survive_relaunch() -> Result<(), String> {
         let fixture = ProfileFixture::new()?;
-        let expected = |text| DEFAULT_PROFILES.configured(ACTION_NAMES, text);
+        let expected = configured_profiles;
         let store = fixture.store()?;
         let stored = || store.load().map_err(|error| format!("{error:?}"));
         if fixture.resolve(&[])?.profiles != expected(FALLBACK_PROFILE)? {
@@ -1126,9 +1124,7 @@ mod tests {
         let explicit = fixture.0.path().join("explicit.txt");
         let path = explicit.to_str().ok_or("invalid test path")?;
         let smoke = fixture.resolve(&["--smoke", "--controls", path])?;
-        if smoke.profiles
-            != DEFAULT_PROFILES.configured(ACTION_NAMES, EXPLICIT_PROFILE)?
-        {
+        if smoke.profiles != configured_profiles(EXPLICIT_PROFILE)? {
             return Err("smoke did not select explicit controls".into());
         }
         smoke.persist()?;
@@ -1168,7 +1164,7 @@ mod tests {
             ControllerLaunch::parse(args)?
                 .select_controls(Some(&fallback), Some(fixture.0.path()))
         };
-        let expected = |text| DEFAULT_PROFILES.configured(ACTION_NAMES, text);
+        let expected = configured_profiles;
         if select(&[])?.profiles != expected(FALLBACK_PROFILE)? {
             return Err("controller fallback not applied".into());
         }

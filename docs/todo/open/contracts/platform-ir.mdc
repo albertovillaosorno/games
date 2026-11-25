@@ -105,3 +105,15 @@ reject option-like identifiers and verify target, feature and artifact
 path consistency. Three target condition occurrences were removed from
 the baseline. The joint fresh native gate passed in run
 1795636790890770112-1650625. No additional target toolchain is implemented.
+
+The shared physical input contract now admits six controller axes, 21
+controller buttons and five pointer buttons independent of native enum
+values. The keyboard contract uses stable routing identities and the
+portable digital profile parser accepts an injected legacy key-name
+resolver. Existing version-one names and routing codes are preserved;
+legacy extended keyboard identities remain an adapter translation concern.
+Native mapping tests, pure profile admission tests and title remapping
+coverage passed with native rendering and dummy audio in fresh validation
+1795636790890770112-1650625. Six title-side platform references were
+removed from the baseline. Physical devices and other backends remain
+unverified.

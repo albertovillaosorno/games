@@ -52,7 +52,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use games::audio::MasterVolume;
-use games::input::physical::{ControllerButton, PointerButton};
+use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
+use games::input::profile::{AxisProfile, DigitalProfiles, MAX_PROFILE_BYTES};
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
@@ -70,11 +71,8 @@ use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform::performance::{
     FrameMeter, peak_resident_bytes, resident_bytes,
 };
-use games_platform_graphics::linux::input::profile::{
-    AxisProfile, DigitalProfiles, MAX_PROFILE_BYTES,
-};
 use games_platform_graphics::linux::input::{
-    HostEvent, InputStartup, NativeInput, Scancode, key_code,
+    HostEvent, InputStartup, NativeInput, key_from_name, key_name,
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
@@ -110,46 +108,46 @@ const CONTROLS: [Control; 8] = [
     Control::Up,
     Control::Down,
 ];
-const KEYBOARD: [[Option<Scancode>; 8]; 4] = [
+const KEYBOARD: [[Option<KeyboardKey>; 8]; 4] = [
     [
-        Some(Scancode::Escape),
-        Some(Scancode::Return),
-        Some(Scancode::Z),
-        Some(Scancode::Space),
-        Some(Scancode::A),
-        Some(Scancode::D),
-        Some(Scancode::W),
-        Some(Scancode::S),
+        Some(KeyboardKey::ESCAPE),
+        Some(KeyboardKey::ENTER),
+        Some(KeyboardKey::LETTER_Z),
+        Some(KeyboardKey::SPACE),
+        Some(KeyboardKey::LETTER_A),
+        Some(KeyboardKey::LETTER_D),
+        Some(KeyboardKey::LETTER_W),
+        Some(KeyboardKey::LETTER_S),
     ],
     [
         None,
-        Some(Scancode::Num6),
-        Some(Scancode::F),
-        Some(Scancode::G),
-        Some(Scancode::Left),
-        Some(Scancode::Right),
-        Some(Scancode::Up),
-        Some(Scancode::Down),
+        Some(KeyboardKey::NUM_6),
+        Some(KeyboardKey::LETTER_F),
+        Some(KeyboardKey::LETTER_G),
+        Some(KeyboardKey::LEFT),
+        Some(KeyboardKey::RIGHT),
+        Some(KeyboardKey::UP),
+        Some(KeyboardKey::DOWN),
     ],
     [
         None,
-        Some(Scancode::Num7),
-        Some(Scancode::O),
-        Some(Scancode::P),
-        Some(Scancode::J),
-        Some(Scancode::L),
-        Some(Scancode::I),
-        Some(Scancode::K),
+        Some(KeyboardKey::NUM_7),
+        Some(KeyboardKey::LETTER_O),
+        Some(KeyboardKey::LETTER_P),
+        Some(KeyboardKey::LETTER_J),
+        Some(KeyboardKey::LETTER_L),
+        Some(KeyboardKey::LETTER_I),
+        Some(KeyboardKey::LETTER_K),
     ],
     [
         None,
-        Some(Scancode::Num8),
-        Some(Scancode::Kp1),
-        Some(Scancode::Kp2),
-        Some(Scancode::Kp4),
-        Some(Scancode::Kp6),
-        Some(Scancode::Kp8),
-        Some(Scancode::Kp5),
+        Some(KeyboardKey::NUM_8),
+        Some(KeyboardKey::KP_1),
+        Some(KeyboardKey::KP_2),
+        Some(KeyboardKey::KP_4),
+        Some(KeyboardKey::KP_6),
+        Some(KeyboardKey::KP_8),
+        Some(KeyboardKey::KP_5),
     ],
 ];
 const BUTTONS: [ControllerButton; 8] = [
@@ -294,7 +292,7 @@ impl Controls {
         &self,
         player: Player,
         control: Control,
-    ) -> Result<Scancode, RenderError> {
+    ) -> Result<KeyboardKey, RenderError> {
         let index = CONTROLS
             .iter()
             .position(|item| *item == control)
@@ -1069,6 +1067,10 @@ impl<'preferences> Interactive<'preferences> {
 
 type LocalAdmission<Input> = Result<Option<u64>, RejectedInput<Input>>;
 
+fn configured_profiles(text: &str) -> Result<Profiles, String> {
+    DEFAULT_PROFILES.configured(ACTION_NAMES, text, key_from_name)
+}
+
 fn load_actors(
     scene: &mut SceneSession<'_, '_>,
     source: &Sources<'_>,
@@ -1118,7 +1120,7 @@ fn desktop_mapping(
             .zip(reserved)
             .find_map(|(player, remote)| (!remote).then_some(player))
     {
-        mapping.bind_key(key_code(key), Action {
+        mapping.bind_key(key.code(), Action {
             control: Control::Pause,
             player,
         });
@@ -1139,14 +1141,14 @@ fn desktop_mapping(
 fn bind_desktop_seat(
     mapping: &mut InputMapping<Action>,
     player: Player,
-    keys: [Option<Scancode>; 8],
+    keys: [Option<KeyboardKey>; 8],
     buttons: [Option<PointerButton>; 8],
 ) {
     for ((control, key), mouse) in CONTROLS.into_iter().zip(keys).zip(buttons) {
         if control != Control::Pause
             && let Some(code) = key
         {
-            mapping.bind_key(key_code(code), Action { control, player });
+            mapping.bind_key(code.code(), Action { control, player });
         }
         if let Some(button) = mouse {
             mapping.bind_mouse(button.code(), Action { control, player });
@@ -1204,11 +1206,11 @@ const fn mouse_label(button: PointerButton) -> &'static str {
     }
 }
 
-fn key_label(key: Scancode) -> &'static str {
-    if key == Scancode::Return {
+fn key_label(key: KeyboardKey) -> &'static str {
+    if key == KeyboardKey::ENTER {
         "ENTER"
     } else {
-        key.name()
+        key_name(key)
     }
 }
 
@@ -1245,7 +1247,7 @@ fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 3] {
         profiles.keys.get(index).copied().unwrap_or([None; 8]);
     let [_, _, mouse, ..] =
         profiles.mouse.get(index).copied().unwrap_or([None; 8]);
-    let key = |binding: Option<Scancode>| {
+    let key = |binding: Option<KeyboardKey>| {
         binding.map_or("NONE", |code| {
             let label = key_label(code);
             if label.len() > 12 {
@@ -1611,7 +1613,7 @@ fn smoke_special(
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
     for down in [true, false] {
         for control in [Control::Primary, Control::Secondary] {
-            let code = key_code(controls.key(Player::Marge, control)?);
+            let code = controls.key(Player::Marge, control)?.code();
             controls.route(
                 InputEvent::Key { code, down },
                 TICK_INTERVAL.saturating_mul(tick),
@@ -1873,7 +1875,7 @@ fn smoke_press(
     control: Control,
 ) -> Result<(), RenderError> {
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
-    let code = key_code(controls.key(Player::Marge, control)?);
+    let code = controls.key(Player::Marge, control)?.code();
     for down in [true, false] {
         controls.route(
             InputEvent::Key { code, down },
@@ -1910,10 +1912,7 @@ fn smoke_admission(
         let key = start.ok_or(RenderError::InvalidSprite)?;
         for down in [true, false] {
             controls.route(
-                InputEvent::Key {
-                    code: key_code(key),
-                    down,
-                },
+                InputEvent::Key { code: key.code(), down },
                 Duration::ZERO,
                 simulation,
             )?;
@@ -2000,7 +1999,7 @@ fn smoke_jump_edge(
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
     controls.route(
         InputEvent::Key {
-            code: key_code(controls.key(Player::Marge, Control::Secondary)?),
+            code: controls.key(Player::Marge, Control::Secondary)?.code(),
             down,
         },
         TICK_INTERVAL.saturating_mul(tick),
@@ -2128,10 +2127,7 @@ fn smoke_movement_inputs(
         };
         for (key, down) in [(release, false), (press, true)] {
             controls.route(
-                InputEvent::Key {
-                    code: key_code(key),
-                    down,
-                },
+                InputEvent::Key { code: key.code(), down },
                 elapsed,
                 simulation,
             )?;
@@ -2173,7 +2169,7 @@ fn smoke_poses(
         for down in [true, false] {
             controls.route(
                 InputEvent::Key {
-                    code: key_code(primary.ok_or(RenderError::InvalidSprite)?),
+                    code: primary.ok_or(RenderError::InvalidSprite)?.code(),
                     down,
                 },
                 TICK_INTERVAL.saturating_mul(tick),
@@ -2757,17 +2753,18 @@ fn preview_layout(
 
 #[cfg(test)]
 mod tests {
-    use games::input::physical::{ControllerAxis, ControllerButton};
+    use games::input::physical::{
+        ControllerAxis, ControllerButton, KeyboardKey,
+    };
     use games::input::{InputEvent, LogicalAction};
     use games::replay::{InputStep as _, LiveSimulation};
     use games_platform_graphics::linux::RenderError;
-    use games_platform_graphics::linux::input::{Scancode, key_code};
     use games_platform_graphics::linux::sprites::EventBatch;
 
     use super::{
-        ACTION_NAMES, Action, Cabinet, Control, Controls, DEFAULT_PROFILES,
-        LiveInputLimits, NativeBatch, Phase, Player, Profiles, Station,
-        StepClock, StreetLayout, TICK_INTERVAL, dimension, failure, frame_due,
+        Action, Cabinet, Control, Controls, DEFAULT_PROFILES, LiveInputLimits,
+        NativeBatch, Phase, Player, Profiles, Station, StepClock, StreetLayout,
+        TICK_INTERVAL, configured_profiles, dimension, failure, frame_due,
         live, presentation_wait, size,
     };
     use crate::remote::{HostedCabinet, HostedInput};
@@ -2969,12 +2966,12 @@ mod tests {
             Controls::with_reserved(false, &DEFAULT_PROFILES, [
                 true, false, false, false,
             ])?;
-        let key = |code, down| InputEvent::Key {
-            code: key_code(code),
+        let key = |code: KeyboardKey, down| InputEvent::Key {
+            code: code.code(),
             down,
         };
         for down in [true, false] {
-            if controls.actions(key(Scancode::Escape, down))?
+            if controls.actions(key(KeyboardKey::ESCAPE, down))?
                 != [LogicalAction {
                     action: Action {
                         control: Control::Pause,
@@ -2982,7 +2979,7 @@ mod tests {
                     },
                     down,
                 }]
-                || !controls.actions(key(Scancode::F2, down))?.is_empty()
+                || !controls.actions(key(KeyboardKey::F2, down))?.is_empty()
             {
                 return Err(failure("global pause routed incorrectly"));
             }
@@ -3063,7 +3060,7 @@ mod tests {
             return Err(failure("local controller assigned wrong seat"));
         }
         let remote = controls.actions(InputEvent::Key {
-            code: key_code(Scancode::Return),
+            code: KeyboardKey::ENTER.code(),
             down: true,
         })?;
         if !remote.is_empty()
@@ -3178,8 +3175,7 @@ mod tests {
     #[test]
     fn touch_panels_cannot_claim_reserved_remote_stations()
     -> Result<(), RenderError> {
-        let profiles = DEFAULT_PROFILES
-            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+        let profiles = configured_profiles("version=1\ntouch-players=1,3")
             .map_err(failure)?;
         if Controls::with_reserved(true, &profiles, [false, true, false, true])
             .is_err()
@@ -3199,16 +3195,12 @@ mod tests {
 
     #[test]
     fn axis_profiles_isolate_station_thresholds() -> Result<(), RenderError> {
-        let profiles = DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\naxis 2 leftx=none/none\n",
-                    "axis 2 rightx=right/left\n",
-                    "axis-threshold 2 rightx=20000/5000\n",
-                ),
-            )
-            .map_err(failure)?;
+        let profiles = configured_profiles(concat!(
+            "version=1\naxis 2 leftx=none/none\n",
+            "axis 2 rightx=right/left\n",
+            "axis-threshold 2 rightx=20000/5000\n",
+        ))
+        .map_err(failure)?;
         let (mut controls, mut simulation) = cabinet(&profiles)?;
         let [first, second, ..] = simulation.state().stations();
         for event in [
@@ -3280,17 +3272,14 @@ mod tests {
     #[test]
     fn custom_profiles_route_only_the_configured_station_and_device()
     -> Result<(), RenderError> {
-        let profiles = DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                "version=1\nkey 1 right=Q\nbutton 2 right=x\n",
-            )
-            .map_err(failure)?;
+        let profiles =
+            configured_profiles("version=1\nkey 1 right=Q\nbutton 2 right=x\n")
+                .map_err(failure)?;
         let (mut controls, mut simulation) = cabinet(&profiles)?;
         let before = simulation.state().stations();
         for event in [
             InputEvent::Key {
-                code: key_code(Scancode::D),
+                code: KeyboardKey::LETTER_D.code(),
                 down: true,
             },
             button(11, ControllerButton::DPadRight, true),
@@ -3303,7 +3292,7 @@ mod tests {
         }
         for event in [
             InputEvent::Key {
-                code: key_code(Scancode::Q),
+                code: KeyboardKey::LETTER_Q.code(),
                 down: true,
             },
             button(11, ControllerButton::West, true),

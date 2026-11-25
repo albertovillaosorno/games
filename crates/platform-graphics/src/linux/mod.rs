@@ -459,6 +459,7 @@ mod tests {
     use games::capability::{
         HapticCommand, HapticEffect, HapticError, Haptics as _,
     };
+    use games::input::physical::KeyboardKey;
     use games::input::touch::{
         ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone,
     };
@@ -469,12 +470,12 @@ mod tests {
     use sdl2::EventSubsystem;
     use sdl2::controller::{Axis, Button};
     use sdl2::event::Event;
-    use sdl2::keyboard::Mod;
+    use sdl2::keyboard::{Mod, Scancode};
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
     use sdl2::video::FullscreenType;
 
-    use super::input::{HostEvent, NativeInput, Scancode, key_code};
+    use super::input::{HostEvent, NativeInput};
     use super::sprites::{
         EventBatch, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
     };
@@ -548,7 +549,7 @@ mod tests {
             },
         );
         let mut mapping = InputMapping::new();
-        mapping.bind_key(key_code(Scancode::Space), "jump");
+        mapping.bind_key(KeyboardKey::SPACE.code(), "jump");
         let mut router = InputRouter::new(mapping);
         live.enqueue_at(timestamp, router.handle(event))
             .map_err(|error| RenderError::Backend(format!("{error:?}")))?;
@@ -858,7 +859,7 @@ mod tests {
             RenderError::Backend(String::from("invalid test zone"))
         })?;
         mapping.bind_touch(1, "jump");
-        mapping.bind_key(key_code(Scancode::Space), "move");
+        mapping.bind_key(KeyboardKey::SPACE.code(), "move");
         mapping.set_touch_layout(TouchLayout::new(vec![zone], budget(1)));
         Ok(InputRouter::new(mapping))
     }
@@ -874,7 +875,7 @@ mod tests {
             phase,
         };
         let key = |down| InputEvent::Key {
-            code: key_code(Scancode::Space),
+            code: KeyboardKey::SPACE.code(),
             down,
         };
         let action = |action, down| LogicalAction { action, down };
@@ -1027,7 +1028,7 @@ mod tests {
         events.push_event(event).map_err(RenderError::Backend)?;
         let mut pump = window.sdl.event_pump().map_err(RenderError::Backend)?;
         let expected = InputEvent::Key {
-            code: key_code(Scancode::Space),
+            code: KeyboardKey::SPACE.code(),
             down: true,
         };
         for native in pump.poll_iter().take(256) {

@@ -539,17 +539,13 @@ mod tests {
     #[test]
     fn independent_panels_route_simultaneous_contacts_at_all_widths()
     -> Result<(), RenderError> {
-        use super::super::ACTION_NAMES;
+        use super::super::configured_profiles;
 
-        let profiles = DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\ntouch-players=4,1,3,2\n",
-                    "touch 2 left=right\ntouch 2 right=left\n",
-                ),
-            )
-            .map_err(RenderError::Backend)?;
+        let profiles = configured_profiles(concat!(
+            "version=1\ntouch-players=4,1,3,2\n",
+            "touch 2 left=right\ntouch 2 right=left\n",
+        ))
+        .map_err(RenderError::Backend)?;
         if super::height(&profiles)? != super::MAX_SCENE_HEIGHT {
             return Err(RenderError::InvalidDimensions);
         }
@@ -660,11 +656,10 @@ mod tests {
 
     #[test]
     fn multi_panel_drag_stays_with_initial_seat() -> Result<(), RenderError> {
-        use super::super::ACTION_NAMES;
+        use super::super::configured_profiles;
         use crate::Control;
 
-        let profiles = DEFAULT_PROFILES
-            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+        let profiles = configured_profiles("version=1\ntouch-players=1,3")
             .map_err(RenderError::Backend)?;
         let mut mapping = InputMapping::new();
         install(&mut mapping, &profiles, PanelRole::Cabinet)?;
@@ -713,11 +708,10 @@ mod tests {
     #[test]
     fn crowded_panel_cannot_consume_another_seats_contact_slots()
     -> Result<(), RenderError> {
-        use super::super::ACTION_NAMES;
+        use super::super::configured_profiles;
         use crate::Control;
 
-        let profiles = DEFAULT_PROFILES
-            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+        let profiles = configured_profiles("version=1\ntouch-players=1,3")
             .map_err(RenderError::Backend)?;
         let mut mapping = InputMapping::new();
         install(&mut mapping, &profiles, PanelRole::Cabinet)?;
@@ -768,11 +762,10 @@ mod tests {
     #[test]
     fn multi_panel_raster_labels_and_slot_geometry_match()
     -> Result<(), RenderError> {
-        use super::super::ACTION_NAMES;
+        use super::super::configured_profiles;
         use crate::Control;
 
-        let profiles = DEFAULT_PROFILES
-            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+        let profiles = configured_profiles("version=1\ntouch-players=1,3")
             .map_err(RenderError::Backend)?;
         let first = center(Player::Marge, Control::Primary, &profiles)?;
         let second = center(Player::Bart, Control::Primary, &profiles)?;
@@ -831,19 +824,15 @@ mod tests {
     #[test]
     fn swapped_touch_slots_move_symbols_and_route_selected_station()
     -> Result<(), RenderError> {
-        use super::super::ACTION_NAMES;
+        use super::super::configured_profiles;
         use super::panel;
         use crate::Control;
 
-        let profiles = DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\ntouch-player=3\n",
-                    "touch 3 primary=secondary\ntouch 3 secondary=primary\n"
-                ),
-            )
-            .map_err(RenderError::Backend)?;
+        let profiles = configured_profiles(concat!(
+            "version=1\ntouch-player=3\n",
+            "touch 3 primary=secondary\ntouch 3 secondary=primary\n"
+        ))
+        .map_err(RenderError::Backend)?;
         let mut mapping = InputMapping::new();
         install(&mut mapping, &profiles, PanelRole::Cabinet)?;
         let mut router = InputRouter::new(mapping);

@@ -39,19 +39,19 @@
     "target:target_os:\"linux\"": 3
   },
   "crates/game-simpsons-arcade/src/native/audio.rs": {
-    "os:linux": 3
+    "os:linux": 2
   },
   "crates/game-simpsons-arcade/src/native/controller.rs": {
-    "os:linux": 6
+    "os:linux": 4
   },
   "crates/game-simpsons-arcade/src/native/encounter.rs": {
-    "os:linux": 3
+    "os:linux": 2
   },
   "crates/game-simpsons-arcade/src/native/measurement.rs": {
     "os:linux": 1
   },
   "crates/game-simpsons-arcade/src/native/mod.rs": {
-    "os:linux": 9
+    "os:linux": 7
   },
   "crates/game-simpsons-arcade/src/native/poses.rs": {
     "os:linux": 2

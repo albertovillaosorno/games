@@ -37,13 +37,13 @@ use std::num::NonZeroU64;
 use std::time::Instant;
 
 use games::input::InputEvent;
+use games::input::physical::KeyboardKey;
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
 use games::presentation::FramePacing;
 use games::replay::LiveSimulation;
 use games::session::LocalSession;
-use games_platform_graphics::linux::input::{Scancode, key_code};
 use games_platform_graphics::linux::sprites::{
     SceneSession, SpriteDraw, SpriteRect,
 };
@@ -273,13 +273,13 @@ impl Meter {
 fn key(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
-    scancode: Scancode,
+    scancode: KeyboardKey,
     down: bool,
 ) -> Result<(), RenderError> {
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
     controls.route(
         InputEvent::Key {
-            code: key_code(scancode),
+            code: scancode.code(),
             down,
         },
         TICK_INTERVAL.saturating_mul(tick),
@@ -290,7 +290,7 @@ fn key(
 fn pulse(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
-    scancode: Scancode,
+    scancode: KeyboardKey,
 ) -> Result<(), RenderError> {
     for down in [true, false] {
         key(controls, simulation, scancode, down)?;
@@ -312,9 +312,9 @@ fn approach(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    pulse(controls, simulation, Scancode::Return)?;
+    pulse(controls, simulation, KeyboardKey::ENTER)?;
     advance(simulation, 1)?;
-    key(controls, simulation, Scancode::D, true)?;
+    key(controls, simulation, KeyboardKey::LETTER_D, true)?;
     for _ in 0..60u8 {
         let [marge, ..] = simulation.state().stations();
         let enemy = simulation
@@ -322,7 +322,7 @@ fn approach(
             .enemy()
             .ok_or(RenderError::InvalidSprite)?;
         if marge.position.x.abs_diff(enemy.position.x) <= 28 {
-            key(controls, simulation, Scancode::D, false)?;
+            key(controls, simulation, KeyboardKey::LETTER_D, false)?;
             return Ok(());
         }
         advance(simulation, 1)?;
@@ -456,7 +456,7 @@ fn smoke_reinforcement_gate(
         live_with_scroll(true, LocalSession::default(), limit)?;
     let mut controls = Controls::new(touch_enabled)?;
     approach(&mut controls, &mut simulation)?;
-    pulse(&mut controls, &mut simulation, Scancode::Z)?;
+    pulse(&mut controls, &mut simulation, KeyboardKey::LETTER_Z)?;
     advance(&mut simulation, u16::from(GROUND_ATTACK_RECOVERY_TICKS))?;
     if simulation
         .state()
@@ -483,14 +483,14 @@ fn walk_reinforcements(
     for checked in seen.iter_mut().take(expected.saturating_sub(1)) {
         *checked = true;
     }
-    key(controls, simulation, Scancode::D, true)?;
+    key(controls, simulation, KeyboardKey::LETTER_D, true)?;
     for _ in 0..300u16 {
         advance(simulation, 1)?;
         if simulation.state().camera_origin() >= target {
             break;
         }
     }
-    key(controls, simulation, Scancode::D, false)?;
+    key(controls, simulation, KeyboardKey::LETTER_D, false)?;
     if simulation.state().camera_origin() != target
         || simulation.state().enemies().count() != expected.saturating_add(1)
     {
@@ -517,22 +517,22 @@ fn smoke_restraint(
     let mut simulation = fixed(cabinet)?;
     let mut controls = Controls::new(touch_enabled)?;
     approach(&mut controls, &mut simulation)?;
-    pulse(&mut controls, &mut simulation, Scancode::Z)?;
+    pulse(&mut controls, &mut simulation, KeyboardKey::LETTER_Z)?;
     advance(&mut simulation, u16::from(GROUND_ATTACK_RECOVERY_TICKS))?;
-    key(&mut controls, &mut simulation, Scancode::D, true)?;
+    key(&mut controls, &mut simulation, KeyboardKey::LETTER_D, true)?;
     for _ in 0..450u16 {
         advance(&mut simulation, 1)?;
         if restrained(simulation.state()) {
             break;
         }
     }
-    key(&mut controls, &mut simulation, Scancode::D, false)?;
+    key(&mut controls, &mut simulation, KeyboardKey::LETTER_D, false)?;
     verify_restraint_art(scene, art, simulation.state())?;
     for edge in 0..12u8 {
         let button = if edge.is_multiple_of(2) {
-            Scancode::Z
+            KeyboardKey::LETTER_Z
         } else {
-            Scancode::Space
+            KeyboardKey::SPACE
         };
         pulse(&mut controls, &mut simulation, button)?;
         advance(&mut simulation, 1)?;
@@ -713,7 +713,7 @@ fn smoke_strikes(
         NonZeroU64::new(16_666_667),
     );
     let injected = Instant::now();
-    pulse(controls, simulation, Scancode::Z)?;
+    pulse(controls, simulation, KeyboardKey::LETTER_Z)?;
     measure_strike(scene, art, simulation, (&mut collector, injected))?;
     if simulation.state().enemy().map(|enemy| enemy.health) != Some(0) {
         return Err(failure("native strike did not defeat enemy"));
@@ -825,7 +825,7 @@ fn smoke_enemy_walk(
 ) -> Result<(), RenderError> {
     let mut simulation = live(true)?;
     let mut controls = Controls::new(touch_enabled)?;
-    pulse(&mut controls, &mut simulation, Scancode::Return)?;
+    pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
     advance(&mut simulation, 6)?;
     let enemy = simulation
         .state()
@@ -877,7 +877,7 @@ fn smoke_hurt(
         return Err(failure("native damage did not start a hit reaction"));
     }
     verify_hurt_art(scene, art, simulation.state())?;
-    pulse(controls, simulation, Scancode::Z)?;
+    pulse(controls, simulation, KeyboardKey::LETTER_Z)?;
     advance(simulation, 1)?;
     let [first, ..] = simulation.state().stations();
     if first.maneuver != (Maneuver::Hurt { tick: 1 })
@@ -889,7 +889,7 @@ fn smoke_hurt(
     advance(simulation, 5)?;
     verify_hurt_art(scene, art, simulation.state())?;
     advance(simulation, 7)?;
-    pulse(controls, simulation, Scancode::Z)?;
+    pulse(controls, simulation, KeyboardKey::LETTER_Z)?;
     advance(simulation, 1)?;
     let [after, ..] = simulation.state().stations();
     if after.maneuver != (Maneuver::Attack { moving: false, tick: 0 }) {
@@ -1002,7 +1002,7 @@ fn smoke_continue(
     wait_for_continue(simulation)?;
     let _drawn = art.present(scene, simulation.state())?;
     verify_prompt(scene)?;
-    pulse(controls, simulation, Scancode::Return)?;
+    pulse(controls, simulation, KeyboardKey::ENTER)?;
     advance(simulation, 1)?;
     let [continued, ..] = simulation.state().stations();
     if continued.health != PLAYER_HEALTH
@@ -1091,7 +1091,7 @@ fn restart_after_expiry(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    pulse(controls, simulation, Scancode::Return)?;
+    pulse(controls, simulation, KeyboardKey::ENTER)?;
     advance(simulation, 1)?;
     if simulation.state().phase() != Phase::Playing {
         return Err(failure("native restart did not enter street"));

@@ -45,7 +45,6 @@ use games_assets::ManifestLimits;
 use games_assets::pcm::PcmSamples;
 use games_platform_audio::linux::{NativeAudio, PlaybackSpec};
 use games_platform_graphics::linux::RenderError;
-use games_platform_graphics::linux::input::key_code;
 use games_platform_storage::bundle::MediaOverlay;
 
 use super::launch::AudioSelection;
@@ -487,7 +486,7 @@ fn smoke_hold(
     for player in Player::ALL {
         controls.route(
             InputEvent::Key {
-                code: key_code(controls.key(player, control)?),
+                code: controls.key(player, control)?.code(),
                 down: true,
             },
             TICK_INTERVAL.saturating_mul(tick),
@@ -505,10 +504,7 @@ fn smoke_join(
         let key = controls.key(player, Control::Start)?;
         for down in [true, false] {
             controls.route(
-                InputEvent::Key {
-                    code: key_code(key),
-                    down,
-                },
+                InputEvent::Key { code: key.code(), down },
                 Duration::ZERO,
                 simulation,
             )?;

@@ -9,18 +9,17 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Admission of per-station native digital input profiles.
+//   - Admission of per-station portable digital input profiles.
 // - Must-Not:
 //   - Select title actions, assign devices or route simulation events.
 // - Allows:
 //   - Inputs: Bounded local text, title action names and default bindings.
-//   - Outputs: Validated SDL keyboard, mouse, button and digital axis
-//     assignments.
+//   - Outputs: Validated keyboard, mouse, button and digital axis assignments.
 //   - Side effects: None.
 // - Split-When:
 //   - Other device families require independent profile representations.
 // - Merge-When:
-//   - Another native profile parser duplicates these admission rules.
+//   - Another digital profile parser duplicates these admission rules.
 // - Summary:
 //   - Override digital bindings without ambiguous physical assignments.
 // - Description:
@@ -32,20 +31,17 @@
 // - Defaults:
 //   - Reject unknown controls, duplicates and malformed values.
 
-//! Bounded, reusable native digital input profiles.
+//! Bounded, reusable portable digital input profiles.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use games::input::AxisBinding;
-use games::input::physical::{ControllerAxis, ControllerButton, PointerButton};
-
-use super::{Scancode, key_code};
+use super::AxisBinding;
+use super::physical::{
+    ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
+};
 
 /// Maximum UTF-8 profile size, in bytes.
 pub const MAX_PROFILE_BYTES: usize = 8192;
-
-/// Standard controller axes, in profile storage order.
-pub const NATIVE_AXES: [ControllerAxis; 6] = ControllerAxis::ALL;
 
 /// One signed axis's digital action slots and hysteresis thresholds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,16 +119,18 @@ impl AxisProfile {
 
 /// Mapped physical axes ready for a single controller assignment.
 pub type ControllerAxes<Action> = BTreeMap<u16, AxisBinding<Action>>;
+/// Adapter-provided resolution of a persisted physical keyboard name.
+pub type KeyResolver = fn(&str) -> Option<KeyboardKey>;
 
 /// Digital bindings in title-supplied station and action order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
     /// Per-station signed digital controller axes.
-    pub axes: [[AxisProfile; NATIVE_AXES.len()]; PLAYERS],
+    pub axes: [[AxisProfile; ControllerAxis::ALL.len()]; PLAYERS],
     /// Per-station controller button bindings.
     pub buttons: [[ControllerButton; ACTIONS]; PLAYERS],
     /// Globally unique optional keyboard bindings.
-    pub keys: [[Option<Scancode>; ACTIONS]; PLAYERS],
+    pub keys: [[Option<KeyboardKey>; ACTIONS]; PLAYERS],
     /// Globally unique optional mouse button bindings.
     pub mouse: [[Option<PointerButton>; ACTIONS]; PLAYERS],
     /// Stations selected for visible touch panels, in station order.
@@ -160,7 +158,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     {
         let row = self.axes.get(player).ok_or("invalid axis station")?;
         let mut mapped = BTreeMap::new();
-        for (axis, profile) in NATIVE_AXES.into_iter().zip(row) {
+        for (axis, profile) in ControllerAxis::ALL.into_iter().zip(row) {
             profile.validate(axis, ACTIONS)?;
             if profile.negative.is_some() || profile.positive.is_some() {
                 let _old = mapped.insert(axis.code(), profile.bind(&actions)?);
@@ -176,7 +174,8 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// `axis PLAYER AXIS=NEGATIVE/POSITIVE` or
     /// `axis-threshold PLAYER AXIS=PRESS/RELEASE`. Axis names follow the
     /// version-one profile contract;
-    /// use `none` to disable a direction.
+    /// use `none` to disable a direction. The supplied keyboard resolver
+    /// translates legacy profile names to portable identities.
     /// Player numbers start at one; touch slots use the action names.
     /// Optional `touch-player=N` or `touch-players=N,M` selects stations.
     /// The selection is nonempty, unique and ordered by station number.
@@ -187,6 +186,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         mut self,
         actions: [&str; ACTIONS],
         text: &str,
+        resolve_key: KeyResolver,
     ) -> Result<Self, String> {
         if text.len() > MAX_PROFILE_BYTES {
             return Err(String::from("control profile exceeds byte limit"));
@@ -208,7 +208,11 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
             if !seen.insert((kind, player, action)) {
                 return Err(String::from("duplicate control override"));
             }
-            self.override_binding((kind, player, action, name), &actions)?;
+            self.override_binding(
+                (kind, player, action, name),
+                &actions,
+                resolve_key,
+            )?;
         }
         self.validate()?;
         Ok(self)
@@ -218,6 +222,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         &mut self,
         record: Record<'_>,
         actions: &[&str],
+        resolve_key: KeyResolver,
     ) -> Result<(), String> {
         let (kind, player, action, name) = record;
         let invalid = || String::from("unknown player, action or binding");
@@ -274,7 +279,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
                     .get_mut(player)
                     .and_then(|row| row.get_mut(action))
                     .ok_or_else(invalid)?;
-                *slot = parse_key(name)?;
+                *slot = parse_key(name, resolve_key)?;
             },
         }
         Ok(())
@@ -289,7 +294,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
             return Err(String::from("invalid touch player"));
         }
         for row in &self.axes {
-            for (axis, profile) in NATIVE_AXES.into_iter().zip(row) {
+            for (axis, profile) in ControllerAxis::ALL.into_iter().zip(row) {
                 profile.validate(axis, ACTIONS)?;
             }
         }
@@ -302,7 +307,7 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         }
         let mut keys = BTreeSet::new();
         for key in self.keys.iter().flatten().flatten().copied() {
-            if !keys.insert(key_code(key)) {
+            if !keys.insert(key.code()) {
                 return Err(String::from("duplicate keyboard binding"));
             }
         }
@@ -384,11 +389,14 @@ fn axis_action(value: &str, actions: &[&str]) -> Result<Option<usize>, String> {
         .ok_or_else(|| String::from("unknown axis action"))
 }
 
-fn parse_key(name: &str) -> Result<Option<Scancode>, String> {
+fn parse_key(
+    name: &str,
+    resolve_key: KeyResolver,
+) -> Result<Option<KeyboardKey>, String> {
     if name == "none" {
         return Ok(None);
     }
-    Scancode::from_name(name)
+    resolve_key(name)
         .map(Some)
         .ok_or_else(|| String::from("unknown keyboard binding"))
 }
@@ -427,7 +435,7 @@ fn parse_line<'text>(
     let action = match kind {
         Kind::Axis | Kind::AxisThreshold => {
             ControllerAxis::from_profile_name(field).and_then(|axis| {
-                NATIVE_AXES.iter().position(|item| *item == axis)
+                ControllerAxis::ALL.iter().position(|item| *item == axis)
             })
         },
         Kind::Button | Kind::Key | Kind::Mouse | Kind::Touch => {
@@ -450,28 +458,42 @@ mod tests {
     use super::*;
 
     const DEFAULT: DigitalProfiles<2, 2> = DigitalProfiles {
-        axes: [[AxisProfile::UNBOUND; NATIVE_AXES.len()]; 2],
+        axes: [[AxisProfile::UNBOUND; ControllerAxis::ALL.len()]; 2],
         buttons: [[ControllerButton::South, ControllerButton::East]; 2],
-        keys: [[Some(Scancode::A), Some(Scancode::B)], [
-            Some(Scancode::C),
-            Some(Scancode::D),
-        ]],
+        keys: [
+            [Some(KeyboardKey::LETTER_A), Some(KeyboardKey::LETTER_B)],
+            [Some(KeyboardKey::LETTER_C), Some(KeyboardKey::LETTER_D)],
+        ],
         mouse: [[None; 2]; 2],
         touch_players: [true, false],
         touch_slots: [[0, 1]; 2],
     };
     const ACTIONS: [&str; 2] = ["primary", "secondary"];
 
+    fn configure(text: &str) -> Result<DigitalProfiles<2, 2>, String> {
+        DEFAULT.configured(ACTIONS, text, resolve_key)
+    }
+
+    fn resolve_key(name: &str) -> Option<KeyboardKey> {
+        match name {
+            "A" => Some(KeyboardKey::LETTER_A),
+            "B" => Some(KeyboardKey::LETTER_B),
+            "C" => Some(KeyboardKey::LETTER_C),
+            "D" => Some(KeyboardKey::LETTER_D),
+            "Q" => Some(KeyboardKey::LETTER_Q),
+            "R" => Some(KeyboardKey::LETTER_R),
+            "Space" => Some(KeyboardKey::SPACE),
+            _ => None,
+        }
+    }
+
     #[test]
     fn profile_overrides_only_selected_station_and_binding() {
-        let configured = DEFAULT.configured(
-            ACTIONS,
-            concat!(
-                "version=1\nkey 2 primary=Space\nbutton 2 primary=x\n",
-                "touch-player=2\ntouch 2 primary=secondary\n",
-                "touch 2 secondary=primary\n"
-            ),
-        );
+        let configured = configure(concat!(
+            "version=1\nkey 2 primary=Space\nbutton 2 primary=x\n",
+            "touch-player=2\ntouch 2 primary=secondary\n",
+            "touch 2 secondary=primary\n"
+        ));
         assert_eq!(
             configured,
             Ok(DigitalProfiles {
@@ -480,10 +502,10 @@ mod tests {
                     ControllerButton::West,
                     ControllerButton::East
                 ]],
-                keys: [[Some(Scancode::A), Some(Scancode::B)], [
-                    Some(Scancode::Space),
-                    Some(Scancode::D)
-                ]],
+                keys: [
+                    [Some(KeyboardKey::LETTER_A), Some(KeyboardKey::LETTER_B)],
+                    [Some(KeyboardKey::SPACE), Some(KeyboardKey::LETTER_D)]
+                ],
                 mouse: DEFAULT.mouse,
                 touch_players: [false, true],
                 touch_slots: [[0, 1], [1, 0]],
@@ -493,8 +515,7 @@ mod tests {
 
     #[test]
     fn mouse_bindings_are_optional_and_unique_across_stations() {
-        let configured = DEFAULT.configured(
-            ACTIONS,
+        let configured = configure(
             "version=1\nmouse 1 primary=left\nmouse 2 secondary=right",
         );
         assert_eq!(
@@ -508,34 +529,22 @@ mod tests {
             })
         );
         assert!(
-            DEFAULT
-                .configured(
-                    ACTIONS,
-                    "version=1\nmouse 1 primary=left\nmouse 2 secondary=left"
-                )
-                .is_err()
+            configure(
+                "version=1\nmouse 1 primary=left\nmouse 2 secondary=left"
+            )
+            .is_err()
         );
-        assert!(
-            DEFAULT
-                .configured(ACTIONS, "version=1\nmouse 1 primary=unknown")
-                .is_err()
-        );
-        assert_eq!(
-            DEFAULT.configured(ACTIONS, "version=1\nmouse 1 primary=none"),
-            Ok(DEFAULT)
-        );
+        assert!(configure("version=1\nmouse 1 primary=unknown").is_err());
+        assert_eq!(configure("version=1\nmouse 1 primary=none"), Ok(DEFAULT));
     }
 
     #[test]
     fn axis_overrides_admit_only_selected_station() -> Result<(), String> {
-        let profiles = DEFAULT.configured(
-            ACTIONS,
-            concat!(
-                "version=1\naxis 2 rightx=secondary/primary\n",
-                "axis-threshold 2 rightx=20000/5000\n",
-                "axis 2 lefttrigger=none/primary\n",
-            ),
-        )?;
+        let profiles = configure(concat!(
+            "version=1\naxis 2 rightx=secondary/primary\n",
+            "axis-threshold 2 rightx=20000/5000\n",
+            "axis 2 lefttrigger=none/primary\n",
+        ))?;
         let axes = profiles.axis_bindings(1, ACTIONS)?;
         if profiles.axes.first() != DEFAULT.axes.first()
             || !profiles.axis_bindings(0, ACTIONS)?.is_empty()
@@ -551,8 +560,7 @@ mod tests {
 
     #[test]
     fn multiple_touch_seats_are_canonical_and_backward_compatible() {
-        let configured =
-            DEFAULT.configured(ACTIONS, "version=1\ntouch-players=2,1");
+        let configured = configure("version=1\ntouch-players=2,1");
         assert_eq!(
             configured,
             Ok(DigitalProfiles {
@@ -561,8 +569,8 @@ mod tests {
             })
         );
         assert_eq!(
-            DEFAULT.configured(ACTIONS, "version=1\ntouch-players=2"),
-            DEFAULT.configured(ACTIONS, "version=1\ntouch-player=2")
+            configure("version=1\ntouch-players=2"),
+            configure("version=1\ntouch-player=2")
         );
     }
 
@@ -603,8 +611,8 @@ mod tests {
             "version=1\ntouch 2 primary=secondary",
             "version=1\ntouch-player=1\ntouch-player=2",
         ] {
-            assert!(DEFAULT.configured(ACTIONS, invalid).is_err());
+            assert!(configure(invalid).is_err());
         }
-        assert!(DEFAULT.configured(ACTIONS, &" ".repeat(8193)).is_err());
+        assert!(configure(&" ".repeat(8193)).is_err());
     }
 }

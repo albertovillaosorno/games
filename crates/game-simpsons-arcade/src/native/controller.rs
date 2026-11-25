@@ -36,7 +36,7 @@ use std::time::Duration;
 use std::{mem, thread};
 
 use games::input::InputEvent;
-use games_platform_graphics::linux::input::profile::NATIVE_AXES;
+use games::input::physical::ControllerAxis;
 use games_platform_graphics::linux::input::{
     HostEvent, InputStartup, NativeInput,
 };
@@ -137,7 +137,7 @@ fn axis_label(slot: Option<usize>) -> Option<&'static str> {
 
 fn axis_hints(profiles: &Profiles) -> Vec<String> {
     let [axes, ..] = profiles.axes;
-    let mut hints: Vec<_> = NATIVE_AXES
+    let mut hints: Vec<_> = ControllerAxis::ALL
         .into_iter()
         .zip(axes)
         .filter_map(|(axis, profile)| {
@@ -401,24 +401,19 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
 mod tests {
     use std::env;
 
-    use games::input::physical::{ControllerAxis, ControllerButton};
+    use games::input::physical::{ControllerButton, KeyboardKey};
     use games::input::touch::{ContactId, ContactPhase};
-    use games_platform_graphics::linux::input::{Scancode, key_code};
 
-    use super::super::{ACTION_NAMES, DEFAULT_PROFILES};
+    use super::super::{DEFAULT_PROFILES, configured_profiles};
     use super::*;
     use crate::Player;
 
     fn remapped_profiles() -> Result<Profiles, RenderError> {
-        DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\nkey 1 primary=V\n",
-                    "button 1 primary=x\nkey 1 right=H\n",
-                ),
-            )
-            .map_err(failure)
+        configured_profiles(concat!(
+            "version=1\nkey 1 primary=V\n",
+            "button 1 primary=x\nkey 1 right=H\n",
+        ))
+        .map_err(failure)
     }
 
     fn check_edge(
@@ -471,11 +466,15 @@ mod tests {
         let mut controls = Controls::with_reserved(false, &profiles, [
             false, true, true, true,
         ])?;
-        for key in [Scancode::Z, Scancode::D, Scancode::Escape] {
+        for key in [
+            KeyboardKey::LETTER_Z,
+            KeyboardKey::LETTER_D,
+            KeyboardKey::ESCAPE,
+        ] {
             check_edge(
                 &mut controls,
                 InputEvent::Key {
-                    code: key_code(key),
+                    code: key.code(),
                     down: true,
                 },
                 None,
@@ -484,7 +483,7 @@ mod tests {
         check_edge(
             &mut controls,
             InputEvent::Key {
-                code: key_code(Scancode::H),
+                code: KeyboardKey::LETTER_H.code(),
                 down: true,
             },
             RemoteControl::new(Control::Right, true),
@@ -514,16 +513,12 @@ mod tests {
 
     #[test]
     fn axis_profiles_drive_remote_control_edges() -> Result<(), RenderError> {
-        let profiles = DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\naxis 1 leftx=none/none\n",
-                    "axis 1 rightx=left/right\n",
-                    "axis-threshold 1 rightx=20000/5000\n",
-                ),
-            )
-            .map_err(failure)?;
+        let profiles = configured_profiles(concat!(
+            "version=1\naxis 1 leftx=none/none\n",
+            "axis 1 rightx=left/right\n",
+            "axis-threshold 1 rightx=20000/5000\n",
+        ))
+        .map_err(failure)?;
         if axis_hints(&profiles) != ["lefty: -UP +DOWN", "rightx: -LEFT +RIGHT"]
         {
             return Err(failure("controller hint ignored custom axes"));
@@ -561,20 +556,16 @@ mod tests {
     }
 
     fn all_axis_profiles() -> Result<Profiles, RenderError> {
-        DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\n",
-                    "axis 1 leftx=primary/pause\n",
-                    "axis 1 lefty=pause/secondary\n",
-                    "axis 1 rightx=up/down\n",
-                    "axis 1 righty=start/left\n",
-                    "axis 1 lefttrigger=none/primary\n",
-                    "axis 1 righttrigger=none/secondary\n",
-                ),
-            )
-            .map_err(failure)
+        configured_profiles(concat!(
+            "version=1\n",
+            "axis 1 leftx=primary/pause\n",
+            "axis 1 lefty=pause/secondary\n",
+            "axis 1 rightx=up/down\n",
+            "axis 1 righty=start/left\n",
+            "axis 1 lefttrigger=none/primary\n",
+            "axis 1 righttrigger=none/secondary\n",
+        ))
+        .map_err(failure)
     }
 
     #[test]
@@ -611,20 +602,16 @@ mod tests {
         }) {
             return Err(failure("axis hints require reduced text scale"));
         }
-        let disabled = DEFAULT_PROFILES
-            .configured(
-                ACTION_NAMES,
-                concat!(
-                    "version=1\n",
-                    "axis 1 leftx=pause/pause\n",
-                    "axis 1 lefty=none/none\n",
-                    "axis 1 rightx=none/none\n",
-                    "axis 1 righty=none/none\n",
-                    "axis 1 lefttrigger=none/none\n",
-                    "axis 1 righttrigger=none/pause\n",
-                ),
-            )
-            .map_err(failure)?;
+        let disabled = configured_profiles(concat!(
+            "version=1\n",
+            "axis 1 leftx=pause/pause\n",
+            "axis 1 lefty=none/none\n",
+            "axis 1 rightx=none/none\n",
+            "axis 1 righty=none/none\n",
+            "axis 1 lefttrigger=none/none\n",
+            "axis 1 righttrigger=none/pause\n",
+        ))
+        .map_err(failure)?;
         if axis_hints(&disabled) != ["NO REMOTE AXIS BINDINGS"] {
             return Err(failure("inactive axis hint advertises a control"));
         }
@@ -633,10 +620,10 @@ mod tests {
 
     #[test]
     fn touch_controller_routes_and_releases() -> Result<(), RenderError> {
-        let profiles = DEFAULT_PROFILES.configured(
-            ACTION_NAMES,
+        let profiles = configured_profiles(
             "version=1\ntouch 1 primary=secondary\ntouch 1 secondary=primary\n",
-        ).map_err(failure)?;
+        )
+        .map_err(failure)?;
         let mut controls = controller_controls(&profiles, true)?;
         let right = ContactId { device: 1, finger: 1 };
         let attack = ContactId { device: 1, finger: 2 };

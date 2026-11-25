@@ -30,9 +30,6 @@
 //   - Ignore repeat keys, unknown controllers and unhandled event types.
 
 //! Native SDL input for the shared action router.
-/// Reusable bounded digital control profile admission.
-pub mod profile;
-
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -42,12 +39,14 @@ use games::capability::{
     HapticCommand, HapticEffect, HapticError, HapticSupport, Haptics,
 };
 use games::input::InputEvent;
-use games::input::physical::{ControllerAxis, ControllerButton, PointerButton};
+use games::input::physical::{
+    ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
+};
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::presentation::PresentationLayout;
 use sdl2::controller::{Axis, Button, GameController};
 use sdl2::event::{Event, WindowEvent};
-pub use sdl2::keyboard::Scancode;
+use sdl2::keyboard::Scancode;
 use sdl2::mouse::MouseButton;
 use sdl2::video::Window;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
@@ -480,13 +479,28 @@ fn event_elapsed(origin: u64, now: u64, stamp: u32) -> Option<Duration> {
     Some(Duration::from_millis(absolute.saturating_sub(origin)))
 }
 
-/// SDL physical scancode for use in a title's shared key mapping.
+/// Resolve a legacy keyboard profile name at the native boundary.
+#[must_use]
+pub fn key_from_name(name: &str) -> Option<KeyboardKey> {
+    Scancode::from_name(name).map(|key| KeyboardKey::from_code(key_code(key)))
+}
+
+/// Native presentation name for a translated physical key.
+#[must_use]
+pub fn key_name(key: KeyboardKey) -> &'static str {
+    i32::try_from(key.code())
+        .ok()
+        .and_then(Scancode::from_i32)
+        .map_or("UNKNOWN", Scancode::name)
+}
+
+/// Translate a native keyboard identity for the shared router.
 #[must_use]
 #[expect(
     clippy::as_conversions,
     reason = "SDL scancodes are nonnegative C ABI enum discriminants"
 )]
-pub const fn key_code(scancode: Scancode) -> u32 {
+const fn key_code(scancode: Scancode) -> u32 {
     scancode as u32
 }
 
@@ -722,7 +736,7 @@ mod tests {
 
     use games::capability::{HapticEffect, HapticError, HapticSupport};
     use games::input::physical::{
-        ControllerAxis, ControllerButton, PointerButton,
+        ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
     };
     use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
@@ -733,10 +747,28 @@ mod tests {
 
     use super::{
         Axis, Button, HostEvent, Scancode, TouchGeometry, admit_discovery,
-        axis_code, button_code, deliver_feedback, event_elapsed, key_code,
-        mouse_code, open_candidate, route, route_contact,
+        axis_code, button_code, deliver_feedback, event_elapsed, key_from_name,
+        key_name, mouse_code, open_candidate, route, route_contact,
     };
     use crate::linux::RenderError;
+
+    #[test]
+    fn keyboard_profile_names_preserve_routing_identities() {
+        for (name, expected) in [
+            ("A", KeyboardKey::LETTER_A),
+            ("Space", KeyboardKey::SPACE),
+            ("Return", KeyboardKey::ENTER),
+            ("F2", KeyboardKey::F2),
+            ("6", KeyboardKey::NUM_6),
+            ("Keypad 1", KeyboardKey::KP_1),
+            ("Left", KeyboardKey::LEFT),
+        ] {
+            assert_eq!(key_from_name(name), Some(expected));
+            assert_eq!(key_name(expected), name);
+        }
+        assert_eq!(key_from_name("not-a-key"), None);
+        assert_eq!(key_name(KeyboardKey::from_code(u32::MAX)), "UNKNOWN");
+    }
 
     #[test]
     fn native_control_names_translate_to_shared_codes() {
@@ -1044,7 +1076,7 @@ mod tests {
     #[test]
     fn physical_keys_route_only_for_the_selected_window() {
         let mut mapping = InputMapping::new();
-        mapping.bind_key(key_code(Scancode::Space), "jump");
+        mapping.bind_key(KeyboardKey::SPACE.code(), "jump");
         let mut router = InputRouter::new(mapping);
         assert_eq!(route(&key(3, false), 2), None);
         assert_eq!(route(&key(2, true), 2), None);
@@ -1052,7 +1084,7 @@ mod tests {
         assert_eq!(
             first,
             Some(HostEvent::Input(InputEvent::Key {
-                code: key_code(Scancode::Space),
+                code: KeyboardKey::SPACE.code(),
                 down: true,
             }))
         );

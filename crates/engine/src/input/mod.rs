@@ -31,8 +31,10 @@
 //
 //! Platform-independent input mapping with robust device disconnects.
 
-/// Stable standard gamepad and pointer identities.
+/// Stable standard keyboard, gamepad and pointer identities.
 pub mod physical;
+/// Bounded platform-neutral digital binding profiles.
+pub mod profile;
 
 /// Normalized touch geometry and bounded contact lifetimes.
 pub mod touch;

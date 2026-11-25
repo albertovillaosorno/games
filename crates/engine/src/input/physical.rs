@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Stable physical gamepad and pointer identities and profile names.
+//   - Stable physical keyboard, gamepad and pointer identities.
 // - Must-Not:
 //   - Depend on native device libraries or prescribe title actions.
 // - Allows:
@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - A shared physical input contract covers identical identities.
 // - Summary:
-//   - Platform-independent control identities for standard gamepads and mice.
+//   - Platform-independent control identities for standard input devices.
 // - Description:
 //   - Preserves existing profile names while separating native event enums.
 // - Usage:
@@ -207,6 +207,117 @@ impl ControllerButton {
     #[must_use]
     pub const fn profile_name(self) -> &'static str {
         self.descriptor().1
+    }
+}
+
+/// A physical keyboard routing identity, not a character or layout symbol.
+///
+/// Standard keys use keyboard-page USB HID usage identifiers. Existing
+/// adapter-specific extended codes are reserved for legacy profile migration;
+/// another adapter must explicitly translate its device codes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KeyboardKey(u32);
+
+impl KeyboardKey {
+    /// Physical DOWN key.
+    pub const DOWN: Self = Self(81);
+    /// Physical ENTER key.
+    pub const ENTER: Self = Self(40);
+    /// Physical ESCAPE key.
+    pub const ESCAPE: Self = Self(41);
+    /// Physical F1 key.
+    pub const F1: Self = Self(58);
+    /// Physical F2 key.
+    pub const F2: Self = Self(59);
+    /// Physical 1 key on the numeric keypad.
+    pub const KP_1: Self = Self(89);
+    /// Physical 2 key on the numeric keypad.
+    pub const KP_2: Self = Self(90);
+    /// Physical 4 key on the numeric keypad.
+    pub const KP_4: Self = Self(92);
+    /// Physical 5 key on the numeric keypad.
+    pub const KP_5: Self = Self(93);
+    /// Physical 6 key on the numeric keypad.
+    pub const KP_6: Self = Self(94);
+    /// Physical 8 key on the numeric keypad.
+    pub const KP_8: Self = Self(96);
+    /// Physical LEFT key.
+    pub const LEFT: Self = Self(80);
+    /// Physical A key.
+    pub const LETTER_A: Self = Self(4);
+    /// Physical B key.
+    pub const LETTER_B: Self = Self(5);
+    /// Physical C key.
+    pub const LETTER_C: Self = Self(6);
+    /// Physical D key.
+    pub const LETTER_D: Self = Self(7);
+    /// Physical E key.
+    pub const LETTER_E: Self = Self(8);
+    /// Physical F key.
+    pub const LETTER_F: Self = Self(9);
+    /// Physical G key.
+    pub const LETTER_G: Self = Self(10);
+    /// Physical H key.
+    pub const LETTER_H: Self = Self(11);
+    /// Physical I key.
+    pub const LETTER_I: Self = Self(12);
+    /// Physical J key.
+    pub const LETTER_J: Self = Self(13);
+    /// Physical K key.
+    pub const LETTER_K: Self = Self(14);
+    /// Physical L key.
+    pub const LETTER_L: Self = Self(15);
+    /// Physical M key.
+    pub const LETTER_M: Self = Self(16);
+    /// Physical N key.
+    pub const LETTER_N: Self = Self(17);
+    /// Physical O key.
+    pub const LETTER_O: Self = Self(18);
+    /// Physical P key.
+    pub const LETTER_P: Self = Self(19);
+    /// Physical Q key.
+    pub const LETTER_Q: Self = Self(20);
+    /// Physical R key.
+    pub const LETTER_R: Self = Self(21);
+    /// Physical S key.
+    pub const LETTER_S: Self = Self(22);
+    /// Physical T key.
+    pub const LETTER_T: Self = Self(23);
+    /// Physical U key.
+    pub const LETTER_U: Self = Self(24);
+    /// Physical V key.
+    pub const LETTER_V: Self = Self(25);
+    /// Physical W key.
+    pub const LETTER_W: Self = Self(26);
+    /// Physical X key.
+    pub const LETTER_X: Self = Self(27);
+    /// Physical Y key.
+    pub const LETTER_Y: Self = Self(28);
+    /// Physical Z key.
+    pub const LETTER_Z: Self = Self(29);
+    /// Physical 6 key on the main number row.
+    pub const NUM_6: Self = Self(35);
+    /// Physical 7 key on the main number row.
+    pub const NUM_7: Self = Self(36);
+    /// Physical 8 key on the main number row.
+    pub const NUM_8: Self = Self(37);
+    /// Physical RIGHT key.
+    pub const RIGHT: Self = Self(79);
+    /// Physical SPACE key.
+    pub const SPACE: Self = Self(44);
+    /// Physical UP key.
+    pub const UP: Self = Self(82);
+
+    /// Return the stable routing identity.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        self.0
+    }
+
+    /// Admit an explicitly translated keyboard routing identity.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Self {
+        Self(code)
     }
 }
 

@@ -344,7 +344,7 @@ pub(super) mod tests {
     use games_platform_graphics::linux::sprites::SceneLimits;
     use games_platform_graphics::linux::{FrameLayout, NativeWindow};
 
-    use super::super::{ACTION_NAMES, DEFAULT_PROFILES, dimension};
+    use super::super::{configured_profiles, dimension};
     use super::*;
 
     const STRIDE: usize = 320 * 4;
@@ -555,10 +555,10 @@ pub(super) mod tests {
                 sprites: size(2)?,
             },
             |scene| {
-                let profiles = DEFAULT_PROFILES.configured(
-                    ACTION_NAMES,
+                let profiles = configured_profiles(
                     "version=1\nkey 1 start=F1\nbutton 1 start=rightshoulder",
-                ).map_err(failure)?;
+                )
+                .map_err(failure)?;
                 let mut hud = StationHud::load(scene, &profiles, reserved)?;
                 check_remote(scene, &mut hud)?;
                 check_local(scene, &hud)
