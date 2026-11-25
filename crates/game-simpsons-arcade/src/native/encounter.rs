@@ -322,7 +322,7 @@ fn measure_strike(
         let started = Instant::now();
         advance(simulation, 1)?;
         let [marge, ..] = simulation.state().stations();
-        let attack = Maneuver::Attack { tick };
+        let attack = Maneuver::Attack { moving: false, tick };
         let expected = if tick < attack.pose_duration(Player::Marge) {
             attack
         } else {

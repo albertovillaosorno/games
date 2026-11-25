@@ -1298,3 +1298,35 @@ adaptive offscreen OpenGL ES touch and dummy-audio smoke with the
 88-pose catalogue, with no missed host-work budget on 600 movement and
 60 combat submissions. Frame-level audio scheduling, physical audio,
 background music and other sound effects remain unverified.
+
+Controlled one-tick horizontal pulses at offsets zero, one and two
+of isolated ground attacks distinguish the moving animation. For all
+four characters only offset one selects the alternate pose sequence;
+offsets zero and two retain neutral poses. Marge also retains neutral
+poses for Up and Down at offset one. The distinct sequences last the
+same displayed interval, with Bart's final transient idle pose.
+Sixteen pose crops passed complete-scene pixel-exact import and
+extend the local catalogue to 134 records. Marge's back-to-back
+attack probes with one and three rightward drift ticks in separate
+actions did not cross a visible pixel boundary, consistent with the
+existing per-action remainder reset. Other fractional cases remain
+unverified.
+
+The preview latches moving art from horizontal input on the tick
+after ground attack admission and retains it until the attack ends.
+The first predicted tick and catalogues without attack-moving use
+neutral art. This is a presentation variant of the existing attack,
+not a new hitbox or damage mechanic; both variants use the same
+provisional strike and recovery. Inline regressions verify the
+four-station sampling window, optional sequence admission, neutral
+fallback and retained single-strike behavior. The bounded catalogue
+now admits up to 144 records, still limited to 16 KiB.
+
+Fresh combined native rendering, audio and portable-core validation
+passed in run 1795621085352033160-3557396, including the final strike
+regression. The 3,233,264-byte optimized preview passed adaptive
+offscreen OpenGL touch smoke with the 134-pose catalogue. No budget
+misses occurred across 600 movement and 60 combat submissions;
+mean host work was 67.462 and 54.333 microseconds respectively,
+and whole-smoke peak RSS was 124,506,112 bytes. This does not
+establish physical presentation, original hitbox or sound parity.

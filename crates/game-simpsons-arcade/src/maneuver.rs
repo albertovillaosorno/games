@@ -229,6 +229,8 @@ pub enum Maneuver {
     AirAttack(AirAttackMotion),
     /// Station is attacking.
     Attack {
+        /// Horizontal input sampled one tick after attack admission.
+        moving: bool,
         /// Zero-based displayed pose tick.
         tick: u8,
     },
@@ -252,11 +254,11 @@ impl Maneuver {
                 Some(next) => Self::AirAttack(next),
                 None => Self::Idle,
             },
-            Self::Attack { tick } => {
+            Self::Attack { moving, tick } => {
                 let duration = self.pose_duration(player);
                 let next = tick.saturating_add(1);
                 if next < duration {
-                    Self::Attack { tick: next }
+                    Self::Attack { moving, tick: next }
                 } else {
                     Self::Idle
                 }
@@ -291,7 +293,7 @@ impl Maneuver {
     pub(super) const fn attack_cue(self, player: Player) -> bool {
         match self {
             Self::AirAttack(motion) => motion.tick() == 4,
-            Self::Attack { tick } => {
+            Self::Attack { tick, .. } => {
                 let onset = match player {
                     Player::Marge | Player::Bart => 4,
                     Player::Homer | Player::Lisa => 5,
@@ -477,7 +479,7 @@ mod tests {
             } else {
                 17
             };
-            let mut state = Maneuver::Attack { tick: 0 };
+            let mut state = Maneuver::Attack { moving: false, tick: 0 };
             for _ in 0..attack_ticks {
                 assert_ne!(state, Maneuver::Idle);
                 state = state.advance(player, false);

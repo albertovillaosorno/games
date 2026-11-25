@@ -74,12 +74,12 @@ UTF-8 catalogue has one whitespace-separated record per line:
 NAME ACTION TICK SHA256
 ```
 
-NAME is marge, homer, bart or lisa; ACTION is attack, air-attack, jump,
-jump-lift, special, walk or walk-up. TICK is
+NAME is marge, homer, bart or lisa; ACTION is attack, attack-moving,
+air-attack, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 128 poses and
+record or maneuver end. The catalogue is limited to 144 poses and
 16 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
@@ -97,6 +97,11 @@ cycle phase as walk. Upward input selects it, including diagonals;
 otherwise the forward walking sequence is used. Missing walk-up art
 falls back to walk. Held walking input advances the cycle even at a
 blocked boundary, and neutral input resets it.
+An optional attack-moving sequence for all four characters has the
+same duration as attack. Horizontal input on the tick after attack
+admission selects it for the rest of that attack. Its first preview
+tick and missing moving art use the neutral sequence. Hit timing and
+recovery are unchanged.
 
 For the experimental first enemy, insert
 `--enemy APPROACH_SHA STRIKE_SHA` after `--poses FILE` (if used) and

@@ -1894,12 +1894,9 @@ fn smoke_poses(
         }
     }
     let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    if simulation
-        .state()
-        .stations()
-        .iter()
-        .any(|station| station.maneuver != (Maneuver::Attack { tick: 0 }))
-    {
+    if simulation.state().stations().iter().any(|station| {
+        station.maneuver != (Maneuver::Attack { moving: false, tick: 0 })
+    }) {
         return Err(failure("four-player attack admission failed"));
     }
     let _attack = art.present(scene, simulation.state())?;

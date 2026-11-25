@@ -45,12 +45,13 @@ use games_platform_storage::file::snapshot;
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
 use crate::{JumpMotion, WalkMotion};
 
-const MAX_POSES: usize = 128;
+const MAX_POSES: usize = 144;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
     AirAttack,
     Attack,
+    AttackMoving,
     Jump,
     Lift,
     Special,
@@ -62,7 +63,10 @@ impl Kind {
     const fn duration(self, player: Player) -> u8 {
         match self {
             Self::AirAttack => 60,
-            Self::Attack => Maneuver::Attack { tick: 0 }.pose_duration(player),
+            Self::Attack | Self::AttackMoving => {
+                Maneuver::Attack { moving: false, tick: 0 }
+                    .pose_duration(player)
+            },
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
             Self::Special => 30,
@@ -127,6 +131,7 @@ impl Catalogue {
         });
         let complete_optional = [
             Kind::AirAttack,
+            Kind::AttackMoving,
             Kind::Lift,
             Kind::Special,
             Kind::Walk,
@@ -156,30 +161,42 @@ impl PoseArt {
         player: Player,
         station: Station,
     ) -> Option<Art> {
-        let (kind, tick) = match station.maneuver {
-            Maneuver::Attack { tick } => (Kind::Attack, tick),
+        match station.maneuver {
+            Maneuver::Attack { moving, tick } => {
+                ground_attack_entry(&self.entries, player, moving, tick)
+                    .copied()
+            },
             Maneuver::AirAttack(motion) => {
-                return air_attack_entry(&self.entries, player, motion.tick())
-                    .copied();
+                air_attack_entry(&self.entries, player, motion.tick()).copied()
             },
             Maneuver::Special { tick, .. } => {
-                return select_entry(
-                    &self.entries,
-                    (player, Kind::Special, tick),
-                )
-                .or_else(|| air_attack_entry(&self.entries, player, tick))
-                .copied();
+                select_entry(&self.entries, (player, Kind::Special, tick))
+                    .or_else(|| air_attack_entry(&self.entries, player, tick))
+                    .copied()
             },
             Maneuver::Jump(motion) => {
-                return jump_entry(&self.entries, player, motion).copied();
+                jump_entry(&self.entries, player, motion).copied()
             },
             Maneuver::Idle => {
-                return walking_entry(&self.entries, player, station.walking?)
-                    .copied();
+                walking_entry(&self.entries, player, station.walking?).copied()
             },
-        };
-        select_entry(&self.entries, (player, kind, tick)).copied()
+        }
     }
+}
+
+fn ground_attack_entry<Value>(
+    entries: &BTreeMap<Key, Value>,
+    player: Player,
+    moving: bool,
+    tick: u8,
+) -> Option<&Value> {
+    if moving
+        && let Some(entry) =
+            select_entry(entries, (player, Kind::AttackMoving, tick))
+    {
+        return Some(entry);
+    }
+    select_entry(entries, (player, Kind::Attack, tick))
 }
 
 fn walking_entry<Value>(
@@ -245,6 +262,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
     let kind = match action {
         "air-attack" => Kind::AirAttack,
         "attack" => Kind::Attack,
+        "attack-moving" => Kind::AttackMoving,
         "jump" => Kind::Jump,
         "jump-lift" => Kind::Lift,
         "special" => Kind::Special,
@@ -314,6 +332,55 @@ mod tests {
             assert_eq!(walking_offset(player, period), Some(0));
             assert_eq!(walking_offset(player, period * 2 + 1), Some(1));
         }
+    }
+
+    #[test]
+    fn moving_ground_pose_is_optional_and_does_not_replace_neutral() {
+        let entries = BTreeMap::from([
+            ((Player::Marge, Kind::Attack, 0), "neutral"),
+            ((Player::Marge, Kind::AttackMoving, 0), "moving"),
+            ((Player::Marge, Kind::AttackMoving, 4), "moving-late"),
+            ((Player::Bart, Kind::Attack, 0), "bart"),
+        ]);
+        assert_eq!(
+            ground_attack_entry(&entries, Player::Marge, true, 5),
+            Some(&"moving-late")
+        );
+        assert_eq!(
+            ground_attack_entry(&entries, Player::Marge, false, 5),
+            Some(&"neutral")
+        );
+        assert_eq!(
+            ground_attack_entry(&entries, Player::Bart, true, 5),
+            Some(&"bart")
+        );
+    }
+
+    #[test]
+    fn optional_moving_attack_requires_every_station_and_valid_ticks() {
+        let base = complete();
+        let moving = format!(
+            "marge attack-moving 0 {HASH}\n\
+             homer attack-moving 0 {HASH}\n\
+             bart attack-moving 0 {HASH}\n\
+             lisa attack-moving 0 {HASH}\n"
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}marge attack-moving 0 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!(
+                "{base}{moving}bart attack-moving 17 {HASH}"
+            ))
+            .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!(
+                "{base}{moving}marge attack-moving 17 {HASH}"
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -388,7 +455,7 @@ mod tests {
         let extra: String = ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
-                (0u8..30).map(move |tick| {
+                (0u8..34).map(move |tick| {
                     format!("{name} air-attack {tick} {HASH}\n")
                 })
             })
@@ -399,7 +466,7 @@ mod tests {
             Some(MAX_POSES)
         );
         assert!(
-            Catalogue::parse(&format!("{text}marge air-attack 30 {HASH}\n"))
+            Catalogue::parse(&format!("{text}marge air-attack 34 {HASH}\n"))
                 .is_err()
         );
     }

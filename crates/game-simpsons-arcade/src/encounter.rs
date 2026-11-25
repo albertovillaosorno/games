@@ -168,9 +168,10 @@ impl Enemy {
                     self.position,
                     (32, 12),
                 )
-                && (station.maneuver
-                    == (Maneuver::Attack { tick: PLAYER_STRIKE })
-                    || station.maneuver.consume_air_strike())
+                && (matches!(station.maneuver, Maneuver::Attack {
+                    tick: PLAYER_STRIKE,
+                    ..
+                }) || station.maneuver.consume_air_strike())
             {
                 self.health = self.health.saturating_sub(1);
             }
@@ -286,6 +287,27 @@ mod tests {
         }
         assert_eq!(cabinet.enemy(), defeated);
         assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
+    }
+
+    #[test]
+    fn moving_ground_attack_retains_one_strike() {
+        let result = playing(Point { x: 132, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let [press, release] = pulse(Control::Right);
+        cabinet.input_step(3, &pulse(Control::Primary));
+        cabinet.input_step(4, &[press]);
+        cabinet.input_step(5, &[release]);
+        assert_eq!(
+            cabinet.stations().first().map(|slot| slot.maneuver),
+            Some(Maneuver::Attack { moving: true, tick: 2 })
+        );
+        for tick in 6..23 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(2));
     }
 
     #[test]
