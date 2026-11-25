@@ -13,6 +13,7 @@ categories.workspace = true
 native-preview = [
     "dep:games",
     "dep:games-platform",
+    "dep:games-platform-audio",
     "dep:games-platform-graphics",
 ]
 
@@ -26,6 +27,7 @@ games-platform-storage.workspace = true
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 games = { workspace = true, optional = true }
 games-platform = { workspace = true, optional = true }
+games-platform-audio = { workspace = true, optional = true }
 games-platform-graphics = { workspace = true, optional = true }
 
 [lints]

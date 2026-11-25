@@ -45,6 +45,14 @@ can be explicitly included with:
 GAMES_NATIVE_RENDER_SMOKE=1 cargo validate --no-cache
 ```
 
+The native audio adapter uses a separate, bounded signed-PCM playback queue.
+Its paused-device smoke test can run without audible output using SDL2's
+dummy audio driver:
+
+```sh
+SDL_AUDIODRIVER=dummy GAMES_NATIVE_AUDIO_SMOKE=1 cargo validate --no-cache
+```
+
 ## Development
 
 The project is in bootstrap. No game is currently playable. The catalogue is a

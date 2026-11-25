@@ -5,6 +5,7 @@ members = [
     "crates/engine",
     "crates/importer",
     "crates/platform",
+    "crates/platform-audio",
     "crates/platform-graphics",
     "crates/platform-storage",
     "crates/validator",
@@ -34,6 +35,10 @@ sdl2 = { version = "0.39.0", features = ["use-pkgconfig"] }
 nix = { version = "0.31.3", features = ["fs", "user"] }
 [workspace.dependencies.games-platform]
 path = "crates/platform"
+version = "0.1.0"
+
+[workspace.dependencies.games-platform-audio]
+path = "crates/platform-audio"
 version = "0.1.0"
 
 [workspace.dependencies.games-platform-graphics]

@@ -6,8 +6,8 @@ The engine uses SHA-2 for save integrity. The shared asset crate uses
 SHA-2 and Serde JSON for canonical manifests. The importer uses ZIP
 and the pure-Rust zlib-rs Deflate backend. The native platform
 adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
-Nix for descriptor-relative archive staging. Linux graphics uses Rust-SDL2
-with the system SDL2 library (Zlib licence), linked dynamically. No
+Nix for descriptor-relative archive staging. Linux graphics and audio use
+Rust-SDL2 with the system SDL2 library (Zlib licence), linked dynamically. No
 original game assets, original game code or candidate project source is
 incorporated or distributed by this repository. The development validator
 uses Serde JSON, TOML and SHA-2; platform tests use Rcgen.

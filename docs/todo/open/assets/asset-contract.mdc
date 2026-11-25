@@ -76,3 +76,15 @@ samples without allocating. Tests cover channel order, negative and
 positive extrema, invalid indices, mismatched hashes and partial frames.
 Native graphics consumption is also verified by exact logical RGBA
 readback from locally imported tiles; see the Simpsons task for evidence.
+
+A separate Linux SDL2 audio adapter accepts verified canonical PCM frame
+ranges or caller-mixed interleaved signed samples. The caller requests the
+exact sample rate, channel count, native buffer size and software-queue
+budget. The adapter rejects out-of-range, incomplete and incompatible
+submissions and checks capacity before decoding or submitting. Scratch
+storage is reused. The device starts paused, and queue occupancy excludes
+samples already handed to the backend. Synthetic fixtures exercise range
+decoding, exact-format admission and overflow rejection. The opt-in native
+smoke uses the SDL2 dummy driver to exercise paused queue admission and
+clearing without requiring an audio output device. Physical output,
+latency, Android, WASM and gameplay audio parity remain unverified.

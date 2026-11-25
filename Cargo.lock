@@ -234,6 +234,7 @@ dependencies = [
  "games-assets",
  "games-importer",
  "games-platform",
+ "games-platform-audio",
  "games-platform-graphics",
  "games-platform-storage",
 ]
@@ -258,6 +259,14 @@ dependencies = [
  "rcgen",
  "rustls",
  "sha2",
+]
+
+[[package]]
+name = "games-platform-audio"
+version = "0.1.0"
+dependencies = [
+ "games-assets",
+ "sdl2",
 ]
 
 [[package]]

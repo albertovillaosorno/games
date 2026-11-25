@@ -30,6 +30,13 @@
 //   - Read-only verification and explicit opt-in to publication.
 
 //! Host-side original media verification and asset import.
+#[cfg(all(
+    feature = "native-preview",
+    target_os = "linux",
+    target_env = "gnu"
+))]
+/// Bounded canonical PCM consumption and native queue diagnostics.
+pub mod audio_check;
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 /// Native canonical bundle publication and verification.
@@ -112,6 +119,8 @@ const USAGE: &str = concat!(
     "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
     "\nLinux/Android: mame tilemap-check MACHINE REV RAM REGISTERS",
     "\n",
+    "GNU/Linux (native-preview): mame audio-render-check MACHINE REV ",
+    "PARENT SHA256 LEFT_KEY RIGHT_KEY FRAMES\n",
     "GNU/Linux (native-preview): mame render-check MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT",
     "\nGNU/Linux (native-preview): mame render-bench MACHINE REV ",
@@ -201,6 +210,12 @@ impl Arguments {
 
 #[derive(Debug)]
 enum Command {
+    #[cfg(all(
+        feature = "native-preview",
+        target_os = "linux",
+        target_env = "gnu"
+    ))]
+    AudioCheck(Machine, audio_check::Arguments),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     BackgroundCheck(Machine, reference_background::Arguments),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -311,6 +326,17 @@ impl Command {
         Args: Iterator<Item = OsString>,
     {
         let selected = select_machine(&mut args)?;
+        #[cfg(all(
+            feature = "native-preview",
+            target_os = "linux",
+            target_env = "gnu"
+        ))]
+        if action == "audio-render-check" {
+            return Ok(Self::AudioCheck(
+                selected,
+                audio_check::Arguments::parse(args.collect())?,
+            ));
+        }
         match action {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "background-check" | "scene-check" | "scene-render-check" => {
@@ -400,6 +426,12 @@ impl Command {
 
     fn run(self) -> Result<(), String> {
         match self {
+            #[cfg(all(
+                feature = "native-preview",
+                target_os = "linux",
+                target_env = "gnu"
+            ))]
+            Self::AudioCheck(machine, args) => args.run(machine),
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::BackgroundCheck(machine, args) => args.run(machine),
             #[cfg(any(target_os = "linux", target_os = "android"))]

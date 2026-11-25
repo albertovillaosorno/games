@@ -396,3 +396,23 @@ read-back diagnostics; a repeated publication was refused and another
 read-back matched. The original graphics manifest is unchanged.
 Catalogue indices are not semantic sound-event IDs, and nominal rates
 do not establish original playback pitch, scheduling or audio parity.
+
+The native-preview host now loads two verified catalogue clips through the
+canonical PCM view and the shared engine mixer. It mixes their source rates
+into independent stereo channels at 48 kHz, compares different chunk
+partitions and checks each complete submission against the paused native
+software queue. The queue is cleared between submissions, never resumed.
+
+```sh
+SDL_AUDIODRIVER=dummy cargo run --locked -p games-build \
+  --features native-preview -- mame audio-render-check simpsons \
+  world-4p-set-1 PARENT SHA256 LEFT_KEY RIGHT_KEY FRAMES
+```
+
+Two local diagnostics processed 480,000 and 123,457 stereo output frames.
+The first had 312,743 nonzero frames and the second 24,047; both exhausted
+their voices with exact chunk-invariant samples and queue byte extents.
+The SDL dummy driver proves bounded native submission, not sound from a
+physical device. Linear interpolation is not a band-limited downsampler.
+Original event mapping, variable pitch, looping, FM synthesis and
+interactive gameplay remain unverified.
