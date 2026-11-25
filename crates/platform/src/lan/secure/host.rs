@@ -37,7 +37,7 @@ use games::network::{
 };
 use rustls::Connection;
 
-use super::{PeerFingerprint, SecureFrameStream};
+use super::{PeerFingerprint, SecureFrameStream, SendProgress};
 
 /// Host admission, session policy or transport failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +48,8 @@ pub enum HostError {
     InvalidTransport,
     /// A local controller cannot claim a LAN-enrolled identity.
     LocalIdentityReserved,
+    /// An outgoing frame is already queued on this peer.
+    SendPending,
     /// The shared roster or message policy rejected the operation.
     Session(SessionError),
     /// Enrolments exceed the configured maximum player count.
@@ -200,6 +202,40 @@ impl HostSession {
             .map_err(HostError::from)
     }
 
+    /// Advance the queued outgoing frame for an authenticated peer.
+    ///
+    /// # Errors
+    /// Rejects unknown peers and disconnects a failed or expired transfer.
+    pub fn poll_send(&mut self, peer: u64) -> Result<SendProgress, HostError> {
+        self.channels
+            .get_mut(&peer)
+            .ok_or(SessionError::UnknownPeer)?
+            .poll_send()
+            .map_err(|error| self.failed_transfer(peer, &error))
+    }
+
+    /// Queue one outgoing frame without waiting for socket I/O.
+    ///
+    /// # Errors
+    /// Rejects missing channels, oversized frames and outstanding sends.
+    pub fn queue_send(
+        &mut self,
+        peer: u64,
+        bytes: Vec<u8>,
+    ) -> Result<(), HostError> {
+        self.roster.accept(peer, &bytes)?;
+        let stream = self
+            .channels
+            .get_mut(&peer)
+            .ok_or(SessionError::UnknownPeer)?;
+        if stream.has_pending_send() {
+            return Err(HostError::SendPending);
+        }
+        stream
+            .queue_send(bytes)
+            .map_err(|error| self.failed_transfer(peer, &error))
+    }
+
     /// Receive and schema-check one frame for an authenticated LAN identity.
     ///
     /// # Errors
@@ -269,13 +305,18 @@ impl HostSession {
     /// Send a bounded application frame to an active LAN player.
     ///
     /// # Errors
-    /// Rejects missing channels and oversized messages. A transport failure
-    /// closes the channel and reserves the identity.
+    /// Rejects missing channels, oversized messages and queued sends. A
+    /// transport failure closes the channel and reserves the identity.
     pub fn send(&mut self, peer: u64, bytes: &[u8]) -> Result<(), HostError> {
         self.roster.accept(peer, bytes)?;
-        self.channels
+        let stream = self
+            .channels
             .get_mut(&peer)
-            .ok_or(SessionError::UnknownPeer)?
+            .ok_or(SessionError::UnknownPeer)?;
+        if stream.has_pending_send() {
+            return Err(HostError::SendPending);
+        }
+        stream
             .send(bytes)
             .map_err(|error| self.failed_transfer(peer, &error))
     }

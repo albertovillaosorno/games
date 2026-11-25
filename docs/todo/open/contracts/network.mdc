@@ -162,3 +162,19 @@ deadlines, and rejection of an untrusted certificate with permit recovery.
 The tests passed in both default and all-feature suites. Incremental
 outbound sends, automatic scheduling, credential provisioning and physical
 LAN play remain open.
+
+The native transport also supports one bounded queued outbound frame per
+authenticated channel. Queue admission is distinct from wire completion;
+the shared framing cursor handles partial header and payload writes for
+both blocking and polled transfers. Polling advances plaintext and flushes
+pending ciphertext without waiting for a receiver. Another send cannot
+replace or interleave the outstanding frame. Expiry closes the transport
+and reserves the existing identity; receiving cannot renew a send deadline.
+
+A deterministic scripted stream exercises short writes, backpressure,
+exact frame bytes (including an empty frame), flush completion, queue
+rejection and expiry. A TLS loopback worker test verifies a queued send,
+busy rejection without disconnecting, unrelated local admission, encrypted
+delivery and subsequent idle state. Fresh validation passed in run
+1795588148767594009-55007. Caller-driven scheduling remains explicit;
+physical LAN, integrated game hosting and production enrolment remain open.

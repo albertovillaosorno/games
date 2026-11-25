@@ -80,6 +80,15 @@ impl LanConfig {
             timeout,
         })
     }
+
+    fn outbound_length(self, length: usize) -> io::Result<u32> {
+        let count =
+            u32::try_from(length).map_err(|_error| ErrorKind::InvalidInput)?;
+        if count > self.max_bytes {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        Ok(count)
+    }
 }
 
 #[derive(Debug)]
@@ -149,16 +158,29 @@ impl DeadlineSocket {
 }
 
 trait TimedStream {
+    fn poll_flush(&mut self) -> io::Result<bool>;
     fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize>;
+    fn poll_write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize>;
     fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize>;
     fn reset_deadline(&mut self, deadline: Instant);
     fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize>;
 }
 
 impl TimedStream for DeadlineSocket {
+    fn poll_flush(&mut self) -> io::Result<bool> {
+        Ok(true)
+    }
+
     fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         self.socket.set_nonblocking(true)?;
         let result = self.socket.read(bytes);
+        self.socket.set_nonblocking(false)?;
+        result
+    }
+
+    fn poll_write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.socket.set_nonblocking(true)?;
+        let result = self.socket.write(bytes);
         self.socket.set_nonblocking(false)?;
         result
     }
@@ -241,9 +263,92 @@ impl FrameReader {
     }
 }
 
+/// Progress of the single outstanding outgoing frame on a channel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendProgress {
+    /// All plaintext and pending transport bytes have been submitted.
+    Complete,
+    /// No outgoing frame has been queued.
+    Idle,
+    /// The frame is incomplete or the peer is applying backpressure.
+    Pending,
+}
+
+#[derive(Debug)]
+struct FrameWriter {
+    header: [u8; 4],
+    header_written: usize,
+    payload_written: usize,
+}
+
+impl FrameWriter {
+    fn advance<Write>(
+        &mut self,
+        payload: &[u8],
+        write: Write,
+    ) -> io::Result<bool>
+    where
+        Write: FnOnce(&[u8]) -> io::Result<usize>,
+    {
+        let (bytes, offset) = if self.header_written < self.header.len() {
+            (self.header.as_slice(), &mut self.header_written)
+        } else {
+            (payload, &mut self.payload_written)
+        };
+        let chunk = bytes.get(*offset..).ok_or(ErrorKind::InvalidData)?;
+        if !chunk.is_empty() {
+            let count = write(chunk)?;
+            if count == 0 {
+                return Err(ErrorKind::WriteZero.into());
+            }
+            if count > chunk.len() {
+                return Err(ErrorKind::InvalidData.into());
+            }
+            *offset =
+                offset.checked_add(count).ok_or(ErrorKind::InvalidData)?;
+        }
+        Ok(self.header_written == self.header.len()
+            && self.payload_written == payload.len())
+    }
+
+    const fn new(length: u32) -> Self {
+        Self {
+            header: length.to_be_bytes(),
+            header_written: 0,
+            payload_written: 0,
+        }
+    }
+
+    fn write_blocking<Stream>(
+        &mut self,
+        payload: &[u8],
+        stream: &mut Stream,
+    ) -> io::Result<()>
+    where
+        Stream: TimedStream,
+    {
+        loop {
+            match self.advance(payload, |chunk| stream.write_chunk(chunk)) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {},
+                Err(error) if error.kind() == ErrorKind::Interrupted => {},
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PendingSend {
+    bytes: Vec<u8>,
+    deadline: Instant,
+    writer: FrameWriter,
+}
+
 #[derive(Debug)]
 struct FrameChannel<Stream> {
     config: LanConfig,
+    pending_send: Option<PendingSend>,
     read_deadline: Option<Instant>,
     reader: FrameReader,
     stream: Option<Stream>,
@@ -255,13 +360,19 @@ where
 {
     fn close(&mut self) {
         drop(self.stream.take());
+        self.pending_send = None;
         self.reader = FrameReader::new();
         self.read_deadline = None;
+    }
+
+    const fn has_pending_send(&self) -> bool {
+        self.pending_send.is_some()
     }
 
     const fn new(stream: Stream, config: LanConfig) -> Self {
         Self {
             config,
+            pending_send: None,
             read_deadline: None,
             reader: FrameReader::new(),
             stream: Some(stream),
@@ -277,6 +388,9 @@ where
     }
 
     fn poll_receive_inner(&mut self) -> io::Result<Option<Vec<u8>>> {
+        if let Some(pending) = &self.pending_send {
+            let _remaining = remaining(pending.deadline)?;
+        }
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         if let Some(deadline) = self.read_deadline {
             let _time = remaining(deadline)?;
@@ -307,6 +421,57 @@ where
         }
     }
 
+    fn poll_send(&mut self) -> io::Result<SendProgress> {
+        let result = self.poll_send_inner();
+        if result.is_err() {
+            self.close();
+        }
+        result
+    }
+
+    fn poll_send_inner(&mut self) -> io::Result<SendProgress> {
+        let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
+        let Some(pending) = &mut self.pending_send else {
+            return Ok(SendProgress::Idle);
+        };
+        let _time = remaining(pending.deadline)?;
+        match pending
+            .writer
+            .advance(&pending.bytes, |bytes| stream.poll_write_chunk(bytes))
+        {
+            Ok(true) => {
+                if stream.poll_flush()? {
+                    self.pending_send = None;
+                    return Ok(SendProgress::Complete);
+                }
+            },
+            Ok(false) => {},
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::WouldBlock | ErrorKind::Interrupted
+                ) => {},
+            Err(error) => return Err(error),
+        }
+        Ok(SendProgress::Pending)
+    }
+
+    fn queue_send(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+        let length = self.config.outbound_length(bytes.len())?;
+        if self.stream.is_none() {
+            return Err(ErrorKind::NotConnected.into());
+        }
+        if self.has_pending_send() {
+            return Err(ErrorKind::AlreadyExists.into());
+        }
+        self.pending_send = Some(PendingSend {
+            bytes,
+            deadline: self.config.deadline()?,
+            writer: FrameWriter::new(length),
+        });
+        Ok(())
+    }
+
     fn receive(&mut self) -> io::Result<Vec<u8>> {
         let result = self.receive_blocking();
         if result.is_err() {
@@ -317,7 +482,14 @@ where
 
     fn receive_blocking(&mut self) -> io::Result<Vec<u8>> {
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
-        let deadline = self.read_deadline.unwrap_or(self.config.deadline()?);
+        let receive_deadline =
+            self.read_deadline.unwrap_or(self.config.deadline()?);
+        let deadline = self
+            .pending_send
+            .as_ref()
+            .map_or(receive_deadline, |pending| {
+                receive_deadline.min(pending.deadline)
+            });
         stream.reset_deadline(deadline);
         loop {
             let _time = remaining(deadline)?;
@@ -337,15 +509,12 @@ where
     }
 
     fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let length = u32::try_from(bytes.len())
-            .map_err(|_error| ErrorKind::InvalidInput)?;
-        if length > self.config.max_bytes {
-            return Err(ErrorKind::InvalidInput.into());
+        let length = self.config.outbound_length(bytes.len())?;
+        if self.has_pending_send() {
+            return Err(ErrorKind::AlreadyExists.into());
         }
-        self.transfer(|stream, _config| {
-            write_all(stream, &length.to_be_bytes())?;
-            write_all(stream, bytes)
-        })
+        let mut writer = FrameWriter::new(length);
+        self.transfer(|stream, _config| writer.write_blocking(bytes, stream))
     }
 
     fn transfer<Output, Operation>(
@@ -425,6 +594,7 @@ fn require_private(address: SocketAddr) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn write_all<Stream>(stream: &mut Stream, mut bytes: &[u8]) -> io::Result<()>
 where
     Stream: TimedStream,
@@ -452,7 +622,10 @@ mod tests {
 
     use games::network::{MessageSchema, PeerKind, Session, SessionConfig};
 
-    use super::{FrameStream, LanConfig, LanListener};
+    use super::{
+        FrameChannel, FrameStream, LanConfig, LanListener, SendProgress,
+        TimedStream,
+    };
 
     pub(super) const LOOPBACK: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -469,6 +642,44 @@ mod tests {
                 [b'M', value] if *value <= 10 => Some(*value),
                 _ => None,
             }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct ScriptedStream {
+        bytes: Vec<u8>,
+        flush_blocked: bool,
+        write_blocked: bool,
+    }
+
+    impl TimedStream for ScriptedStream {
+        fn poll_flush(&mut self) -> io::Result<bool> {
+            Ok(!self.flush_blocked)
+        }
+
+        fn poll_read_chunk(&mut self, _bytes: &mut [u8]) -> io::Result<usize> {
+            Err(ErrorKind::WouldBlock.into())
+        }
+
+        fn poll_write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.write_blocked {
+                return Err(ErrorKind::WouldBlock.into());
+            }
+            let chunk = bytes
+                .get(..bytes.len().min(2))
+                .ok_or(ErrorKind::InvalidData)?;
+            self.bytes.extend_from_slice(chunk);
+            Ok(chunk.len())
+        }
+
+        fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            self.poll_read_chunk(bytes)
+        }
+
+        fn reset_deadline(&mut self, _deadline: Instant) {}
+
+        fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.poll_write_chunk(bytes)
         }
     }
 
@@ -527,6 +738,91 @@ mod tests {
         require(host.receive()? == b"next", "next frame")?;
         host.send(b"reply")?;
         require(client.receive()? == b"reply", "reply frame")
+    }
+
+    #[test]
+    fn polled_send_preserves_wire_order_under_backpressure() -> io::Result<()> {
+        let stream = ScriptedStream {
+            flush_blocked: true,
+            write_blocked: true,
+            ..ScriptedStream::default()
+        };
+        let mut channel = FrameChannel::new(stream, config()?);
+        require(channel.poll_send()? == SendProgress::Idle, "idle")?;
+        require(
+            error_kind(channel.queue_send(vec![0; 9]))
+                == Some(ErrorKind::InvalidInput),
+            "oversized frame does not occupy queue",
+        )?;
+        channel.queue_send(b"abc".to_vec())?;
+        require(
+            channel.poll_send()? == SendProgress::Pending
+                && error_kind(channel.queue_send(b"next".to_vec()))
+                    == Some(ErrorKind::AlreadyExists)
+                && error_kind(channel.send(b"next"))
+                    == Some(ErrorKind::AlreadyExists),
+            "blocked frame cannot be replaced or interleaved",
+        )?;
+        channel
+            .stream
+            .as_mut()
+            .ok_or(ErrorKind::NotConnected)?
+            .write_blocked = false;
+        poll_accept(|| {
+            require(
+                channel.poll_send()? == SendProgress::Pending,
+                "unflushed transport bytes must remain pending",
+            )?;
+            let transport =
+                channel.stream.as_ref().ok_or(ErrorKind::NotConnected)?;
+            Ok((transport.bytes == b"\0\0\0\x03abc").then_some(()))
+        })?;
+        channel
+            .stream
+            .as_mut()
+            .ok_or(ErrorKind::NotConnected)?
+            .flush_blocked = false;
+        require(
+            channel.poll_send()? == SendProgress::Complete
+                && channel.poll_send()? == SendProgress::Idle,
+            "completion waits for final flush and releases queue",
+        )?;
+        channel.queue_send(Vec::new())?;
+        poll_accept(|| {
+            Ok((channel.poll_send()? == SendProgress::Complete).then_some(()))
+        })?;
+        require(
+            channel
+                .stream
+                .as_ref()
+                .ok_or(ErrorKind::NotConnected)?
+                .bytes
+                == b"\0\0\0\x03abc\0\0\0\0",
+            "exact header and payload followed by an empty frame",
+        )
+    }
+
+    #[test]
+    fn expired_outgoing_frame_closes_both_directions() -> io::Result<()> {
+        let stream = ScriptedStream {
+            write_blocked: true,
+            ..ScriptedStream::default()
+        };
+        let settings =
+            LanConfig::new(session_config(true), Duration::from_millis(50))?;
+        let mut channel = FrameChannel::new(stream, settings);
+        channel.queue_send(b"abc".to_vec())?;
+        require(
+            channel.poll_send()? == SendProgress::Pending,
+            "blocked frame has not completed",
+        )?;
+        thread::sleep(Duration::from_millis(80));
+        require(
+            error_kind(channel.poll_receive()) == Some(ErrorKind::TimedOut)
+                && error_kind(channel.poll_send())
+                    == Some(ErrorKind::NotConnected),
+            "receiving cannot extend an expired outgoing deadline",
+        )
     }
 
     #[test]

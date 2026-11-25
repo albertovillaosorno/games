@@ -59,8 +59,8 @@ use rustls::{
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    DeadlineSocket, FrameChannel, LanConfig, LanListener, TimedStream,
-    connect_socket, remaining,
+    DeadlineSocket, FrameChannel, LanConfig, LanListener, SendProgress,
+    TimedStream, connect_socket, remaining,
 };
 
 const PROTOCOL: &[u8] = b"games-lan/1";
@@ -426,6 +426,12 @@ impl SecureFrameStream {
         )
     }
 
+    /// Whether an outgoing frame is queued or partially transmitted.
+    #[must_use]
+    pub const fn has_pending_send(&self) -> bool {
+        self.channel.has_pending_send()
+    }
+
     /// Get the authenticated peer's leaf certificate fingerprint.
     #[must_use]
     pub const fn peer_fingerprint(&self) -> PeerFingerprint {
@@ -443,6 +449,22 @@ impl SecureFrameStream {
         self.channel.poll_receive()
     }
 
+    /// Advance the queued frame without blocking on a slow peer.
+    ///
+    /// # Errors
+    /// Closes the connection on a failed or expired transfer.
+    pub fn poll_send(&mut self) -> io::Result<SendProgress> {
+        self.channel.poll_send()
+    }
+
+    /// Queue one bounded frame without performing socket I/O.
+    ///
+    /// # Errors
+    /// Rejects a closed connection, oversize or another outstanding frame.
+    pub fn queue_send(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+        self.channel.queue_send(bytes)
+    }
+
     /// Receive one bounded, authenticated application frame.
     ///
     /// # Errors
@@ -456,7 +478,8 @@ impl SecureFrameStream {
     ///
     /// # Errors
     ///
-    /// Rejects oversized data and closes the connection on transfer failure.
+    /// Rejects oversized data or an outstanding queued frame, and closes
+    /// the connection on transfer failure.
     pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.channel.send(bytes)
     }
@@ -512,6 +535,14 @@ impl TlsSocket {
         self.read_once()
     }
 
+    fn poll_write_plaintext(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.poll_write_tls()?;
+        if self.connection.wants_write() {
+            return Err(ErrorKind::WouldBlock.into());
+        }
+        self.connection.writer().write(bytes)
+    }
+
     fn poll_write_tls(&mut self) -> io::Result<()> {
         if self.connection.wants_write() {
             match self.connection.write_tls(&mut self.socket.socket) {
@@ -554,6 +585,14 @@ impl TlsSocket {
 }
 
 impl TimedStream for TlsSocket {
+    fn poll_flush(&mut self) -> io::Result<bool> {
+        self.socket.socket.set_nonblocking(true)?;
+        let result = self.poll_write_tls();
+        self.socket.socket.set_nonblocking(false)?;
+        result?;
+        Ok(!self.connection.wants_write())
+    }
+
     fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         match self.connection.reader().read(bytes) {
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
@@ -565,6 +604,13 @@ impl TimedStream for TlsSocket {
             },
             result => result,
         }
+    }
+
+    fn poll_write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.socket.socket.set_nonblocking(true)?;
+        let result = self.poll_write_plaintext(bytes);
+        self.socket.socket.set_nonblocking(false)?;
+        result
     }
 
     fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {

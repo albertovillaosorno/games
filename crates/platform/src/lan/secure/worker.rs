@@ -43,7 +43,7 @@ use std::thread::{Builder, JoinHandle};
 use games::network::MessageSchema;
 
 use super::host::{HostError, HostSession};
-use super::{PeerFingerprint, PendingConnection};
+use super::{PeerFingerprint, PendingConnection, SendProgress};
 
 const MAX_QUEUE_CAPACITY: usize = 1024;
 
@@ -60,6 +60,15 @@ pub enum HostOperation {
     PollAuthenticate(Box<PendingConnection>),
     /// Poll one frame without blocking on an idle or incomplete peer.
     PollReceive(u64),
+    /// Advance one queued outgoing frame without blocking.
+    PollSend(u64),
+    /// Queue one frame without performing socket I/O.
+    QueueSend {
+        /// Host-approved player identity.
+        peer: u64,
+        /// Bounded payload retained until completion or disconnect.
+        bytes: Vec<u8>,
+    },
     /// Receive one protocol-expected frame; an idle timeout disconnects.
     Receive(u64),
     /// Reconnect a previously reserved local controller.
@@ -104,6 +113,8 @@ pub enum HostOutcome<Message> {
     },
     /// No complete frame available on the polled peer.
     Pending,
+    /// Progress of the requested outgoing-frame poll.
+    SendState(SendProgress),
 }
 
 /// Failure of an operation performed by the worker.
@@ -171,9 +182,10 @@ struct Channels<Message> {
 /// Only the worker performs authentication, schema decoding and transfers.
 /// Requests and completions each have the supplied finite capacity. One
 /// operation is in flight at a time. A trusted title codec must be bounded
-/// and nonblocking. Use `PollAuthenticate` and `PollReceive` to prevent
-/// quiet sockets from delaying other requests; blocking operations remain
-/// available for protocol-expected transfers.
+/// and nonblocking. Use `PollAuthenticate`, `PollReceive`, `QueueSend` and
+/// `PollSend` to prevent quiet sockets from delaying other requests.
+/// A queued frame occupies its peer slot until completion or disconnect;
+/// blocking operations remain available for protocol-expected transfers.
 ///
 /// Shutdown cancels queued operations and joins the worker. It may wait for
 /// an in-flight bounded transfer; do not shut down on the rendering path.
@@ -255,7 +267,8 @@ impl<Message: Send + 'static> HostWorker<Message> {
         &self,
         request: HostRequest,
     ) -> Result<(), RejectedRequest> {
-        if let HostOperation::Send { bytes, .. } = &request.operation
+        if let HostOperation::Send { bytes, .. }
+        | HostOperation::QueueSend { bytes, .. } = &request.operation
             && bytes.len() > self.frame_budget
         {
             return Err(RejectedRequest {
@@ -345,6 +358,13 @@ where
                 || HostOutcome::Pending,
                 |value| HostOutcome::Message { peer, value },
             ))
+        },
+        HostOperation::PollSend(peer) => {
+            Ok(HostOutcome::SendState(session.poll_send(peer)?))
+        },
+        HostOperation::QueueSend { peer, bytes } => {
+            session.queue_send(peer, bytes)?;
+            Ok(HostOutcome::Applied)
         },
         HostOperation::Receive(peer) => {
             let value = session.receive(peer, codec)?;
@@ -690,6 +710,63 @@ mod tests {
             )
         })?;
         drop(stalled);
+        worker.shutdown()
+    }
+
+    #[test]
+    fn queued_sends_do_not_block_other_players() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, config()?, keys.server.clone())?;
+        let session =
+            HostSession::new(session_config(true), &[(keys.client_id, 2)])
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
+        let mut client = authenticate(&worker, &listener, &keys, 1)?;
+        submit(&worker, 2, HostOperation::QueueSend {
+            peer: 2,
+            bytes: b"message".to_vec(),
+        })?;
+        require(
+            matches!(completion(&worker, 2)?, Ok(HostOutcome::Applied)),
+            "queued frame admitted",
+        )?;
+        submit(&worker, 3, HostOperation::Send {
+            peer: 2,
+            bytes: b"other".to_vec(),
+        })?;
+        require(
+            matches!(
+                completion(&worker, 3)?,
+                Err(OperationError::Host(HostError::SendPending))
+            ),
+            "cannot interleave frames",
+        )?;
+        submit(&worker, 4, HostOperation::JoinLocal(1))?;
+        require(
+            matches!(completion(&worker, 4)?, Ok(HostOutcome::Applied)),
+            "local join proceeds without reading client",
+        )?;
+        poll_accept(|| {
+            submit(&worker, 5, HostOperation::PollSend(2))?;
+            match completion(&worker, 5)? {
+                Ok(HostOutcome::SendState(SendProgress::Complete)) => {
+                    Ok(Some(()))
+                },
+                Ok(HostOutcome::SendState(SendProgress::Pending)) => Ok(None),
+                result => Err(io::Error::other(format!("{result:?}"))),
+            }
+        })?;
+        require(client.receive()? == b"message", "queued frame received")?;
+        submit(&worker, 6, HostOperation::PollSend(2))?;
+        require(
+            matches!(
+                completion(&worker, 6)?,
+                Ok(HostOutcome::SendState(SendProgress::Idle))
+            ),
+            "completed frame releases its slot",
+        )?;
         worker.shutdown()
     }
 
