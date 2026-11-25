@@ -93,6 +93,8 @@ use crate::remote::HostedCabinet;
 
 // Leave transport, fixed updates and presentation time between input bursts.
 const EVENT_BUDGET: usize = 32;
+// Keep fixed updates and LAN polling responsive on static screens.
+const IDLE_EVENT_WAIT_MS: u32 = 8;
 
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
@@ -716,6 +718,44 @@ impl<'preferences> Interactive<'preferences> {
         })
     }
 
+    fn poll(
+        &mut self,
+        scene: &mut SceneSession<'_, '_>,
+        wait_ms: u32,
+    ) -> Result<EventBatch, RenderError> {
+        let batch = scene.dispatch_events(
+            size(EVENT_BUDGET)?,
+            wait_ms,
+            |view, event| {
+                let logical = match self.input.translate(event)? {
+                    Some(HostEvent::Quit) => return Ok(false),
+                    Some(HostEvent::Input(logical)) => logical,
+                    None => return Ok(true),
+                };
+                let elapsed = self
+                    .input
+                    .event_elapsed(event)
+                    .ok_or_else(|| failure("ambiguous event timestamp"))?;
+                if let Some(projected) = project_contact(view, logical)? {
+                    self.controls.route(
+                        projected,
+                        elapsed,
+                        &mut self.simulation,
+                    )?;
+                }
+                Ok(true)
+            },
+        )?;
+        if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
+            let attached = self.input.discover_after_drain()?;
+            let elapsed = self.input.elapsed();
+            for event in attached {
+                self.controls.route(event, elapsed, &mut self.simulation)?;
+            }
+        }
+        Ok(batch)
+    }
+
     fn run(
         mut self,
         scene: &mut SceneSession<'_, '_>,
@@ -725,14 +765,13 @@ impl<'preferences> Interactive<'preferences> {
         if let Some(audio) = &mut playback {
             audio.enable_output();
         }
-        while self.simulation.state().state().phase() != Phase::Exited
-            && poll(
-                scene,
-                &mut self.input,
-                &mut self.controls,
-                &mut self.simulation,
-            )?
-        {
+        let mut presented = None;
+        while self.simulation.state().state().phase() != Phase::Exited {
+            let wait_ms = presentation_wait(self.simulation.state());
+            let batch = self.poll(scene, wait_ms)?;
+            if batch == EventBatch::Stopped {
+                break;
+            }
             if let Some(host) = &mut self.host {
                 host.poll(&mut self.simulation).map_err(failure)?;
             }
@@ -756,13 +795,35 @@ impl<'preferences> Interactive<'preferences> {
             if let Some(audio) = &mut playback {
                 audio.update(cabinet)?;
             }
-            let _drawn = art.present(scene, cabinet)?;
+            if frame_due(hosted, presented.as_ref(), batch) {
+                let drawn = art.present(scene, cabinet)?;
+                presented = (drawn && cabinet.phase() != Phase::Playing)
+                    .then_some(*hosted);
+            }
         }
         Ok(())
     }
 }
 
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
+
+fn frame_due(
+    current: &HostedCabinet,
+    presented: Option<&HostedCabinet>,
+    batch: EventBatch,
+) -> bool {
+    current.state().phase() == Phase::Playing
+        || batch != EventBatch::Empty
+        || presented != Some(current)
+}
+
+const fn presentation_wait(current: &HostedCabinet) -> u32 {
+    if matches!(current.state().phase(), Phase::Playing) {
+        0
+    } else {
+        IDLE_EVENT_WAIT_MS
+    }
+}
 
 fn save_display(
     store: Option<&DisplayStore>,
@@ -978,46 +1039,6 @@ fn open_bundles<const COUNT: usize>(
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
         .map_err(|_error| failure("bundle count"))
-}
-
-fn poll<Simulation>(
-    scene: &mut SceneSession<'_, '_>,
-    input: &mut NativeInput,
-    controls: &mut Controls,
-    live: &mut LiveSimulation<Simulation>,
-) -> Result<bool, RenderError>
-where
-    Simulation: InputStep,
-    Simulation::Input: From<LogicalAction<Action>>,
-{
-    let batch =
-        scene.dispatch_events(size(EVENT_BUDGET)?, 0, |view, event| {
-            match input.translate(event)? {
-                Some(HostEvent::Quit) => return Ok(false),
-                Some(HostEvent::Input(logical)) => {
-                    let elapsed = input
-                        .event_elapsed(event)
-                        .ok_or_else(|| failure("ambiguous event timestamp"))?;
-                    if let Some(projected) = project_contact(view, logical)? {
-                        controls.route(projected, elapsed, live)?;
-                    }
-                },
-                None => {},
-            }
-            Ok(true)
-        })?;
-    match batch {
-        EventBatch::Stopped => Ok(false),
-        EventBatch::Limited => Ok(true),
-        EventBatch::Empty | EventBatch::Drained => {
-            let attached = input.discover_after_drain()?;
-            let elapsed = input.elapsed();
-            for event in attached {
-                controls.route(event, elapsed, live)?;
-            }
-            Ok(true)
-        },
-    }
 }
 
 fn project_contact(
@@ -1816,17 +1837,20 @@ fn preview_layout(touch_enabled: bool) -> Result<FrameLayout, RenderError> {
 
 #[cfg(test)]
 mod tests {
-    use games::input::InputEvent;
-    use games::replay::LiveSimulation;
+    use games::input::{InputEvent, LogicalAction};
+    use games::replay::{InputStep as _, LiveSimulation};
     use games_platform_graphics::linux::RenderError;
     use games_platform_graphics::linux::input::{
         Button, Scancode, button_code, key_code,
     };
+    use games_platform_graphics::linux::sprites::EventBatch;
 
     use super::{
-        ACTION_NAMES, Cabinet, Controls, DEFAULT_PROFILES, Player, Profiles,
-        Station, TICK_INTERVAL, failure, live,
+        ACTION_NAMES, Action, Cabinet, Control, Controls, DEFAULT_PROFILES,
+        Phase, Player, Profiles, Station, StreetLayout, TICK_INTERVAL, failure,
+        frame_due, live, presentation_wait,
     };
+    use crate::remote::{HostedCabinet, HostedInput};
 
     type TestCabinet = (Controls, LiveSimulation<Cabinet>);
 
@@ -1870,6 +1894,59 @@ mod tests {
         }
         let _stations = advance(&mut simulation)?;
         Ok((controls, simulation))
+    }
+
+    #[test]
+    fn suspended_frames_redraw_for_input_window_or_remote_state()
+    -> Result<(), RenderError> {
+        let cabinet = Cabinet::new(StreetLayout::DOWNTOWN).map_err(failure)?;
+        let mut hosted =
+            HostedCabinet::new(&cabinet, [false, true, false, false])
+                .ok_or_else(|| failure("invalid hosted fixture"))?;
+        let initial = hosted;
+        if presentation_wait(&hosted) == 0
+            || !frame_due(&hosted, None, EventBatch::Empty)
+            || frame_due(&hosted, Some(&initial), EventBatch::Empty)
+            || !frame_due(&hosted, Some(&initial), EventBatch::Drained)
+            || !frame_due(&hosted, Some(&initial), EventBatch::Limited)
+        {
+            return Err(failure("static menu frame policy"));
+        }
+        hosted.input_step(0, &[HostedInput::Connected(1)]);
+        if !frame_due(&hosted, Some(&initial), EventBatch::Empty) {
+            return Err(failure("authenticated state did not redraw menu"));
+        }
+        let action = |control| {
+            HostedInput::Local(LogicalAction {
+                action: Action {
+                    control,
+                    player: Player::Marge,
+                },
+                down: true,
+            })
+        };
+        hosted.input_step(1, &[action(Control::Start)]);
+        if hosted.state().phase() != Phase::Playing
+            || presentation_wait(&hosted) != 0
+            || !frame_due(&hosted, Some(&hosted), EventBatch::Empty)
+        {
+            return Err(failure("gameplay was not uncapped"));
+        }
+        let playing = hosted;
+        hosted.input_step(2, &[action(Control::Pause)]);
+        if hosted.state().phase() != Phase::Paused
+            || presentation_wait(&hosted) == 0
+            || !frame_due(&hosted, Some(&playing), EventBatch::Empty)
+            || frame_due(&hosted, Some(&hosted), EventBatch::Empty)
+        {
+            return Err(failure("paused frame policy"));
+        }
+        let paused = hosted;
+        hosted.input_step(3, &[HostedInput::Disconnected(1)]);
+        if !frame_due(&hosted, Some(&paused), EventBatch::Empty) {
+            return Err(failure("disconnect did not invalidate paused frame"));
+        }
+        Ok(())
     }
 
     #[test]

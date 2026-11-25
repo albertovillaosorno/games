@@ -294,3 +294,27 @@ The adaptive diagnostic additionally verified 80 extension columns.
 These are host submission intervals under software rendering; the
 trials are not a physical GPU benchmark, VRAM measurement, full game
 loading benchmark or an isolated comparison with earlier runs.
+
+The interactive arcade host now waits at most eight milliseconds for an
+event on suspended screens. Fixed updates, transport polling and audio
+maintenance continue; the host redraws on native activity, cabinet or
+remote-seat changes, and retries unsuccessful presentation. Gameplay
+continues using uncapped presentation. An inline regression exercises
+initial drawing, unchanged screens, event batches, remote admission
+and disconnect, and entry into and exit from active gameplay.
+
+A paired release-mode interactive diagnostic used the same verified
+version-two catalogue, Xvfb, software OpenGL and dummy audio. Linux
+process CPU utilisation (100% per logical processor) was sampled using
+four one-second top intervals after an initial warm-up sample:
+
+- Main menu: baseline 847.0–899.1%, revised 0–1%.
+- Paused: baseline 795.0–897.0%, revised 0–1%.
+
+Both builds preserved exact pixels over four seconds on each static
+screen; the initial main menu matched across builds pixel for pixel.
+Both accepted keyboard entry, pause, window resize to 1080x756 and
+menu-driven exit. The revised active game still rendered uncapped.
+These are single paired software-rendered process observations, not
+physical GPU utilisation or input-to-photon measurements. The fresh
+workspace validation passed in run 1795605886548083151-4173262.
