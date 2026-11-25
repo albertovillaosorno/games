@@ -44,3 +44,9 @@ of the existing validation command. Fresh validation passed in run
 Network, security and performance acceptance remain open. The integrated
 gate does not prove physical LAN interoperability, mod isolation, runtime
 performance or gameplay parity.
+
+The gate additionally verifies Cargo target source paths against the owning
+crate and the authored-file inventory. Custom target declarations cannot
+point into another crate, ignored assets or private reference storage.
+Fresh validation passed in run 1795577329926246004-2812824
+(94 workspace tests).

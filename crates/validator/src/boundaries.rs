@@ -175,9 +175,13 @@ fn source_layout(path: &Path) -> bool {
         && parts.next().is_some_and(|part| part.as_os_str() != "tests")
 }
 
-fn sources(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
-    for path in files::authored(root)? {
-        if !source_layout(&path) {
+fn sources(
+    root: &Path,
+    members: &BTreeSet<PathBuf>,
+    authored: &[PathBuf],
+) -> Result<(), String> {
+    for path in authored {
+        if !source_layout(path) {
             return Err(format!(
                 "Rust source outside crate: {}",
                 path.display()
@@ -192,8 +196,8 @@ fn sources(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
                 ));
             }
         }
-        if code_path(&path) {
-            let content = fs::read_to_string(root.join(&path))
+        if code_path(path) {
+            let content = fs::read_to_string(root.join(path))
                 .map_err(|error| error.to_string())?;
             header(&content)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
@@ -301,9 +305,36 @@ fn member(
     Ok(())
 }
 
+fn target_source(
+    root: &Path,
+    directory: &Path,
+    target: &JsonValue,
+    authored: &[PathBuf],
+) -> Result<(), String> {
+    let source = target
+        .get("src_path")
+        .and_then(JsonValue::as_str)
+        .ok_or("missing Cargo target source path")?;
+    let relative = Path::new(source)
+        .strip_prefix(root)
+        .map_err(|error| format!("Cargo target outside repository: {error}"))?;
+    if !relative.starts_with(directory)
+        || relative.extension().is_none_or(|ext| ext != "rs")
+        || authored
+            .binary_search_by(|path| path.as_path().cmp(relative))
+            .is_err()
+    {
+        return Err(format!(
+            "Cargo target outside owned authored source: {source}"
+        ));
+    }
+    Ok(())
+}
+
 fn package_manifest(
     root: &Path,
     package: &JsonValue,
+    authored: &[PathBuf],
 ) -> Result<PathBuf, String> {
     let manifest = package
         .get("manifest_path")
@@ -335,6 +366,7 @@ fn package_manifest(
                 "separate integration test target: {manifest}"
             ));
         }
+        target_source(root, directory, target, authored)?;
     }
     Ok(path.to_path_buf())
 }
@@ -342,6 +374,7 @@ fn package_manifest(
 fn metadata_members(
     root: &Path,
     metadata: &JsonValue,
+    authored: &[PathBuf],
 ) -> Result<BTreeSet<PathBuf>, String> {
     let ids = metadata
         .get("workspace_members")
@@ -367,7 +400,7 @@ fn metadata_members(
         if !remaining.remove(id) {
             return Err(format!("unexpected workspace package: {id}"));
         }
-        if !manifests.insert(package_manifest(root, package)?) {
+        if !manifests.insert(package_manifest(root, package, authored)?) {
             return Err(format!("duplicate workspace package path: {id}"));
         }
     }
@@ -467,8 +500,9 @@ fn manifests(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
 /// Rejects missing source contracts, lint overrides and forbidden edges.
 pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
     let canonical = root.canonicalize().map_err(|error| error.to_string())?;
-    let members = metadata_members(&canonical, metadata)?;
-    sources(root, &members)?;
+    let authored = files::authored(root)?;
+    let members = metadata_members(&canonical, metadata, &authored)?;
+    sources(root, &members, &authored)?;
     manifests(root, &members)
 }
 
@@ -654,12 +688,13 @@ mod tests {
     }
 
     fn metadata_fixture(path: &str, target_kind: &str) -> JsonValue {
+        let source = Path::new(path).with_file_name("src/lib.rs");
         json!({
             "workspace_members": ["member"],
             "packages": [{
                 "id": "member",
                 "manifest_path": path,
-                "targets": [{"kind": [target_kind]}]
+                "targets": [{"kind": [target_kind], "src_path": source}]
             }]
         })
     }
@@ -667,9 +702,10 @@ mod tests {
     #[test]
     fn rejects_workspace_members_outside_the_direct_crates_layout() {
         let root = Path::new("repo");
+        let authored = [PathBuf::from("crates/engine/src/lib.rs")];
         let valid = metadata_fixture("repo/crates/engine/Cargo.toml", "lib");
         assert_eq!(
-            metadata_members(root, &valid),
+            metadata_members(root, &valid, &authored),
             Ok(BTreeSet::from([PathBuf::from("crates/engine/Cargo.toml")]))
         );
         for path in [
@@ -679,7 +715,12 @@ mod tests {
             "repo/crates/../Cargo.toml",
         ] {
             assert!(
-                metadata_members(root, &metadata_fixture(path, "lib")).is_err()
+                metadata_members(
+                    root,
+                    &metadata_fixture(path, "lib"),
+                    &authored
+                )
+                .is_err()
             );
         }
     }
@@ -687,14 +728,39 @@ mod tests {
     #[test]
     fn rejects_separate_test_targets_and_incomplete_metadata() {
         let root = Path::new("repo");
+        let authored = [PathBuf::from("crates/engine/src/lib.rs")];
         let integration =
             metadata_fixture("repo/crates/engine/Cargo.toml", "test");
-        assert!(metadata_members(root, &integration).is_err());
+        assert!(metadata_members(root, &integration, &authored).is_err());
         let incomplete = json!({
             "workspace_members": ["member"],
             "packages": []
         });
-        assert!(metadata_members(root, &incomplete).is_err());
+        assert!(metadata_members(root, &incomplete, &authored).is_err());
+    }
+
+    #[test]
+    fn rejects_custom_targets_outside_the_owning_crate() {
+        let root = Path::new("repo");
+        let authored = [
+            PathBuf::from("crates/engine/src/lib.rs"),
+            PathBuf::from("crates/platform/src/lib.rs"),
+        ];
+        for source in [
+            "repo/crates/platform/src/lib.rs",
+            "repo/crates/engine/assets/ignored.rs",
+            "repo/.reference/private.rs",
+        ] {
+            let metadata = json!({
+                "workspace_members": ["member"],
+                "packages": [{
+                    "id": "member",
+                    "manifest_path": "repo/crates/engine/Cargo.toml",
+                    "targets": [{"kind": ["bin"], "src_path": source}]
+                }]
+            });
+            assert!(metadata_members(root, &metadata, &authored).is_err());
+        }
     }
 
     #[test]
