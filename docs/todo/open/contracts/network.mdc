@@ -457,3 +457,19 @@ A real-TLS regression fills 127 slots, rejects a two-edge release and
 opposite press without partial admission, retries after drain, and
 observes the assigned actor stop and reverse in order. Physical network
 congestion remains unverified.
+
+The clean integrated Linux release at b2b82e4 passed the four-process
+native loopback diagnostic again after host and controller backpressure
+changes. Each of three independently enrolled controllers joined,
+moved, released and stabilized. The third disconnected while moving;
+the other two remained responsive and the third reclaimed its seat.
+
+A separate native diagnostic suspended the host for 3.4 seconds while
+one remote direction was held. All three controllers exited with their
+expected host-lease timeout diagnostics. The host resumed, stabilized
+its frame, and accepted local movement and release. Each original
+identity rejoined, moved and released; all four processes remained
+alive. Both runs used verified local art, separate credentials, Xvfb,
+software OpenGL and synthetic keyboard events on one machine.
+Disposable private keys were removed; neither test establishes
+physical LAN or simultaneous physical controller interoperability.
