@@ -89,27 +89,6 @@ impl Debug for NativeInput {
 }
 
 impl NativeInput {
-    fn attach(
-        &mut self,
-        index: u32,
-    ) -> Result<Option<InputEvent>, RenderError> {
-        if self.controllers.len() >= self.limit.get()
-            || !self.subsystem.is_game_controller(index)
-        {
-            return Ok(None);
-        }
-        let controller = self
-            .subsystem
-            .open(index)
-            .map_err(|error| RenderError::Backend(error.to_string()))?;
-        let device = u64::from(controller.instance_id());
-        if self.controllers.contains_key(&device) {
-            return Ok(None);
-        }
-        let _old = self.controllers.insert(device, controller);
-        Ok(Some(InputEvent::Attached { device }))
-    }
-
     /// Discover controllers after a native poll returns no event.
     ///
     /// A device change in an earlier limited batch remains pending until the
@@ -131,31 +110,32 @@ impl NativeInput {
     ///
     /// Call after device changes and draining the native event queue.
     /// Controllers already admitted retain their identity; newly admitted
-    /// controllers produce attachment events for the host to route.
+    /// controllers produce attachment events for the host to route. A device
+    /// that disappears during opening schedules another post-drain discovery.
     ///
     /// # Errors
-    /// Reports failed controller enumeration or device open.
+    /// Reports failed enumeration or opening a still-available device. On
+    /// failure, no new controllers or partial attachment batch are admitted.
     pub fn discover_available(
         &mut self,
     ) -> Result<Vec<InputEvent>, RenderError> {
-        let mut attached = Vec::new();
         if self.controllers.len() == self.limit.get() {
             self.rediscover = false;
-            return Ok(attached);
+            return Ok(Vec::new());
         }
         let count = self
             .subsystem
             .num_joysticks()
             .map_err(RenderError::Backend)?;
-        for index in 0..count {
-            if self.controllers.len() == self.limit.get() {
-                break;
-            }
-            if let Some(event) = self.attach(index)? {
-                attached.push(event);
-            }
-        }
-        self.rediscover = false;
+        let subsystem = &self.subsystem;
+        let mut retry = false;
+        let attached = admit_discovery(
+            &mut self.controllers,
+            self.limit,
+            count,
+            |index| discover_controller(subsystem, index, &mut retry),
+        )?;
+        self.rediscover = retry && self.controllers.len() < self.limit.get();
         Ok(attached)
     }
 
@@ -222,11 +202,11 @@ impl NativeInput {
         }
         if let Event::ControllerDeviceRemoved { which, .. } = *event {
             let device = u64::from(which);
-            if self.controllers.remove(&device).is_some() {
-                self.rediscover = true;
-                return Some(HostEvent::Input(InputEvent::Detached { device }));
-            }
-            return None;
+            let removed = self.controllers.remove(&device);
+            self.rediscover |= self.controllers.len() < self.limit.get();
+            return removed.map(|_controller| {
+                HostEvent::Input(InputEvent::Detached { device })
+            });
         }
         if self.touch_enabled && event.is_finger() {
             return route_contact(event);
@@ -243,6 +223,84 @@ impl NativeInput {
         }
         routed
     }
+}
+
+type Discovered<Handle> = Result<Option<(u64, Handle)>, RenderError>;
+
+fn discover_controller(
+    subsystem: &GameControllerSubsystem,
+    index: u32,
+    retry: &mut bool,
+) -> Discovered<GameController> {
+    let Some(controller) = open_candidate(
+        || subsystem.is_game_controller(index),
+        || {
+            subsystem
+                .open(index)
+                .map_err(|error| RenderError::Backend(error.to_string()))
+        },
+        retry,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !controller.attached() {
+        *retry = true;
+        return Ok(None);
+    }
+    let device = u64::from(controller.instance_id());
+    Ok(Some((device, controller)))
+}
+
+// SDL locks each enumeration operation separately. An index can disappear
+
+// after its mapping was checked; do not treat that observed race as a fatal
+// backend error or interpret the old index as a stable device identity.
+fn open_candidate<Handle>(
+    mut available: impl FnMut() -> bool,
+    open: impl FnOnce() -> Result<Handle, RenderError>,
+    retry: &mut bool,
+) -> Result<Option<Handle>, RenderError> {
+    if !available() {
+        return Ok(None);
+    }
+    match open() {
+        Ok(handle) => Ok(Some(handle)),
+        Err(_) if !available() => {
+            *retry = true;
+            Ok(None)
+        },
+        Err(error) => Err(error),
+    }
+}
+
+// Stage handles in discovery order. A later backend error must not retain
+// an earlier handle whose attachment notification could not reach the host.
+fn admit_discovery<Handle, Candidate>(
+    controllers: &mut BTreeMap<u64, Handle>,
+    limit: NonZeroUsize,
+    count: u32,
+    mut candidate: Candidate,
+) -> Result<Vec<InputEvent>, RenderError>
+where
+    Candidate: FnMut(u32) -> Discovered<Handle>,
+{
+    let mut staged = BTreeMap::new();
+    let mut attached = Vec::new();
+    for index in 0..count {
+        if controllers.len().saturating_add(staged.len()) >= limit.get() {
+            break;
+        }
+        if let Some((device, handle)) = candidate(index)?
+            && !controllers.contains_key(&device)
+            && !staged.contains_key(&device)
+        {
+            let _old = staged.insert(device, handle);
+            attached.push(InputEvent::Attached { device });
+        }
+    }
+    controllers.append(&mut staged);
+    Ok(attached)
 }
 
 fn event_elapsed(origin: u64, now: u64, stamp: u32) -> Option<Duration> {
@@ -418,6 +476,8 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::num::NonZeroUsize;
     use std::time::Duration;
 
     use games::input::touch::{ContactId, ContactPhase, TouchPoint};
@@ -426,9 +486,68 @@ mod tests {
     use sdl2::keyboard::Mod;
 
     use super::{
-        Axis, Button, HostEvent, Scancode, axis_code, button_code,
-        event_elapsed, key_code, route, route_contact,
+        Axis, Button, HostEvent, Scancode, admit_discovery, axis_code,
+        button_code, event_elapsed, key_code, open_candidate, route,
+        route_contact,
     };
+    use crate::linux::RenderError;
+
+    #[test]
+    fn discovery_distinguishes_a_vanished_index_from_a_backend_error() {
+        let failure = || RenderError::Backend("open failed".to_owned());
+        let mut retry = false;
+        let mut checks = [true, false].into_iter();
+        let vanished = open_candidate::<()>(
+            || checks.next().unwrap_or(false),
+            || Err(failure()),
+            &mut retry,
+        );
+        assert!(matches!(vanished, Ok(None)));
+        assert!(retry);
+        retry = false;
+        let present =
+            open_candidate::<()>(|| true, || Err(failure()), &mut retry);
+        assert!(matches!(present, Err(RenderError::Backend(_))));
+        assert!(!retry);
+        let unopened =
+            open_candidate::<()>(|| false, || Err(failure()), &mut retry);
+        assert!(matches!(unopened, Ok(None)));
+        assert!(!retry);
+    }
+
+    #[test]
+    fn discovery_failure_does_not_lose_attachment_notifications() {
+        let mut controllers = BTreeMap::from([(10, "old")]);
+        let limit = NonZeroUsize::new(3).unwrap_or(NonZeroUsize::MIN);
+        let failed = admit_discovery(&mut controllers, limit, 2, |index| {
+            if index == 0 {
+                Ok(Some((20, "new")))
+            } else {
+                Err(RenderError::Backend("open failed".to_owned()))
+            }
+        });
+        assert!(matches!(failed, Err(RenderError::Backend(_))));
+        assert_eq!(controllers, BTreeMap::from([(10, "old")]));
+        let mut visited = Vec::new();
+        let attached = admit_discovery(&mut controllers, limit, 5, |index| {
+            visited.push(index);
+            Ok(match index {
+                0 => Some((10, "duplicate")),
+                1 => Some((30, "first")),
+                2 => Some((30, "duplicate")),
+                _ => Some((20, "second")),
+            })
+        });
+        assert!(matches!(attached, Ok(events) if events == [
+            InputEvent::Attached { device: 30 },
+            InputEvent::Attached { device: 20 },
+        ]));
+        assert_eq!(visited, [0, 1, 2, 3]);
+        assert_eq!(
+            controllers,
+            BTreeMap::from([(10, "old"), (20, "second"), (30, "first"),])
+        );
+    }
 
     #[test]
     fn native_touch_coordinates_are_checked_and_rounded() {

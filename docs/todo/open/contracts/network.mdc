@@ -632,3 +632,15 @@ other physical sources of the same logical hold and accepts subsequent input
 through the assigned profile. Synthetic tests exercise unknown and repeated
 notifications, independent controllers, aggregated keyboard holds and later
 input on the same device. Physical controller remapping remains unverified.
+
+Native controller discovery now stages every new handle before publishing
+its attachment batch. A later backend error cannot leave a partially
+admitted controller whose notification the title never received. An index
+confirmed unavailable after a failed open, or an already disconnected
+opened handle, requests another discovery after the event drain. Removal
+notifications also request rediscovery when capacity remains, including
+removal of an unadmitted instance whose index may have shifted. Genuine
+open and enumeration errors still propagate. Synthetic tests verify
+observed disappearance versus persistent failure, rollback, duplicate
+identity handling, capacity and attachment order. Concurrent physical
+hot-plug timing remains unverified.
