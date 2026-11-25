@@ -35,6 +35,14 @@
   parameters, composition, strategies and narrow adapters.
 - Keep game logic independent of operating systems and original media
   formats. Platform adapters own OS access; importers own source formats.
+- Organise importers by source format and hardware family, not by title.
+  Arcade ROM sets use a shared MAME adapter under the importer crate.
+  Share ROM admission, region assembly, chip layouts and asset conversion.
+  Title or board differences belong in small profiles or reusable strategies.
+  Select the MAME machine and pinned revision through a generic build/import
+  interface; do not create title-specific importer commands or pipelines.
+  MAME is a reference format and emulator, never a remake runtime.
+  Verify supported profiles individually; do not assume universal compatibility.
 - No reverse dependencies from shared crates to games, apps or tools.
   No title-to-title dependencies. Use a single Cargo workspace.
 - All authored Rust code lives under `crates/`, including tools and titles.

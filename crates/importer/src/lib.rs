@@ -35,8 +35,8 @@ pub mod conversion;
 
 /// Bounded source graphics decoding.
 pub mod graphics;
-/// Selected Simpsons arcade graphics source adapter.
-pub mod simpsons;
+/// MAME machine profiles and shared arcade ROM-set conversion.
+pub mod mame;
 
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};

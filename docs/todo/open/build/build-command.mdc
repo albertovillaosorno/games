@@ -24,3 +24,9 @@ Expose one build command accepting a title and optional target.
 ## Evidence
 
 Pending. Record actual checks and remaining limitations before completion.
+
+The host-side `games-build` crate selects the MAME source family, machine
+and revision for asset verification, conversion, publication and read-back.
+Its dependency on native storage excludes runtime TLS and game logic.
+Executable packaging, title selection and target-specific build output are
+not implemented yet.

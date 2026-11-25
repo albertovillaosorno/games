@@ -25,7 +25,7 @@
 // - Description:
 //   - Compose importer and platform services without coupling their crates.
 // - Usage:
-//   - cargo run --locked -p games-build -- PATH TITLE REV SHA LIMITS
+//   - cargo run --locked -p games-build -- mame import MACHINE REV PATH LIMITS
 // - Defaults:
 //   - Read-only verification and explicit opt-in to publication.
 
@@ -42,7 +42,6 @@ use std::fs::{self, File};
 #[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 use std::io::Read;
 use std::io::{Write as _, stdout};
-use std::iter::once;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
@@ -51,16 +50,19 @@ use games_assets::{
     AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
 use games_importer::conversion::ConversionLimits;
-use games_importer::{ImportError, VerifiedSource, simpsons};
+use games_importer::mame::Machine;
+use games_importer::{ImportError, VerifiedSource};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_platform_storage::file::snapshot;
 
 const USAGE: &str = concat!(
-    "usage: games-build [--simpsons-graphics] PATH TITLE REV SHA256 ",
+    "usage: games-build zip verify PATH TITLE REV SHA256 ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: --publish-simpsons-graphics PARENT PATH TITLE REV SHA256 ",
+    "games-build mame verify|import MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: --check-simpsons-graphics PARENT MANIFEST_SHA256"
+    "GNU/Linux: mame publish MACHINE REV PARENT PATH ",
+    "SOURCE ENTRY TOTAL COUNT\n",
+    "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256"
 );
 
 #[derive(Debug)]
@@ -86,16 +88,20 @@ impl Arguments {
         identity
             .validate()
             .map_err(|_error| String::from("invalid title or revision"))?;
-        Ok(Self {
-            archive: ArchiveBudget::new(
-                parse_limit(&entry)?,
-                parse_limit(&total)?,
-                parse_limit(&count)?,
-            ),
-            identity,
-            path: PathBuf::from(path),
-            source_limit: parse_limit(&source)?,
-        })
+        Self::with_identity(identity, path, [source, entry, total, count])
+    }
+
+    fn parse_mame(
+        machine: Machine,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        let [path, source, entry, total, count] =
+            <[OsString; 5]>::try_from(args)
+                .map_err(|_args| String::from(USAGE))?;
+        let identity = machine
+            .identity()
+            .map_err(|error| format!("profile: {error:?}"))?;
+        Self::with_identity(identity, path, [source, entry, total, count])
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -118,15 +124,33 @@ impl Arguments {
         snapshot(&self.path, self.source_limit)
             .map_err(|error| format!("source file: {error:?}"))
     }
+
+    fn with_identity(
+        identity: SourceIdentity,
+        path: OsString,
+        limits: [OsString; 4],
+    ) -> Result<Self, String> {
+        let [source, entry, total, count] = limits;
+        Ok(Self {
+            archive: ArchiveBudget::new(
+                parse_limit(&entry)?,
+                parse_limit(&total)?,
+                parse_limit(&count)?,
+            ),
+            identity,
+            path: PathBuf::from(path),
+            source_limit: parse_limit(&source)?,
+        })
+    }
 }
 
 #[derive(Debug)]
 enum Command {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    Check(PathBuf, ContentHash),
-    Graphics(Arguments),
+    Check(Machine, PathBuf, ContentHash),
+    Import(Machine, Arguments),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    Publish(PathBuf, Arguments),
+    Publish(Machine, PathBuf, Arguments),
     Verify(Arguments),
 }
 
@@ -135,47 +159,77 @@ impl Command {
     where
         Args: Iterator<Item = OsString>,
     {
-        let first = args.next().ok_or_else(|| String::from(USAGE))?;
-        match first.to_str() {
-            Some("--simpsons-graphics") => {
-                Ok(Self::Graphics(Arguments::parse(args.collect())?))
+        let format = args.next().ok_or_else(|| String::from(USAGE))?;
+        let action = args.next().ok_or_else(|| String::from(USAGE))?;
+        match (format.to_str(), action.to_str()) {
+            (Some("zip"), Some("verify")) => {
+                Ok(Self::Verify(Arguments::parse(args.collect())?))
             },
+            (Some("mame"), Some(operation)) => {
+                Self::parse_mame(operation, args)
+            },
+            _ => Err(String::from(USAGE)),
+        }
+    }
+
+    fn parse_mame<Args>(action: &str, mut args: Args) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        let machine = args.next().ok_or_else(|| String::from(USAGE))?;
+        let revision = args.next().ok_or_else(|| String::from(USAGE))?;
+        let selected = Machine::select(text(&machine)?, text(&revision)?)
+            .map_err(|error| format!("MAME profile: {error:?}"))?;
+        match action {
+            "verify" => Ok(Self::Verify(Arguments::parse_mame(
+                selected,
+                args.collect(),
+            )?)),
+            "import" => Ok(Self::Import(
+                selected,
+                Arguments::parse_mame(selected, args.collect())?,
+            )),
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            Some("--publish-simpsons-graphics") => {
+            "publish" => {
                 let parent = args.next().ok_or_else(|| String::from(USAGE))?;
                 Ok(Self::Publish(
+                    selected,
                     PathBuf::from(parent),
-                    Arguments::parse(args.collect())?,
+                    Arguments::parse_mame(selected, args.collect())?,
                 ))
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            Some("--check-simpsons-graphics") => {
+            "check" => {
                 let [parent, digest_argument] =
                     <[OsString; 2]>::try_from(args.collect::<Vec<_>>())
                         .map_err(|_args| String::from(USAGE))?;
                 let digest = text(&digest_argument)?
                     .parse()
                     .map_err(|_error| String::from("invalid manifest hash"))?;
-                Ok(Self::Check(PathBuf::from(parent), digest))
+                Ok(Self::Check(selected, PathBuf::from(parent), digest))
             },
-            _ => Ok(Self::Verify(Arguments::parse(
-                once(first).chain(args).collect(),
-            )?)),
+            _ => Err(String::from(USAGE)),
         }
     }
 
     fn run(self) -> Result<(), String> {
         match self {
             Self::Verify(args) => with_source(&args, verify_archive),
-            Self::Graphics(args) => with_source(&args, report_graphics),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            Self::Publish(parent, args) => {
+            Self::Import(machine, args) => {
                 with_source(&args, |source, archive| {
-                    publication::publish(&parent, source, archive)
+                    report_graphics(machine, source, archive)
                 })
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            Self::Check(parent, digest) => publication::check(&parent, digest),
+            Self::Publish(machine, parent, args) => {
+                with_source(&args, |source, archive| {
+                    publication::publish(machine, &parent, source, archive)
+                })
+            },
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::Check(machine, parent, digest) => {
+                publication::check(machine, &parent, digest)
+            },
         }
     }
 }
@@ -276,16 +330,18 @@ fn report_manifest(
 }
 
 fn report_graphics(
+    machine: Machine,
     source: &VerifiedSource<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
-    let manifest = simpsons::graphics_limits();
-    let converted = simpsons::convert_graphics(
-        source,
-        ConversionLimits { archive, manifest },
-        |_digest, _bytes| Ok(()),
-    )
-    .map_err(|error| format!("graphics: {error:?}"))?;
+    let manifest = machine.graphics_limits();
+    let converted = machine
+        .convert_graphics(
+            source,
+            ConversionLimits { archive, manifest },
+            |_digest, _bytes| Ok(()),
+        )
+        .map_err(|error| format!("graphics: {error:?}"))?;
     report_manifest(&converted, manifest)
 }
 
@@ -332,20 +388,46 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn publication_modes_require_explicit_output_and_identity() {
-        let args = ["--check-simpsons-graphics", "output"];
+        let args = ["mame", "check", "simpsons", "world-4p-set-1", "output"];
         assert!(Command::parse(args.into_iter().map(OsString::from)).is_err());
-        let valid = [
-            OsString::from("--check-simpsons-graphics"),
-            OsString::from("output"),
-            OsString::from("1".repeat(64)),
-        ];
-        assert!(matches!(
-            Command::parse(valid.into_iter()),
-            Ok(Command::Check(_, _))
-        ));
-        let publish = ["--publish-simpsons-graphics", "output"];
+        let valid = args
+            .into_iter()
+            .map(OsString::from)
+            .chain([OsString::from("1".repeat(64))]);
+        assert!(matches!(Command::parse(valid), Ok(Command::Check(_, _, _))));
+        let publish =
+            ["mame", "publish", "simpsons", "world-4p-set-1", "output"];
         assert!(
             Command::parse(publish.into_iter().map(OsString::from)).is_err()
         );
+    }
+
+    #[test]
+    fn mame_admission_selects_a_pinned_profile() {
+        let args = [
+            "mame",
+            "import",
+            "simpsons",
+            "world-4p-set-1",
+            "archive.zip",
+            "3000000",
+            "1048576",
+            "7209088",
+            "14",
+        ];
+        let command = Command::parse(args.into_iter().map(OsString::from));
+        assert!(matches!(command, Ok(Command::Import(_, _))));
+        let wrong = [
+            "mame",
+            "import",
+            "simpsons",
+            "wrong",
+            "archive.zip",
+            "3000000",
+            "1048576",
+            "7209088",
+            "14",
+        ];
+        assert!(Command::parse(wrong.into_iter().map(OsString::from)).is_err());
     }
 }

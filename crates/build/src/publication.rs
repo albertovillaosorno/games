@@ -36,7 +36,8 @@ use std::path::Path;
 use games_assets::archive::ArchiveBudget;
 use games_assets::{ContentHash, ManifestLimits};
 use games_importer::conversion::ConversionLimits;
-use games_importer::{ImportError, VerifiedSource, simpsons};
+use games_importer::mame::Machine;
+use games_importer::{ImportError, VerifiedSource};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::staging::CanonicalStaging;
 
@@ -44,22 +45,18 @@ use games_platform_storage::staging::CanonicalStaging;
 ///
 /// # Errors
 /// Rejects unexpected identities, invalid assets or output failures.
-pub fn check(parent: &Path, digest: ContentHash) -> Result<(), String> {
-    let limits = simpsons::graphics_limits();
+pub fn check(
+    machine: Machine,
+    parent: &Path,
+    digest: ContentHash,
+) -> Result<(), String> {
+    let limits = machine.graphics_limits();
     let bundle = CanonicalBundle::open(parent, digest, limits)
         .map_err(|error| format!("bundle: {error:?}"))?;
     let manifest = bundle.manifest();
-    let identity = manifest.source();
-    if identity.title != simpsons::TITLE
-        || identity.revision != simpsons::REVISION
-        || identity.digest
-            != simpsons::SHA256.parse().map_err(|_error| {
-                String::from("invalid selected source identity")
-            })?
-        || manifest.records().len() != limits.records.get()
-    {
-        return Err(String::from("unexpected graphics bundle identity"));
-    }
+    machine
+        .validate_manifest(manifest)
+        .map_err(|error| format!("profile manifest: {error:?}"))?;
     for record in manifest.records() {
         drop(
             bundle
@@ -75,30 +72,32 @@ pub fn check(parent: &Path, digest: ContentHash) -> Result<(), String> {
 /// # Errors
 /// Returns conversion, staging, publication or output failures.
 pub fn publish(
+    machine: Machine,
     parent: &Path,
     source: &VerifiedSource<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
-    let manifest = simpsons::graphics_limits();
+    let manifest = machine.graphics_limits();
     let mut stage = CanonicalStaging::new(parent, staging_budget(manifest)?)
         .map_err(|error| format!("stage: {error:?}"))?;
     let mut staging_error = None;
-    let converted = simpsons::convert_graphics(
-        source,
-        ConversionLimits { archive, manifest },
-        |digest, bytes| {
-            stage.write_payload(digest, bytes).map_err(|error| {
-                staging_error = Some(error);
-                ImportError::StageFailed
-            })
-        },
-    )
-    .map_err(|error| {
-        staging_error.map_or_else(
-            || format!("graphics: {error:?}"),
-            |failure| format!("stage: {failure:?}"),
+    let converted = machine
+        .convert_graphics(
+            source,
+            ConversionLimits { archive, manifest },
+            |digest, bytes| {
+                stage.write_payload(digest, bytes).map_err(|error| {
+                    staging_error = Some(error);
+                    ImportError::StageFailed
+                })
+            },
         )
-    })?;
+        .map_err(|error| {
+            staging_error.map_or_else(
+                || format!("graphics: {error:?}"),
+                |failure| format!("stage: {failure:?}"),
+            )
+        })?;
     let staged = stage
         .finish(&converted, manifest)
         .map_err(|error| format!("complete: {error:?}"))?;
@@ -146,10 +145,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn staging_budget_rejects_overflow() {
-        let mut limits = simpsons::graphics_limits();
+    fn staging_budget_rejects_overflow() -> Result<(), ImportError> {
+        let machine = Machine::select("simpsons", "world-4p-set-1")?;
+        let mut limits = machine.graphics_limits();
         limits.total_bytes = NonZeroU64::MAX;
-        assert!(staging_budget(limits).is_err());
-        assert!(staging_budget(simpsons::graphics_limits()).is_ok());
+        (staging_budget(limits).is_err()
+            && staging_budget(machine.graphics_limits()).is_ok())
+        .then_some(())
+        .ok_or(ImportError::TooLarge)
     }
 }

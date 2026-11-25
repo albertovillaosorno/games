@@ -59,3 +59,12 @@ Independent pinned-manifest read-back verified both payloads.
 A repeated import rejected the existing destination and left its contents
 unchanged. Outputs are retained only beneath the ignored local reference
 directory. Other titles, Android publication and full gameplay remain open.
+
+The MAME adapter now selects an explicit machine and pinned revision. The
+Simpsons machine is a declarative Konami board profile: the shared adapter
+collects exact ROM lanes, reuses chip bit layouts, converts each region and
+checks the expected manifest shape. The host CLI uses MAME verify, import,
+publish and check operations rather than title-specific flags. Local native
+round-trip verification reproduced the previously pinned manifest identity
+and both payload hashes. The old bundle also passed the new reader.
+Only the selected Simpsons profile is verified; other boards remain open.

@@ -42,18 +42,16 @@ Archive SHA-256:
 
 No original binaries were executed. The full MAME download timed out; the
 relevant pinned driver metadata was retrieved separately. Local input is
-verified; asset conversion, gameplay implementation and parity remain open.
+verified; gameplay implementation and parity remain open.
 The Rust importer also verified all 14 members with exact configured limits
 and reported 7,209,088 decoded bytes without extraction or execution.
 
-The selected source adapter pins this archive as `world-4p-set-1`.
+The shared MAME adapter pins machine `simpsons` as `world-4p-set-1`.
 Local read-only graphics conversion succeeded using:
 
 ```sh
-cargo run --locked -p games-build -- --simpsons-graphics \
-  .reference/games/simpsons-arcade/simpsons.zip simpsons-arcade \
-  world-4p-set-1 \
-  c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa \
+cargo run --locked -p games-build -- mame import simpsons world-4p-set-1 \
+  .reference/games/simpsons-arcade/simpsons.zip \
   3000000 1048576 7209088 14
 ```
 
@@ -61,7 +59,7 @@ The converter decoded 32,768 8-by-8 background tiles (2,097,152 bytes)
 and 32,768 16-by-16 sprite tiles (8,388,608 bytes) as palette indices.
 Synthetic fixtures cover hardware lane ordering and bit permutations.
 No original code or pixels were written to tracked storage. Palette
-selection, audio, asset publication and observable gameplay remain open.
+selection, audio and observable remake gameplay remain open.
 
 The same command now builds a validated canonical indexed-tile manifest
 with two content-addressed entries. The actual local conversion produced
@@ -76,13 +74,13 @@ not publish a filesystem bundle or render any gameplay.
 The read-only command has moved to the host composition crate
 `games-build`, preserving the importer/platform dependency boundary.
 Using the same verified source and limits, the GNU/Linux host command
-`--publish-simpsons-graphics` published the bundle beneath
+`mame publish` published the bundle beneath
 `.reference/games/simpsons-arcade/bundles/`. Independent
-`--check-simpsons-graphics` read both declared payloads and verified
+`mame check` read both declared payloads and verified
 the manifest identity above. Repeating publication returned a collision;
 read-back still succeeded, and no staging directory remained.
-No assets are tracked. Palette reconstruction, audio, rendering,
-reference execution and gameplay remain unverified.
+No assets are tracked. Palette reconstruction, audio, rendering and remake
+gameplay remain unverified.
 
 Reference execution is now available locally. The official Fedora 45
 MAME 0.289-1.x86_64 RPM and seven dependency RPMs passed signature and
@@ -98,3 +96,9 @@ observations are private and retained under `.reference/tools/mame/`.
 They establish repeatable original behaviour and input sensitivity, not
 remake gameplay parity. Audio, interpreted scene semantics and portable
 save behaviour remain unverified.
+
+The generic MAME command reproduced the exact existing manifest and both
+payload identities, including fresh publication and independent read-back.
+A previously published bundle also passed the profile-driven shape check.
+The MAME adapter now shares region assembly and Konami graphics layouts;
+the selected machine supplies only its revision, ROM lanes and budgets.

@@ -88,15 +88,24 @@ The Linux platform stages content by SHA-256 and completes a private bundle
 only when its exact payload set matches the manifest. GNU/Linux supports
 atomic publication without replacement and native verified read-back.
 
-Use `cargo run --locked -p games-build --` with the archive path, title ID,
-revision ID, SHA-256, source-byte limit, entry-byte limit, total-byte limit
-and entry-count limit for local read-only verification. The same command
-accepts `--simpsons-graphics` for selected source graphics conversion,
-`--publish-simpsons-graphics PARENT` before the source arguments on
-GNU/Linux, or `--check-simpsons-graphics PARENT MANIFEST_SHA256` for read-back.
+The host build tool selects arcade originals by MAME machine and revision.
+The importer owns trusted source identities, word-lane assembly, reusable
+chip layouts and canonical graphics conversion. Unknown profiles fail closed.
+
+```sh
+cargo run --locked -p games-build -- mame import simpsons world-4p-set-1 \
+  .reference/games/simpsons-arcade/simpsons.zip 3000000 1048576 7209088 14
+```
+
+Use `mame verify` for read-only archive admission. On GNU/Linux, use
+`mame publish MACHINE REV PARENT PATH SOURCE ENTRY TOTAL COUNT` or
+`mame check MACHINE REV PARENT MANIFEST_SHA256`. The four numeric limits
+bound source bytes, individual decoded members, total bytes and member count.
 Create a trusted, private output parent inside the ignored reference directory
-before publication. The selected Simpsons bundle is verified locally; palette,
-audio, runtime rendering and other platform publication remain open.
+before publication. `zip verify PATH TITLE REV SHA256 SOURCE ENTRY TOTAL COUNT`
+remains available for explicit generic flat ZIP admission. The selected
+Simpsons bundle is verified locally; palette, audio, runtime rendering, other
+MAME profiles and other platform publication remain open.
 
 ## Catalogue
 
