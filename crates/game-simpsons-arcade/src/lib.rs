@@ -53,7 +53,10 @@ pub mod native;
 use std::mem;
 use std::time::Duration;
 
-pub use encounter::{ENEMY_ATTACK_TICKS, ENEMY_WALK_TICKS, Enemy, EnemyAction};
+pub use encounter::{
+    ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
+    EnemyAction,
+};
 use games::input::LogicalAction;
 use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
@@ -797,7 +800,8 @@ impl Cabinet {
                 slot.move_tick(layout);
             }
             if let Some(enemy) = &mut self.enemy
-                && self.slots.iter().any(|slot| slot.station.can_fight())
+                && (enemy.health == 0
+                    || self.slots.iter().any(|slot| slot.station.can_fight()))
             {
                 enemy.advance(layout, &mut self.slots);
             }

@@ -533,7 +533,7 @@ impl Scene {
         });
         if let (Some(combat), Some(enemy)) = (&self.combat, projected_enemy)
             && cabinet.session().world_visible()
-            && enemy.health > 0
+            && enemy.visible()
         {
             self.world.push((
                 enemy.position.y,

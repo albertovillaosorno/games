@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - First-street enemy approach, strike, stagger and health rules.
+//   - First-street enemy approach, strike and defeat rules.
 // - Must-Not:
 //   - Render, interpret original media or perform host I/O.
 // - Allows:
@@ -33,7 +33,7 @@
 
 use super::{Facing, Maneuver, Point, Slot, StreetLayout};
 
-const ENEMY_HEALTH: u8 = 3;
+const ENEMY_HEALTH: u8 = 1;
 const PLAYER_STRIKE: u8 = 10;
 const ENEMY_STRIKE: u8 = 14;
 const ENEMY_DAMAGE: u8 = 3;
@@ -41,7 +41,10 @@ const ENEMY_DAMAGE: u8 = 3;
 pub const ENEMY_ATTACK_TICKS: u8 = 34;
 /// Number of fixed-step ticks in the initial enemy walking cycle.
 pub const ENEMY_WALK_TICKS: u8 = 48;
-const STAGGER_TICKS: u8 = 12;
+/// Number of fixed-step ticks before the defeated enemy disappears.
+pub const ENEMY_DEFEAT_TICKS: u8 = 66;
+const DEFEAT_KNOCKBACK_TICKS: u8 = 33;
+const DEFEAT_BLINK_TICK: u8 = 52;
 
 /// Observable enemy action in the experimental encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,17 +59,17 @@ pub enum EnemyAction {
         /// Zero-based attack tick.
         tick: u8,
     },
-    /// Temporarily interrupted by a player strike.
-    Stagger {
-        /// Remaining recovery ticks.
-        remaining: u8,
+    /// Knockback, landing and disappearance after a lethal strike.
+    Defeat {
+        /// Zero-based defeat tick, capped at disappearance.
+        tick: u8,
     },
 }
 
 /// Read-only state of the initial enemy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Enemy {
-    /// Current action; a zero-health enemy no longer acts.
+    /// Current action, including the noninteractive defeat timeline.
     pub action: EnemyAction,
     /// Current horizontal facing.
     pub facing: Facing,
@@ -85,6 +88,7 @@ impl Enemy {
         slots: &mut [Slot; 4],
     ) {
         if self.health == 0 {
+            self.advance_defeat(layout);
             return;
         }
         if self.receive_strikes(slots) {
@@ -97,16 +101,30 @@ impl Enemy {
             EnemyAction::Attack { tick } => {
                 self.attack(tick, slots);
             },
-            EnemyAction::Stagger { remaining } => {
-                self.action = if remaining <= 1 {
-                    EnemyAction::Approach { tick: 0 }
-                } else {
-                    EnemyAction::Stagger {
-                        remaining: remaining.saturating_sub(1),
-                    }
-                };
-            },
+            EnemyAction::Defeat { .. } => {},
         }
+    }
+
+    fn advance_defeat(&mut self, layout: StreetLayout) {
+        let EnemyAction::Defeat { tick } = self.action else {
+            return;
+        };
+        if tick >= ENEMY_DEFEAT_TICKS {
+            return;
+        }
+        let next = tick.saturating_add(1);
+        if next <= DEFEAT_KNOCKBACK_TICKS {
+            let displacement = match self.facing {
+                Facing::Left => 2,
+                Facing::Right => -2,
+            };
+            self.position.x = self
+                .position
+                .x
+                .saturating_add(displacement)
+                .clamp(layout.min.x, layout.max.x);
+        }
+        self.action = EnemyAction::Defeat { tick: next };
     }
 
     fn approach(&mut self, layout: StreetLayout, slots: &[Slot; 4], tick: u8) {
@@ -177,7 +195,6 @@ impl Enemy {
     }
 
     fn receive_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
-        let before = self.health;
         for slot in slots {
             let station = &mut slot.station;
             if station.can_fight()
@@ -192,18 +209,35 @@ impl Enemy {
                     ..
                 }) || station.maneuver.consume_air_strike())
             {
-                self.health = self.health.saturating_sub(1);
+                self.health = 0;
+                // The original observed rightward knockback faces left.
+                self.facing = match station.facing {
+                    Facing::Left => Facing::Right,
+                    Facing::Right => Facing::Left,
+                };
+                self.action = EnemyAction::Defeat { tick: 0 };
+                return true;
             }
         }
-        if before == self.health {
-            return false;
-        }
-        self.action = EnemyAction::Stagger { remaining: STAGGER_TICKS };
-        true
+        false
     }
 
     pub(super) const fn restart(self) -> Self {
         Self::new(self.spawn)
+    }
+
+    /// Whether the enemy still contributes a visible world sprite.
+    #[must_use]
+    pub const fn visible(self) -> bool {
+        match self.action {
+            EnemyAction::Defeat { tick } => {
+                tick < DEFEAT_BLINK_TICK
+                    || (tick < ENEMY_DEFEAT_TICKS && !tick.is_multiple_of(2))
+            },
+            EnemyAction::Approach { .. } | EnemyAction::Attack { .. } => {
+                self.health > 0
+            },
+        }
     }
 }
 
@@ -291,27 +325,129 @@ mod tests {
     }
 
     #[test]
-    fn three_distinct_strikes_defeat_without_repeat() {
+    fn defeat_lifetime_blinks_and_then_stays_absent() {
         let result = playing(Point { x: 132, y: 190 });
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
             return;
         };
-        for (start, health) in [(3u64, 2), (23, 1), (43, 0)] {
-            cabinet.input_step(start, &pulse(Control::Primary));
-            for tick in start.saturating_add(1)..start.saturating_add(20) {
-                cabinet.input_step(tick, &[]);
-            }
-            assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(health));
+        cabinet.input_step(3, &pulse(Control::Primary));
+        for tick in 4..14 {
+            cabinet.input_step(tick, &[]);
         }
+        let outcome = cabinet.enemy();
+        assert!(outcome.is_some());
+        let Some(impact) = outcome else {
+            return;
+        };
+        assert_eq!(impact.action, EnemyAction::Defeat { tick: 0 });
+        assert_eq!(impact.health, 0);
+        verify_defeat_timeline(&mut cabinet, impact);
         let defeated = cabinet.enemy();
-        for tick in 63..120 {
+        for tick in 81..120 {
             cabinet.input_step(tick, &[]);
         }
         assert_eq!(cabinet.enemy(), defeated);
         assert_eq!(
             cabinet.stations().first().map(|slot| slot.health),
             Some(PLAYER_HEALTH)
+        );
+    }
+
+    fn verify_defeat_timeline(cabinet: &mut Cabinet, impact: Enemy) {
+        for tick in 0..=ENEMY_DEFEAT_TICKS {
+            let state = cabinet.enemy();
+            assert!(state.is_some());
+            let Some(enemy) = state else {
+                return;
+            };
+            assert_eq!(enemy.action, EnemyAction::Defeat { tick });
+            assert_eq!(enemy.health, 0);
+            assert_eq!(
+                enemy.visible(),
+                tick < 52
+                    || (53..66).contains(&tick) && !tick.is_multiple_of(2)
+            );
+            assert_eq!(
+                enemy.position.x,
+                impact
+                    .position
+                    .x
+                    .saturating_add(i16::from(tick.min(33)).saturating_mul(2))
+            );
+            cabinet.input_step(14u64.saturating_add(u64::from(tick)), &[]);
+        }
+    }
+
+    #[test]
+    fn defeated_enemy_pauses_and_cannot_be_struck_again() {
+        let layout = StreetLayout {
+            max: Point { x: 138, y: 208 },
+            spawn: [
+                Point { x: 110, y: 190 },
+                Point { x: 88, y: 190 },
+                Point { x: 132, y: 178 },
+                Point { x: 132, y: 178 },
+            ],
+            ..StreetLayout::DOWNTOWN
+        };
+        let result = Cabinet::with_encounter(layout, Point { x: 132, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(2, &pulse(Control::Start));
+        cabinet.input_step(3, &pulse(Control::Primary));
+        for tick in 4..24 {
+            cabinet.input_step(tick, &[]);
+        }
+        let frozen = cabinet.enemy();
+        assert_eq!(
+            frozen.map(|enemy| enemy.action),
+            Some(EnemyAction::Defeat { tick: 10 })
+        );
+        assert_eq!(frozen.map(|enemy| enemy.position.x), Some(138));
+        cabinet.input_step(24, &pulse(Control::Pause));
+        for tick in 25..40 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.enemy(), frozen);
+        cabinet.input_step(40, &pulse(Control::Pause));
+        cabinet.input_step(41, &pulse(Control::Primary));
+        for tick in 42..52 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(
+            cabinet.enemy().map(|enemy| enemy.action),
+            Some(EnemyAction::Defeat { tick: 22 })
+        );
+        assert_eq!(
+            cabinet.stations().first().map(|station| station.health),
+            Some(PLAYER_HEALTH)
+        );
+    }
+
+    #[test]
+    fn leftward_defeat_mirrors_and_stops_at_the_boundary() {
+        let result = playing(Point { x: 90, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let [press, release] = pulse(Control::Left);
+        cabinet.input_step(3, &[press]);
+        cabinet.input_step(4, &[release]);
+        cabinet.input_step(5, &pulse(Control::Primary));
+        for tick in 6..49 {
+            cabinet.input_step(tick, &[]);
+        }
+        let defeated = cabinet.enemy();
+        assert_eq!(
+            defeated.map(|enemy| (enemy.action, enemy.facing, enemy.position)),
+            Some((EnemyAction::Defeat { tick: 33 }, Facing::Right, Point {
+                x: StreetLayout::DOWNTOWN.min.x,
+                y: 190
+            }))
         );
     }
 
@@ -365,11 +501,11 @@ mod tests {
         for tick in 6..23 {
             cabinet.input_step(tick, &[]);
         }
-        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(2));
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(0));
     }
 
     #[test]
-    fn aerial_attack_hits_only_once_per_flight() {
+    fn aerial_attack_can_defeat_the_first_enemy() {
         let result = playing(Point { x: 132, y: 190 });
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
@@ -383,7 +519,7 @@ mod tests {
         for tick in 9..30 {
             cabinet.input_step(tick, &[]);
         }
-        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(2));
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(0));
         assert_eq!(
             cabinet.stations().first().map(|slot| slot.health),
             Some(PLAYER_HEALTH)
@@ -402,7 +538,10 @@ mod tests {
             for tick in 4..14 {
                 cabinet.input_step(tick, &[]);
             }
-            assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(3));
+            assert_eq!(
+                cabinet.enemy().map(|enemy| enemy.health),
+                Some(ENEMY_HEALTH)
+            );
         }
     }
 

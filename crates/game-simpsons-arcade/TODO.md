@@ -82,7 +82,7 @@ air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 160 poses and
+record or maneuver end. The catalogue is limited to 180 poses and
 16 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
@@ -114,7 +114,10 @@ uses the single strike bundle when that sequence is absent.
 An optional `enemy walk TICK SHA256` sequence similarly starts at zero,
 permits offsets through 47 and uses the bundle record `enemy/approach`.
 The walking phase advances only on approach displacement. It wraps
-every 48 ticks and resets when an attack or stagger ends.
+every 48 ticks and resets when an attack ends.
+An optional `enemy defeat TICK SHA256` sequence begins at zero, permits
+offsets through 65 and uses the bundle record `enemy/defeat`.
+Without it, the approach sprite is retained during the defeat timeline.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated
@@ -133,7 +136,12 @@ first enemy approaches an active station, can be struck with Primary,
 and can damage grounded players. Jump evades a ground strike.
 The punch lasts 34 simulation ticks, dealing damage once at tick 14.
 A grounded player attack resolves its single hit at offset ten;
-this timing is observed for all four stations.
+this timing is observed for all four stations. A single hit defeats the
+first enemy, which stops dealing and receiving damage immediately.
+The defeated enemy remains visible for 52 ticks, blinks on odd offsets
+53 through 65, and disappears at offset 66. Its independently authored
+motion travels up to 66 pixels away from the attacker, clipped to the
+current movement bounds. Its defeat art retains approximate pivots.
 The next approach tick re-evaluates whether a new punch can begin.
 A nonlethal light hit interrupts the current maneuver and prevents
 movement and action admission for 14 ticks (17 for Bart). Held

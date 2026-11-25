@@ -53,9 +53,9 @@ use super::{
     Art, Controls, Scene, dimension, failure, ground_position, live, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Control, Enemy, EnemyAction, Facing,
-    GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PLAYER_HEALTH, PLAYER_STOCKS,
-    Participation, Phase, Player, Point, Station, TICK_INTERVAL,
+    CONTINUE_TICKS, Cabinet, Control, ENEMY_DEFEAT_TICKS, Enemy, EnemyAction,
+    Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PLAYER_HEALTH,
+    PLAYER_STOCKS, Participation, Phase, Player, Point, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -244,7 +244,11 @@ impl Meter {
     const fn enemy(health: u8) -> Self {
         Self {
             columns: 24,
-            filled: health.saturating_mul(8),
+            filled: if health > 0 {
+                24
+            } else {
+                0
+            },
         }
     }
 
@@ -327,7 +331,7 @@ pub(super) fn smoke(
     let mut controls = Controls::new(touch_enabled)?;
     approach(&mut controls, &mut simulation)?;
     smoke_strikes(scene, art, &mut controls, &mut simulation)?;
-    let _settle = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    smoke_defeat(scene, art, &mut simulation)?;
     let _defeated = art.present(scene, simulation.state())?;
     let final_pixels = scene.readback().map_err(failure)?;
     advance(&mut simulation, 60)?;
@@ -337,6 +341,41 @@ pub(super) fn smoke(
     }
     smoke_counterstrike(scene, art, touch_enabled)?;
     smoke_expiry(scene, art, touch_enabled)
+}
+
+fn smoke_defeat(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let enemy = simulation
+        .state()
+        .enemy()
+        .ok_or(RenderError::InvalidSprite)?;
+    let EnemyAction::Defeat { tick } = enemy.action else {
+        return Err(failure("expected active defeat timeline"));
+    };
+    advance(simulation, u16::from(52u8.saturating_sub(tick)))?;
+    let _hidden = art.present(scene, simulation.state())?;
+    let hidden = scene.readback()?;
+    advance(simulation, 1)?;
+    let _blink = art.present(scene, simulation.state())?;
+    let blink = scene.readback()?;
+    if blink == hidden {
+        return Err(failure("defeated enemy blink was not visible"));
+    }
+    verify_enemy_art(scene, art, simulation.state(), &blink)?;
+    advance(simulation, 1)?;
+    let _hidden_again = art.present(scene, simulation.state())?;
+    if hidden != scene.readback()? {
+        return Err(failure("defeated enemy did not blink off"));
+    }
+    advance(simulation, u16::from(ENEMY_DEFEAT_TICKS.saturating_sub(54)))?;
+    let _gone = art.present(scene, simulation.state())?;
+    if hidden != scene.readback()? {
+        return Err(failure("defeated enemy did not disappear"));
+    }
+    Ok(())
 }
 
 fn smoke_four_player_encounter(
@@ -387,7 +426,6 @@ fn smoke_strikes(
         &initial,
         scene.layout().width().get(),
     )?;
-    let mut previous = initial;
     let layout = scene.layout();
     let mut collector = PerformanceCollector::with_percentiles(
         QualityProfile {
@@ -398,26 +436,23 @@ fn smoke_strikes(
         },
         NonZeroU64::new(16_666_667),
     );
-    for health in [2, 1, 0] {
-        let injected = Instant::now();
-        pulse(controls, simulation, Scancode::Z)?;
-        measure_strike(scene, art, simulation, (&mut collector, injected))?;
-        if simulation.state().enemy().map(|enemy| enemy.health) != Some(health)
-        {
-            return Err(failure("native strike did not change enemy health"));
-        }
-        let pixels = scene.readback().map_err(failure)?;
-        if previous == pixels {
-            return Err(failure("enemy damage was not presented"));
-        }
-        verify_enemy_health(
-            art,
-            simulation.state(),
-            &pixels,
-            scene.layout().width().get(),
-        )?;
-        previous = pixels;
+    let injected = Instant::now();
+    pulse(controls, simulation, Scancode::Z)?;
+    measure_strike(scene, art, simulation, (&mut collector, injected))?;
+    if simulation.state().enemy().map(|enemy| enemy.health) != Some(0) {
+        return Err(failure("native strike did not defeat enemy"));
     }
+    let pixels = scene.readback().map_err(failure)?;
+    if initial == pixels {
+        return Err(failure("enemy defeat was not presented"));
+    }
+    verify_enemy_health(
+        art,
+        simulation.state(),
+        &pixels,
+        layout.width().get(),
+    )?;
+    verify_enemy_art(scene, art, simulation.state(), &pixels)?;
     report_strikes(&collector)
 }
 
@@ -501,6 +536,10 @@ fn smoke_counterstrike(
         )?;
         if marge.health < PLAYER_HEALTH {
             smoke_hurt(scene, art, &mut controls, &mut simulation)?;
+            // Continue admission uses a separate, undefeated encounter.
+            simulation = live(true)?;
+            controls = Controls::new(touch_enabled)?;
+            approach(&mut controls, &mut simulation)?;
             return smoke_continue(scene, art, &mut controls, &mut simulation);
         }
         advance(&mut simulation, 1)?;
@@ -538,7 +577,9 @@ fn verify_enemy_art(
     let enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
     if !matches!(
         enemy.action,
-        EnemyAction::Attack { tick: 12 } | EnemyAction::Approach { tick: 6 }
+        EnemyAction::Attack { tick: 12 }
+            | EnemyAction::Approach { tick: 6 }
+            | EnemyAction::Defeat { .. }
     ) || art.poses.enemy(enemy.action).is_none()
     {
         return Ok(());

@@ -1544,3 +1544,36 @@ smoke passed with the 160-pose configuration. All 600 movement and
 60 combat host submissions met the 16.667 ms budget; mean
 submission work was 64.390 and 49.990 microseconds respectively.
 Lifetime peak RSS was 147,730,432 bytes.
+
+The first enemy now enters a noninteractive defeat at its first admitted
+strike. The health bar and collision eligibility end immediately; the
+visible defeat advances independently through 66 fixed ticks. The
+prototype moves its ground anchor two pixels away from the attacker for
+33 ticks (bounded by the current movement limits), holds the landing
+pose, then blinks on odd offsets 53 through 65 and disappears at 66.
+Its exact collision pivot, airborne trajectory and mirrored original
+behaviour remain unverified. Camera progression no longer waits for the
+defeated enemy, and Pause freezes the defeat timeline.
+
+The optional enemy defeat sequence reuses the bounded pose catalogue,
+with the distinct enemy/defeat asset key. The cap is 180 records with
+the existing 16 KiB text and 128x128 pose limits. The verified 170-pose
+catalogue occupies 13,718 bytes. Older catalogues retain the approach
+sprite through the same defeat and blink state. Inline tests cover
+one-hit defeat, both displacement directions, clamping, pause,
+repeated strikes, exact visibility and bounded catalogue admission.
+
+The normal Linux build produced a 3,289,904-byte executable. Adaptive
+offscreen OpenGL ES smoke with the NVIDIA EGL vendor, touch and dummy
+audio passed both the 170-pose and 160-pose catalogues. Readback compared
+the optional defeat sprites against the old fallback, confirmed hidden
+offsets 52 and 54, visible offset 53 and stable disappearance at 66.
+Counterstrike, stock refill, free continue and expiry used independent
+undefeated encounters. All 600 movement and 20 combat submissions per
+catalogue met 16.667 ms; the 170-pose run averaged 121.509 and 90.484
+microseconds respectively with lifetime peak RSS of 91,336,704 bytes.
+This shorter combat workload is not comparable to the previous
+three-strike benchmark. Physical display and complete stage parity
+remain open.
+Fresh validation with native renderer and audio smoke passed in run
+1795625113045148245-4035188.
