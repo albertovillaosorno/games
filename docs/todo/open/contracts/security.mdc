@@ -154,3 +154,9 @@ executable name, case collision or aggregate overflow prevents any callback;
 a deliberately corrupted first payload does not mask later unsafe metadata.
 The source byte limit still bounds the central-directory parser's input;
 its metadata allocation is not independently limited by the member count.
+
+The supplied Simpsons archive passed the new preflight with 14 members
+and 7,209,088 decoded bytes. The read-only host diagnostic rejected limits
+of 13 members, 7,209,087 aggregate bytes, 1,048,575 bytes per member and a
+1,000,000-byte source snapshot in four separate invocations. No original
+member was executed or published by these checks.

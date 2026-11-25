@@ -204,3 +204,24 @@ GPU execution time, input latency or memory claim follows from this test.
 A third release run with per-station position checks passed (600 frames,
 66,188 ns mean, 3,130,330 ns maximum, zero misses). Fresh validation
 passed in run 1795593147156550715-1327130.
+
+A paired manifest migration diagnostic on 2026-11-25 used the same native
+Linux debug executable, adaptive 400x304 logical scene, touch controls,
+Xvfb, software OpenGL and dummy audio. The legacy and version-two
+catalogues referenced 67 equivalent bundles; all 292 payload files
+(23,331,508 bytes) matched byte for byte. Both catalogues verified 80
+added scene columns and 80 street-camera columns. Two interleaved trials
+per catalogue measured the existing 600-frame four-player movement slice:
+
+- Legacy: mean 1.331–1.398 ms, maximum 9.604 ms, p95 ranges spanning
+  1.573–1.966 ms, peak process RSS 124,020–124,232 KiB.
+- Version two: mean 1.249–1.263 ms, maximum 7.363 ms, p95 ranges spanning
+  1.311–1.704 ms, peak process RSS 123,632–124,152 KiB.
+- All 2,400 measured frames met the 16.667 ms target. Whole-process wall
+  time was 1.51–1.57 s for legacy and 1.41–1.45 s for version two.
+  The unstripped debug executable occupied 49,047,392 bytes.
+
+GNU time measured the process RSS and whole-process wall time separately
+from the game's frame collector. These two samples per catalogue do not
+establish a statistically significant speedup, isolated asset load time,
+physical GPU performance, display latency or release binary size.
