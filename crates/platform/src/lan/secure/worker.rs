@@ -39,6 +39,7 @@ use std::sync::mpsc::{
     Receiver, SyncSender, TryRecvError, TrySendError, sync_channel,
 };
 use std::thread::{Builder, JoinHandle};
+use std::time::Instant;
 
 use games::network::MessageSchema;
 
@@ -138,6 +139,8 @@ pub type HostResult<Message> = Result<HostOutcome<Message>, OperationError>;
 /// One correlated completion, including failures.
 #[derive(Debug)]
 pub struct HostCompletion<Message> {
+    /// Host monotonic time immediately after the operation completed.
+    pub completed_at: Instant,
     /// Identifier supplied with the original command.
     pub id: u64,
     /// Operation success or failure.
@@ -400,9 +403,11 @@ fn serve<Codec>(
         if channels.stopped.load(Ordering::Acquire) {
             break;
         }
+        let result = execute(&mut session, codec, request.operation);
         let completion = HostCompletion {
+            completed_at: Instant::now(),
             id: request.id,
-            result: execute(&mut session, codec, request.operation),
+            result,
         };
         if channels.outgoing.send(completion).is_err() {
             break;
