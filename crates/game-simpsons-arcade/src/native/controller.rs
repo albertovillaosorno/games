@@ -13,7 +13,8 @@
 // - Must-Not:
 //   - Select a host seat, simulate gameplay or replicate original art.
 // - Allows:
-//   - Inputs: Approved TLS connection and native keyboard/controller events.
+//   - Inputs: Approved TLS connection and native keyboard, controller or touch
+//     events.
 //   - Outputs: Ordered seat-independent digital control transitions.
 //   - Side effects: Small native window and bounded nonblocking LAN polling.
 // - Split-When:
@@ -43,14 +44,14 @@ use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
 use super::{
     Controls, DEFAULT_PROFILES, EVENT_BUDGET, LocalActions, Profiles,
-    dimension, key_label, lan, size,
+    dimension, key_label, lan, project_contact, size, touch,
 };
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
 
 const WIDTH: u16 = 320;
 const HEIGHT: u16 = 176;
-const BYTES: usize = 225_280;
+const MAX_BYTES: usize = 389_120;
 
 fn connection_failure(kind: ErrorKind) -> RenderError {
     let context = if kind == ErrorKind::TimedOut {
@@ -112,6 +113,7 @@ fn axis_hint(profiles: &Profiles) -> &'static str {
 fn panel(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
+    touch_enabled: bool,
 ) -> Result<SpriteDraw, RenderError> {
     let bindings = binding_hints(profiles);
     let lines = [
@@ -129,6 +131,8 @@ fn panel(
         (axis_hint(profiles), 144, 2),
         ("CLOSE WINDOW TO LEAVE", 160, 2),
     ])
+    .chain(touch_enabled.then_some(("TOUCH BUTTONS BELOW", 184, 2)))
+    .chain(touch_enabled.then_some(("DRAG OFF TO RELEASE", 200, 2)))
     .map(|(text, top, scale)| {
         TextLine {
             color: [245, 240, 220, 255],
@@ -143,8 +147,12 @@ fn panel(
         scene,
         PlateLayout {
             background: [24, 22, 30, 255],
-            height: HEIGHT,
-            max_bytes: size(BYTES)?,
+            height: if touch_enabled {
+                touch::PANEL_TOP
+            } else {
+                HEIGHT
+            },
+            max_bytes: size(MAX_BYTES)?,
             width: WIDTH,
         },
         &[lines],
@@ -152,21 +160,112 @@ fn panel(
     atlas.draw(0, 0, 0)
 }
 
+fn controller_controls(
+    profiles: &Profiles,
+    touch_enabled: bool,
+) -> Result<Controls, RenderError> {
+    Controls::with_panel(
+        touch_enabled.then_some(touch::PanelRole::Controller),
+        profiles,
+        [false, true, true, true],
+    )
+}
+
+fn controller_draws(
+    scene: &mut SceneSession<'_, '_>,
+    profiles: &Profiles,
+    touch_enabled: bool,
+) -> Result<Vec<SpriteDraw>, RenderError> {
+    let mut draws = vec![panel(scene, profiles, touch_enabled)?];
+    if touch_enabled {
+        draws.push(touch::load(scene, profiles, touch::PanelRole::Controller)?);
+    }
+    Ok(draws)
+}
+
+fn controller_layout(
+    profiles: &Profiles,
+    touch_enabled: bool,
+) -> Result<FrameLayout, RenderError> {
+    let height = if touch_enabled {
+        touch::height(profiles)?
+    } else {
+        HEIGHT
+    };
+    FrameLayout::new(
+        dimension(u32::from(WIDTH))?,
+        dimension(u32::from(height))?,
+        size(MAX_BYTES)?,
+    )
+}
+
+fn controller_limits(
+    layout: FrameLayout,
+    touch_enabled: bool,
+) -> Result<SceneLimits, RenderError> {
+    let count = size(if touch_enabled {
+        2
+    } else {
+        1
+    })?;
+    Ok(SceneLimits {
+        atlas_bytes: size(layout.bytes())?,
+        atlases: count,
+        sprites: count,
+    })
+}
+
+fn project_event(
+    scene: &SceneSession<'_, '_>,
+    event: Option<HostEvent>,
+) -> Result<Option<HostEvent>, RenderError> {
+    match event {
+        Some(HostEvent::Input(change)) => {
+            Ok(project_contact(scene, change)?.map(HostEvent::Input))
+        },
+        other => Ok(other),
+    }
+}
+
+fn route_event(
+    event: Option<HostEvent>,
+    controls: &mut Controls,
+    controller: &mut ClientLan,
+    deferred: &mut Vec<RemoteControl>,
+) -> Result<bool, RenderError> {
+    let change = match event {
+        Some(HostEvent::Quit) => return Ok(false),
+        Some(HostEvent::Input(change)) => change,
+        None => return Ok(true),
+    };
+    *deferred = enqueue(controller, controls.actions(change)?)
+        .err()
+        .unwrap_or_default();
+    Ok(deferred.is_empty())
+}
+
 fn interactive(
     scene: &mut SceneSession<'_, '_>,
     startup: InputStartup,
-    mut controller: ClientLan,
-    profiles: &Profiles,
+    connection: lan::ControllerConnection,
 ) -> Result<(), RenderError> {
+    let lan::ControllerConnection {
+        profiles,
+        stream,
+        touch_enabled,
+    } = connection;
+    let mut controller = ClientLan::new(stream);
     let mut input = startup.input;
-    let mut controls =
-        Controls::with_reserved(false, profiles, [false, true, true, true])?;
+    let mut controls = controller_controls(&profiles, touch_enabled)?;
+    if touch_enabled {
+        input.enable_touch();
+    }
     for event in startup.attached {
         enqueue(&mut controller, controls.actions(event)?)
             .map_err(|_rejected| connection_failure(ErrorKind::WouldBlock))?;
     }
-    let sprite = panel(scene, profiles)?;
-    let _initial = scene.present([24, 22, 30], &[sprite])?;
+    let draws = controller_draws(scene, &profiles, touch_enabled)?;
+    let mut presented = scene.present([24, 22, 30], &draws)?;
     let mut deferred = Vec::new();
     loop {
         controller
@@ -180,21 +279,15 @@ fn interactive(
             thread::sleep(Duration::from_millis(1));
             continue;
         }
-        let batch = scene.dispatch_events(
-            size(EVENT_BUDGET)?,
-            8,
-            |_scene, native| {
-                let change = match input.translate(native)? {
-                    Some(HostEvent::Quit) => return Ok(false),
-                    Some(HostEvent::Input(change)) => change,
-                    None => return Ok(true),
-                };
-                deferred = enqueue(&mut controller, controls.actions(change)?)
-                    .err()
-                    .unwrap_or_default();
-                Ok(deferred.is_empty())
-            },
-        )?;
+        let batch =
+            scene.dispatch_events(size(EVENT_BUDGET)?, 8, |view, native| {
+                route_event(
+                    project_event(view, input.translate(native)?)?,
+                    &mut controls,
+                    &mut controller,
+                    &mut deferred,
+                )
+            })?;
         if batch == EventBatch::Stopped && deferred.is_empty() {
             return Ok(());
         }
@@ -205,35 +298,27 @@ fn interactive(
                 )?;
             }
         }
-        if batch != EventBatch::Empty {
-            let _drawn = scene.present([24, 22, 30], &[sprite])?;
+        if !presented || batch != EventBatch::Empty {
+            presented = scene.present([24, 22, 30], &draws)?;
         }
     }
 }
 
 pub(super) fn run(path: &Path) -> Result<(), String> {
-    let (stream, profiles) = lan::open_client(path)?;
-    let controller = ClientLan::new(stream);
+    let connection = lan::open_client(path)?;
+    let touch_enabled = connection.touch_enabled;
     let result = (|| {
+        let layout = controller_layout(&connection.profiles, touch_enabled)?;
         let mut window = NativeWindow::open(
             "The Simpsons Arcade - remote controller",
-            dimension(640)?,
-            dimension(352)?,
+            dimension(layout.width().get().saturating_mul(2))?,
+            dimension(layout.height().get().saturating_mul(2))?,
             false,
         )?;
         let startup = window.input(size(1)?)?;
-        let layout = FrameLayout::new(
-            dimension(u32::from(WIDTH))?,
-            dimension(u32::from(HEIGHT))?,
-            size(BYTES)?,
-        )?;
-        let limits = SceneLimits {
-            atlas_bytes: size(BYTES)?,
-            atlases: size(1)?,
-            sprites: size(1)?,
-        };
+        let limits = controller_limits(layout, touch_enabled)?;
         window.with_scene(layout, limits, |scene| {
-            interactive(scene, startup, controller, &profiles)
+            interactive(scene, startup, connection)
         })
     })();
     result.map_err(|error: RenderError| format!("{error:?}"))
@@ -244,13 +329,14 @@ mod tests {
     use std::env;
 
     use games::input::InputEvent;
+    use games::input::touch::{ContactId, ContactPhase};
     use games_platform_graphics::linux::input::{
         Axis, Button, Scancode, axis_code, button_code, key_code,
     };
 
     use super::super::{ACTION_NAMES, failure};
     use super::*;
-    use crate::Control;
+    use crate::{Control, Player};
 
     fn remapped_profiles() -> Result<Profiles, RenderError> {
         DEFAULT_PROFILES
@@ -401,6 +487,111 @@ mod tests {
     }
 
     #[test]
+    fn touch_controller_routes_and_releases() -> Result<(), RenderError> {
+        let profiles = DEFAULT_PROFILES.configured(
+            ACTION_NAMES,
+            "version=1\ntouch 1 primary=secondary\ntouch 1 secondary=primary\n",
+        ).map_err(failure)?;
+        let mut controls = controller_controls(&profiles, true)?;
+        let right = ContactId { device: 1, finger: 1 };
+        let attack = ContactId { device: 1, finger: 2 };
+        for (id, control) in
+            [(right, Control::Right), (attack, Control::Primary)]
+        {
+            check_edge(
+                &mut controls,
+                InputEvent::Contact {
+                    id,
+                    phase: ContactPhase::Down(touch::center(
+                        Player::Marge,
+                        control,
+                        &profiles,
+                    )?),
+                },
+                RemoteControl::new(control, true),
+            )?;
+        }
+        check_edge(
+            &mut controls,
+            InputEvent::Contact {
+                id: right,
+                phase: ContactPhase::Motion(None),
+            },
+            RemoteControl::new(Control::Right, false),
+        )?;
+        check_edge(
+            &mut controls,
+            InputEvent::FocusLost,
+            RemoteControl::new(Control::Primary, false),
+        )
+    }
+
+    #[test]
+    fn touch_controller_omits_pause_and_requires_opt_in()
+    -> Result<(), RenderError> {
+        let id = ContactId { device: 1, finger: 1 };
+        for (enabled, control) in
+            [(true, Control::Pause), (false, Control::Start)]
+        {
+            let mut controls = controller_controls(&DEFAULT_PROFILES, enabled)?;
+            let phase = ContactPhase::Down(touch::center(
+                Player::Marge,
+                control,
+                &DEFAULT_PROFILES,
+            )?);
+            if !controls
+                .actions(InputEvent::Contact { id, phase })?
+                .is_empty()
+            {
+                return Err(failure("unexpected touch action"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn opt_in_touch_controller_smoke() -> Result<(), RenderError> {
+        if env::var_os("GAMES_NATIVE_RENDER_SMOKE").is_none() {
+            return Ok(());
+        }
+        let profiles = DEFAULT_PROFILES;
+        let layout = controller_layout(&profiles, true)?;
+        let mut window = NativeWindow::open(
+            "Touch controller smoke",
+            layout.width(),
+            layout.height(),
+            true,
+        )?;
+        window.with_scene(layout, controller_limits(layout, true)?, |scene| {
+            let draws = controller_draws(scene, &profiles, true)?;
+            if !scene.present([24, 22, 30], &draws)? {
+                return Err(failure("touch controller not drawn"));
+            }
+            let pixels = scene.readback()?;
+            if !pixels.as_chunks::<4>().0.contains(&[242, 245, 250, 255]) {
+                return Err(failure("touch controller symbols missing"));
+            }
+            let logical =
+                touch::center(Player::Marge, Control::Start, &profiles)?;
+            let point = scene
+                .surface_touch(logical)?
+                .ok_or(RenderError::InvalidDimensions)?;
+            let id = ContactId { device: 1, finger: 1 };
+            let event = project_contact(scene, InputEvent::Contact {
+                id,
+                phase: ContactPhase::Down(point),
+            })?
+            .ok_or(RenderError::InvalidDimensions)?;
+            let mut controls = controller_controls(&profiles, true)?;
+            check_edge(
+                &mut controls,
+                event,
+                RemoteControl::new(Control::Start, true),
+            )
+        })
+    }
+
+    #[test]
     fn opt_in_native_panels_smoke() -> Result<(), RenderError> {
         if env::var_os("GAMES_NATIVE_RENDER_SMOKE").is_none() {
             return Ok(());
@@ -414,17 +605,17 @@ mod tests {
         let layout = FrameLayout::new(
             dimension(u32::from(WIDTH))?,
             dimension(u32::from(HEIGHT))?,
-            size(BYTES)?,
+            size(MAX_BYTES)?,
         )?;
         window.with_scene(
             layout,
             SceneLimits {
-                atlas_bytes: size(BYTES)?,
+                atlas_bytes: size(MAX_BYTES)?,
                 atlases: size(1)?,
                 sprites: size(1)?,
             },
             |scene| {
-                let sprite = panel(scene, &remapped_profiles()?)?;
+                let sprite = panel(scene, &remapped_profiles()?, false)?;
                 if !scene.present([24, 22, 30], &[sprite])? {
                     return Err(failure("controller panel not drawn"));
                 }

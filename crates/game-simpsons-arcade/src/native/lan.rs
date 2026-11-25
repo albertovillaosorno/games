@@ -190,6 +190,7 @@ struct ClientSelection {
     host: PublicFiles,
     identity: LocalFiles,
     name: String,
+    touch_enabled: bool,
 }
 
 impl ClientSelection {
@@ -217,6 +218,13 @@ impl ClientSelection {
         let controls = values
             .remove("controls")
             .map(|relative| base.join(relative));
+        let touch_enabled = match values.remove("touch") {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(_) => {
+                return Err(String::from("expected touch=on or touch=off"));
+            },
+        };
         if !values.is_empty() {
             return Err(String::from("unknown controller field"));
         }
@@ -226,16 +234,30 @@ impl ClientSelection {
             host,
             identity,
             name,
+            touch_enabled,
         })
     }
 }
 
-type ControllerConnection = (SecureFrameStream, Profiles);
+pub(super) struct ControllerConnection {
+    pub(super) profiles: Profiles,
+    pub(super) stream: SecureFrameStream,
+    pub(super) touch_enabled: bool,
+}
 
 pub(super) fn open_client(path: &Path) -> Result<ControllerConnection, String> {
     let selection = ClientSelection::parse(path, &catalogue(path)?)?;
     let profiles = load_profiles(selection.controls.as_deref())?;
-    Ok((selection.connect()?, profiles))
+    if selection.touch_enabled
+        && profiles.touch_players != [true, false, false, false]
+    {
+        return Err(String::from("remote touch requires station 1 only"));
+    }
+    Ok(ControllerConnection {
+        profiles,
+        stream: selection.connect()?,
+        touch_enabled: selection.touch_enabled,
+    })
 }
 
 fn certificate(path: &Path) -> Result<Vec<u8>, String> {
@@ -316,15 +338,17 @@ mod tests {
         if selection.host.root != Path::new("client/approved-root.der")
             || selection.host.leaf != Path::new("client/approved-leaf.der")
             || selection.controls.is_some()
+            || selection.touch_enabled
         {
             return Err(String::from("host paths not anchored"));
         }
         let configured = ClientSelection::parse(
             path,
-            &format!("{text}controls=profiles/remote.local\n"),
+            &format!("{text}controls=profiles/remote.local\ntouch=on\n"),
         )?;
         if configured.controls.as_deref()
             != Some(Path::new("client/profiles/remote.local"))
+            || !configured.touch_enabled
         {
             return Err(String::from("controller profile path not anchored"));
         }
@@ -334,6 +358,8 @@ mod tests {
             format!("{text}peer2_leaf=l\n"),
             format!("{text}name=override\n"),
             format!("{text}controls=a\ncontrols=b\n"),
+            format!("{text}touch=maybe\n"),
+            format!("{text}touch=on\ntouch=off\n"),
         ] {
             if ClientSelection::parse(path, &invalid).is_ok() {
                 return Err(String::from("invalid controller trust accepted"));

@@ -311,15 +311,8 @@ impl Controls {
             .map_err(|rejected| failure(rejected.reason))
     }
 
-    fn with_profiles(
-        touch_enabled: bool,
-        profiles: &Profiles,
-    ) -> Result<Self, RenderError> {
-        Self::with_reserved(touch_enabled, profiles, [false; 4])
-    }
-
-    fn with_reserved(
-        touch_enabled: bool,
+    fn with_panel(
+        panel: Option<touch::PanelRole>,
         profiles: &Profiles,
         reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
@@ -335,11 +328,11 @@ impl Controls {
                 mapping.bind_key(key_code(key), Action { control, player });
             }
         }
-        if touch_enabled {
+        if let Some(role) = panel {
             if touch::reserved(profiles, reserved) {
                 return Err(failure("touch seat reserved for remote input"));
             }
-            touch::install(&mut mapping, profiles)?;
+            touch::install(&mut mapping, profiles, role)?;
         }
         Ok(Self {
             devices: [None; 4],
@@ -347,6 +340,25 @@ impl Controls {
             reserved,
             router: InputRouter::new(mapping),
         })
+    }
+
+    fn with_profiles(
+        touch_enabled: bool,
+        profiles: &Profiles,
+    ) -> Result<Self, RenderError> {
+        Self::with_reserved(touch_enabled, profiles, [false; 4])
+    }
+
+    fn with_reserved(
+        touch_enabled: bool,
+        profiles: &Profiles,
+        reserved: [bool; 4],
+    ) -> Result<Self, RenderError> {
+        Self::with_panel(
+            touch_enabled.then_some(touch::PanelRole::Cabinet),
+            profiles,
+            reserved,
+        )
     }
 }
 
@@ -484,7 +496,7 @@ impl Scene {
                 reserved.contains(&true),
             )?,
             panel: if touch_enabled {
-                Some(touch::load(scene, profiles)?)
+                Some(touch::load(scene, profiles, touch::PanelRole::Cabinet)?)
             } else {
                 None
             },

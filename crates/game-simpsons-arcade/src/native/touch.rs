@@ -23,7 +23,7 @@
 // - Summary:
 //   - Visible controls outside the original arcade scene.
 // - Description:
-//   - Both button pixels and hit regions derive from one layout.
+//   - Button pixels and hit regions share geometry and seat-role filtering.
 // - Usage:
 //   - Install and draw only when touch controls are explicitly enabled.
 // - Defaults:
@@ -46,7 +46,7 @@ pub(super) const MAX_SCENE_HEIGHT: u16 = PANEL_TOP + PANEL_HEIGHT * 4;
 const MAX_PANEL_BYTES: usize = 409_600;
 const CONTACTS_PER_PANEL: usize = 8;
 const PANEL_HEIGHT: u16 = 80;
-const PANEL_TOP: u16 = 224;
+pub(super) const PANEL_TOP: u16 = 224;
 const WIDTH: u16 = 320;
 
 const BUTTONS: [PanelButton; 8] = [
@@ -75,6 +75,21 @@ const BUTTONS: [PanelButton; 8] = [
         0b00100, 0b00010, 0b11111, 0b00010, 0b00100,
     ]),
 ];
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PanelRole {
+    Cabinet,
+    Controller,
+}
+
+impl PanelRole {
+    const fn allows(self, control: Control) -> bool {
+        match self {
+            Self::Cabinet => true,
+            Self::Controller => !matches!(control, Control::Pause),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct PanelButton {
@@ -250,6 +265,7 @@ pub(super) fn center(
 pub(super) fn install(
     mapping: &mut InputMapping<Action>,
     profiles: &Profiles,
+    role: PanelRole,
 ) -> Result<(), RenderError> {
     let count = seats(profiles).count();
     let mut zones = Vec::with_capacity(count.saturating_mul(BUTTONS.len()));
@@ -260,7 +276,10 @@ pub(super) fn install(
         if count > 1 {
             regions.push(panel_region(row, offset, height)?);
         }
-        for button in panel(profiles, player)? {
+        for button in panel(profiles, player)?
+            .into_iter()
+            .filter(|button| role.allows(button.control))
+        {
             let id = u16::try_from(zones.len())
                 .map_err(|_error| RenderError::TooLarge)?;
             let [min, max] = button
@@ -288,6 +307,7 @@ pub(super) fn install(
 pub(super) fn load(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
+    role: PanelRole,
 ) -> Result<SpriteDraw, RenderError> {
     let count = seats(profiles).count();
     let panel_height = height(profiles)?.saturating_sub(PANEL_TOP);
@@ -307,7 +327,7 @@ pub(super) fn load(
         } else {
             ""
         };
-        raster_panel(&mut pixels, &buttons, label);
+        raster_panel(&mut pixels, &buttons, label, role);
     }
     let atlas = scene.load_atlas(layout, &pixels)?;
     let source = SpriteRect {
@@ -328,7 +348,12 @@ pub(super) fn load(
     })
 }
 
-fn raster_panel(pixels: &mut Vec<u8>, buttons: &[PanelButton; 8], label: &str) {
+fn raster_panel(
+    pixels: &mut Vec<u8>,
+    buttons: &[PanelButton; 8],
+    label: &str,
+    role: PanelRole,
+) {
     let line = ui::TextLine {
         color: [242, 245, 250, 255],
         scale: 2,
@@ -339,6 +364,7 @@ fn raster_panel(pixels: &mut Vec<u8>, buttons: &[PanelButton; 8], label: &str) {
         for x in 0..WIDTH {
             let color = buttons
                 .iter()
+                .filter(|button| role.allows(button.control))
                 .find_map(|button| button.color(x, y))
                 .unwrap_or_else(|| panel_background(line, x, y));
             pixels.extend_from_slice(&color);
@@ -431,14 +457,16 @@ mod tests {
     use games_platform_graphics::linux::RenderError;
 
     use super::super::DEFAULT_PROFILES;
-    use super::{BUTTONS, TouchPoint, center, install, to_panel, to_scene};
+    use super::{
+        BUTTONS, PanelRole, TouchPoint, center, install, to_panel, to_scene,
+    };
     use crate::{Action, Player};
 
     #[test]
     fn centered_panel_projects_button_centers_and_rejects_side_space()
     -> Result<(), RenderError> {
         let mut mapping = InputMapping::new();
-        install(&mut mapping, &DEFAULT_PROFILES)?;
+        install(&mut mapping, &DEFAULT_PROFILES, PanelRole::Cabinet)?;
         let mut router = InputRouter::new(mapping);
         let id = ContactId { device: 1, finger: 2 };
         for (width, button) in [320u32, 321, 362, 512]
@@ -478,7 +506,7 @@ mod tests {
     #[test]
     fn visible_buttons_route_to_one_station() -> Result<(), RenderError> {
         let mut mapping = InputMapping::new();
-        install(&mut mapping, &DEFAULT_PROFILES)?;
+        install(&mut mapping, &DEFAULT_PROFILES, PanelRole::Cabinet)?;
         let mut router = InputRouter::new(mapping);
         let id = ContactId { device: 1, finger: 2 };
         for button in BUTTONS {
@@ -524,7 +552,7 @@ mod tests {
             return Err(RenderError::InvalidDimensions);
         }
         let mut mapping = InputMapping::new();
-        install(&mut mapping, &profiles)?;
+        install(&mut mapping, &profiles, PanelRole::Cabinet)?;
         let mut router = InputRouter::new(mapping);
         for width in [320u32, 362, 512] {
             verify_panel_contacts(&mut router, &profiles, width)?;
@@ -590,7 +618,7 @@ mod tests {
             .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
             .map_err(RenderError::Backend)?;
         let mut mapping = InputMapping::new();
-        install(&mut mapping, &profiles)?;
+        install(&mut mapping, &profiles, PanelRole::Cabinet)?;
         let mut router = InputRouter::new(mapping);
         let id = ContactId { device: 1, finger: 2 };
         let first = center(Player::Marge, Control::Right, &profiles)?;
@@ -653,13 +681,45 @@ mod tests {
         let mut first_pixels = Vec::new();
         let mut second_pixels = Vec::new();
         let buttons = super::panel(&profiles, Player::Marge)?;
-        super::raster_panel(&mut first_pixels, &buttons, "SEAT 1");
-        super::raster_panel(&mut second_pixels, &buttons, "SEAT 3");
+        super::raster_panel(
+            &mut first_pixels,
+            &buttons,
+            "SEAT 1",
+            PanelRole::Cabinet,
+        );
+        super::raster_panel(
+            &mut second_pixels,
+            &buttons,
+            "SEAT 3",
+            PanelRole::Cabinet,
+        );
         if first_pixels == second_pixels
             || first_pixels.len() != 102_400
             || second_pixels.len() != 102_400
         {
             return Err(RenderError::InvalidLength);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn controller_panel_does_not_draw_pause() -> Result<(), RenderError> {
+        let buttons = super::panel(&DEFAULT_PROFILES, Player::Marge)?;
+        let mut cabinet = Vec::new();
+        let mut controller = Vec::new();
+        super::raster_panel(&mut cabinet, &buttons, "", PanelRole::Cabinet);
+        super::raster_panel(
+            &mut controller,
+            &buttons,
+            "",
+            PanelRole::Controller,
+        );
+        let index = 20usize.saturating_mul(320).saturating_add(208);
+        let background = [23, 27, 38, 255];
+        if controller.as_chunks::<4>().0.get(index) != Some(&background)
+            || cabinet.as_chunks::<4>().0.get(index) == Some(&background)
+        {
+            return Err(RenderError::InvalidDimensions);
         }
         Ok(())
     }
@@ -681,7 +741,7 @@ mod tests {
             )
             .map_err(RenderError::Backend)?;
         let mut mapping = InputMapping::new();
-        install(&mut mapping, &profiles)?;
+        install(&mut mapping, &profiles, PanelRole::Cabinet)?;
         let mut router = InputRouter::new(mapping);
         let point =
             center(Player::Marge, Control::Secondary, &DEFAULT_PROFILES)?;

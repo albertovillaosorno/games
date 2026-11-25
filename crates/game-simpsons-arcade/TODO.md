@@ -309,9 +309,14 @@ and X/B jumps by default. The controller panel shows its effective digital
 bindings. Optionally add `controls=FILE` to its catalogue, resolving the
 existing version-one control profile relative to the catalogue directory.
 Only station 1 bindings are used on a standalone controller, regardless of
-the host-assigned seat. The host handles Pause and menus. Close the
-controller window to disconnect. Re-launch with the same approved identity to
-rejoin; no automatic discovery or reconnection is attempted.
+the host-assigned seat. Optionally add `touch=on` to show the seven shared
+touch controls below the hints; only station 1 may be touch-enabled in
+the selected profile. Simultaneous contacts and drag-off releases use
+the same remappable regions as the cabinet. The host-only Pause button
+is neither drawn nor mapped. Touch is disabled by default (`touch=off`).
+The host handles Pause and menus. Close the controller window to
+disconnect. Re-launch with the same approved identity to rejoin; no
+automatic discovery or reconnection is attempted.
 
 Use matching protocol-version-two host and controller builds; the local
 credential catalogue format remains version one. An idle controller sends

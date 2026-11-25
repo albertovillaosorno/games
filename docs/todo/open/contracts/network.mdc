@@ -528,3 +528,14 @@ Real TLS regression tests exercise a full live input queue and verify
 that the subsequently admitted timestamp is reported exactly once at
 the new tick. The timestamp is host-side decode completion, not a
 client clock or a network round-trip measurement.
+
+The standalone native controller accepts an explicit `touch=on` catalogue
+option. Its seven on-screen controls share the cabinet's touch geometry,
+remapping, contact routing and release behavior; the host-only Pause
+region is neither drawn nor mapped. Only station 1 may be touch-enabled
+in its profile, regardless of the seat authenticated by the host.
+Keyboard and gamepad behavior remains the default. Regression tests
+exercise remapped simultaneous contacts, drag-off and focus-loss releases,
+disabled touch and excluded Pause geometry. The opt-in native rendering
+smoke also passes on isolated offscreen OpenGL ES. Actual touchscreen
+hardware and physical multi-device LAN remain unverified.
