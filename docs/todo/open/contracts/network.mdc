@@ -120,3 +120,15 @@ Credential generation and storage remain external; promoting the test
 certificate generator to production would introduce incompatible
 transitive dependency versions under the workspace's existing lint policy.
 An integrated provisioning UI and physical-device LAN remain unverified.
+
+The native host now offers a caller-driven I/O worker with a bounded
+request and completion queue, nonblocking submission and result polling,
+and correlated operation identifiers. Full or oversized requests return
+their original command; shutdown cancels queued work and joins the
+in-flight operation. Tests exercise the offline roster, mutual TLS
+loopback authentication, schema rejection, encrypted responses, identity
+rejoin and deterministic request-queue saturation. Fresh validation
+passed in run 1795584885193639323-3848985. The worker serialises transfers:
+idle receive requests still use the transport deadline and disconnect,
+so callers must submit protocol-expected receives. Independent peer
+scheduling and physical LAN play remain unverified.

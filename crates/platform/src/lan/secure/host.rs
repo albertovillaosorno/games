@@ -125,6 +125,10 @@ impl HostSession {
         }
     }
 
+    pub(super) const fn frame_budget(&self) -> usize {
+        self.frame_budget
+    }
+
     /// Admit a directly connected local controller.
     ///
     /// # Errors

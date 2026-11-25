@@ -33,6 +33,8 @@
 pub mod host;
 /// Local credential import and explicit public trust exchange.
 pub mod identity;
+/// Bounded off-thread host session commands.
+pub mod worker;
 
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::SocketAddr;
