@@ -642,11 +642,10 @@ fn sibling_catalogue(executable: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::DirBuilderExt as _;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use std::{fs, process};
+    use std::fs;
 
     use games::presentation::WindowMode;
+    use games_platform_storage::fixtures::TestRoot;
 
     use super::*;
 
@@ -656,21 +655,12 @@ mod tests {
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[derive(Debug)]
-    struct ProfileFixture(PathBuf);
+    struct ProfileFixture(TestRoot);
 
     impl ProfileFixture {
         fn new() -> Result<Self, String> {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| error.to_string())?
-                .as_nanos();
-            let path = env::temp_dir()
-                .join(format!("games-controls-{}-{timestamp}", process::id()));
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&path)
-                .map_err(|error| error.to_string())?;
-            let fixture = Self(path);
+            let fixture =
+                Self(TestRoot::new().map_err(|error| error.to_string())?);
             fixture.write(
                 "launch.local",
                 &format!("{}controls=fallback.txt\nsettings=.\n", catalogue()),
@@ -686,26 +676,20 @@ mod tests {
                 .map(OsString::from)
                 .chain([
                     OsString::from("--config"),
-                    self.0.join("launch.local").into_os_string(),
+                    self.0.path().join("launch.local").into_os_string(),
                 ])
                 .collect();
             Launch::parse(args)?.controls.resolve()
         }
 
         fn store(&self) -> Result<ControlStore, String> {
-            ControlStore::open(&self.0, profile_limit()?)
+            ControlStore::open(self.0.path(), profile_limit()?)
                 .map_err(|error| format!("{error:?}"))
         }
 
         fn write(&self, name: &str, text: &str) -> Result<(), String> {
-            fs::write(self.0.join(name), text)
+            fs::write(self.0.path().join(name), text)
                 .map_err(|error| error.to_string())
-        }
-    }
-
-    impl Drop for ProfileFixture {
-        fn drop(&mut self) {
-            let _cleanup = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -755,12 +739,12 @@ mod tests {
         let fixture = ProfileFixture::new()?;
         let args = [
             OsString::from("--config"),
-            fixture.0.join("launch.local").into_os_string(),
+            fixture.0.path().join("launch.local").into_os_string(),
         ];
         if Launch::parse(args.clone().into())?.volume != MasterVolume::Full {
             return Err("wrong initial volume".into());
         }
-        let volume = VolumeStore::open(&fixture.0)
+        let volume = VolumeStore::open(fixture.0.path())
             .map_err(|error| format!("{error:?}"))?;
         let receipt = volume
             .store(MasterVolume::Half)
@@ -787,7 +771,7 @@ mod tests {
         let config = || {
             [
                 OsString::from("--config"),
-                fixture.0.join("launch.local").into_os_string(),
+                fixture.0.path().join("launch.local").into_os_string(),
             ]
         };
         let selected = Launch::parse(config().into())?;
@@ -1103,7 +1087,7 @@ mod tests {
             return Err("catalogue fallback was unexpectedly persisted".into());
         }
 
-        let explicit = fixture.0.join("explicit.txt");
+        let explicit = fixture.0.path().join("explicit.txt");
         let path = explicit.to_str().ok_or("invalid test path")?;
         let resolved = fixture.resolve(&["--controls", path])?;
         if resolved.profiles != expected(EXPLICIT_PROFILE)?
@@ -1139,7 +1123,7 @@ mod tests {
         let _receipt = store
             .store(FALLBACK_PROFILE)
             .map_err(|error| format!("{error:?}"))?;
-        let explicit = fixture.0.join("explicit.txt");
+        let explicit = fixture.0.path().join("explicit.txt");
         let path = explicit.to_str().ok_or("invalid test path")?;
         let smoke = fixture.resolve(&["--smoke", "--controls", path])?;
         if smoke.profiles
@@ -1172,8 +1156,8 @@ mod tests {
     #[test]
     fn controller_controls_share_persistence_and_reset() -> Result<(), String> {
         let fixture = ProfileFixture::new()?;
-        let fallback = fixture.0.join("fallback.txt");
-        let explicit = fixture.0.join("explicit.txt");
+        let fallback = fixture.0.path().join("fallback.txt");
+        let explicit = fixture.0.path().join("explicit.txt");
         let path = explicit.to_str().ok_or("invalid test path")?;
         let select = |options: &[&str]| {
             let args = ["--lan-controller", "client.local"]
@@ -1182,7 +1166,7 @@ mod tests {
                 .map(OsString::from)
                 .collect();
             ControllerLaunch::parse(args)?
-                .select_controls(Some(&fallback), Some(&fixture.0))
+                .select_controls(Some(&fallback), Some(fixture.0.path()))
         };
         let expected = |text| DEFAULT_PROFILES.configured(ACTION_NAMES, text);
         if select(&[])?.profiles != expected(FALLBACK_PROFILE)? {

@@ -37,6 +37,13 @@ pub mod bundle;
 /// Bounded native regular-file snapshots.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod file;
+
+/// Shared native storage fixtures for workspace tests.
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(test, feature = "test-fixtures"),
+))]
+pub mod fixtures;
 /// Atomic persistence for portable display and input preferences.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod preferences;

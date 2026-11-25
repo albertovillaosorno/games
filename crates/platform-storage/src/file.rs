@@ -349,7 +349,7 @@ mod tests {
     use nix::unistd::mkfifo;
 
     use super::*;
-    use crate::bundle::TestRoot;
+    use crate::fixtures::TestRoot;
 
     fn require(condition: bool) -> Result<(), FileReadError> {
         condition

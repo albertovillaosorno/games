@@ -32,8 +32,6 @@
 mod license_inventory;
 
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::fs::DirBuilder;
 use std::io::{ErrorKind, Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -279,36 +277,9 @@ fn native_entry(bytes: &[u8]) -> Option<()> {
 }
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::DirBuilderExt as _;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use std::{env, process};
+    use games_platform_storage::fixtures::TestRoot;
 
     use super::*;
-
-    #[derive(Debug)]
-    struct TestRoot(PathBuf);
-
-    impl TestRoot {
-        fn new() -> Result<Self, String> {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| error.to_string())?
-                .as_nanos();
-            let path = env::temp_dir()
-                .join(format!("games-package-{}-{timestamp}", process::id()));
-            DirBuilder::new()
-                .mode(0o700)
-                .create(&path)
-                .map_err(|error| error.to_string())?;
-            Ok(Self(path))
-        }
-    }
-
-    impl Drop for TestRoot {
-        fn drop(&mut self) {
-            let _cleanup = fs::remove_dir_all(&self.0);
-        }
-    }
 
     fn write_field<const N: usize>(
         bytes: &mut [u8],
@@ -403,8 +374,8 @@ mod tests {
     #[test]
     fn package_requires_a_receipt_and_rejects_nonportable_paths()
     -> Result<(), String> {
-        let root = TestRoot::new()?;
-        let output = root.0.join("package");
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let output = root.path().join("package");
         let mut prepared = Prepared::default();
         for path in [
             "licenses//MIT",
@@ -423,7 +394,7 @@ mod tests {
         executable_receipt.add(RECEIPT.into(), b"receipt".to_vec(), true)?;
         require(executable_receipt.publish(&output).is_err())?;
         require(
-            fs::read_dir(&root.0)
+            fs::read_dir(root.path())
                 .map_err(|error| error.to_string())?
                 .count()
                 == 0,
@@ -432,8 +403,8 @@ mod tests {
 
     #[test]
     fn package_never_replaces_an_existing_directory() -> Result<(), String> {
-        let root = TestRoot::new()?;
-        let output = root.0.join("package");
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let output = root.path().join("package");
         let mut prepared = Prepared::default();
         prepared.add("title".into(), vec![1, 2, 3], true)?;
         prepared.add("licenses/MIT".into(), b"text".to_vec(), false)?;
@@ -455,9 +426,9 @@ mod tests {
                 .map_err(|error| error.to_string())?
                 == b"complete",
         )?;
-        require(!root.0.join("escape").exists())?;
+        require(!root.path().join("escape").exists())?;
         require(
-            fs::read_dir(&root.0)
+            fs::read_dir(root.path())
                 .map_err(|error| error.to_string())?
                 .count()
                 == 1,
@@ -466,8 +437,8 @@ mod tests {
 
     #[test]
     fn failed_write_does_not_publish_partial_package() -> Result<(), String> {
-        let root = TestRoot::new()?;
-        let output = root.0.join("package");
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let output = root.path().join("package");
         let mut prepared = Prepared::default();
         prepared.add("licenses".into(), vec![1], false)?;
         prepared.add("licenses/MIT".into(), vec![2], false)?;
@@ -475,7 +446,7 @@ mod tests {
         require(prepared.publish(&output).is_err())?;
         require(!output.exists())?;
         require(
-            fs::read_dir(&root.0)
+            fs::read_dir(root.path())
                 .map_err(|error| error.to_string())?
                 .count()
                 == 0,

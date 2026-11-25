@@ -88,3 +88,11 @@ workspace-inherited dependency aliases, including target-specific and
 nested dependency groups. Tests cover aliases, normalized spellings
 and missing workspace references. The same fresh joint gate above
 passed without increasing the migration baseline.
+
+Storage, title launch and package tests now share the existing atomic
+private temporary directory mechanism through a storage adapter fixture.
+The fixture is enabled for tests without requiring it in title releases.
+A regression test verifies owner-only permissions, independent roots and
+cleanup without affecting another root. Four Unix API occurrences across
+two consumer files were removed from the migration baseline. The joint
+fresh workspace gate passed in run 1795636430293093179-1561568.

@@ -308,7 +308,7 @@ mod tests {
     use nix::unistd::mkfifo;
 
     use super::*;
-    use crate::bundle::TestRoot;
+    use crate::fixtures::TestRoot;
 
     fn publish_replacements(
         store: &SaveStore,

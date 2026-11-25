@@ -28,10 +28,6 @@
     "target:target_env:\"gnu\"": 1,
     "target:target_os:\"linux\"": 1
   },
-  "crates/build/src/title_package/mod.rs": {
-    "os-api": 1,
-    "os:unix": 1
-  },
   "crates/game-simpsons-arcade/Cargo.toml": {
     "target-table:cfg(all(target_os = \"linux\", target_env = \"gnu\"))": 1
   },
@@ -55,10 +51,6 @@
   },
   "crates/game-simpsons-arcade/src/native/encounter.rs": {
     "os:linux": 3
-  },
-  "crates/game-simpsons-arcade/src/native/launch.rs": {
-    "os-api": 1,
-    "os:unix": 1
   },
   "crates/game-simpsons-arcade/src/native/measurement.rs": {
     "os:linux": 1

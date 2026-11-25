@@ -729,7 +729,7 @@ mod tests {
     use nix::unistd::mkfifo;
 
     use super::*;
-    use crate::bundle::TestRoot;
+    use crate::fixtures::TestRoot;
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     type CopyFixture = (CanonicalBundle, PublishedBundle);

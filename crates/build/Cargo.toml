@@ -32,5 +32,8 @@ games-platform = { workspace = true, optional = true }
 games-platform-audio = { workspace = true, optional = true }
 games-platform-graphics = { workspace = true, optional = true }
 
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
+games-platform-storage = { workspace = true, features = ["test-fixtures"] }
+
 [lints]
 workspace = true

@@ -34,6 +34,7 @@ games-platform-storage = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
+games-platform-storage = { workspace = true, features = ["test-fixtures"] }
 rcgen.workspace = true
 
 [[bin]]

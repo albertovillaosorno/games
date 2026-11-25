@@ -32,8 +32,6 @@
 use std::io;
 use std::os::fd::OwnedFd;
 use std::path::Path;
-#[cfg(test)]
-use std::{env, fs, path::PathBuf};
 
 use games_assets::{
     AssetError, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
@@ -41,8 +39,6 @@ use games_assets::{
 use nix::errno::Errno;
 use nix::fcntl::{open, openat};
 use nix::sys::stat::Mode;
-#[cfg(test)]
-use nix::unistd::mkdtemp;
 
 use crate::file::{
     DIRECTORY_FLAGS, FileReadError, read_regular, trusted_directory,
@@ -252,13 +248,16 @@ fn open_directory(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::path::PathBuf;
 
     use games_assets::{AssetFormat, SourceIdentity};
     use nix::unistd::mkfifo;
 
     use super::*;
+    use crate::fixtures::TestRoot;
 
     type FixturePayload<'data> = (AssetRecord, &'data [u8]);
 
@@ -636,28 +635,5 @@ mod tests {
         fs::rename(&payloads, &original)?;
         symlink(&original, &payloads)?;
         require(fixture.open().is_err())
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct TestRoot {
-    pub(crate) path: PathBuf,
-}
-
-#[cfg(test)]
-impl TestRoot {
-    pub(crate) fn new() -> io::Result<Self> {
-        let template = env::temp_dir().join("games-fixture-XXXXXX");
-        Ok(Self {
-            path: mkdtemp(&template)?,
-        })
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestRoot {
-    fn drop(&mut self) {
-        let _result = fs::remove_dir_all(&self.path);
     }
 }

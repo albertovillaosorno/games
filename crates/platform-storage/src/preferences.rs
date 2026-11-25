@@ -244,7 +244,7 @@ mod tests {
     use games::presentation::{PresentationMode, WindowMode};
 
     use super::*;
-    use crate::bundle::TestRoot;
+    use crate::fixtures::TestRoot;
     fn require(condition: bool) -> Result<(), PreferenceError> {
         condition
             .then_some(())

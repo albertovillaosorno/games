@@ -14,5 +14,8 @@ games-assets.workspace = true
 nix.workspace = true
 zeroize.workspace = true
 
+[features]
+test-fixtures = []
+
 [lints]
 workspace = true
