@@ -2011,3 +2011,16 @@ missed no host work budgets across 600 movement frames and 20 strike
 submissions (mean 69.118 and 223.573 microseconds respectively).
 Lifetime peak RSS was 134,991,872 bytes. These are synthetic host
 measurements rather than physical input or complete gameplay parity.
+
+A further passive centered control retained the restraint object from
+frame 2767 through 3017; visible health first decreased at frame 2769.
+The meter drained three columns at two-frame intervals per observed
+hit, with contiguous six-column and longer separated sequences.
+The last four columns continued draining after the combined object
+was removed, reaching zero at frame 3025. The right-edge control
+similarly began its final drain after release. These observations
+support separate logical and displayed health, but do not isolate
+which nearby enemy contributed each hit. Exact restraint damage
+cadence and depletion timing remain open; the representative fixed
+cadence is unchanged. Both raw observations and derived transition
+lists remain in the private reference directory.
