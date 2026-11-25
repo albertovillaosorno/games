@@ -31,6 +31,7 @@
 
 //! Native initial street preview using only verified canonical art.
 
+mod encounter;
 mod poses;
 mod touch;
 
@@ -58,7 +59,7 @@ use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Participation, Phase, Player,
-    Station, StreetLayout, TICK_INTERVAL,
+    Point, Station, StreetLayout, TICK_INTERVAL,
 };
 
 const SOURCE_SHA: &str =
@@ -266,19 +267,20 @@ impl Art {
 struct Scene {
     actors: [Art; 4],
     background: Art,
+    combat: Option<encounter::CombatArt>,
     draws: Vec<SpriteDraw>,
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
+    world: Vec<(i16, SpriteDraw)>,
 }
 
 impl Scene {
     fn load(
         scene: &mut SceneSession<'_, '_>,
-        bundles: &[CanonicalBundle; 4],
+        source: &Sources<'_>,
         touch_enabled: bool,
-        pose_source: (&poses::Catalogue, &Path),
     ) -> Result<Self, RenderError> {
-        let [first, _, _, _] = bundles;
+        let [first, _, _, _] = &source.actors;
         let mut background = Art::load(scene, first, "scene/background")?;
         if (background.rect.width.get(), background.rect.height.get())
             != (320, 224)
@@ -289,7 +291,7 @@ impl Scene {
         background.rect.y = 28i32;
         background.rect.height = dimension(196)?;
         let mut actors = Vec::new();
-        for (bundle, key) in bundles.iter().zip(KEYS) {
+        for (bundle, key) in source.actors.iter().zip(KEYS) {
             let actor = Art::load(scene, bundle, key)?;
             if actor.rect.width.get() > 128 || actor.rect.height.get() > 128 {
                 return Err(failure("unexpected actor extent"));
@@ -301,13 +303,23 @@ impl Scene {
                 .try_into()
                 .map_err(|_error| failure("actor count"))?,
             background,
-            draws: Vec::with_capacity(10),
+            combat: source
+                .enemy
+                .as_ref()
+                .map(|bundles| encounter::CombatArt::load(scene, bundles))
+                .transpose()?,
+            draws: Vec::with_capacity(if source.enemy.is_some() {
+                21
+            } else {
+                10
+            }),
             panel: if touch_enabled {
                 Some(touch::load(scene)?)
             } else {
                 None
             },
-            poses: pose_source.0.load(pose_source.1, scene)?,
+            poses: source.poses.load(source.parent, scene)?,
+            world: Vec::with_capacity(5),
         })
     }
 
@@ -319,46 +331,102 @@ impl Scene {
         self.draws.clear();
         self.draws
             .push(self.background.draw(self.background.rect, false));
-        let [marge, homer, bart, lisa] = cabinet.stations();
-        let mut order = [
-            (Player::Marge, marge),
-            (Player::Homer, homer),
-            (Player::Bart, bart),
-            (Player::Lisa, lisa),
-        ];
-        order.sort_by_key(|(_, station)| station.position.y);
-        for (player, station) in order {
-            let actor = *self
-                .actors
-                .get(player.index())
-                .ok_or(RenderError::InvalidSprite)?;
-            if station.credits > 0
-                || station.participation != Participation::Absent
-            {
-                self.draws.push(actor.draw(indicator(player)?, false));
-            }
-            if station.participation == Participation::Playing
-                && cabinet.phase() == Phase::Street
-            {
-                let pose = self.poses.select(player, station).unwrap_or(actor);
-                self.draws.push(pose.draw(
-                    actor_position(pose, station)?,
-                    station.facing == Facing::Left,
-                ));
-            }
+        self.world.clear();
+        for (player, station) in Player::ALL.into_iter().zip(cabinet.stations())
+        {
+            self.queue_station(player, station, cabinet.phase())?;
+        }
+        if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
+            && cabinet.phase() == Phase::Street
+            && enemy.health > 0
+        {
+            self.world
+                .push((enemy.position.y, combat.enemy_draw(enemy)?));
+        }
+        self.world.sort_by_key(|(depth, _)| *depth);
+        self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
+        if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
+            && cabinet.phase() == Phase::Street
+            && enemy.health > 0
+        {
+            combat.enemy_health(&mut self.draws, enemy)?;
         }
         if let Some(panel) = self.panel {
             self.draws.push(panel);
         }
         scene.present([24, 22, 30], &self.draws)
     }
+
+    fn queue_station(
+        &mut self,
+        player: Player,
+        station: Station,
+        phase: Phase,
+    ) -> Result<(), RenderError> {
+        let actor = *self
+            .actors
+            .get(player.index())
+            .ok_or(RenderError::InvalidSprite)?;
+        if station.credits > 0 || station.participation != Participation::Absent
+        {
+            self.draws.push(actor.draw(indicator(player)?, false));
+        }
+        if station.participation == Participation::Playing
+            && phase == Phase::Street
+        {
+            if let Some(combat) = &self.combat {
+                combat.station_health(&mut self.draws, player, station)?;
+            }
+            if station.health > 0 {
+                let pose = self.poses.select(player, station).unwrap_or(actor);
+                self.world.push((
+                    station.position.y,
+                    pose.draw(
+                        ground_position(
+                            pose,
+                            station.position,
+                            station.maneuver.elevation(),
+                        )?,
+                        station.facing == Facing::Left,
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct Sources<'source> {
+    actors: [CanonicalBundle; 4],
+    enemy: Option<[CanonicalBundle; 2]>,
+    parent: &'source Path,
+    poses: poses::Catalogue,
+}
+
+impl<'source> Sources<'source> {
+    fn load(
+        parent: &'source Path,
+        actors: &[OsString; 4],
+        enemy: Option<&[OsString; 2]>,
+        poses: poses::Catalogue,
+    ) -> Result<Self, RenderError> {
+        Ok(Self {
+            actors: open_bundles(parent, actors)?,
+            enemy: enemy
+                .map(|hashes| open_bundles(parent, hashes))
+                .transpose()?,
+            parent,
+            poses,
+        })
+    }
 }
 
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
 
-fn actor_position(
+fn ground_position(
     actor: Art,
-    station: Station,
+    position: Point,
+    elevation: i16,
 ) -> Result<SpriteRect, RenderError> {
     let half = actor
         .rect
@@ -369,10 +437,10 @@ fn actor_position(
     let horizontal = i32::try_from(half).map_err(failure)?;
     let vertical = i32::try_from(actor.rect.height.get()).map_err(failure)?;
     Ok(SpriteRect {
-        x: i32::from(station.position.x).saturating_sub(horizontal),
-        y: i32::from(station.position.y)
+        x: i32::from(position.x).saturating_sub(horizontal),
+        y: i32::from(position.y)
             .saturating_sub(vertical)
-            .saturating_sub(i32::from(station.maneuver.elevation())),
+            .saturating_sub(i32::from(elevation)),
         ..actor.rect
     })
 }
@@ -423,8 +491,16 @@ fn indicator(player: Player) -> Result<SpriteRect, RenderError> {
     })
 }
 
-fn live() -> Result<LiveSimulation<Cabinet>, RenderError> {
-    let cabinet = Cabinet::new(StreetLayout::DOWNTOWN).map_err(failure)?;
+fn live(combat: bool) -> Result<LiveSimulation<Cabinet>, RenderError> {
+    let cabinet = if combat {
+        Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
+            x: 246,
+            y: 190,
+        })
+    } else {
+        Cabinet::new(StreetLayout::DOWNTOWN)
+    }
+    .map_err(failure)?;
     let clock =
         StepClock::new(TICK_INTERVAL, dimension(8)?).map_err(failure)?;
     Ok(LiveSimulation::new(cabinet, clock, LiveInputLimits {
@@ -460,6 +536,18 @@ fn open_bundle(
         return Err(failure("unexpected source edition"));
     }
     Ok(bundle)
+}
+
+fn open_bundles<const COUNT: usize>(
+    parent: &Path,
+    hashes: &[OsString; COUNT],
+) -> Result<[CanonicalBundle; COUNT], RenderError> {
+    hashes
+        .iter()
+        .map(|hash| open_bundle(parent, hash))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_error| failure("bundle count"))
 }
 
 fn poll(
@@ -530,25 +618,31 @@ pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
     } else {
         poses::Catalogue::default()
     };
+    let enemy = if args.first().is_some_and(|arg| arg == "--enemy") {
+        if args.len() < 3 {
+            return Err(String::from("missing enemy bundle hashes"));
+        }
+        let _flag = args.remove(0);
+        Some([args.remove(0), args.remove(0)])
+    } else {
+        None
+    };
     let [directory, marge, homer, bart, lisa] = <[OsString; 5]>::try_from(args)
         .map_err(|_error| {
             String::from(concat!(
                 "usage: simpsons-arcade [--smoke] [--touch] ",
-                "[--poses FILE] PARENT ",
+                "[--poses FILE] [--enemy APPROACH_SHA STRIKE_SHA] PARENT ",
                 "MARGE_SHA HOMER_SHA BART_SHA LISA_SHA"
             ))
         })?;
     let parent = Path::new(&directory);
-    let result = [marge, homer, bart, lisa]
-        .iter()
-        .map(|hash| open_bundle(parent, hash))
-        .collect::<Result<Vec<_>, _>>()
-        .and_then(|bundles| {
-            bundles.try_into().map_err(|_error| failure("bundle count"))
-        })
-        .and_then(|bundles| {
-            window(&bundles, smoke, touch_enabled, (&catalogue, parent))
-        });
+    let result = Sources::load(
+        parent,
+        &[marge, homer, bart, lisa],
+        enemy.as_ref(),
+        catalogue,
+    )
+    .and_then(|source| window(&source, smoke, touch_enabled));
     result.map_err(|error| format!("{error:?}"))
 }
 
@@ -561,7 +655,7 @@ fn smoke(
     art: &mut Scene,
     touch_enabled: bool,
 ) -> Result<(), RenderError> {
-    let mut simulation = live()?;
+    let mut simulation = live(false)?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene
         .readback()
@@ -760,10 +854,9 @@ fn smoke_touch_movement(
 }
 
 fn window(
-    bundles: &[CanonicalBundle; 4],
+    source: &Sources<'_>,
     hidden: bool,
     touch_enabled: bool,
-    pose_source: (&poses::Catalogue, &Path),
 ) -> Result<(), RenderError> {
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
@@ -782,31 +875,18 @@ fn window(
     };
     let layout =
         FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)?;
-    let limits = SceneLimits {
-        atlas_bytes: size(
-            2_097_152usize
-                .saturating_add(pose_source.0.count().saturating_mul(65_536)),
-        )?,
-        atlases: size(pose_source.0.count().saturating_add(
-            if touch_enabled {
-                6
-            } else {
-                5
-            },
-        ))?,
-        sprites: size(if touch_enabled {
-            10
-        } else {
-            9
-        })?,
-    };
+    let limits = scene_limits(source, touch_enabled)?;
     let startup = window.input(size(4)?)?;
     window.with_scene(layout, limits, |scene| {
-        let mut art = Scene::load(scene, bundles, touch_enabled, pose_source)?;
+        let mut art = Scene::load(scene, source, touch_enabled)?;
         if hidden {
-            return smoke(scene, &mut art, touch_enabled);
+            smoke(scene, &mut art, touch_enabled)?;
+            if source.enemy.is_some() {
+                encounter::smoke(scene, &mut art, touch_enabled)?;
+            }
+            return Ok(());
         }
-        let mut simulation = live()?;
+        let mut simulation = live(source.enemy.is_some())?;
         let mut controls = Controls::new(touch_enabled)?;
         for event in startup.attached {
             controls.route(event, Duration::ZERO, &mut simulation)?;
@@ -824,5 +904,37 @@ fn window(
             let _drawn = art.present(scene, simulation.state())?;
         }
         Ok(())
+    })
+}
+
+fn scene_limits(
+    source: &Sources<'_>,
+    touch_enabled: bool,
+) -> Result<SceneLimits, RenderError> {
+    let enemy_atlases = if source.enemy.is_some() {
+        3
+    } else {
+        0
+    };
+    let enemy_sprites: usize = if source.enemy.is_some() {
+        11
+    } else {
+        0
+    };
+    let count = source.poses.count().saturating_add(enemy_atlases);
+    Ok(SceneLimits {
+        atlas_bytes: size(
+            2_097_152usize.saturating_add(count.saturating_mul(65_536)),
+        )?,
+        atlases: size(count.saturating_add(if touch_enabled {
+            6
+        } else {
+            5
+        }))?,
+        sprites: size(enemy_sprites.saturating_add(if touch_enabled {
+            10
+        } else {
+            9
+        }))?,
     })
 }

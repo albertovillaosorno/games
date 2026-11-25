@@ -524,3 +524,27 @@ all four tick-zero entries when enabled; attack and jump take priority.
 The 59-pose combined local catalogue passed native touch-and-pose smoke
 and fresh workspace validation. Exact pivots, facing-specific variants,
 collision and comprehensive gameplay parity remain unverified.
+
+An optional deterministic first-enemy encounter now supports approach,
+one strike per player attack, enemy windup and recovery, stagger,
+ground-strike damage, jump evasion and knockout. Five inline behavior
+tests cover admission, distinct hits, facing/depth misses, evasion and
+knockout. All health, strike timing and range rules are independently
+authored provisional policies rather than reconstructed combat.
+
+Two enemy pose groups from the isolated Marge walking capture were
+published by the exact-scene importer (device ticks 2270 and 2290 with
+the following displayed frames and palettes). Both full-scene checks
+passed before cropping. The approach observation and alternate pose
+are used as provisional approach and strike art. The latter is not
+evidence of original strike timing. Both local bundles remain ignored.
+
+The GNU/Linux native preview accepts optional
+`--enemy APPROACH_SHA STRIKE_SHA` after the pose catalogue option.
+Enemy art shares actor depth sorting; simple independent health bars
+show damage. A finite combined touch, pose and combat smoke launch
+verified three successive player strikes through native keyboard
+routing, 24-pixel health bar readback, defeat and stable post-defeat
+pixels. A separate counterstrike verified player damage and its
+indicator. Stage progression, original collision and combat rules,
+enemy animation, accurate pivots and continue handling remain open.

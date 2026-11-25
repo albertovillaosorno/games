@@ -44,8 +44,8 @@ touch devices and Android/browser presentation remain unverified.
 
 The isolated attack and jump timings are now modeled. Jump visibly
 raises the idle actor art using an approximate elevation curve. Attack
-currently locks ground displacement; distinct pose art and actual
-enemy combat are not yet implemented. Held-jump variants are omitted.
+currently locks ground displacement. The optional pose catalogue and
+combat encounter extend this preview. Held-jump variants are omitted.
 
 For original attack and jump poses, optionally pass
 `--poses FILE` after `--touch` (if used) and before PARENT. The local
@@ -62,3 +62,13 @@ pair requires tick zero. The most recent pose is held until the next
 record or maneuver end. The catalogue is limited to 64 poses and
 16 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
+
+For the experimental first enemy, insert
+`--enemy APPROACH_SHA STRIKE_SHA` after `--poses FILE` (if used) and
+before PARENT. These are separately verified local canonical bundles
+with `enemy/approach` and `enemy/strike` records respectively. The
+first enemy approaches an active station, can be struck with Primary,
+and can damage grounded players. Jump evades a ground strike.
+Health indicators and enemy actions are independently authored
+prototype rules, not an original-game hitbox or health reconstruction.
+The optional encounter has no stage progression or continue handling.
