@@ -64,7 +64,39 @@ fn hash_environment(hash: &mut Sha256, key: &str, value: Option<&OsStr>) {
     }
 }
 
-fn hash_cargo_overrides(
+// cc and pkg-config accept both HOST_/TARGET_ prefixes and target suffixes.
+// Include the native inputs used by Ring and SDL without collecting unrelated
+// shell variables or printing their potentially private values.
+fn native_override(raw: &[u8]) -> bool {
+    let name = raw
+        .strip_prefix(b"HOST_")
+        .or_else(|| raw.strip_prefix(b"TARGET_"))
+        .unwrap_or(raw);
+    [
+        b"CC".as_slice(),
+        b"CFLAGS",
+        b"CXX",
+        b"CXXFLAGS",
+        b"AR",
+        b"ARFLAGS",
+        b"RANLIB",
+        b"RANLIBFLAGS",
+        b"PKG_CONFIG",
+        b"SDL2",
+        b"CROSS_COMPILE",
+        b"CRATE_CC_NO_DEFAULTS",
+        b"RING_PREGENERATE_ASM",
+    ]
+    .into_iter()
+    .any(|base| {
+        name == base
+            || name
+                .strip_prefix(base)
+                .is_some_and(|tail| tail.starts_with(b"_"))
+    })
+}
+
+fn hash_build_overrides(
     hash: &mut Sha256,
     values: impl IntoIterator<Item = (OsString, OsString)>,
 ) {
@@ -79,9 +111,10 @@ fn hash_cargo_overrides(
             ]
             .into_iter()
             .any(|prefix| name.starts_with(prefix))
+                || native_override(name)
         })
         .collect();
-    hash_value(hash, b"cargo-overrides");
+    hash_value(hash, b"build-overrides");
     hash_value(hash, &overrides.len().to_le_bytes());
     for (key, value) in overrides {
         hash_value(hash, key.as_encoded_bytes());
@@ -161,7 +194,7 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
     {
         hash_environment(hash, key, env::var_os(key).as_deref());
     }
-    hash_cargo_overrides(hash, env::vars_os());
+    hash_build_overrides(hash, env::vars_os());
     Ok(())
 }
 
@@ -277,7 +310,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        NATIVE_SMOKE_FLAGS, hash_cargo_config_files, hash_cargo_overrides,
+        NATIVE_SMOKE_FLAGS, hash_build_overrides, hash_cargo_config_files,
         hash_environment, native_smoke_requested, run_with,
     };
     use crate::fixtures::{directory, require};
@@ -376,32 +409,80 @@ mod tests {
         assert_ne!(absent, enabled);
     }
 
+    fn override_fingerprint(values: &[(&str, &str)]) -> Vec<u8> {
+        let mut hash = Sha256::new();
+        hash_build_overrides(
+            &mut hash,
+            values.iter().map(|&(key, value)| {
+                (OsString::from(key), OsString::from(value))
+            }),
+        );
+        hash.finalize().to_vec()
+    }
+
     #[test]
-    fn cargo_override_fingerprint_is_order_independent_and_sensitive() {
-        let fingerprint = |values: &[(&str, &str)]| {
-            let mut hash = Sha256::new();
-            hash_cargo_overrides(
-                &mut hash,
-                values.iter().map(|&(key, value)| {
-                    (OsString::from(key), OsString::from(value))
-                }),
-            );
-            hash.finalize()
-        };
+    fn cargo_overrides_are_order_independent_and_sensitive() {
         let flags = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS";
         let profile = "CARGO_PROFILE_TEST_DEBUG";
         let build = "CARGO_BUILD_RUSTDOCFLAGS";
-        let baseline = fingerprint(&[(flags, "-D warnings"), (profile, "0")]);
+        let baseline =
+            override_fingerprint(&[(flags, "-D warnings"), (profile, "0")]);
         assert_eq!(
             baseline,
-            fingerprint(&[(profile, "0"), (flags, "-D warnings")])
+            override_fingerprint(&[(profile, "0"), (flags, "-D warnings")])
         );
-        assert_ne!(baseline, fingerprint(&[(flags, ""), (profile, "0")]));
-        assert_ne!(baseline, fingerprint(&[(flags, "-D warnings")]));
-        assert_ne!(fingerprint(&[]), fingerprint(&[(build, "")]));
+        assert_ne!(
+            baseline,
+            override_fingerprint(&[(flags, ""), (profile, "0")])
+        );
+        assert_ne!(baseline, override_fingerprint(&[(flags, "-D warnings")]));
+        assert_ne!(
+            override_fingerprint(&[]),
+            override_fingerprint(&[(build, "")])
+        );
         assert_eq!(
-            fingerprint(&[]),
-            fingerprint(&[("CARGO_MAKEFLAGS", "jobserver")])
+            override_fingerprint(&[]),
+            override_fingerprint(&[("CARGO_MAKEFLAGS", "jobserver")])
+        );
+    }
+
+    #[test]
+    fn native_overrides_are_order_independent_and_sensitive() {
+        let flags = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS";
+        for native in [
+            "CC",
+            "CC_x86_64-unknown-linux-gnu",
+            "CFLAGS_aarch64_linux_android",
+            "HOST_AR",
+            "TARGET_PKG_CONFIG_PATH",
+            "PKG_CONFIG",
+            "PKG_CONFIG_LIBDIR_x86_64_unknown_linux_gnu",
+            "SDL2_NO_PKG_CONFIG",
+            "CC_FORCE_DISABLE",
+            "RING_PREGENERATE_ASM",
+        ] {
+            let empty = override_fingerprint(&[(native, "")]);
+            let set = override_fingerprint(&[(native, "value")]);
+            assert_ne!(override_fingerprint(&[]), empty);
+            assert_ne!(empty, set);
+            assert_eq!(
+                override_fingerprint(&[
+                    (native, "value"),
+                    (flags, "-D warnings")
+                ]),
+                override_fingerprint(&[
+                    (flags, "-D warnings"),
+                    (native, "value")
+                ])
+            );
+        }
+        assert_eq!(
+            override_fingerprint(&[]),
+            override_fingerprint(&[("CCACHE_DIR", "x")])
+        );
+        assert_eq!(
+            override_fingerprint(&[]),
+            override_fingerprint(&[("UNRELATED", "x")])
         );
     }
 

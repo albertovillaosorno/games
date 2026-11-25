@@ -125,3 +125,14 @@ and removals, inherited config changes and extensionless precedence.
 This does not sandbox machine-level configuration or guarantee the
 identity of executables selected by an external config.
 Fresh validation passed in run 1795609385573902295-576011.
+
+The cache also fingerprints native compiler, archiver and pkg-config
+build overrides used by Ring and SDL, including host/target prefixes and
+both target suffix spellings. Tests distinguish absent, empty and changed
+values, preserve deterministic ordering and ignore the Cargo jobserver
+and unrelated shell variables. On the prior validator, a successful gate
+followed by `PKG_CONFIG=/definitely-missing-games-pkg-config cargo validate`
+returned a cache hit (1795612649722480864-1498117). The revised validator
+ran Clippy's SDL build and rejected the missing executable in run
+1795612733691369083-1525359. This does not fingerprint every system library
+or the contents of native compiler and pkg-config executables.
