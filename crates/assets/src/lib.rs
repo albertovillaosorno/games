@@ -391,7 +391,7 @@ impl AssetManifest {
         Ok(())
     }
 
-    /// Verify a non-executing replacement for a title-approved media slot.
+    /// Validate a replacement descriptor for a title-approved media slot.
     ///
     /// The trusted runtime supplies the allowlist for this base manifest;
     /// it must not derive approval from the untrusted replacement record.
@@ -400,13 +400,12 @@ impl AssetManifest {
     /// title-specific validation. No files are opened or installed here.
     ///
     /// # Errors
-    /// Rejects unknown or unapproved keys, incompatible media, and bytes
-    /// that do not match the replacement descriptor.
-    pub fn verify_media_replacement(
+    /// Rejects unknown or unapproved keys and incompatible media.
+    /// Payload bytes still require independent verification before use.
+    pub fn validate_media_replacement(
         &self,
         allowed_keys: &[&str],
         replacement: &AssetRecord,
-        payload: &[u8],
     ) -> Result<(), AssetError> {
         let key = replacement.key.as_str();
         if !allowed_keys.contains(&key) {
@@ -421,6 +420,20 @@ impl AssetManifest {
         {
             return Err(AssetError::InvalidFormat);
         }
+        replacement.validate()
+    }
+
+    /// Verify a non-executing replacement and its exact payload bytes.
+    ///
+    /// # Errors
+    /// Rejects unapproved or incompatible media and mismatched payloads.
+    pub fn verify_media_replacement(
+        &self,
+        allowed_keys: &[&str],
+        replacement: &AssetRecord,
+        payload: &[u8],
+    ) -> Result<(), AssetError> {
+        self.validate_media_replacement(allowed_keys, replacement)?;
         replacement.verify(payload)
     }
 }

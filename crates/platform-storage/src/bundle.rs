@@ -35,7 +35,9 @@ use std::path::Path;
 #[cfg(test)]
 use std::{env, fs, path::PathBuf};
 
-use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
+use games_assets::{
+    AssetError, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
+};
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat};
 use nix::sys::stat::{FileStat, Mode, fstat, fstatat};
@@ -162,6 +164,68 @@ impl CanonicalBundle {
     }
 }
 
+/// An explicitly selected, read-only passive-media replacement bundle.
+///
+/// The caller must pin the exact base and replacement manifests. Each
+/// replacement must address an existing title-approved RGBA or PCM slot
+/// with the same format and dimensions. Unknown or unapproved records
+/// reject the entire overlay; corrupted payloads never silently fall back.
+#[derive(Debug)]
+pub struct MediaOverlay<'bundle> {
+    base: &'bundle CanonicalBundle,
+    replacement: &'bundle CanonicalBundle,
+}
+
+impl<'bundle> MediaOverlay<'bundle> {
+    fn bundle_for(&self, key: &str) -> &CanonicalBundle {
+        if self.replacement.manifest().record(key).is_some() {
+            self.replacement
+        } else {
+            self.base
+        }
+    }
+
+    /// Select a replacement after checking every declared descriptor.
+    ///
+    /// The allowlist must come from the trusted title, not either manifest.
+    /// Payload integrity is verified on each subsequent read.
+    ///
+    /// # Errors
+    /// Rejects another title, an unknown or unapproved slot, incompatible
+    /// media, and attempts to replace declarative game data.
+    pub fn new(
+        base: &'bundle CanonicalBundle,
+        replacement: &'bundle CanonicalBundle,
+        allowed_keys: &[&str],
+    ) -> Result<Self, BundleError> {
+        if base.manifest().source().title
+            != replacement.manifest().source().title
+        {
+            return Err(AssetError::InvalidIdentity.into());
+        }
+        for record in replacement.manifest().records() {
+            base.manifest()
+                .validate_media_replacement(allowed_keys, record)?;
+        }
+        Ok(Self { base, replacement })
+    }
+
+    /// Read the selected payload with its original bundle's integrity checks.
+    ///
+    /// # Errors
+    /// Rejects absent keys, invalid storage and corrupted replacement or base
+    /// content. A failed replacement read is never retried against the base.
+    pub fn read_payload(&self, key: &str) -> Result<Vec<u8>, BundleError> {
+        self.bundle_for(key).read_payload(key)
+    }
+
+    /// Return the effective descriptor for the selected payload, if present.
+    #[must_use]
+    pub fn record(&self, key: &str) -> Option<&AssetRecord> {
+        self.bundle_for(key).manifest().record(key)
+    }
+}
+
 pub(crate) fn bundle_name(digest: ContentHash) -> String {
     format!("bundle-{digest}")
 }
@@ -225,13 +289,15 @@ fn read_regular(
 
 #[cfg(test)]
 mod tests {
-    use std::num::{NonZeroU64, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
-    use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
+    use games_assets::{AssetFormat, SourceIdentity};
     use nix::unistd::mkfifo;
 
     use super::*;
+
+    type FixturePayload<'data> = (AssetRecord, &'data [u8]);
 
     #[derive(Debug)]
     struct Fixture {
@@ -244,21 +310,33 @@ mod tests {
 
     impl Fixture {
         fn new() -> Result<Self, BundleError> {
+            Self::with_records("synthetic", &[(
+                record("tiles/hero", AssetFormat::Data, b"tile"),
+                b"tile",
+            )])
+        }
+
+        fn open(&self) -> Result<CanonicalBundle, BundleError> {
+            CanonicalBundle::open(&self.parent.path, self.digest, limits())
+        }
+
+        fn with_records(
+            title: &str,
+            records: &[FixturePayload<'_>],
+        ) -> Result<Self, BundleError> {
             let parent = TestRoot::new()?;
-            let record = AssetRecord {
-                digest: ContentHash::calculate(b"tile"),
-                format: AssetFormat::Data,
-                key: String::from("tiles/hero"),
-                size: 4,
-            };
-            let name = record.digest.to_string();
+            let first = records.first().ok_or(BundleError::MissingKey)?;
+            let name = first.0.digest.to_string();
             let manifest = AssetManifest::new(
                 SourceIdentity {
                     digest: ContentHash::calculate(b"source"),
                     revision: String::from("fixture"),
-                    title: String::from("synthetic"),
+                    title: String::from(title),
                 },
-                vec![record],
+                records
+                    .iter()
+                    .map(|(record, _bytes)| record.clone())
+                    .collect(),
                 limits(),
             )?;
             let encoded = manifest.encode(limits())?;
@@ -268,7 +346,9 @@ mod tests {
             fs::create_dir_all(&directory)?;
             let payload = directory.join(name);
             fs::write(bundle.join(MANIFEST_NAME), encoded)?;
-            fs::write(&payload, b"tile")?;
+            for (record, bytes) in records {
+                fs::write(directory.join(record.digest.to_string()), bytes)?;
+            }
             Ok(Self {
                 bundle,
                 digest,
@@ -276,10 +356,6 @@ mod tests {
                 parent,
                 payload,
             })
-        }
-
-        fn open(&self) -> Result<CanonicalBundle, BundleError> {
-            CanonicalBundle::open(&self.parent.path, self.digest, limits())
         }
     }
 
@@ -297,6 +373,147 @@ mod tests {
         condition
             .then_some(())
             .ok_or(BundleError::Io(io::ErrorKind::InvalidData))
+    }
+
+    fn media_fixture(bytes: &[u8]) -> Result<Fixture, BundleError> {
+        Fixture::with_records("synthetic", &[(
+            record("sprite/hero", rgba(), bytes),
+            bytes,
+        )])
+    }
+
+    fn record(key: &str, format: AssetFormat, bytes: &[u8]) -> AssetRecord {
+        AssetRecord {
+            digest: ContentHash::calculate(bytes),
+            format,
+            key: String::from(key),
+            size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        }
+    }
+
+    fn rgba() -> AssetFormat {
+        AssetFormat::Rgba8 {
+            height: NonZeroU32::MIN,
+            width: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+        }
+    }
+
+    #[test]
+    fn overlay_reads_only_approved_media_and_keeps_base_game_data()
+    -> Result<(), BundleError> {
+        let base = Fixture::with_records("synthetic", &[
+            (record("sprite/hero", rgba(), b"12345678"), b"12345678"),
+            (record("stage/rules", AssetFormat::Data, b"rules"), b"rules"),
+        ])?;
+        let replacement = media_fixture(b"abcdefgh")?;
+        let original = base.open()?;
+        let changes = replacement.open()?;
+        let overlay = MediaOverlay::new(&original, &changes, &["sprite/hero"])?;
+        require(overlay.read_payload("sprite/hero")? == b"abcdefgh")?;
+        require(overlay.read_payload("stage/rules")? == b"rules")?;
+        require(
+            overlay.record("sprite/hero")
+                == changes.manifest().record("sprite/hero"),
+        )?;
+        require(
+            overlay.record("stage/rules")
+                == original.manifest().record("stage/rules"),
+        )?;
+        require(overlay.record("sprite/missing").is_none())?;
+        require(
+            overlay.read_payload("sprite/missing")
+                == Err(BundleError::MissingKey),
+        )
+    }
+
+    #[test]
+    fn overlay_rejects_all_records_if_one_slot_is_unapproved()
+    -> Result<(), BundleError> {
+        let base = Fixture::with_records("synthetic", &[
+            (record("sprite/hero", rgba(), b"12345678"), b"12345678"),
+            (record("stage/rules", AssetFormat::Data, b"rules"), b"rules"),
+        ])?;
+        let replacement = Fixture::with_records("synthetic", &[
+            (record("sprite/hero", rgba(), b"abcdefgh"), b"abcdefgh"),
+            (record("stage/rules", AssetFormat::Data, b"other"), b"other"),
+        ])?;
+        let original = base.open()?;
+        let changes = replacement.open()?;
+        require(matches!(
+            MediaOverlay::new(&original, &changes, &["sprite/hero"]),
+            Err(BundleError::Asset(AssetError::InvalidIdentity))
+        ))?;
+        require(matches!(
+            MediaOverlay::new(&original, &changes, &[
+                "sprite/hero",
+                "stage/rules"
+            ]),
+            Err(BundleError::Asset(AssetError::InvalidFormat))
+        ))
+    }
+
+    #[test]
+    fn overlay_rejects_other_titles_unknown_keys_and_incompatible_layout()
+    -> Result<(), BundleError> {
+        let base = media_fixture(b"12345678")?;
+        let original = base.open()?;
+        let transposed = AssetFormat::Rgba8 {
+            height: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            width: NonZeroU32::MIN,
+        };
+        for (title, key, format, expected) in [
+            (
+                "other-title",
+                "sprite/hero",
+                rgba(),
+                AssetError::InvalidIdentity,
+            ),
+            (
+                "synthetic",
+                "sprite/unknown",
+                rgba(),
+                AssetError::InvalidIdentity,
+            ),
+            (
+                "synthetic",
+                "sprite/hero",
+                transposed,
+                AssetError::InvalidFormat,
+            ),
+        ] {
+            let replacement = Fixture::with_records(title, &[(
+                record(key, format, b"abcdefgh"),
+                b"abcdefgh",
+            )])?;
+            let changes = replacement.open()?;
+            require(matches!(
+                MediaOverlay::new(&original, &changes, &[key]),
+                Err(BundleError::Asset(error)) if error == expected
+            ))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn overlay_fails_closed_on_tampering_and_never_falls_back()
+    -> Result<(), BundleError> {
+        let base = media_fixture(b"12345678")?;
+        let replacement = media_fixture(b"abcdefgh")?;
+        let original = base.open()?;
+        let changes = replacement.open()?;
+        let overlay = MediaOverlay::new(&original, &changes, &["sprite/hero"])?;
+        fs::write(&replacement.payload, b"87654321")?;
+        require(
+            overlay.read_payload("sprite/hero")
+                == Err(AssetError::PayloadMismatch.into()),
+        )?;
+        fs::remove_file(&replacement.payload)?;
+        symlink(&base.payload, &replacement.payload)?;
+        require(
+            overlay.read_payload("sprite/hero")
+                == Err(BundleError::UnsafeStorage),
+        )?;
+        require(original.read_payload("sprite/hero")? == b"12345678")
     }
 
     #[test]

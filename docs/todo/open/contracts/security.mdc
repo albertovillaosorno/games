@@ -71,3 +71,16 @@ PCM layouts or lengths, and mismatched payload hashes are rejected. No files
 are opened or installed by this policy; it is not a process sandbox or a
 replacement for title-specific data validation. Synthetic image and audio
 fixtures passed in run 1795578114804270643-2943036 (121 tests).
+
+The native bundle reader now admits one explicitly selected passive-media
+overlay over two pinned canonical manifests. Every replacement descriptor
+must pass the existing title allowlist and layout policy before any
+overlay is returned. The base and replacement must name the same title.
+Each read verifies the selected bundle's regular-file, size and digest
+constraints, and a failed replacement cannot silently fall back to the
+base. Synthetic native tests preserve non-replaced data, reject mixed
+approved/unapproved records, incompatible formats and cross-title
+manifests, and detect tampering and symlinks. Fresh validation passed in
+run 1795584472390696736-3793042. No executable or gameplay-data mods,
+automatic mod discovery, revision-compatibility claim or process sandbox
+are supplied by this adapter.
