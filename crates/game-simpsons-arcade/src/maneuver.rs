@@ -211,7 +211,7 @@ impl AirAttackMotion {
 
 /// Current player maneuver.
 ///
-/// Attack combinations, exact original pivots and hitboxes are not modeled.
+/// Cooperative combinations, exact original pivots and hitboxes remain open.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Maneuver {
     /// Station is performing a forward airborne attack.

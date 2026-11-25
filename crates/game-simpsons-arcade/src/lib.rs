@@ -1205,6 +1205,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn short_jump_last_airborne_tick_accepts_an_aerial_attack() {
+        let mut state = short_jump_after(31);
+        let before = station_for(&state, Player::Marge);
+        state.input_step(34, &pulse(Player::Marge, Control::Primary));
+        assert_air_attack_started(before, station_for(&state, Player::Marge));
+    }
+
+    #[test]
+    fn attack_after_short_jump_landing_is_grounded() {
+        let mut state = short_jump_after(32);
+        let before = station_for(&state, Player::Marge);
+        assert_eq!(before.maneuver, Maneuver::Idle);
+        state.input_step(35, &pulse(Player::Marge, Control::Primary));
+        let attack = station_for(&state, Player::Marge);
+        assert_eq!(attack.maneuver, Maneuver::Attack { tick: 0 });
+        assert_eq!(attack.position, before.position);
+    }
+
+    fn short_jump_after(offset: u64) -> Cabinet {
+        let mut state = four_playing();
+        state.input_step(3, &[change(Player::Marge, Control::Secondary, true)]);
+        for tick in 4..6 {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(6, &[change(
+            Player::Marge,
+            Control::Secondary,
+            false,
+        )]);
+        for tick in 7..3u64.saturating_add(offset) {
+            state.input_step(tick, &[]);
+        }
+        state
+    }
+
     fn assert_air_attack_started(before: Station, attack: Station) {
         let maneuver = attack.maneuver;
         assert!(

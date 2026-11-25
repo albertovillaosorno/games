@@ -1046,3 +1046,12 @@ aerial attack edges through the first three input offsets without
 buffering a held attack. A new edge at offset four is accepted for each
 station. These observations bound initial input timing, not all airborne
 attack conditions or full original gameplay parity.
+
+A sixty-tick primary hold beginning at jump input offset three also
+matched all 96 sampled long-jump-only object-DMA frames for Marge.
+Seven additional three-tick-jump probes established that offset 28
+through 31 still selects the forward aerial attack with a shadow;
+offsets 32 through 34 select a ground attack after landing. The
+existing simulation already distinguishes offsets 31 and 32, and
+fixed-step regressions now preserve that boundary. The late samples
+establish action selection, not the complete late attack trajectory.
