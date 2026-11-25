@@ -77,8 +77,11 @@
   Offer adaptive height-fit rendering: retain the original vertical field
   and uniform scale while expanding the camera horizontally to render real
   additional world content. Never stretch, crop, duplicate pixels or invent
-  assets in this mode. Use aspect-fit fallback when the scene or camera
-  cannot safely support expansion, including narrow display ratios.
+  assets in this mode. Aspect-fit fallback is temporary for unsupported
+  scenes. Manually adapt each title's camera, scene data and HUD to enable
+  real extension where needed, preserving the original presentation mode.
+  Keep unsupported scenes open until verified; never claim fallback is full
+  adaptive support. Use aspect-fit for inherently narrow display ratios.
   Support windowed and fullscreen presentation; adapt HUD and touch layout.
   Keep gameplay coordinates and timing independent of window dimensions.
   Map pointer and touch coordinates through the actual presentation transform.

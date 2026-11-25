@@ -31,11 +31,13 @@ Create title packages and their TODO.md files when implementation begins.
 - Record the reviewed title identifiers, reused or extracted mechanisms,
   and justified title-specific exceptions in the existing task evidence.
   Recheck newly introduced mechanisms for reuse before closing the task.
-- Declare whether the title supports adaptive height-fit world rendering.
-  Where supported, retain the original vertical field and uniform scale,
-  render real additional scene content at wider aspect ratios, and adapt
-  HUD and input transforms without changing simulation behaviour.
-  Use aspect-fit fallback when real scene extension is not supported.
+- Implement adaptive height-fit world rendering for each title, manually
+  adapting camera, scene data and HUD where necessary. Retain the original
+  vertical field and uniform scale, render real additional scene content
+  at wider aspect ratios, and adapt input transforms without changing
+  simulation behaviour. Preserve original presentation as an option.
+  Treat unsupported scenes as open work, with temporary aspect-fit fallback
+  and documented limitations; do not count fallback as adaptive support.
 - Use `crates/game-<id>` or `crates/app-<id>` and inline behavioural tests.
 - Reference the canonical task record rather than duplicating its contents.
 
