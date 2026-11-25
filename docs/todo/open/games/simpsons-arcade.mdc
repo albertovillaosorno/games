@@ -902,3 +902,19 @@ time, changed frame pixels, unchanged ground anchor and landing.
 The separate opt-in workspace controller smoke exposed concurrent
 SDL initialization between its two test threads; that issue was
 reported to the network-contract owner for independent correction.
+
+Four fresh original held-jump observations captured the distinct
+middle pose around the eleventh displayed tick. The existing exact
+scene importer accepted all four aligned scene pairs and published
+the corresponding isolated actor groups under the ignored local
+bundle directory. The optional catalogue admits four new
+`jump-lift 0` entries together (one per character) within its
+unchanged 64-pose bound. Opening and middle pose selection uses the
+simulated ascent; short taps and legacy catalogues retain their
+existing selection. The four new actor crops are locally verified,
+but phase transitions and actor pivots remain approximations.
+
+The combined 63-entry local catalogue passed native offscreen
+touch-and-pose smoke with the held-jump readback check. The regression
+tests also reject partial or out-of-range lift groups and compare
+legacy, short-tap, opening, raised and descent selection.

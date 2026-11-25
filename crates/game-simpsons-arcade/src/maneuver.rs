@@ -77,7 +77,18 @@ impl JumpMotion {
         self.height.checked_div(QUARTERS_PER_PIXEL).unwrap_or(0)
     }
 
-    // The existing short-jump catalogue is still the only admitted art.
+    // The observed sustained ascent retains its opening pose through
+    // the first eleven displayed ticks.
+    #[cfg(all(
+        feature = "native-preview",
+        target_os = "linux",
+        target_env = "gnu"
+    ))]
+    pub(super) const fn opening_pose(self) -> bool {
+        self.tick < 11 && !self.released
+    }
+
+    // Bound selection to the existing short-jump catalogue.
     #[cfg(all(
         feature = "native-preview",
         target_os = "linux",
@@ -85,6 +96,17 @@ impl JumpMotion {
     ))]
     pub(super) fn pose_tick(self) -> u8 {
         self.tick.min(SHORT_JUMP_TICKS.saturating_sub(1))
+    }
+
+    // Select the middle pose above short-tap height near the ascent,
+    // including the brief apex transition.
+    #[cfg(all(
+        feature = "native-preview",
+        target_os = "linux",
+        target_env = "gnu"
+    ))]
+    pub(super) const fn raised_pose(self) -> bool {
+        self.tick >= 11 && self.height > 210 && self.velocity >= -2
     }
 
     const fn start() -> Self {

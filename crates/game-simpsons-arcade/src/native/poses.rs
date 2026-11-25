@@ -43,6 +43,7 @@ use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
+use crate::JumpMotion;
 
 const MAX_POSES: usize = 64;
 
@@ -50,6 +51,7 @@ const MAX_POSES: usize = 64;
 enum Kind {
     Attack,
     Jump,
+    Lift,
     Walk,
 }
 
@@ -58,6 +60,7 @@ impl Kind {
         match self {
             Self::Attack => Maneuver::Attack { tick: 0 }.pose_duration(player),
             Self::Jump => Maneuver::jump().pose_duration(player),
+            Self::Lift => 1,
             Self::Walk => walk_duration(player),
         }
     }
@@ -117,12 +120,10 @@ impl Catalogue {
                 .into_iter()
                 .all(|kind| entries.contains_key(&(player, kind, 0)))
         });
-        let walking = entries.keys().any(|(_, kind, _)| *kind == Kind::Walk);
-        let complete_walk = !walking
-            || Player::ALL
-                .into_iter()
-                .all(|player| entries.contains_key(&(player, Kind::Walk, 0)));
-        if !complete || !complete_walk {
+        let complete_optional = [Kind::Lift, Kind::Walk]
+            .into_iter()
+            .all(|kind| optional_complete(&entries, kind));
+        if !complete || !complete_optional {
             return Err(failure("missing tick-zero pose"));
         }
         Ok(Self { entries })
@@ -146,13 +147,41 @@ impl PoseArt {
     ) -> Option<Art> {
         let (kind, tick) = match station.maneuver {
             Maneuver::Attack { tick } => (Kind::Attack, tick),
-            Maneuver::Jump(motion) => (Kind::Jump, motion.pose_tick()),
+            Maneuver::Jump(motion) => {
+                return jump_entry(&self.entries, player, motion).copied();
+            },
             Maneuver::Idle => {
                 (Kind::Walk, walking_offset(player, station.walking_ticks?)?)
             },
         };
         select_entry(&self.entries, (player, kind, tick)).copied()
     }
+}
+
+fn optional_complete<Value>(
+    entries: &BTreeMap<Key, Value>,
+    kind: Kind,
+) -> bool {
+    !entries.keys().any(|(_, existing, _)| *existing == kind)
+        || Player::ALL
+            .into_iter()
+            .all(|player| entries.contains_key(&(player, kind, 0)))
+}
+
+fn jump_entry<Value>(
+    entries: &BTreeMap<Key, Value>,
+    player: Player,
+    motion: JumpMotion,
+) -> Option<&Value> {
+    if let Some(lift) = entries.get(&(player, Kind::Lift, 0)) {
+        if motion.opening_pose() {
+            return entries.get(&(player, Kind::Jump, 0));
+        }
+        if motion.raised_pose() {
+            return Some(lift);
+        }
+    }
+    select_entry(entries, (player, Kind::Jump, motion.pose_tick()))
 }
 
 fn parse_line(line: &str) -> Result<Entry, RenderError> {
@@ -169,6 +198,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
     let kind = match action {
         "attack" => Kind::Attack,
         "jump" => Kind::Jump,
+        "jump-lift" => Kind::Lift,
         "walk" => Kind::Walk,
         _ => return Err(failure("unknown pose maneuver")),
     };
@@ -291,5 +321,63 @@ mod tests {
             Catalogue::parse(&format!("{valid}lisa jump 31 {HASH}")).is_err()
         );
         assert!(Catalogue::parse(&format!("marge attack 0 {HASH}")).is_err());
+    }
+
+    fn jump_at(tick: u8, held: bool) -> Option<JumpMotion> {
+        let mut state = Maneuver::jump();
+        for _ in 0..tick {
+            state = state.advance(Player::Marge, held);
+        }
+        if let Maneuver::Jump(motion) = state {
+            Some(motion)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn held_pose_catalogue_requires_all_four_tick_zero_entries() {
+        let base = complete();
+        let lift = format!(
+            "marge jump-lift 0 {HASH}\n\
+             homer jump-lift 0 {HASH}\n\
+             bart jump-lift 0 {HASH}\n\
+             lisa jump-lift 0 {HASH}\n"
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}marge jump-lift 0 {HASH}"))
+                .is_err()
+        );
+        assert_eq!(
+            Catalogue::parse(&format!("{base}{lift}"))
+                .map(|value| value.count())
+                .ok(),
+            Some(12)
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{lift}lisa jump-lift 1 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn held_pose_selection_preserves_legacy_and_short_tap() {
+        let mut entries = BTreeMap::from([
+            ((Player::Marge, Kind::Jump, 0), "opening"),
+            ((Player::Marge, Kind::Jump, 4), "landing"),
+        ]);
+        let select = |map: &BTreeMap<_, _>, tick, held| {
+            jump_at(tick, held)
+                .and_then(|motion| jump_entry(map, Player::Marge, motion))
+                .copied()
+        };
+        assert_eq!(select(&entries, 20, true), Some("landing"));
+        let _prior = entries.insert((Player::Marge, Kind::Lift, 0), "raised");
+        assert_eq!(select(&entries, 10, true), Some("opening"));
+        assert_eq!(select(&entries, 11, true), Some("raised"));
+        assert_eq!(select(&entries, 30, true), Some("raised"));
+        assert_eq!(select(&entries, 31, true), Some("raised"));
+        assert_eq!(select(&entries, 32, true), Some("landing"));
+        assert_eq!(select(&entries, 12, false), Some("landing"));
     }
 }
