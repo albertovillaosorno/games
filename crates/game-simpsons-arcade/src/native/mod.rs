@@ -1374,10 +1374,12 @@ fn smoke_special(
     if pixels == scene.readback()? {
         return Err(failure("stationary special not visibly presented"));
     }
-    for _ in 0..30u8 {
+    for _ in 0..29u8 {
         let _cycle_step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
         let _cycle_draw = art.present(scene, simulation.state())?;
     }
+    smoke_press(controls, simulation, Control::Primary)?;
+    let _land_draw = art.present(scene, simulation.state())?;
     let [landed, ..] = simulation.state().stations();
     if landed.maneuver != Maneuver::Idle || landed.position != before.position {
         return Err(failure("special did not land at original position"));

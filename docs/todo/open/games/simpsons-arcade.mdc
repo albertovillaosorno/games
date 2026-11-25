@@ -1097,3 +1097,25 @@ work was 112.882 and 87.153 microseconds respectively; lifetime peak
 RSS was 89,128,960 bytes. The revised combat sample includes the
 recovery frames, unlike the earlier 51-frame workload. This is
 offscreen host submission, not physical gameplay or display parity.
+
+A separate stationary simultaneous-button special recovery probe used
+fresh three-tick pulses and 101 object-DMA samples per comparison.
+All eight character/button combinations matched their special-only
+control at offset 30 and diverged at offset 31. Marge's primary
+offset 29 also matched its control, and offset 32 diverged. A fresh
+Marge control reproduced all 101 previous control frames. The
+station-local action recovery counter now preserves the thirty-tick
+pose while rejecting follow-up edges through offset 30. Tests exercise
+both buttons, all four characters, and offsets 29 through 31; rejected
+edges are compared against the untouched control over further ticks.
+The native smoke rejects the primary edge on landing, then admits the
+next jump. Directional recovery and interrupted specials remain
+unverified against the original.
+
+Fresh portable validation passed in run 1795618113964657291-2951680.
+The optimized 3,224,528-byte native build passed offscreen OpenGL ES
+adaptive touch-and-combat smoke with the verified 88-pose catalogue.
+All 600 movement and 60 combat submissions met the 16.667 ms
+host-work budget. Mean submission work was 109.583 and 82.622
+microseconds respectively; lifetime peak RSS was 88,539,136 bytes.
+This does not establish original combat or physical display parity.

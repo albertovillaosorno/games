@@ -68,6 +68,8 @@ pub const CONTINUE_TICKS: u16 = 1200;
 const PLAYER_HEALTH: u8 = 3;
 // Original ground-attack follow-up edges first take effect at offset 20.
 const GROUND_ATTACK_RECOVERY_TICKS: u8 = 20;
+// Original special follow-up edges first take effect at offset 31.
+const SPECIAL_ATTACK_RECOVERY_TICKS: u8 = 31;
 
 /// Characters and default input seat order for the four-player edition.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -247,8 +249,8 @@ impl Station {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Slot {
+    action_recovery: u8,
     attack_quarters: i16,
-    ground_recovery: u8,
     held: u8,
     spawn: Point,
     station: Station,
@@ -256,7 +258,7 @@ struct Slot {
 
 impl Slot {
     fn advance_maneuver(&mut self, player: Player, queued: Option<Maneuver>) {
-        self.ground_recovery = self.ground_recovery.saturating_sub(1);
+        self.action_recovery = self.action_recovery.saturating_sub(1);
         if self.station.can_fight()
             && matches!(queued, Some(Maneuver::Attack { .. }))
             && let Maneuver::Jump(jump) = self.station.maneuver
@@ -289,11 +291,15 @@ impl Slot {
     fn begin_maneuver(&mut self, maneuver: Maneuver) {
         if self.station.can_fight()
             && self.station.maneuver == Maneuver::Idle
-            && self.ground_recovery == 0
+            && self.action_recovery == 0
         {
-            if matches!(maneuver, Maneuver::Attack { .. }) {
-                self.ground_recovery = GROUND_ATTACK_RECOVERY_TICKS;
-            }
+            self.action_recovery = match maneuver {
+                Maneuver::Attack { .. } => GROUND_ATTACK_RECOVERY_TICKS,
+                Maneuver::Special { .. } => SPECIAL_ATTACK_RECOVERY_TICKS,
+                Maneuver::AirAttack(_) | Maneuver::Idle | Maneuver::Jump(_) => {
+                    0
+                },
+            };
             self.attack_quarters = 0;
             self.station.maneuver = maneuver;
             self.station.walking_ticks = None;
@@ -302,7 +308,7 @@ impl Slot {
 
     const fn damage(&mut self) {
         self.attack_quarters = 0;
-        self.ground_recovery = 0;
+        self.action_recovery = 0;
         self.station.health = self.station.health.saturating_sub(1);
         self.station.maneuver = Maneuver::Idle;
         self.station.walking_ticks = None;
@@ -417,8 +423,8 @@ impl Slot {
 
     const fn new(position: Point) -> Self {
         Self {
+            action_recovery: 0,
             attack_quarters: 0,
-            ground_recovery: 0,
             held: 0,
             spawn: position,
             station: Station {
@@ -441,7 +447,7 @@ impl Slot {
             return;
         }
         self.attack_quarters = 0;
-        self.ground_recovery = 0;
+        self.action_recovery = 0;
         self.station.health = PLAYER_HEALTH;
         self.station.position = Point {
             x: self.spawn.x.saturating_add(camera),
@@ -1156,30 +1162,64 @@ mod tests {
     fn ground_attack_follow_up_requires_twenty_active_ticks() {
         for player in Player::ALL {
             for offset in 17..=20 {
-                verify_ground_follow_up(player, Control::Primary, offset);
-                verify_ground_follow_up(player, Control::Secondary, offset);
+                let mut state = four_playing();
+                state.input_step(3, &pulse(player, Control::Primary));
+                let timing = (offset, offset == 20);
+                verify_follow_up(state, player, Control::Primary, timing);
+                verify_follow_up(state, player, Control::Secondary, timing);
             }
         }
     }
 
-    fn verify_ground_follow_up(player: Player, control: Control, offset: u64) {
+    #[test]
+    fn special_attack_follow_up_requires_thirty_one_active_ticks() {
+        for player in Player::ALL {
+            for offset in 29..=31 {
+                let state = special_started(player);
+                let timing = (offset, offset == 31);
+                verify_follow_up(state, player, Control::Primary, timing);
+                verify_follow_up(state, player, Control::Secondary, timing);
+            }
+        }
+    }
+
+    fn special_started(player: Player) -> Cabinet {
         let mut state = four_playing();
-        state.input_step(3, &pulse(player, Control::Primary));
+        state.input_step(3, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Secondary, true),
+            change(player, Control::Primary, false),
+            change(player, Control::Secondary, false),
+        ]);
+        assert!(matches!(
+            station_for(&state, player).maneuver,
+            Maneuver::Special { tick: 0, .. }
+        ));
+        state
+    }
+
+    fn verify_follow_up(
+        mut state: Cabinet,
+        player: Player,
+        control: Control,
+        timing: (u64, bool),
+    ) {
+        let (offset, allowed) = timing;
         let target = 3u64.saturating_add(offset);
         for tick in 4..target {
             state.input_step(tick, &[]);
         }
         let baseline = state;
         state.input_step(target, &pulse(player, control));
-        if offset < 20 {
-            assert_discarded_follow_up(state, baseline, target);
-        } else {
+        if allowed {
             let maneuver = station_for(&state, player).maneuver;
             if control == Control::Primary {
                 assert_eq!(maneuver, Maneuver::Attack { tick: 0 });
             } else {
                 assert!(matches!(maneuver, Maneuver::Jump(j) if j.tick() == 0));
             }
+        } else {
+            assert_discarded_follow_up(state, baseline, target);
         }
     }
 
@@ -1190,7 +1230,7 @@ mod tests {
     ) {
         baseline.input_step(target, &[]);
         assert_eq!(state.stations(), baseline.stations());
-        for tick in target.saturating_add(1)..30 {
+        for tick in target.saturating_add(1)..target.saturating_add(12) {
             state.input_step(tick, &[]);
             baseline.input_step(tick, &[]);
             assert_eq!(state.stations(), baseline.stations());
@@ -1198,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn ground_recovery_does_not_buffer_held_input_or_lock_other_players() {
+    fn action_recovery_does_not_buffer_held_input_or_lock_other_players() {
         let mut state = four_playing();
         state.input_step(3, &pulse(Player::Marge, Control::Primary));
         for tick in 4..22 {
@@ -1227,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn pause_does_not_advance_invisible_ground_recovery() {
+    fn pause_does_not_advance_invisible_action_recovery() {
         let mut state = four_playing();
         state.input_step(3, &pulse(Player::Marge, Control::Primary));
         for tick in 4..21 {
