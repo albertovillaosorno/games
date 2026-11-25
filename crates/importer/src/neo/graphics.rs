@@ -463,6 +463,44 @@ mod tests {
     }
 
     #[test]
+    fn profile_rejects_structurally_valid_region_changes()
+    -> Result<(), ImportError> {
+        let profile = CartridgeGraphics(&FIXTURE);
+        let identity = profile.identity();
+        let limit = NonZeroU64::MIN.saturating_add(8192 - 1);
+        let valid = cartridge()?;
+
+        let mut wrong_program = valid.clone();
+        set(&mut wrong_program, 4, 3)?;
+        wrong_program.push(0);
+
+        let mut extra_audio = valid.clone();
+        set(&mut extra_audio, 12, 1)?;
+        extra_audio.push(0);
+
+        let mut missing_fixed = valid;
+        set(&mut missing_fixed, 8, 0)?;
+        missing_fixed.truncate(4096 + 2 + 128);
+
+        let mut generous = limits(profile);
+        generous.archive = ArchiveBudget::new(
+            NonZeroU64::MIN.saturating_add(128 - 1),
+            NonZeroU64::MIN.saturating_add(164 - 1),
+            NonZeroU64::MIN.saturating_add(4 - 1),
+        );
+        for bytes in [wrong_program, extra_audio, missing_fixed] {
+            let source = SourceSnapshot::new(&bytes, &identity, limit)?;
+            source.visit_neo(generous.archive, |_, _| Ok(()))?;
+            require(
+                profile.convert(&source, generous, |_, _| {
+                    Err(ImportError::StageFailed)
+                }) == Err(ImportError::UnsupportedMember),
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn conversion_checks_profile_before_staging() -> Result<(), ImportError> {
         let profile = CartridgeGraphics(&FIXTURE);
         let identity = profile.identity();
