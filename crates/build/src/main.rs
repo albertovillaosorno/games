@@ -35,6 +35,9 @@
 /// Native canonical bundle publication and verification.
 pub mod publication;
 #[cfg(any(target_os = "linux", target_os = "android"))]
+/// Exact bounded comparison of private PCM reference recordings.
+pub mod reference_audio;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only palette comparison against local observations.
 pub mod reference_palette;
 #[cfg(all(
@@ -76,7 +79,9 @@ const USAGE: &str = concat!(
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
     "\n",
     "GNU/Linux (native-preview): mame render-check MACHINE REV ",
-    "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT"
+    "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT",
+    "\n",
+    "Linux/Android: wave compare LEFT RIGHT LIMIT"
 );
 
 #[derive(Debug)]
@@ -174,6 +179,8 @@ enum Command {
     ))]
     RenderCheck(Machine, render_check::Arguments),
     Verify(Arguments),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    WaveCompare(PathBuf, PathBuf, NonZeroU64),
 }
 
 impl Command {
@@ -186,6 +193,17 @@ impl Command {
         match (format.to_str(), action.to_str()) {
             (Some("zip"), Some("verify")) => {
                 Ok(Self::Verify(Arguments::parse(args.collect())?))
+            },
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            (Some("wave"), Some("compare")) => {
+                let [left, right, limit] =
+                    <[OsString; 3]>::try_from(args.collect::<Vec<_>>())
+                        .map_err(|_args| String::from(USAGE))?;
+                Ok(Self::WaveCompare(
+                    left.into(),
+                    right.into(),
+                    parse_limit(&limit)?,
+                ))
             },
             (Some("mame"), Some(operation)) => {
                 Self::parse_mame(operation, args)
@@ -262,6 +280,10 @@ impl Command {
                 target_env = "gnu"
             ))]
             Self::RenderCheck(machine, args) => args.run(machine),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::WaveCompare(left, right, limit) => {
+                reference_audio::check(&left, &right, limit)
+            },
             Self::Verify(args) => with_source(&args, verify_archive),
             Self::Import(machine, args) => {
                 with_source(&args, |source, archive| {

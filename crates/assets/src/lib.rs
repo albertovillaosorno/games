@@ -34,6 +34,8 @@
 pub mod archive;
 /// Integrity-checked runtime access to indexed graphics.
 pub mod indexed;
+/// Integrity-checked runtime access to interleaved PCM audio.
+pub mod pcm;
 
 use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64, NonZeroUsize};

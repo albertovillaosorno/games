@@ -69,3 +69,10 @@ Synthetic tests verify the complete RGBA output, explicit alpha, palette
 reuse, layout overflow, byte budgets and unchanged buffers after rejected
 selections. Fresh validation passed in run 1795582623653954940-3515380.
 No original palette selection or GPU scene fidelity is implied.
+
+The checked canonical PCM view now validates the descriptor and payload
+hash, then borrows complete frames and decodes signed little-endian
+samples without allocating. Tests cover channel order, negative and
+positive extrema, invalid indices, mismatched hashes and partial frames.
+Native graphics consumption is also verified by exact logical RGBA
+readback from locally imported tiles; see the Simpsons task for evidence.

@@ -37,6 +37,8 @@ pub mod conversion;
 pub mod graphics;
 /// MAME machine profiles and shared arcade ROM-set conversion.
 pub mod mame;
+/// Strict PCM16 WAVE reference capture admission.
+pub mod wave;
 
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
@@ -67,6 +69,8 @@ pub enum ImportError {
     IncorrectSource,
     /// The title or revision identifier is not canonical.
     InvalidSourceIdentity,
+    /// Reference WAVE headers or PCM frame extents are invalid.
+    InvalidWave,
     /// Archive headers, compressed bytes or checksum are invalid.
     InvalidZip,
     /// A caller-owned private staging sink failed to accept an asset.

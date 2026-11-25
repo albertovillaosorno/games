@@ -52,3 +52,11 @@ A separate platform graphics crate keeps this dependency out of headless
 engine, importer, native storage and TLS consumers. The current adapter
 is Linux-only; Android, browser, distribution and physical GPU performance
 remain unverified.
+
+The inspected Craft Libraries audio crate exposes WAV PCM extraction,
+but that operation intentionally accepts truncated payloads and its
+decode-native feature enables unrelated codecs. The reference capture
+reader needs exact RIFF and data extents and borrowed signed PCM16 bytes.
+A narrow allocation-free canonical-header reader therefore admits only
+the observed 44-byte RIFF PCM16 layout, not general WAV files. No new
+dependency or codec implementation was added.

@@ -139,3 +139,16 @@ using a persistent atlas texture. Both 1,024 background tiles
 Invalid source and palette ranges were rejected. This is an end-to-end
 asset presentation check with explicitly chosen palette slices, not a
 comparison against original screen composition or playable gameplay.
+
+Two independent scripted 30-second reference runs produced identical
+48 kHz stereo PCM16 WAV recordings. The strict Rust reference command
+
+```sh
+cargo run --locked -p games-build -- wave compare LEFT RIGHT 6000000
+```
+
+matched all 1,440,001 sample frames. The no-input control diverged at
+zero-based sample frame 589,806; a smaller file budget was rejected.
+The source captures remain private. This proves repeatability of
+observed mixed audio, not sound-chip decoding, title event mapping,
+sample extraction or audio parity of a remake.
