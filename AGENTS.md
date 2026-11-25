@@ -66,6 +66,12 @@
 
 ## Behaviour and performance
 
+- Ship modern free-play experiences only; do not require virtual coins,
+  payment or a classic arcade mode. Use shared visible menus, immediate
+  Start/Enter, character selection where appropriate, local multiplayer
+  joining, pause, settings and exit. Keep historical payment mechanics
+  as reference evidence, not shipped interaction. Verify real native
+  input and visible gameplay in addition to finite synthetic smoke.
 - Preserve gameplay, not technical debt. Test public behaviour, properties
   and invariants rather than internal calls or incidental constants.
 - Use deterministic simulation independent of rendering FPS. Provide

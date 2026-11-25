@@ -19,6 +19,16 @@ preserve original four-player cooperative gameplay and pixel art.
 
 ## Acceptance
 
+- Replace the obsolete coin-dependent prototype with free play only.
+  No virtual coins, paid continues or classic arcade mode may ship.
+- Provide a visible modern main menu, Enter/Start to play immediately,
+  character selection, local multiplayer joining, pause, settings and
+  exit using shared session/menu/input mechanisms.
+- Verify visible characters and enemies and actual keyboard movement,
+  controller and touch input; hidden synthetic smoke is supplementary.
+- Complete real adaptive widescreen scene extension and responsive HUD
+  and touch placement. Keep per-player control settings and defaults.
+
 - Use only a selected lawful original edition and locally imported assets.
 - Reuse shared engine mechanisms and extend them where necessary.
 - Verify observable gameplay or application behaviour, saves and input.
@@ -648,3 +658,19 @@ hit regions and station routing. The combined hidden title run passed
 with Bart selected, swapped attack/jump and left/right touch positions,
 custom keyboard bindings and integer mode. Independent simultaneous
 touch panels and hardware testing remain open.
+
+Owner acceptance override: the visible prototype opens onto street art
+without an obvious entry prompt; the owner observed a character only
+after station Start. The existing coin/Start/continue evidence above
+describes historical reference observations and temporary implementation,
+not an approved mode. Replace the admission, HUD and paid continue
+interactions with free play, shared modern menus and free local join.
+Actual visible native play remains unverified by this development session.
+
+The hidden display matrix passed five windowed modes and four fullscreen
+touch modes. All four selected touch stations passed swapped directional
+slots; catalogue-relative profile selection worked from another working
+directory. Fill with the fixed touch panel and a symlink profile were
+rejected. All fourteen successful matrix runs reported zero missed
+samples across their respective 600-frame movement workloads.
+Adaptive is still fixed-scene fallback, not extended content.

@@ -6,6 +6,11 @@ See the [canonical title task](
 ../../docs/todo/open/games/simpsons-arcade.mdc) for acceptance,
 reference evidence and unresolved parity.
 
+**Obsolete preview admission:** the owner requires modern free play only.
+The coin and continue controls documented below describe the current
+prototype, not an approved shipping experience. Replace them with the
+visible shared menu and immediate Start/Enter; see canonical acceptance.
+
 ## Native movement preview
 
 After locally publishing the four named actor bundles using the MAME

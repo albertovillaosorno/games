@@ -99,3 +99,11 @@ button routes to the selected station. A combined hidden title run
 passed with Bart selected, swapped touch buttons and custom keyboard
 bindings. Independent simultaneous touch panels, analog axes and
 hardware validation remain open.
+
+Owner override: shared main menu/session admission must support free play
+only, immediate Enter/Start, character selection where applicable, local
+join, pause/settings/exit and visible play. Do not ship a coin-dependent
+or classic arcade mode. The existing title admission is obsolete.
+Actual physical native input and visible play must be checked separately
+from synthetic smoke. The first title passed the hidden display and touch
+profile matrix; real responsive HUD and camera expansion remain open.
