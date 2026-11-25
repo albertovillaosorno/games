@@ -79,6 +79,7 @@ pub(super) static SIMPSONS: Profile = Profile {
         width: 320,
     },
     revision: "world-4p-set-1",
+    sprite_wiring: super::sprites::Wiring { x: -43, y: -23 },
     tile_code_mask: 0x7fff,
     title: "simpsons-arcade",
     video: Wiring {

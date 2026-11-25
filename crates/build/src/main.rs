@@ -97,6 +97,10 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
     "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
+    "GNU/Linux: mame scene-check MACHINE REV PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
+    "GNU/Linux (native-preview): mame scene-render-check MACHINE REV ",
+    "PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "Linux/Android: mame object-check MACHINE REV CPU DEVICE\n",
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
     "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
@@ -246,6 +250,19 @@ impl Command {
         }
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn parse_check(
+        machine: Machine,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        let [parent, digest_argument] = <[OsString; 2]>::try_from(args)
+            .map_err(|_args| String::from(USAGE))?;
+        let digest = text(&digest_argument)?
+            .parse()
+            .map_err(|_error| String::from("invalid manifest hash"))?;
+        Ok(Self::Check(machine, parent.into(), digest))
+    }
+
     fn parse_mame<Args>(action: &str, mut args: Args) -> Result<Self, String>
     where
         Args: Iterator<Item = OsString>,
@@ -253,10 +270,15 @@ impl Command {
         let selected = select_machine(&mut args)?;
         match action {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            "background-check" => Ok(Self::BackgroundCheck(
-                selected,
-                reference_background::Arguments::parse(args.collect())?,
-            )),
+            "background-check" | "scene-check" | "scene-render-check" => {
+                Ok(Self::BackgroundCheck(
+                    selected,
+                    reference_background::Arguments::parse_command(
+                        action,
+                        args.collect(),
+                    )?,
+                ))
+            },
             "verify" => Ok(Self::Verify(Arguments::parse_mame(
                 selected,
                 args.collect(),
@@ -298,15 +320,7 @@ impl Command {
                 ))
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            "check" => {
-                let [parent, digest_argument] =
-                    <[OsString; 2]>::try_from(args.collect::<Vec<_>>())
-                        .map_err(|_args| String::from(USAGE))?;
-                let digest = text(&digest_argument)?
-                    .parse()
-                    .map_err(|_error| String::from("invalid manifest hash"))?;
-                Ok(Self::Check(selected, PathBuf::from(parent), digest))
-            },
+            "check" => Self::parse_check(selected, args.collect()),
             _ => Err(String::from(USAGE)),
         }
     }

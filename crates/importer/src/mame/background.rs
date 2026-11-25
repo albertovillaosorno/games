@@ -14,7 +14,7 @@
 //   - Execute game code, draw sprites or implement gameplay.
 // - Allows:
 //   - Inputs: Profile raster, observed tile state and canonical tiles.
-//   - Outputs: Visible row-major palette indices.
+//   - Outputs: Visible row-major palette indices and layer coverage.
 //   - Side effects: Writes to caller-owned raster buffer.
 // - Split-When:
 //   - A different tilemap layout needs an independent decoder.
@@ -47,6 +47,48 @@ pub struct Background<'state, 'tiles> {
     pub tiles: &'tiles IndexedTiles<'tiles>,
 }
 
+/// A reconstructed palette index with tile coverage and sprite effects.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Pixel {
+    pub(super) pen: u16,
+    pub(super) priority: u8,
+    pub(super) shadow: bool,
+}
+
+impl Pixel {
+    /// Construct an unmodified palette index without coverage.
+    #[must_use]
+    pub const fn from_pen(pen: u16) -> Self {
+        Self {
+            pen,
+            priority: 0,
+            shadow: false,
+        }
+    }
+
+    /// Unmodified palette index, before any shadow.
+    #[must_use]
+    pub const fn pen(self) -> u16 {
+        self.pen
+    }
+
+    /// Resolve ordinary and indexed-palette shadow pixels.
+    /// Returns no value for a missing palette entry.
+    #[must_use]
+    pub fn rgba(self, palette: &[[u8; 4]]) -> Option<[u8; 4]> {
+        let color = *palette.get(usize::from(self.pen))?;
+        if !self.shadow {
+            return Some(color);
+        }
+        let [red, green, blue, alpha] = color;
+        let channel = |value: u8| {
+            u8::try_from(u16::from(value).saturating_mul(3).checked_div(5)?)
+                .ok()
+        };
+        Some([channel(red)?, channel(green)?, channel(blue)?, alpha])
+    }
+}
+
 /// Fixed visible raster geometry selected by machine profile.
 #[derive(Clone, Copy, Debug)]
 pub struct Raster {
@@ -66,7 +108,7 @@ impl Raster {
     pub fn compose(
         self,
         background: Background<'_, '_>,
-        output: &mut [u16],
+        output: &mut [Pixel],
     ) -> Result<(), ImportError> {
         if output.len() != self.pixels()
             || background.tiles.width().get() != 8
@@ -78,12 +120,21 @@ impl Raster {
             .state
             .standard_scroll(background.scroll_control)?;
         let mixer = background.state.priority();
-        output.fill(u16::from(mixer.backdrop.palette_bank) << 4u32);
-        for layer in mixer.ordered_layers() {
+        output.fill(Pixel {
+            pen: u16::from(mixer.backdrop.palette_bank) << 4u32,
+            ..Pixel::default()
+        });
+        for (layer, coverage) in
+            mixer.ordered_layers().into_iter().zip([1, 2, 4])
+        {
             let offset =
                 *scroll.get(layer).ok_or(ImportError::UnsupportedMember)?;
             self.compose_layer(
-                Layer { background, index: layer },
+                Layer {
+                    background,
+                    coverage,
+                    index: layer,
+                },
                 offset,
                 output,
             )?;
@@ -95,7 +146,7 @@ impl Raster {
         self,
         layer: Layer<'_, '_>,
         offset: Offset,
-        output: &mut [u16],
+        output: &mut [Pixel],
     ) -> Result<(), ImportError> {
         let (scroll_x, scroll_y) = offset;
         let alignment = *self
@@ -110,6 +161,12 @@ impl Raster {
         Ok(())
     }
 
+    /// Width and height of the visible raster in logical pixels.
+    #[must_use]
+    pub const fn extent(self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
     /// Number of visible pixels in the machine's bounded raster.
     #[must_use]
     pub const fn pixels(self) -> usize {
@@ -120,6 +177,7 @@ impl Raster {
 #[derive(Clone, Copy, Debug)]
 struct Layer<'state, 'tiles> {
     background: Background<'state, 'tiles>,
+    coverage: u8,
     index: usize,
 }
 
@@ -127,14 +185,15 @@ impl Layer<'_, '_> {
     fn compose_row(
         self,
         origin: Offset,
-        pixels: &mut [u16],
+        pixels: &mut [Pixel],
     ) -> Result<(), ImportError> {
         let (start_x, row_y) = origin;
         for (column, pixel) in pixels.iter_mut().enumerate() {
             if let Some(pen) =
                 self.pen((start_x.wrapping_add(column), row_y))?
             {
-                *pixel = pen;
+                pixel.pen = pen;
+                pixel.priority |= self.coverage;
             }
         }
         Ok(())
@@ -220,7 +279,7 @@ mod tests {
             origin_y: 0,
             width: 1,
         };
-        let mut output = [0];
+        let mut output = [Pixel::default()];
         for (flip, expected) in [(0, 1), (4, 5)] {
             let state = machine.tilemap_snapshot(
                 &ram,
@@ -235,7 +294,7 @@ mod tests {
                 },
                 &mut output,
             )?;
-            if output != [expected] {
+            if output.map(Pixel::pen) != [expected] {
                 return Err(ImportError::UnsupportedMember);
             }
         }
@@ -289,13 +348,13 @@ mod tests {
             state,
             tiles: &sheet,
         };
-        let mut output = [0; 4];
+        let mut output = [Pixel::default(); 4];
         raster.compose(input, &mut output)?;
         // Layer 1 contributes its final pen at row 255, column 511.
         // Layer 2 contributes its first pen at row 0, column 0.
         // At the next row, layer 1 contributes its first pen at column 0.
-        if output != [259, 514, 0, 258]
-            || raster.compose(input, &mut [0; 3]).is_ok()
+        if output.map(Pixel::pen) != [259, 514, 0, 258]
+            || raster.compose(input, &mut [Pixel::default(); 3]).is_ok()
             || raster
                 .compose(
                     Background {

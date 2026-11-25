@@ -39,6 +39,8 @@ pub mod objects;
 mod palette;
 /// Observed video mixer assignment and priority order.
 pub mod priority;
+/// Observed sprite composition and vertical mirror handling.
+pub mod sprites;
 /// Observed local tile-cell addresses and attributes.
 pub mod tilemap;
 
@@ -98,6 +100,7 @@ struct Profile {
     palette: palette::Palette,
     raster: background::Raster,
     revision: &'static str,
+    sprite_wiring: sprites::Wiring,
     tile_code_mask: u16,
     title: &'static str,
     video: priority::Wiring,
@@ -221,6 +224,18 @@ impl Machine {
             })
             .map(Self)
             .ok_or(ImportError::IncorrectSource)
+    }
+
+    /// Bind observed object RAM and 44 bytes of packed device controls.
+    /// # Errors
+    /// Rejects malformed snapshots and unimplemented display modes.
+    pub fn sprite_snapshot<'source>(
+        self,
+        ram: &'source [u8],
+        controls: &[u8],
+        mixer: priority::VideoPriority,
+    ) -> Result<sprites::Snapshot<'source>, ImportError> {
+        sprites::Snapshot::new(self.0.sprite_wiring, ram, controls, mixer)
     }
 
     /// Bind observed tile RAM and six bytes of character bank/control state.

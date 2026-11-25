@@ -261,3 +261,83 @@ equivalence. The CPU and device captures need not reflect the same DMA
 instant. All zero-object frames are also the exact background matches.
 Sprite attributes, placement, scaling, shadow/priority composition and
 actual DMA timing remain open.
+
+The shared MAME reference adapter now overlays selected observed device
+objects on the tile raster. It resolves distinct object depths,
+interleaved tile addressing, local flips, scaling, clipping, tile
+priority, transparent pens and the indexed palette's default shadow.
+It rejects horizontal mirroring, ambiguous equal depths, global
+reversal, alternate coordinate wrap and depth rejection settings.
+The host command uses the already-published local graphics bundle:
+
+```sh
+cargo run --locked -p games-build -- mame scene-check simpsons \
+  world-4p-set-1 PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 \
+  OBJECTS CONTROLS
+```
+
+The object buffer is exactly 4,096 bytes. The control file concatenates
+eight window-register bytes, 32 operation-register bytes (16
+little-endian words) and the four-byte little-endian rejection value.
+The RGB32 comparison uses the displayed frame's current palette.
+
+Two fresh isolated MAME runs captured the five-frame windows around
+660, 900 and 1500; all 195 overlapping raw screen, palette, tile and
+object observation files matched byte-for-byte. The first run compared
+12 consecutive frame pairs and the second compared those same pairs
+plus 119-to-120, 598-to-599 and 1199-to-1200. Each comparison used
+the preceding callback's tile and device-object state with the current
+callback's screen and palette. All 27 comparisons matched every one
+of the 71,680 visible pixels, with no tolerance. The same-callback
+scene comparison still differs by 286 pixels at frame 660 and 222
+pixels at frame 900, so the callback alignment is material.
+Frame 1500 matches even without the offset.
+
+This establishes exact reconstruction of these observed scenes, not
+general compositor or gameplay parity. The callback offset does not
+establish universal DMA timing, and unsupported device modes, actual
+interactive scene simulation, native rendering, and platform acceptance
+remain open. No captured proprietary bytes or images are published.
+
+A third isolated reference run extended observation to 100 emulated
+seconds and sampled 31 further aligned pairs every 120 frames from
+1800 through 5400. Initially 30 pairs matched exactly and the adapter
+rejected frame 3600's vertically mirrored single-height object.
+Supporting vertical mirror selection and the single-height two-face
+overlay resolved that checkpoint to an exact 71,680-pixel match as
+well. The longer scenario therefore has 31 of 31 exact sampled pairs.
+Horizontal mirroring remains unsupported; these are sampled reference
+observations, not continuous video or gameplay acceptance.
+
+An independent repeat of the 100-second scenario matched all 806
+overlapping raw observation files byte-for-byte and reproduced all 31
+exact scene comparisons with the final mirror implementation. Across
+the two short and two extended runs, all 89 aligned comparisons
+matched 71,680 pixels without tolerance.
+
+The existing accelerated native scene API also accepts a single
+reconstructed RGBA raster through its bounded atlas and sprite path:
+
+```sh
+cargo run --locked -p games-build --features native-preview -- \
+  mame scene-render-check simpsons world-4p-set-1 PARENT SHA256 \
+  RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS
+```
+
+On the local Linux OpenGL renderer, aligned frames 120, 660, 900, 1500
+and 3600 each produced exact 71,680-pixel original comparisons and
+byte-identical native logical-target readback. This verifies native
+presentation of a CPU-reconstructed reference observation, not
+GPU implementation of the arcade priority hardware or a playable title.
+
+A separate 45-second reference scenario added sustained directional
+inputs and repeated staggered button pulses across all four player
+ports. Nine aligned pairs sampled from frames 1320 to 2280 also matched
+all 71,680 pixels exactly. These inputs are original-machine script
+events, not evidence of corresponding remake simulation.
+An independent repeat matched all 234 sampled raw observation files
+and all nine scene comparisons. All five overlapping late screen
+checkpoints differ from the shorter-input scenario. The combined
+reference corpus now has 107 exact aligned scene comparisons.
+Native logical-target readback also matched the reconstructed raster
+at frames 1560, 1800 and 2280 of the repeated input-stress scenario.

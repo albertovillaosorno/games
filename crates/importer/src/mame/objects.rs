@@ -140,6 +140,15 @@ impl ObjectEntry<'_> {
         let &[low, high, ..] = self.0;
         u16::from_le_bytes([low, high])
     }
+
+    pub(super) fn words(self) -> [u16; 8] {
+        let (pairs, _) = self.0.as_chunks::<2>();
+        let mut words = [0; 8];
+        for (word, bytes) in words.iter_mut().zip(pairs) {
+            *word = u16::from_le_bytes(*bytes);
+        }
+        words
+    }
 }
 
 #[cfg(test)]
