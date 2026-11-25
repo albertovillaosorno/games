@@ -697,3 +697,16 @@ prompts; it reported one missed sample in the 600-frame movement
 workload. This is not physical input, audio, GPU or desktop acceptance.
 Interactive settings, independent controller character selection and
 real adaptive scene extension remain open.
+
+The shared free-play session now includes a display settings screen from
+both the main and pause menus. Display cycling and desktop fullscreen
+switching apply to the live renderer without rebuilding its atlases.
+Menu framing temporarily uses aspect-fit for a cropped gameplay mode;
+touch-enabled sessions skip Fill entirely. Native menus reuse compact
+cached setting rows rather than rasterizing complete selection variants.
+Engine tests verify all modes, the touch restriction and return to the
+originating screen. The combined hidden title smoke additionally routed
+keyboard actions into Settings, observed changed logical pixels, switched
+to fullscreen and back, and returned to the main menu. It passed the
+600-frame movement workload with zero missed samples. Real devices,
+actual widescreen content and persistent display settings remain open.

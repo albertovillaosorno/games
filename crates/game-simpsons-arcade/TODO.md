@@ -25,7 +25,8 @@ Marge's bundle also provides the stage background. The visible main menu
 shows each character's Start key. Press Enter to play as Marge, or another
 station's Start key to play as that character. Other stations may join
 while the game is running. Up/Down navigates the menu and Primary
-confirms. Pause opens Resume, Main Menu and Exit; Pause or Start resumes.
+confirms. Pause opens Resume, Settings, Main Menu and Exit; Pause or Start
+resumes.
 Close the window or select Exit to quit.
 
 | Station | Pause | Start | Primary / Secondary | Movement |
@@ -136,7 +137,10 @@ currently falls back to aspect-fit for this fixed scene; real camera,
 scene and HUD extension remains open. Fill may crop the game HUD and
 is rejected when the current fixed touch panel is enabled. Responsive
 HUD placement and independent touch overlays remain open. Settings
-are edited in the catalogue, not saved automatically by an in-game menu.
+can also be changed through the main or pause menu: Up/Down selects,
+Primary cycles display or toggles desktop fullscreen, and Back returns.
+Menus temporarily use aspect-fit when Fill is selected for gameplay.
+Changes apply immediately but are not saved between launches.
 
 ### Digital control profiles
 

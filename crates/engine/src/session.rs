@@ -31,9 +31,18 @@
 
 //! Local free-play navigation independent of the host and title rules.
 
-const MAIN_ITEMS: [MenuItem; 2] = [MenuItem::Play, MenuItem::Exit];
-const PAUSE_ITEMS: [MenuItem; 3] =
-    [MenuItem::Resume, MenuItem::MainMenu, MenuItem::Exit];
+use crate::presentation::{DisplaySettings, PresentationMode};
+
+const MAIN_ITEMS: [MenuItem; 3] =
+    [MenuItem::Play, MenuItem::Settings, MenuItem::Exit];
+const PAUSE_ITEMS: [MenuItem; 4] = [
+    MenuItem::Resume,
+    MenuItem::Settings,
+    MenuItem::MainMenu,
+    MenuItem::Exit,
+];
+const SETTINGS_ITEMS: [MenuItem; 3] =
+    [MenuItem::Display, MenuItem::Window, MenuItem::Back];
 
 /// Current screen of a local gameplay session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -47,11 +56,17 @@ pub enum SessionPhase {
     Paused,
     /// The world is running.
     Playing,
+    /// Display settings; the originating menu remains suspended.
+    Settings,
 }
 
 /// Available shared menu choices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MenuItem {
+    /// Return to the menu from which settings were opened.
+    Back,
+    /// Cycle the logical presentation mode.
+    Display,
     /// Close the host.
     Exit,
     /// Abandon the current world and return to the main menu.
@@ -60,6 +75,10 @@ pub enum MenuItem {
     Play,
     /// Resume the suspended world.
     Resume,
+    /// Open display settings.
+    Settings,
+    /// Toggle windowed or desktop-fullscreen presentation.
+    Window,
 }
 
 /// Edge-triggered logical menu input.
@@ -97,6 +116,7 @@ impl SessionPhase {
         match self {
             Self::MainMenu => &MAIN_ITEMS,
             Self::Paused => &PAUSE_ITEMS,
+            Self::Settings => &SETTINGS_ITEMS,
             Self::Playing | Self::Exited => &[],
         }
     }
@@ -105,27 +125,70 @@ impl SessionPhase {
 /// Deterministic local session state with no device or title dependencies.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalSession {
+    display: DisplaySettings,
     phase: SessionPhase,
+    restrict_fill: bool,
     selection: usize,
+    settings_origin: SessionPhase,
 }
 
 impl LocalSession {
+    const fn close_settings(&mut self) {
+        self.transition(self.settings_origin);
+        self.selection = 1;
+    }
+
     fn confirm(&mut self) -> SessionEffect {
         match self.selected() {
-            Some(MenuItem::Play) => self.start(),
+            Some(MenuItem::Back) => self.close_settings(),
+            Some(MenuItem::Display) => self.cycle_display(),
+            Some(MenuItem::Settings) => {
+                self.settings_origin = self.phase;
+                self.transition(SessionPhase::Settings);
+            },
+            Some(MenuItem::Window) => {
+                self.display.window = self.display.window.toggled();
+            },
+            Some(MenuItem::Play) => return self.start(),
             Some(MenuItem::Resume) => {
                 self.transition(SessionPhase::Playing);
-                SessionEffect::None
             },
             Some(MenuItem::MainMenu) => {
                 self.return_to_menu();
-                SessionEffect::Reset
+                return SessionEffect::Reset;
             },
             Some(MenuItem::Exit) => {
                 self.transition(SessionPhase::Exited);
-                SessionEffect::Exit
+                return SessionEffect::Exit;
             },
-            None => SessionEffect::None,
+            None => {},
+        }
+        SessionEffect::None
+    }
+
+    const fn cycle_display(&mut self) {
+        self.display.presentation =
+            self.display.presentation.next(self.restrict_fill);
+    }
+
+    /// Current requested portable display settings.
+    #[must_use]
+    pub const fn display(self) -> DisplaySettings {
+        self.display
+    }
+
+    /// Keep menu choices reachable when gameplay uses centered cropping.
+    #[must_use]
+    pub const fn effective_display(self) -> DisplaySettings {
+        if !matches!(self.phase, SessionPhase::Playing)
+            && matches!(self.display.presentation, PresentationMode::Fill)
+        {
+            DisplaySettings {
+                presentation: PresentationMode::AspectFit,
+                ..self.display
+            }
+        } else {
+            self.display
         }
     }
 
@@ -195,6 +258,10 @@ impl LocalSession {
                 self.transition(SessionPhase::Playing);
                 SessionEffect::None
             },
+            SessionPhase::Settings => {
+                self.close_settings();
+                SessionEffect::None
+            },
             SessionPhase::Exited => SessionEffect::None,
         }
     }
@@ -203,6 +270,7 @@ impl LocalSession {
         match self.phase {
             SessionPhase::Playing => self.transition(SessionPhase::Paused),
             SessionPhase::Paused => self.transition(SessionPhase::Playing),
+            SessionPhase::Settings => self.close_settings(),
             SessionPhase::MainMenu | SessionPhase::Exited => {},
         }
     }
@@ -211,11 +279,46 @@ impl LocalSession {
         self.phase = phase;
         self.selection = 0;
     }
+
+    /// Initialise a session with portable display preferences and whether
+    /// centered cropping must be excluded to keep controls reachable.
+    #[must_use]
+    pub const fn with_display(
+        display: DisplaySettings,
+        restrict_fill: bool,
+    ) -> Self {
+        let adjusted = if restrict_fill
+            && matches!(display.presentation, PresentationMode::Fill)
+        {
+            DisplaySettings {
+                presentation: PresentationMode::AspectFit,
+                ..display
+            }
+        } else {
+            display
+        };
+        Self {
+            display: adjusted,
+            phase: SessionPhase::MainMenu,
+            restrict_fill,
+            selection: 0,
+            settings_origin: SessionPhase::MainMenu,
+        }
+    }
+
+    /// Whether the current screen suspends or displays an existing world.
+    #[must_use]
+    pub const fn world_visible(self) -> bool {
+        matches!(self.phase, SessionPhase::Playing | SessionPhase::Paused)
+            || (matches!(self.phase, SessionPhase::Settings)
+                && matches!(self.settings_origin, SessionPhase::Paused))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::WindowMode;
 
     #[test]
     fn start_joins_without_prerequisites_and_pause_is_reversible() {
@@ -240,6 +343,7 @@ mod tests {
         assert_eq!(session.input(MenuInput::Start), SessionEffect::Join);
         assert_eq!(session.input(MenuInput::Pause), SessionEffect::None);
         assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
         assert_eq!(session.selected(), Some(MenuItem::MainMenu));
         assert_eq!(session.input(MenuInput::Confirm), SessionEffect::Reset);
         assert_eq!(session.phase(), SessionPhase::MainMenu);
@@ -252,5 +356,92 @@ mod tests {
         assert_eq!(session.input(MenuInput::Confirm), SessionEffect::Exit);
         assert_eq!(session.phase(), SessionPhase::Exited);
         assert_eq!(session.input(MenuInput::Start), SessionEffect::None);
+    }
+
+    #[test]
+    fn settings_cycle_display_and_return_to_origin() {
+        let mut session = LocalSession::default();
+        menu_input(&mut session, MenuInput::Next);
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.phase(), SessionPhase::Settings);
+        assert!(!session.world_visible());
+        cycle_modes(&mut session, &[
+            PresentationMode::Integer,
+            PresentationMode::Fill,
+            PresentationMode::Stretch,
+            PresentationMode::Adaptive,
+            PresentationMode::AspectFit,
+        ]);
+        menu_input(&mut session, MenuInput::Next);
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.display().window, WindowMode::Fullscreen);
+        menu_input(&mut session, MenuInput::Next);
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.phase(), SessionPhase::MainMenu);
+        assert_eq!(session.selected(), Some(MenuItem::Settings));
+    }
+
+    #[test]
+    fn paused_settings_preserve_world_and_avoid_cropped_touch_controls() {
+        let mut session = LocalSession::with_display(
+            DisplaySettings {
+                presentation: PresentationMode::Fill,
+                ..DisplaySettings::default()
+            },
+            true,
+        );
+        assert_eq!(session.display().presentation, PresentationMode::AspectFit);
+        assert_eq!(session.input(MenuInput::Start), SessionEffect::Join);
+        menu_input(&mut session, MenuInput::Pause);
+        menu_input(&mut session, MenuInput::Next);
+        menu_input(&mut session, MenuInput::Confirm);
+        assert!(session.world_visible());
+        cycle_modes(&mut session, &[
+            PresentationMode::Integer,
+            PresentationMode::Stretch,
+            PresentationMode::Adaptive,
+            PresentationMode::AspectFit,
+        ]);
+        menu_input(&mut session, MenuInput::Start);
+        assert_eq!(session.phase(), SessionPhase::Paused);
+        menu_input(&mut session, MenuInput::Start);
+        assert_eq!(session.phase(), SessionPhase::Playing);
+    }
+
+    fn menu_input(session: &mut LocalSession, input: MenuInput) {
+        assert_eq!(session.input(input), SessionEffect::None);
+    }
+
+    fn cycle_modes(session: &mut LocalSession, modes: &[PresentationMode]) {
+        for &mode in modes {
+            menu_input(session, MenuInput::Confirm);
+            assert_eq!(session.display().presentation, mode);
+        }
+    }
+
+    #[test]
+    fn fill_is_requested_only_during_gameplay() {
+        let mut session = LocalSession::with_display(
+            DisplaySettings {
+                presentation: PresentationMode::Fill,
+                ..DisplaySettings::default()
+            },
+            false,
+        );
+        assert_eq!(
+            session.effective_display().presentation,
+            PresentationMode::AspectFit
+        );
+        assert_eq!(session.input(MenuInput::Start), SessionEffect::Join);
+        assert_eq!(
+            session.effective_display().presentation,
+            PresentationMode::Fill
+        );
+        assert_eq!(session.input(MenuInput::Pause), SessionEffect::None);
+        assert_eq!(
+            session.effective_display().presentation,
+            PresentationMode::AspectFit
+        );
+        assert_eq!(session.display().presentation, PresentationMode::Fill);
     }
 }

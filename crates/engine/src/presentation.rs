@@ -95,6 +95,27 @@ pub struct PresentationLayout {
 }
 
 impl PresentationMode {
+    /// All supported presentation choices in menu cycling order.
+    pub const ALL: [Self; 5] = [
+        Self::AspectFit,
+        Self::Integer,
+        Self::Fill,
+        Self::Stretch,
+        Self::Adaptive,
+    ];
+
+    /// Portable settings value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Adaptive => "adaptive",
+            Self::AspectFit => "aspect-fit",
+            Self::Fill => "fill",
+            Self::Integer => "integer",
+            Self::Stretch => "stretch",
+        }
+    }
+
     /// Determine the admissible logical extent before rendering a frame.
     ///
     /// Adaptive retains the base height and may widen only to the supplied
@@ -195,6 +216,18 @@ impl PresentationMode {
         }
     }
 
+    /// Cycle presentation, optionally skipping modes that crop controls.
+    #[must_use]
+    pub const fn next(self, restrict_fill: bool) -> Self {
+        match self {
+            Self::Adaptive => Self::AspectFit,
+            Self::AspectFit => Self::Integer,
+            Self::Integer if !restrict_fill => Self::Fill,
+            Self::Integer | Self::Fill => Self::Stretch,
+            Self::Stretch => Self::Adaptive,
+        }
+    }
+
     /// Parse a portable settings value.
     ///
     /// # Errors
@@ -222,6 +255,18 @@ pub enum WindowMode {
 }
 
 impl WindowMode {
+    /// Both portable window choices.
+    pub const ALL: [Self; 2] = [Self::Windowed, Self::Fullscreen];
+
+    /// Portable settings value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fullscreen => "fullscreen",
+            Self::Windowed => "windowed",
+        }
+    }
+
     /// Parse a portable settings value.
     ///
     /// # Errors
@@ -231,6 +276,15 @@ impl WindowMode {
             "fullscreen" => Ok(Self::Fullscreen),
             "windowed" => Ok(Self::Windowed),
             _ => Err("expected fullscreen or windowed"),
+        }
+    }
+
+    /// Toggle desktop fullscreen without changing resolution.
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::Fullscreen => Self::Windowed,
+            Self::Windowed => Self::Fullscreen,
         }
     }
 }

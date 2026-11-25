@@ -35,7 +35,9 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::input::touch::TouchPoint;
-use games::presentation::{PresentationLayout, PresentationMode};
+use games::presentation::{
+    DisplaySettings, PresentationLayout, PresentationMode,
+};
 use sdl2::EventPump;
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -47,8 +49,8 @@ use sdl2::render::{
 use sdl2::video::WindowContext;
 
 use super::{
-    FrameLayout, RenderError, copy_to_viewport, drawable_viewport,
-    validate_dimensions,
+    FrameLayout, RenderError, apply_window_mode, copy_to_viewport,
+    drawable_viewport, validate_dimensions,
 };
 
 /// An atlas identifier scoped to a scene session.
@@ -305,6 +307,19 @@ impl Debug for SceneSession<'_, '_> {
 }
 
 impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
+    /// Change the current window and viewport without rebuilding atlases.
+    ///
+    /// # Errors
+    /// Reports a rejected native fullscreen transition.
+    pub fn apply_display_settings(
+        &mut self,
+        settings: DisplaySettings,
+    ) -> Result<(), RenderError> {
+        apply_window_mode(self.canvas, settings.window)?;
+        self.textures.mode = settings.presentation;
+        Ok(())
+    }
+
     /// Upload one tightly packed RGBA atlas for reuse in subsequent frames.
     /// # Errors
     /// Rejects byte/count limit violations or failed native allocation.
@@ -367,6 +382,10 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         &self,
     ) -> Result<Option<PresentationLayout>, RenderError> {
         drawable_viewport(self.canvas, self.textures.layout, self.textures.mode)
+    }
+
+    pub(super) const fn presentation_mode(&self) -> PresentationMode {
+        self.textures.mode
     }
 
     /// Read the current logical scene as RGBA bytes.

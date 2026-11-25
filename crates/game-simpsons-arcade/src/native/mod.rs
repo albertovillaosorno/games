@@ -52,16 +52,17 @@ use games::input::{AxisBinding, InputEvent, InputMapping, InputRouter};
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
-use games::presentation::{DisplaySettings, FramePacing};
+use games::presentation::{DisplaySettings, FramePacing, WindowMode};
 use games::replay::{LiveInputLimits, LiveSimulation, QueueRejection};
+use games::session::LocalSession;
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform_graphics::linux::input::profile::{
     DigitalProfiles, MAX_PROFILE_BYTES,
 };
 use games_platform_graphics::linux::input::{
-    Axis, Button, HostEvent, NativeInput, Scancode, axis_code, button_code,
-    key_code,
+    Axis, Button, HostEvent, InputStartup, NativeInput, Scancode, axis_code,
+    button_code, key_code,
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
@@ -377,9 +378,9 @@ impl Scene {
                 .map(|bundles| encounter::CombatArt::load(scene, bundles))
                 .transpose()?,
             draws: Vec::with_capacity(if source.enemy.is_some() {
-                22
+                26
             } else {
-                11
+                15
             }),
             hud: station_hud::StationHud::load(scene, profiles)?,
             menu: load_menu(scene, profiles)?,
@@ -404,10 +405,14 @@ impl Scene {
         self.world.clear();
         for (player, station) in Player::ALL.into_iter().zip(cabinet.stations())
         {
-            self.queue_station(player, station, cabinet.phase())?;
+            self.queue_station(
+                player,
+                station,
+                cabinet.session().world_visible(),
+            )?;
         }
         if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
-            && matches!(cabinet.phase(), Phase::Playing | Phase::Paused)
+            && cabinet.session().world_visible()
             && enemy.health > 0
         {
             self.world
@@ -416,14 +421,13 @@ impl Scene {
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
         if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
-            && matches!(cabinet.phase(), Phase::Playing | Phase::Paused)
+            && cabinet.session().world_visible()
             && enemy.health > 0
         {
             combat.enemy_health(&mut self.draws, enemy)?;
         }
-        if let Some(menu) = self.menu.draw(cabinet.session(), 20, 24)? {
-            self.draws.push(menu);
-        }
+        self.menu
+            .queue(cabinet.session(), (20i32, 16i32), &mut self.draws)?;
         if let Some(panel) = self.panel {
             self.draws.push(panel);
         }
@@ -434,9 +438,9 @@ impl Scene {
         &mut self,
         player: Player,
         station: Station,
-        phase: Phase,
+        world_visible: bool,
     ) -> Result<(), RenderError> {
-        if !matches!(phase, Phase::Playing | Phase::Paused) {
+        if !world_visible {
             return Ok(());
         }
         if let Some(prompt) = self.hud.draw(player, station.participation)? {
@@ -515,6 +519,77 @@ struct PreviewOptions<'profiles> {
     touch_enabled: bool,
 }
 
+struct Interactive {
+    applied: DisplaySettings,
+    controls: Controls,
+    input: NativeInput,
+    previous: Duration,
+    simulation: LiveSimulation<Cabinet>,
+}
+
+impl Interactive {
+    fn new(
+        startup: InputStartup,
+        options: PreviewOptions<'_>,
+        combat: bool,
+    ) -> Result<Self, RenderError> {
+        let session =
+            LocalSession::with_display(options.display, options.touch_enabled);
+        let mut simulation = live_with_session(combat, session)?;
+        let mut controls =
+            Controls::with_profiles(options.touch_enabled, options.profiles)?;
+        for event in startup.attached {
+            controls.route(event, Duration::ZERO, &mut simulation)?;
+        }
+        let mut input = startup.input;
+        if options.touch_enabled {
+            input.enable_touch();
+        }
+        Ok(Self {
+            applied: options.display,
+            controls,
+            input,
+            previous: Duration::ZERO,
+            simulation,
+        })
+    }
+
+    fn run(
+        mut self,
+        scene: &mut SceneSession<'_, '_>,
+        art: &mut Scene,
+        mut playback: Option<&mut audio::Playback<'_>>,
+    ) -> Result<(), RenderError> {
+        if let Some(audio) = &playback {
+            audio.resume();
+        }
+        while self.simulation.state().phase() != Phase::Exited
+            && poll(
+                scene,
+                &mut self.input,
+                &mut self.controls,
+                &mut self.simulation,
+            )?
+        {
+            let elapsed = self.input.elapsed();
+            let delta = elapsed.saturating_sub(self.previous);
+            self.previous = elapsed;
+            let _advanced = self.simulation.advance(delta).map_err(failure)?;
+            let cabinet = self.simulation.state();
+            let desired = cabinet.session().effective_display();
+            if desired != self.applied {
+                scene.apply_display_settings(desired)?;
+                self.applied = desired;
+            }
+            if let Some(audio) = &mut playback {
+                audio.update(cabinet)?;
+            }
+            let _drawn = art.present(scene, cabinet)?;
+        }
+        Ok(())
+    }
+}
+
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
 
 fn key_label(key: Scancode) -> &'static str {
@@ -539,8 +614,8 @@ fn load_menu(
         scene,
         PlateLayout {
             background: [24, 22, 30, 255],
-            height: 176,
-            max_bytes: size(1_048_576)?,
+            height: 192,
+            max_bytes: size(1_200_000)?,
             width: 280,
         },
         MenuContent {
@@ -556,6 +631,11 @@ fn load_menu(
             pause_hints: &[
                 "PAUSE OR START TO RESUME",
                 "UP/DOWN SELECT - PRIMARY CONFIRM",
+            ],
+            settings_hints: &[
+                "PRIMARY CHANGES THE SELECTED VALUE",
+                "ADAPTIVE CURRENTLY USES ASPECT FIT",
+                "PAUSE OR START RETURNS TO MENU",
             ],
             title: "THE SIMPSONS ARCADE",
         },
@@ -631,7 +711,14 @@ fn indicator(player: Player) -> Result<SpriteRect, RenderError> {
 }
 
 fn live(combat: bool) -> Result<LiveSimulation<Cabinet>, RenderError> {
-    let cabinet = if combat {
+    live_with_session(combat, LocalSession::default())
+}
+
+fn live_with_session(
+    combat: bool,
+    session: LocalSession,
+) -> Result<LiveSimulation<Cabinet>, RenderError> {
+    let mut cabinet = if combat {
         Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
             x: 246,
             y: 190,
@@ -640,6 +727,7 @@ fn live(combat: bool) -> Result<LiveSimulation<Cabinet>, RenderError> {
         Cabinet::new(StreetLayout::DOWNTOWN)
     }
     .map_err(failure)?;
+    cabinet.session = session;
     let clock =
         StepClock::new(TICK_INTERVAL, dimension(8)?).map_err(failure)?;
     Ok(LiveSimulation::new(cabinet, clock, LiveInputLimits {
@@ -845,6 +933,81 @@ fn smoke(
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
     smoke_movement_benchmark(scene, art, &mut controls, &mut simulation)
+}
+
+fn smoke_settings(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    options: PreviewOptions<'_>,
+) -> Result<(), RenderError> {
+    let session = LocalSession::with_display(
+        DisplaySettings::default(),
+        options.touch_enabled,
+    );
+    let mut simulation = live_with_session(false, session)?;
+    let mut controls =
+        Controls::with_profiles(options.touch_enabled, options.profiles)?;
+    scene.apply_display_settings(session.effective_display())?;
+    let _drawn = art.present(scene, simulation.state())?;
+    let before = scene.readback()?;
+    for control in [Control::Down, Control::Primary, Control::Primary] {
+        smoke_press(&mut controls, &mut simulation, control)?;
+    }
+    let settings = simulation.state().session();
+    if settings.phase() != Phase::Settings
+        || settings.display().presentation
+            != session.display().presentation.next(options.touch_enabled)
+    {
+        return Err(failure("display menu selection failed"));
+    }
+    scene.apply_display_settings(settings.effective_display())?;
+    let _updated = art.present(scene, simulation.state())?;
+    if scene.readback()? == before {
+        return Err(failure("settings were not visibly presented"));
+    }
+    smoke_window_toggle(scene, art, &mut controls, &mut simulation)?;
+    scene.apply_display_settings(options.display)
+}
+
+fn smoke_window_toggle(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    smoke_press(controls, simulation, Control::Down)?;
+    for mode in [WindowMode::Fullscreen, WindowMode::Windowed] {
+        smoke_press(controls, simulation, Control::Primary)?;
+        let settings = simulation.state().session();
+        if settings.display().window != mode {
+            return Err(failure("window menu selection failed"));
+        }
+        scene.apply_display_settings(settings.effective_display())?;
+        let _drawn = art.present(scene, simulation.state())?;
+    }
+    smoke_press(controls, simulation, Control::Start)?;
+    if simulation.state().phase() != Phase::MainMenu {
+        return Err(failure("settings did not return to main menu"));
+    }
+    Ok(())
+}
+
+fn smoke_press(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    control: Control,
+) -> Result<(), RenderError> {
+    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+    let code = key_code(controls.key(Player::Marge, control)?);
+    for down in [true, false] {
+        controls.route(
+            InputEvent::Key { code, down },
+            TICK_INTERVAL.saturating_mul(tick),
+            simulation,
+        )?;
+    }
+    let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    Ok(())
 }
 
 fn smoke_admission(
@@ -1167,6 +1330,7 @@ fn window(
         let mut art =
             Scene::load(scene, source, touch_enabled, options.profiles)?;
         if options.hidden {
+            smoke_settings(scene, &mut art, options)?;
             smoke(scene, &mut art, touch_enabled, options.profiles)?;
             return smoke_optional(
                 scene,
@@ -1175,33 +1339,9 @@ fn window(
                 playback.as_mut(),
             );
         }
-        if let Some(audio) = &playback {
-            audio.resume();
-        }
-        let mut simulation = live(source.enemy.is_some())?;
-        let mut controls =
-            Controls::with_profiles(touch_enabled, options.profiles)?;
-        for event in startup.attached {
-            controls.route(event, Duration::ZERO, &mut simulation)?;
-        }
-        let mut input = startup.input;
-        if touch_enabled {
-            input.enable_touch();
-        }
-        let mut previous = Duration::ZERO;
-        while simulation.state().phase() != Phase::Exited
-            && poll(scene, &mut input, &mut controls, &mut simulation)?
-        {
-            let elapsed = input.elapsed();
-            let delta = elapsed.saturating_sub(previous);
-            previous = elapsed;
-            let _advanced = simulation.advance(delta).map_err(failure)?;
-            if let Some(audio) = &mut playback {
-                audio.update(simulation.state())?;
-            }
-            let _drawn = art.present(scene, simulation.state())?;
-        }
-        Ok(())
+        let preview =
+            Interactive::new(startup, options, source.enemy.is_some())?;
+        preview.run(scene, &mut art, playback.as_mut())
     })
 }
 
@@ -1222,17 +1362,17 @@ fn scene_limits(
     let count = source.poses.count().saturating_add(enemy_atlases);
     Ok(SceneLimits {
         atlas_bytes: size(
-            3_145_728usize.saturating_add(count.saturating_mul(65_536)),
+            3_407_872usize.saturating_add(count.saturating_mul(65_536)),
         )?,
         atlases: size(count.saturating_add(if touch_enabled {
-            8
+            9
         } else {
-            7
+            8
         }))?,
         sprites: size(enemy_sprites.saturating_add(if touch_enabled {
-            11
+            15
         } else {
-            10
+            14
         }))?,
     })
 }

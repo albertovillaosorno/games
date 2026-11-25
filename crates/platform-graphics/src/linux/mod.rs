@@ -159,14 +159,7 @@ impl NativeWindow {
         &mut self,
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
-        let fullscreen = match settings.window {
-            WindowMode::Fullscreen => FullscreenType::Desktop,
-            WindowMode::Windowed => FullscreenType::Off,
-        };
-        self.canvas
-            .window_mut()
-            .set_fullscreen(fullscreen)
-            .map_err(RenderError::Backend)?;
+        apply_window_mode(&mut self.canvas, settings.window)?;
         self.set_presentation_mode(settings.presentation);
         Ok(())
     }
@@ -285,7 +278,9 @@ impl NativeWindow {
         let textures = SceneTextures::new(&creator, layout, limits, self.mode)?;
         let mut session =
             SceneSession::new(&mut self.canvas, events, textures)?;
-        run(&mut session)
+        let result = run(&mut session);
+        self.mode = session.presentation_mode();
+        result
     }
 }
 
@@ -337,6 +332,23 @@ impl FrameSession<'_, '_> {
 struct FramePresentation {
     layout: FrameLayout,
     mode: PresentationMode,
+}
+
+fn apply_window_mode(
+    canvas: &mut WindowCanvas,
+    mode: WindowMode,
+) -> Result<(), RenderError> {
+    let fullscreen = match mode {
+        WindowMode::Fullscreen => FullscreenType::Desktop,
+        WindowMode::Windowed => FullscreenType::Off,
+    };
+    if canvas.window().fullscreen_state() == fullscreen {
+        return Ok(());
+    }
+    canvas
+        .window_mut()
+        .set_fullscreen(fullscreen)
+        .map_err(RenderError::Backend)
 }
 
 fn copy_to_viewport<Target>(
