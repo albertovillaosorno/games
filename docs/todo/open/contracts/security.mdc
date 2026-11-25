@@ -346,3 +346,20 @@ also fail without affecting a sentinel. This is an observed-state check,
 not an atomic defence against hostile same-user races; such writers and
 the pinned directory remain trusted, and changed files can be orphaned.
 Fresh validation passed in run 1795609582998660652-607892.
+
+The current optimized host importer was also run as the ordinary desktop
+user in a manual Bubblewrap 0.13.1 isolation diagnostic. The invocation
+used `--unshare-all --die-with-parent --new-session --cap-drop ALL`
+with a cleared environment, isolated procfs and device nodes, read-only
+binds of the executable, its three dynamic runtime libraries and the
+approved original ZIP, and one new private writable output directory.
+No host home, source checkout or executable search path was exposed.
+Read-only verification admitted 14 members and 7,209,088 decoded bytes;
+publication produced 10,485,760 bytes of canonical graphics payloads.
+The complete version-two bundle matched the existing local copy byte
+for byte and passed pinned read-back with its output mount read-only.
+A 13-member budget, read-only publication mount and repeated publication
+were each rejected; subsequent read-back remained identical and no
+staging directory survived. No original binary was executed. This is
+local GNU/Linux evidence for an externally applied isolation policy,
+not a mandatory sandbox supplied by the importer or Android acceptance.
