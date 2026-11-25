@@ -81,3 +81,15 @@ passed in run 1795582311633882091-3468901 (164 workspace tests).
 The host emitted a nonfatal libdecor plugin initialization warning.
 The capability flag does not prove physical GPU execution, measured
 frame latency, scene throughput or title parity.
+
+The native graphics adapter now also composes ordered sprite scenes into
+a reusable logical render target. Static RGBA atlases are uploaded once;
+per-frame work is bounded by an explicit sprite-command limit. The atlas
+count and logical RGBA byte budget are independent. It shares the existing
+letterbox and nearest-sampling policy with streaming frame presentation.
+Exact software-renderer read-back covers draw order, transparency,
+horizontal flipping, clipping, frame clearing and rejection without
+changing the displayed pixels. Both rendering paths passed the explicitly
+enabled native accelerated-window smoke in fresh validation run
+1795582523569847945-3501164. No physical GPU timing, actual VRAM usage or
+game-scene throughput is claimed.

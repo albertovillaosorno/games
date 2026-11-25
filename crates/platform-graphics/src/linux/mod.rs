@@ -30,6 +30,8 @@
 //   - Require acceleration; do not request vertical synchronization.
 
 //! Accelerated SDL2 RGBA presentation for Linux hosts.
+/// Bounded GPU-resident sprite atlases and ordered scene composition.
+pub mod sprites;
 
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -43,6 +45,8 @@ use sdl2::render::{
     WindowCanvas,
 };
 use sdl2::{EventPump, Sdl};
+
+use self::sprites::{SceneLimits, SceneSession, SceneTextures};
 // SDL_RENDERER_ACCELERATED in the public SDL2 renderer flags.
 const ACCELERATED_FLAG: u32 = 2;
 
@@ -55,6 +59,8 @@ pub enum RenderError {
     InvalidDimensions,
     /// The supplied frame is not exactly the requested RGBA extent.
     InvalidLength,
+    /// An atlas or sprite rectangle is absent or outside its source.
+    InvalidSprite,
     /// The frame requires more bytes than permitted.
     TooLarge,
 }
@@ -202,6 +208,29 @@ impl NativeWindow {
         };
         run(&mut session)
     }
+
+    /// Run an ordered sprite scene without uploading a complete CPU frame.
+    ///
+    /// The logical render target and bounded atlases belong to this window.
+    ///
+    /// # Errors
+    /// Rejects unavailable render targets, event pumps or callback errors.
+    pub fn with_scene<Output, Run>(
+        &mut self,
+        layout: FrameLayout,
+        limits: SceneLimits,
+        run: Run,
+    ) -> Result<Output, RenderError>
+    where
+        Run: FnOnce(&mut SceneSession<'_, '_>) -> Result<Output, RenderError>,
+    {
+        let creator = self.canvas.texture_creator();
+        let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
+        let textures = SceneTextures::new(&creator, layout, limits)?;
+        let mut session =
+            SceneSession::new(&mut self.canvas, events, textures)?;
+        run(&mut session)
+    }
 }
 
 /// A persistent frame texture and native event pump owned by one window.
@@ -244,6 +273,21 @@ impl FrameSession<'_, '_> {
     }
 }
 
+fn copy_to_viewport<Target>(
+    canvas: &mut Canvas<Target>,
+    texture: &Texture<'_>,
+    destination: Rect,
+) -> Result<(), RenderError>
+where
+    Target: RenderTarget,
+{
+    canvas.set_draw_color(Color::RGB(0, 0, 0));
+    canvas.clear();
+    canvas
+        .copy(texture, None, destination)
+        .map_err(RenderError::Backend)
+}
+
 fn create_texture<Context>(
     creator: &TextureCreator<Context>,
     layout: FrameLayout,
@@ -272,13 +316,30 @@ where
     if pixels.len() != layout.bytes {
         return Err(RenderError::InvalidLength);
     }
+    let Some(destination) = drawable_rect(canvas, layout)? else {
+        return Ok(false);
+    };
+    texture
+        .update(None, pixels, layout.pitch)
+        .map_err(|error| RenderError::Backend(error.to_string()))?;
+    copy_to_viewport(canvas, texture, destination)?;
+    Ok(true)
+}
+
+fn drawable_rect<Target>(
+    canvas: &Canvas<Target>,
+    layout: FrameLayout,
+) -> Result<Option<Rect>, RenderError>
+where
+    Target: RenderTarget,
+{
     let (output_width, output_height) =
         canvas.output_size().map_err(RenderError::Backend)?;
     let (Some(width), Some(height)) = (
         NonZeroU32::new(output_width),
         NonZeroU32::new(output_height),
     ) else {
-        return Ok(false);
+        return Ok(None);
     };
     validate_dimensions(width, height)?;
     let fitted = Viewport::fit(width, height, layout.width, layout.height);
@@ -286,19 +347,7 @@ where
         .map_err(|_error| RenderError::InvalidDimensions)?;
     let top = i32::try_from(fitted.y)
         .map_err(|_error| RenderError::InvalidDimensions)?;
-    texture
-        .update(None, pixels, layout.pitch)
-        .map_err(|error| RenderError::Backend(error.to_string()))?;
-    canvas.set_draw_color(Color::RGB(0, 0, 0));
-    canvas.clear();
-    canvas
-        .copy(
-            texture,
-            None,
-            Rect::new(left, top, fitted.width, fitted.height),
-        )
-        .map_err(RenderError::Backend)?;
-    Ok(true)
+    Ok(Some(Rect::new(left, top, fitted.width, fitted.height)))
 }
 
 fn validate_dimensions(
@@ -319,6 +368,7 @@ mod tests {
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
 
+    use super::sprites::{SceneLimits, SpriteDraw, SpriteRect};
     use super::{
         FrameLayout, NativeWindow, RenderError, create_texture, draw_frame,
     };
@@ -435,6 +485,41 @@ mod tests {
                 frame.present(replacement.as_flattened())?,
                 "second frame not drawn",
             )
-        })
+        })?;
+        window.with_scene(
+            extent()?,
+            SceneLimits {
+                atlas_bytes: budget(16),
+                atlases: budget(1),
+                sprites: budget(2),
+            },
+            |scene| {
+                let atlas = scene.load_atlas(
+                    extent()?,
+                    [RED, GREEN, BLUE, WHITE].as_flattened(),
+                )?;
+                let rect = SpriteRect {
+                    height: nz(2),
+                    width: nz(2),
+                    x: 0,
+                    y: 0,
+                };
+                let sprite = SpriteDraw {
+                    atlas,
+                    destination: rect,
+                    flip_horizontal: false,
+                    flip_vertical: false,
+                    source: rect,
+                };
+                require(scene.present([0; 3], &[sprite])?, "no sprite scene")?;
+                require(
+                    scene.present([0; 3], &[SpriteDraw {
+                        flip_horizontal: true,
+                        ..sprite
+                    }])?,
+                    "second sprite scene not drawn",
+                )
+            },
+        )
     }
 }
