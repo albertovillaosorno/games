@@ -185,14 +185,22 @@ fn read_consistent(
     bytes: &mut Vec<u8>,
 ) -> Result<(), FileReadError> {
     read_bounded_descriptor(&mut file, file_size(before)?, bytes)?;
-    let after = fstat(&file)?;
+    check_content_metadata(&file, before, admitted)
+}
+
+fn check_content_metadata(
+    file: &File,
+    before: &FileStat,
+    admitted: fn(&FileStat) -> bool,
+) -> Result<(), FileReadError> {
+    let after = fstat(file)?;
     if !admitted(&after) || !same_content_metadata(before, &after) {
         return Err(FileReadError::UnsafeFile);
     }
     Ok(())
 }
 
-fn read_bounded_descriptor(
+pub(crate) fn read_bounded_descriptor(
     file: &mut File,
     size: u64,
     bytes: &mut Vec<u8>,
@@ -243,11 +251,32 @@ pub(crate) fn read_regular(
     name: &str,
     maximum: u64,
 ) -> Result<Vec<u8>, FileReadError> {
-    if !trusted_directory(parent)? {
-        return Err(FileReadError::UnsafeFile);
+    read_regular_with(parent, name, maximum, |file, size| {
+        let mut bytes = Vec::new();
+        read_bounded_descriptor(file, size, &mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+// Read a pinned regular file through a caller-supplied bounded decoder.
+pub(crate) fn read_regular_with<T, E>(
+    parent: &impl AsFd,
+    name: &str,
+    maximum: u64,
+    decode: impl FnOnce(&mut File, u64) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<FileReadError>,
+{
+    if !trusted_directory(parent).map_err(FileReadError::from)? {
+        return Err(FileReadError::UnsafeFile.into());
     }
-    let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())?;
-    read_pinned(&pinned, maximum, private_regular)
+    let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())
+        .map_err(FileReadError::from)?;
+    let (mut file, before) = reopen_pinned(&pinned, maximum, private_regular)?;
+    let result = decode(&mut file, file_size(&before)?)?;
+    check_content_metadata(&file, &before, private_regular)?;
+    Ok(result)
 }
 
 fn staged_regular(stat: &FileStat) -> bool {

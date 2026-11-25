@@ -35,7 +35,8 @@ use std::num::NonZeroU64;
 
 use sha2::{Digest as _, Sha256};
 
-const SAVE_HEADER: usize = 40;
+/// Fixed byte length of a portable save envelope header.
+pub const SAVE_HEADER: usize = 40;
 const SAVE_MAGIC: &[u8] = b"GMS1";
 
 /// Rejections before save decoding or allocation.
@@ -47,14 +48,37 @@ pub enum SafetyError {
     TooLarge,
 }
 
-fn checked_save(
-    payload: &[u8],
-    max_size: NonZeroU64,
-) -> Result<u32, SafetyError> {
-    if u64::try_from(payload.len()).unwrap_or(u64::MAX) > max_size.get() {
+/// An admitted save header; the payload remains untrusted until verified.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SaveHeader {
+    checksum: [u8; 32],
+    length: u32,
+}
+
+impl SaveHeader {
+    /// Verify exact payload length and checksum.
+    ///
+    /// # Errors
+    /// Rejects any payload that does not match the admitted header.
+    pub fn verify(self, payload: &[u8]) -> Result<(), SafetyError> {
+        if payload_size(payload) != u64::from(self.length)
+            || self.checksum.as_slice() != Sha256::digest(payload).as_slice()
+        {
+            return Err(SafetyError::InvalidSave);
+        }
+        Ok(())
+    }
+}
+
+fn checked_size(size: u64, max_size: NonZeroU64) -> Result<u32, SafetyError> {
+    if size > max_size.get() {
         return Err(SafetyError::TooLarge);
     }
-    u32::try_from(payload.len()).map_err(|_error| SafetyError::TooLarge)
+    u32::try_from(size).map_err(|_error| SafetyError::TooLarge)
+}
+
+fn payload_size(payload: &[u8]) -> u64 {
+    u64::try_from(payload.len()).unwrap_or(u64::MAX)
 }
 
 /// Maximum encoded bytes accepted for a payload limit.
@@ -99,7 +123,7 @@ pub fn encode_save_header(
     payload: &[u8],
     max_size: NonZeroU64,
 ) -> Result<[u8; SAVE_HEADER], SafetyError> {
-    let length = checked_save(payload, max_size)?;
+    let length = checked_size(payload_size(payload), max_size)?;
     let mut header = [0u8; SAVE_HEADER];
     let (magic, remainder) = header.split_at_mut(4);
     let (declared, checksum) = remainder.split_at_mut(4);
@@ -118,30 +142,53 @@ pub fn decode_save(
     data: &[u8],
     max_size: NonZeroU64,
 ) -> Result<&[u8], SafetyError> {
-    let magic = data.get(..4).ok_or(SafetyError::InvalidSave)?;
-    if magic != SAVE_MAGIC {
+    let (header, payload) = data
+        .split_at_checked(SAVE_HEADER)
+        .ok_or(SafetyError::InvalidSave)?;
+    validate_save_header(header, payload_size(payload), max_size)?
+        .verify(payload)?;
+    Ok(payload)
+}
+
+/// Admit a fixed save header against an independently observed payload size.
+///
+/// This check can precede allocation; it does not authenticate the payload.
+///
+/// # Errors
+/// Rejects malformed headers, mismatched lengths and excessive sizes.
+pub fn validate_save_header(
+    header: &[u8],
+    size: u64,
+    max_size: NonZeroU64,
+) -> Result<SaveHeader, SafetyError> {
+    if header.len() != SAVE_HEADER || header.get(..4) != Some(SAVE_MAGIC) {
         return Err(SafetyError::InvalidSave);
     }
-    let declared = data.get(4..8).ok_or(SafetyError::InvalidSave)?;
-    let length: [u8; 4] = declared
+    let declared = header.get(4..8).ok_or(SafetyError::InvalidSave)?;
+    let length = u32::from_le_bytes(
+        declared
+            .try_into()
+            .map_err(|_error| SafetyError::InvalidSave)?,
+    );
+    if length != checked_size(size, max_size)? {
+        return Err(SafetyError::InvalidSave);
+    }
+    let checksum = header
+        .get(8..SAVE_HEADER)
+        .ok_or(SafetyError::InvalidSave)?
         .try_into()
         .map_err(|_error| SafetyError::InvalidSave)?;
-    let checksum = data.get(8..SAVE_HEADER).ok_or(SafetyError::InvalidSave)?;
-    let payload = data.get(SAVE_HEADER..).ok_or(SafetyError::InvalidSave)?;
-    let actual = checked_save(payload, max_size)?;
-    if u32::from_le_bytes(length) != actual
-        || checksum != Sha256::digest(payload).as_slice()
-    {
-        return Err(SafetyError::InvalidSave);
-    }
-    Ok(payload)
+    Ok(SaveHeader { checksum, length })
 }
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
 
-    use super::{SafetyError, decode_save, encode_save, save_envelope_limit};
+    use super::{
+        SafetyError, decode_save, encode_save, encode_save_header,
+        save_envelope_limit, validate_save_header,
+    };
 
     fn limit(value: u64) -> NonZeroU64 {
         NonZeroU64::new(value).unwrap_or(NonZeroU64::MIN)
@@ -158,6 +205,31 @@ mod tests {
             Some(save_envelope_limit(maximum)),
         );
         assert_eq!(save_envelope_limit(limit(u64::MAX)), 4_294_967_335);
+    }
+
+    #[test]
+    fn header_admission_checks_size_before_payload_verification() {
+        let encoded = encode_save_header(b"four", limit(4));
+        assert!(encoded.is_ok());
+        let Ok(header) = encoded else {
+            return;
+        };
+        let validated = validate_save_header(&header, 4, limit(4));
+        assert!(validated.is_ok());
+        let Ok(admitted) = validated else {
+            return;
+        };
+        assert_eq!(admitted.verify(b"four"), Ok(()));
+        assert_eq!(admitted.verify(b"five"), Err(SafetyError::InvalidSave));
+        assert_eq!(admitted.verify(b""), Err(SafetyError::InvalidSave));
+        assert_eq!(
+            validate_save_header(&header, 3, limit(4)),
+            Err(SafetyError::InvalidSave)
+        );
+        assert_eq!(
+            validate_save_header(&header, 5, limit(4)),
+            Err(SafetyError::TooLarge)
+        );
     }
 
     #[test]

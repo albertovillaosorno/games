@@ -30,14 +30,15 @@
 //   - No traversal, links, special files or partial publication.
 
 use std::fs::File;
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use games::safety::{
-    SafetyError, decode_save, encode_save_header, save_envelope_limit,
+    SAVE_HEADER, SafetyError, encode_save_header, save_envelope_limit,
+    validate_save_header,
 };
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat, renameat};
@@ -45,8 +46,8 @@ use nix::sys::stat::{Mode, fstatat};
 use nix::unistd::{UnlinkatFlags, unlinkat};
 
 use crate::file::{
-    DIRECTORY_FLAGS, FileReadError, private_regular, read_regular,
-    trusted_directory,
+    DIRECTORY_FLAGS, FileReadError, private_regular, read_bounded_descriptor,
+    read_regular_with, trusted_directory,
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -115,19 +116,26 @@ impl SaveStore {
     /// Rejects unsafe storage, missing or malformed files and oversized data.
     pub fn load(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
         let directory = &self.directory;
-        let mut bytes = read_regular(
+        read_regular_with(
             directory,
             &slot_name(slot),
             save_envelope_limit(self.maximum),
-        )?;
-        let length = decode_save(&bytes, self.maximum)?.len();
-        let offset = bytes
-            .len()
-            .checked_sub(length)
-            .ok_or(SafetyError::InvalidSave)?;
-        bytes.copy_within(offset.., 0);
-        bytes.truncate(length);
-        Ok(bytes)
+            |file, size| {
+                let header_size =
+                    u64::try_from(SAVE_HEADER).unwrap_or(u64::MAX);
+                let length = size
+                    .checked_sub(header_size)
+                    .ok_or(SafetyError::InvalidSave)?;
+                let mut bytes = [0; SAVE_HEADER];
+                file.read_exact(&mut bytes).map_err(FileReadError::from)?;
+                let header =
+                    validate_save_header(&bytes, length, self.maximum)?;
+                let mut payload = Vec::new();
+                read_bounded_descriptor(file, length, &mut payload)?;
+                header.verify(&payload)?;
+                Ok(payload)
+            },
+        )
     }
 
     /// Open a trusted save directory without following a final symlink.
@@ -243,7 +251,7 @@ mod tests {
     use std::sync::Barrier;
     use std::{fs, thread};
 
-    use games::safety::encode_save;
+    use games::safety::{decode_save, encode_save};
     use nix::unistd::mkfifo;
 
     use super::*;
@@ -392,6 +400,30 @@ mod tests {
         require(store.store(0, b"x") == Err(SaveError::UnsafeStorage))?;
         fs::set_permissions(&root.path, fs::Permissions::from_mode(0o700))?;
         Ok(())
+    }
+
+    #[test]
+    fn malformed_sparse_save_fails_header_admission() -> Result<(), SaveError> {
+        let root = TestRoot::new()?;
+        let maximum =
+            NonZeroU64::new(1_073_741_824).ok_or(SafetyError::TooLarge)?;
+        let store = SaveStore::open(&root.path, maximum)?;
+        let slot = root.path.join(slot_name(0));
+        let file = File::create(&slot)?;
+        file.set_len(save_envelope_limit(maximum))?;
+        require(
+            store.load(0) == Err(SaveError::Envelope(SafetyError::InvalidSave)),
+        )?;
+        let header = encode_save_header(b"", maximum)?;
+        fs::write(&slot, header)?;
+        file.set_len(save_envelope_limit(maximum))?;
+        require(
+            store.load(0) == Err(SaveError::Envelope(SafetyError::InvalidSave)),
+        )?;
+        fs::write(&slot, b"GMS1")?;
+        require(
+            store.load(0) == Err(SaveError::Envelope(SafetyError::InvalidSave)),
+        )
     }
 
     #[test]

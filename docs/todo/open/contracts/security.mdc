@@ -278,3 +278,12 @@ file; completion rejects each without affecting an unrelated sentinel.
 This detects observed metadata changes, not same-length content swaps or
 all concurrent same-user races; private staging remains trusted.
 Fresh validation passed in run 1795607432667590463-262106.
+
+Save loading now admits the fixed portable envelope header against the
+pinned file length and caller budget before allocating payload storage.
+The native reader loads the payload directly into its final buffer and
+shares header and checksum verification with the in-memory decoder.
+This retains inode admission and post-read metadata checks. Synthetic
+controls include a sparse one-GiB file with an invalid header or a
+mismatched declared length, without requiring a payload-sized allocation.
+The portable format and existing atomic replacement semantics are unchanged.
