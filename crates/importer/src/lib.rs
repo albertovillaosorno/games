@@ -30,6 +30,8 @@
 //   - Reject unknown source identities, ambiguous names and unsupported files.
 
 //! Source identification and read-only archive conversion inputs.
+/// Transactional canonical conversion of verified source members.
+pub mod conversion;
 
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
@@ -39,27 +41,41 @@ use std::str;
 use games_assets::archive::{
     ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
 };
-use games_assets::{ContentHash, SourceIdentity};
+use games_assets::{AssetError, ContentHash, SourceIdentity};
 use zip::CompressionMethod;
 use zip::read::{ArchiveOffset, Config, ZipArchive};
 
 /// A source admission or conversion failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImportError {
+    /// A conversion attempted to continue after an earlier failure.
+    Aborted,
     /// Shared archive safety policy rejected the metadata or decoded size.
     Archive(ArchiveError),
+    /// Canonical asset metadata or payload validation failed.
+    Asset(AssetError),
     /// Two member names are identical or collide under ASCII case folding.
     Collision,
+    /// The converter produced no canonical assets.
+    EmptyConversion,
     /// Source bytes do not match the exact expected identity.
     IncorrectSource,
     /// The title or revision identifier is not canonical.
     InvalidSourceIdentity,
     /// Archive headers, compressed bytes or checksum are invalid.
     InvalidZip,
+    /// A caller-owned private staging sink failed to accept an asset.
+    StageFailed,
     /// A source, allocation or archive budget was exceeded.
     TooLarge,
     /// The source uses a member type, path or compression not yet supported.
     UnsupportedMember,
+}
+
+impl From<AssetError> for ImportError {
+    fn from(error: AssetError) -> Self {
+        Self::Asset(error)
+    }
 }
 
 impl From<ArchiveError> for ImportError {
@@ -218,10 +234,13 @@ where
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
+    use std::num::NonZeroUsize;
 
+    use games_assets::{AssetFormat, ManifestLimits};
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
 
+    use super::conversion::{ConversionLimits, convert_flat_zip};
     use super::*;
     type FixtureMember<'data> = (&'data str, &'data [u8], CompressionMethod);
     type DecodedMember = (String, Vec<u8>);
@@ -440,5 +459,57 @@ mod tests {
             Ok(())
         });
         require(result == Err(ImportError::InvalidZip) && !called)
+    }
+
+    #[test]
+    fn conversion_requires_every_source_entry() -> Result<(), ImportError> {
+        let mut bytes = make_zip(&[
+            ("first.bin", b"first", CompressionMethod::Stored),
+            ("second.bin", b"second-payload", CompressionMethod::Stored),
+        ])?;
+        let limits = ConversionLimits {
+            archive: budget(),
+            manifest: ManifestLimits {
+                manifest_bytes: NonZeroUsize::new(4096)
+                    .unwrap_or(NonZeroUsize::MIN),
+                payload_bytes: bound(1024),
+                records: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+                total_bytes: bound(4096),
+            },
+        };
+        let expected = identity(&bytes);
+        let source = VerifiedSource::new(&bytes, &expected, bound(65_536))?;
+        let mut staged = 0usize;
+        let manifest = convert_flat_zip(
+            &source,
+            limits,
+            |_digest, _data| {
+                staged += 1;
+                Ok(())
+            },
+            |name, data, output| {
+                let key = name
+                    .strip_suffix(".bin")
+                    .ok_or(ImportError::UnsupportedMember)?;
+                output.write(key, AssetFormat::Data, data)
+            },
+        )?;
+        require(staged == 2 && manifest.records().len() == 2)?;
+        replace_first(&mut bytes, b"second-payload", b"damagd-payload")?;
+        let damaged_identity = identity(&bytes);
+        let damaged =
+            VerifiedSource::new(&bytes, &damaged_identity, bound(65_536))?;
+        let result = convert_flat_zip(
+            &damaged,
+            limits,
+            |_digest, _data| Ok(()),
+            |name, data, output| {
+                let key = name
+                    .strip_suffix(".bin")
+                    .ok_or(ImportError::UnsupportedMember)?;
+                output.write(key, AssetFormat::Data, data)
+            },
+        );
+        require(result == Err(ImportError::InvalidZip))
     }
 }

@@ -33,5 +33,8 @@ checks decoded length and CRC before each conversion callback. Six synthetic
 tests pass. The read-only verification CLI also passed on the pinned
 Simpsons World set 1 input with exact source, member, total and count limits.
 It decoded 14 members and 7,209,088 bytes without extraction or execution.
-Canonical conversion and transactional
-publication remain open; callers must discard staged results on any failure.
+Synthetic conversion tests cover deterministic manifest ordering, payload
+deduplication, output budget enforcement and rejection after source or
+staging errors. The staging sink is caller-owned and must discard all
+outputs on failure. Title-specific conversion and filesystem publication
+remain open.

@@ -82,11 +82,12 @@ decoding, publication, sandboxing, graphics and playable titles remain open.
 The shared asset crate defines deterministic versioned manifests, SHA-256
 content identities and checked RGBA8 and PCM16 payload descriptors.
 The importer validates a pinned immutable ZIP source and checks each flat
+archive member before conversion. The conversion interface assembles a
+canonical manifest with deduplicated, validated payload staging requests.
 Use `cargo run --locked -p games-importer --` with the archive path, title ID,
 revision ID, SHA-256, source-byte limit, entry-byte limit, total-byte limit
-and entry-count limit for local read-only verification.
-archive member before conversion. Canonical conversion, publication and
-runtime consumption are not yet implemented.
+and entry-count limit for local read-only verification. Title-specific
+conversion, filesystem publication and runtime consumption remain open.
 
 ## Catalogue
 

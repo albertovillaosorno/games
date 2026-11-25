@@ -29,5 +29,6 @@ logical identifiers, SHA-256 payloads, explicit per-entry and aggregate
 budgets, RGBA8 images and interleaved signed 16-bit PCM audio. Synthetic
 tests cover deterministic ordering, format size validation, tampering,
 duplicate keys, unsupported versions and malformed metadata.
-The first original archive is pinned in the Simpsons task. Importer and
-runtime consumption and target compatibility still require evidence.
+The first original archive is pinned in the Simpsons task. Synthetic
+importer conversion exercises canonical descriptors and manifests. Runtime
+consumption and target compatibility still require evidence.
