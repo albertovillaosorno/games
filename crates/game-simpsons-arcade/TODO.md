@@ -270,14 +270,23 @@ simpsons-arcade --lan-controller controller.local
 
 Watch the host screen. Enter or gamepad Start joins when the host has
 started the world. Arrow keys or the D-pad/left stick move; Z/A attacks
-and X/B jumps. The host handles Pause and menus. Close the controller
-window to disconnect. Re-launch with the same approved identity to
+and X/B jumps by default. The controller panel shows its effective digital
+bindings. Optionally add `controls=FILE` to its catalogue, resolving the
+existing version-one control profile relative to the catalogue directory.
+Only station 1 bindings are used on a standalone controller, regardless of
+the host-assigned seat. The host handles Pause and menus. Close the
+controller window to disconnect. Re-launch with the same approved identity to
 rejoin; no automatic discovery or reconnection is attempted.
 
-Use matching host and controller builds. An idle controller sends a
-heartbeat every 500 ms. The host disconnects a peer after three seconds
+Use matching protocol-version-two host and controller builds; the local
+credential catalogue format remains version one. An idle controller sends
+a heartbeat every 500 ms. The host acknowledges valid heartbeats and
+controls at a bounded rate. It disconnects a peer after three seconds
 without a valid decoded message and releases its held controls on the
-next eligible simulation tick. Re-launch to rejoin if the lease expires.
+next eligible simulation tick. The controller also closes after three
+seconds without a valid host acknowledgement. Re-launch to rejoin if
+either lease expires. A loopback test stops host polling while the socket
+remains open to verify controller-side expiry.
 
 #### Manual credential preparation
 
@@ -331,3 +340,11 @@ DER files. Do not reuse a participant's root or private key for another
 seat. Replace expired credentials and explicitly update the corresponding
 approved public files. This is manual local administration, not an
 in-game certificate issuance or discovery service.
+
+The standalone controller profile was exercised with an optimized native
+build using two processes on loopback under Xvfb and software OpenGL.
+The old Right binding changed no host pixels, remapped H changed 19,926
+pixels, and subsequent captures after release were identical. The
+automated native gate also covers button remapping, focus loss and
+controller detach. Physical controllers and multi-device play remain
+unverified.
