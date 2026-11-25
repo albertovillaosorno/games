@@ -416,15 +416,15 @@ impl Slot {
         }
         let dx = axis(self.held(Control::Left), self.held(Control::Right));
         let dy = axis(self.held(Control::Up), self.held(Control::Down));
-        if !matches!(
-            self.station.maneuver,
-            Maneuver::Attack { tick: 1.. }
-                | Maneuver::AirAttack(_)
-                | Maneuver::Special { .. }
-        ) && (self.station.maneuver != Maneuver::Idle
-            || self.action_recovery.allows_turn())
-            && dx != 0
-        {
+        let facing_locked = match self.station.maneuver {
+            Maneuver::Attack { tick } => tick > 0,
+            Maneuver::AirAttack(air) => air.tick() > 0,
+            // A directional chord at onset remains a separate open case.
+            Maneuver::Special { tick, .. } => tick == 0,
+            Maneuver::Idle => !self.action_recovery.allows_turn(),
+            Maneuver::Jump(_) => false,
+        };
+        if !facing_locked && dx != 0 {
             self.station.facing = if dx < 0 {
                 Facing::Left
             } else {
@@ -1590,6 +1590,57 @@ mod tests {
             matches!(maneuver, Maneuver::AirAttack(air) if air.tick() == 0)
         );
         assert_eq!(attack.position.x.abs_diff(before.position.x), 2);
+    }
+
+    #[test]
+    fn aerial_attack_admits_takeoff_turn_then_locks_facing() {
+        for player in Player::ALL {
+            let mut state = four_playing();
+            let before = station_for(&state, player);
+            state.input_step(3, &[change(player, Control::Secondary, true)]);
+            for tick in 4..18 {
+                state.input_step(tick, &[]);
+            }
+            state.input_step(18, &[
+                change(player, Control::Primary, true),
+                change(player, Control::Left, true),
+            ]);
+            let attack = station_for(&state, player);
+            assert_eq!(attack.facing, Facing::Left);
+            assert_eq!(attack.position.x, before.position.x.saturating_sub(4));
+            assert!(matches!(attack.maneuver, Maneuver::AirAttack(air)
+                if air.tick() == 0));
+            state.input_step(19, &[
+                change(player, Control::Left, false),
+                change(player, Control::Right, true),
+            ]);
+            let next = station_for(&state, player);
+            assert_eq!(next.facing, Facing::Left);
+            assert_eq!(next.position.x, attack.position.x.saturating_sub(4));
+        }
+    }
+
+    #[test]
+    fn stationary_special_turns_without_displacement_during_flight() {
+        for player in Player::ALL {
+            let mut state = special_started(player);
+            let before = station_for(&state, player);
+            for tick in 4..13 {
+                state.input_step(tick, &[]);
+            }
+            state.input_step(13, &[change(player, Control::Left, true)]);
+            let turned = station_for(&state, player);
+            assert_eq!(turned.facing, Facing::Left);
+            assert_eq!(turned.position, before.position);
+            assert!(matches!(turned.maneuver, Maneuver::Special {
+                tick: 10,
+                ..
+            }));
+            state.input_step(14, &[change(player, Control::Left, false)]);
+            let next = station_for(&state, player);
+            assert_eq!(next.facing, Facing::Left);
+            assert_eq!(next.position, before.position);
+        }
     }
 
     #[test]

@@ -1195,3 +1195,26 @@ OpenGL ES touch smoke with the verified 88-pose catalogue. All
 host-work budget. Mean submission work was 110.313 and 85.773
 microseconds, respectively; lifetime peak RSS was 88,780,800 bytes.
 Physical presentation and full original gameplay remain unverified.
+
+A further directional probe isolated aerial attack takeoff in all four
+characters. A one-tick Left pulse on the attack edge changed the
+original trajectory; the same pulse at offset one matched all 101
+object-DMA frames of each control. Marge also rejected the pulses at
+offsets two and ten. Leftward travel used the same four-pixel stride
+until the observed boundary. Stationary special Left pulses at offset
+ten changed all four characters' facing without changing their
+ground anchors; Marge also turned at offsets one and two. The
+preview now accepts aerial takeoff facing, locks subsequent aerial
+turns, and permits turns during the stationary special without
+walking. Four-character regressions cover these distinct policies.
+A directional simultaneous-button chord at offset zero produces a
+different moving action in the original for all four characters.
+Its flight, recovery, hit effects and directional art remain open;
+the preview does not yet represent that distinct action.
+
+Fresh portable validation passed in run 1795619234157224618-3147344.
+The 3,226,064-byte native optimized preview passed adaptive 400x304
+offscreen smoke with touch. All 600 movement and 60 combat submissions
+met the 16.667 ms host-work budget; mean submission work was 110.971
+and 86.603 microseconds respectively, with whole-smoke peak RSS of
+88,956,928 bytes. These are not physical presentation measurements.
