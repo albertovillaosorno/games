@@ -110,11 +110,11 @@ impl NativeInput {
         Ok(Some(InputEvent::Attached { device }))
     }
 
-    /// Discover replacements after a native poll returns no event.
+    /// Discover controllers after a native poll returns no event.
     ///
-    /// A removal in an earlier limited batch remains pending until the
+    /// A device change in an earlier limited batch remains pending until the
     /// caller has reached a no-event poll. Re-enumeration is
-    /// unnecessary unless an admitted controller was removed.
+    /// unnecessary unless device availability may have changed.
     /// # Errors
     /// Reports failed controller enumeration or device open.
     pub fn discover_after_drain(
@@ -129,7 +129,7 @@ impl NativeInput {
 
     /// Discover available controllers in the current joystick-index order.
     ///
-    /// Call after routing a removal and draining the native event queue.
+    /// Call after device changes and draining the native event queue.
     /// Controllers already admitted retain their identity; newly admitted
     /// controllers produce attachment events for the host to route.
     ///
@@ -208,35 +208,28 @@ impl NativeInput {
         Ok(InputStartup { attached, input })
     }
 
-    /// Translate one polled native event, opening or closing devices as needed.
+    /// Translate one polled native event, recording device changes.
     ///
-    /// Discovery uses the joystick index; subsequent button and removal
-    /// events use the admitted controller's stable instance identifier.
-    /// Devices above the explicit capacity are not opened. After removal,
-    /// the host can call `discover_after_drain` after a no-event poll
-    /// to fill vacant slots.
-    ///
-    /// # Errors
-    /// Reports failure to open a newly reported native controller.
-    pub fn translate(
-        &mut self,
-        event: &Event,
-    ) -> Result<Option<HostEvent>, RenderError> {
-        if let Event::ControllerDeviceAdded { which, .. } = *event {
-            return Ok(self.attach(which)?.map(HostEvent::Input));
+    /// Add notifications are discovery hints, not stable device identities.
+    /// Drain queued removals before enumerating current joystick indices.
+    /// Button and removal events use admitted stable instance identifiers.
+    /// Only devices within the explicit capacity may be opened.
+    #[must_use]
+    pub fn translate(&mut self, event: &Event) -> Option<HostEvent> {
+        if matches!(event, Event::ControllerDeviceAdded { .. }) {
+            self.rediscover |= self.controllers.len() < self.limit.get();
+            return None;
         }
         if let Event::ControllerDeviceRemoved { which, .. } = *event {
             let device = u64::from(which);
             if self.controllers.remove(&device).is_some() {
                 self.rediscover = true;
-                return Ok(Some(HostEvent::Input(InputEvent::Detached {
-                    device,
-                })));
+                return Some(HostEvent::Input(InputEvent::Detached { device }));
             }
-            return Ok(None);
+            return None;
         }
         if self.touch_enabled && event.is_finger() {
-            return Ok(route_contact(event));
+            return route_contact(event);
         }
         let routed = route(event, self.window);
         if let Some(HostEvent::Input(
@@ -244,9 +237,9 @@ impl NativeInput {
         )) = routed
             && !self.controllers.contains_key(&device)
         {
-            return Ok(None);
+            return None;
         }
-        Ok(routed)
+        routed
     }
 }
 

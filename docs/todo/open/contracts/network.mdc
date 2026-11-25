@@ -612,3 +612,14 @@ mutual-TLS connection, rejects dispatch at lease expiry, and confirms
 that only the disconnect reaches the host simulation. This cannot retract
 bytes already submitted before expiry. Fresh validation passed in run
 1795611697974351999-1098018.
+
+Native SDL device-added notifications now schedule the same bounded
+post-drain discovery used after removal, rather than opening a transient
+joystick index from a queued notification. Only current enumerated
+controllers receive stable attachment identities; pre-admission events
+cannot act on a seat. Existing admitted button, axis and removal events
+still use stable instance identifiers. The opt-in native render smoke
+exercised a synthetic stale addition and unknown removal without
+creating a phantom device. Fresh Xvfb render and dummy-audio validation
+passed in run 1795611954770808357-1249780. Physical controller hot-plug
+and events arriving during discovery remain unverified.

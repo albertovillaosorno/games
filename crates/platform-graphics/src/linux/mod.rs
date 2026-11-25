@@ -880,7 +880,7 @@ mod tests {
         };
         for native in pump.poll_iter().take(256) {
             if let Some(HostEvent::Input(input)) =
-                startup.input.translate(&native)?
+                startup.input.translate(&native)
                 && input == expected
             {
                 return verify_routed_timestamp(&startup.input, &native, input);
@@ -902,14 +902,11 @@ mod tests {
             dy: 0.0,
             pressure: 1.0,
         };
-        require(
-            input.translate(&down)?.is_none(),
-            "touch enabled by default",
-        )?;
+        require(input.translate(&down).is_none(), "touch enabled by default")?;
         input.enable_touch();
         let id = ContactId { device: 3, finger: 4 };
         require(
-            input.translate(&down)?
+            input.translate(&down)
                 == Some(HostEvent::Input(InputEvent::Contact {
                     id,
                     phase: ContactPhase::Down(TouchPoint {
@@ -930,7 +927,7 @@ mod tests {
             pressure: 0.0,
         };
         require(
-            input.translate(&up)?
+            input.translate(&up)
                 == Some(HostEvent::Input(InputEvent::Contact {
                     id,
                     phase: ContactPhase::Up,
@@ -956,18 +953,29 @@ mod tests {
             },
         ] {
             require(
-                input.translate(&unknown)?.is_none(),
+                input.translate(&unknown).is_none(),
                 "unknown controller produced an action",
             )?;
         }
+        let stale_add = Event::ControllerDeviceAdded {
+            timestamp: 0,
+            which: u32::MAX,
+        };
+        require(
+            input.translate(&stale_add).is_none(),
+            "device-added notification must not directly attach",
+        )?;
         let removed = Event::ControllerDeviceRemoved {
             timestamp: 0,
             which: u32::MAX,
         };
         require(
-            input.translate(&removed)?.is_none(),
+            input.translate(&removed).is_none(),
             "unknown controller removal produced a detach",
         )?;
-        Ok(())
+        require(
+            input.discover_after_drain()?.is_empty(),
+            "stale discovery hint attached a phantom device",
+        )
     }
 }

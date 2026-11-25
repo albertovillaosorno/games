@@ -836,7 +836,7 @@ impl<'preferences> Interactive<'preferences> {
             size(EVENT_BUDGET)?,
             wait_ms,
             |view, event| {
-                let logical = match self.input.translate(event)? {
+                let logical = match self.input.translate(event) {
                     Some(HostEvent::Quit) => return Ok(false),
                     Some(HostEvent::Input(logical)) => logical,
                     None => return Ok(true),

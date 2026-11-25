@@ -284,7 +284,7 @@ fn interactive(
         let batch =
             scene.dispatch_events(size(EVENT_BUDGET)?, 8, |view, native| {
                 route_event(
-                    project_event(view, input.translate(native)?)?,
+                    project_event(view, input.translate(native))?,
                     &mut controls,
                     &mut controller,
                     &mut deferred,
