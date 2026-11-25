@@ -70,7 +70,7 @@ pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
 
 /// Approximate twenty-second original continue opportunity in ticks.
 pub const CONTINUE_TICKS: u16 = 1200;
-const ENEMY_CAPACITY: usize = 5;
+const ENEMY_CAPACITY: usize = 7;
 const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;

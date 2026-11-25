@@ -112,12 +112,20 @@ const fn remote_label(control: Control) -> Option<&'static str> {
 fn binding_hints(profiles: &Profiles) -> Vec<String> {
     let [keys, ..] = profiles.keys;
     let [buttons, ..] = profiles.buttons;
+    let [mouse_bindings, ..] = profiles.mouse;
     CONTROLS
         .into_iter()
-        .zip(keys.into_iter().zip(buttons))
-        .filter_map(|(control, (key, button))| {
+        .zip(keys.into_iter().zip(buttons).zip(mouse_bindings))
+        .filter_map(|(control, ((key, button), mouse))| {
             let label = remote_label(control)?;
-            Some(format!("{label}: {} / {}", key_label(key), button.string()))
+            let key_name = key.map_or("NONE", key_label);
+            let mouse_name = mouse.map_or_else(String::new, |binding| {
+                format!(" / MOUSE {}", super::mouse_label(binding))
+            });
+            Some(format!(
+                "{label}: {key_name}{mouse_name} / {}",
+                button.string()
+            ))
         })
         .collect()
 }
@@ -407,7 +415,7 @@ mod tests {
             .configured(
                 ACTION_NAMES,
                 concat!(
-                    "version=1\nkey 1 primary=Space\n",
+                    "version=1\nkey 1 primary=V\n",
                     "button 1 primary=x\nkey 1 right=H\n",
                 ),
             )
@@ -454,7 +462,9 @@ mod tests {
     fn remapped_bindings_match_hints() -> Result<(), RenderError> {
         let profiles = remapped_profiles()?;
         let hints = binding_hints(&profiles);
-        if !hints.iter().any(|line| line == "ATTACK: Space / x")
+        if !hints
+            .iter()
+            .any(|line| line == "ATTACK: V / MOUSE LEFT / x")
             || !hints.iter().any(|line| line == "RIGHT: H / dpright")
         {
             return Err(failure("controller hints ignored profile"));
@@ -462,7 +472,7 @@ mod tests {
         let mut controls = Controls::with_reserved(false, &profiles, [
             false, true, true, true,
         ])?;
-        for key in [Scancode::Z, Scancode::Right, Scancode::Escape] {
+        for key in [Scancode::Z, Scancode::D, Scancode::Escape] {
             check_edge(
                 &mut controls,
                 InputEvent::Key {

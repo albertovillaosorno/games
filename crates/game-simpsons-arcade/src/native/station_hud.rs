@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native station join, remote status and free-rejoin indicators.
+//   - Native selection, active remote status and free-rejoin indicators.
 // - Must-Not:
 //   - Modify connection state, the countdown or title simulation.
 // - Allows:
@@ -21,13 +21,13 @@
 // - Merge-When:
 //   - A title-local HUD already owns these continue indicators.
 // - Summary:
-//   - Present free join, rejoin and remote availability.
+//   - Present selection, rejoin and active remote availability.
 // - Description:
 //   - Uses independently drawn compact glyphs, not original HUD pixels.
 // - Usage:
 //   - Load once and update from the authenticated fixed-step cabinet.
 // - Defaults:
-//   - Always advertise vacant local stations during play.
+//   - Hide vacant stations and control bindings during play.
 
 //! Station join, verified remote status and free-rejoin presentation.
 
@@ -35,7 +35,7 @@ use games_platform_graphics::linux::RenderError;
 use games_platform_graphics::linux::sprites::{SceneSession, SpriteDraw};
 use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 
-use super::{Profiles, dimension, failure, key_label, size};
+use super::{Profiles, failure, key_label, size};
 use crate::{CONTINUE_TICKS, Participation, Player};
 
 const WIDTH: u16 = 64;
@@ -74,7 +74,7 @@ impl StationHud {
     ) -> Result<Option<SpriteDraw>, RenderError> {
         let offline = self.offline_join(seat);
         let tile = match participation {
-            Participation::Absent => self.choice_tile(seat, player),
+            Participation::Absent => return Ok(None),
             Participation::Continuing { ticks_left } => {
                 let seconds =
                     ticks_left.div_ceil(SECOND_TICKS).clamp(1, LAST_SECONDS);
@@ -119,13 +119,13 @@ impl StationHud {
             .zip(profiles.buttons)
             .map(|([_, key, ..], [_, button, ..])| {
                 [
-                    binding_hint("JOIN", key_label(key)),
+                    binding_hint("JOIN", key.map_or("NONE", key_label)),
                     binding_hint("PAD", &button.string()),
                 ]
             })
             .collect();
         let prompts = (1..=LAST_SECONDS)
-            .map(|seconds| format!("START {seconds:02}"))
+            .map(|seconds| format!("REJOIN{seconds:02}"))
             .collect::<Vec<_>>();
         let labels = Player::ALL
             .into_iter()
@@ -136,11 +136,8 @@ impl StationHud {
             })
             .collect::<Vec<_>>();
         let mut plates = join_plates(&labels, &joins, reserved);
-        let timers: Vec<_> = (1..=LAST_SECONDS)
-            .map(|seconds| format!("REJOIN{seconds:02}"))
-            .collect();
-        for timer in &timers {
-            plates.push(plate(timer, "REMOTE START"));
+        for timer in &prompts {
+            plates.push(plate(timer, ""));
         }
         let (offline_joins, offline_rejoin) =
             offline_plates(&mut plates, reserved, &labels, &prompts);
@@ -179,24 +176,6 @@ impl StationHud {
         };
         prompt.destination.x = prompt.destination.x.saturating_add(offset);
         draws.push(prompt);
-        if matches!(participation, Participation::Continuing { .. })
-            && self.offline_joins.get(seat.index()) == Some(&None)
-        {
-            // Reuse the exact same local binding rows as the join plate.
-            // The timer's top half remains visible above this opaque crop.
-            let mut binding = self.atlas.draw(
-                self.choice_tile(seat, player),
-                prompt.destination.x,
-                prompt.destination.y,
-            )?;
-            let height = dimension(u32::from(HEIGHT - BINDING_TOP))?;
-            let top = i32::from(BINDING_TOP);
-            binding.source.y = binding.source.y.saturating_add(top);
-            binding.source.height = height;
-            binding.destination.y = binding.destination.y.saturating_add(top);
-            binding.destination.height = height;
-            draws.push(binding);
-        }
         Ok(true)
     }
 
@@ -251,7 +230,7 @@ fn offline_plates<'text>(
     let rejoin = if reserved.contains(&true) {
         let base = plates.len();
         for hint in prompts {
-            plates.push(plate("OFFLINE", hint));
+            plates.push(plate(hint, "OFFLINE"));
         }
         Some(base)
     } else {
@@ -337,7 +316,7 @@ fn binding_plate<'text>(
 }
 
 fn plate<'text>(top: &'text str, bottom: &'text str) -> Vec<TextLine<'text>> {
-    vec![
+    let mut lines = vec![
         TextLine {
             color: INK,
             scale: 2,
@@ -345,14 +324,19 @@ fn plate<'text>(top: &'text str, bottom: &'text str) -> Vec<TextLine<'text>> {
             top: 1,
         }
         .fit_width(WIDTH),
-        TextLine {
-            color: INK,
-            scale: 2,
-            text: bottom,
-            top: 13,
-        }
-        .fit_width(WIDTH),
-    ]
+    ];
+    if !bottom.is_empty() {
+        lines.push(
+            TextLine {
+                color: INK,
+                scale: 2,
+                text: bottom,
+                top: 13,
+            }
+            .fit_width(WIDTH),
+        );
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -360,7 +344,7 @@ pub(super) mod tests {
     use games_platform_graphics::linux::sprites::SceneLimits;
     use games_platform_graphics::linux::{FrameLayout, NativeWindow};
 
-    use super::super::{ACTION_NAMES, DEFAULT_PROFILES};
+    use super::super::{ACTION_NAMES, DEFAULT_PROFILES, dimension};
     use super::*;
 
     const STRIDE: usize = 320 * 4;
@@ -390,7 +374,13 @@ pub(super) mod tests {
         scene: &mut SceneSession<'_, '_>,
         hud: &mut StationHud,
     ) -> Result<(), RenderError> {
-        let offline = remote_pixels(scene, hud, Participation::Absent)?;
+        let offline = remote_pixels(scene, hud, Participation::Playing)?;
+        if hud
+            .draw(Player::Lisa, Player::Homer, Participation::Absent)?
+            .is_some()
+        {
+            return Err(failure("vacant remote seat rendered"));
+        }
         let continuing = Participation::Continuing { ticks_left: 120 };
         let offline_countdown = remote_pixels(scene, hud, continuing)?;
         let choice = hud.draw_choice(Player::Homer, Player::Lisa)?;
@@ -398,14 +388,18 @@ pub(super) mod tests {
         let local_choice = hud.draw_choice(Player::Marge, Player::Marge)?;
         let local = pixels(scene, local_choice)?;
         hud.update_connections([false, true, false, false]);
-        let ready = remote_pixels(scene, hud, Participation::Absent)?;
+        if hud
+            .draw(Player::Lisa, Player::Homer, Participation::Absent)?
+            .is_some()
+        {
+            return Err(failure("vacant remote seat rendered"));
+        }
         let connected_countdown = remote_pixels(scene, hud, continuing)?;
         let connected_choice =
             pixels(scene, hud.draw_choice(Player::Homer, Player::Lisa)?)?;
         let same_local =
             pixels(scene, hud.draw_choice(Player::Marge, Player::Marge)?)?;
-        if offline == ready
-            || offline_countdown == connected_countdown
+        if offline_countdown == connected_countdown
             || offline_choice == connected_choice
             || local != same_local
             || hud
@@ -444,7 +438,17 @@ pub(super) mod tests {
         scene: &mut SceneSession<'_, '_>,
         hud: &StationHud,
     ) -> Result<(), RenderError> {
-        let joined = local_pixels(scene, hud, Participation::Absent)?;
+        let mut draws = Vec::new();
+        if hud.queue(
+            (Player::Lisa, Player::Marge),
+            (Participation::Absent, 0i32),
+            &mut draws,
+        )? || !draws.is_empty()
+        {
+            return Err(failure("vacant local seat rendered"));
+        }
+        let joined =
+            pixels(scene, hud.draw_choice(Player::Marge, Player::Lisa)?)?;
         let first = local_pixels(scene, hud, Participation::Continuing {
             ticks_left: 120,
         })?;
@@ -457,12 +461,11 @@ pub(super) mod tests {
         let end = 2usize
             .saturating_add(usize::from(HEIGHT))
             .saturating_mul(STRIDE);
-        if joined == first
-            || first == second
-            || joined.get(start..end) != first.get(start..end)
-            || first.get(start..end) != second.get(start..end)
-        {
-            return Err(failure("rejoin lost the seat binding or countdown"));
+        if first == second || first.get(start..end) != second.get(start..end) {
+            return Err(failure("rejoin countdown did not update"));
+        }
+        for row in first.as_chunks::<STRIDE>().0.iter().skip(14).take(12) {
+            check_binding_row(row, 248, 0, &[])?;
         }
         let hints = [String::from("JOIN F1"), String::from("P rightshoulder")];
         let expected = binding_plate("P1 LISA", &hints);
@@ -470,12 +473,13 @@ pub(super) mod tests {
             .as_chunks::<STRIDE>()
             .0
             .iter()
-            .skip(2)
+            .skip(172)
             .take(usize::from(HEIGHT))
             .enumerate()
         {
             check_binding_row(
                 pixels,
+                8,
                 u16::try_from(row).map_err(failure)?,
                 &expected,
             )?;
@@ -485,6 +489,7 @@ pub(super) mod tests {
 
     fn check_binding_row(
         pixels: &[u8],
+        x: usize,
         row: u16,
         expected: &[TextLine<'_>],
     ) -> Result<(), RenderError> {
@@ -492,7 +497,7 @@ pub(super) mod tests {
             .as_chunks::<4>()
             .0
             .iter()
-            .skip(248)
+            .skip(x)
             .take(usize::from(WIDTH))
             .enumerate()
         {

@@ -27,7 +27,7 @@
 // - Usage:
 //   - Opt in through Cabinet::with_opening_street or with_encounter.
 // - Defaults:
-//   - At most five enemies; no original combat parity claim.
+//   - At most seven enemies; no original combat parity claim.
 
 //! Provisional fixed-step encounter for the first street.
 
@@ -58,12 +58,14 @@ const RESTRAINT_DAMAGE_INTERVAL: u8 = 48;
 // First observed sprite-group admissions during rightward travel.
 // Anchors are approximate; the observed arrivals start outside the view.
 const RESTRAINT_THRESHOLD: i16 = 154;
-const OPENING_COMBAT_LIMIT: i16 = 210;
+const OPENING_COMBAT_LIMIT: i16 = 362;
 const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (50, Point { x: 334, y: 176 }),
     (82, Point { x: -18, y: 208 }),
     (RESTRAINT_THRESHOLD, Point { x: 334, y: 192 }),
-    (OPENING_COMBAT_LIMIT, Point { x: 334, y: 208 }),
+    (210, Point { x: 334, y: 208 }),
+    (274, Point { x: -18, y: 176 }),
+    (OPENING_COMBAT_LIMIT, Point { x: 334, y: 160 }),
 ];
 
 impl Encounter {
@@ -157,8 +159,11 @@ impl Encounter {
     }
 
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
+        let mut enemies = [None; ENEMY_CAPACITY];
+        let [initial, ..] = &mut enemies;
+        *initial = Some(Enemy::new(spawn));
         Self {
-            enemies: [Some(Enemy::new(spawn)), None, None, None, None],
+            enemies,
             marge_restraint: false,
             progressive,
         }
@@ -609,8 +614,12 @@ mod tests {
             (154, 4),
             (209, 4),
             (210, 5),
-            (210, 5),
-            (0, 5),
+            (273, 5),
+            (274, 6),
+            (361, 6),
+            (362, 7),
+            (362, 7),
+            (0, 7),
         ] {
             encounter.admit(camera);
             assert_eq!(encounter.enemies().count(), count);
@@ -621,6 +630,8 @@ mod tests {
             Point { x: 64, y: 208 },
             Point { x: 488, y: 192 },
             Point { x: 544, y: 208 },
+            Point { x: 256, y: 176 },
+            Point { x: 696, y: 160 },
         ]));
         assert_eq!(
             encounter.enemies().nth(2).map(|enemy| enemy.facing),
@@ -713,20 +724,22 @@ mod tests {
                 50..=81 => 2,
                 82..=153 => 3,
                 154..=209 => 4,
-                _ => 5,
+                210..=273 => 5,
+                274..=361 => 6,
+                _ => 7,
             };
             assert_eq!(cabinet.enemies().count(), count);
-            if camera == 210 {
+            if camera == 362 {
                 break;
             }
         }
-        assert_eq!(cabinet.camera_origin(), 210);
+        assert_eq!(cabinet.camera_origin(), 362);
     }
 
     fn assert_combat_travel_bound(cabinet: &mut Cabinet) {
         for tick in 363..403 {
             cabinet.input_step(tick, &[]);
-            assert_eq!(cabinet.camera_origin(), 210);
+            assert_eq!(cabinet.camera_origin(), 362);
         }
         let [_, release] = pulse(Control::Right);
         cabinet.input_step(403, &[release]);

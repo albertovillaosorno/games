@@ -36,10 +36,13 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::{env, str, vec};
 
+use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
 use games_platform_storage::file::snapshot;
-use games_platform_storage::preferences::{ControlStore, DisplayStore};
+use games_platform_storage::preferences::{
+    ControlStore, DisplayStore, VolumeStore,
+};
 
 use super::{
     ACTION_NAMES, DEFAULT_PROFILES, Profiles, profile_limit, read_profile,
@@ -50,7 +53,8 @@ const FILE_NAME: &str = "simpsons-arcade.local";
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke | --measure] [--touch] ",
-    "[--display MODE] [--window MODE] [--settings DIR] ",
+    "[--display MODE] [--window MODE] [--audio-device NAME] ",
+    "[--settings DIR] ",
     "[--controls FILE | --reset-controls] ",
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
@@ -60,15 +64,19 @@ const USAGE: &str = concat!(
     "Without an asset selection, read simpsons-arcade.local ",
     "beside the binary.\n",
     "usage: simpsons-arcade --lan-controller FILE [--settings DIR] ",
-    "[--controls FILE | --reset-controls]"
+    "[--controls FILE | --reset-controls]\n",
+    "usage: simpsons-arcade --list-audio-devices"
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
+type EnemyHashes = Option<[OsString; 2]>;
+type VolumePreferences = (Option<VolumeStore>, MasterVolume);
 pub(super) type Fields<'text> = BTreeMap<&'text str, &'text str>;
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct LocalPaths {
+    audio_device: Option<String>,
     controls: Option<PathBuf>,
     settings: Option<PathBuf>,
 }
@@ -132,19 +140,18 @@ impl Assets {
             hash(required(&mut values, "bart")?)?,
             hash(required(&mut values, "lisa")?)?,
         ];
-        let enemy = match (
-            values.remove("enemy_approach"),
-            values.remove("enemy_strike"),
-        ) {
-            (None, None) => None,
-            (Some(approach), Some(strike)) => {
-                Some([hash(approach)?, hash(strike)?])
-            },
-            _ => return Err(String::from("both enemy hashes are required")),
-        };
+        let enemy = enemy_hashes(&mut values)?;
         let audio = AudioSelection::new(
             values.remove("audio").map(hash).transpose()?,
             values.remove("audio_mod").map(hash).transpose()?,
+        )?;
+        let audio_device = selected_audio_device(
+            values
+                .remove("audio_device")
+                .map(str::to_owned)
+                .map(validate_audio_device)
+                .transpose()?,
+            audio.is_some(),
         )?;
         let shadow = values.remove("shadow").map(hash).transpose()?;
         let world = values.remove("world").map(hash).transpose()?;
@@ -167,7 +174,11 @@ impl Assets {
                 world,
             },
             display,
-            LocalPaths { controls, settings },
+            LocalPaths {
+                audio_device,
+                controls,
+                settings,
+            },
         ))
     }
 
@@ -380,6 +391,7 @@ impl ControllerLaunch {
 #[derive(Debug)]
 pub(super) struct Launch {
     pub(super) assets: Assets,
+    pub(super) audio_device: Option<String>,
     pub(super) controls: ControlSelection,
     pub(super) display: DisplaySettings,
     pub(super) host: Option<PathBuf>,
@@ -387,6 +399,8 @@ pub(super) struct Launch {
     pub(super) preferences: Option<DisplayStore>,
     pub(super) smoke: bool,
     pub(super) touch_enabled: bool,
+    pub(super) volume: MasterVolume,
+    pub(super) volume_store: Option<VolumeStore>,
 }
 
 impl Launch {
@@ -397,6 +411,9 @@ impl Launch {
         let touch_enabled = flag(&mut remaining, "--touch");
         let mode = optional_value(&mut remaining, "--display")?;
         let window = optional_value(&mut remaining, "--window")?;
+        let device = optional_value(&mut remaining, "--audio-device")?
+            .map(validate_audio_device)
+            .transpose()?;
         let explicit_settings = optional_path(&mut remaining, "--settings")?;
         let control_options = ControlOptions::parse(&mut remaining, smoke)?;
         let host = optional_path(&mut remaining, "--lan-host")?;
@@ -404,6 +421,10 @@ impl Launch {
             return Err(String::from("smoke cannot open a LAN host"));
         }
         let (assets, defaults, paths) = Assets::select(remaining)?;
+        let audio_device = selected_audio_device(
+            device.or(paths.audio_device),
+            assets.audio.is_some(),
+        )?;
         let settings = explicit_settings.or(paths.settings);
         let preferences = settings
             .as_deref()
@@ -416,6 +437,7 @@ impl Launch {
             .transpose()
             .map_err(|error| format!("display preferences: {error:?}"))?
             .flatten();
+        let (volume_store, volume) = load_volume(settings.as_deref())?;
         let display = resolve_display(
             defaults,
             stored,
@@ -425,6 +447,7 @@ impl Launch {
 
         Ok(Self {
             assets,
+            audio_device,
             controls: ControlSelection::open(
                 control_options,
                 paths.controls,
@@ -437,8 +460,56 @@ impl Launch {
             preferences,
             smoke,
             touch_enabled,
+            volume,
+            volume_store,
         })
     }
+}
+
+fn enemy_hashes(values: &mut Fields<'_>) -> Result<EnemyHashes, String> {
+    match (
+        values.remove("enemy_approach"),
+        values.remove("enemy_strike"),
+    ) {
+        (None, None) => Ok(None),
+        (Some(approach), Some(strike)) => {
+            Ok(Some([hash(approach)?, hash(strike)?]))
+        },
+        _ => Err(String::from("both enemy hashes are required")),
+    }
+}
+
+fn selected_audio_device(
+    device: Option<String>,
+    has_audio: bool,
+) -> Result<Option<String>, String> {
+    if device.is_some() && !has_audio {
+        return Err("audio device requires an audio bundle".into());
+    }
+    Ok(device.filter(|name| name != "default"))
+}
+
+fn load_volume(settings: Option<&Path>) -> Result<VolumePreferences, String> {
+    let store = settings
+        .map(VolumeStore::open)
+        .transpose()
+        .map_err(|error| format!("volume store: {error:?}"))?;
+    let volume = store
+        .as_ref()
+        .map(VolumeStore::load)
+        .transpose()
+        .map_err(|error| format!("volume preferences: {error:?}"))?
+        .flatten()
+        .unwrap_or_default();
+    Ok((store, volume))
+}
+
+fn validate_audio_device(name: String) -> Result<String, String> {
+    if name.is_empty() || name.len() > 512 || name.chars().any(char::is_control)
+    {
+        return Err("invalid audio device name".into());
+    }
+    Ok(name)
 }
 
 fn open_control_store(
@@ -670,6 +741,78 @@ mod tests {
             || paths.settings != Some(PathBuf::from("/package/preferences"))
         {
             return Err(String::from("incorrect catalogue selection"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn launch_restores_master_volume_without_overwriting_controls()
+    -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let args = [
+            OsString::from("--config"),
+            fixture.0.join("launch.local").into_os_string(),
+        ];
+        if Launch::parse(args.clone().into())?.volume != MasterVolume::Full {
+            return Err("wrong initial volume".into());
+        }
+        let volume = VolumeStore::open(&fixture.0)
+            .map_err(|error| format!("{error:?}"))?;
+        let receipt = volume
+            .store(MasterVolume::Half)
+            .map_err(|error| format!("{error:?}"))?;
+        receipt.durability.map_err(|error| format!("{error:?}"))?;
+        let launch = Launch::parse(args.into())?;
+        if launch.volume != MasterVolume::Half
+            || launch.controls.resolve()?.profiles
+                != DEFAULT_PROFILES
+                    .configured(ACTION_NAMES, FALLBACK_PROFILE)?
+        {
+            return Err("volume or controls not restored".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn audio_device_selection_is_overridable() -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        fixture.write(
+            "launch.local",
+            &format!("{}audio={DIGEST}\naudio_device=Speakers\n", catalogue()),
+        )?;
+        let config = || {
+            [
+                OsString::from("--config"),
+                fixture.0.join("launch.local").into_os_string(),
+            ]
+        };
+        let selected = Launch::parse(config().into())?;
+        if selected.audio_device.as_deref() != Some("Speakers") {
+            return Err("wrong configured device".into());
+        }
+        let default_args = ["--audio-device", "default"]
+            .map(OsString::from)
+            .into_iter()
+            .chain(config())
+            .collect();
+        if Launch::parse(default_args)?.audio_device.is_some() {
+            return Err("default output override ignored".into());
+        }
+        let args = ["--audio-device", "Headphones"]
+            .map(OsString::from)
+            .into_iter()
+            .chain(config())
+            .collect();
+        if Launch::parse(args)?.audio_device.as_deref() != Some("Headphones") {
+            return Err("named output override ignored".into());
+        }
+        let no_audio = format!("{}audio_device=Speakers\n", catalogue());
+        if Assets::catalogue(Path::new("local"), &no_audio).is_ok()
+            || validate_audio_device(String::new()).is_ok()
+            || validate_audio_device("x\0y".into()).is_ok()
+            || validate_audio_device("x".repeat(513)).is_ok()
+        {
+            return Err("invalid audio device accepted".into());
         }
         Ok(())
     }

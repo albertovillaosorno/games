@@ -14,7 +14,8 @@
 //   - Select title actions, assign devices or route simulation events.
 // - Allows:
 //   - Inputs: Bounded local text, title action names and default bindings.
-//   - Outputs: Validated SDL keyboard, button and digital axis assignments.
+//   - Outputs: Validated SDL keyboard, mouse, button and digital axis
+//     assignments.
 //   - Side effects: None.
 // - Split-When:
 //   - Other device families require independent profile representations.
@@ -37,7 +38,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use games::input::AxisBinding;
 
-use super::{Axis, Button, Scancode, axis_code, button_code, key_code};
+use super::{
+    Axis, Button, MouseButton, Scancode, axis_code, button_code, key_code,
+    mouse_code,
+};
 
 /// Maximum UTF-8 profile size, in bytes.
 pub const MAX_PROFILE_BYTES: usize = 8192;
@@ -130,8 +134,10 @@ pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
     pub axes: [[AxisProfile; NATIVE_AXES.len()]; PLAYERS],
     /// Per-station controller button bindings.
     pub buttons: [[Button; ACTIONS]; PLAYERS],
-    /// Globally unique keyboard bindings.
-    pub keys: [[Scancode; ACTIONS]; PLAYERS],
+    /// Globally unique optional keyboard bindings.
+    pub keys: [[Option<Scancode>; ACTIONS]; PLAYERS],
+    /// Globally unique optional mouse button bindings.
+    pub mouse: [[Option<MouseButton>; ACTIONS]; PLAYERS],
     /// Stations selected for visible touch panels, in station order.
     pub touch_players: [bool; PLAYERS],
     /// Per-station logical-action to physical touch-slot permutation.
@@ -256,13 +262,21 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
                     .position(|position| *position == name)
                     .ok_or_else(invalid)?;
             },
+            Kind::Mouse => {
+                let slot = self
+                    .mouse
+                    .get_mut(player)
+                    .and_then(|row| row.get_mut(action))
+                    .ok_or_else(invalid)?;
+                *slot = parse_mouse(name)?;
+            },
             Kind::Key => {
                 let slot = self
                     .keys
                     .get_mut(player)
                     .and_then(|row| row.get_mut(action))
                     .ok_or_else(invalid)?;
-                *slot = Scancode::from_name(name).ok_or_else(invalid)?;
+                *slot = parse_key(name)?;
             },
         }
         Ok(())
@@ -289,9 +303,17 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
             }
         }
         let mut keys = BTreeSet::new();
-        for key in self.keys.iter().flatten().copied() {
+        for key in self.keys.iter().flatten().flatten().copied() {
             if !keys.insert(key_code(key)) {
                 return Err(String::from("duplicate keyboard binding"));
+            }
+        }
+        let mut mouse = BTreeSet::new();
+        for button in self.mouse.iter().flatten().flatten().copied() {
+            if button == MouseButton::Unknown
+                || !mouse.insert(mouse_code(button))
+            {
+                return Err(String::from("invalid or duplicate mouse binding"));
             }
         }
         for row in &self.buttons {
@@ -316,6 +338,7 @@ enum Kind {
     AxisThreshold,
     Button,
     Key,
+    Mouse,
     Touch,
 }
 
@@ -365,6 +388,27 @@ fn axis_action(value: &str, actions: &[&str]) -> Result<Option<usize>, String> {
         .ok_or_else(|| String::from("unknown axis action"))
 }
 
+fn parse_key(name: &str) -> Result<Option<Scancode>, String> {
+    if name == "none" {
+        return Ok(None);
+    }
+    Scancode::from_name(name)
+        .map(Some)
+        .ok_or_else(|| String::from("unknown keyboard binding"))
+}
+
+fn parse_mouse(name: &str) -> Result<Option<MouseButton>, String> {
+    Ok(match name {
+        "none" => None,
+        "left" => Some(MouseButton::Left),
+        "middle" => Some(MouseButton::Middle),
+        "right" => Some(MouseButton::Right),
+        "x1" => Some(MouseButton::X1),
+        "x2" => Some(MouseButton::X2),
+        _ => return Err(String::from("unknown mouse binding")),
+    })
+}
+
 fn parse_line<'text>(
     line: &'text str,
     actions: &[&str],
@@ -376,6 +420,7 @@ fn parse_line<'text>(
         Some("axis") => Kind::Axis,
         Some("axis-threshold") => Kind::AxisThreshold,
         Some("key") => Kind::Key,
+        Some("mouse") => Kind::Mouse,
         Some("button") => Kind::Button,
         Some("touch") => Kind::Touch,
         _ => return Err(invalid()),
@@ -389,7 +434,7 @@ fn parse_line<'text>(
     let action = match kind {
         Kind::Axis | Kind::AxisThreshold => Axis::from_string(field)
             .and_then(|axis| NATIVE_AXES.iter().position(|item| *item == axis)),
-        Kind::Button | Kind::Key | Kind::Touch => {
+        Kind::Button | Kind::Key | Kind::Mouse | Kind::Touch => {
             actions.iter().position(|name| *name == field)
         },
     }
@@ -411,7 +456,11 @@ mod tests {
     const DEFAULT: DigitalProfiles<2, 2> = DigitalProfiles {
         axes: [[AxisProfile::UNBOUND; NATIVE_AXES.len()]; 2],
         buttons: [[Button::A, Button::B]; 2],
-        keys: [[Scancode::A, Scancode::B], [Scancode::C, Scancode::D]],
+        keys: [[Some(Scancode::A), Some(Scancode::B)], [
+            Some(Scancode::C),
+            Some(Scancode::D),
+        ]],
+        mouse: [[None; 2]; 2],
         touch_players: [true, false],
         touch_slots: [[0, 1]; 2],
     };
@@ -432,13 +481,49 @@ mod tests {
             Ok(DigitalProfiles {
                 axes: DEFAULT.axes,
                 buttons: [[Button::A, Button::B], [Button::X, Button::B]],
-                keys: [[Scancode::A, Scancode::B], [
-                    Scancode::Space,
-                    Scancode::D
+                keys: [[Some(Scancode::A), Some(Scancode::B)], [
+                    Some(Scancode::Space),
+                    Some(Scancode::D)
                 ]],
+                mouse: DEFAULT.mouse,
                 touch_players: [false, true],
                 touch_slots: [[0, 1], [1, 0]],
             })
+        );
+    }
+
+    #[test]
+    fn mouse_bindings_are_optional_and_unique_across_stations() {
+        let configured = DEFAULT.configured(
+            ACTIONS,
+            "version=1\nmouse 1 primary=left\nmouse 2 secondary=right",
+        );
+        assert_eq!(
+            configured,
+            Ok(DigitalProfiles {
+                mouse: [[Some(MouseButton::Left), None], [
+                    None,
+                    Some(MouseButton::Right)
+                ]],
+                ..DEFAULT
+            })
+        );
+        assert!(
+            DEFAULT
+                .configured(
+                    ACTIONS,
+                    "version=1\nmouse 1 primary=left\nmouse 2 secondary=left"
+                )
+                .is_err()
+        );
+        assert!(
+            DEFAULT
+                .configured(ACTIONS, "version=1\nmouse 1 primary=unknown")
+                .is_err()
+        );
+        assert_eq!(
+            DEFAULT.configured(ACTIONS, "version=1\nmouse 1 primary=none"),
+            Ok(DEFAULT)
         );
     }
 

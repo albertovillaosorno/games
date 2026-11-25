@@ -314,7 +314,7 @@ fn approach(
 ) -> Result<(), RenderError> {
     pulse(controls, simulation, Scancode::Return)?;
     advance(simulation, 1)?;
-    key(controls, simulation, Scancode::Right, true)?;
+    key(controls, simulation, Scancode::D, true)?;
     for _ in 0..60u8 {
         let [marge, ..] = simulation.state().stations();
         let enemy = simulation
@@ -322,7 +322,7 @@ fn approach(
             .enemy()
             .ok_or(RenderError::InvalidSprite)?;
         if marge.position.x.abs_diff(enemy.position.x) <= 28 {
-            key(controls, simulation, Scancode::Right, false)?;
+            key(controls, simulation, Scancode::D, false)?;
             return Ok(());
         }
         advance(simulation, 1)?;
@@ -432,14 +432,16 @@ fn smoke_reinforcements(
     let limit = art
         .world_art
         .map_or(Ok(0), super::world::WorldArt::scroll_limit)?;
-    let target = limit.min(210);
+    let target = limit.min(362);
     let target_origin = i16::try_from(target).map_err(failure)?;
     let expected: usize = match target {
         0..=49 => return Ok(()),
         50..=81 => 1,
         82..=153 => 2,
         154..=209 => 3,
-        _ => 4,
+        210..=273 => 4,
+        274..=361 => 5,
+        _ => 6,
     };
     let mut simulation =
         live_with_scroll(true, LocalSession::default(), limit)?;
@@ -454,22 +456,53 @@ fn smoke_reinforcements(
     {
         return Err(failure("opening enemy was not defeated"));
     }
-    key(&mut controls, &mut simulation, Scancode::Right, true)?;
+    walk_reinforcements(
+        scene,
+        art,
+        (&mut controls, &mut simulation),
+        (target_origin, expected),
+    )
+}
+
+fn walk_reinforcements(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    (controls, simulation): (&mut Controls, &mut LiveSimulation<Cabinet>),
+    (target, expected): (i16, usize),
+) -> Result<(), RenderError> {
+    let mut seen = [false; ENEMY_CAPACITY - 1];
+    key(controls, simulation, Scancode::D, true)?;
     for _ in 0..300u16 {
-        advance(&mut simulation, 1)?;
-        if simulation.state().camera_origin() == target_origin {
+        advance(simulation, 1)?;
+        let admitted = simulation.state().enemies().count().saturating_sub(1);
+        if seen.iter().filter(|checked| **checked).count() < admitted {
+            key(controls, simulation, Scancode::D, false)?;
+            verify_reinforcements(
+                scene,
+                art,
+                simulation,
+                (admitted, &mut seen),
+            )?;
+            key(controls, simulation, Scancode::D, true)?;
+        }
+        if simulation.state().camera_origin() == target {
             break;
         }
     }
-    key(&mut controls, &mut simulation, Scancode::Right, false)?;
-    if simulation.state().camera_origin() != target_origin
+    key(controls, simulation, Scancode::D, false)?;
+    if simulation.state().camera_origin() != target
         || simulation.state().enemies().count() != expected.saturating_add(1)
+        || seen.iter().filter(|checked| **checked).count() != expected
     {
         return Err(failure(
             "street reinforcement admission did not match travel",
         ));
     }
-    verify_reinforcements(scene, art, &mut simulation, expected)
+    writeln!(
+        stdout().lock(),
+        "Reinforcements: {expected} meters verified"
+    )
+    .map_err(failure)
 }
 
 fn smoke_restraint(
@@ -490,20 +523,20 @@ fn smoke_restraint(
     approach(&mut controls, &mut simulation)?;
     pulse(&mut controls, &mut simulation, Scancode::Z)?;
     advance(&mut simulation, u16::from(GROUND_ATTACK_RECOVERY_TICKS))?;
-    key(&mut controls, &mut simulation, Scancode::Right, true)?;
+    key(&mut controls, &mut simulation, Scancode::D, true)?;
     for _ in 0..450u16 {
         advance(&mut simulation, 1)?;
         if restrained(simulation.state()) {
             break;
         }
     }
-    key(&mut controls, &mut simulation, Scancode::Right, false)?;
+    key(&mut controls, &mut simulation, Scancode::D, false)?;
     verify_restraint_art(scene, art, simulation.state())?;
     for edge in 0..12u8 {
         let button = if edge.is_multiple_of(2) {
             Scancode::Z
         } else {
-            Scancode::X
+            Scancode::Space
         };
         pulse(&mut controls, &mut simulation, button)?;
         advance(&mut simulation, 1)?;
@@ -617,47 +650,51 @@ fn verify_reinforcements(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     simulation: &mut LiveSimulation<Cabinet>,
-    expected: usize,
+    (expected, seen): (usize, &mut [bool; ENEMY_CAPACITY - 1]),
 ) -> Result<(), RenderError> {
-    let mut seen = [false; ENEMY_CAPACITY - 1];
     for _ in 0..40u8 {
-        let _presented = art.present(scene, simulation.state())?;
-        let pixels = scene.readback()?;
-        let view = art.presentation_view(scene, simulation.state())?;
-        let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
-        for (mut enemy, checked) in
-            simulation.state().enemies().skip(1).zip(&mut seen)
-        {
-            if *checked || enemy.health == 0 {
-                continue;
-            }
-            enemy.position = view.project(enemy.position);
-            let position = combat
-                .enemy_health_position(enemy, art.poses.enemy(enemy.action))?;
-            let right = i32::from(position.x).saturating_add(24);
-            if position.x >= 0
-                && right <= i32::try_from(view.width).map_err(failure)?
-            {
-                verify_bar(
-                    &pixels,
-                    (position, view.width),
-                    Meter::enemy(enemy.health),
-                    [FILLED, MISSING],
-                )?;
-                *checked = true;
-            }
-        }
+        observe_reinforcements(scene, art, simulation.state(), seen)?;
         if seen.iter().filter(|checked| **checked).count() == expected {
-            writeln!(
-                stdout().lock(),
-                "Reinforcements: {expected} meters verified"
-            )
-            .map_err(failure)?;
             return Ok(());
         }
         advance(simulation, 4)?;
     }
-    Err(failure("street reinforcement meters were not all visible"))
+    Err(failure(format!(
+        "expected {expected} visible reinforcement meters: {seen:?}"
+    )))
+}
+
+fn observe_reinforcements(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    seen: &mut [bool; ENEMY_CAPACITY - 1],
+) -> Result<(), RenderError> {
+    let _presented = art.present(scene, cabinet)?;
+    let pixels = scene.readback()?;
+    let view = art.presentation_view(scene, cabinet)?;
+    let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
+    for (mut enemy, checked) in cabinet.enemies().skip(1).zip(seen) {
+        if *checked || enemy.health == 0 {
+            continue;
+        }
+        enemy.position = view.project(enemy.position);
+        let position = combat
+            .enemy_health_position(enemy, art.poses.enemy(enemy.action))?;
+        let right = i32::from(position.x).saturating_add(24);
+        if position.x >= 0
+            && right <= i32::try_from(view.width).map_err(failure)?
+        {
+            verify_bar(
+                &pixels,
+                (position, view.width),
+                Meter::enemy(enemy.health),
+                [FILLED, MISSING],
+            )?;
+            *checked = true;
+        }
+    }
+    Ok(())
 }
 
 fn smoke_strikes(

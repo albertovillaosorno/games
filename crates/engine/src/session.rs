@@ -31,6 +31,7 @@
 
 //! Local free-play navigation independent of the host and title rules.
 
+use crate::audio::MasterVolume;
 use crate::presentation::{DisplaySettings, PresentationMode};
 
 const MAIN_ITEMS: [MenuItem; 3] =
@@ -41,8 +42,12 @@ const PAUSE_ITEMS: [MenuItem; 4] = [
     MenuItem::MainMenu,
     MenuItem::Exit,
 ];
-const SETTINGS_ITEMS: [MenuItem; 3] =
-    [MenuItem::Display, MenuItem::Window, MenuItem::Back];
+const SETTINGS_ITEMS: [MenuItem; 4] = [
+    MenuItem::Display,
+    MenuItem::Window,
+    MenuItem::Volume,
+    MenuItem::Back,
+];
 
 /// Current screen of a local gameplay session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -56,7 +61,7 @@ pub enum SessionPhase {
     Paused,
     /// The world is running.
     Playing,
-    /// Display settings; the originating menu remains suspended.
+    /// Settings; the originating menu remains suspended.
     Settings,
 }
 
@@ -75,8 +80,10 @@ pub enum MenuItem {
     Play,
     /// Resume the suspended world.
     Resume,
-    /// Open display settings.
+    /// Open settings.
     Settings,
+    /// Cycle master audio volume.
+    Volume,
     /// Toggle windowed or desktop-fullscreen presentation.
     Window,
 }
@@ -130,6 +137,7 @@ pub struct LocalSession {
     restrict_fill: bool,
     selection: usize,
     settings_origin: SessionPhase,
+    volume: MasterVolume,
 }
 
 impl LocalSession {
@@ -146,6 +154,7 @@ impl LocalSession {
                 self.settings_origin = self.phase;
                 self.transition(SessionPhase::Settings);
             },
+            Some(MenuItem::Volume) => self.volume = self.volume.next(),
             Some(MenuItem::Window) => {
                 self.display.window = self.display.window.toggled();
             },
@@ -280,11 +289,27 @@ impl LocalSession {
         self.selection = 0;
     }
 
+    /// Current requested master volume.
+    #[must_use]
+    pub const fn volume(self) -> MasterVolume {
+        self.volume
+    }
+
     /// Initialise a session with portable display preferences and whether
     /// centered cropping must be excluded to keep controls reachable.
     #[must_use]
     pub const fn with_display(
         display: DisplaySettings,
+        restrict_fill: bool,
+    ) -> Self {
+        Self::with_preferences(display, MasterVolume::Full, restrict_fill)
+    }
+
+    /// Initialise a session with portable display and volume preferences.
+    #[must_use]
+    pub const fn with_preferences(
+        display: DisplaySettings,
+        volume: MasterVolume,
         restrict_fill: bool,
     ) -> Self {
         let adjusted = if restrict_fill
@@ -303,6 +328,7 @@ impl LocalSession {
             restrict_fill,
             selection: 0,
             settings_origin: SessionPhase::MainMenu,
+            volume,
         }
     }
 
@@ -376,9 +402,14 @@ mod tests {
         menu_input(&mut session, MenuInput::Confirm);
         assert_eq!(session.display().window, WindowMode::Fullscreen);
         menu_input(&mut session, MenuInput::Next);
+        assert_eq!(session.selected(), Some(MenuItem::Volume));
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
+        menu_input(&mut session, MenuInput::Next);
         menu_input(&mut session, MenuInput::Confirm);
         assert_eq!(session.phase(), SessionPhase::MainMenu);
         assert_eq!(session.selected(), Some(MenuItem::Settings));
+        assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
     }
 
     #[test]

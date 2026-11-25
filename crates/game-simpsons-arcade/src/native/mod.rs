@@ -51,6 +51,7 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use games::audio::MasterVolume;
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
@@ -72,8 +73,8 @@ use games_platform_graphics::linux::input::profile::{
     AxisProfile, DigitalProfiles, MAX_PROFILE_BYTES,
 };
 use games_platform_graphics::linux::input::{
-    Button, HostEvent, InputStartup, NativeInput, Scancode, button_code,
-    key_code,
+    Button, HostEvent, InputStartup, MouseButton, NativeInput, Scancode,
+    button_code, key_code, mouse_code,
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
@@ -83,7 +84,7 @@ use games_platform_graphics::linux::ui::PlateLayout;
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
-use games_platform_storage::preferences::DisplayStore;
+use games_platform_storage::preferences::{DisplayStore, VolumeStore};
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Pair, Participation, Phase,
@@ -109,46 +110,46 @@ const CONTROLS: [Control; 8] = [
     Control::Up,
     Control::Down,
 ];
-const KEYBOARD: [[Scancode; 8]; 4] = [
+const KEYBOARD: [[Option<Scancode>; 8]; 4] = [
     [
-        Scancode::Escape,
-        Scancode::Return,
-        Scancode::Z,
-        Scancode::X,
-        Scancode::Left,
-        Scancode::Right,
-        Scancode::Up,
-        Scancode::Down,
+        Some(Scancode::Escape),
+        Some(Scancode::Return),
+        Some(Scancode::Z),
+        Some(Scancode::Space),
+        Some(Scancode::A),
+        Some(Scancode::D),
+        Some(Scancode::W),
+        Some(Scancode::S),
     ],
     [
-        Scancode::F2,
-        Scancode::Num6,
-        Scancode::F,
-        Scancode::G,
-        Scancode::A,
-        Scancode::D,
-        Scancode::W,
-        Scancode::S,
+        None,
+        Some(Scancode::Num6),
+        Some(Scancode::F),
+        Some(Scancode::G),
+        Some(Scancode::Left),
+        Some(Scancode::Right),
+        Some(Scancode::Up),
+        Some(Scancode::Down),
     ],
     [
-        Scancode::F3,
-        Scancode::Num7,
-        Scancode::O,
-        Scancode::P,
-        Scancode::J,
-        Scancode::L,
-        Scancode::I,
-        Scancode::K,
+        None,
+        Some(Scancode::Num7),
+        Some(Scancode::O),
+        Some(Scancode::P),
+        Some(Scancode::J),
+        Some(Scancode::L),
+        Some(Scancode::I),
+        Some(Scancode::K),
     ],
     [
-        Scancode::F4,
-        Scancode::Num8,
-        Scancode::Kp1,
-        Scancode::Kp2,
-        Scancode::Kp4,
-        Scancode::Kp6,
-        Scancode::Kp8,
-        Scancode::Kp5,
+        None,
+        Some(Scancode::Num8),
+        Some(Scancode::Kp1),
+        Some(Scancode::Kp2),
+        Some(Scancode::Kp4),
+        Some(Scancode::Kp6),
+        Some(Scancode::Kp8),
+        Some(Scancode::Kp5),
     ],
 ];
 const BUTTONS: [Button; 8] = [
@@ -191,6 +192,21 @@ const DEFAULT_PROFILES: Profiles = Profiles {
     ]; 4],
     buttons: [BUTTONS; 4],
     keys: KEYBOARD,
+    mouse: [
+        [
+            None,
+            None,
+            Some(MouseButton::Left),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ],
+        [None; 8],
+        [None; 8],
+        [None; 8],
+    ],
     touch_players: [true, false, false, false],
     touch_slots: [[0, 1, 2, 3, 4, 5, 6, 7]; 4],
 };
@@ -288,6 +304,7 @@ impl Controls {
             .get(player.index())
             .and_then(|keys| keys.get(index))
             .copied()
+            .flatten()
             .ok_or(RenderError::InvalidSprite)
     }
 
@@ -318,17 +335,7 @@ impl Controls {
         reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
         profiles.validate().map_err(failure)?;
-        let mut mapping = InputMapping::new();
-        for ((player, keys), remote) in
-            Player::ALL.into_iter().zip(profiles.keys).zip(reserved)
-        {
-            if remote {
-                continue;
-            }
-            for (key, control) in keys.into_iter().zip(CONTROLS) {
-                mapping.bind_key(key_code(key), Action { control, player });
-            }
-        }
+        let mut mapping = desktop_mapping(profiles, reserved);
         if let Some(role) = panel {
             if touch::reserved(profiles, reserved) {
                 return Err(failure("touch seat reserved for remote input"));
@@ -479,9 +486,9 @@ impl Scene {
                 .transpose()?,
             draws: Vec::with_capacity(
                 (if source.enemy.is_some() {
-                    17usize.saturating_add(encounter::EXTRA_SPRITES)
+                    21usize.saturating_add(encounter::EXTRA_SPRITES)
                 } else {
-                    17usize
+                    21usize
                 })
                 .saturating_add(
                     usize::from(source.shadow.is_some()).saturating_mul(4),
@@ -536,7 +543,7 @@ impl Scene {
             (20i32.saturating_add(center), 16i32),
             &mut self.draws,
         )?;
-        if cabinet.phase() == Phase::MainMenu {
+        if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused) {
             for (seat, character) in
                 Player::ALL.into_iter().zip(cabinet.choices())
             {
@@ -789,12 +796,15 @@ impl<'source> Sources<'source> {
 
 #[derive(Clone, Copy, Debug)]
 struct PreviewOptions<'profiles> {
+    audio_device: Option<&'profiles str>,
     controls: &'profiles launch::ResolvedControls,
     display: DisplaySettings,
     hidden: bool,
     measure: bool,
     preferences: Option<&'profiles DisplayStore>,
     touch_enabled: bool,
+    volume: MasterVolume,
+    volume_store: Option<&'profiles VolumeStore>,
 }
 
 /// One already translated native event, retained across fixed-step catch-up.
@@ -839,6 +849,8 @@ struct Interactive<'preferences> {
     previous: Duration,
     requested: DisplaySettings,
     simulation: LiveSimulation<HostedCabinet>,
+    volume: MasterVolume,
+    volume_store: Option<&'preferences VolumeStore>,
 }
 
 impl<'preferences> Interactive<'preferences> {
@@ -911,6 +923,8 @@ impl<'preferences> Interactive<'preferences> {
             previous: Duration::ZERO,
             requested: cabinet.session().display(),
             simulation,
+            volume: cabinet.session().volume(),
+            volume_store: options.volume_store,
         })
     }
 
@@ -1026,6 +1040,11 @@ impl<'preferences> Interactive<'preferences> {
                 save_display(self.preferences, requested)?;
                 self.requested = requested;
             }
+            let volume = cabinet.session().volume();
+            if volume != self.volume {
+                save_volume(self.volume_store, volume)?;
+                self.volume = volume;
+            }
             if let Some(audio) = &mut playback {
                 audio.update(cabinet)?;
             }
@@ -1083,6 +1102,55 @@ where
     live.enqueue(target, actions).map(|()| Some(target))
 }
 
+fn desktop_mapping(
+    profiles: &Profiles,
+    reserved: [bool; 4],
+) -> InputMapping<Action> {
+    let mut mapping = InputMapping::new();
+    let [first, ..] = profiles.keys;
+    let [pause, ..] = first;
+    if let Some(key) = pause
+        && let Some(player) = Player::ALL
+            .into_iter()
+            .zip(reserved)
+            .find_map(|(player, remote)| (!remote).then_some(player))
+    {
+        mapping.bind_key(key_code(key), Action {
+            control: Control::Pause,
+            player,
+        });
+    }
+    for (((player, keys), buttons), remote) in Player::ALL
+        .into_iter()
+        .zip(profiles.keys)
+        .zip(profiles.mouse)
+        .zip(reserved)
+    {
+        if !remote {
+            bind_desktop_seat(&mut mapping, player, keys, buttons);
+        }
+    }
+    mapping
+}
+
+fn bind_desktop_seat(
+    mapping: &mut InputMapping<Action>,
+    player: Player,
+    keys: [Option<Scancode>; 8],
+    buttons: [Option<MouseButton>; 8],
+) {
+    for ((control, key), mouse) in CONTROLS.into_iter().zip(keys).zip(buttons) {
+        if control != Control::Pause
+            && let Some(code) = key
+        {
+            mapping.bind_key(key_code(code), Action { control, player });
+        }
+        if let Some(button) = mouse {
+            mapping.bind_mouse(mouse_code(button), Action { control, player });
+        }
+    }
+}
+
 fn frame_due(
     current: &HostedCabinet,
     presented: Option<&HostedCabinet>,
@@ -1110,6 +1178,28 @@ fn save_display(
         receipt.durability.map_err(failure)?;
     }
     Ok(())
+}
+
+fn save_volume(
+    store: Option<&VolumeStore>,
+    volume: MasterVolume,
+) -> Result<(), RenderError> {
+    if let Some(preferences) = store {
+        let receipt = preferences.store(volume).map_err(failure)?;
+        receipt.durability.map_err(failure)?;
+    }
+    Ok(())
+}
+
+const fn mouse_label(button: MouseButton) -> &'static str {
+    match button {
+        MouseButton::Left => "LEFT",
+        MouseButton::Middle => "MIDDLE",
+        MouseButton::Right => "RIGHT",
+        MouseButton::X1 => "X1",
+        MouseButton::X2 => "X2",
+        MouseButton::Unknown => "UNKNOWN",
+    }
 }
 
 fn key_label(key: Scancode) -> &'static str {
@@ -1156,7 +1246,7 @@ fn load_menu(
         PlateLayout {
             background: [24, 22, 30, 255],
             height: 192,
-            max_bytes: size(1_200_000)?,
+            max_bytes: size(1_400_000)?,
             width: 280,
         },
         MenuContent {
@@ -1347,12 +1437,16 @@ fn project_contact(
 /// # Errors
 /// Rejects invalid inputs, missing art, unsupported native device or input.
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
+    if matches!(args.as_slice(), [arg] if arg == "--list-audio-devices") {
+        return audio::list_devices().map_err(|error| format!("{error:?}"));
+    }
     if args.first().is_some_and(|arg| arg == "--lan-controller") {
         return controller::run(args);
     }
     let load_started = Instant::now();
     let launch::Launch {
         assets,
+        audio_device,
         controls,
         display,
         host,
@@ -1360,6 +1454,8 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         preferences,
         smoke,
         touch_enabled,
+        volume,
+        volume_store,
     } = launch::Launch::parse(args)?;
     let resolved = controls.resolve()?;
     let listener = host.as_deref().map(lan::open_host).transpose()?;
@@ -1382,12 +1478,15 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             window(
                 &source,
                 PreviewOptions {
+                    audio_device: audio_device.as_deref(),
                     controls: &resolved,
                     display,
                     hidden: smoke,
                     measure,
                     preferences: preferences.as_ref(),
                     touch_enabled,
+                    volume,
+                    volume_store: volume_store.as_ref(),
                 },
                 listener,
                 load_started,
@@ -1710,6 +1809,17 @@ fn smoke_window_toggle(
         scene.apply_display_settings(settings.effective_display())?;
         let _drawn = art.present(scene, simulation.state())?;
     }
+    smoke_press(controls, simulation, Control::Down)?;
+    let _drawn = art.present(scene, simulation.state())?;
+    let before = scene.readback()?;
+    smoke_press(controls, simulation, Control::Primary)?;
+    if simulation.state().session().volume() != MasterVolume::ThreeQuarters {
+        return Err(failure("master volume menu selection failed"));
+    }
+    let _updated = art.present(scene, simulation.state())?;
+    if scene.readback()? == before {
+        return Err(failure("master volume row did not update"));
+    }
     smoke_press(controls, simulation, Control::Start)?;
     if simulation.state().phase() != Phase::MainMenu {
         return Err(failure("settings did not return to main menu"));
@@ -1756,7 +1866,8 @@ fn smoke_admission(
             )?;
             continue;
         }
-        let [_, key, ..] = keys;
+        let [_, start, ..] = keys;
+        let key = start.ok_or(RenderError::InvalidSprite)?;
         for down in [true, false] {
             controls.route(
                 InputEvent::Key {
@@ -1925,23 +2036,12 @@ fn smoke_movement_benchmark(
         let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
         let elapsed = TICK_INTERVAL.saturating_mul(tick);
         let before = simulation.state().stations();
-        for [_, _, _, _, left, right, ..] in controls.profiles.keys {
-            let (release, press) = if cycle.is_multiple_of(2) {
-                (left, right)
-            } else {
-                (right, left)
-            };
-            for (key, down) in [(release, false), (press, true)] {
-                controls.route(
-                    InputEvent::Key {
-                        code: key_code(key),
-                        down,
-                    },
-                    elapsed,
-                    simulation,
-                )?;
-            }
-        }
+        smoke_movement_inputs(
+            controls,
+            simulation,
+            elapsed,
+            cycle.is_multiple_of(2),
+        )?;
         let rss = resident_bytes().ok();
         for frame in 0..30u8 {
             let started = Instant::now();
@@ -1969,6 +2069,35 @@ fn smoke_movement_benchmark(
         }
     }
     smoke_movement_report(&collector)
+}
+
+fn smoke_movement_inputs(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    elapsed: Duration,
+    rightward: bool,
+) -> Result<(), RenderError> {
+    for [_, _, _, _, left_binding, right_binding, ..] in controls.profiles.keys
+    {
+        let left = left_binding.ok_or(RenderError::InvalidSprite)?;
+        let right = right_binding.ok_or(RenderError::InvalidSprite)?;
+        let (release, press) = if rightward {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        for (key, down) in [(release, false), (press, true)] {
+            controls.route(
+                InputEvent::Key {
+                    code: key_code(key),
+                    down,
+                },
+                elapsed,
+                simulation,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn smoke_movement_report(
@@ -2004,7 +2133,7 @@ fn smoke_poses(
         for down in [true, false] {
             controls.route(
                 InputEvent::Key {
-                    code: key_code(primary),
+                    code: key_code(primary.ok_or(RenderError::InvalidSprite)?),
                     down,
                 },
                 TICK_INTERVAL.saturating_mul(tick),
@@ -2462,11 +2591,8 @@ fn window(
     let limits = scene_limits(source, options, reserved)?;
     let startup = window
         .input(size(reserved.into_iter().filter(|remote| !remote).count())?)?;
-    let mut playback = source
-        .audio
-        .as_ref()
-        .map(audio::Playback::open)
-        .transpose()?;
+    let mut playback =
+        audio::open_optional(source.audio.as_ref(), options.audio_device)?;
     let renderer =
         (options.hidden || options.measure).then(|| window.renderer_name());
     window.with_scene(layout, limits, |scene| {
@@ -2490,8 +2616,11 @@ fn window(
         }
         let scroll_limit =
             art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
-        let session =
-            LocalSession::with_display(options.display, touch_enabled);
+        let session = LocalSession::with_preferences(
+            options.display,
+            options.volume,
+            touch_enabled,
+        );
         let cabinet = art.poses.configure_cabinet(&cabinet_with_scroll(
             source.enemy.is_some(),
             session,
@@ -2524,7 +2653,7 @@ fn scene_limits(
     let shadows = usize::from(source.shadow.is_some());
     Ok(SceneLimits {
         atlas_bytes: size(
-            3_407_872usize
+            3_607_872usize
                 .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
                     touch::extra_bytes(&options.controls.profiles)
@@ -2552,9 +2681,9 @@ fn scene_limits(
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
                 .saturating_add(if touch_enabled {
-                    15
+                    19
                 } else {
-                    14
+                    18
                 }),
         )?,
     })
@@ -3055,7 +3184,7 @@ mod tests {
         let before = simulation.state().stations();
         for event in [
             InputEvent::Key {
-                code: key_code(Scancode::Right),
+                code: key_code(Scancode::D),
                 down: true,
             },
             button(11, Button::DPadRight, true),

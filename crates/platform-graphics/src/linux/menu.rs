@@ -34,6 +34,7 @@
 
 use std::num::NonZeroUsize;
 
+use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 use games::session::{LocalSession, MenuItem, SessionPhase};
 
@@ -48,7 +49,7 @@ const PHASES: [SessionPhase; 3] = [
 ];
 const ROW_HEIGHT: u16 = 16;
 const ROW_TOP: u16 = 48;
-const ROWS: [Row; 13] = [
+const ROWS: [Row; 18] = [
     Row::Choice(MenuItem::Back),
     Row::Choice(MenuItem::Exit),
     Row::Choice(MenuItem::MainMenu),
@@ -60,6 +61,11 @@ const ROWS: [Row; 13] = [
     Row::Presentation(PresentationMode::Fill),
     Row::Presentation(PresentationMode::Integer),
     Row::Presentation(PresentationMode::Stretch),
+    Row::Volume(MasterVolume::Muted),
+    Row::Volume(MasterVolume::Quarter),
+    Row::Volume(MasterVolume::Half),
+    Row::Volume(MasterVolume::ThreeQuarters),
+    Row::Volume(MasterVolume::Full),
     Row::Window(WindowMode::Fullscreen),
     Row::Window(WindowMode::Windowed),
 ];
@@ -83,13 +89,19 @@ pub struct MenuContent<'text> {
 enum Row {
     Choice(MenuItem),
     Presentation(PresentationMode),
+    Volume(MasterVolume),
     Window(WindowMode),
 }
 
 impl Row {
-    const fn for_item(item: MenuItem, display: DisplaySettings) -> Self {
+    const fn for_item(
+        item: MenuItem,
+        display: DisplaySettings,
+        volume: MasterVolume,
+    ) -> Self {
         match item {
             MenuItem::Display => Self::Presentation(display.presentation),
+            MenuItem::Volume => Self::Volume(volume),
             MenuItem::Window => Self::Window(display.window),
             MenuItem::Back
             | MenuItem::Exit
@@ -110,10 +122,12 @@ impl Row {
                 MenuItem::Play => "PLAY",
                 MenuItem::Resume => "RESUME",
                 MenuItem::Settings => "SETTINGS",
+                MenuItem::Volume => "VOLUME",
                 MenuItem::Window => "WINDOW",
             }
             .to_owned(),
             Self::Presentation(mode) => format!("DISPLAY: {}", mode.as_str()),
+            Self::Volume(level) => format!("VOLUME: {}%", level.percent()),
             Self::Window(mode) => format!("WINDOW: {}", mode.as_str()),
         }
     }
@@ -204,7 +218,7 @@ impl MenuArt {
             .ok_or(RenderError::InvalidSprite)?;
         draws.push(self.panels.draw(panel, left, top)?);
         for (index, item) in session.items().iter().copied().enumerate() {
-            let tile = Row::for_item(item, session.display())
+            let tile = Row::for_item(item, session.display(), session.volume())
                 .tile(item == selected)
                 .ok_or(RenderError::InvalidSprite)?;
             let offset = i32::try_from(index)
@@ -297,17 +311,23 @@ mod tests {
     fn verify_rows(item: MenuItem) {
         for presentation in PresentationMode::ALL {
             for window in WindowMode::ALL {
-                let row = Row::for_item(item, DisplaySettings {
+                verify_volume_rows(item, DisplaySettings {
                     presentation,
                     window,
                 });
-                let plain = row.tile(false);
-                assert!(plain.is_some());
-                assert_eq!(
-                    row.tile(true),
-                    plain.map(|index| index.saturating_add(1))
-                );
             }
+        }
+    }
+
+    fn verify_volume_rows(item: MenuItem, display: DisplaySettings) {
+        for volume in MasterVolume::ALL {
+            let row = Row::for_item(item, display, volume);
+            let plain = row.tile(false);
+            assert!(plain.is_some());
+            assert_eq!(
+                row.tile(true),
+                plain.map(|index| index.saturating_add(1))
+            );
         }
     }
 
@@ -318,12 +338,19 @@ mod tests {
             window: WindowMode::Fullscreen,
         };
         assert_eq!(
-            Row::for_item(MenuItem::Display, display).label(),
+            Row::for_item(MenuItem::Display, display, MasterVolume::Full)
+                .label(),
             "DISPLAY: integer"
         );
         assert_eq!(
-            Row::for_item(MenuItem::Window, display).label(),
+            Row::for_item(MenuItem::Window, display, MasterVolume::Full)
+                .label(),
             "WINDOW: fullscreen"
+        );
+        assert_eq!(
+            Row::for_item(MenuItem::Volume, display, MasterVolume::Half)
+                .label(),
+            "VOLUME: 50%"
         );
     }
 }

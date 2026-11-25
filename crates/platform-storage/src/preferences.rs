@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native persistence of shared display and input preferences.
+//   - Native persistence of shared display, audio and input preferences.
 // - Must-Not:
 //   - Select a title's settings directory or change its display.
 // - Allows:
@@ -33,6 +33,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 use std::{io, str};
 
+use games::audio::MasterVolume;
 use games::presentation::DisplaySettings;
 
 use crate::file::FileReadError;
@@ -41,6 +42,8 @@ use crate::save::{SaveError, SaveReceipt, SaveStore};
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(63);
 const DISPLAY_SLOT: u32 = 0;
 const CONTROL_SLOT: u32 = 1;
+const VOLUME_SLOT: u32 = 2;
+const VOLUME_PREFIX: &str = "master-volume-v1\n";
 const CONTROL_PREFIX: &str = "input-profile-v1\n";
 
 /// Display preference admission or publication error.
@@ -107,6 +110,52 @@ impl DisplayStore {
         Ok(self
             .store
             .store(DISPLAY_SLOT, settings.encode().as_bytes())?)
+    }
+}
+
+/// Master audio volume in the same dedicated preferences directory.
+#[derive(Debug)]
+pub struct VolumeStore {
+    store: SaveStore,
+}
+
+impl VolumeStore {
+    /// Load saved volume, or None when no preference has been saved.
+    /// # Errors
+    /// Rejects unsafe storage and malformed or incompatible preferences.
+    pub fn load(&self) -> Result<Option<MasterVolume>, PreferenceError> {
+        load_optional(&self.store, VOLUME_SLOT)?
+            .map(|bytes| {
+                let text = str::from_utf8(&bytes)
+                    .map_err(|_error| PreferenceError::InvalidPayload)?;
+                let value = text
+                    .strip_prefix(VOLUME_PREFIX)
+                    .ok_or(PreferenceError::InvalidPayload)?;
+                MasterVolume::parse(value)
+                    .map_err(|_error| PreferenceError::InvalidPayload)
+            })
+            .transpose()
+    }
+
+    /// Pin an existing dedicated settings directory.
+    /// # Errors
+    /// Rejects missing, linked, non-directory or writable-by-others paths.
+    pub fn open(directory: &Path) -> Result<Self, PreferenceError> {
+        Ok(Self {
+            store: SaveStore::open(directory, MAX_BYTES)?,
+        })
+    }
+
+    /// Atomically replace saved volume.
+    /// # Errors
+    /// Rejects unsafe storage, incompatible existing data or save failure.
+    pub fn store(
+        &self,
+        volume: MasterVolume,
+    ) -> Result<SaveReceipt, PreferenceError> {
+        let _existing = self.load()?;
+        let payload = format!("{VOLUME_PREFIX}{}", volume.percent());
+        Ok(self.store.store(VOLUME_SLOT, payload.as_bytes())?)
     }
 }
 
@@ -200,6 +249,38 @@ mod tests {
         condition
             .then_some(())
             .ok_or(PreferenceError::InvalidPayload)
+    }
+
+    #[test]
+    fn volume_preferences_are_independent_and_validated()
+    -> Result<(), PreferenceError> {
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let display = DisplayStore::open(&root.path)?;
+        let controls = ControlStore::open(&root.path, MAX_BYTES)?;
+        let volume = VolumeStore::open(&root.path)?;
+        require(volume.load()?.is_none())?;
+        let settings = DisplaySettings::default();
+        require(display.store(settings)?.durability.is_ok())?;
+        let profile = "version=1\n";
+        require(controls.store(profile)?.durability.is_ok())?;
+        for level in MasterVolume::ALL {
+            require(volume.store(level)?.durability.is_ok())?;
+            require(VolumeStore::open(&root.path)?.load()? == Some(level))?;
+        }
+        require(display.load()? == Some(settings))?;
+        require(controls.load()?.as_deref() == Some(profile))?;
+        let raw = SaveStore::open(&root.path, MAX_BYTES)?;
+        for payload in [
+            b"title-progress".as_slice(),
+            b"master-volume-v1\n101",
+            b"master-volume-v1\n50\n",
+        ] {
+            let _receipt = raw.store(VOLUME_SLOT, payload)?;
+            require(volume.load() == Err(PreferenceError::InvalidPayload))?;
+            require(volume.store(MasterVolume::Full).is_err())?;
+            require(raw.load(VOLUME_SLOT)? == payload)?;
+        }
+        Ok(())
     }
 
     #[test]

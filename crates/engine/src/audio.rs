@@ -124,6 +124,77 @@ impl StereoGain {
     };
 }
 
+/// Master output attenuation, independent of the game's individual gains.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MasterVolume {
+    /// Preserve the original amplitude.
+    #[default]
+    Full,
+    /// One half of the original amplitude.
+    Half,
+    /// Silence without stopping voices.
+    Muted,
+    /// One quarter of the original amplitude.
+    Quarter,
+    /// Three quarters of the original amplitude.
+    ThreeQuarters,
+}
+
+impl MasterVolume {
+    /// All supported levels in menu order.
+    pub const ALL: [Self; 5] = [
+        Self::Muted,
+        Self::Quarter,
+        Self::Half,
+        Self::ThreeQuarters,
+        Self::Full,
+    ];
+
+    const fn attenuate(self, sample: i64) -> i64 {
+        match self {
+            Self::Muted => 0,
+            Self::Quarter => sample.saturating_div(4),
+            Self::Half => sample.saturating_div(2),
+            Self::ThreeQuarters => sample.saturating_mul(3).saturating_div(4),
+            Self::Full => sample,
+        }
+    }
+
+    /// Select the next lower level, wrapping after mute.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Full => Self::ThreeQuarters,
+            Self::ThreeQuarters => Self::Half,
+            Self::Half => Self::Quarter,
+            Self::Quarter => Self::Muted,
+            Self::Muted => Self::Full,
+        }
+    }
+
+    /// Parse one of the supported percentages.
+    /// # Errors
+    /// Rejects percentages outside the supported menu levels.
+    pub fn parse(text: &str) -> Result<Self, AudioError> {
+        Self::ALL
+            .into_iter()
+            .find(|level| level.percent() == text)
+            .ok_or(AudioError::InvalidVolume)
+    }
+
+    /// Portable, human-readable percentage.
+    #[must_use]
+    pub const fn percent(self) -> &'static str {
+        match self {
+            Self::Muted => "0",
+            Self::Quarter => "25",
+            Self::Half => "50",
+            Self::ThreeQuarters => "75",
+            Self::Full => "100",
+        }
+    }
+}
+
 /// Audio timing and playback admission failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AudioError {
@@ -133,6 +204,8 @@ pub enum AudioError {
     FrameOverflow,
     /// Empty or incomplete source frames.
     InvalidClip,
+    /// The master volume percentage is not a supported level.
+    InvalidVolume,
     /// No free voice slot; existing playback remains unchanged.
     VoicesFull,
 }
@@ -253,6 +326,7 @@ impl Voice<'_> {
 pub struct Mixer<'samples> {
     rate: NonZeroU32,
     voices: Vec<Option<Voice<'samples>>>,
+    volume: MasterVolume,
 }
 
 impl<'samples> Mixer<'samples> {
@@ -280,7 +354,11 @@ impl<'samples> Mixer<'samples> {
             .try_reserve_exact(count)
             .map_err(|_error| AudioError::Allocation)?;
         voices.resize(count, None);
-        Ok(Self { rate, voices })
+        Ok(Self {
+            rate,
+            voices,
+            volume: MasterVolume::default(),
+        })
     }
 
     /// Start a clip in the first free slot and return its index.
@@ -322,8 +400,13 @@ impl<'samples> Mixer<'samples> {
     pub fn render(&mut self, output: &mut [[i16; 2]]) {
         let rate = NonZeroU64::from(self.rate).get();
         for frame in output {
-            *frame = mix_frame(&mut self.voices, rate);
+            *frame = mix_frame(&mut self.voices, rate, self.volume);
         }
+    }
+
+    /// Set the master attenuation without interrupting active voices.
+    pub const fn set_volume(&mut self, volume: MasterVolume) {
+        self.volume = volume;
     }
 
     /// Stop a currently occupied slot without changing other voices.
@@ -334,7 +417,11 @@ impl<'samples> Mixer<'samples> {
     }
 }
 
-fn mix_frame(voices: &mut [Option<Voice<'_>>], rate: u64) -> [i16; 2] {
+fn mix_frame(
+    voices: &mut [Option<Voice<'_>>],
+    rate: u64,
+    volume: MasterVolume,
+) -> [i16; 2] {
     let mut sum = [0i64; 2];
     for slot in voices {
         let Some(voice) = slot else {
@@ -348,8 +435,11 @@ fn mix_frame(voices: &mut [Option<Voice<'_>>], rate: u64) -> [i16; 2] {
         }
     }
     sum.map(|sample| {
-        i16::try_from(sample.clamp(i64::from(i16::MIN), i64::from(i16::MAX)))
-            .unwrap_or(0)
+        let attenuated = volume.attenuate(sample);
+        i16::try_from(
+            attenuated.clamp(i64::from(i16::MIN), i64::from(i16::MAX)),
+        )
+        .unwrap_or(0)
     })
 }
 
@@ -392,6 +482,63 @@ mod tests {
 
     fn rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+    }
+
+    #[test]
+    fn master_volume_preserves_timing_and_scales_before_clipping()
+    -> Result<(), AudioError> {
+        let clip = Clip::new(
+            &[20_000, -20_000, 24_000, -24_000],
+            Channels::Mono,
+            rate(1),
+        )?;
+        let mut mixer = Mixer::new(rate(1), NonZeroU16::MIN.saturating_add(1))?;
+        let _first = mixer.play(clip, StereoGain::UNITY)?;
+        let _second = mixer.play(clip, StereoGain::UNITY)?;
+        let mut frame = [[0; 2]];
+        mixer.render(&mut frame);
+        if frame != [[i16::MAX; 2]] {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.set_volume(MasterVolume::Half);
+        mixer.render(&mut frame);
+        if frame != [[-20_000; 2]] {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.set_volume(MasterVolume::Muted);
+        mixer.render(&mut frame);
+        if frame != [[0; 2]] || mixer.active() != 2 {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.set_volume(MasterVolume::Quarter);
+        mixer.render(&mut frame);
+        (frame == [[-12_000; 2]] && mixer.active() == 0)
+            .then_some(())
+            .ok_or(AudioError::InvalidVolume)
+    }
+
+    #[test]
+    fn volume_levels_roundtrip_and_cycle() -> Result<(), AudioError> {
+        let mut level = MasterVolume::default();
+        for expected in [
+            MasterVolume::Full,
+            MasterVolume::ThreeQuarters,
+            MasterVolume::Half,
+            MasterVolume::Quarter,
+            MasterVolume::Muted,
+        ] {
+            if level != expected
+                || MasterVolume::parse(level.percent())? != level
+            {
+                return Err(AudioError::InvalidVolume);
+            }
+            level = level.next();
+        }
+        (level == MasterVolume::Full
+            && MasterVolume::parse("101").is_err()
+            && MasterVolume::parse("25.5").is_err())
+        .then_some(())
+        .ok_or(AudioError::InvalidVolume)
     }
 
     #[test]

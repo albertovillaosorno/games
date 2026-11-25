@@ -45,6 +45,7 @@ use sdl2::controller::GameController;
 pub use sdl2::controller::{Axis, Button};
 use sdl2::event::{Event, WindowEvent};
 pub use sdl2::keyboard::Scancode;
+pub use sdl2::mouse::MouseButton;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
 use super::RenderError;
@@ -406,6 +407,16 @@ pub const fn button_code(button: Button) -> u16 {
     button as u16
 }
 
+/// SDL physical mouse button code for shared action mapping.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "SDL mouse buttons have u8 C ABI discriminants"
+)]
+pub const fn mouse_code(button: MouseButton) -> u8 {
+    button as u8
+}
+
 #[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
@@ -478,7 +489,40 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
             down: false,
         }));
     }
-    route_controller(event)
+    route_mouse(event, window).or_else(|| route_controller(event))
+}
+
+fn route_mouse(event: &Event, window: u32) -> Option<HostEvent> {
+    let (window_id, which, button, down) = if let Event::MouseButtonDown {
+        window_id,
+        which,
+        mouse_btn,
+        ..
+    } = *event
+    {
+        (window_id, which, mouse_btn, true)
+    } else if let Event::MouseButtonUp {
+        window_id,
+        which,
+        mouse_btn,
+        ..
+    } = *event
+    {
+        (window_id, which, mouse_btn, false)
+    } else {
+        return None;
+    };
+    // SDL_TOUCH_MOUSEID is not a physical mouse. Avoid double routing.
+    if window_id != window
+        || which == u32::MAX
+        || button == MouseButton::Unknown
+    {
+        return None;
+    }
+    Some(HostEvent::Input(InputEvent::Mouse {
+        code: mouse_code(button),
+        down,
+    }))
 }
 
 fn route_controller(event: &Event) -> Option<HostEvent> {

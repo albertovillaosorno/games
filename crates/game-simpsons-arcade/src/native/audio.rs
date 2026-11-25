@@ -31,11 +31,14 @@
 
 //! Opt-in playback of observed attack-associated PCM clips.
 
+use std::io::{Write as _, stdout};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::path::Path;
 use std::time::Duration;
 
-use games::audio::{AudioError, Channels, Clip, Mixer, StereoGain};
+use games::audio::{
+    AudioError, Channels, Clip, MasterVolume, Mixer, StereoGain,
+};
 use games::input::{InputEvent, LogicalAction};
 use games::replay::LiveSimulation;
 use games_assets::ManifestLimits;
@@ -46,9 +49,7 @@ use games_platform_graphics::linux::input::key_code;
 use games_platform_storage::bundle::MediaOverlay;
 
 use super::launch::AudioSelection;
-use super::{
-    Controls, KEYBOARD, failure, live, open_selected_bundle, size, smoke_press,
-};
+use super::{Controls, failure, live, open_selected_bundle, size, smoke_press};
 use crate::{Action, Cabinet, Control, Phase, Player, TICK_INTERVAL};
 
 const CHUNK: usize = 256;
@@ -160,6 +161,7 @@ pub(super) struct Playback<'samples> {
     mixer: Mixer<'samples>,
     running: bool,
     scratch: [[i16; 2]; CHUNK],
+    volume: MasterVolume,
 }
 
 impl<'samples> Playback<'samples> {
@@ -185,13 +187,21 @@ impl<'samples> Playback<'samples> {
 
     pub(super) fn open(
         samples: &'samples Samples,
+        name: Option<&str>,
     ) -> Result<Self, RenderError> {
-        let device = NativeAudio::open(PlaybackSpec {
+        let spec = PlaybackSpec {
             buffer_frames: NonZeroU16::MIN.saturating_add(255),
             channels: NonZeroU8::MIN.saturating_add(1),
             max_queued_frames: NonZeroU32::MIN.saturating_add(QUEUE_FRAMES - 1),
             sample_rate: RATE,
-        })
+        };
+        let device = NativeAudio::open_on(spec, name).map_err(failure)?;
+        let (driver, requested) = device.output();
+        writeln!(
+            stdout().lock(),
+            "Audio: SDL {driver}, requested output: {}",
+            requested.unwrap_or("system default").escape_debug(),
+        )
         .map_err(failure)?;
         Ok(Self {
             clips: samples.clips()?,
@@ -202,6 +212,7 @@ impl<'samples> Playback<'samples> {
                 .map_err(failure)?,
             running: false,
             scratch: [[0; 2]; CHUNK],
+            volume: MasterVolume::default(),
         })
     }
 
@@ -348,6 +359,13 @@ impl<'samples> Playback<'samples> {
         &mut self,
         cabinet: &Cabinet,
     ) -> Result<(), RenderError> {
+        let volume = cabinet.session().volume();
+        if self.volume != volume {
+            // Pending frames were already mixed at the previous volume.
+            self.device.clear();
+            self.mixer.set_volume(volume);
+            self.volume = volume;
+        }
         let current = cabinet.stations().map(|station| station.attack_cues);
         let phase = cabinet.phase();
         let playing = phase == Phase::Playing;
@@ -397,6 +415,32 @@ impl<'samples> Playback<'samples> {
         }
         Ok(())
     }
+}
+
+pub(super) fn list_devices() -> Result<(), RenderError> {
+    let devices = NativeAudio::playback_devices().map_err(failure)?;
+    let mut out = stdout().lock();
+    writeln!(out, "SDL audio backend: {}", devices.driver).map_err(failure)?;
+    if let Some(names) = devices.names {
+        for name in names {
+            writeln!(out, "{}", name.escape_debug()).map_err(failure)?;
+        }
+    } else {
+        writeln!(out, "Device enumeration unavailable").map_err(failure)?;
+    }
+    Ok(())
+}
+
+pub(super) fn open_optional<'samples>(
+    samples: Option<&'samples Samples>,
+    name: Option<&str>,
+) -> Result<Option<Playback<'samples>>, RenderError> {
+    if let Some(available) = samples {
+        return Playback::open(available, name).map(Some);
+    }
+    writeln!(stdout().lock(), "Audio: disabled (no audio bundle)")
+        .map_err(failure)?;
+    Ok(None)
 }
 
 fn replacement_limits() -> Result<ManifestLimits, RenderError> {
@@ -457,8 +501,8 @@ fn smoke_join(
     simulation: &mut LiveSimulation<Cabinet>,
     controls: &mut Controls,
 ) -> Result<(), RenderError> {
-    let entries = KEYBOARD.into_iter().map(|[_, start, ..]| start);
-    for key in entries {
+    for player in Player::ALL {
+        let key = controls.key(player, Control::Start)?;
         for down in [true, false] {
             controls.route(
                 InputEvent::Key {

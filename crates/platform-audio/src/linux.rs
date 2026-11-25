@@ -15,7 +15,8 @@
 // - Allows:
 //   - Inputs: Explicit playback configuration and complete PCM frames.
 //   - Outputs: Queue occupancy, admission and playback control.
-//   - Side effects: Native audio device creation and sample submission.
+//   - Side effects: Native audio device enumeration, creation and sample
+//     submission.
 // - Split-When:
 //   - Independent native audio backends require separate adapters.
 // - Merge-When:
@@ -37,6 +38,9 @@ use std::ops::Range;
 
 use games_assets::pcm::PcmSamples;
 use sdl2::audio::{AudioFormat, AudioQueue, AudioSpecDesired};
+
+const MAX_DEVICE_NAME: usize = 512;
+const MAX_DEVICES: u32 = 64;
 
 /// Explicit audio playback configuration and software-queue budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,10 +66,21 @@ pub enum PlaybackError {
     Capacity,
     /// PCM or the obtained device has an incompatible format.
     FormatMismatch,
+    /// An explicit device name is empty, oversized or invalid.
+    InvalidDevice,
     /// An empty, incomplete or out-of-range frame submission.
     InvalidFrames,
     /// The requested playback configuration is not representable.
     InvalidSpec,
+}
+
+/// The current native audio backend and its enumerated playback devices.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AudioDevices {
+    /// SDL backend identifier.
+    pub driver: &'static str,
+    /// Exact output names, or None when enumeration is unsupported.
+    pub names: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,7 +166,9 @@ impl QueueLayout {
 /// already transferred to the device or system audio server.
 pub struct NativeAudio {
     device: AudioQueue<i16>,
+    driver: &'static str,
     layout: QueueLayout,
+    requested_device: Option<String>,
     scratch: Vec<i16>,
 }
 
@@ -174,6 +191,19 @@ impl NativeAudio {
     /// # Errors
     /// Rejects invalid configuration, unavailable devices or format changes.
     pub fn open(spec: PlaybackSpec) -> Result<Self, PlaybackError> {
+        Self::open_on(spec, None)
+    }
+
+    /// Open an exact named device or the system default.
+    /// # Errors
+    /// Rejects malformed names, unavailable devices and format changes.
+    pub fn open_on(
+        spec: PlaybackSpec,
+        name: Option<&str>,
+    ) -> Result<Self, PlaybackError> {
+        if name.is_some_and(|value| !valid_device(value)) {
+            return Err(PlaybackError::InvalidDevice);
+        }
         let layout = QueueLayout::new(spec)?;
         let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
         let audio = sdl.audio().map_err(PlaybackError::Backend)?;
@@ -183,7 +213,7 @@ impl NativeAudio {
             samples: Some(spec.buffer_frames.get()),
         };
         let device = audio
-            .open_queue::<i16, _>(None, &desired)
+            .open_queue::<i16, _>(name, &desired)
             .map_err(PlaybackError::Backend)?;
         let obtained = device.spec();
         if obtained.freq != layout.frequency
@@ -195,14 +225,52 @@ impl NativeAudio {
         device.pause();
         Ok(Self {
             device,
+            driver: audio.current_audio_driver(),
             layout,
+            requested_device: name.map(str::to_owned),
             scratch: Vec::new(),
         })
+    }
+
+    /// Backend identifier and requested device name. None means the system
+    /// default, whose physical route may change outside this process.
+    #[must_use]
+    pub fn output(&self) -> (&str, Option<&str>) {
+        (self.driver, self.requested_device.as_deref())
     }
 
     /// Stop consuming software-queued frames.
     pub fn pause(&self) {
         self.device.pause();
+    }
+
+    /// Enumerate playback devices without opening or playing on them.
+    /// # Errors
+    /// Reports backend failure or enumeration beyond the bounded limit.
+    pub fn playback_devices() -> Result<AudioDevices, PlaybackError> {
+        let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
+        let audio = sdl.audio().map_err(PlaybackError::Backend)?;
+        let names = audio
+            .num_audio_playback_devices()
+            .map(|count| {
+                if count > MAX_DEVICES {
+                    return Err(PlaybackError::Capacity);
+                }
+                (0..count)
+                    .map(|index| {
+                        validate_device_name(
+                            audio
+                                .audio_playback_device_name(index)
+                                .map_err(PlaybackError::Backend)?,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        Ok(AudioDevices {
+            driver: audio.current_audio_driver(),
+            names,
+        })
     }
 
     /// Decode and enqueue a verified canonical PCM frame range.
@@ -254,6 +322,19 @@ impl NativeAudio {
     }
 }
 
+fn valid_device(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_DEVICE_NAME
+        && !name.as_bytes().contains(&0)
+}
+
+fn validate_device_name(name: String) -> Result<String, PlaybackError> {
+    if !valid_device(&name) {
+        return Err(PlaybackError::InvalidDevice);
+    }
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -289,6 +370,16 @@ mod tests {
             &PAYLOAD,
         )
         .map_err(|_error| PlaybackError::InvalidFrames)
+    }
+
+    #[test]
+    fn rejects_invalid_explicit_device_names_before_opening() {
+        for name in ["", "bad\0name", &"a".repeat(513)] {
+            assert!(matches!(
+                NativeAudio::open_on(configuration(), Some(name)),
+                Err(PlaybackError::InvalidDevice)
+            ));
+        }
     }
 
     #[test]
@@ -390,7 +481,16 @@ mod tests {
         if env::var_os("GAMES_NATIVE_AUDIO_SMOKE").is_none() {
             return Ok(());
         }
+        let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
+        let _subsystem = sdl.audio().map_err(PlaybackError::Backend)?;
+        let devices = NativeAudio::playback_devices().map_err(|error| {
+            PlaybackError::Backend(format!("enumerate: {error:?}"))
+        })?;
         let mut audio = NativeAudio::open(configuration())?;
+        require(
+            audio.output() == (devices.driver, None),
+            "unexpected default output",
+        )?;
         let source = pcm()?;
         require(audio.queued_bytes() == 0, "expected empty queue")?;
         audio.queue_pcm(&source, 1, NonZeroU32::MIN)?;
@@ -406,6 +506,19 @@ mod tests {
         require(audio.queued_bytes() == 0, "expected empty queue")?;
         audio.resume();
         audio.pause();
+        drop(audio);
+        if let Some(name) =
+            devices.names.as_ref().and_then(|names| names.first())
+        {
+            let named = NativeAudio::open_on(configuration(), Some(name))
+                .map_err(|error| {
+                    PlaybackError::Backend(format!("named open: {error:?}"))
+                })?;
+            require(
+                named.output() == (devices.driver, Some(name.as_str())),
+                "unexpected named output",
+            )?;
+        }
         Ok(())
     }
 }

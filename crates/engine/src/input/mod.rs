@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Read operating-system devices or prescribe per-title controls.
 // - Allows:
-//   - Inputs: Platform-neutral key, gamepad and touch events.
+//   - Inputs: Platform-neutral key, mouse, gamepad and touch events.
 //   - Outputs: Aggregated logical action transitions.
 //   - Side effects: Tracks connected devices and held inputs in memory.
 // - Split-When:
@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another shared input router covers identical semantics.
 // - Summary:
-//   - Configurable keyboard, controller and touch input routing.
+//   - Configurable keyboard, mouse, controller and touch routing.
 // - Description:
 //   - Releases held actions on unplug without releasing other sources.
 // - Usage:
@@ -84,13 +84,20 @@ pub enum InputEvent {
         /// Identifier of the disconnected controller.
         device: u64,
     },
-    /// The host window lost keyboard and touch focus.
+    /// The host window lost keyboard, mouse and touch focus.
     FocusLost,
     /// A keyboard scancode changed state.
     Key {
         /// Physical keyboard scancode.
         code: u32,
         /// Whether the key is pressed.
+        down: bool,
+    },
+    /// A physical mouse button changed state.
+    Mouse {
+        /// Platform-defined mouse button code.
+        code: u8,
+        /// Whether the button is pressed.
         down: bool,
     },
     /// A configured title-specific touch zone changed state.
@@ -144,6 +151,7 @@ pub struct InputMapping<Action> {
     axes: BTreeMap<u16, AxisBinding<Action>>,
     buttons: BTreeMap<u16, Action>,
     keys: BTreeMap<u32, Action>,
+    mouse: BTreeMap<u8, Action>,
     touch: BTreeMap<u16, Action>,
     touch_layout: Option<TouchLayout>,
 }
@@ -163,6 +171,7 @@ enum Source {
     Button(u64, u16),
     Contact(ContactId),
     Key(u32),
+    Mouse(u8),
     Touch(u16),
 }
 
@@ -211,6 +220,11 @@ impl<Action> InputMapping<Action> {
         let _old = self.keys.insert(code, action);
     }
 
+    /// Assign a physical mouse button to a logical action.
+    pub fn bind_mouse(&mut self, code: u8, action: Action) {
+        let _old = self.mouse.insert(code, action);
+    }
+
     /// Assign a per-title touch zone to a logical action.
     pub fn bind_touch(&mut self, zone: u16, action: Action) {
         let _old = self.touch.insert(zone, action);
@@ -223,6 +237,7 @@ impl<Action> InputMapping<Action> {
             axes: BTreeMap::new(),
             buttons: BTreeMap::new(),
             keys: BTreeMap::new(),
+            mouse: BTreeMap::new(),
             touch: BTreeMap::new(),
             touch_layout: None,
         }
@@ -365,6 +380,10 @@ impl<Action: Clone + Ord> InputRouter<Action> {
             InputEvent::Key { code, down } => {
                 let mapping = self.mapping.keys.get(&code).cloned();
                 self.transition(Source::Key(code), mapping, down)
+            },
+            InputEvent::Mouse { code, down } => {
+                let mapping = self.mapping.mouse.get(&code).cloned();
+                self.transition(Source::Mouse(code), mapping, down)
             },
             InputEvent::Touch { zone, down } => {
                 let mapping = self.mapping.touch.get(&zone).cloned();
@@ -721,6 +740,36 @@ mod tests {
         assert_eq!(router.handle(InputEvent::Key { code: 42, down: false }), [
         ]);
         assert_eq!(router.handle(InputEvent::Detached { device: 5 }), [up]);
+    }
+
+    #[test]
+    fn mouse_holds_aggregate_with_keys_and_release_on_focus_loss()
+    -> Result<(), &'static str> {
+        let mut map = InputMapping::new();
+        map.bind_key(42, "jump");
+        map.bind_mouse(1, "jump");
+        map.bind_button(7, "jump");
+        let mut router = InputRouter::new(map);
+        let mouse = |down| InputEvent::Mouse { code: 1, down };
+        verify_steps(&mut router, &[
+            (mouse(true), &[change("jump", true)]),
+            (mouse(true), &[]),
+            (InputEvent::Key { code: 42, down: true }, &[]),
+            (mouse(false), &[]),
+            (InputEvent::FocusLost, &[change("jump", false)]),
+            (mouse(true), &[change("jump", true)]),
+            (InputEvent::Attached { device: 5 }, &[]),
+            (
+                InputEvent::Button {
+                    device: 5,
+                    code: 7,
+                    down: true,
+                },
+                &[],
+            ),
+            (InputEvent::FocusLost, &[]),
+            (InputEvent::Detached { device: 5 }, &[change("jump", false)]),
+        ])
     }
 
     #[test]
