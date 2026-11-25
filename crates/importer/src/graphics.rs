@@ -80,14 +80,30 @@ impl TileLayout<'_> {
         if destination.len() != expected {
             return Err(GraphicsError::SizeMismatch);
         }
-        let pixels = self.pixels_per_tile()?;
-        for (tile, decoded) in source
-            .chunks_exact(self.tile_bytes.get())
-            .zip(destination.chunks_exact_mut(pixels))
+        if self.plane_bits == [0, 1, 2, 3]
+            && self
+                .row_bits
+                .iter()
+                .chain(self.column_bits)
+                .all(|offset| offset.is_multiple_of(4))
         {
-            self.decode_tile(tile, decoded)?;
+            return self.decode_tiles(source, destination, packed_pixel);
         }
-        Ok(())
+        if let [first, second, third, fourth] = self.plane_bits
+            && self
+                .plane_bits
+                .iter()
+                .all(|offset| offset.is_multiple_of(8))
+        {
+            let planes =
+                [*first, *second, *third, *fourth].map(|bit| bit >> 3usize);
+            return self.decode_tiles(source, destination, |tile, base| {
+                aligned_pixel(tile, base, planes)
+            });
+        }
+        self.decode_tiles(source, destination, |tile, base| {
+            self.decode_pixel(tile, base)
+        })
     }
 
     /// Allocate and decode a complete canonical index buffer.
@@ -124,6 +140,7 @@ impl TileLayout<'_> {
         &self,
         tile: &[u8],
         destination: &mut [u8],
+        read_pixel: impl Fn(&[u8], usize) -> Result<u8, GraphicsError>,
     ) -> Result<(), GraphicsError> {
         for (row, output) in self
             .row_bits
@@ -133,8 +150,24 @@ impl TileLayout<'_> {
             for (column, pixel) in self.column_bits.iter().zip(output) {
                 let base =
                     row.checked_add(*column).ok_or(GraphicsError::Overflow)?;
-                *pixel = self.decode_pixel(tile, base)?;
+                *pixel = read_pixel(tile, base)?;
             }
+        }
+        Ok(())
+    }
+
+    fn decode_tiles(
+        &self,
+        source: &[u8],
+        destination: &mut [u8],
+        read_pixel: impl Fn(&[u8], usize) -> Result<u8, GraphicsError>,
+    ) -> Result<(), GraphicsError> {
+        let pixels = self.pixels_per_tile()?;
+        for (tile, decoded) in source
+            .chunks_exact(self.tile_bytes.get())
+            .zip(destination.chunks_exact_mut(pixels))
+        {
+            self.decode_tile(tile, decoded, &read_pixel)?;
         }
         Ok(())
     }
@@ -212,6 +245,26 @@ impl TileLayout<'_> {
     }
 }
 
+// Byte-aligned plane offsets were divided by eight before dispatch.
+// Both addends therefore fit together without overflow.
+fn aligned_pixel(
+    tile: &[u8],
+    base: usize,
+    [first, second, third, fourth]: [usize; 4],
+) -> Result<u8, GraphicsError> {
+    let mask = 0x80u8 >> (base & 7);
+    let read = |plane| {
+        let address = (base >> 3usize).wrapping_add(plane);
+        tile.get(address)
+            .map(|byte| u8::from(byte & mask != 0))
+            .ok_or(GraphicsError::InvalidLayout)
+    };
+    Ok((read(first)? << 3)
+        | (read(second)? << 2)
+        | (read(third)? << 1)
+        | read(fourth)?)
+}
+
 pub(crate) fn allocated_bytes(size: usize) -> Result<Vec<u8>, GraphicsError> {
     let mut bytes = Vec::new();
     bytes
@@ -260,6 +313,14 @@ pub fn interleave_words(
         }
     }
     Ok(())
+}
+
+// These readers run only after the complete layout has been validated.
+fn packed_pixel(tile: &[u8], base: usize) -> Result<u8, GraphicsError> {
+    let byte = tile
+        .get(base >> 3usize)
+        .ok_or(GraphicsError::InvalidLayout)?;
+    Ok((byte >> (4 ^ (base & 4))) & 0x0f)
 }
 
 #[cfg(test)]
@@ -329,6 +390,43 @@ mod tests {
         let mut output = [0u8; 4];
         assert_eq!(layout.decode(&[0x12, 0x34], &mut output), Ok(()));
         assert_eq!(output, [4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn specialized_layouts_match_general_pixel_reads()
+    -> Result<(), GraphicsError> {
+        let layouts = [
+            TileLayout {
+                column_bits: &[4, 0],
+                plane_bits: &[0, 1, 2, 3],
+                row_bits: &[8, 0],
+                tile_bytes: NonZeroUsize::MIN.saturating_add(1),
+            },
+            TileLayout {
+                column_bits: &[7, 0, 3, 4],
+                plane_bits: &[24, 0, 8, 16],
+                row_bits: &[32, 0],
+                tile_bytes: NonZeroUsize::MIN.saturating_add(7),
+            },
+            TileLayout {
+                column_bits: &[1, 3, 7],
+                plane_bits: &[0, 1, 2, 3],
+                row_bits: &[0, 16],
+                tile_bytes: NonZeroUsize::MIN.saturating_add(3),
+            },
+        ];
+        let source: Vec<u8> = (0..=u8::MAX).collect();
+        for layout in layouts {
+            let decoded = layout.decode_owned(&source)?;
+            let mut general = allocated_bytes(decoded.len())?;
+            layout.decode_tiles(&source, &mut general, |tile, base| {
+                layout.decode_pixel(tile, base)
+            })?;
+            if decoded != general {
+                return Err(GraphicsError::InvalidLayout);
+            }
+        }
+        Ok(())
     }
 
     #[test]

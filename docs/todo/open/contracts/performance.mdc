@@ -487,3 +487,22 @@ ranged from 89,735,168 to 89,812,992 bytes for integer and from
 89,989,120 to 90,243,072 bytes for adaptive. The worst observed movement
 submission was 3.746 ms. These are distinct logical scene configurations,
 not equal-workload GPU comparisons or physical display measurements.
+
+The shared host importer now dispatches validated packed-nibble and
+byte-aligned four-plane layouts to specialized pixel readers while
+retaining the general bit reader and common tile traversal. Four local
+release imports per source before and after the change, using the same
+source limits and `/usr/bin/time`, gave these wall-clock and peak RSS
+ranges:
+
+- Metal Slug cartridge graphics: 0.48–0.49 s and 62,224–62,424 KiB
+  before; 0.37–0.38 s and 62,172–62,528 KiB after.
+- Simpsons archive graphics: 0.18–0.19 s and 18,468–18,596 KiB
+  before; 0.12 s and 18,476–18,732 KiB after.
+
+Every run reproduced the exact prior canonical manifest identity and
+payload hashes. Synthetic tests compare packed, planar and unaligned
+layouts against the general bit reader over multiple tiles. These are
+short sequential local host-process measurements, including file reads
+and hashing; they do not establish isolated decoder timing, runtime
+frame rates or performance on other hardware.
