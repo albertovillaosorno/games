@@ -384,6 +384,14 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
         ) {
             return Some(HostEvent::Input(InputEvent::FocusLost));
         }
+        if matches!(
+            win_event,
+            WindowEvent::Resized(..)
+                | WindowEvent::SizeChanged(..)
+                | WindowEvent::DisplayChanged(..)
+        ) {
+            return Some(HostEvent::Input(InputEvent::TouchCancelled));
+        }
     }
     if let Event::KeyDown {
         window_id,
@@ -710,6 +718,26 @@ mod tests {
                 action: "jump",
                 down: false,
             }]);
+        }
+    }
+
+    #[test]
+    fn resize_and_display_changes_cancel_only_selected_window_touch() {
+        for kind in [
+            WindowEvent::Resized(800, 600),
+            WindowEvent::SizeChanged(800, 600),
+            WindowEvent::DisplayChanged(1),
+        ] {
+            let event = Event::Window {
+                timestamp: 0,
+                window_id: 2,
+                win_event: kind,
+            };
+            assert_eq!(route(&event, 3), None);
+            assert_eq!(
+                route(&event, 2),
+                Some(HostEvent::Input(InputEvent::TouchCancelled))
+            );
         }
     }
 

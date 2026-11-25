@@ -717,9 +717,14 @@ mod tests {
             return Ok(());
         }
         let mut window =
-            NativeWindow::open("games native smoke", nz(64), nz(64), true)?;
+            NativeWindow::open("games native smoke", nz(96), nz(48), true)?;
         verify_native_input(&window)?;
         verify_window_mode(&mut window)?;
+        window
+            .canvas
+            .window_mut()
+            .set_size(96, 48)
+            .map_err(|error| RenderError::Backend(error.to_string()))?;
         let renderer_name = window.renderer_name();
         require(!renderer_name.is_empty(), "missing renderer name")?;
         let expected_name = renderer_name.clone();
@@ -743,35 +748,94 @@ mod tests {
             },
             |scene| {
                 verify_native_batches(scene, &events, window_id)?;
-                let atlas = scene.load_atlas(
-                    extent()?,
-                    [RED, GREEN, BLUE, WHITE].as_flattened(),
-                )?;
-                let rect = SpriteRect {
-                    height: nz(2),
-                    width: nz(2),
-                    x: 0,
-                    y: 0,
-                };
-                let sprite = SpriteDraw {
-                    atlas,
-                    destination: rect,
-                    flip_horizontal: false,
-                    flip_vertical: false,
-                    source: rect,
-                };
-                require(scene.present([0; 3], &[sprite])?, "no sprite scene")?;
-                require(
-                    scene.present([0; 3], &[SpriteDraw {
-                        flip_horizontal: true,
-                        ..sprite
-                    }])?,
-                    "second sprite scene not drawn",
-                )
+                verify_sprite_scene(scene)
             },
         )?;
         drop(window);
         require(renderer_name == expected_name, "renderer name changed")
+    }
+
+    fn verify_sprite_scene(
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<(), RenderError> {
+        let center = TouchPoint { x: 32_768, y: 32_768 };
+        require(
+            scene.logical_touch(center)?.is_none()
+                && scene.surface_touch(center)?.is_none(),
+            "unpresented scene admitted touch",
+        )?;
+        let atlas = scene
+            .load_atlas(extent()?, [RED, GREEN, BLUE, WHITE].as_flattened())?;
+        let rect = SpriteRect {
+            height: nz(2),
+            width: nz(2),
+            x: 0,
+            y: 0,
+        };
+        let sprite = SpriteDraw {
+            atlas,
+            destination: rect,
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rect,
+        };
+        require(scene.present([0; 3], &[sprite])?, "no sprite scene")?;
+        verify_touch_redraw(scene, sprite)?;
+        require(
+            scene.present([0; 3], &[SpriteDraw {
+                flip_horizontal: true,
+                ..sprite
+            }])?,
+            "second sprite scene not drawn",
+        )
+    }
+
+    fn verify_touch_redraw(
+        scene: &mut SceneSession<'_, '_>,
+        sprite: SpriteDraw,
+    ) -> Result<(), RenderError> {
+        let edge = TouchPoint { x: 0, y: 32_768 };
+        let center = TouchPoint { x: 32_768, y: 32_768 };
+        require(
+            scene.logical_touch(edge)?.is_none()
+                && scene.logical_touch(center)?.is_some(),
+            "aspect-fit touch did not reject letterbox space",
+        )?;
+        scene.apply_display_settings(DisplaySettings {
+            presentation: PresentationMode::Stretch,
+            ..DisplaySettings::default()
+        })?;
+        require(
+            scene.logical_touch(center)?.is_none()
+                && scene.surface_touch(center)?.is_none(),
+            "touch used a layout not yet drawn",
+        )?;
+        require(scene.present([0; 3], &[sprite])?, "no stretched scene")?;
+        require(
+            scene.logical_touch(edge)? == Some(edge)
+                && scene.surface_touch(edge)? == Some(edge),
+            "redrawn stretch touch did not use the full surface",
+        )?;
+        scene.apply_display_settings(DisplaySettings {
+            presentation: PresentationMode::Adaptive,
+            ..DisplaySettings::default()
+        })?;
+        let maximum = FrameLayout::new(nz(4), nz(2), budget(32))?;
+        require(
+            scene.fit_adaptive_width(maximum)? == maximum,
+            "adaptive test target did not widen",
+        )?;
+        require(
+            scene.logical_touch(center)?.is_none()
+                && scene.surface_touch(center)?.is_none(),
+            "touch used a new target before presentation",
+        )?;
+        require(scene.present([0; 3], &[sprite])?, "no adaptive scene")?;
+        require(
+            scene.logical_touch(edge)? == Some(edge)
+                && scene.surface_touch(edge)? == Some(edge),
+            "redrawn adaptive touch did not use the new extent",
+        )
     }
 
     fn verify_window_mode(

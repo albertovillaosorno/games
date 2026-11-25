@@ -439,8 +439,8 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         self.textures.atlases.load(layout, pixels)
     }
 
-    /// Project a surface-normalized touch point into the logical scene.
-    /// Letterbox space and unavailable drawable surfaces return None.
+    /// Project a surface-normalized touch point into the displayed scene.
+    /// Letterbox space, unavailable or not yet redrawn surfaces return None.
     /// # Errors
     /// Reports failure to query the drawable dimensions.
     pub fn logical_touch(
@@ -448,7 +448,7 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         point: TouchPoint,
     ) -> Result<Option<TouchPoint>, RenderError> {
         Ok(self
-            .presentation_layout()?
+            .visible_layout()?
             .and_then(|layout| point.in_presentation(layout)))
     }
 
@@ -486,12 +486,6 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(drawable.is_some())
     }
 
-    fn presentation_layout(
-        &self,
-    ) -> Result<Option<PresentationLayout>, RenderError> {
-        drawable_viewport(self.canvas, self.textures.layout, self.textures.mode)
-    }
-
     pub(super) const fn presentation_mode(&self) -> PresentationMode {
         self.textures.mode
     }
@@ -508,7 +502,8 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         self.textures.readback(self.canvas)
     }
 
-    /// Project a visible logical point onto the physical surface.
+    /// Project a displayed logical point onto the physical surface.
+    /// Returns None until the current geometry has been presented.
     /// # Errors
     /// Reports failure to query the drawable dimensions.
     pub fn surface_touch(
@@ -516,8 +511,23 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         point: TouchPoint,
     ) -> Result<Option<TouchPoint>, RenderError> {
         Ok(self
-            .presentation_layout()?
+            .visible_layout()?
             .and_then(|layout| point.on_presentation(layout)))
+    }
+
+    fn visible_layout(
+        &self,
+    ) -> Result<Option<PresentationLayout>, RenderError> {
+        let current = drawable_viewport(
+            self.canvas,
+            self.textures.layout,
+            self.textures.mode,
+        )?;
+        // A resize or policy change can precede the next completed draw.
+        // Never interpret a touch against controls not yet presented.
+        Ok(self
+            .last_presented
+            .filter(|layout| Some(*layout) == current))
     }
 }
 

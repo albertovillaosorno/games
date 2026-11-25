@@ -100,6 +100,8 @@ pub enum InputEvent {
         /// Whether the touch zone is pressed.
         down: bool,
     },
+    /// The host invalidated the geometry of existing touch contacts.
+    TouchCancelled,
 }
 
 /// Optional directional actions and hysteresis for a signed controller axis.
@@ -271,6 +273,25 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         changes
     }
 
+    fn cancel_touch(&mut self) -> Vec<LogicalAction<Action>> {
+        self.contacts.clear();
+        let mut changes = self.release_range(
+            Source::Contact(ContactId {
+                device: i64::MIN,
+                finger: i64::MIN,
+            })..=Source::Contact(ContactId {
+                device: i64::MAX,
+                finger: i64::MAX,
+            }),
+        );
+        changes.extend(
+            self.release_range(
+                Source::Touch(u16::MIN)..=Source::Touch(u16::MAX),
+            ),
+        );
+        changes
+    }
+
     fn contact(
         &mut self,
         id: ContactId,
@@ -349,6 +370,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                 let mapping = self.mapping.touch.get(&zone).cloned();
                 self.transition(Source::Touch(zone), mapping, down)
             },
+            InputEvent::TouchCancelled => self.cancel_touch(),
         }
     }
 

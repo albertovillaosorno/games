@@ -571,6 +571,48 @@ mod tests {
     }
 
     #[test]
+    fn geometry_change_cancels_touch_without_releasing_other_sources() {
+        let mut router = router(2);
+        let key = |down| InputEvent::Key { code: 42, down };
+        let button = |down| InputEvent::Button { device: 5, code: 7, down };
+        assert_eq!(router.handle(InputEvent::Attached { device: 5 }), []);
+        assert_eq!(router.handle(key(true)), [action("left", true)]);
+        assert_eq!(router.handle(button(true)), [action("right", true)]);
+        assert_eq!(router.handle(event(1, 1, ContactPhase::Down(LEFT))), []);
+        assert_eq!(router.handle(event(1, 2, ContactPhase::Down(RIGHT))), []);
+        assert_eq!(router.handle(InputEvent::Touch { zone: 1, down: true }), [
+        ]);
+        assert_eq!(router.handle(InputEvent::TouchCancelled), []);
+        assert_eq!(router.handle(key(false)), [action("left", false)]);
+        assert_eq!(router.handle(button(false)), [action("right", false)]);
+    }
+
+    #[test]
+    fn cancelled_contacts_require_new_presses_and_release_touch_only_holds() {
+        let mut router = router(2);
+        assert_eq!(router.handle(event(1, 2, ContactPhase::Down(RIGHT))), [
+            action("right", true)
+        ]);
+        assert_eq!(router.handle(InputEvent::TouchCancelled), [action(
+            "right", false
+        )]);
+        for phase in [ContactPhase::Motion(Some(RIGHT)), ContactPhase::Up] {
+            assert_eq!(router.handle(event(1, 2, phase)), []);
+        }
+        assert_eq!(router.handle(event(1, 1, ContactPhase::Down(RIGHT))), [
+            action("right", true)
+        ]);
+        assert_eq!(router.handle(InputEvent::Touch { zone: 1, down: true }), [
+            action("left", true)
+        ]);
+        assert_eq!(router.handle(InputEvent::TouchCancelled), [
+            action("right", false),
+            action("left", false)
+        ]);
+        assert_eq!(router.handle(InputEvent::TouchCancelled), []);
+    }
+
+    #[test]
     fn focus_loss_clears_contacts_without_releasing_controller() {
         let mut router = router(2);
         assert_eq!(router.handle(InputEvent::Attached { device: 5 }), []);

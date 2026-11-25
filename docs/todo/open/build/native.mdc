@@ -119,3 +119,14 @@ hidden smoke runs leave stored values untouched until an in-game edit.
 This is virtual-display evidence, not actual hardware or cross-platform
 acceptance. Interactive input remapping, responsive world/HUD extension
 and physical input remain open.
+
+Touch projection now accepts only the last successfully presented geometry
+when it still matches the current drawable and logical target. Native
+resize and display-change notifications cancel existing touch holds
+without releasing keyboard or controller sources. Inline tests verify
+stale contact motion, fresh presses and independent held sources; the
+accelerated native smoke checks pre-draw rejection, aspect-fit letterbox
+rejection, and projection after stretch and adaptive target redraws.
+Fresh validation with Xvfb, software GL, dummy audio and portable core
+checks passed in run 1795620220187553166-3438625. Physical touch hardware
+and high-DPI display acceptance remain open.
