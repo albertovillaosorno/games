@@ -133,6 +133,15 @@ impl ClientLan {
     }
 }
 
+/// Oldest host-observed control admitted at a fixed simulation tick.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteAdmission {
+    /// Host monotonic timestamp of successful worker decoding.
+    pub completed_at: Instant,
+    /// Actual unexecuted fixed simulation tick receiving the control.
+    pub tick: u64,
+}
+
 /// Native input bridge for explicitly hosted free play.
 ///
 /// The host's local screen remains authoritative. Each approved certificate
@@ -144,6 +153,7 @@ impl ClientLan {
 pub struct HostLan {
     last_reply: [Option<Instant>; 4],
     pending: Vec<HostedInput>,
+    pending_received: Option<Instant>,
     pump: HostInputPump<RemoteMessage>,
     reserved: [bool; 4],
 }
@@ -196,6 +206,7 @@ impl HostLan {
         Ok(Self {
             last_reply: [None; 4],
             pending: Vec::new(),
+            pending_received: None,
             pump,
             reserved,
         })
@@ -211,30 +222,36 @@ impl HostLan {
 
     /// Poll bounded network work before advancing the shared fixed clock.
     ///
+    /// Returns the target tick and oldest host decode timestamp among
+    /// newly admitted controls, excluding heartbeats and seat lifecycle.
+    ///
     /// # Errors
     /// Reports listener/worker failures or an invalid simulation tick.
     /// Capacity rejection retains the event for retry without error.
     pub fn poll(
         &mut self,
         live: &mut LiveSimulation<HostedCabinet>,
-    ) -> io::Result<()> {
-        if !self.retry(live)? {
-            return Ok(());
+    ) -> io::Result<Option<RemoteAdmission>> {
+        let tick = live.next_tick();
+        let mut oldest = None;
+        if !self.retry(live, &mut oldest)? {
+            return Ok(None);
         }
         for _step in 0..POLL_BUDGET {
             match self.pump.poll()? {
                 PumpProgress::Event(event) => {
                     self.reply(&event)?;
+                    self.pending_received = control_timestamp(&event);
                     self.pending.extend(hosted_input(&event));
                 },
                 PumpProgress::Idle => break,
                 PumpProgress::Progress => {},
             }
-            if !self.retry(live)? {
+            if !self.retry(live, &mut oldest)? {
                 break;
             }
         }
-        Ok(())
+        Ok(oldest.map(|completed_at| RemoteAdmission { completed_at, tick }))
     }
 
     fn reply(&mut self, event: &RemoteEvent<RemoteMessage>) -> io::Result<()> {
@@ -272,12 +289,20 @@ impl HostLan {
     fn retry(
         &mut self,
         live: &mut LiveSimulation<HostedCabinet>,
+        oldest: &mut Option<Instant>,
     ) -> io::Result<bool> {
         if self.pending.is_empty() {
             return Ok(true);
         }
         match live.enqueue(live.next_tick(), mem::take(&mut self.pending)) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                if let Some(received) = self.pending_received.take() {
+                    *oldest = Some(
+                        oldest.map_or(received, |prior| prior.min(received)),
+                    );
+                }
+                Ok(true)
+            },
             Err(rejection) => {
                 self.pending = rejection.actions;
                 if rejection.reason == QueueRejection::Capacity {
@@ -307,6 +332,21 @@ pub fn session_config() -> SessionConfig {
     }
 }
 
+const fn control_timestamp(
+    event: &RemoteEvent<RemoteMessage>,
+) -> Option<Instant> {
+    match *event {
+        RemoteEvent::Message {
+            completed_at,
+            value: RemoteMessage::Control(_),
+            ..
+        } => Some(completed_at),
+        RemoteEvent::Connected(_)
+        | RemoteEvent::Disconnected { .. }
+        | RemoteEvent::Message { .. } => None,
+    }
+}
+
 const fn hosted_input(
     event: &RemoteEvent<RemoteMessage>,
 ) -> Option<HostedInput> {
@@ -318,6 +358,7 @@ const fn hosted_input(
         RemoteEvent::Message {
             peer,
             value: RemoteMessage::Control(value),
+            ..
         } => Some(HostedInput::Remote { peer, value }),
         RemoteEvent::Message { .. } => None,
     }
@@ -423,7 +464,7 @@ mod tests {
             .checked_add(TIMEOUT)
             .ok_or(ErrorKind::TimedOut)?;
         loop {
-            host.poll(live)?;
+            let _admitted = host.poll(live)?;
             if ready(host, live) {
                 return Ok(());
             }
@@ -536,8 +577,11 @@ mod tests {
         await_poll(host, live, |bridge, _state| !bridge.pending.is_empty())?;
         require(live.pending_actions() == 1, "local action retained")?;
         advance(live)?;
-        host.poll(live)?;
-        require(live.pending_actions() == 1, "disconnect retried")?;
+        let admitted = host.poll(live)?;
+        require(
+            live.pending_actions() == 1 && admitted.is_none(),
+            "disconnect retried without a control timestamp",
+        )?;
         advance(live)?;
         let [marge, homer, ..] = live.state().state().stations();
         advance(live)?;
@@ -546,6 +590,43 @@ mod tests {
             moving.position.x > marge.position.x
                 && stopped.position == homer.position,
             "remote hold released without stopping local control",
+        )
+    }
+
+    #[test]
+    fn remote_admission_retains_decode_time_through_full_queue()
+    -> io::Result<()> {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let mut client = connect(&mut host, &mut live, &credentials)?;
+        local(&mut live, Control::Start)?;
+        let right = RemoteControl::new(Control::Right, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        client.send(&right.encode())?;
+        await_poll(&mut host, &mut live, |bridge, _state| {
+            bridge.pending_received.is_some()
+        })?;
+        let decoded = host.pending_received.ok_or(ErrorKind::InvalidData)?;
+        require(
+            host.poll(&mut live)?.is_none()
+                && host.pending_received == Some(decoded),
+            "rejected action retains its original worker timestamp",
+        )?;
+        advance(&mut live)?;
+        let tick = live.next_tick();
+        require(
+            host.poll(&mut live)?
+                == Some(RemoteAdmission {
+                    completed_at: decoded,
+                    tick,
+                })
+                && host.pending_received.is_none()
+                && live.pending_actions() == 1,
+            "successful retry reports the actual newly admitted tick",
+        )?;
+        require(
+            host.poll(&mut live)?.is_none(),
+            "admitted timestamp is not reported twice",
         )
     }
 
@@ -577,7 +658,7 @@ mod tests {
             .ok_or(ErrorKind::TimedOut)?;
         loop {
             client.poll()?;
-            host.poll(live)?;
+            let _admitted = host.poll(live)?;
             if live.pending_actions() == 1 {
                 return advance(live);
             }
@@ -674,9 +755,9 @@ mod tests {
             .ok_or(ErrorKind::TimedOut)?;
         while Instant::now() < deadline {
             client.poll()?;
-            host.poll(live)?;
+            let admitted = host.poll(live)?;
             require(
-                live.pending_actions() == 0,
+                live.pending_actions() == 0 && admitted.is_none(),
                 "heartbeats refresh the lease without simulation input",
             )?;
             thread::yield_now();

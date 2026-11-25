@@ -63,6 +63,8 @@ pub enum RemoteEvent<Message> {
     },
     /// An authenticated peer supplied a valid application message.
     Message {
+        /// Host monotonic time when the worker completed valid decoding.
+        completed_at: Instant,
         /// Host-approved peer identity, independent of the frame payload.
         peer: u64,
         /// Decoded application message.
@@ -329,7 +331,11 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             Ok(HostOutcome::Message { peer: actual, value })
                 if actual == peer =>
             {
-                PumpProgress::Event(RemoteEvent::Message { peer, value })
+                PumpProgress::Event(RemoteEvent::Message {
+                    completed_at,
+                    peer,
+                    value,
+                })
             },
             Ok(HostOutcome::Pending)
             | Err(OperationError::Host(HostError::Session(
@@ -563,7 +569,7 @@ mod tests {
     ) -> io::Result<()> {
         let event = next_event(pump)?;
         let valid = match event {
-            RemoteEvent::Message { peer: actual, value } => {
+            RemoteEvent::Message { peer: actual, value, .. } => {
                 actual == peer && value == expected
             },
             RemoteEvent::Connected(_) | RemoteEvent::Disconnected { .. } => {
@@ -996,10 +1002,13 @@ mod tests {
         client.send(b"M\x05")?;
         let completion = message_completion(&mut pump)?;
         let deadline = pending_deadline(&pump, &completion)?;
+        let decoded_at = completion.completed_at;
         require(
             matches!(
                 pump.complete(completion, deadline)?,
-                PumpProgress::Event(RemoteEvent::Message { peer: 1, value: 5 })
+                PumpProgress::Event(RemoteEvent::Message {
+                    peer: 1, value: 5, completed_at,
+                }) if completed_at == decoded_at
             ),
             "timely decode may be observed after the previous deadline",
         )?;

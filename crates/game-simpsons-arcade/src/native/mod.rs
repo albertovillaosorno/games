@@ -886,7 +886,8 @@ impl<'preferences> Interactive<'preferences> {
                 break;
             }
             if let Some(host) = &mut self.host {
-                host.poll(&mut self.simulation).map_err(failure)?;
+                let _admitted =
+                    host.poll(&mut self.simulation).map_err(failure)?;
             }
             let elapsed = self.input.elapsed();
             let delta = elapsed.saturating_sub(self.previous);

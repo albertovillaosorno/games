@@ -518,3 +518,13 @@ return successful I/O after expiry. Regressions cover both polled and
 blocking receive and send, including closure of the opposite direction.
 This cannot retract bytes already transmitted on the wire; it enforces
 the local result and channel lifetime boundary.
+
+The authenticated input pump preserves the monotonic worker completion
+instant on each valid application message. The arcade host reports the
+oldest newly admitted control timestamp and its actual fixed tick;
+capacity rejection retains the original timestamp until retry succeeds.
+Seat lifecycle events and heartbeats do not create control observations.
+Real TLS regression tests exercise a full live input queue and verify
+that the subsequently admitted timestamp is reported exactly once at
+the new tick. The timestamp is host-side decode completion, not a
+client clock or a network round-trip measurement.
