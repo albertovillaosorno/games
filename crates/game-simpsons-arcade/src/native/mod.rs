@@ -41,7 +41,6 @@ mod station_hud;
 mod touch;
 mod world;
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::io::{Write as _, stdout};
@@ -51,9 +50,7 @@ use std::time::{Duration, Instant};
 use std::{env, str};
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
-use games::input::{
-    AxisBinding, InputEvent, InputMapping, InputRouter, LogicalAction,
-};
+use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
@@ -68,11 +65,11 @@ use games_platform::performance::{
     FrameMeter, peak_resident_bytes, resident_bytes,
 };
 use games_platform_graphics::linux::input::profile::{
-    DigitalProfiles, MAX_PROFILE_BYTES,
+    AxisProfile, DigitalProfiles, MAX_PROFILE_BYTES,
 };
 use games_platform_graphics::linux::input::{
-    Axis, Button, HostEvent, InputStartup, NativeInput, Scancode, axis_code,
-    button_code, key_code,
+    Button, HostEvent, InputStartup, NativeInput, Scancode, button_code,
+    key_code,
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
@@ -172,6 +169,22 @@ const ACTION_NAMES: [&str; 8] = [
     "down",
 ];
 const DEFAULT_PROFILES: Profiles = Profiles {
+    axes: [[
+        AxisProfile {
+            negative: Some(4),
+            positive: Some(5),
+            ..AxisProfile::UNBOUND
+        },
+        AxisProfile {
+            negative: Some(6),
+            positive: Some(7),
+            ..AxisProfile::UNBOUND
+        },
+        AxisProfile::UNBOUND,
+        AxisProfile::UNBOUND,
+        AxisProfile::UNBOUND,
+        AxisProfile::UNBOUND,
+    ]; 4],
     buttons: [BUTTONS; 4],
     keys: KEYBOARD,
     touch_player: 0,
@@ -228,7 +241,13 @@ impl Controls {
                 (button_code(button), Action { control, player })
             })
             .collect();
-        let axes = controller_axes(player)?;
+        let axes = self
+            .profiles
+            .axis_bindings(
+                index,
+                CONTROLS.map(|control| Action { control, player }),
+            )
+            .map_err(failure)?;
         let releases = self
             .router
             .set_controller_controls(device, buttons, axes)
@@ -844,8 +863,6 @@ impl<'preferences> Interactive<'preferences> {
     }
 }
 
-type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
-
 fn enqueue_local<Simulation>(
     live: &mut LiveSimulation<Simulation>,
     elapsed: Duration,
@@ -977,31 +994,6 @@ fn ground_position(
             .saturating_sub(i32::from(elevation)),
         ..actor.rect
     })
-}
-
-fn controller_axes(player: Player) -> Result<ControllerAxes, RenderError> {
-    let binding = |negative, positive| {
-        AxisBinding::new(
-            Some(Action {
-                control: negative,
-                player,
-            }),
-            Some(Action {
-                control: positive,
-                player,
-            }),
-            16_000,
-            10_000,
-        )
-        .ok_or_else(|| failure("invalid controller thresholds"))
-    };
-    Ok(BTreeMap::from([
-        (
-            axis_code(Axis::LeftX),
-            binding(Control::Left, Control::Right)?,
-        ),
-        (axis_code(Axis::LeftY), binding(Control::Up, Control::Down)?),
-    ]))
 }
 
 fn dimension(value: u32) -> Result<NonZeroU32, RenderError> {
@@ -1924,7 +1916,7 @@ mod tests {
     use games::replay::{InputStep as _, LiveSimulation};
     use games_platform_graphics::linux::RenderError;
     use games_platform_graphics::linux::input::{
-        Button, Scancode, button_code, key_code,
+        Axis, Button, Scancode, axis_code, button_code, key_code,
     };
     use games_platform_graphics::linux::sprites::EventBatch;
 
@@ -2222,6 +2214,94 @@ mod tests {
         let [_, old_homer, ..] = stopped;
         if resumed.position.x <= old_homer.position.x {
             return Err(failure("replacement did not control vacant slot"));
+        }
+        Ok(())
+    }
+
+    fn axis(device: u64, axis: Axis, value: i16) -> InputEvent {
+        InputEvent::Axis {
+            device,
+            code: axis_code(axis),
+            value,
+        }
+    }
+
+    #[test]
+    fn axis_profiles_isolate_station_thresholds() -> Result<(), RenderError> {
+        let profiles = DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\naxis 2 leftx=none/none\n",
+                    "axis 2 rightx=right/left\n",
+                    "axis-threshold 2 rightx=20000/5000\n",
+                ),
+            )
+            .map_err(failure)?;
+        let (mut controls, mut simulation) = cabinet(&profiles)?;
+        let [first, second, ..] = simulation.state().stations();
+        for event in [
+            axis(10, Axis::LeftX, 16_000),
+            axis(11, Axis::LeftX, 32_767),
+            axis(11, Axis::RightX, -19_999),
+        ] {
+            route_now(&mut controls, &mut simulation, event)?;
+        }
+        let [moved, waiting, ..] = advance(&mut simulation)?;
+        if moved.position.x <= first.position.x
+            || waiting.position != second.position
+        {
+            return Err(failure("axis profiles affected wrong station"));
+        }
+        for event in [
+            axis(10, Axis::LeftX, 10_000),
+            axis(11, Axis::RightX, -20_000),
+        ] {
+            route_now(&mut controls, &mut simulation, event)?;
+        }
+        let [stopped, pressed, ..] = advance(&mut simulation)?;
+        if stopped.position != moved.position
+            || pressed.position.x <= waiting.position.x
+        {
+            return Err(failure("axis press or release threshold ignored"));
+        }
+        route_now(
+            &mut controls,
+            &mut simulation,
+            axis(11, Axis::RightX, -5_001),
+        )?;
+        let [_, held, ..] = advance(&mut simulation)?;
+        if held.position.x <= pressed.position.x {
+            return Err(failure("axis hysteresis did not retain hold"));
+        }
+        route_now(
+            &mut controls,
+            &mut simulation,
+            axis(11, Axis::RightX, -5_000),
+        )?;
+        let [_, released, ..] = advance(&mut simulation)?;
+        if released.position != held.position {
+            return Err(failure("axis hysteresis did not release"));
+        }
+        verify_axis_replacement(&mut controls, &mut simulation, released)
+    }
+
+    fn verify_axis_replacement(
+        controls: &mut Controls,
+        simulation: &mut LiveSimulation<Cabinet>,
+        released: Station,
+    ) -> Result<(), RenderError> {
+        for event in [
+            InputEvent::Detached { device: 11 },
+            InputEvent::Attached { device: 14 },
+            axis(11, Axis::RightX, -32_767),
+            axis(14, Axis::RightX, 20_000),
+        ] {
+            route_now(controls, simulation, event)?;
+        }
+        let [_, replacement, ..] = advance(simulation)?;
+        if replacement.position.x >= released.position.x {
+            return Err(failure("replacement ignored station axis profile"));
         }
         Ok(())
     }

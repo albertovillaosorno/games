@@ -42,8 +42,8 @@ use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
 use super::{
-    Controls, EVENT_BUDGET, LocalActions, Profiles, dimension, key_label, lan,
-    size,
+    Controls, DEFAULT_PROFILES, EVENT_BUDGET, LocalActions, Profiles,
+    dimension, key_label, lan, size,
 };
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
@@ -101,6 +101,14 @@ fn binding_hints(profiles: &Profiles) -> Vec<String> {
         .collect()
 }
 
+fn axis_hint(profiles: &Profiles) -> &'static str {
+    if profiles.axes.first() == DEFAULT_PROFILES.axes.first() {
+        "LEFT STICK ALSO MOVES"
+    } else {
+        "DIGITAL AXES USE LOCAL PROFILE"
+    }
+}
+
 fn panel(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
@@ -118,7 +126,7 @@ fn panel(
             .map(|(top, hint)| (hint.as_str(), top, 2)),
     )
     .chain([
-        ("LEFT STICK ALSO MOVES", 144, 2),
+        (axis_hint(profiles), 144, 2),
         ("CLOSE WINDOW TO LEAVE", 160, 2),
     ])
     .map(|(text, top, scale)| {
@@ -237,10 +245,10 @@ mod tests {
 
     use games::input::InputEvent;
     use games_platform_graphics::linux::input::{
-        Button, Scancode, button_code, key_code,
+        Axis, Button, Scancode, axis_code, button_code, key_code,
     };
 
-    use super::super::{ACTION_NAMES, DEFAULT_PROFILES, failure};
+    use super::super::{ACTION_NAMES, failure};
     use super::*;
     use crate::Control;
 
@@ -343,6 +351,53 @@ mod tests {
             InputEvent::Detached { device: 1 },
             RemoteControl::new(Control::Primary, false),
         )
+    }
+
+    #[test]
+    fn axis_profiles_drive_remote_control_edges() -> Result<(), RenderError> {
+        let profiles = DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\naxis 1 leftx=none/none\n",
+                    "axis 1 rightx=left/right\n",
+                    "axis-threshold 1 rightx=20000/5000\n",
+                ),
+            )
+            .map_err(failure)?;
+        if axis_hint(&profiles) == axis_hint(&DEFAULT_PROFILES) {
+            return Err(failure("controller hint ignored custom axes"));
+        }
+        let mut controls = Controls::with_reserved(false, &profiles, [
+            false, true, true, true,
+        ])?;
+        check_edge(&mut controls, InputEvent::Attached { device: 1 }, None)?;
+        for (axis, value, expected) in [
+            (Axis::LeftX, 32_767, None),
+            (Axis::RightX, 19_999, None),
+            (
+                Axis::RightX,
+                20_000,
+                RemoteControl::new(Control::Right, true),
+            ),
+            (Axis::RightX, 5_001, None),
+            (
+                Axis::RightX,
+                5_000,
+                RemoteControl::new(Control::Right, false),
+            ),
+        ] {
+            check_edge(
+                &mut controls,
+                InputEvent::Axis {
+                    device: 1,
+                    code: axis_code(axis),
+                    value,
+                },
+                expected,
+            )?;
+        }
+        Ok(())
     }
 
     #[test]

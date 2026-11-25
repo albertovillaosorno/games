@@ -473,3 +473,11 @@ alive. Both runs used verified local art, separate credentials, Xvfb,
 software OpenGL and synthetic keyboard events on one machine.
 Disposable private keys were removed; neither test establishes
 physical LAN or simultaneous physical controller interoperability.
+
+The shared native digital profile now configures signed axis action
+slots and press/release hysteresis per station, including disabled
+directions and positive-only triggers. The existing left-stick
+defaults are preserved. Synthetic regressions exercise malformed
+profiles, station isolation, inclusive thresholds, replacement
+controller assignment and remote wire-edge routing. Actual
+controller hardware and proportional analog movement remain open.

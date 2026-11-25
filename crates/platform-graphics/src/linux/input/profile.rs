@@ -14,7 +14,7 @@
 //   - Select title actions, assign devices or route simulation events.
 // - Allows:
 //   - Inputs: Bounded local text, title action names and default bindings.
-//   - Outputs: Validated SDL keyboard and controller-button assignments.
+//   - Outputs: Validated SDL keyboard, button and digital axis assignments.
 //   - Side effects: None.
 // - Split-When:
 //   - Other device families require independent profile representations.
@@ -24,7 +24,8 @@
 //   - Override digital bindings without ambiguous physical assignments.
 // - Description:
 //   - Keyboard keys are globally unique; controller buttons are unique within
-//     each station. Unspecified bindings retain title defaults.
+//     each station. Signed axes use explicit action slots and thresholds.
+//     Unspecified bindings retain title defaults.
 // - Usage:
 //   - Configure before constructing the shared action router.
 // - Defaults:
@@ -32,16 +33,101 @@
 
 //! Bounded, reusable native digital input profiles.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Button, Scancode, button_code, key_code};
+use games::input::AxisBinding;
+
+use super::{Axis, Button, Scancode, axis_code, button_code, key_code};
 
 /// Maximum UTF-8 profile size, in bytes.
 pub const MAX_PROFILE_BYTES: usize = 8192;
 
+/// Supported SDL controller axes, in profile storage order.
+pub const NATIVE_AXES: [Axis; 6] = [
+    Axis::LeftX,
+    Axis::LeftY,
+    Axis::RightX,
+    Axis::RightY,
+    Axis::TriggerLeft,
+    Axis::TriggerRight,
+];
+
+/// One signed axis's digital action slots and hysteresis thresholds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AxisProfile {
+    /// Title action slot on the negative side, or disabled.
+    pub negative: Option<usize>,
+    /// Title action slot on the positive side, or disabled.
+    pub positive: Option<usize>,
+    /// Inclusive press magnitude.
+    pub press: u16,
+    /// Inclusive release magnitude.
+    pub release: u16,
+}
+
+impl AxisProfile {
+    /// Disabled axis with the standard digital movement hysteresis.
+    pub const UNBOUND: Self = Self {
+        negative: None,
+        positive: None,
+        press: 16_000,
+        release: 10_000,
+    };
+
+    fn bind<Action>(
+        &self,
+        actions: &[Action],
+    ) -> Result<AxisBinding<Action>, String>
+    where
+        Action: Copy,
+    {
+        let find = |slot: Option<usize>| {
+            slot.map(|index| {
+                actions
+                    .get(index)
+                    .copied()
+                    .ok_or_else(|| String::from("invalid axis action"))
+            })
+            .transpose()
+        };
+        AxisBinding::new(
+            find(self.negative)?,
+            find(self.positive)?,
+            self.press,
+            self.release,
+        )
+        .ok_or_else(|| String::from("invalid axis thresholds"))
+    }
+
+    fn validate(self, axis: Axis, actions: usize) -> Result<(), String> {
+        if [self.negative, self.positive]
+            .into_iter()
+            .flatten()
+            .any(|slot| slot >= actions)
+            || (matches!(axis, Axis::TriggerLeft | Axis::TriggerRight)
+                && self.negative.is_some())
+        {
+            return Err(String::from("invalid axis action"));
+        }
+        let _binding = AxisBinding::new(
+            self.negative,
+            self.positive,
+            self.press,
+            self.release,
+        )
+        .ok_or_else(|| String::from("invalid axis thresholds"))?;
+        Ok(())
+    }
+}
+
+/// Mapped physical axes ready for a single controller assignment.
+pub type ControllerAxes<Action> = BTreeMap<u16, AxisBinding<Action>>;
+
 /// Digital bindings in title-supplied station and action order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
+    /// Per-station signed digital controller axes.
+    pub axes: [[AxisProfile; NATIVE_AXES.len()]; PLAYERS],
     /// Per-station controller button bindings.
     pub buttons: [[Button; ACTIONS]; PLAYERS],
     /// Globally unique keyboard bindings.
@@ -55,10 +141,39 @@ pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
 impl<const PLAYERS: usize, const ACTIONS: usize>
     DigitalProfiles<PLAYERS, ACTIONS>
 {
+    /// Build the selected station's mapped axes for a shared input router.
+    ///
+    /// The action array follows the same order as the profile action names.
+    /// Disabled axes are omitted; button and axis sources may share an action.
+    /// # Errors
+    /// Rejects an invalid station, action slot or hysteresis threshold.
+    pub fn axis_bindings<Action>(
+        &self,
+        player: usize,
+        actions: [Action; ACTIONS],
+    ) -> Result<ControllerAxes<Action>, String>
+    where
+        Action: Copy,
+    {
+        let row = self.axes.get(player).ok_or("invalid axis station")?;
+        let mut mapped = BTreeMap::new();
+        for (axis, profile) in NATIVE_AXES.into_iter().zip(row) {
+            profile.validate(axis, ACTIONS)?;
+            if profile.negative.is_some() || profile.positive.is_some() {
+                let _old =
+                    mapped.insert(axis_code(axis), profile.bind(&actions)?);
+            }
+        }
+        Ok(mapped)
+    }
+
     /// Apply explicit overrides to a complete set of default bindings.
     ///
-    /// Each record is `key PLAYER ACTION=NAME` or
-    /// `button PLAYER ACTION=NAME` or `touch PLAYER ACTION=SLOT`.
+    /// Each record is `key PLAYER ACTION=NAME`,
+    /// `button PLAYER ACTION=NAME`, `touch PLAYER ACTION=SLOT`,
+    /// `axis PLAYER AXIS=NEGATIVE/POSITIVE` or
+    /// `axis-threshold PLAYER AXIS=PRESS/RELEASE`. Axis names follow SDL;
+    /// use `none` to disable a direction.
     /// Player numbers start at one; touch slots use the action names.
     /// Optional `touch-player=N` selects one station for the panel.
     /// The first nonempty line must be `version=1`.
@@ -110,6 +225,24 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         let (kind, player, action, name) = record;
         let invalid = || String::from("unknown player, action or binding");
         match kind {
+            Kind::Axis | Kind::AxisThreshold => {
+                let profile = self
+                    .axes
+                    .get_mut(player)
+                    .and_then(|row| row.get_mut(action))
+                    .ok_or_else(invalid)?;
+                let (negative, positive) =
+                    name.split_once('/').ok_or_else(invalid)?;
+                if kind == Kind::Axis {
+                    profile.negative = axis_action(negative, actions)?;
+                    profile.positive = axis_action(positive, actions)?;
+                } else {
+                    profile.press =
+                        negative.parse().map_err(|_error| invalid())?;
+                    profile.release =
+                        positive.parse().map_err(|_error| invalid())?;
+                }
+            },
             Kind::Button => {
                 let slot = self
                     .buttons
@@ -143,10 +276,16 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
 
     /// Verify that no physical binding silently overwrites another.
     /// # Errors
-    /// Rejects duplicate keyboard keys or same-station controller buttons.
+    /// Rejects duplicate keyboard keys, same-station controller buttons,
+    /// invalid axis slots or thresholds and invalid touch permutations.
     pub fn validate(&self) -> Result<(), String> {
         if self.touch_player >= PLAYERS {
             return Err(String::from("invalid touch player"));
+        }
+        for row in &self.axes {
+            for (axis, profile) in NATIVE_AXES.into_iter().zip(row) {
+                profile.validate(axis, ACTIONS)?;
+            }
         }
         for row in &self.touch_slots {
             if row.iter().any(|slot| *slot >= ACTIONS)
@@ -179,12 +318,25 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
+    Axis,
+    AxisThreshold,
     Button,
     Key,
     Touch,
 }
 
 type Record<'text> = (Kind, usize, usize, &'text str);
+
+fn axis_action(value: &str, actions: &[&str]) -> Result<Option<usize>, String> {
+    if value == "none" {
+        return Ok(None);
+    }
+    actions
+        .iter()
+        .position(|name| *name == value)
+        .map(Some)
+        .ok_or_else(|| String::from("unknown axis action"))
+}
 
 fn parse_line<'text>(
     line: &'text str,
@@ -194,6 +346,8 @@ fn parse_line<'text>(
     let (left, raw_name) = line.split_once('=').ok_or_else(invalid)?;
     let mut fields = left.split_whitespace();
     let kind = match fields.next() {
+        Some("axis") => Kind::Axis,
+        Some("axis-threshold") => Kind::AxisThreshold,
         Some("key") => Kind::Key,
         Some("button") => Kind::Button,
         Some("touch") => Kind::Touch,
@@ -204,10 +358,15 @@ fn parse_line<'text>(
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|number| number.checked_sub(1))
         .ok_or_else(invalid)?;
-    let action = fields
-        .next()
-        .and_then(|value| actions.iter().position(|name| *name == value))
-        .ok_or_else(invalid)?;
+    let field = fields.next().ok_or_else(invalid)?;
+    let action = match kind {
+        Kind::Axis | Kind::AxisThreshold => Axis::from_string(field)
+            .and_then(|axis| NATIVE_AXES.iter().position(|item| *item == axis)),
+        Kind::Button | Kind::Key | Kind::Touch => {
+            actions.iter().position(|name| *name == field)
+        },
+    }
+    .ok_or_else(invalid)?;
     let name = raw_name.trim();
     if fields.next().is_some()
         || name.is_empty()
@@ -223,6 +382,7 @@ mod tests {
     use super::*;
 
     const DEFAULT: DigitalProfiles<2, 2> = DigitalProfiles {
+        axes: [[AxisProfile::UNBOUND; NATIVE_AXES.len()]; 2],
         buttons: [[Button::A, Button::B]; 2],
         keys: [[Scancode::A, Scancode::B], [Scancode::C, Scancode::D]],
         touch_player: 0,
@@ -243,6 +403,7 @@ mod tests {
         assert_eq!(
             configured,
             Ok(DigitalProfiles {
+                axes: DEFAULT.axes,
                 buttons: [[Button::A, Button::B], [Button::X, Button::B]],
                 keys: [[Scancode::A, Scancode::B], [
                     Scancode::Space,
@@ -255,9 +416,45 @@ mod tests {
     }
 
     #[test]
+    fn axis_overrides_admit_only_selected_station() -> Result<(), String> {
+        let profiles = DEFAULT.configured(
+            ACTIONS,
+            concat!(
+                "version=1\naxis 2 rightx=secondary/primary\n",
+                "axis-threshold 2 rightx=20000/5000\n",
+                "axis 2 lefttrigger=none/primary\n",
+            ),
+        )?;
+        let axes = profiles.axis_bindings(1, ACTIONS)?;
+        if profiles.axes.first() != DEFAULT.axes.first()
+            || !profiles.axis_bindings(0, ACTIONS)?.is_empty()
+            || axes.len() != 2
+            || !axes.contains_key(&axis_code(Axis::RightX))
+            || !axes.contains_key(&axis_code(Axis::TriggerLeft))
+            || profiles.axis_bindings(2, ACTIONS).is_ok()
+        {
+            return Err(String::from("axis profile station mismatch"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rejects_ambiguous_or_invalid_mappings() {
         for invalid in [
             "version=2",
+            "version=1\naxis 1 missing=none/primary",
+            "version=1\naxis 3 leftx=none/primary",
+            "version=1\naxis 1 leftx=missing/primary",
+            "version=1\naxis 1 lefttrigger=primary/none",
+            "version=1\naxis 1 leftx=primary",
+            "version=1\naxis 1 leftx=none/primary\naxis 1 leftx=none/none",
+            "version=1\naxis-threshold 1 leftx=32768/1",
+            "version=1\naxis-threshold 1 leftx=100/100",
+            "version=1\naxis-threshold 1 leftx=0/0",
+            concat!(
+                "version=1\naxis-threshold 1 leftx=100/20\n",
+                "axis-threshold 1 leftx=200/20",
+            ),
             "version=1\nkey 1 primary=C",
             "version=1\nbutton 2 primary=b",
             "version=1\nkey 3 primary=Space",

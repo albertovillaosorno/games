@@ -196,8 +196,24 @@ mapping names. Unspecified controls keep the defaults. Duplicate
 keyboard bindings across stations and duplicate buttons within a
 station are rejected, as are unknown names and repeated overrides.
 Controller replacement inherits the vacant station's profile.
-Analog axes remain unchanged; an interactive
-remapping menu and automatic settings persistence remain open.
+Digital controller axes can be assigned per station in the same file:
+
+```text
+axis 2 leftx=none/none
+axis 2 rightx=left/right
+axis-threshold 2 rightx=20000/9000
+axis 2 righttrigger=none/primary
+```
+
+Axis names follow SDL: leftx, lefty, rightx, righty, lefttrigger and
+righttrigger. The two actions correspond to negative and positive
+motion; none disables a direction. Triggers accept only positive
+bindings. Press magnitudes must be 1-32767 and release magnitudes
+must be smaller (including zero). Defaults remain 16000 to press
+and 10000 to release. Both the host and remote controller support
+these digital profiles; the remote controller uses station 1's
+profile. Proportional movement, an interactive remapping menu and
+automatic settings persistence remain open.
 
 For the optional single touch panel, select a station and swap button
 positions in the same profile, using the default action names as slots:
