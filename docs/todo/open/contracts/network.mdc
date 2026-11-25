@@ -644,3 +644,12 @@ open and enumeration errors still propagate. Synthetic tests verify
 observed disappearance versus persistent failure, rollback, duplicate
 identity handling, capacity and attachment order. Concurrent physical
 hot-plug timing remains unverified.
+
+Native window hiding and minimization now release keyboard and touch
+holds using the existing focus-loss action, independently of a separate
+SDL focus event. Other windows are ignored; restoring visibility does not
+synthesize new holds. A four-station cabinet regression also demonstrates
+that remapping an admitted controller stops only its station and preserves
+that controller's ability to move the same station with a subsequent axis
+input. These are synthetic event and fixed-step regressions, not physical
+device or window-manager acceptance.

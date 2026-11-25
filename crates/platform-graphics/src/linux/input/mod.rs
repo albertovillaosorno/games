@@ -376,7 +376,12 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
         if win_event == WindowEvent::Close {
             return Some(HostEvent::Quit);
         }
-        if win_event == WindowEvent::FocusLost {
+        if matches!(
+            win_event,
+            WindowEvent::FocusLost
+                | WindowEvent::Hidden
+                | WindowEvent::Minimized
+        ) {
             return Some(HostEvent::Input(InputEvent::FocusLost));
         }
     }
@@ -705,6 +710,35 @@ mod tests {
                 action: "jump",
                 down: false,
             }]);
+        }
+    }
+
+    #[test]
+    fn visibility_loss_releases_only_the_selected_window() {
+        for kind in [WindowEvent::Hidden, WindowEvent::Minimized] {
+            let event = Event::Window {
+                timestamp: 0,
+                window_id: 2,
+                win_event: kind,
+            };
+            assert_eq!(route(&event, 3), None);
+            assert_eq!(
+                route(&event, 2),
+                Some(HostEvent::Input(InputEvent::FocusLost))
+            );
+        }
+        for kind in [WindowEvent::Shown, WindowEvent::Restored] {
+            assert_eq!(
+                route(
+                    &Event::Window {
+                        timestamp: 0,
+                        window_id: 2,
+                        win_event: kind,
+                    },
+                    2
+                ),
+                None
+            );
         }
     }
 

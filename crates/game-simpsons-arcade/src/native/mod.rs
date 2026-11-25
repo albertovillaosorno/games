@@ -2480,6 +2480,46 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn remapping_releases_only_that_station_and_keeps_its_assignment()
+    -> Result<(), RenderError> {
+        let (mut controls, mut simulation) = cabinet(&DEFAULT_PROFILES)?;
+        for device in 10..14u64 {
+            route_now(
+                &mut controls,
+                &mut simulation,
+                button(device, Button::DPadRight, true),
+            )?;
+        }
+        let moving = advance(&mut simulation)?;
+        for event in [
+            InputEvent::ControllerRemapped { device: 11 },
+            InputEvent::ControllerRemapped { device: 11 },
+            button(11, Button::DPadRight, false),
+        ] {
+            route_now(&mut controls, &mut simulation, event)?;
+        }
+        let stopped = advance(&mut simulation)?;
+        for (index, (before, after)) in
+            moving.into_iter().zip(stopped).enumerate()
+        {
+            if (before.position == after.position) != (index == 1) {
+                return Err(failure("remap affected the wrong stations"));
+            }
+        }
+        route_now(
+            &mut controls,
+            &mut simulation,
+            axis(11, Axis::LeftX, i16::MIN),
+        )?;
+        let [_, resumed, ..] = advance(&mut simulation)?;
+        let [_, old_homer, ..] = stopped;
+        if resumed.position.x >= old_homer.position.x {
+            return Err(failure("remapped device lost its station"));
+        }
+        Ok(())
+    }
+
     fn axis(device: u64, axis: Axis, value: i16) -> InputEvent {
         InputEvent::Axis {
             device,
