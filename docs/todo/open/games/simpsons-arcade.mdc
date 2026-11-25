@@ -1153,3 +1153,45 @@ the verified 88-pose catalogue. All 600 movement and 60 combat
 submissions met the 16.667 ms host-work budget; mean submission work
 was 108.848 and 85.168 microseconds, respectively. Lifetime peak
 RSS was 88,268,800 bytes. This remains offscreen evidence only.
+
+One-tick directional pulses in all four isolated ground attacks
+confirmed the distinction between the displayed pose and movement
+recovery. Up at offset 19 matched all 101 control frames; at 20
+it diverged. Left at offset 18 changed the actor trace without
+flipping its facing; at 19 it matched every control frame. Marge's
+held-left and held-right comparisons from offsets 1 and 17
+showed downward rounding of the observed quarter-pixel drift.
+The preview retains that fractional remainder during the attack
+and through offset 18, then blocks displacement and turning
+at offset 19. Ordinary walking and facing resume at offset 20.
+Fractional carry between independent actions and collision behavior
+remain provisional.
+
+The stationary special and ordinary short jump allow a horizontal
+turn at landing, but not normal walking on that tick. For all
+four special controls, Up on landing matched all 101 frames;
+Left changed facing while preserving the idle actor's position
+apart from mirrored sprite offsets. Marge's forward aerial
+attack instead rejected both tested directions on landing.
+The short-jump Up probes matched the Marge and Homer controls;
+Bart and Lisa instead showed a two-pixel translation of all
+captured objects, including enemies, not an isolated actor shift.
+Vertical camera behavior remains open, and the shared prototype
+does not infer an independent actor-depth difference from it.
+
+The existing station-local recovery now distinguishes timed ground
+drift, landing with or without turning, and readiness. Landing and
+ground recovery cannot start a walking animation or consume new
+button actions. Held directions resume on the next admitted
+walking tick. Inline tests cover four-station ground drift, retained
+facing, both turn-only landings, and the forward aerial direction
+lock. Moving and interrupted original recovery are not fully
+established.
+
+Fresh portable validation passed in run 1795618985483698513-3092891.
+The 3,225,872-byte optimized preview passed adaptive offscreen
+OpenGL ES touch smoke with the verified 88-pose catalogue. All
+600 movement and 60 combat submissions met the 16.667 ms
+host-work budget. Mean submission work was 110.313 and 85.773
+microseconds, respectively; lifetime peak RSS was 88,780,800 bytes.
+Physical presentation and full original gameplay remain unverified.

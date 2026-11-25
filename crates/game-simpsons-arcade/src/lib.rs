@@ -235,7 +235,7 @@ pub struct Station {
     pub participation: Participation,
     /// Current foot position.
     pub position: Point,
-    /// Consecutive displaced ticks, zero-based; None when stationary.
+    /// Consecutive walking ticks, zero-based; None outside displaced walking.
     pub walking_ticks: Option<u64>,
 }
 
@@ -246,8 +246,30 @@ impl Station {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Recovery {
+    Ground(u8),
+    Landing { turn: bool },
+    Ready,
+}
+
+impl Recovery {
+    const fn advance(self) -> Self {
+        match self {
+            Self::Ground(ticks) if ticks > 1 => {
+                Self::Ground(ticks.saturating_sub(1))
+            },
+            Self::Ground(_) | Self::Landing { .. } | Self::Ready => Self::Ready,
+        }
+    }
+
+    const fn allows_turn(self) -> bool {
+        matches!(self, Self::Ready | Self::Landing { turn: true })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Slot {
-    action_recovery: u8,
+    action_recovery: Recovery,
     attack_quarters: i16,
     held: u8,
     spawn: Point,
@@ -256,7 +278,7 @@ struct Slot {
 
 impl Slot {
     fn advance_maneuver(&mut self, player: Player, queued: Option<Maneuver>) {
-        self.action_recovery = self.action_recovery.saturating_sub(1);
+        self.action_recovery = self.action_recovery.advance();
         if self.station.can_fight()
             && matches!(queued, Some(Maneuver::Attack { .. }))
             && let Maneuver::Jump(jump) = self.station.maneuver
@@ -270,19 +292,24 @@ impl Slot {
             previous.advance(player, self.held(Control::Secondary));
         if previous.airborne() && self.station.maneuver == Maneuver::Idle {
             // Landing is visible before new ground actions can begin.
-            self.action_recovery = 1;
+            self.action_recovery = Recovery::Landing {
+                turn: !matches!(previous, Maneuver::AirAttack(_)),
+            };
         }
         if let Some(maneuver) = queued {
             self.begin_maneuver(maneuver);
         }
     }
 
-    // Accumulate the observed approximate quarter-pixel horizontal rate.
+    // Retain a quarter-pixel remainder and round the position downward.
     const fn attack_step(&mut self, horizontal: i16) -> i16 {
         let next = self.attack_quarters.saturating_add(horizontal.signum());
-        if next == -4 || next == 4 {
-            self.attack_quarters = 0;
-            next.signum()
+        if next < 0 {
+            self.attack_quarters = next.saturating_add(4);
+            -1
+        } else if next >= 4 {
+            self.attack_quarters = next.saturating_sub(4);
+            1
         } else {
             self.attack_quarters = next;
             0
@@ -292,10 +319,11 @@ impl Slot {
     fn begin_maneuver(&mut self, maneuver: Maneuver) {
         if self.station.can_fight()
             && self.station.maneuver == Maneuver::Idle
-            && self.action_recovery == 0
+            && self.action_recovery == Recovery::Ready
         {
             if matches!(maneuver, Maneuver::Attack { .. }) {
-                self.action_recovery = GROUND_ATTACK_RECOVERY_TICKS;
+                self.action_recovery =
+                    Recovery::Ground(GROUND_ATTACK_RECOVERY_TICKS);
             }
             self.attack_quarters = 0;
             self.station.maneuver = maneuver;
@@ -305,7 +333,7 @@ impl Slot {
 
     const fn damage(&mut self) {
         self.attack_quarters = 0;
-        self.action_recovery = 0;
+        self.action_recovery = Recovery::Ready;
         self.station.health = self.station.health.saturating_sub(1);
         self.station.maneuver = Maneuver::Idle;
         self.station.walking_ticks = None;
@@ -368,6 +396,13 @@ impl Slot {
             },
             Maneuver::Special { .. } => (0, 0),
             Maneuver::Attack { .. } => (self.attack_step(dx), 0),
+            // Original drift continues through offset 18, then stops.
+            Maneuver::Idle
+                if matches!(self.action_recovery, Recovery::Ground(2..)) =>
+            {
+                (self.attack_step(dx), 0)
+            },
+            Maneuver::Idle if self.action_recovery != Recovery::Ready => (0, 0),
             Maneuver::Idle | Maneuver::Jump(_) => {
                 self.attack_quarters = 0;
                 (dx, dy)
@@ -386,7 +421,9 @@ impl Slot {
             Maneuver::Attack { tick: 1.. }
                 | Maneuver::AirAttack(_)
                 | Maneuver::Special { .. }
-        ) && dx != 0
+        ) && (self.station.maneuver != Maneuver::Idle
+            || self.action_recovery.allows_turn())
+            && dx != 0
         {
             self.station.facing = if dx < 0 {
                 Facing::Left
@@ -407,6 +444,7 @@ impl Slot {
             .clamp(layout.min.y, layout.max.y);
         self.station.walking_ticks = if *position == previous
             || self.station.maneuver != Maneuver::Idle
+            || self.action_recovery != Recovery::Ready
         {
             None
         } else {
@@ -420,7 +458,7 @@ impl Slot {
 
     const fn new(position: Point) -> Self {
         Self {
-            action_recovery: 0,
+            action_recovery: Recovery::Ready,
             attack_quarters: 0,
             held: 0,
             spawn: position,
@@ -444,7 +482,7 @@ impl Slot {
             return;
         }
         self.attack_quarters = 0;
-        self.action_recovery = 0;
+        self.action_recovery = Recovery::Ready;
         self.station.health = PLAYER_HEALTH;
         self.station.position = Point {
             x: self.spawn.x.saturating_add(camera),
@@ -1147,12 +1185,67 @@ mod tests {
         let last = station_for(&state, player);
         assert_eq!(last.facing, Facing::Left);
         assert_ne!(last.maneuver, Maneuver::Idle);
-        state.input_step(end, &[]);
+        for tick in end..23 {
+            state.input_step(tick, &[]);
+            assert_recovery_pose(station_for(&state, player), last.position.y);
+        }
+        let recovered = station_for(&state, player);
+        state.input_step(23, &[]);
         let resumed = station_for(&state, player);
         assert_eq!(resumed.facing, Facing::Right);
         assert_eq!(resumed.maneuver, Maneuver::Idle);
-        assert_eq!(resumed.position.x, last.position.x.saturating_add(2));
-        assert_eq!(resumed.position.y, last.position.y.saturating_sub(2));
+        assert_eq!(resumed.position.x, recovered.position.x.saturating_add(2));
+        assert_eq!(resumed.position.y, recovered.position.y.saturating_sub(2));
+        assert_eq!(resumed.walking_ticks, Some(0));
+    }
+
+    fn assert_recovery_pose(recovering: Station, depth: i16) {
+        assert_eq!(recovering.facing, Facing::Left);
+        assert_eq!(recovering.maneuver, Maneuver::Idle);
+        assert_eq!(recovering.position.y, depth);
+        assert_eq!(recovering.walking_ticks, None);
+    }
+
+    #[test]
+    fn ground_recovery_preserves_fractional_drift_until_offset_eighteen() {
+        for player in Player::ALL {
+            verify_recovery_direction(player, 21, -1, false);
+            verify_recovery_direction(player, 22, 0, false);
+            verify_recovery_direction(player, 23, -2, true);
+        }
+    }
+
+    fn verify_recovery_direction(
+        player: Player,
+        target: u64,
+        dx: i16,
+        walking: bool,
+    ) {
+        let mut state = four_playing();
+        let before = station_for(&state, player);
+        state.input_step(3, &pulse(player, Control::Primary));
+        for tick in 4..target {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(target, &[
+            change(player, Control::Left, true),
+            change(player, Control::Up, true),
+        ]);
+        let moved = station_for(&state, player);
+        assert_eq!(moved.position.x, before.position.x.saturating_add(dx));
+        let dy = if walking {
+            -2
+        } else {
+            0
+        };
+        assert_eq!(moved.position.y, before.position.y.saturating_add(dy));
+        let facing = if walking {
+            Facing::Left
+        } else {
+            Facing::Right
+        };
+        assert_eq!(moved.facing, facing);
+        assert_eq!(moved.walking_ticks, walking.then_some(0));
     }
 
     #[test]
@@ -1241,6 +1334,48 @@ mod tests {
             Control::Secondary,
             (release, landing.saturating_add(1), true),
         );
+    }
+
+    #[test]
+    fn landing_turn_does_not_start_walking() {
+        for player in Player::ALL {
+            let mut special = special_started(player);
+            for tick in 4..33 {
+                special.input_step(tick, &[]);
+            }
+            verify_landing_direction(special, player, 33, Facing::Left);
+            let mut jump = four_playing();
+            jump.input_step(3, &pulse(player, Control::Secondary));
+            for tick in 4..34 {
+                jump.input_step(tick, &[]);
+            }
+            verify_landing_direction(jump, player, 34, Facing::Left);
+        }
+    }
+
+    fn verify_landing_direction(
+        mut state: Cabinet,
+        player: Player,
+        target: u64,
+        facing: Facing,
+    ) {
+        let before = station_for(&state, player);
+        assert!(before.maneuver.airborne());
+        state.input_step(target, &[
+            change(player, Control::Left, true),
+            change(player, Control::Up, true),
+        ]);
+        let landed = station_for(&state, player);
+        assert_eq!(landed.maneuver, Maneuver::Idle);
+        assert_eq!(landed.position, before.position);
+        assert_eq!(landed.facing, facing);
+        assert_eq!(landed.walking_ticks, None);
+        state.input_step(target.saturating_add(1), &[]);
+        let walking = station_for(&state, player);
+        assert_eq!(walking.position.x, landed.position.x.saturating_sub(2));
+        assert_eq!(walking.position.y, landed.position.y.saturating_sub(2));
+        assert_eq!(walking.facing, Facing::Left);
+        assert_eq!(walking.walking_ticks, Some(0));
     }
 
     fn special_started(player: Player) -> Cabinet {
@@ -1482,6 +1617,7 @@ mod tests {
     }
 
     fn assert_air_attack_landing(state: &mut Cabinet, last: Station) {
+        verify_landing_direction(*state, Player::Marge, 39, Facing::Right);
         state.input_step(39, &[change(Player::Marge, Control::Up, false)]);
         let [landed, ..] = state.stations();
         assert_eq!(landed.maneuver, Maneuver::Idle);
@@ -1532,10 +1668,21 @@ mod tests {
             state.input_step(tick, &[]);
         }
         assert_maneuvers_at_end(&state, before.position);
+        assert_walk_after_ground_recovery(state, before.position);
+    }
+
+    fn assert_walk_after_ground_recovery(mut state: Cabinet, position: Point) {
         state.input_step(20, &[change(Player::Marge, Control::Right, true)]);
+        let [recovering, ..] = state.stations();
+        assert_eq!(recovering.maneuver, Maneuver::Idle);
+        assert_eq!(recovering.position, position);
+        assert_eq!(recovering.walking_ticks, None);
+        for tick in 21..=23 {
+            state.input_step(tick, &[]);
+        }
         let [walking, ..] = state.stations();
         assert_eq!(walking.maneuver, Maneuver::Idle);
-        assert_eq!(walking.position.x, before.position.x + 2);
+        assert_eq!(walking.position.x, position.x.saturating_add(2));
         assert_eq!(walking.walking_ticks, Some(0));
     }
 

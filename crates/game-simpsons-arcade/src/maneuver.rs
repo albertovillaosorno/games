@@ -221,7 +221,7 @@ pub enum Maneuver {
         /// Zero-based displayed pose tick.
         tick: u8,
     },
-    /// Station is on the ground and free to walk.
+    /// Station is on the ground without a displayed maneuver.
     Idle,
     /// Station is airborne.
     Jump(JumpMotion),
