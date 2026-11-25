@@ -86,8 +86,8 @@ air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 208 poses and
-17 KiB. The original four-hash command still works without a catalogue.
+record or maneuver end. The catalogue is limited to 220 poses and
+18 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
 pose for each of the four characters. When present, the preview retains
@@ -224,9 +224,16 @@ distinct single-button press ticks release her after four further ticks;
 same-tick chords do not count, held directions do not move her, and
 pause freezes the interaction. Damage and contact admission remain
 provisional; depletion releases her into the existing stock recovery.
-A successful escape repels the living enemy using provisional motion
-and existing defeat art. Other characters, multiplayer restraint
-and exact release poses remain open. Older catalogues omit this behavior.
+A successful escape repels the living enemy. An optional complete
+`enemy repelled TICK SHA256` sequence uses twelve offsets: 0, 5, 10,
+16, 19, 25, 29, 34, 49, 56, 77 and 83. Each contains an
+`enemy/repelled` record and requires the restraint sequence. The
+centered capture informs the 56-pixel displacement over 28 ticks and
+91-tick recovery; a boundary trial informs the 103-tick alternative.
+Direction-dependent timing, mirroring and pivots remain provisional.
+Without the recovery poses, defeat art remains the fallback. Other
+characters and multiplayer restraint remain open. Older catalogues
+without restraint omit the interaction entirely.
 
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
 The hash identifies the verified canonical PCM sample catalogue. The

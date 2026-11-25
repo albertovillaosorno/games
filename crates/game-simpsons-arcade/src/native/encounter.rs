@@ -85,6 +85,7 @@ impl CombatArt {
         &self,
         enemy: Enemy,
         animated: Option<Art>,
+        repelled_art: bool,
     ) -> Result<SpriteDraw, RenderError> {
         let fallback = if matches!(enemy.action, EnemyAction::Attack { .. }) {
             self.strike
@@ -92,12 +93,17 @@ impl CombatArt {
             self.approach
         };
         let pose = animated.unwrap_or(fallback);
-        // The selected reference observations face left.
-        Ok(pose.draw(
-            ground_position(pose, enemy.position, 0)?,
-            enemy.facing == Facing::Right
-                && !matches!(enemy.action, EnemyAction::Restrain(_)),
-        ))
+        let flip = match enemy.action {
+            EnemyAction::Restrain(_) => false,
+            EnemyAction::Repelled { .. } if repelled_art => {
+                enemy.facing == Facing::Left
+            },
+            EnemyAction::Approach { .. }
+            | EnemyAction::Attack { .. }
+            | EnemyAction::Defeat { .. }
+            | EnemyAction::Repelled { .. } => enemy.facing == Facing::Right,
+        };
+        Ok(pose.draw(ground_position(pose, enemy.position, 0)?, flip))
     }
 
     pub(super) fn enemy_health(
@@ -119,7 +125,7 @@ impl CombatArt {
         enemy: Enemy,
         animated: Option<Art>,
     ) -> Result<Point, RenderError> {
-        let rect = self.enemy_draw(enemy, animated)?.destination;
+        let rect = self.enemy_draw(enemy, animated, false)?.destination;
         Ok(Point {
             x: enemy.position.x.saturating_sub(12),
             y: i16::try_from(rect.y).map_err(failure)?.saturating_sub(5),
@@ -518,8 +524,7 @@ fn smoke_restraint(
             "restraint did not release into nonlethal recovery",
         ));
     }
-    let _presented = art.present(scene, simulation.state())?;
-    let _pixels = scene.readback()?;
+    verify_repelled_art(scene, art, simulation.state())?;
     writeln!(
         stdout().lock(),
         "Restraint: combined art and escape verified"
@@ -530,6 +535,44 @@ fn smoke_restraint(
 fn restrained(cabinet: &Cabinet) -> bool {
     let [marge, ..] = cabinet.stations();
     marge.maneuver == Maneuver::Restrained
+}
+
+fn verify_repelled_art(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    let _presented = art.present(scene, cabinet)?;
+    let pixels = scene.readback()?;
+    if !art.poses.repelled_enabled() {
+        return Ok(());
+    }
+    let enemy = cabinet
+        .enemies()
+        .find(|enemy| matches!(enemy.action, EnemyAction::Repelled { .. }))
+        .ok_or_else(|| failure("missing repelled enemy"))?;
+    let pose = art
+        .poses
+        .enemy(enemy.action)
+        .ok_or(RenderError::InvalidSprite)?;
+    if !art.world.iter().any(|(_, draw)| {
+        draw.atlas == pose.atlas
+            && draw.flip_horizontal == (enemy.facing == Facing::Left)
+    }) {
+        return Err(failure("dedicated recovery pose was not drawn"));
+    }
+    let saved = art.poses.take_enemy();
+    let fallback = art.present(scene, cabinet);
+    art.poses.restore_enemy(saved);
+    let _fallback_presented = fallback?;
+    if pixels == scene.readback()? {
+        return Err(failure("dedicated recovery art was not visible"));
+    }
+    writeln!(
+        stdout().lock(),
+        "Restraint: dedicated recovery art verified"
+    )
+    .map_err(failure)
 }
 
 fn verify_restraint_art(

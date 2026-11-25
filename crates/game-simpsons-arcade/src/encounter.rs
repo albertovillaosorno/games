@@ -47,6 +47,9 @@ pub const ENEMY_WALK_TICKS: u8 = 48;
 pub const ENEMY_DEFEAT_TICKS: u8 = 66;
 const DEFEAT_KNOCKBACK_TICKS: u8 = 33;
 const DEFEAT_BLINK_TICK: u8 = 52;
+const REPELLED_KNOCKBACK_TICKS: u8 = 28;
+const REPELLED_CENTER_TICKS: u8 = 91;
+const REPELLED_BOUNDARY_TICKS: u8 = 103;
 const RESTRAINT_EDGES: u8 = 12;
 const RESTRAINT_RELEASE_TICKS: u8 = 4;
 const RESTRAINT_FIRST_DAMAGE: u8 = 25;
@@ -292,14 +295,18 @@ impl Enemy {
             return;
         }
         let next = tick.saturating_add(1);
-        self.knockback(layout, next);
+        self.knockback(layout, next, DEFEAT_KNOCKBACK_TICKS);
         self.action = EnemyAction::Defeat { tick: next };
     }
 
     fn advance_repelled(&mut self, layout: StreetLayout, tick: u8) {
         let next = tick.saturating_add(1);
-        self.knockback(layout, next);
-        self.action = if next >= ENEMY_DEFEAT_TICKS {
+        self.knockback(layout, next, REPELLED_KNOCKBACK_TICKS);
+        let duration = match self.facing {
+            Facing::Right => REPELLED_CENTER_TICKS,
+            Facing::Left => REPELLED_BOUNDARY_TICKS,
+        };
+        self.action = if next >= duration {
             EnemyAction::Approach { tick: 0 }
         } else {
             EnemyAction::Repelled { tick: next }
@@ -430,8 +437,8 @@ impl Enemy {
         };
     }
 
-    fn knockback(&mut self, layout: StreetLayout, tick: u8) {
-        if tick <= DEFEAT_KNOCKBACK_TICKS {
+    fn knockback(&mut self, layout: StreetLayout, tick: u8, duration: u8) {
+        if tick <= duration {
             let displacement = match self.facing {
                 Facing::Left => 2,
                 Facing::Right => -2,
@@ -814,6 +821,27 @@ mod tests {
             enemy.health > 0
                 && enemy.action == EnemyAction::Repelled { tick: 0 }
         }));
+    }
+
+    #[test]
+    fn repelled_enemy_recovers_without_defeat_or_blink() {
+        for (facing, end, duration) in
+            [(Facing::Right, 144, 91), (Facing::Left, 256, 103)]
+        {
+            let layout = StreetLayout::DOWNTOWN;
+            let mut enemy = Enemy::new(Point { x: 200, y: 190 });
+            enemy.facing = facing;
+            enemy.action = EnemyAction::Repelled { tick: 0 };
+            let health = enemy.health;
+            for tick in 0..duration {
+                assert_eq!(enemy.action, EnemyAction::Repelled { tick });
+                assert!(enemy.visible());
+                enemy.advance_repelled(layout, tick);
+            }
+            assert_eq!(enemy.position, Point { x: end, y: 190 });
+            assert_eq!(enemy.health, health);
+            assert_eq!(enemy.action, EnemyAction::Approach { tick: 0 });
+        }
     }
 
     #[test]

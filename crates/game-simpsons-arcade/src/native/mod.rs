@@ -607,7 +607,11 @@ impl Scene {
                 enemy.position = view.project(enemy.position);
                 self.world.push((
                     enemy.position.y,
-                    combat.enemy_draw(enemy, self.poses.enemy(enemy.action))?,
+                    combat.enemy_draw(
+                        enemy,
+                        self.poses.enemy(enemy.action),
+                        self.poses.repelled_enabled(),
+                    )?,
                 ));
             }
         }

@@ -1983,3 +1983,31 @@ continue using the existing common bounded translation. Cover both
 families, either airborne controller, reversal after release, depth
 release, repeated jumps and restoration of the grounded owner.
 The exact seat sampling offsets still require original controls.
+
+A centered escape control distinguishes nonlethal recovery from defeat.
+After the twelfth button edge and four-tick release, the enemy shadow
+moves 56 pixels in 28 ticks. Downed poses follow, then kneeling and
+standing; ordinary walking resumes at offset 91. A separate right-edge
+control shows a different, partly clipped tumble and resumes walking
+at offset 103. Twelve complete centered crops at offsets 0, 5, 10,
+16, 19, 25, 29, 34, 49, 56, 77 and 83 passed exact 71,680-pixel
+scene reconstruction before publication into private local bundles.
+
+The simulation now preserves enemy health and visibility throughout
+recovery, moves two pixels per tick for 28 ticks, and selects a
+provisional 91- or 103-tick duration according to facing. A complete
+optional recovery catalogue requires the six restraint keys and all
+12 recovery keys; without the latter, existing defeat art remains the
+fallback. The bounded catalogue grows to 220 records and 18 KiB.
+The centered pose sequence repeats its observed downed phases and
+mirrors in the other direction. Exact boundary-specific art, causal
+timing differences, collision and pose pivots remain unresolved.
+
+Fresh render/audio validation passed in run
+1795632122711622637-969594. The 218-pose adaptive OpenGL touch smoke
+verified dedicated recovery atlas selection, facing and readback;
+206- and 200-pose compatibility controls also passed. The new run
+missed no host work budgets across 600 movement frames and 20 strike
+submissions (mean 69.118 and 223.573 microseconds respectively).
+Lifetime peak RSS was 134,991,872 bytes. These are synthetic host
+measurements rather than physical input or complete gameplay parity.
