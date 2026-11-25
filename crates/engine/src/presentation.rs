@@ -48,6 +48,154 @@ pub struct Viewport {
     pub y: u32,
 }
 
+/// How a logical frame occupies the available physical surface.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PresentationMode {
+    /// Extend the logical camera horizontally when the title supports it.
+    Adaptive,
+    /// Preserve the aspect ratio and letterbox any remaining area.
+    #[default]
+    AspectFit,
+    /// Fill the surface using a centered crop of the logical frame.
+    Fill,
+    /// Preserve the aspect ratio while using whole-number pixel scaling.
+    Integer,
+    /// Fill the surface without preserving the aspect ratio.
+    Stretch,
+}
+
+/// Nonzero surface or logical frame dimensions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Dimensions {
+    /// Vertical pixel extent.
+    pub height: NonZeroU32,
+    /// Horizontal pixel extent.
+    pub width: NonZeroU32,
+}
+
+impl Dimensions {
+    /// Create dimensions in width, height order.
+    #[must_use]
+    pub const fn new(width: NonZeroU32, height: NonZeroU32) -> Self {
+        Self { height, width }
+    }
+}
+
+/// The exact source and destination rectangles used for presentation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PresentationLayout {
+    /// Complete logical frame dimensions.
+    pub design: Dimensions,
+    /// Destination rectangle within the physical surface.
+    pub destination: Viewport,
+    /// Source rectangle within the complete logical frame.
+    pub source: Viewport,
+    /// Complete physical surface dimensions.
+    pub surface: Dimensions,
+}
+
+impl PresentationMode {
+    /// Determine the admissible logical extent before rendering a frame.
+    ///
+    /// Adaptive retains the base height and may widen only to the supplied
+    /// supported camera limit. Pass the base width for fixed scenes.
+    #[must_use]
+    pub fn design_for_surface(
+        self,
+        surface: Dimensions,
+        base: Dimensions,
+        maximum_width: NonZeroU32,
+    ) -> Dimensions {
+        if self != Self::Adaptive || maximum_width <= base.width {
+            return base;
+        }
+        let desired = NonZeroU64::from(surface.width)
+            .get()
+            .saturating_mul(NonZeroU64::from(base.height).get())
+            .checked_div(NonZeroU64::from(surface.height).get())
+            .unwrap_or(0);
+        let admitted = desired
+            .min(NonZeroU64::from(maximum_width).get())
+            .max(NonZeroU64::from(base.width).get());
+        let width = u32::try_from(admitted)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .unwrap_or(base.width);
+        Dimensions::new(width, base.height)
+    }
+
+    /// Select source and destination pixel rectangles.
+    ///
+    /// Adaptive fits the actual supplied logical frame; call
+    /// `design_for_surface` before composing an extendable scene.
+    /// Integer mode falls back to aspect-fit below one logical pixel scale.
+    /// Fill rounds its source crop to whole logical pixels.
+    #[must_use]
+    pub fn layout(
+        self,
+        surface: Dimensions,
+        design: Dimensions,
+    ) -> PresentationLayout {
+        let Dimensions {
+            height: surface_height,
+            width: surface_width,
+        } = surface;
+        let Dimensions {
+            height: design_height,
+            width: design_width,
+        } = design;
+        let full_source = Viewport::full(design_width, design_height);
+        let full_surface = Viewport::full(surface_width, surface_height);
+        let fit = || {
+            Viewport::fit(
+                surface_width,
+                surface_height,
+                design_width,
+                design_height,
+            )
+        };
+        let (source, destination) = match self {
+            Self::Adaptive | Self::AspectFit => (full_source, fit()),
+            Self::Integer => {
+                let horizontal = surface_width
+                    .get()
+                    .checked_div(design_width.get())
+                    .unwrap_or(0);
+                let vertical = surface_height
+                    .get()
+                    .checked_div(design_height.get())
+                    .unwrap_or(0);
+                let scale = horizontal.min(vertical);
+                let destination = if scale == 0 {
+                    fit()
+                } else {
+                    full_surface.center(
+                        design_width.get().saturating_mul(scale),
+                        design_height.get().saturating_mul(scale),
+                    )
+                };
+                (full_source, destination)
+            },
+            Self::Fill => (
+                Viewport::fit(
+                    design_width,
+                    design_height,
+                    surface_width,
+                    surface_height,
+                ),
+                full_surface,
+            ),
+            Self::Stretch => (full_source, full_surface),
+        };
+        PresentationLayout {
+            design,
+            destination,
+            source,
+            surface,
+        }
+    }
+}
+
 /// A policy for whether the host should cap rendering frequency.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FramePacing {
@@ -77,6 +225,19 @@ impl FramePacing {
 }
 
 impl Viewport {
+    fn center(self, width: u32, height: u32) -> Self {
+        Self {
+            height,
+            width,
+            x: self.width.saturating_sub(width).checked_div(2).unwrap_or(0),
+            y: self
+                .height
+                .saturating_sub(height)
+                .checked_div(2)
+                .unwrap_or(0),
+        }
+    }
+
     /// Fit a logical design size inside the surface without stretching it.
     ///
     /// A renderer may choose how to fill the remaining letterbox area.
@@ -101,19 +262,15 @@ impl Viewport {
             .unwrap_or_else(|_| surface_width.get());
         let height = u32::try_from(fitted_height.max(1).min(sh))
             .unwrap_or_else(|_| surface_height.get());
+        Self::full(surface_width, surface_height).center(width, height)
+    }
+
+    const fn full(width: NonZeroU32, height: NonZeroU32) -> Self {
         Self {
-            height,
-            width,
-            x: surface_width
-                .get()
-                .saturating_sub(width)
-                .checked_div(2)
-                .unwrap_or(0),
-            y: surface_height
-                .get()
-                .saturating_sub(height)
-                .checked_div(2)
-                .unwrap_or(0),
+            height: height.get(),
+            width: width.get(),
+            x: 0,
+            y: 0,
         }
     }
 }
@@ -171,10 +328,85 @@ mod tests {
     use std::num::NonZeroU32;
     use std::time::Duration;
 
-    use super::{FramePacing, TranslationCatalog, Viewport};
+    use super::{
+        Dimensions, FramePacing, PresentationMode, TranslationCatalog, Viewport,
+    };
 
     fn nz(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+    }
+
+    #[test]
+    fn presentation_modes_select_distinct_source_and_destination_rectangles() {
+        let surface = Dimensions::new(nz(800), nz(600));
+        let design = Dimensions::new(nz(320), nz(224));
+        let fit = PresentationMode::AspectFit.layout(surface, design);
+        let integer = PresentationMode::Integer.layout(surface, design);
+        let fill = PresentationMode::Fill.layout(surface, design);
+        let stretch = PresentationMode::Stretch.layout(surface, design);
+        assert_eq!(fit.destination, Viewport {
+            height: 560,
+            width: 800,
+            x: 0,
+            y: 20,
+        });
+        assert_eq!(integer.destination, Viewport {
+            height: 448,
+            width: 640,
+            x: 80,
+            y: 76,
+        });
+        assert_eq!(fill.destination, stretch.destination);
+        assert_eq!(fill.source, Viewport {
+            height: 224,
+            width: 298,
+            x: 11,
+            y: 0,
+        });
+        assert_eq!(fit.source, stretch.source);
+        assert_eq!(integer.source, stretch.source);
+        assert_eq!(stretch.destination, Viewport {
+            height: 600,
+            width: 800,
+            x: 0,
+            y: 0,
+        });
+    }
+
+    #[test]
+    fn integer_mode_falls_back_to_fit_when_the_design_cannot_fit_at_one() {
+        let surface = Dimensions::new(nz(100), nz(700));
+        let design = Dimensions::new(nz(320), nz(224));
+        assert_eq!(
+            PresentationMode::Integer.layout(surface, design),
+            PresentationMode::AspectFit.layout(surface, design),
+        );
+    }
+
+    #[test]
+    fn adaptive_extends_only_within_an_explicit_supported_width() {
+        let base = Dimensions::new(nz(320), nz(224));
+        let wide = Dimensions::new(nz(1920), nz(1080));
+        let tall = Dimensions::new(nz(400), nz(800));
+        let mode = PresentationMode::Adaptive;
+        assert_eq!(mode.design_for_surface(wide, base, base.width), base);
+        assert_eq!(mode.design_for_surface(tall, base, nz(800)), base);
+        assert_eq!(
+            mode.design_for_surface(wide, base, nz(800)),
+            Dimensions::new(nz(398), base.height),
+        );
+        assert_eq!(
+            mode.design_for_surface(wide, base, nz(360)),
+            Dimensions::new(nz(360), base.height),
+        );
+        assert_eq!(
+            mode.layout(wide, base),
+            PresentationMode::AspectFit.layout(wide, base),
+        );
+        assert_eq!(
+            PresentationMode::Fill.design_for_surface(wide, base, nz(800)),
+            base,
+        );
     }
 
     #[test]

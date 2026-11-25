@@ -34,7 +34,7 @@
 use std::collections::BTreeSet;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
-use crate::presentation::Viewport;
+use crate::presentation::{PresentationLayout, Viewport};
 
 /// A position in the normalized control surface, inclusive at both edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +46,33 @@ pub struct TouchPoint {
 }
 
 impl TouchPoint {
+    /// Project a contact through the rendered source and destination.
+    ///
+    /// Rejects letterbox space and invalid rectangles. Cropped content
+    /// retains its position within the complete logical frame.
+    #[must_use]
+    pub fn in_presentation(self, layout: PresentationLayout) -> Option<Self> {
+        let relative = self.in_viewport(
+            layout.destination,
+            layout.surface.width,
+            layout.surface.height,
+        )?;
+        Some(Self {
+            x: source_axis(
+                relative.x,
+                layout.source.x,
+                layout.source.width,
+                layout.design.width,
+            )?,
+            y: source_axis(
+                relative.y,
+                layout.source.y,
+                layout.source.height,
+                layout.design.height,
+            )?,
+        })
+    }
+
     /// Project surface-normalized coordinates into a fitted viewport.
     /// Returns None for letterbox areas or invalid viewport geometry.
     #[must_use]
@@ -218,13 +245,28 @@ fn project_axis(
     u16::try_from(logical).ok()
 }
 
+fn source_axis(
+    point: u16,
+    offset: u32,
+    extent: u32,
+    design: NonZeroU32,
+) -> Option<u16> {
+    if extent == 0 || offset.checked_add(extent)? > design.get() {
+        return None;
+    }
+    let start = u64::from(offset).checked_mul(u64::from(u16::MAX))?;
+    let relative = u64::from(point).checked_mul(u64::from(extent))?;
+    let coordinate = start.checked_add(relative)?;
+    u16::try_from(coordinate.checked_div(NonZeroU64::from(design).get())?).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use super::{ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone};
     use crate::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
-    use crate::presentation::Viewport;
+    use crate::presentation::{Dimensions, PresentationMode, Viewport};
 
     const LEFT: TouchPoint = TouchPoint { x: 100, y: 0 };
     const RIGHT: TouchPoint = TouchPoint { x: 500, y: 0 };
@@ -268,6 +310,51 @@ mod tests {
         down: bool,
     ) -> LogicalAction<&'static str> {
         LogicalAction { action, down }
+    }
+
+    #[test]
+    fn cropped_touch_maps_to_the_visible_source_and_stretch_maps_all() {
+        let nz = |value| NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
+        let surface = Dimensions::new(nz(400), nz(400));
+        let design = Dimensions::new(nz(800), nz(400));
+        let fill = PresentationMode::Fill.layout(surface, design);
+        let stretch = PresentationMode::Stretch.layout(surface, design);
+        let first = TouchPoint { x: 0, y: 0 };
+        let last = TouchPoint { x: u16::MAX, y: u16::MAX };
+        let center = TouchPoint { x: 32768, y: 32768 };
+        assert_eq!(
+            first.in_presentation(fill),
+            Some(TouchPoint { x: 16383, y: 0 })
+        );
+        assert_eq!(
+            last.in_presentation(fill),
+            Some(TouchPoint { x: 49151, y: u16::MAX })
+        );
+        assert_eq!(
+            center.in_presentation(fill),
+            Some(TouchPoint { x: 32767, y: 32768 })
+        );
+        assert_eq!(first.in_presentation(stretch), Some(first));
+        assert_eq!(last.in_presentation(stretch), Some(last));
+        let mut invalid = fill;
+        invalid.source.width = u32::MAX;
+        assert_eq!(center.in_presentation(invalid), None);
+    }
+
+    #[test]
+    fn integer_and_aspect_fit_reject_unrendered_surface_space() {
+        let nz = |value| NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
+        let surface = Dimensions::new(nz(800), nz(600));
+        let design = Dimensions::new(nz(320), nz(224));
+        for mode in [PresentationMode::AspectFit, PresentationMode::Integer] {
+            let layout = mode.layout(surface, design);
+            assert_eq!(
+                TouchPoint { x: 32768, y: 0 }.in_presentation(layout),
+                None
+            );
+            let center = TouchPoint { x: 32768, y: 32768 };
+            assert_eq!(center.in_presentation(layout), Some(center));
+        }
     }
 
     #[test]

@@ -38,7 +38,9 @@ pub mod sprites;
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use games::presentation::Viewport;
+use games::presentation::{
+    Dimensions, PresentationLayout, PresentationMode, Viewport,
+};
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Rect, max_int_value};
@@ -132,6 +134,7 @@ impl FrameLayout {
 /// A native window with an explicitly accelerated renderer.
 pub struct NativeWindow {
     canvas: WindowCanvas,
+    mode: PresentationMode,
     sdl: Sdl,
 }
 
@@ -190,13 +193,23 @@ impl NativeWindow {
                 "SDL did not select an accelerated renderer",
             )));
         }
-        Ok(Self { canvas, sdl })
+        Ok(Self {
+            canvas,
+            mode: PresentationMode::default(),
+            sdl,
+        })
     }
 
     /// Owned name reported by the selected native rendering driver.
     #[must_use]
     pub fn renderer_name(&self) -> String {
         self.canvas.info().name.to_owned()
+    }
+
+    /// Select the presentation mode for subsequent frame and scene sessions.
+    /// Does not change the logical design dimensions.
+    pub const fn set_presentation_mode(&mut self, mode: PresentationMode) {
+        self.mode = mode;
     }
 
     /// Reuse one texture and event pump for the caller's presentation loop.
@@ -220,7 +233,7 @@ impl NativeWindow {
         let mut session = FrameSession {
             canvas: &mut self.canvas,
             events,
-            layout,
+            presentation: FramePresentation { layout, mode: self.mode },
             texture,
         };
         run(&mut session)
@@ -243,7 +256,7 @@ impl NativeWindow {
     {
         let creator = self.canvas.texture_creator();
         let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
-        let textures = SceneTextures::new(&creator, layout, limits)?;
+        let textures = SceneTextures::new(&creator, layout, limits, self.mode)?;
         let mut session =
             SceneSession::new(&mut self.canvas, events, textures)?;
         run(&mut session)
@@ -254,14 +267,14 @@ impl NativeWindow {
 pub struct FrameSession<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
     events: EventPump,
-    layout: FrameLayout,
+    presentation: FramePresentation,
     texture: Texture<'texture>,
 }
 
 impl Debug for FrameSession<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("FrameSession")
-            .field("layout", &self.layout)
+            .field("layout", &self.presentation.layout)
             .finish_non_exhaustive()
     }
 }
@@ -281,8 +294,12 @@ impl FrameSession<'_, '_> {
     /// # Errors
     /// Rejects incorrect frame lengths or failed native operations.
     pub fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
-        let drawn =
-            draw_frame(self.canvas, &mut self.texture, self.layout, pixels)?;
+        let drawn = draw_frame(
+            self.canvas,
+            &mut self.texture,
+            self.presentation,
+            pixels,
+        )?;
         if drawn {
             self.canvas.present();
         }
@@ -291,16 +308,15 @@ impl FrameSession<'_, '_> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DrawableViewport {
-    fitted: Viewport,
-    height: NonZeroU32,
-    width: NonZeroU32,
+struct FramePresentation {
+    layout: FrameLayout,
+    mode: PresentationMode,
 }
 
 fn copy_to_viewport<Target>(
     canvas: &mut Canvas<Target>,
     texture: &Texture<'_>,
-    destination: Rect,
+    layout: PresentationLayout,
 ) -> Result<(), RenderError>
 where
     Target: RenderTarget,
@@ -308,7 +324,11 @@ where
     canvas.set_draw_color(Color::RGB(0, 0, 0));
     canvas.clear();
     canvas
-        .copy(texture, None, destination)
+        .copy(
+            texture,
+            native_rect(layout.source)?,
+            native_rect(layout.destination)?,
+        )
         .map_err(RenderError::Backend)
 }
 
@@ -331,48 +351,31 @@ fn create_texture<Context>(
 fn draw_frame<Target>(
     canvas: &mut Canvas<Target>,
     texture: &mut Texture<'_>,
-    layout: FrameLayout,
+    presentation: FramePresentation,
     pixels: &[u8],
 ) -> Result<bool, RenderError>
 where
     Target: RenderTarget,
 {
+    let FramePresentation { layout, mode } = presentation;
     if pixels.len() != layout.bytes {
         return Err(RenderError::InvalidLength);
     }
-    let Some(destination) = drawable_rect(canvas, layout)? else {
+    let Some(drawable) = drawable_viewport(canvas, layout, mode)? else {
         return Ok(false);
     };
     texture
         .update(None, pixels, layout.pitch)
         .map_err(|error| RenderError::Backend(error.to_string()))?;
-    copy_to_viewport(canvas, texture, destination)?;
+    copy_to_viewport(canvas, texture, drawable)?;
     Ok(true)
-}
-
-fn drawable_rect<Target>(
-    canvas: &Canvas<Target>,
-    layout: FrameLayout,
-) -> Result<Option<Rect>, RenderError>
-where
-    Target: RenderTarget,
-{
-    let Some(DrawableViewport { fitted, .. }) =
-        drawable_viewport(canvas, layout)?
-    else {
-        return Ok(None);
-    };
-    let left = i32::try_from(fitted.x)
-        .map_err(|_error| RenderError::InvalidDimensions)?;
-    let top = i32::try_from(fitted.y)
-        .map_err(|_error| RenderError::InvalidDimensions)?;
-    Ok(Some(Rect::new(left, top, fitted.width, fitted.height)))
 }
 
 fn drawable_viewport<Target>(
     canvas: &Canvas<Target>,
     layout: FrameLayout,
-) -> Result<Option<DrawableViewport>, RenderError>
+    mode: PresentationMode,
+) -> Result<Option<PresentationLayout>, RenderError>
 where
     Target: RenderTarget,
 {
@@ -385,8 +388,18 @@ where
         return Ok(None);
     };
     validate_dimensions(width, height)?;
-    let fitted = Viewport::fit(width, height, layout.width, layout.height);
-    Ok(Some(DrawableViewport { fitted, height, width }))
+    Ok(Some(mode.layout(
+        Dimensions::new(width, height),
+        Dimensions::new(layout.width, layout.height),
+    )))
+}
+
+fn native_rect(viewport: Viewport) -> Result<Rect, RenderError> {
+    let left = i32::try_from(viewport.x)
+        .map_err(|_error| RenderError::InvalidDimensions)?;
+    let top = i32::try_from(viewport.y)
+        .map_err(|_error| RenderError::InvalidDimensions)?;
+    Ok(Rect::new(left, top, viewport.width, viewport.height))
 }
 
 fn validate_dimensions(
@@ -406,6 +419,7 @@ mod tests {
     use std::time::Duration;
 
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
+    use games::presentation::PresentationMode;
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
     use games::timing::StepClock;
     use sdl2::event::Event;
@@ -418,7 +432,8 @@ mod tests {
     };
     use super::sprites::{SceneLimits, SpriteDraw, SpriteRect};
     use super::{
-        FrameLayout, NativeWindow, RenderError, create_texture, draw_frame,
+        FrameLayout, FramePresentation, NativeWindow, RenderError,
+        create_texture, draw_frame,
     };
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
@@ -516,6 +531,10 @@ mod tests {
     fn software_readback_preserves_pixels_and_letterbox()
     -> Result<(), RenderError> {
         let layout = extent()?;
+        let presentation = FramePresentation {
+            layout,
+            mode: PresentationMode::AspectFit,
+        };
         let surface = Surface::new(6, 4, PixelFormatEnum::RGBA32)
             .map_err(RenderError::Backend)?;
         let mut canvas = surface.into_canvas().map_err(RenderError::Backend)?;
@@ -525,7 +544,7 @@ mod tests {
         let drawn = draw_frame(
             &mut canvas,
             &mut texture,
-            layout,
+            presentation,
             pixels.as_flattened(),
         )?;
         require(drawn, "frame was not drawn")?;
@@ -540,7 +559,7 @@ mod tests {
             "nearest sampling or letterbox colors differ",
         )?;
         require(
-            draw_frame(&mut canvas, &mut texture, layout, &[])
+            draw_frame(&mut canvas, &mut texture, presentation, &[])
                 == Err(RenderError::InvalidLength),
             "invalid frame accepted",
         )?;
@@ -556,7 +575,7 @@ mod tests {
             draw_frame(
                 &mut canvas,
                 &mut texture,
-                layout,
+                presentation,
                 replacement.as_flattened(),
             )?,
             "second frame not drawn",
@@ -568,6 +587,84 @@ mod tests {
                 .map_err(RenderError::Backend)?
                 == [row; 4].as_flattened().as_flattened(),
             "persistent texture did not update",
+        )
+    }
+
+    #[test]
+    fn fill_and_stretch_render_their_distinct_source_pixels()
+    -> Result<(), RenderError> {
+        let layout = FrameLayout::new(nz(4), nz(2), budget(32))?;
+        let surface = Surface::new(4, 4, PixelFormatEnum::RGBA32)
+            .map_err(RenderError::Backend)?;
+        let mut canvas = surface.into_canvas().map_err(RenderError::Backend)?;
+        let creator = canvas.texture_creator();
+        let mut texture = create_texture(&creator, layout)?;
+        let upper = [RED, GREEN, BLUE, WHITE];
+        let lower = [WHITE, BLUE, GREEN, RED];
+        let pixels = [upper, lower];
+        for (mode, expected) in [
+            (PresentationMode::Fill, [
+                [GREEN, GREEN, BLUE, BLUE],
+                [GREEN, GREEN, BLUE, BLUE],
+                [BLUE, BLUE, GREEN, GREEN],
+                [BLUE, BLUE, GREEN, GREEN],
+            ]),
+            (PresentationMode::Stretch, [upper, upper, lower, lower]),
+            (PresentationMode::AspectFit, [
+                [BLACK; 4], upper, lower, [BLACK; 4],
+            ]),
+        ] {
+            require(
+                draw_frame(
+                    &mut canvas,
+                    &mut texture,
+                    FramePresentation { layout, mode },
+                    pixels.as_flattened().as_flattened(),
+                )?,
+                "frame was not drawn",
+            )?;
+            require(
+                canvas
+                    .read_pixels(None, PixelFormatEnum::RGBA32)
+                    .map_err(RenderError::Backend)?
+                    == expected.as_flattened().as_flattened(),
+                "presentation mode selected incorrect pixels",
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn integer_mode_does_not_fractionally_scale_pixels()
+    -> Result<(), RenderError> {
+        let layout = extent()?;
+        let surface = Surface::new(5, 5, PixelFormatEnum::RGBA32)
+            .map_err(RenderError::Backend)?;
+        let mut canvas = surface.into_canvas().map_err(RenderError::Backend)?;
+        let creator = canvas.texture_creator();
+        let mut texture = create_texture(&creator, layout)?;
+        let pixels = [RED, GREEN, BLUE, WHITE];
+        require(
+            draw_frame(
+                &mut canvas,
+                &mut texture,
+                FramePresentation {
+                    layout,
+                    mode: PresentationMode::Integer,
+                },
+                pixels.as_flattened(),
+            )?,
+            "integer frame not drawn",
+        )?;
+        let upper = [RED, RED, GREEN, GREEN, BLACK];
+        let lower = [BLUE, BLUE, WHITE, WHITE, BLACK];
+        let expected = [upper, upper, lower, lower, [BLACK; 5]];
+        require(
+            canvas
+                .read_pixels(None, PixelFormatEnum::RGBA32)
+                .map_err(RenderError::Backend)?
+                == expected.as_flattened().as_flattened(),
+            "integer mode did not preserve whole pixels",
         )
     }
 

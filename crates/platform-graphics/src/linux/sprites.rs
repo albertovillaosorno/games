@@ -35,6 +35,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::input::touch::TouchPoint;
+use games::presentation::PresentationMode;
 use sdl2::EventPump;
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -46,8 +47,8 @@ use sdl2::render::{
 use sdl2::video::WindowContext;
 
 use super::{
-    FrameLayout, RenderError, copy_to_viewport, drawable_rect,
-    drawable_viewport, validate_dimensions,
+    FrameLayout, RenderError, copy_to_viewport, drawable_viewport,
+    validate_dimensions,
 };
 
 /// An atlas identifier scoped to a scene session.
@@ -210,6 +211,7 @@ impl<'texture, Context> Atlases<'texture, Context> {
 pub(super) struct SceneTextures<'texture, Context> {
     atlases: Atlases<'texture, Context>,
     layout: FrameLayout,
+    mode: PresentationMode,
     target: Texture<'texture>,
 }
 
@@ -224,7 +226,8 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         Target: RenderTarget,
     {
         self.atlases.validate(sprites)?;
-        let Some(destination) = drawable_rect(canvas, self.layout)? else {
+        let Some(drawable) = drawable_viewport(canvas, self.layout, self.mode)?
+        else {
             return Ok(false);
         };
         let mut result = Ok(());
@@ -239,7 +242,7 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
             })
             .map_err(|error| RenderError::Backend(error.to_string()))?;
         result?;
-        copy_to_viewport(canvas, &self.target, destination)?;
+        copy_to_viewport(canvas, &self.target, drawable)?;
         Ok(true)
     }
 
@@ -247,10 +250,12 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         creator: &'texture TextureCreator<Context>,
         layout: FrameLayout,
         limits: SceneLimits,
+        mode: PresentationMode,
     ) -> Result<Self, RenderError> {
         Ok(Self {
             atlases: Atlases::new(creator, limits),
             layout,
+            mode,
             target: create_target(creator, layout)?,
         })
     }
@@ -319,12 +324,15 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         &self,
         point: TouchPoint,
     ) -> Result<Option<TouchPoint>, RenderError> {
-        let Some(super::DrawableViewport { fitted, height, width }) =
-            drawable_viewport(self.canvas, self.textures.layout)?
+        let Some(drawable) = drawable_viewport(
+            self.canvas,
+            self.textures.layout,
+            self.textures.mode,
+        )?
         else {
             return Ok(None);
         };
-        Ok(point.in_viewport(fitted, width, height))
+        Ok(point.in_presentation(drawable))
     }
 
     pub(super) fn new(
@@ -433,6 +441,7 @@ fn create_target<Context>(
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
+    use games::presentation::PresentationMode;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::render::Canvas;
     use sdl2::surface::{Surface, SurfaceContext};
@@ -561,7 +570,12 @@ mod tests {
     fn ordered_sprites_blend_flip_and_clip() -> Result<(), RenderError> {
         let mut canvas = canvas()?;
         let creator = canvas.texture_creator();
-        let mut scene = SceneTextures::new(&creator, layout()?, limits())?;
+        let mut scene = SceneTextures::new(
+            &creator,
+            layout()?,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         let [base, overlay] = commands(&mut scene.atlases)?;
         require(
             scene.draw(&mut canvas, [0; 3], &[base, overlay])?,
@@ -597,7 +611,12 @@ mod tests {
     fn invalid_commands_preserve_the_display() -> Result<(), RenderError> {
         let mut canvas = canvas()?;
         let creator = canvas.texture_creator();
-        let mut scene = SceneTextures::new(&creator, layout()?, limits())?;
+        let mut scene = SceneTextures::new(
+            &creator,
+            layout()?,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         let [base, overlay] = commands(&mut scene.atlases)?;
         require(
             scene.draw(&mut canvas, [0; 3], &[base, overlay])?,
