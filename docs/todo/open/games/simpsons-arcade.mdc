@@ -1835,3 +1835,20 @@ submissions met the 16.667 ms budget; mean work was 65.452 and
 134,217,728 bytes. The previous 192-pose aspect-fit catalogue passed
 without the Marge/Homer jump. Physical play and full stage acceptance
 remain open.
+
+Follow-up grounded Marge/Homer chord captures reproduce the Secondary
+sequence for either station; Marge's complete object DMA matches
+the Secondary-only control throughout the 32-frame action window.
+A second Secondary after landing reproduces the original vertical
+sequence. The fixed-step regression exercises both triggers and two
+successive jumps with and without Primary in the chord.
+
+Separate landed Primary controls at frame 2350, one for each
+station, match all 61 complete DMA frames from 2340 through 2400.
+A Marge Primary followed by Homer Primary at 2370 changes the held
+actor pose at frame 2374, persisting through frame 2400. This is
+additional evidence for a two-edge response after Secondary, not
+evidence of damage. The pre-Secondary two-edge pose differs and
+requires separately admitted art. Leave Primary behavior provisional
+until both modes, reset and movement rules can be implemented with
+complete evidence and a bounded catalogue.

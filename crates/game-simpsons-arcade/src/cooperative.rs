@@ -833,6 +833,34 @@ mod tests {
     }
 
     #[test]
+    fn marge_homer_chords_and_repeat_jumps_match_secondary() {
+        for player in Pair::MargeHomer.members() {
+            let mut control = joined().with_pair_jump(Pair::MargeHomer, true);
+            let mut chord = control;
+            for tick in [41, 71] {
+                control.input_step(tick, &[
+                    change(player, Control::Secondary, true),
+                    change(player, Control::Secondary, false),
+                ]);
+                chord.input_step(tick, &[
+                    change(player, Control::Primary, true),
+                    change(player, Control::Secondary, true),
+                    change(player, Control::Primary, false),
+                    change(player, Control::Secondary, false),
+                ]);
+                assert_eq!(chord, control);
+                assert_eq!(
+                    control.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+                    Some(PairMotion::Jump { tick: 0 })
+                );
+                wait(&mut chord, 29);
+                wait(&mut control, 29);
+                assert_eq!(chord, control);
+            }
+        }
+    }
+
+    #[test]
     fn combined_primary_preserves_stationary_pair_for_both_members() {
         for player in Pair::BartLisa.members() {
             check_grounded_primary(player);
