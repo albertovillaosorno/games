@@ -410,3 +410,25 @@ Fresh native-enabled validation passed in run
 1795605700202886000-4148650.
 This bounds work by event count, not a hard wall-time deadline; physical
 controller replacement and sustained real-device traffic remain open.
+
+A four-seat native loopback diagnostic used the optimized executable from
+96c56f2, verified local art, an isolated X11 display and software OpenGL.
+One host and three controller processes used distinct P-256 roots and
+role-specific leaves. Connecting each reserved remote changed exactly
+1,008 pixels in its own HUD label; the difference rectangles were
+165x15 at x=276, 516 and 756 in the 960x672 host frame. Each remote
+joined and moved its corresponding actor through its controller window.
+Three successive captures were identical after each release. Terminating
+the third controller during held movement stabilized the host frame;
+the second and fourth controllers still produced visible movement.
+The same third-seat identity rejoined and moved again. All generated
+private key files were removed. This covers all four seats in actual
+native processes on one machine, not simultaneous physical input,
+multi-device LAN or end-to-end display latency.
+
+The host scheduler also suppresses authenticated admission completions
+observed at or beyond the initial idle lease deadline. The worker closes
+the unpublished connection and reserves its roster slot without sending
+a phantom connect/disconnect pair to the simulation. A real TLS
+regression controls the observation timestamp, queues a stale input,
+requires silent cleanup, and verifies same-identity rejoin and input.

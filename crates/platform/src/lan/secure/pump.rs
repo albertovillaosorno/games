@@ -84,7 +84,8 @@ pub enum PumpProgress<Message> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PollKind {
     Authenticate,
-    Disconnect(u64),
+    // The flag records whether gameplay was notified of admission.
+    Disconnect(u64, bool),
     Receive(u64, Option<Instant>),
     Reply(u64, Option<Instant>),
 }
@@ -103,9 +104,9 @@ impl PollTask {
         }
     }
 
-    const fn disconnect(peer: u64) -> Self {
+    const fn disconnect(peer: u64, announced: bool) -> Self {
         Self {
-            kind: PollKind::Disconnect(peer),
+            kind: PollKind::Disconnect(peer, announced),
             operation: HostOperation::Disconnect(peer),
         }
     }
@@ -258,16 +259,19 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             .remove(&completion.id)
             .ok_or(ErrorKind::InvalidData)?;
         match kind {
-            PollKind::Authenticate => {
-                self.complete_auth(completion.completed_at, completion.result)
-            },
-            PollKind::Disconnect(peer) => match completion.result {
-                Ok(HostOutcome::Applied) => {
+            PollKind::Authenticate => self.complete_auth(
+                completion.completed_at,
+                observed_at,
+                completion.result,
+            ),
+            PollKind::Disconnect(peer, announced) => match completion.result {
+                Ok(HostOutcome::Applied) if announced => {
                     Ok(PumpProgress::Event(RemoteEvent::Disconnected {
                         peer,
                         reason: ErrorKind::TimedOut,
                     }))
                 },
+                Ok(HostOutcome::Applied) => Ok(PumpProgress::Progress),
                 _ => Err(ErrorKind::InvalidData.into()),
             },
             PollKind::Receive(peer, deadline) => {
@@ -282,14 +286,17 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     fn complete_auth(
         &mut self,
         completed_at: Instant,
+        observed_at: Instant,
         result: HostResult<Message>,
     ) -> io::Result<PumpProgress<Message>> {
         match result {
             Ok(HostOutcome::Admitted(peer)) => {
-                self.ready.push_back(PollTask::receive(
-                    peer,
-                    self.deadline(completed_at)?,
-                ));
+                let deadline = self.deadline(completed_at)?;
+                if deadline.is_some_and(|limit| observed_at >= limit) {
+                    self.ready.push_back(PollTask::disconnect(peer, false));
+                    return Ok(PumpProgress::Progress);
+                }
+                self.ready.push_back(PollTask::receive(peer, deadline));
                 Ok(PumpProgress::Event(RemoteEvent::Connected(peer)))
             },
             Ok(HostOutcome::Authenticating(pending)) => {
@@ -343,7 +350,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             if deadline.is_some_and(|limit| completed_at >= limit)
                 || renewed.is_some_and(|limit| observed_at >= limit)
             {
-                self.ready.push_back(PollTask::disconnect(peer));
+                self.ready.push_back(PollTask::disconnect(peer, true));
                 return Ok(PumpProgress::Progress);
             }
             renewed
@@ -404,8 +411,8 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// Authentication failures and malformed application frames do not
     /// produce a gameplay event or stop unrelated peers. A transfer failure
     /// produces one explicit disconnect; verified rejoin is a new connection.
-    /// Leases use worker completion time, rejecting stale decoded input even
-    /// when a caller resumes polling after an extended stall.
+    /// Leases use worker completion time, rejecting stale admissions and
+    /// decoded input when a caller resumes polling after an extended stall.
     /// # Errors
     /// Reports listener, worker or internal correlation failures.
     pub fn poll(&mut self) -> io::Result<PumpProgress<Message>> {
@@ -465,10 +472,10 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             | PollKind::Reply(peer, Some(deadline))
                 if Instant::now() >= deadline =>
             {
-                PollTask::disconnect(peer)
+                PollTask::disconnect(peer, true)
             },
             PollKind::Authenticate
-            | PollKind::Disconnect(_)
+            | PollKind::Disconnect(..)
             | PollKind::Receive(..)
             | PollKind::Reply(..) => task,
         };
@@ -511,6 +518,11 @@ mod tests {
         first: ClientTls,
         pump: HostInputPump<u8>,
         second: ClientTls,
+    }
+
+    struct UnobservedAdmission {
+        completion: HostCompletion<u8>,
+        stream: SecureFrameStream,
     }
 
     fn next_event(pump: &mut HostInputPump<u8>) -> io::Result<RemoteEvent<u8>> {
@@ -809,6 +821,98 @@ mod tests {
             }),
             "malformed frames neither publish input nor renew the lease",
         )?;
+        pump.shutdown()
+    }
+
+    fn poll_admission_completion(
+        pump: &mut HostInputPump<u8>,
+    ) -> io::Result<Option<HostCompletion<u8>>> {
+        let Some(completion) = pump.worker.poll()? else {
+            let _accepted = pump.accept_one()?;
+            let _submitted = pump.submit_one()?;
+            return Ok(None);
+        };
+        if matches!(completion.result, Ok(HostOutcome::Admitted(1))) {
+            return Ok(Some(completion));
+        }
+        require(
+            !matches!(
+                pump.complete(completion, Instant::now())?,
+                PumpProgress::Event(_)
+            ),
+            "no peer announced before the target admission",
+        )?;
+        Ok(None)
+    }
+
+    fn admission_completion(
+        pump: &mut HostInputPump<u8>,
+        client: &ClientTls,
+    ) -> io::Result<UnobservedAdmission> {
+        let address = pump.local_addr()?;
+        let settings = config()?;
+        let name =
+            ServerName::try_from("games.test").map_err(io::Error::other)?;
+        thread::scope(|scope| {
+            let remote = scope.spawn(|| {
+                SecureFrameStream::connect(address, settings, client, name)
+            });
+            let completion = poll_accept(|| poll_admission_completion(pump))?;
+            let stream = remote
+                .join()
+                .map_err(|_error| io::Error::other("client panicked"))??;
+            Ok(UnobservedAdmission { completion, stream })
+        })
+    }
+
+    #[test]
+    fn expired_admission_does_not_publish_a_phantom_peer() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let idle = Duration::from_secs(30);
+        let mut pump = HostInputPump::bind(
+            HostInputConfig {
+                address: LOOPBACK,
+                enrolments: &[(keys.client_id, 1)],
+                idle_timeout: Some(idle),
+                local_peers: &[0],
+                session: session_config(true),
+                timeout: TIMEOUT,
+            },
+            keys.server,
+            TestCodec,
+        )?;
+        let UnobservedAdmission {
+            stream: mut stale,
+            completion,
+        } = admission_completion(&mut pump, &keys.client)?;
+        stale.send(b"M\x05")?;
+        let observed_at = completion
+            .completed_at
+            .checked_add(idle)
+            .ok_or(ErrorKind::InvalidInput)?;
+        require(
+            matches!(
+                pump.complete(completion, observed_at)?,
+                PumpProgress::Progress
+            ),
+            "admission observed at lease expiry must stay unpublished",
+        )?;
+        require(pump.submit_one()?, "schedule expired admission cleanup")?;
+        let disconnected = poll_accept(|| pump.worker.poll())?;
+        require(
+            matches!(
+                pump.complete(disconnected, observed_at)?,
+                PumpProgress::Progress
+            ),
+            "cleanup cannot publish disconnect for an unpublished peer",
+        )?;
+        drop(stale);
+
+        // The authenticated roster must reserve, not strand, this seat.
+        let mut rejoined = connect(&mut pump, &keys.client, 1)?;
+        rejoined.send(b"M\x06")?;
+        expect_message(&mut pump, 1, 6)?;
         pump.shutdown()
     }
 
