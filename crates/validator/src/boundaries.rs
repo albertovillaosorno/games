@@ -31,6 +31,7 @@
 //
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
@@ -435,6 +436,63 @@ fn workspace_lints(workspace: &toml::Table) -> Result<(), String> {
     Ok(())
 }
 
+fn reject_override_entries(entries: &toml::Table) -> Result<(), String> {
+    for (name, spec) in entries {
+        if spec.get("path").is_some() {
+            return Err(format!(
+                "local dependency override must use a workspace path: {name}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_indirect_paths(value: &Value) -> Result<(), String> {
+    if let Some(paths) = value.get("paths") {
+        let entries = paths.as_array().ok_or("invalid Cargo paths override")?;
+        if !entries.is_empty() {
+            return Err(String::from("Cargo paths overrides are not allowed"));
+        }
+    }
+    if let Some(replacements) = value.get("replace") {
+        reject_override_entries(
+            replacements
+                .as_table()
+                .ok_or("invalid Cargo replace table")?,
+        )?;
+    }
+    if let Some(patches) = value.get("patch") {
+        for entries in patches
+            .as_table()
+            .ok_or("invalid Cargo patch table")?
+            .values()
+        {
+            reject_override_entries(
+                entries.as_table().ok_or("invalid Cargo patch source")?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn repository_cargo_config(root: &Path) -> Result<(), String> {
+    for name in [".cargo/config", ".cargo/config.toml"] {
+        let source = match fs::read_to_string(root.join(name)) {
+            Ok(content) => content,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("{name}: {error}")),
+        };
+        let value = Value::Table(
+            source
+                .parse::<toml::Table>()
+                .map_err(|error| format!("{name}: {error}"))?,
+        );
+        reject_indirect_paths(&value)
+            .map_err(|error| format!("{name}: {error}"))?;
+    }
+    Ok(())
+}
+
 fn manifests(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
     let root_manifest = Value::Table(
         fs::read_to_string(root.join("Cargo.toml"))
@@ -442,6 +500,8 @@ fn manifests(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
             .parse::<toml::Table>()
             .map_err(|error| error.to_string())?,
     );
+    reject_indirect_paths(&root_manifest)?;
+    repository_cargo_config(root)?;
     let workspace = table(&root_manifest, "workspace")?;
     let dependencies = workspace
         .get("dependencies")
@@ -510,6 +570,7 @@ pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     use serde_json::{Value as JsonValue, json};
@@ -517,9 +578,10 @@ mod tests {
 
     use super::{
         Role, dependency, dependency_allowed, header, member, metadata_members,
-        role, source_layout, workspace_lints,
+        reject_indirect_paths, repository_cargo_config, role, source_layout,
+        workspace_lints,
     };
-    use crate::fixtures::require;
+    use crate::fixtures::{directory, require};
 
     #[test]
     fn requires_colocated_rust_sources() {
@@ -774,6 +836,73 @@ mod tests {
             });
             assert!(metadata_members(root, &metadata, &authored).is_err());
         }
+    }
+
+    #[test]
+    fn rejects_indirect_local_dependency_overrides() -> Result<(), String> {
+        for source in [
+            concat!(
+                "[patch.crates-io]\n",
+                "arcade = { path = \"crates/game-simpsons-arcade\" }"
+            ),
+            "[replace]\n\"arcade:0.1.0\" = { path = \"../other\" }",
+            "paths = [\"../other\"]",
+            concat!(
+                "[patch.\"https://example.invalid/source\"]\n",
+                "arcade = { path = \".reference\" }"
+            ),
+        ] {
+            let value = Value::Table(
+                source
+                    .parse::<toml::Table>()
+                    .map_err(|error| error.to_string())?,
+            );
+            require(
+                reject_indirect_paths(&value).is_err(),
+                "local dependency substitution must be rejected",
+            )?;
+        }
+        for source in [
+            "paths = []\n[alias]\nvalidate = \"run\"",
+            concat!(
+                "[patch.crates-io]\n",
+                "foo = { git = \"https://example.invalid/source\", ",
+                "rev = \"1234567\" }"
+            ),
+        ] {
+            let value = Value::Table(
+                source
+                    .parse::<toml::Table>()
+                    .map_err(|error| error.to_string())?,
+            );
+            require(
+                reject_indirect_paths(&value).is_ok(),
+                "ordinary config and non-path patches remain allowed",
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn checks_both_repository_cargo_config_names() -> Result<(), String> {
+        let root = directory("cargo-overrides")?;
+        fs::create_dir_all(root.join(".cargo"))
+            .map_err(|error| error.to_string())?;
+        require(
+            repository_cargo_config(&root).is_ok(),
+            "missing optional config",
+        )?;
+        for name in ["config", "config.toml"] {
+            let config = root.join(".cargo").join(name);
+            fs::write(&config, "paths = [\"../outside\"]")
+                .map_err(|error| error.to_string())?;
+            require(
+                repository_cargo_config(&root).is_err(),
+                "both Cargo config names must reject local path overrides",
+            )?;
+            fs::remove_file(config).map_err(|error| error.to_string())?;
+        }
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 
     #[test]

@@ -82,3 +82,13 @@ Native device state can change without source edits; native results are
 not reused on a subsequent explicit smoke request. Isolated negative
 controls verify that each flag executes a deliberately failing check
 instead of reusing an ordinary cached success.
+
+Local path substitutions through root Cargo patch or replace tables are
+now rejected, as are nonempty Cargo `paths` overrides and local patches
+in either repository Cargo config filename. Local dependencies must use
+explicit workspace dependency paths so their architecture role is visible
+to the existing edge check. Ordinary aliases, registry and Git dependency
+specifications remain supported. Synthetic controls cover forbidden title
+and outside paths, both config filenames and a non-path patch. This is a
+repository policy gate, not a sandbox for machine-level Cargo configuration
+or untrusted external dependency build scripts.
