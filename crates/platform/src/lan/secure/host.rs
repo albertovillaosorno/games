@@ -325,6 +325,7 @@ impl HostSession {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::net::SocketAddr;
     use std::num::NonZeroUsize;
 
     use games::network::SessionError;
@@ -413,11 +414,28 @@ mod tests {
 
     #[test]
     fn host_decodes_frames_and_reserves_slot() -> io::Result<()> {
+        check_host_round_trip(LOOPBACK)
+    }
+
+    #[test]
+    fn ipv6_host_decodes_frames_and_reserves_slot() -> io::Result<()> {
+        check_host_round_trip(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)))
+    }
+
+    #[test]
+    fn mapped_loopback_host_decodes_frames_and_reserves_slot() -> io::Result<()>
+    {
+        check_host_round_trip(SocketAddr::from((
+            [0, 0, 0, 0, 0, 0xffff, 0x7f00, 1],
+            0,
+        )))
+    }
+
+    fn check_host_round_trip(address: SocketAddr) -> io::Result<()> {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
         let settings = config()?;
-        let listener =
-            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let listener = SecureLanListener::bind(address, settings, keys.server)?;
         let mut host = host_ok(HostSession::new(session_config(true), &[(
             keys.client_id,
             2,

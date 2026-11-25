@@ -594,3 +594,13 @@ disabled the old remapped keys on each endpoint. Before/after captures
 changed only for admitted controls, and release captures stabilized.
 Private key files were removed. This establishes native keyboard
 routing and persistence, not physical controllers or multi-device LAN.
+
+Native TCP address-policy tests now cover private-range boundaries,
+IPv6 unique-local and link-local addresses, public and multicast
+addresses, and canonical IPv4-mapped IPv6 addresses. Public and wildcard
+binds and connects remain rejected. The same real mutual-TLS host
+round-trip regression passes over IPv4, IPv6 and IPv4-mapped IPv6
+loopback: schema rejection, valid frames and replies, reserved slots,
+and same-identity rejoin. The Linux host has IPv6 loopback enabled;
+these tests do not establish scoped link-local or multi-device routing.
+Fresh validation passed in run 1795611541668604334-1069821.

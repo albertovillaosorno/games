@@ -683,6 +683,7 @@ mod tests {
     use super::{
         FrameChannel, FrameReader, FrameStream, LanConfig, LanListener,
         RECEIVE_CHUNK, SendProgress, TimedStream, connect_socket,
+        private_address,
     };
 
     pub(super) const LOOPBACK: SocketAddr =
@@ -1242,6 +1243,41 @@ mod tests {
     }
 
     #[test]
+    fn private_address_policy_canonicalizes_and_rejects_public_ranges()
+    -> io::Result<()> {
+        for (address, expected) in [
+            ("127.0.0.1:1", true),
+            ("10.0.0.1:1", true),
+            ("172.15.255.255:1", false),
+            ("172.16.0.0:1", true),
+            ("172.31.255.255:1", true),
+            ("172.32.0.0:1", false),
+            ("192.168.0.1:1", true),
+            ("169.254.0.1:1", true),
+            ("100.64.0.1:1", false),
+            ("[::1]:1", true),
+            ("[::]:1", false),
+            ("[::127.0.0.1]:1", false),
+            ("[fc00::1]:1", true),
+            ("[fdff::1]:1", true),
+            ("[fe80::1]:1", true),
+            ("[febf::1]:1", true),
+            ("[fec0::1]:1", false),
+            ("[2001:db8::1]:1", false),
+            ("[ff02::1]:1", false),
+            ("[::ffff:127.0.0.1]:1", true),
+            ("[::ffff:192.168.0.1]:1", true),
+            ("[::ffff:8.8.8.8]:1", false),
+            ("[::ffff:0.0.0.0]:1", false),
+            ("[::ffff:100.64.0.1]:1", false),
+        ] {
+            let endpoint = address.parse().map_err(io::Error::other)?;
+            require(private_address(endpoint) == expected, address)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn transport_requires_opt_in_and_a_private_address() -> io::Result<()> {
         require(
             error_kind(LanConfig::new(session_config(false), TIMEOUT))
@@ -1258,6 +1294,8 @@ mod tests {
             SocketAddr::from(([0, 0, 0, 0], 0)),
             SocketAddr::from(([8, 8, 8, 8], 0)),
             SocketAddr::from(([0; 8], 0)),
+            SocketAddr::from(([0, 0, 0, 0, 0, 0xffff, 0, 0], 0)),
+            SocketAddr::from(([0x2001, 0xdb8, 0, 0, 0, 0, 0, 1], 0)),
             SocketAddr::from(([0, 0, 0, 0, 0, 0xffff, 0x0808, 0x0808], 0)),
         ] {
             require(
