@@ -34,6 +34,9 @@
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 /// Native canonical bundle publication and verification.
 pub mod publication;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Bounded read-only palette comparison against local observations.
+pub mod reference_palette;
 
 use std::env;
 use std::ffi::OsString;
@@ -62,7 +65,8 @@ const USAGE: &str = concat!(
     "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: mame publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256"
+    "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
+    "Linux/Android: mame palette-check MACHINE REV RAW ARGB32"
 );
 
 #[derive(Debug)]
@@ -149,6 +153,8 @@ enum Command {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Check(Machine, PathBuf, ContentHash),
     Import(Machine, Arguments),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    PaletteCheck(Machine, PathBuf, PathBuf),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Publish(Machine, PathBuf, Arguments),
     Verify(Arguments),
@@ -185,6 +191,13 @@ impl Command {
                 selected,
                 args.collect(),
             )?)),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            "palette-check" => {
+                let [raw, reference] =
+                    <[OsString; 2]>::try_from(args.collect::<Vec<_>>())
+                        .map_err(|_args| String::from(USAGE))?;
+                Ok(Self::PaletteCheck(selected, raw.into(), reference.into()))
+            },
             "import" => Ok(Self::Import(
                 selected,
                 Arguments::parse_mame(selected, args.collect())?,
@@ -214,6 +227,10 @@ impl Command {
 
     fn run(self) -> Result<(), String> {
         match self {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::PaletteCheck(machine, raw, reference) => {
+                reference_palette::check(machine, &raw, &reference)
+            },
             Self::Verify(args) => with_source(&args, verify_archive),
             Self::Import(machine, args) => {
                 with_source(&args, |source, archive| {
@@ -399,6 +416,33 @@ mod tests {
             ["mame", "publish", "simpsons", "world-4p-set-1", "output"];
         assert!(
             Command::parse(publish.into_iter().map(OsString::from)).is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn palette_check_requires_profile_and_two_files() {
+        let args = [
+            "mame",
+            "palette-check",
+            "simpsons",
+            "world-4p-set-1",
+            "raw.bin",
+            "pens.bin",
+        ];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::PaletteCheck(_, _, _))
+        ));
+        assert!(
+            Command::parse(args.into_iter().take(5).map(OsString::from))
+                .is_err()
+        );
+        assert!(
+            Command::parse(
+                args.into_iter().chain(["extra"]).map(OsString::from)
+            )
+            .is_err()
         );
     }
 

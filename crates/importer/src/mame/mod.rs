@@ -32,6 +32,7 @@
 //! Shared MAME ROM-set conversion, not an emulator or gameplay runtime.
 
 mod konami;
+mod palette;
 
 use std::iter::once;
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -85,6 +86,7 @@ struct Profile {
     graphics: &'static [Region],
     limits: ManifestLimits,
     machine: &'static str,
+    palette: palette::Palette,
     revision: &'static str,
     title: &'static str,
 }
@@ -132,6 +134,19 @@ impl Machine {
         })
     }
 
+    /// Decode an exact observed palette RAM snapshot into opaque RGBA.
+    ///
+    /// The caller supplies transparency and pen assignment separately.
+    /// # Errors
+    /// Rejects mismatched source or output lengths.
+    pub fn decode_palette(
+        self,
+        source: &[u8],
+        output: &mut [[u8; 4]],
+    ) -> Result<(), ImportError> {
+        self.0.palette.decode(source, output)
+    }
+
     /// Exact canonical graphics resource limits for this revision.
     #[must_use]
     pub const fn graphics_limits(self) -> ManifestLimits {
@@ -148,6 +163,12 @@ impl Machine {
             revision: self.0.revision.to_owned(),
             title: self.0.title.to_owned(),
         })
+    }
+
+    /// Exact number of entries in the machine palette RAM.
+    #[must_use]
+    pub const fn palette_entries(self) -> NonZeroUsize {
+        self.0.palette.entries
     }
 
     /// Select a supported machine and exact revision.

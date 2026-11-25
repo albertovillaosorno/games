@@ -35,6 +35,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use games_assets::ManifestLimits;
 
+use super::palette::{Palette, xbgr555_be};
 use super::{Profile, Region};
 use crate::graphics::TileLayout;
 
@@ -63,6 +64,10 @@ pub(super) static SIMPSONS: Profile = Profile {
         total_bytes: NonZeroU64::MIN.saturating_add(10_485_760 - 1),
     },
     machine: "simpsons",
+    palette: Palette {
+        decode_word: xbgr555_be,
+        entries: NonZeroUsize::MIN.saturating_add(2048 - 1),
+    },
     revision: "world-4p-set-1",
     title: "simpsons-arcade",
 };

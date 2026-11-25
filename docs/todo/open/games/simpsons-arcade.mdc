@@ -102,3 +102,22 @@ payload identities, including fresh publication and independent read-back.
 A previously published bundle also passed the profile-driven shape check.
 The MAME adapter now shares region assembly and Konami graphics layouts;
 the selected machine supplies only its revision, ROM lanes and budgets.
+
+Two additional independent, network-isolated MAME runs captured 4,096
+palette RAM bytes and 2,048 ordinary ARGB32 pen colors at each of the six
+existing checkpoints. Both runs reproduced every palette and screen
+buffer byte-for-byte, and the screen buffers also matched the earlier
+reference run. The selected MAME profile now decodes the observed
+big-endian xBGR555 words to opaque RGBA, expanding all five-bit channels
+by bit replication. The read-only host command
+
+```sh
+cargo run --locked -p games-build -- mame palette-check simpsons \
+  world-4p-set-1 PATH_TO_RAW_PALETTE PATH_TO_ARGB32_PENS
+```
+
+matched all 2,048 entries at every checkpoint in both runs (24,576
+entry comparisons). The raw data and capture bridges remain private.
+This verifies ordinary palette-word conversion, not dynamic pen
+assignment, tile or sprite priorities, transparency, shadow/highlight
+behavior or a remake frame. Those remain open.
