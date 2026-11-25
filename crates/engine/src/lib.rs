@@ -32,6 +32,8 @@
 
 //! Shared engine boundary. Capabilities are added with playable vertical
 //! slices.
+/// Bounded deterministic PCM playback and stereo mixing.
+pub mod audio;
 /// Configurable keyboard, gamepad and touch mapping with hot-plug recovery.
 pub mod input;
 /// Offline-first local sessions and opt-in self-hosted LAN access policy.
