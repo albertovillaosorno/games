@@ -64,3 +64,11 @@ coordinated concurrent work. The path check also covers Git type changes.
 Synthetic path-list and filesystem fixtures pass in fresh run
 1795577633179381736-2865763. This check does not constitute a separate
 validation build of an isolated index snapshot.
+
+The authored-file inventory now cross-checks tracked and nonignored
+untracked Git paths against ripgrep discovery. It rejects source symlinks,
+nonregular path components and force-added ignored reference inputs
+instead of silently omitting them from validation. Removed paths and
+ordinary ignored local media remain valid. Isolated Git fixtures cover
+each case; fresh validation passed in
+1795587450021173745-4186488.

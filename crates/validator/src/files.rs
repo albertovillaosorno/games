@@ -31,6 +31,7 @@
 //
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::from_utf8;
@@ -43,7 +44,58 @@ use crate::todo::roadmap_width;
 ///
 /// Returns an error if discovery fails.
 pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
-    discover(&mut authored_command(root))
+    let paths = discover(&mut authored_command(root))?;
+    if root.join(".git").exists() {
+        verify_git_inventory(root, &paths)?;
+    }
+    Ok(paths)
+}
+
+fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
+    let mut current = root.to_path_buf();
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        current.push(component);
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(value) => value,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok(false);
+            },
+            Err(error) => return Err(error.to_string()),
+        };
+        let valid = if components.peek().is_some() {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        };
+        if !valid {
+            return Err(format!(
+                "non-regular authored path: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(true)
+}
+
+fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    let mut command = Command::new("git");
+    let _configured = command.current_dir(root).args([
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-from=.gitignore",
+        "-z",
+    ]);
+    for path in discover(&mut command)? {
+        if regular_path(root, &path)? && paths.binary_search(&path).is_err() {
+            return Err(format!(
+                "Git path omitted from authored inventory: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn authored_command(root: &Path) -> Command {
@@ -183,6 +235,8 @@ pub fn validate(root: &Path) -> Result<(), String> {
 mod tests {
     use std::fs;
     use std::path::Path;
+    #[cfg(unix)]
+    use std::process::Command;
 
     use super::{authored, authored_command, discover, line_width, python};
     use crate::fixtures::{directory, require};
@@ -271,6 +325,48 @@ mod tests {
         let mut command = authored_command(&root);
         let _configured = command.env("RIPGREP_CONFIG_PATH", config);
         require(discover(&mut command)? == files, "ignore local rg config")?;
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[cfg(unix)]
+    fn git(root: &Path, args: &[&str]) -> Result<(), String> {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .map_err(|error| error.to_string())?;
+        require(output.status.success(), "fixture Git command")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_git_paths_hidden_from_file_discovery() -> Result<(), String> {
+        use std::os::unix::fs::symlink;
+
+        let root = directory("inventory")?;
+        git(&root, &["init", "--quiet"])?;
+        fs::write(root.join(".gitignore"), b"/private/\n")
+            .map_err(|error| error.to_string())?;
+        fs::write(root.join("source.rs"), b"// source\n")
+            .map_err(|error| error.to_string())?;
+        git(&root, &["add", "source.rs"])?;
+        require(authored(&root).is_ok(), "regular tracked source")?;
+
+        let link = root.join("link.rs");
+        symlink("source.rs", &link).map_err(|error| error.to_string())?;
+        require(authored(&root).is_err(), "untracked source symlink")?;
+        git(&root, &["add", "link.rs"])?;
+        require(authored(&root).is_err(), "staged source symlink")?;
+        fs::remove_file(&link).map_err(|error| error.to_string())?;
+        require(authored(&root).is_ok(), "removed tracked link")?;
+
+        let hidden = root.join("private");
+        fs::create_dir_all(&hidden).map_err(|error| error.to_string())?;
+        fs::write(hidden.join("asset"), b"synthetic")
+            .map_err(|error| error.to_string())?;
+        require(authored(&root).is_ok(), "ignored local media")?;
+        git(&root, &["add", "-f", "private/asset"])?;
+        require(authored(&root).is_err(), "tracked ignored file")?;
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 }
