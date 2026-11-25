@@ -1745,3 +1745,26 @@ continue, cooperative jump, and three reinforcement meters. The
 65.582 microseconds respectively; lifetime peak RSS was 133,189,632
 bytes. These are synthetic input and offscreen measurements, not
 physical controller or full gameplay acceptance.
+
+Four fresh isolated World set 1 controls reproduced the Bart/Lisa
+paired jump (Lisa secondary at frame 2305). Independent three-frame
+Bart Primary, Lisa Primary, and Bart simultaneous Primary/Secondary
+pulses at frame 2315 each matched the neutral control's complete
+4,096-byte object DMA at every frame 2305 through 2360 (56 frames
+per comparison). The original visible combined motion and landing
+were unchanged. The optional combined-jump prototype now discards
+pair-local maneuver edges in flight, including on its landing pose,
+without buffering them. Other stations still receive their own
+actions, and the older solo-jump catalogue is unchanged. The
+observable reference comparison does not establish airborne damage
+eligibility or the rules for grounded pair attacks.
+
+The regression compares both members' Primary and chord pulses at
+four in-flight offsets, through the next grounded idle, alongside an
+independent Marge input. Fresh workspace validation with native
+render and audio gates passed (1795629397040474861-284808). The
+3,329,584-byte Linux build passed the adaptive offscreen OpenGL
+192-pose touch and dummy-audio smoke. All 600 movement and 20 strike
+submissions met the 16.667 ms host-work budget; lifetime RSS peak
+was 133,767,168 bytes. Physical input and original damage acceptance
+remain open.

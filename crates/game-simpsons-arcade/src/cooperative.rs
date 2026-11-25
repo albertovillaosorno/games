@@ -330,6 +330,11 @@ impl Cooperation {
             return false;
         }
         let [_, _, bart, lisa] = pending;
+        if matches!(pair.motion, Some(PairMotion::Jump { .. })) {
+            *bart = PendingManeuver::default();
+            *lisa = PendingManeuver::default();
+            return false;
+        }
         if [*bart, *lisa].into_iter().any(|action| {
             action.chord
                 || action.candidate.is_some_and(|maneuver| {
@@ -341,7 +346,7 @@ impl Cooperation {
         let requested = bart.candidate.is_some() || lisa.candidate.is_some();
         *bart = PendingManeuver::default();
         *lisa = PendingManeuver::default();
-        requested && !matches!(pair.motion, Some(PairMotion::Jump { .. }))
+        requested
     }
 
     pub(super) fn invalidate(&mut self, slots: &[Slot; 4]) {
@@ -647,6 +652,48 @@ mod tests {
         );
         let [_, _, landed_bart, landed_lisa] = state.stations();
         assert_eq!([landed_bart, landed_lisa], [bart, lisa]);
+    }
+
+    #[test]
+    fn combined_jump_discards_pair_button_edges_without_buffering() {
+        for player in Pair::BartLisa.members() {
+            for offset in [0, 10, 27, 28] {
+                check_airborne_buttons(player, offset);
+            }
+        }
+    }
+
+    fn check_airborne_buttons(player: Player, offset: u64) {
+        let mut baseline = joined().with_bart_lisa_jump(true);
+        baseline.input_step(41, &[
+            change(Player::Lisa, Control::Secondary, true),
+            change(Player::Lisa, Control::Secondary, false),
+        ]);
+        wait(&mut baseline, offset);
+        let mut state = baseline;
+        let mut chord = baseline;
+        let other = || change(Player::Marge, Control::Primary, true);
+        baseline.input_step(42, &[other()]);
+        state.input_step(42, &[
+            other(),
+            change(player, Control::Primary, true),
+            change(player, Control::Primary, false),
+        ]);
+        chord.input_step(42, &[
+            other(),
+            change(player, Control::Primary, true),
+            change(player, Control::Secondary, true),
+            change(player, Control::Primary, false),
+            change(player, Control::Secondary, false),
+        ]);
+        assert_eq!(state, baseline);
+        assert_eq!(chord, baseline);
+        wait(&mut baseline, 40);
+        wait(&mut state, 40);
+        wait(&mut chord, 40);
+        assert_eq!(state, baseline);
+        assert_eq!(chord, baseline);
+        assert!(state.pair_pose(Pair::BartLisa).is_some());
     }
 
     #[test]

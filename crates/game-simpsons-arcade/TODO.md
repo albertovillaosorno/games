@@ -137,7 +137,9 @@ The optional `bart-lisa jump TICK SHA256` sequence requires the
 complete Bart/Lisa idle and walk catalogue plus jump poses at offsets
 0, 4 and 28. Either member's Secondary initiates a 29-tick combined
 vertical action. It retains the pair, reaches a representative
-60-pixel elevation and returns to the ground. During the action
+60-pixel elevation and returns to the ground. New Primary, Secondary
+or chord edges from either member during flight are discarded, not
+buffered into landing. During the action
 Bart's direction takes priority; after landing only Lisa moves the
 pair until it separates. Missing jump poses preserve the earlier solo
 jump behavior. Ground positions, directional speed, combat eligibility,
