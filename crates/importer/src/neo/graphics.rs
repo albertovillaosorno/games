@@ -42,37 +42,48 @@ use crate::conversion::{
 use crate::graphics::TileLayout;
 use crate::{ImportError, SourceSnapshot};
 
-static METAL_SLUG: Profile = Profile {
-    graphics: &[
-        Region {
-            bytes: 0x0002_0000,
-            key: "graphics/fixed",
-            layout: fixed_layout(),
-            name: "fixed",
-        },
-        Region {
-            bytes: 0x0100_0000,
-            key: "graphics/sprites",
-            layout: sprite_layout(),
-            name: "sprites",
-        },
-    ],
-    limits: ManifestLimits {
-        manifest_bytes: NonZeroUsize::MIN.saturating_add(4096 - 1),
-        payload_bytes: NonZeroU64::MIN.saturating_add(33_554_432 - 1),
-        records: NonZeroUsize::MIN.saturating_add(2 - 1),
-        total_bytes: NonZeroU64::MIN.saturating_add(33_816_576 - 1),
-    },
-    regions: &[
-        ("program", 0x0020_0000),
-        ("fixed", 0x0002_0000),
-        ("audio-program", 0x0002_0000),
-        ("adpcm-a", 0x0080_0000),
-        ("sprites", 0x0100_0000),
-    ],
-    revision: "mvs-aes-neo-v1",
-    title: "metal-slug",
+const FIXED: Region = Region {
+    bytes: 0x0002_0000,
+    key: "graphics/fixed",
+    layout: fixed_layout(),
+    name: "fixed",
 };
+
+static PROFILES: [Profile; 3] = [
+    Profile {
+        graphics: &[FIXED, sprite_region(0x0100_0000)],
+        limits: graphics_limits(33_554_432),
+        other_regions: &[
+            ("program", 0x0020_0000),
+            ("audio-program", 0x0002_0000),
+            ("adpcm-a", 0x0080_0000),
+        ],
+        revision: "mvs-aes-neo-v1",
+        title: "metal-slug",
+    },
+    Profile {
+        graphics: &[FIXED, sprite_region(0x0200_0000)],
+        limits: graphics_limits(67_108_864),
+        other_regions: &[
+            ("program", 0x0030_0000),
+            ("audio-program", 0x0002_0000),
+            ("adpcm-a", 0x0080_0000),
+        ],
+        revision: "mvs-aes-neo-v1",
+        title: "metal-slug-2",
+    },
+    Profile {
+        graphics: &[FIXED, sprite_region(0x0300_0000)],
+        limits: graphics_limits(100_663_296),
+        other_regions: &[
+            ("program", 0x0050_0000),
+            ("audio-program", 0x0002_0000),
+            ("adpcm-a", 0x00a0_0000),
+        ],
+        revision: "mvs-aes-neo-v1",
+        title: "metal-slug-x",
+    },
+];
 
 #[derive(Clone, Copy, Debug)]
 struct Region {
@@ -92,7 +103,7 @@ impl Region {
 struct Profile {
     graphics: &'static [Region],
     limits: ManifestLimits,
-    regions: &'static [(&'static str, usize)],
+    other_regions: &'static [(&'static str, usize)],
     revision: &'static str,
     title: &'static str,
 }
@@ -171,8 +182,12 @@ impl CartridgeGraphics {
     /// # Errors
     /// Rejects unknown titles and layouts.
     pub fn select(title: &str, revision: &str) -> Result<Self, ImportError> {
-        (title == METAL_SLUG.title && revision == METAL_SLUG.revision)
-            .then_some(Self(&METAL_SLUG))
+        PROFILES
+            .iter()
+            .find(|profile| {
+                title == profile.title && revision == profile.revision
+            })
+            .map(Self)
             .ok_or(ImportError::IncorrectSource)
     }
 
@@ -209,15 +224,45 @@ impl CartridgeGraphics {
         }
         let mut admitted = 0usize;
         source.visit_neo(budget, |name, payload| {
-            if !self.0.regions.contains(&(name, payload.len())) {
+            let graphics = self.0.graphics.iter().any(|region| {
+                region.name == name && region.bytes == payload.len()
+            });
+            if !graphics
+                && !self.0.other_regions.contains(&(name, payload.len()))
+            {
                 return Err(ImportError::UnsupportedMember);
             }
             admitted = admitted.saturating_add(1);
             Ok(())
         })?;
-        (admitted == self.0.regions.len())
-            .then_some(())
-            .ok_or(ImportError::UnsupportedMember)
+        (admitted
+            == self
+                .0
+                .graphics
+                .len()
+                .saturating_add(self.0.other_regions.len()))
+        .then_some(())
+        .ok_or(ImportError::UnsupportedMember)
+    }
+}
+
+const fn graphics_limits(sprite_output_bytes: u64) -> ManifestLimits {
+    ManifestLimits {
+        manifest_bytes: NonZeroUsize::MIN.saturating_add(4096 - 1),
+        payload_bytes: NonZeroU64::MIN
+            .saturating_add(sprite_output_bytes.saturating_sub(1)),
+        records: NonZeroUsize::MIN.saturating_add(2 - 1),
+        total_bytes: NonZeroU64::MIN
+            .saturating_add(sprite_output_bytes.saturating_add(262_143)),
+    }
+}
+
+const fn sprite_region(bytes: usize) -> Region {
+    Region {
+        bytes,
+        key: "graphics/sprites",
+        layout: sprite_layout(),
+        name: "sprites",
     }
 }
 
@@ -274,7 +319,7 @@ mod tests {
             records: NonZeroUsize::MIN.saturating_add(2 - 1),
             total_bytes: NonZeroU64::MIN.saturating_add(320 - 1),
         },
-        regions: &[("program", 2), ("fixed", 32), ("sprites", 128)],
+        other_regions: &[("program", 2)],
         revision: "neo-v1",
         title: "synthetic",
     };
@@ -317,6 +362,43 @@ mod tests {
             archive: ArchiveBudget::new(bound(128), bound(162), bound(3)),
             manifest: profile.limits(),
         }
+    }
+
+    #[test]
+    fn profile_output_budgets_are_exact() -> Result<(), ImportError> {
+        for (title, expected_sprite_bytes) in [
+            ("metal-slug", 33_554_432u64),
+            ("metal-slug-2", 67_108_864),
+            ("metal-slug-x", 100_663_296),
+        ] {
+            let profile = CartridgeGraphics::select(title, "mvs-aes-neo-v1")?;
+            let limits = profile.limits();
+            require(profile.identity().title == title)?;
+            let mut total = 0u64;
+            let mut records = Vec::new();
+            for region in profile.0.graphics {
+                let size =
+                    u64::try_from(region.layout.output_len(region.bytes)?)
+                        .map_err(|_error| ImportError::TooLarge)?;
+                total = total.saturating_add(size);
+                records.push(games_assets::AssetRecord {
+                    digest: ContentHash::calculate(region.key.as_bytes()),
+                    format: region.format()?,
+                    key: region.key.to_owned(),
+                    size,
+                });
+            }
+            require(limits.payload_bytes.get() == expected_sprite_bytes)?;
+            require(total == limits.total_bytes.get())?;
+            let manifest =
+                AssetManifest::new(profile.identity(), records, limits)?;
+            profile.validate_manifest(&manifest)?;
+            require(CartridgeGraphics::select(title, "unknown").is_err())?;
+        }
+        require(
+            CartridgeGraphics::select("metal-slug-3", "mvs-aes-neo-v1")
+                .is_err(),
+        )
     }
 
     #[test]

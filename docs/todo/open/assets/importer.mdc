@@ -153,3 +153,21 @@ byte-for-byte comparisons matched the existing canonical bundles.
 Repeated graphics publication failed with a collision; subsequent
 read-back remained unchanged. All output stayed under ignored local
 reference directories, with no surviving temporary staging directory.
+
+The same unencrypted NEO converter now admits explicitly selected
+Metal Slug 2 and Metal Slug X MVS/AES version-one layouts. Local graphics
+comparisons against the public board definitions matched each fixed
+region and all four (Metal Slug 2) or six (Metal Slug X) deinterleaved
+sprite chip lanes. No source fingerprints or extracted chips are tracked.
+This establishes the graphics region layout, not full media authenticity.
+
+Optimized publication and pinned read-back succeeded at exact source
+budgets for both supplied containers: 67,371,008 and 100,925,440 canonical
+graphics bytes respectively. Duplicate publication, cross-title source
+selection and a one-byte-short individual region budget all failed
+without replacing a bundle or leaving a private staging directory.
+The original Metal Slug bundle remained identical byte for byte.
+Synthetic tests verify exact profile output budgets and reject unknown
+revisions and the unadmitted later encrypted layout. Fresh validation
+passed in run 1795619352157930332-3184317. Palette, audio and gameplay
+remain separate tasks; no subsequent title implementation is claimed.
