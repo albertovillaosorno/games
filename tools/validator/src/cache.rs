@@ -32,7 +32,6 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -48,7 +47,9 @@ use games_platform::ir::toolchain::{
 };
 use sha2::{Digest as _, Sha256};
 
-use crate::files::{authored, ledger_location};
+use crate::files::{
+    authored, ledger_location, read_authored, repository_present,
+};
 use crate::{cargo_config, portability};
 
 /// Function signature for a complete validation pass.
@@ -147,7 +148,7 @@ fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
         &cargo_home(&canonical, &observed)?,
         &mut hash,
     )?;
-    if root.join(".git").exists() {
+    if repository_present(root)? {
         let head = repository_head(root.as_os_str())
             .map_err(|error| error.to_string())?;
         hash_value(&mut hash, b"git-history");
@@ -158,8 +159,7 @@ fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
     }
     for path in authored(root)? {
         hash_value(&mut hash, path.as_os_str().as_encoded_bytes());
-        let bytes =
-            fs::read(root.join(path)).map_err(|error| error.to_string())?;
+        let bytes = read_authored(root, &path)?;
         hash_value(&mut hash, &bytes);
     }
     Ok(hash.finalize().into())

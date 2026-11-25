@@ -234,8 +234,7 @@ fn collect(
             let relative =
                 path.strip_prefix(root).map_err(|error| error.to_string())?;
             let name = relative.to_str().ok_or("non-UTF-8 task path")?;
-            let text =
-                fs::read_to_string(&path).map_err(|error| error.to_string())?;
+            let text = files::read_text(root, relative)?;
             let (id, task) = record(&text, name)
                 .map_err(|error| format!("{name}: {error}"))?;
             require(tasks.insert(id, task).is_none(), "duplicate task ID")?;
@@ -405,8 +404,7 @@ pub fn validate(root: &Path) -> Result<(), String> {
     for task in tasks.values() {
         predecessors(task, &tasks)?;
     }
-    let text = fs::read_to_string(root.join("TODO.md"))
-        .map_err(|error| error.to_string())?;
+    let text = files::read_text(root, Path::new("TODO.md"))?;
     let ordered = index(&text, &tasks)?;
     dependency_order(&tasks, &ordered)
 }

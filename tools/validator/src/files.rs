@@ -30,15 +30,20 @@
 //   - Fail closed on invalid inputs.
 //
 
-use std::fs;
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::num::NonZeroU64;
+use std::path::{Component, Path, PathBuf};
 use std::str::from_utf8;
 
 use games_platform::ir::security::toolchain::validation::admit_paths;
+use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::{PathKind, path_kind};
 use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
 
 use crate::todo::roadmap_width;
+
+// Authored source is not an asset store. Bound individual input buffers.
+const MAX_AUTHORED_BYTES: NonZeroU64 =
+    NonZeroU64::MIN.saturating_add(16_777_215);
 
 /// Discover authored files using the shared ignore policy.
 ///
@@ -58,7 +63,7 @@ pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
             path.display()
         ));
     }
-    if root.join(".git").exists() {
+    if repository_present(root)? {
         verify_git_inventory(root, &paths)?;
     }
     Ok(paths)
@@ -70,18 +75,17 @@ pub(crate) fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
     let mut components = path.components().peekable();
     while let Some(component) = components.next() {
         current.push(component);
-        let metadata = match fs::symlink_metadata(&current) {
-            Ok(value) => value,
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Ok(false);
-            },
-            Err(error) => return Err(error.to_string()),
-        };
-        let valid = if components.peek().is_some() {
-            metadata.is_dir()
+        let kind = path_kind(current.as_os_str())
+            .map_err(|error| error.to_string())?;
+        if kind == PathKind::Missing {
+            return Ok(false);
+        }
+        let expected = if components.peek().is_some() {
+            PathKind::Directory
         } else {
-            metadata.is_file()
+            PathKind::RegularFile
         };
+        let valid = kind == expected;
         if !valid {
             return Err(format!(
                 "non-regular authored path: {}",
@@ -90,6 +94,44 @@ pub(crate) fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
         }
     }
     Ok(true)
+}
+
+pub(crate) fn repository_present(root: &Path) -> Result<bool, String> {
+    match path_kind(root.join(".git").as_os_str())
+        .map_err(|error| error.to_string())?
+    {
+        PathKind::Directory | PathKind::RegularFile => Ok(true),
+        PathKind::Missing => Ok(false),
+        PathKind::Other | PathKind::SymbolicLink => {
+            Err(String::from("invalid Git repository entry"))
+        },
+    }
+}
+
+/// Read an authored regular file with the shared bounded snapshot.
+pub(crate) fn read_authored(
+    root: &Path,
+    path: &Path,
+) -> Result<Vec<u8>, String> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+        || private_configuration(path)
+    {
+        return Err(String::from("invalid authored read path"));
+    }
+    if !regular_path(root, path)? {
+        return Err(format!("missing authored file: {}", path.display()));
+    }
+    snapshot(root.join(path).as_os_str(), MAX_AUTHORED_BYTES)
+        .map_err(|error| format!("{}: {error:?}", path.display()))
+}
+
+/// Decode authored text after the same bounded regular-file admission.
+pub(crate) fn read_text(root: &Path, path: &Path) -> Result<String, String> {
+    String::from_utf8(read_authored(root, path)?)
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
@@ -214,8 +256,7 @@ fn line_width(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn local_storage_policy(root: &Path) -> Result<(), String> {
-    let ignore = fs::read_to_string(root.join(".gitignore"))
-        .map_err(|error| error.to_string())?;
+    let ignore = read_text(root, Path::new(".gitignore"))?;
     for directory in [".reference", ".cache", ".temp"] {
         let pattern = format!("/{directory}/");
         if !ignore.lines().any(|line| line == pattern) {
@@ -229,15 +270,13 @@ fn local_storage_policy(root: &Path) -> Result<(), String> {
 pub(crate) fn ledger_location(root: &Path) -> Result<(), String> {
     for directory in [".cache", ".temp"] {
         let path = root.join(directory).join("ledger");
-        match fs::symlink_metadata(&path) {
-            Ok(_) => {
-                return Err(format!(
-                    "durable ledger belongs in .reference/ledger: {}",
-                    path.display(),
-                ));
-            },
-            Err(error) if error.kind() == ErrorKind::NotFound => {},
-            Err(error) => return Err(error.to_string()),
+        if path_kind(path.as_os_str()).map_err(|error| error.to_string())?
+            != PathKind::Missing
+        {
+            return Err(format!(
+                "durable ledger belongs in .reference/ledger: {}",
+                path.display(),
+            ));
         }
     }
     Ok(())
@@ -250,8 +289,7 @@ pub(crate) fn ledger_location(root: &Path) -> Result<(), String> {
 pub fn validate(root: &Path) -> Result<(), String> {
     local_storage_policy(root)?;
     for path in authored(root)? {
-        let bytes =
-            fs::read(root.join(&path)).map_err(|error| error.to_string())?;
+        let bytes = read_authored(root, &path)?;
         if python(&path, &bytes) {
             return Err(format!("Python is forbidden: {}", path.display()));
         }
@@ -269,10 +307,50 @@ mod tests {
     use games_platform::ir::storage::fixtures as platform_fixtures;
 
     use super::{
-        authored, line_width, local_storage_policy, private_configuration,
-        python,
+        MAX_AUTHORED_BYTES, authored, line_width, local_storage_policy,
+        private_configuration, python, read_authored, read_text,
     };
     use crate::fixtures::{directory, require};
+
+    #[test]
+    fn authored_reads_are_bounded_and_reject_links() -> Result<(), String> {
+        let fixture = directory()?;
+        let root = fixture.path();
+        fixture
+            .write_file("source.rs", b"source")
+            .map_err(|error| error.to_string())?;
+        require(
+            read_text(root, Path::new("source.rs"))? == "source",
+            "exact snapshot",
+        )?;
+        let link = root.join("alias.rs");
+        platform_fixtures::file_link(&root.join("source.rs"), &link)
+            .map_err(|error| error.to_string())?;
+        require(
+            read_authored(root, Path::new("alias.rs")).is_err(),
+            "reject linked source",
+        )?;
+        require(
+            read_authored(root, Path::new("../source.rs")).is_err(),
+            "reject traversal",
+        )?;
+        fixture
+            .write_file(".env", b"private")
+            .map_err(|error| error.to_string())?;
+        require(
+            read_authored(root, Path::new(".env")).is_err(),
+            "reject private source",
+        )?;
+        let oversized = fs::File::create(root.join("large"))
+            .map_err(|error| error.to_string())?;
+        oversized
+            .set_len(MAX_AUTHORED_BYTES.get().saturating_add(1))
+            .map_err(|error| error.to_string())?;
+        require(
+            read_authored(root, Path::new("large")).is_err(),
+            "reject oversized source",
+        )
+    }
 
     #[test]
     fn durable_ledgers_are_not_disposable() -> Result<(), String> {

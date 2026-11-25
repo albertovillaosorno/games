@@ -32,7 +32,6 @@
 
 mod ir_layout;
 
-use std::fs;
 use std::path::Path;
 
 use games_platform::ir::toolchain::validation::{self, Request};
@@ -62,8 +61,7 @@ pub fn todo(root: &Path) -> Result<(), String> {
 }
 
 fn manifest(root: &Path) -> Result<Value, String> {
-    let source = fs::read_to_string(root.join("Cargo.toml"))
-        .map_err(|error| error.to_string())?;
+    let source = files::read_text(root, Path::new("Cargo.toml"))?;
     let value = source
         .parse::<toml::Table>()
         .map_err(|error| error.to_string())?;
@@ -124,9 +122,8 @@ fn classify(package: &Value, root: &Path) -> Result<Package, String> {
 /// Returns diagnostics if a required check fails.
 pub fn validate(root: &Path) -> Result<Vec<Package>, String> {
     let metadata = manifest(root)?;
-    if fs::read(root.join("LICENSE")).map_err(|error| error.to_string())?
-        != fs::read(root.join("crates/engine/LICENSE"))
-            .map_err(|error| error.to_string())?
+    if files::read_authored(root, Path::new("LICENSE"))?
+        != files::read_authored(root, Path::new("crates/engine/LICENSE"))?
     {
         return Err(String::from("engine licence differs from root licence"));
     }

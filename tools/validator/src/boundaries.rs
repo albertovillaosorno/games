@@ -30,7 +30,6 @@
 //   - Reject missing ownership, local lint overrides and reverse edges.
 //
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value as JsonValue;
@@ -222,8 +221,7 @@ fn sources(
             }
         }
         if code_path(path) {
-            let content = fs::read_to_string(root.join(path))
-                .map_err(|error| error.to_string())?;
+            let content = files::read_text(root, path)?;
             header(&content)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
         }
@@ -626,8 +624,7 @@ fn manifests(
     authored: &[PathBuf],
 ) -> Result<toml::Table, String> {
     let root_manifest = Value::Table(
-        fs::read_to_string(root.join("Cargo.toml"))
-            .map_err(|error| error.to_string())?
+        files::read_text(root, Path::new("Cargo.toml"))?
             .parse::<toml::Table>()
             .map_err(|error| error.to_string())?,
     );
@@ -665,8 +662,7 @@ fn manifests(
         let name = relative.to_string_lossy().replace('\\', "/");
         let member_role = role(&name)
             .ok_or_else(|| format!("unrecognised workspace member: {name}"))?;
-        let content = fs::read_to_string(root.join(relative))
-            .map_err(|error| error.to_string())?;
+        let content = files::read_text(root, relative)?;
         let value = Value::Table(
             content
                 .parse::<toml::Table>()

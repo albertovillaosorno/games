@@ -30,11 +30,10 @@
 //   - Allow neutral IR and reject new concrete backend access.
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::clones::tokens;
-use crate::host_api;
+use crate::{files, host_api};
 
 fn native_word(word: &str) -> bool {
     matches!(
@@ -277,8 +276,7 @@ pub(crate) fn validate(
         if name.starts_with("tools/validator/") {
             continue;
         }
-        let source = fs::read_to_string(root.join(path))
-            .map_err(|error| error.to_string())?;
+        let source = files::read_text(root, path)?;
         let result = if name.starts_with("crates/platform/src/hardware/") {
             device_source(&source)
         } else if name == "crates/platform/src/lib.rs" {

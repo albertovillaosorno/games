@@ -30,7 +30,6 @@
 //   - Any detected coupling is an error.
 //
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::boundaries::{dependency_tables, host_independent};
@@ -223,8 +222,7 @@ fn inventory(
         if !is_rust && !is_manifest {
             continue;
         }
-        let text = fs::read_to_string(root.join(path))
-            .map_err(|error| error.to_string())?;
+        let text = files::read_text(root, path)?;
         let counts = if is_rust {
             source_counts(&name, &text)?
         } else {
@@ -261,8 +259,7 @@ pub fn validate(
 /// # Errors
 /// Rejects unreadable metadata, authored inventory or platform coupling.
 pub fn preflight(root: &Path) -> Result<(), String> {
-    let source = fs::read_to_string(root.join("Cargo.toml"))
-        .map_err(|error| error.to_string())?;
+    let source = files::read_text(root, Path::new("Cargo.toml"))?;
     let document = source
         .parse::<toml::Table>()
         .map_err(|error| error.to_string())?;

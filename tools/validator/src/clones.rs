@@ -32,7 +32,6 @@
 //! Conservative detection of substantial Rust function-body duplicates.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{self, Write as _};
 use std::iter::Peekable;
 use std::path::Path;
@@ -478,8 +477,7 @@ pub fn validate(root: &Path) -> Result<(), String> {
         if path.extension().is_none_or(|extension| extension != "rs") {
             continue;
         }
-        let source = fs::read_to_string(root.join(&path))
-            .map_err(|error| error.to_string())?;
+        let source = files::read_text(root, &path)?;
         if excluded(&path, &source).is_some() {
             continue;
         }

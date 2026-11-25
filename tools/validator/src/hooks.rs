@@ -37,11 +37,13 @@
 pub mod fixtures;
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::io::ErrorKind;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 
+use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::{PathKind, path_kind};
 use games_platform::ir::toolchain::validation::{
     GitRequest, Request, repository_head, run,
 };
@@ -173,9 +175,11 @@ fn check_commit(message: &str) -> Result<(), String> {
 }
 
 fn check_message_file(path: &Path) -> Result<(), String> {
-    fs::read_to_string(path)
-        .map_err(|error| error.to_string())
-        .and_then(|message| check_commit(&message))
+    let bytes =
+        snapshot(path.as_os_str(), NonZeroU64::MIN.saturating_add(1_048_575))
+            .map_err(|error| format!("commit message: {error:?}"))?;
+    let message = from_utf8(&bytes).map_err(|error| error.to_string())?;
+    check_commit(message)
 }
 
 fn title_data(parts: &[&str]) -> bool {
@@ -305,9 +309,9 @@ fn check_deleted(root: &Path, deleted: &[u8]) -> Result<(), String> {
         if !relative_path(path) {
             return Err("invalid deleted path".into());
         }
-        match fs::symlink_metadata(root.join(path)) {
-            Ok(metadata) if metadata.is_dir() => {},
-            Ok(_metadata) => {
+        match path_kind(root.join(path).as_os_str()) {
+            Ok(PathKind::Directory | PathKind::Missing) => {},
+            Ok(_) => {
                 return Err(format!("staged deletion still exists: {path}"));
             },
             Err(error)
@@ -347,8 +351,14 @@ fn check_history_bytes(bytes: &[u8]) -> Result<(), String> {
 
 fn check_history() -> Result<(), String> {
     let root = root()?;
-    if !root.join(".git").exists() {
-        return Ok(());
+    match path_kind(root.join(".git").as_os_str())
+        .map_err(|error| error.to_string())?
+    {
+        PathKind::Missing => return Ok(()),
+        PathKind::Directory | PathKind::RegularFile => {},
+        PathKind::Other | PathKind::SymbolicLink => {
+            return Err(String::from("invalid Git repository entry"));
+        },
     }
     if repository_head(root.as_os_str())
         .map_err(|error| error.to_string())?
