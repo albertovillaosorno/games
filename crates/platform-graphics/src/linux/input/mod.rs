@@ -602,13 +602,47 @@ mod tests {
     use games::presentation::{Dimensions, PresentationMode};
     use sdl2::event::{Event, WindowEvent};
     use sdl2::keyboard::Mod;
+    use sdl2::mouse::MouseButton;
 
     use super::{
         Axis, Button, HostEvent, Scancode, TouchGeometry, admit_discovery,
-        axis_code, button_code, event_elapsed, key_code, open_candidate, route,
-        route_contact,
+        axis_code, button_code, event_elapsed, key_code, mouse_code,
+        open_candidate, route, route_contact,
     };
     use crate::linux::RenderError;
+
+    #[test]
+    fn mouse_edges_only_route_for_physical_buttons_in_own_window() {
+        let pressed = |window_id, which, mouse_btn| Event::MouseButtonDown {
+            timestamp: 0,
+            window_id,
+            which,
+            mouse_btn,
+            clicks: 1,
+            x: 10i32,
+            y: 20i32,
+        };
+        let input = |down| {
+            Some(HostEvent::Input(InputEvent::Mouse {
+                code: mouse_code(MouseButton::Left),
+                down,
+            }))
+        };
+        assert_eq!(route(&pressed(3, 0, MouseButton::Left), 3), input(true));
+        assert_eq!(route(&pressed(4, 0, MouseButton::Left), 3), None);
+        assert_eq!(route(&pressed(3, u32::MAX, MouseButton::Left), 3), None);
+        assert_eq!(route(&pressed(3, 0, MouseButton::Unknown), 3), None);
+        let released = Event::MouseButtonUp {
+            timestamp: 1,
+            window_id: 3,
+            which: 0,
+            mouse_btn: MouseButton::Left,
+            clicks: 1,
+            x: 10i32,
+            y: 20i32,
+        };
+        assert_eq!(route(&released, 3), input(false));
+    }
 
     #[test]
     fn discovery_distinguishes_a_vanished_index_from_a_backend_error() {

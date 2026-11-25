@@ -317,6 +317,10 @@ impl ControlSelection {
             DEFAULT_PROFILE.to_owned()
         };
         let profiles = DEFAULT_PROFILES.configured(ACTION_NAMES, &text)?;
+        let [_, other @ ..] = profiles.keys;
+        if other.iter().any(|[pause, ..]| pause.is_some()) {
+            return Err("keyboard pause belongs to seat 1 only".into());
+        }
         let pending = if update && !smoke {
             store.map(|preferences| (preferences, text))
         } else {

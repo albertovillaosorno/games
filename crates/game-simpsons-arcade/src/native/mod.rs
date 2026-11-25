@@ -495,11 +495,7 @@ impl Scene {
                 ),
             ),
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
-            menu: load_menu(
-                scene,
-                world_art.is_some(),
-                reserved.contains(&true),
-            )?,
+            menu: load_menu(scene, world_art.is_some(), profiles, reserved)?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles, touch::PanelRole::Cabinet)?)
             } else {
@@ -544,10 +540,17 @@ impl Scene {
             &mut self.draws,
         )?;
         if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused) {
+            let shift = if cabinet.phase() == Phase::Paused {
+                12i32
+            } else {
+                0i32
+            };
             for (seat, character) in
                 Player::ALL.into_iter().zip(cabinet.choices())
             {
                 let mut choice = self.hud.draw_choice(seat, character)?;
+                choice.destination.y =
+                    choice.destination.y.saturating_add(shift);
                 choice.destination.x = choice
                     .destination
                     .x
@@ -1236,11 +1239,52 @@ const fn main_menu_hints(hosted: bool) -> &'static [&'static str] {
     }
 }
 
+fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 3] {
+    let index = reserved.iter().position(|remote| !remote).unwrap_or(0);
+    let [pause, ..] = profiles.keys.first().copied().unwrap_or([None; 8]);
+    let [_, _, primary, secondary, left, right, up, down] =
+        profiles.keys.get(index).copied().unwrap_or([None; 8]);
+    let [_, _, mouse, ..] =
+        profiles.mouse.get(index).copied().unwrap_or([None; 8]);
+    let key = |binding: Option<Scancode>| {
+        binding.map_or("NONE", |code| {
+            let label = key_label(code);
+            if label.len() > 12 {
+                "PROFILE"
+            } else {
+                label
+            }
+        })
+    };
+    let mouse_name = mouse.map_or_else(String::new, |button| {
+        format!(" / MOUSE {}", mouse_label(button))
+    });
+    [
+        format!(
+            "P{} MOVE: {} {} {} {}",
+            index.saturating_add(1),
+            key(left),
+            key(right),
+            key(up),
+            key(down)
+        ),
+        format!(
+            "ATTACK: {}{mouse_name} - JUMP: {}",
+            key(primary),
+            key(secondary)
+        ),
+        format!("{} OR START RESUMES - JOIN BELOW", key(pause)),
+    ]
+}
+
 fn load_menu(
     scene: &mut SceneSession<'_, '_>,
     world_available: bool,
-    hosted: bool,
+    profiles: &Profiles,
+    reserved: [bool; 4],
 ) -> Result<MenuArt, RenderError> {
+    let hints = pause_hints(profiles, reserved);
+    let pause = hints.each_ref().map(String::as_str);
     MenuArt::load(
         scene,
         PlateLayout {
@@ -1250,15 +1294,12 @@ fn load_menu(
             width: 280,
         },
         MenuContent {
-            main_hints: main_menu_hints(hosted),
-            pause_hints: &[
-                "PAUSE OR START TO RESUME",
-                "UP/DOWN SELECT - PRIMARY CONFIRM",
-            ],
+            main_hints: main_menu_hints(reserved.contains(&true)),
+            pause_hints: &pause,
             settings_hints: &[
-                "PRIMARY CHANGES THE SELECTED VALUE",
+                "PRIMARY CHANGES VALUE - PAUSE RETURNS",
                 adaptive_hint(world_available),
-                "PAUSE OR START RETURNS TO MENU",
+                "CONTROLS: --CONTROLS / --RESET-CONTROLS",
             ],
             title: "THE SIMPSONS ARCADE",
         },
@@ -2883,6 +2924,72 @@ mod tests {
                 .iter()
                 .any(|hint| hint.contains("REMOTE"))
         );
+    }
+
+    #[test]
+    fn desktop_defaults_join_one_player_and_attack_with_mouse()
+    -> Result<(), RenderError> {
+        let mut simulation = live(false)?;
+        let mut controls = Controls::new(false)?;
+        super::smoke_press(&mut controls, &mut simulation, Control::Start)?;
+        let [first, others @ ..] = simulation.state().stations();
+        if first.participation != crate::Participation::Playing
+            || others.iter().any(|station| {
+                station.participation != crate::Participation::Absent
+            })
+        {
+            return Err(failure("default admission joined extra players"));
+        }
+        for down in [true, false] {
+            route_now(&mut controls, &mut simulation, InputEvent::Mouse {
+                code: super::mouse_code(super::MouseButton::Left),
+                down,
+            })?;
+        }
+        let [attacking, ..] = advance(&mut simulation)?;
+        if !matches!(attacking.maneuver, crate::Maneuver::Attack {
+            tick: 0,
+            ..
+        }) {
+            return Err(failure("default mouse attack did not start"));
+        }
+        super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        if simulation.state().phase() != Phase::Paused {
+            return Err(failure("Escape did not pause"));
+        }
+        super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        if simulation.state().phase() != Phase::Playing {
+            return Err(failure("Escape did not resume"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn escape_routes_to_first_unreserved_local_seat() -> Result<(), RenderError>
+    {
+        let mut controls =
+            Controls::with_reserved(false, &DEFAULT_PROFILES, [
+                true, false, false, false,
+            ])?;
+        let key = |code, down| InputEvent::Key {
+            code: key_code(code),
+            down,
+        };
+        for down in [true, false] {
+            if controls.actions(key(Scancode::Escape, down))?
+                != [LogicalAction {
+                    action: Action {
+                        control: Control::Pause,
+                        player: Player::Homer,
+                    },
+                    down,
+                }]
+                || !controls.actions(key(Scancode::F2, down))?.is_empty()
+            {
+                return Err(failure("global pause routed incorrectly"));
+            }
+        }
+        Ok(())
     }
 
     #[test]
