@@ -340,3 +340,22 @@ passed 1,469 aggregate test executions and all six portable core targets.
 Physical device and native non-Linux runtime support remain unverified.
 The combined Xvfb rendering and dummy-audio gate also passed in fresh
 run 1795650318348738722-728178, including the native controller panel.
+
+Commit dfa916d centralises the executing program's operating-system and
+architecture identification in typed descriptors. Unrecognised values
+remain explicit; these describe the program target, not the physical
+processor or the availability of device capabilities. Fresh validation
+1795650486442682264-817980 and the commit hook passed all six core targets.
+
+The title now passes opaque local path values to the shared storage IR.
+The selected adapter interprets path parents and joins without accessing
+storage, preserving relative components, absolute overrides and
+non-Unicode input. Existing verified snapshots and publication rules
+still determine access. The strict host API inventory now includes every
+game and app role, including inline tests; positive and negative
+controls cover path, file access and host-free values. Fresh joint
+validation 1795650627351394002-855798 passed 1,477 aggregate test
+executions and all six portable core targets. Local path interpretation
+is implemented by the existing Linux/Android storage adapter only;
+native storage conformance on other targets remains open. Contributor
+tool isolation also remains open.

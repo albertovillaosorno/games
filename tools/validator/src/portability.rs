@@ -280,7 +280,7 @@ mod tests {
 
     use super::{
         Counts, Inventory, adapter, manifest, neutral_ir, reject_coupling,
-        rust, validate,
+        rust, source_counts, validate,
     };
     use crate::fixtures::{directory, require};
 
@@ -306,6 +306,32 @@ mod tests {
         assert!(!neutral_ir("crates/platform/src/software/linux/network.rs"));
         let coupling = rust("use crate::linux::native;");
         assert_eq!(coupling.get("os:linux"), Some(&1));
+    }
+
+    #[test]
+    fn title_host_io_is_rejected_but_opaque_values_are_allowed()
+    -> Result<(), String> {
+        for name in [
+            "crates/games/example/src/lib.rs",
+            "crates/apps/example/src/main.rs",
+        ] {
+            let rejected =
+                source_counts(name, "use std::fs; use std::path::Path;")?;
+            require(
+                rejected.contains_key("host:std::fs"),
+                "title filesystem access",
+            )?;
+            require(
+                rejected.contains_key("host:std::path"),
+                "title native path access",
+            )?;
+            let admitted = source_counts(
+                name,
+                "use std::ffi::OsStr; use std::io::Error;",
+            )?;
+            require(admitted.is_empty(), "title opaque path and error values")?;
+        }
+        Ok(())
     }
 
     #[test]

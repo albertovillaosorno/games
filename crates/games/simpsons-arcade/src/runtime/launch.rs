@@ -30,20 +30,19 @@
 //   - No original media discovery, recursive scans or network access.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::iter::Peekable;
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
 use std::{str, vec};
 
 use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
-use games_platform::ir::storage::executable_path;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, VolumeStore,
 };
+use games_platform::ir::storage::{executable_path, join_path, parent_path};
 
 use super::{Profiles, configured_profiles, profile_limit, read_profile};
 
@@ -76,8 +75,8 @@ pub(super) type Fields<'text> = BTreeMap<&'text str, &'text str>;
 #[derive(Debug, Default, Eq, PartialEq)]
 struct LocalPaths {
     audio_device: Option<String>,
-    controls: Option<PathBuf>,
-    settings: Option<PathBuf>,
+    controls: Option<OsString>,
+    settings: Option<OsString>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -115,24 +114,25 @@ impl AudioSelection {
 pub(super) struct Assets {
     pub(super) actors: [OsString; 4],
     pub(super) audio: Option<AudioSelection>,
-    pub(super) directory: PathBuf,
+    pub(super) directory: OsString,
     pub(super) enemy: Option<[OsString; 2]>,
-    pub(super) poses: Option<PathBuf>,
+    pub(super) poses: Option<OsString>,
     pub(super) shadow: Option<OsString>,
     pub(super) world: Option<OsString>,
 }
 
 impl Assets {
-    fn catalogue(path: &Path, text: &str) -> Result<ConfiguredAssets, String> {
+    fn catalogue(path: &OsStr, text: &str) -> Result<ConfiguredAssets, String> {
         if u64::try_from(text.len()).map_or(true, |len| len > MAX_BYTES.get()) {
             return Err(String::from("launch catalogue exceeds byte limit"));
         }
-        let base = path.parent().ok_or("invalid launch catalogue path")?;
+        let base = parent_path(path)
+            .map_err(|error| format!("launch catalogue path: {error}"))?;
         let mut values = fields(text)?;
         if values.remove("version") != Some("1") {
             return Err(String::from("expected launch catalogue version=1"));
         }
-        let directory = base.join(required(&mut values, "parent")?);
+        let directory = resolve_local(base, required(&mut values, "parent")?)?;
         let actors = [
             hash(required(&mut values, "marge")?)?,
             hash(required(&mut values, "homer")?)?,
@@ -154,9 +154,9 @@ impl Assets {
         )?;
         let shadow = values.remove("shadow").map(hash).transpose()?;
         let world = values.remove("world").map(hash).transpose()?;
-        let poses = values.remove("poses").map(|value| base.join(value));
-        let controls = values.remove("controls").map(|value| base.join(value));
-        let settings = values.remove("settings").map(|value| base.join(value));
+        let poses = optional_catalogue_path(base, &mut values, "poses")?;
+        let controls = optional_catalogue_path(base, &mut values, "controls")?;
+        let settings = optional_catalogue_path(base, &mut values, "settings")?;
         let display = DisplaySettings::default()
             .configured(values.remove("display"), values.remove("window"))?;
         if !values.is_empty() {
@@ -183,7 +183,7 @@ impl Assets {
 
     fn explicit(mut args: Arguments) -> Result<Self, String> {
         let poses = if flag(&mut args, "--poses") {
-            Some(PathBuf::from(next(&mut args)?))
+            Some(next(&mut args)?)
         } else {
             None
         };
@@ -207,7 +207,7 @@ impl Assets {
         Ok(Self {
             actors: [marge, homer, bart, lisa],
             audio,
-            directory: directory.into(),
+            directory,
             enemy,
             poses,
             shadow,
@@ -215,9 +215,9 @@ impl Assets {
         })
     }
 
-    fn open(path: &Path) -> Result<ConfiguredAssets, String> {
-        let bytes = snapshot(path.as_os_str(), MAX_BYTES).map_err(|error| {
-            format!("launch catalogue {}: {error:?}", path.display())
+    fn open(path: &OsStr) -> Result<ConfiguredAssets, String> {
+        let bytes = snapshot(path, MAX_BYTES).map_err(|error| {
+            format!("launch catalogue {}: {error:?}", path.to_string_lossy())
         })?;
         let text = str::from_utf8(&bytes).map_err(|error| error.to_string())?;
         Self::catalogue(path, text)
@@ -225,7 +225,7 @@ impl Assets {
 
     fn select(mut remaining: Arguments) -> Result<ConfiguredAssets, String> {
         if flag(&mut remaining, "--config") {
-            let config = PathBuf::from(next(&mut remaining)?);
+            let config = next(&mut remaining)?;
             if remaining.next().is_some() {
                 return Err(String::from(USAGE));
             }
@@ -233,7 +233,7 @@ impl Assets {
         } else if remaining.peek().is_none() {
             let executable = executable_path()
                 .map_err(|error| format!("executable path: {error}"))?;
-            Self::open(&sibling_catalogue(Path::new(&executable))?)
+            Self::open(&sibling_catalogue(&executable)?)
         } else {
             Ok((
                 Self::explicit(remaining)?,
@@ -246,7 +246,7 @@ impl Assets {
 
 #[derive(Debug)]
 struct ControlOptions {
-    explicit: Option<PathBuf>,
+    explicit: Option<OsString>,
     reset: bool,
 }
 
@@ -265,8 +265,8 @@ impl ControlOptions {
 
 #[derive(Debug)]
 pub(super) struct ControlSelection {
-    explicit: Option<PathBuf>,
-    fallback: Option<PathBuf>,
+    explicit: Option<OsString>,
+    fallback: Option<OsString>,
     reset: bool,
     smoke: bool,
     store: Option<ControlStore>,
@@ -275,8 +275,8 @@ pub(super) struct ControlSelection {
 impl ControlSelection {
     fn open(
         options: ControlOptions,
-        fallback: Option<PathBuf>,
-        settings: Option<&Path>,
+        fallback: Option<OsString>,
+        settings: Option<&OsStr>,
         smoke: bool,
     ) -> Result<Self, String> {
         let store = open_control_store(settings, options.reset)?;
@@ -351,9 +351,9 @@ impl ResolvedControls {
 
 #[derive(Debug)]
 pub(super) struct ControllerLaunch {
-    pub(super) catalogue: PathBuf,
+    pub(super) catalogue: OsString,
     options: ControlOptions,
-    settings: Option<PathBuf>,
+    settings: Option<OsString>,
 }
 
 impl ControllerLaunch {
@@ -362,7 +362,7 @@ impl ControllerLaunch {
         if !flag(&mut remaining, "--lan-controller") {
             return Err(String::from(USAGE));
         }
-        let catalogue = PathBuf::from(next(&mut remaining)?);
+        let catalogue = next(&mut remaining)?;
         let settings = optional_path(&mut remaining, "--settings")?;
         let options = ControlOptions::parse(&mut remaining, false)?;
         if remaining.next().is_some() {
@@ -377,13 +377,13 @@ impl ControllerLaunch {
 
     pub(super) fn select_controls(
         self,
-        fallback: Option<&Path>,
-        settings: Option<&Path>,
+        fallback: Option<&OsStr>,
+        settings: Option<&OsStr>,
     ) -> Result<ResolvedControls, String> {
         let directory = self.settings.as_deref().or(settings);
         ControlSelection::open(
             self.options,
-            fallback.map(Path::to_path_buf),
+            fallback.map(OsStr::to_os_string),
             directory,
             false,
         )?
@@ -397,7 +397,7 @@ pub(super) struct Launch {
     pub(super) audio_device: Option<String>,
     pub(super) controls: ControlSelection,
     pub(super) display: DisplaySettings,
-    pub(super) host: Option<PathBuf>,
+    pub(super) host: Option<OsString>,
     pub(super) measure: bool,
     pub(super) preferences: Option<DisplayStore>,
     pub(super) smoke: bool,
@@ -431,7 +431,7 @@ impl Launch {
         let settings = explicit_settings.or(paths.settings);
         let preferences = settings
             .as_deref()
-            .map(|directory| DisplayStore::open(directory.as_os_str()))
+            .map(DisplayStore::open)
             .transpose()
             .map_err(|error| format!("display store: {error:?}"))?;
         let stored = preferences
@@ -492,9 +492,9 @@ fn selected_audio_device(
     Ok(device.filter(|name| name != "default"))
 }
 
-fn load_volume(settings: Option<&Path>) -> Result<VolumePreferences, String> {
+fn load_volume(settings: Option<&OsStr>) -> Result<VolumePreferences, String> {
     let store = settings
-        .map(|directory| VolumeStore::open(directory.as_os_str()))
+        .map(VolumeStore::open)
         .transpose()
         .map_err(|error| format!("volume store: {error:?}"))?;
     let volume = store
@@ -516,7 +516,7 @@ fn validate_audio_device(name: String) -> Result<String, String> {
 }
 
 fn open_control_store(
-    settings: Option<&Path>,
+    settings: Option<&OsStr>,
     reset_controls: bool,
 ) -> Result<Option<ControlStore>, String> {
     if reset_controls && settings.is_none() {
@@ -526,7 +526,7 @@ fn open_control_store(
     }
     settings
         .map(|directory| {
-            ControlStore::open(directory.as_os_str(), profile_limit()?)
+            ControlStore::open(directory, profile_limit()?)
                 .map_err(|error| format!("control store: {error:?}"))
         })
         .transpose()
@@ -598,12 +598,23 @@ fn next(args: &mut Arguments) -> Result<OsString, String> {
     args.next().ok_or_else(|| String::from(USAGE))
 }
 
+pub(super) fn optional_catalogue_path(
+    base: &OsStr,
+    values: &mut Fields<'_>,
+    key: &str,
+) -> Result<Option<OsString>, String> {
+    values
+        .remove(key)
+        .map(|value| resolve_local(base, value))
+        .transpose()
+}
+
 fn optional_path(
     args: &mut Arguments,
     name: &str,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<OsString>, String> {
     if flag(args, name) {
-        Ok(Some(PathBuf::from(next(args)?)))
+        Ok(Some(next(args)?))
     } else {
         Ok(None)
     }
@@ -632,11 +643,17 @@ pub(super) fn required<'text>(
         .ok_or_else(|| format!("missing launch field: {key}"))
 }
 
-fn sibling_catalogue(executable: &Path) -> Result<PathBuf, String> {
-    executable
-        .parent()
-        .map(|parent| parent.join(FILE_NAME))
-        .ok_or_else(|| String::from("executable has no parent directory"))
+pub(super) fn resolve_local(
+    base: &OsStr,
+    value: &str,
+) -> Result<OsString, String> {
+    join_path(base, value).map_err(|error| format!("local path: {error}"))
+}
+
+fn sibling_catalogue(executable: &OsStr) -> Result<OsString, String> {
+    let parent = parent_path(executable)
+        .map_err(|error| format!("executable parent: {error}"))?;
+    resolve_local(parent, FILE_NAME)
 }
 
 #[cfg(test)]
@@ -675,14 +692,14 @@ mod tests {
                 .map(OsString::from)
                 .chain([
                     OsString::from("--config"),
-                    self.0.path().join("launch.local").into_os_string(),
+                    resolve_local(self.0.location(), "launch.local")?,
                 ])
                 .collect();
             Launch::parse(args)?.controls.resolve()
         }
 
         fn store(&self) -> Result<ControlStore, String> {
-            ControlStore::open(self.0.path().as_os_str(), profile_limit()?)
+            ControlStore::open(self.0.location(), profile_limit()?)
                 .map_err(|error| format!("{error:?}"))
         }
 
@@ -702,7 +719,7 @@ mod tests {
 
     #[test]
     fn catalogue_anchors_paths_to_its_own_directory() -> Result<(), String> {
-        let path = Path::new("/package/simpsons-arcade.local");
+        let path = OsStr::new("/package/simpsons-arcade.local");
         let text = format!(
             "{}poses=poses.txt\ncontrols=controls.txt\n\
              settings=preferences\naudio={DIGEST}\nworld={DIGEST}\n\
@@ -717,16 +734,16 @@ mod tests {
                 base: DIGEST.into(),
                 replacement: None,
             }),
-            directory: PathBuf::from("/package/../local assets"),
+            directory: OsString::from("/package/../local assets"),
             enemy: Some([DIGEST.into(), DIGEST.into()]),
-            poses: Some(PathBuf::from("/package/poses.txt")),
+            poses: Some(OsString::from("/package/poses.txt")),
             shadow: Some(DIGEST.into()),
             world: Some(DIGEST.into()),
         };
         if assets != expected
             || display != DisplaySettings::default()
-            || paths.controls != Some(PathBuf::from("/package/controls.txt"))
-            || paths.settings != Some(PathBuf::from("/package/preferences"))
+            || paths.controls != Some(OsString::from("/package/controls.txt"))
+            || paths.settings != Some(OsString::from("/package/preferences"))
         {
             return Err(String::from("incorrect catalogue selection"));
         }
@@ -739,12 +756,12 @@ mod tests {
         let fixture = ProfileFixture::new()?;
         let args = [
             OsString::from("--config"),
-            fixture.0.path().join("launch.local").into_os_string(),
+            resolve_local(fixture.0.location(), "launch.local")?,
         ];
         if Launch::parse(args.clone().into())?.volume != MasterVolume::Full {
             return Err("wrong initial volume".into());
         }
-        let volume = VolumeStore::open(fixture.0.path().as_os_str())
+        let volume = VolumeStore::open(fixture.0.location())
             .map_err(|error| format!("{error:?}"))?;
         let receipt = volume
             .store(MasterVolume::Half)
@@ -767,12 +784,8 @@ mod tests {
             "launch.local",
             &format!("{}audio={DIGEST}\naudio_device=Speakers\n", catalogue()),
         )?;
-        let config = || {
-            [
-                OsString::from("--config"),
-                fixture.0.path().join("launch.local").into_os_string(),
-            ]
-        };
+        let config_path = resolve_local(fixture.0.location(), "launch.local")?;
+        let config = || [OsString::from("--config"), config_path.clone()];
         let selected = Launch::parse(config().into())?;
         if selected.audio_device.as_deref() != Some("Speakers") {
             return Err("wrong configured device".into());
@@ -794,7 +807,7 @@ mod tests {
             return Err("named output override ignored".into());
         }
         let no_audio = format!("{}audio_device=Speakers\n", catalogue());
-        if Assets::catalogue(Path::new("local"), &no_audio).is_ok()
+        if Assets::catalogue(OsStr::new("local"), &no_audio).is_ok()
             || validate_audio_device(String::new()).is_ok()
             || validate_audio_device("x\0y".into()).is_ok()
             || validate_audio_device("x".repeat(513)).is_ok()
@@ -806,7 +819,7 @@ mod tests {
 
     #[test]
     fn catalogue_rejects_ambiguous_or_incomplete_fields() {
-        let path = Path::new("local");
+        let path = OsStr::new("local");
         let base = catalogue();
         for suffix in [
             "version=1\n",
@@ -848,9 +861,9 @@ mod tests {
                 base: "audio".into(),
                 replacement: None,
             }),
-            directory: PathBuf::from("parent"),
+            directory: OsString::from("parent"),
             enemy: Some(["approach".into(), "strike".into()]),
-            poses: Some(PathBuf::from("poses")),
+            poses: Some(OsString::from("poses")),
             shadow: None,
             world: Some("world".into()),
         };
@@ -868,7 +881,7 @@ mod tests {
             return Err(String::from("explicit shadow missing"));
         }
         let (assets, _, _) =
-            Assets::catalogue(Path::new("local"), &catalogue())?;
+            Assets::catalogue(OsStr::new("local"), &catalogue())?;
         if assets.shadow.is_some() {
             return Err(String::from("shadow must be optional"));
         }
@@ -878,7 +891,7 @@ mod tests {
     #[test]
     fn passive_audio_replacement_requires_explicit_base_selection()
     -> Result<(), String> {
-        let path = Path::new("local");
+        let path = OsStr::new("local");
         let base = catalogue();
         let replacement = format!("{base}audio_mod={DIGEST}\n");
         if Assets::catalogue(path, &replacement).is_ok() {
@@ -920,7 +933,7 @@ mod tests {
     #[test]
     fn launch_display_values_are_optional_strict_and_overridable()
     -> Result<(), String> {
-        let path = Path::new("local");
+        let path = OsStr::new("local");
         let text =
             format!("{}display=integer\nwindow=fullscreen\n", catalogue());
         let (_, settings, _) = Assets::catalogue(path, &text)?;
@@ -982,7 +995,7 @@ mod tests {
     -> Result<(), String> {
         let args = ["--lan-host", "host.local", "parent", "m", "h", "b", "l"];
         let launch = Launch::parse(args.map(OsString::from).into())?;
-        if launch.host.as_deref() != Some(Path::new("host.local")) {
+        if launch.host.as_deref() != Some(OsStr::new("host.local")) {
             return Err(String::from("host selection lost"));
         }
         let invalid = [
@@ -1004,8 +1017,8 @@ mod tests {
     #[test]
     fn implicit_path_is_executable_adjacent() {
         assert_eq!(
-            sibling_catalogue(Path::new("/package/simpsons-arcade")),
-            Ok(PathBuf::from("/package/simpsons-arcade.local"))
+            sibling_catalogue(OsStr::new("/package/simpsons-arcade")),
+            Ok(OsString::from("/package/simpsons-arcade.local"))
         );
         for args in [
             vec!["--config"],
@@ -1086,7 +1099,7 @@ mod tests {
             return Err("catalogue fallback was unexpectedly persisted".into());
         }
 
-        let explicit = fixture.0.path().join("explicit.txt");
+        let explicit = resolve_local(fixture.0.location(), "explicit.txt")?;
         let path = explicit.to_str().ok_or("invalid test path")?;
         let resolved = fixture.resolve(&["--controls", path])?;
         if resolved.profiles != expected(EXPLICIT_PROFILE)?
@@ -1122,7 +1135,7 @@ mod tests {
         let _receipt = store
             .store(FALLBACK_PROFILE)
             .map_err(|error| format!("{error:?}"))?;
-        let explicit = fixture.0.path().join("explicit.txt");
+        let explicit = resolve_local(fixture.0.location(), "explicit.txt")?;
         let path = explicit.to_str().ok_or("invalid test path")?;
         let smoke = fixture.resolve(&["--smoke", "--controls", path])?;
         if smoke.profiles != configured_profiles(EXPLICIT_PROFILE)? {
@@ -1153,8 +1166,8 @@ mod tests {
     #[test]
     fn controller_controls_share_persistence_and_reset() -> Result<(), String> {
         let fixture = ProfileFixture::new()?;
-        let fallback = fixture.0.path().join("fallback.txt");
-        let explicit = fixture.0.path().join("explicit.txt");
+        let fallback = resolve_local(fixture.0.location(), "fallback.txt")?;
+        let explicit = resolve_local(fixture.0.location(), "explicit.txt")?;
         let path = explicit.to_str().ok_or("invalid test path")?;
         let select = |options: &[&str]| {
             let args = ["--lan-controller", "client.local"]
@@ -1163,7 +1176,7 @@ mod tests {
                 .map(OsString::from)
                 .collect();
             ControllerLaunch::parse(args)?
-                .select_controls(Some(&fallback), Some(fixture.0.path()))
+                .select_controls(Some(&fallback), Some(fixture.0.location()))
         };
         let expected = configured_profiles;
         if select(&[])?.profiles != expected(FALLBACK_PROFILE)? {

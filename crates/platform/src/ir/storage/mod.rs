@@ -90,6 +90,12 @@ pub(crate) trait PathObservation {
     fn path_kind(path: &OsStr) -> IoResult<PathKind>;
 }
 
+/// Local path syntax, without access to the filesystem.
+pub(crate) trait PathResolution {
+    fn join(base: &OsStr, child: &OsStr) -> IoResult<OsString>;
+    fn parent(path: &OsStr) -> IoResult<&OsStr>;
+}
+
 /// Resolve the canonical local path, explicitly following links.
 /// This is an observation only, not a grant of file access.
 /// # Errors
@@ -119,6 +125,28 @@ pub fn directory_entries(
 /// Returns a host error if the location cannot be determined.
 pub fn executable_path() -> IoResult<OsString> {
     <() as ExecutableLocation>::executable_path()
+}
+
+/// Interpret a child using the selected host's local path syntax.
+///
+/// This is lexical only: an absolute child replaces the base and parent
+/// components are not resolved. The result does not grant file access.
+/// # Errors
+/// Reports unavailable local path interpretation.
+pub fn join_path<Child>(base: &OsStr, child: &Child) -> IoResult<OsString>
+where
+    Child: AsRef<OsStr> + ?Sized,
+{
+    <() as PathResolution>::join(base, child.as_ref())
+}
+
+/// Identify the lexical parent of a local path without accessing storage.
+///
+/// A single relative filename has an empty parent. A root has no parent.
+/// # Errors
+/// Reports unavailable interpretation or a path with no parent.
+pub fn parent_path(path: &OsStr) -> IoResult<&OsStr> {
+    <() as PathResolution>::parent(path)
 }
 
 /// Observe the final entry kind for preflight diagnostics.

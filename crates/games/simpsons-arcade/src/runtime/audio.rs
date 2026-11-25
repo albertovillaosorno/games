@@ -31,8 +31,8 @@
 
 //! Opt-in playback of observed attack-associated PCM clips.
 
+use std::ffi::OsStr;
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
-use std::path::Path;
 use std::time::Duration;
 
 use games::audio::{
@@ -100,7 +100,7 @@ impl Samples {
     }
 
     pub(super) fn load(
-        parent: &Path,
+        parent: &OsStr,
         selection: &AudioSelection,
     ) -> Result<Self, RenderError> {
         let bundle =
@@ -532,7 +532,7 @@ mod tests {
     type FixtureClip<'key> = (&'key str, u64, i16);
 
     fn publish_fixture(
-        parent: &Path,
+        parent: &OsStr,
         clips: &[FixtureClip<'_>],
     ) -> Result<OsString, RenderError> {
         let limits = replacement_limits()?;
@@ -586,7 +586,7 @@ mod tests {
     fn opted_in_audio_replacement_is_selective_and_fail_closed()
     -> Result<(), RenderError> {
         let root = TestRoot::new().map_err(failure)?;
-        let parent = root.path();
+        let parent = root.location();
         let base = CLIPS.map(|(key, frames)| (key, frames, 12));
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &base)?,

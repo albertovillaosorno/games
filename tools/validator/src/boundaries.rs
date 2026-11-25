@@ -96,7 +96,7 @@ pub(crate) fn host_independent(path: &str) -> bool {
     path.starts_with("tools/download/")
         || matches!(
             role(path),
-            Some(Role::Shared | Role::Runtime | Role::Importer)
+            Some(Role::Shared | Role::Runtime | Role::Importer | Role::Title)
         )
 }
 

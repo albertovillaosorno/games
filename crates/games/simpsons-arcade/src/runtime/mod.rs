@@ -43,10 +43,9 @@ mod station_hud;
 mod touch;
 mod world;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
-use std::path::Path;
 use std::time::Duration;
 
 use games::audio::MasterVolume;
@@ -756,7 +755,7 @@ struct Sources<'source> {
     actors: [CanonicalBundle; 4],
     audio: Option<audio::Samples>,
     enemy: Option<[CanonicalBundle; 2]>,
-    parent: &'source Path,
+    parent: &'source OsStr,
     poses: poses::Catalogue,
     shadow: Option<CanonicalBundle>,
     world: Option<CanonicalBundle>,
@@ -764,7 +763,7 @@ struct Sources<'source> {
 
 impl<'source> Sources<'source> {
     fn load(
-        parent: &'source Path,
+        parent: &'source OsStr,
         actors: &[OsString; 4],
         options: OptionalSources,
     ) -> Result<Self, RenderError> {
@@ -1407,7 +1406,7 @@ where
 }
 
 fn open_bundle(
-    parent: &Path,
+    parent: &OsStr,
     digest: &OsString,
 ) -> Result<CanonicalBundle, RenderError> {
     let limits = ManifestLimits {
@@ -1422,7 +1421,7 @@ fn open_bundle(
 }
 
 fn open_selected_bundle(
-    parent: &Path,
+    parent: &OsStr,
     digest: &OsString,
     limits: ManifestLimits,
 ) -> Result<CanonicalBundle, RenderError> {
@@ -1442,7 +1441,7 @@ fn open_selected_bundle(
 }
 
 fn open_bundles<const COUNT: usize>(
-    parent: &Path,
+    parent: &OsStr,
     hashes: &[OsString; COUNT],
 ) -> Result<[CanonicalBundle; COUNT], RenderError> {
     hashes
@@ -1554,11 +1553,10 @@ fn profile_limit() -> Result<NonZeroU64, String> {
         .ok_or_else(|| String::from("invalid profile byte limit"))
 }
 
-fn read_profile(path: &Path) -> Result<String, String> {
-    let bytes =
-        snapshot(path.as_os_str(), profile_limit()?).map_err(|error| {
-            format!("control profile {}: {error:?}", path.display())
-        })?;
+fn read_profile(path: &OsStr) -> Result<String, String> {
+    let bytes = snapshot(path, profile_limit()?).map_err(|error| {
+        format!("control profile {}: {error:?}", path.to_string_lossy())
+    })?;
     String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 

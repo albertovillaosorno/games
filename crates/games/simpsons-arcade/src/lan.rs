@@ -31,7 +31,7 @@
 
 use core::net::SocketAddr;
 use std::collections::VecDeque;
-use std::io::{self, ErrorKind};
+use std::io::{Error, ErrorKind, Result as IoResult};
 use std::mem;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::time::Duration;
@@ -68,7 +68,7 @@ pub(crate) struct ClientLan {
 }
 
 impl ClientLan {
-    fn check_lease(&self, observed_at: Duration) -> io::Result<()> {
+    fn check_lease(&self, observed_at: Duration) -> IoResult<()> {
         if observed_at.saturating_sub(self.last_received) >= self.idle_timeout {
             return Err(ErrorKind::TimedOut.into());
         }
@@ -87,7 +87,7 @@ impl ClientLan {
         Ok(())
     }
 
-    pub(crate) fn new(stream: SecureFrameStream) -> io::Result<Self> {
+    pub(crate) fn new(stream: SecureFrameStream) -> IoResult<Self> {
         Self::with_idle(stream, IDLE_TIMEOUT)
     }
 
@@ -95,7 +95,7 @@ impl ClientLan {
         &mut self,
         frame: Option<&[u8]>,
         observed_at: Duration,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         self.check_lease(observed_at)?;
         if let Some(bytes) = frame {
             if bytes != HOST_ACK {
@@ -106,7 +106,7 @@ impl ClientLan {
         Ok(())
     }
 
-    pub(crate) fn poll(&mut self) -> io::Result<()> {
+    pub(crate) fn poll(&mut self) -> IoResult<()> {
         self.check_lease(now()?)?;
         // Only a timely, exact versioned acknowledgement renews liveness.
         let reply = self.stream.poll_receive()?;
@@ -124,13 +124,13 @@ impl ClientLan {
         self.check_lease(now()?)
     }
 
-    fn poll_queued_send(&mut self, observed_at: Duration) -> io::Result<()> {
+    fn poll_queued_send(&mut self, observed_at: Duration) -> IoResult<()> {
         self.check_lease(observed_at)?;
         let _progress = self.stream.poll_send()?;
         Ok(())
     }
 
-    fn queue_next(&mut self) -> io::Result<bool> {
+    fn queue_next(&mut self) -> IoResult<bool> {
         let message = match self.pending.pop_front() {
             Some(value) => RemoteMessage::Control(value),
             None if now()?.saturating_sub(self.last_sent)
@@ -148,7 +148,7 @@ impl ClientLan {
     fn with_idle(
         stream: SecureFrameStream,
         idle_timeout: Duration,
-    ) -> io::Result<Self> {
+    ) -> IoResult<Self> {
         let now = now()?;
         Ok(Self {
             idle_timeout,
@@ -195,7 +195,7 @@ impl HostLan {
         address: SocketAddr,
         tls: ServerTls,
         approved: &[Option<PeerFingerprint>; 4],
-    ) -> io::Result<Self> {
+    ) -> IoResult<Self> {
         Self::bind_with_idle(address, tls, approved, IDLE_TIMEOUT)
     }
 
@@ -204,7 +204,7 @@ impl HostLan {
         tls: ServerTls,
         approved: &[Option<PeerFingerprint>; 4],
         idle_timeout: Duration,
-    ) -> io::Result<Self> {
+    ) -> IoResult<Self> {
         let reserved = approved.map(|peer| peer.is_some());
         if reserved.into_iter().all(|remote| remote) {
             return Err(ErrorKind::InvalidInput.into());
@@ -243,7 +243,7 @@ impl HostLan {
     ///
     /// # Errors
     /// Reports a failed native socket inspection.
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+    pub fn local_addr(&self) -> IoResult<SocketAddr> {
         self.pump.local_addr()
     }
 
@@ -258,7 +258,7 @@ impl HostLan {
     pub fn poll(
         &mut self,
         live: &mut LiveSimulation<HostedCabinet>,
-    ) -> io::Result<Option<RemoteAdmission>> {
+    ) -> IoResult<Option<RemoteAdmission>> {
         let tick = live.next_tick();
         let mut oldest = None;
         if !self.retry(live, &mut oldest)? {
@@ -281,7 +281,7 @@ impl HostLan {
         Ok(oldest.map(|completed_at| RemoteAdmission { completed_at, tick }))
     }
 
-    fn reply(&mut self, event: &RemoteEvent<RemoteMessage>) -> io::Result<()> {
+    fn reply(&mut self, event: &RemoteEvent<RemoteMessage>) -> IoResult<()> {
         let (peer, message) = match *event {
             RemoteEvent::Connected(peer)
             | RemoteEvent::Disconnected { peer, .. } => (peer, false),
@@ -317,7 +317,7 @@ impl HostLan {
         &mut self,
         live: &mut LiveSimulation<HostedCabinet>,
         oldest: &mut Option<Duration>,
-    ) -> io::Result<bool> {
+    ) -> IoResult<bool> {
         if self.pending.is_empty() {
             return Ok(true);
         }
@@ -335,7 +335,7 @@ impl HostLan {
                 if rejection.reason == QueueRejection::Capacity {
                     Ok(false)
                 } else {
-                    Err(io::Error::other(format!("{:?}", rejection.reason)))
+                    Err(Error::other(format!("{:?}", rejection.reason)))
                 }
             },
         }
@@ -414,19 +414,19 @@ mod tests {
 
     const HOST: &str = "games.test";
 
-    fn identity(host: bool) -> io::Result<LocalIdentity> {
+    fn identity(host: bool) -> IoResult<LocalIdentity> {
         let mut authority = CertificateParams::default();
         authority.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         authority.key_usages = vec![KeyUsagePurpose::KeyCertSign];
         let root = CertifiedIssuer::self_signed(
             authority,
-            KeyPair::generate().map_err(io::Error::other)?,
+            KeyPair::generate().map_err(Error::other)?,
         )
-        .map_err(io::Error::other)?;
-        let key = KeyPair::generate().map_err(io::Error::other)?;
+        .map_err(Error::other)?;
+        let key = KeyPair::generate().map_err(Error::other)?;
         let mut leaf = if host {
             CertificateParams::new(vec![String::from(HOST)])
-                .map_err(io::Error::other)?
+                .map_err(Error::other)?
         } else {
             CertificateParams::default()
         };
@@ -435,8 +435,7 @@ mod tests {
         } else {
             ExtendedKeyUsagePurpose::ClientAuth
         }];
-        let certificate =
-            leaf.signed_by(&key, &root).map_err(io::Error::other)?;
+        let certificate = leaf.signed_by(&key, &root).map_err(Error::other)?;
         let private = key.serialize_der();
         if host {
             LocalIdentity::host(HOST, root.der(), certificate.der(), &private)
@@ -445,13 +444,13 @@ mod tests {
         }
     }
 
-    fn host() -> io::Result<(HostLan, ClientTls)> {
+    fn host() -> IoResult<(HostLan, ClientTls)> {
         host_with_idle(IDLE_TIMEOUT)
     }
 
     fn host_with_idle(
         idle_timeout: Duration,
-    ) -> io::Result<(HostLan, ClientTls)> {
+    ) -> IoResult<(HostLan, ClientTls)> {
         let server = identity(true)?;
         let client = identity(false)?;
         let tls =
@@ -465,12 +464,12 @@ mod tests {
         Ok((listener, client.client_tls(server.public())?))
     }
 
-    fn live(host: &HostLan) -> io::Result<LiveSimulation<HostedCabinet>> {
+    fn live(host: &HostLan) -> IoResult<LiveSimulation<HostedCabinet>> {
         let cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| Error::other(format!("{error:?}")))?;
         let hosted = host.simulation(&cabinet).ok_or(ErrorKind::InvalidData)?;
         let clock = StepClock::new(TICK_INTERVAL, NonZeroU32::MIN)
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| Error::other(format!("{error:?}")))?;
         Ok(LiveSimulation::new(hosted, clock, LiveInputLimits {
             future_ticks: 0,
             pending_actions: NonZeroUsize::MIN,
@@ -481,7 +480,7 @@ mod tests {
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
         ready: Ready,
-    ) -> io::Result<()>
+    ) -> IoResult<()>
     where
         Ready: Fn(&HostLan, &LiveSimulation<HostedCabinet>) -> bool,
     {
@@ -499,17 +498,17 @@ mod tests {
         }
     }
 
-    fn advance(live: &mut LiveSimulation<HostedCabinet>) -> io::Result<()> {
+    fn advance(live: &mut LiveSimulation<HostedCabinet>) -> IoResult<()> {
         let _report = live
             .advance(TICK_INTERVAL)
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| Error::other(format!("{error:?}")))?;
         Ok(())
     }
 
     fn local(
         live: &mut LiveSimulation<HostedCabinet>,
         control: Control,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         live.enqueue(live.next_tick(), vec![HostedInput::Local(
             LogicalAction {
                 action: Action {
@@ -519,14 +518,14 @@ mod tests {
                 down: true,
             },
         )])
-        .map_err(|error| io::Error::other(format!("{:?}", error.reason)))
+        .map_err(|error| Error::other(format!("{:?}", error.reason)))
     }
 
     fn connect(
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
         client: &ClientTls,
-    ) -> io::Result<SecureFrameStream> {
+    ) -> IoResult<SecureFrameStream> {
         let address = host.local_addr()?;
         let config = LanConfig::new(session_config(), TIMEOUT)?;
         with_worker(
@@ -545,7 +544,7 @@ mod tests {
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
         control: Control,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         let value =
             RemoteControl::new(control, true).ok_or(ErrorKind::InvalidInput)?;
         client.send(&value.encode())?;
@@ -553,11 +552,11 @@ mod tests {
         advance(live)
     }
 
-    fn require(condition: bool, reason: &'static str) -> io::Result<()> {
+    fn require(condition: bool, reason: &'static str) -> IoResult<()> {
         if condition {
             Ok(())
         } else {
-            Err(io::Error::other(reason))
+            Err(Error::other(reason))
         }
     }
 
@@ -565,7 +564,7 @@ mod tests {
         client: &mut SecureFrameStream,
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         local(live, Control::Start)?;
         advance(live)?;
         send(client, host, live, Control::Start)?;
@@ -589,7 +588,7 @@ mod tests {
         client: SecureFrameStream,
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         local(live, Control::Right)?;
         drop(client);
         // Fill the fixed queue before loss arrives. Wait for the host to
@@ -614,8 +613,8 @@ mod tests {
     }
 
     #[test]
-    fn remote_admission_retains_decode_time_through_full_queue()
-    -> io::Result<()> {
+    fn remote_admission_retains_decode_time_through_full_queue() -> IoResult<()>
+    {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let mut client = connect(&mut host, &mut live, &credentials)?;
@@ -651,8 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn real_tls_input_moves_and_rejoins_the_reserved_station() -> io::Result<()>
-    {
+    fn real_tls_input_moves_and_rejoins_the_reserved_station() -> IoResult<()> {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let mut client = connect(&mut host, &mut live, &credentials)?;
@@ -672,7 +670,7 @@ mod tests {
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
         client: &mut ClientLan,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         let deadline =
             now()?.checked_add(TIMEOUT).ok_or(ErrorKind::TimedOut)?;
         loop {
@@ -689,8 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_preserves_order_and_rejects_queue_overflow() -> io::Result<()>
-    {
+    fn controller_preserves_order_and_rejects_queue_overflow() -> IoResult<()> {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
@@ -725,7 +722,7 @@ mod tests {
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
         client: &mut ClientLan,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         let right = RemoteControl::new(Control::Right, true)
             .ok_or(ErrorKind::InvalidInput)?;
         let release = RemoteControl::new(Control::Right, false)
@@ -738,7 +735,7 @@ mod tests {
         let rejected = client
             .enqueue_batch(vec![release, left])
             .err()
-            .ok_or_else(|| io::Error::other("partial batch admitted"))?;
+            .ok_or_else(|| Error::other("partial batch admitted"))?;
         require(
             rejected == [release, left]
                 && client.pending.len() == CLIENT_QUEUE.saturating_sub(1)
@@ -768,7 +765,7 @@ mod tests {
         host: &mut HostLan,
         live: &mut LiveSimulation<HostedCabinet>,
         client: &mut ClientLan,
-    ) -> io::Result<()> {
+    ) -> IoResult<()> {
         let deadline = now()?
             .checked_add(Duration::from_millis(1300))
             .ok_or(ErrorKind::TimedOut)?;
@@ -785,8 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn only_timely_valid_acknowledgements_renew_client_lease() -> io::Result<()>
-    {
+    fn only_timely_valid_acknowledgements_renew_client_lease() -> IoResult<()> {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
@@ -826,7 +822,7 @@ mod tests {
 
     #[test]
     fn expired_client_lease_rejects_queued_control_before_dispatch()
-    -> io::Result<()> {
+    -> IoResult<()> {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
@@ -873,8 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_expires_when_connected_host_stops_polling() -> io::Result<()>
-    {
+    fn controller_expires_when_connected_host_stops_polling() -> IoResult<()> {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
@@ -889,7 +884,7 @@ mod tests {
                 Ok(()) if now()? < deadline => yield_execution()?,
                 Err(error) if error.kind() == ErrorKind::TimedOut => break,
                 _ => {
-                    return Err(io::Error::other(
+                    return Err(Error::other(
                         "controller did not expire on host silence",
                     ));
                 },
@@ -912,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn silent_controller_expires_and_releases_direction() -> io::Result<()> {
+    fn silent_controller_expires_and_releases_direction() -> IoResult<()> {
         let (mut host, credentials) = host_with_idle(Duration::from_secs(1))?;
         let mut live = live(&host)?;
         let mut stream = connect(&mut host, &mut live, &credentials)?;

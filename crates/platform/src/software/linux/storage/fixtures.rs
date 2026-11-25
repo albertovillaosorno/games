@@ -31,6 +31,7 @@
 
 //! Isolated native storage fixtures for workspace integration tests.
 
+use std::ffi::OsStr;
 use std::io::Write as _;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
@@ -59,6 +60,12 @@ impl TestRoot {
                 .checked_add(1)
                 .ok_or_else(|| io::ErrorKind::InvalidData.into())
         })
+    }
+
+    /// Access the opaque fixture location without a native path handle.
+    #[must_use]
+    pub fn location(&self) -> &OsStr {
+        self.path.as_os_str()
     }
 
     /// Atomically create an owner-only directory under the temporary root.

@@ -32,9 +32,8 @@
 //! Optional verified maneuver pose catalogue.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::str::from_utf8;
 
 use games::animation::{
@@ -118,7 +117,7 @@ impl Catalogue {
 
     pub(super) fn load(
         &self,
-        parent: &Path,
+        parent: &OsStr,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<PoseArt, RenderError> {
         let mut entries = BTreeMap::new();
@@ -146,10 +145,9 @@ impl Catalogue {
         Ok(PoseArt { entries })
     }
 
-    pub(super) fn open(path: &Path) -> Result<Self, RenderError> {
-        let bytes =
-            snapshot(path.as_os_str(), NonZeroU64::MIN.saturating_add(18_431))
-                .map_err(failure)?;
+    pub(super) fn open(path: &OsStr) -> Result<Self, RenderError> {
+        let bytes = snapshot(path, NonZeroU64::MIN.saturating_add(18_431))
+            .map_err(failure)?;
         Self::parse(from_utf8(&bytes).map_err(failure)?)
     }
 

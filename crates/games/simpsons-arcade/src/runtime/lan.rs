@@ -30,17 +30,19 @@
 //   - No network, credential generation, discovery or implicit approval.
 
 use core::net::SocketAddr;
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use games_platform::ir::lan::identity::{LocalIdentity, PublicIdentity};
 use games_platform::ir::lan::{LanConfig, PeerFingerprint, SecureFrameStream};
 use games_platform::ir::security::lan::CredentialKind;
 use games_platform::ir::storage::file::{snapshot, snapshot_secret};
+use games_platform::ir::storage::parent_path;
 
 use super::launch::{
-    ControllerLaunch, Fields, ResolvedControls, fields, required,
+    ControllerLaunch, Fields, ResolvedControls, fields,
+    optional_catalogue_path, required, resolve_local,
 };
 use crate::lan::{HostLan, session_config};
 
@@ -48,8 +50,8 @@ const MAX_CATALOGUE: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 
 #[derive(Debug, Eq, PartialEq)]
 struct PublicFiles {
-    leaf: PathBuf,
-    root: PathBuf,
+    leaf: OsString,
+    root: OsString,
 }
 
 impl PublicFiles {
@@ -61,7 +63,7 @@ impl PublicFiles {
     }
 
     fn parse(
-        base: &Path,
+        base: &OsStr,
         values: &mut Fields<'_>,
         prefix: &str,
     ) -> Result<Option<Self>, String> {
@@ -71,8 +73,8 @@ impl PublicFiles {
         ) {
             (None, None) => Ok(None),
             (Some(leaf), Some(root)) => Ok(Some(Self {
-                leaf: base.join(leaf),
-                root: base.join(root),
+                leaf: resolve_local(base, leaf)?,
+                root: resolve_local(base, root)?,
             })),
             _ => Err(String::from("both public certificate paths required")),
         }
@@ -81,7 +83,7 @@ impl PublicFiles {
 
 #[derive(Debug, Eq, PartialEq)]
 struct LocalFiles {
-    key: PathBuf,
+    key: OsString,
     public: PublicFiles,
 }
 
@@ -101,11 +103,11 @@ impl LocalFiles {
         .map_err(|error| format!("local identity: {error}"))
     }
 
-    fn parse(base: &Path, values: &mut Fields<'_>) -> Result<Self, String> {
+    fn parse(base: &OsStr, values: &mut Fields<'_>) -> Result<Self, String> {
         let public = PublicFiles::parse(base, values, "")?
             .ok_or("missing local certificate paths")?;
         Ok(Self {
-            key: base.join(required(values, "key")?),
+            key: resolve_local(base, required(values, "key")?)?,
             public,
         })
     }
@@ -119,7 +121,7 @@ struct Endpoint {
 }
 
 impl Endpoint {
-    fn parse(base: &Path, values: &mut Fields<'_>) -> Result<Self, String> {
+    fn parse(base: &OsStr, values: &mut Fields<'_>) -> Result<Self, String> {
         if values.remove("version") != Some("1") {
             return Err(String::from("expected LAN catalogue version=1"));
         }
@@ -159,8 +161,9 @@ impl HostSelection {
             .map_err(|error| format!("LAN host: {error}"))
     }
 
-    fn parse(path: &Path, text: &str) -> Result<Self, String> {
-        let base = path.parent().ok_or("invalid LAN catalogue path")?;
+    fn parse(path: &OsStr, text: &str) -> Result<Self, String> {
+        let base = parent_path(path)
+            .map_err(|error| format!("LAN catalogue path: {error}"))?;
         let mut values = fields(text)?;
         let Endpoint { address, identity, name } =
             Endpoint::parse(base, &mut values)?;
@@ -185,11 +188,11 @@ impl HostSelection {
 #[derive(Debug, Eq, PartialEq)]
 struct ClientSelection {
     address: SocketAddr,
-    controls: Option<PathBuf>,
+    controls: Option<OsString>,
     host: PublicFiles,
     identity: LocalFiles,
     name: String,
-    settings: Option<PathBuf>,
+    settings: Option<OsString>,
     touch_enabled: bool,
 }
 
@@ -206,19 +209,16 @@ impl ClientSelection {
             .map_err(|error| format!("LAN controller: {error}"))
     }
 
-    fn parse(path: &Path, text: &str) -> Result<Self, String> {
-        let base = path.parent().ok_or("invalid LAN catalogue path")?;
+    fn parse(path: &OsStr, text: &str) -> Result<Self, String> {
+        let base = parent_path(path)
+            .map_err(|error| format!("LAN catalogue path: {error}"))?;
         let mut values = fields(text)?;
         let Endpoint { address, identity, name } =
             Endpoint::parse(base, &mut values)?;
         let host = PublicFiles::parse(base, &mut values, "host_")?
             .ok_or("missing approved host certificate paths")?;
-        let controls = values
-            .remove("controls")
-            .map(|relative| base.join(relative));
-        let settings = values
-            .remove("settings")
-            .map(|relative| base.join(relative));
+        let controls = optional_catalogue_path(base, &mut values, "controls")?;
+        let settings = optional_catalogue_path(base, &mut values, "settings")?;
         let touch_enabled = match values.remove("touch") {
             None | Some("off") => false,
             Some("on") => true,
@@ -270,18 +270,19 @@ pub(super) fn open_client(
     })
 }
 
-fn certificate(path: &Path) -> Result<Vec<u8>, String> {
-    snapshot(path.as_os_str(), CredentialKind::Certificate.max_bytes())
-        .map_err(|error| format!("certificate {}: {error:?}", path.display()))
+fn certificate(path: &OsStr) -> Result<Vec<u8>, String> {
+    snapshot(path, CredentialKind::Certificate.max_bytes()).map_err(|error| {
+        format!("certificate {}: {error:?}", path.to_string_lossy())
+    })
 }
 
-fn catalogue(path: &Path) -> Result<String, String> {
-    let bytes = snapshot(path.as_os_str(), MAX_CATALOGUE)
+fn catalogue(path: &OsStr) -> Result<String, String> {
+    let bytes = snapshot(path, MAX_CATALOGUE)
         .map_err(|error| format!("LAN catalogue: {error:?}"))?;
     String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
-pub(super) fn open_host(path: &Path) -> Result<HostLan, String> {
+pub(super) fn open_host(path: &OsStr) -> Result<HostLan, String> {
     HostSelection::parse(path, &catalogue(path)?)?.bind()
 }
 
@@ -301,18 +302,18 @@ mod tests {
     #[test]
     fn explicit_catalogue_reserves_only_named_remote_seats()
     -> Result<(), String> {
-        let path = Path::new("/private/lan/host.local");
+        let path = OsStr::new("/private/lan/host.local");
         let text = format!(
             "{BASE}peer2_root=guest-root.der\n\
                             peer2_leaf=guest-leaf.der\n"
         );
         let selection = HostSelection::parse(path, &text)?;
         let expected = PublicFiles {
-            leaf: PathBuf::from("/private/lan/guest-leaf.der"),
-            root: PathBuf::from("/private/lan/guest-root.der"),
+            leaf: OsString::from("/private/lan/guest-leaf.der"),
+            root: OsString::from("/private/lan/guest-root.der"),
         };
         if selection.peers != [None, Some(expected), None, None]
-            || selection.identity.key != Path::new("/private/lan/host-key.der")
+            || selection.identity.key != OsStr::new("/private/lan/host-key.der")
             || selection.address != SocketAddr::from(([127, 0, 0, 1], 0))
         {
             return Err(String::from("incorrect LAN selection"));
@@ -322,7 +323,7 @@ mod tests {
 
     #[test]
     fn catalogue_rejects_implicit_incomplete_or_unknown_approval() {
-        let path = Path::new("host.local");
+        let path = OsStr::new("host.local");
         for suffix in [
             "",
             "peer2_root=root.der\n",
@@ -340,13 +341,13 @@ mod tests {
     #[test]
     fn controller_requires_explicit_host_and_local_identity()
     -> Result<(), String> {
-        let path = Path::new("client/controller.local");
+        let path = OsStr::new("client/controller.local");
         let text = format!(
             "{BASE}host_root=approved-root.der\nhost_leaf=approved-leaf.der\n"
         );
         let selection = ClientSelection::parse(path, &text)?;
-        if selection.host.root != Path::new("client/approved-root.der")
-            || selection.host.leaf != Path::new("client/approved-leaf.der")
+        if selection.host.root != OsStr::new("client/approved-root.der")
+            || selection.host.leaf != OsStr::new("client/approved-leaf.der")
             || selection.controls.is_some()
             || selection.settings.is_some()
             || selection.touch_enabled
@@ -361,9 +362,9 @@ mod tests {
             ),
         )?;
         if configured.controls.as_deref()
-            != Some(Path::new("client/profiles/remote.local"))
+            != Some(OsStr::new("client/profiles/remote.local"))
             || configured.settings.as_deref()
-                != Some(Path::new("client/preferences"))
+                != Some(OsStr::new("client/preferences"))
             || !configured.touch_enabled
         {
             return Err(String::from("controller profile path not anchored"));

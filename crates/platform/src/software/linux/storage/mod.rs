@@ -105,7 +105,9 @@ use crate::ir::storage::file::{
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::save::SaveError;
 use crate::ir::storage::save::{OpenSave, SaveFactory};
-use crate::ir::storage::{DirectoryEntry, PathKind, PathObservation};
+use crate::ir::storage::{
+    DirectoryEntry, PathKind, PathObservation, PathResolution,
+};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl SaveFactory for () {
@@ -244,6 +246,31 @@ impl PathObservation for () {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
+impl PathResolution for () {
+    fn join(base: &OsStr, child: &OsStr) -> io::Result<OsString> {
+        Ok(Path::new(base).join(child).into_os_string())
+    }
+
+    fn parent(path: &OsStr) -> io::Result<&OsStr> {
+        Path::new(path)
+            .parent()
+            .map(Path::as_os_str)
+            .ok_or_else(|| io::ErrorKind::InvalidInput.into())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl PathResolution for () {
+    fn join(_base: &OsStr, _child: &OsStr) -> io::Result<OsString> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn parent(_path: &OsStr) -> io::Result<&OsStr> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn entry_kind(kind: &Metadata) -> PathKind {
     if kind.is_file() {
         PathKind::RegularFile
@@ -262,6 +289,30 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     use crate::ir::storage::executable_path as observed_executable_path;
     use crate::ir::storage::file::snapshot;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn lexical_paths_preserve_opaque_input_and_relative_components()
+    -> io::Result<()> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        use crate::ir::storage::{join_path, parent_path};
+
+        let base = OsStr::new("/package");
+        let opaque = OsStr::from_bytes(b"file-\xff");
+        let joined = join_path(base, opaque)?;
+        let valid = joined.as_encoded_bytes() == b"/package/file-\xff"
+            && parent_path(&joined)? == base
+            && join_path(base, "../assets")? == "/package/../assets"
+            && join_path(base, "/other")? == "/other"
+            && parent_path(OsStr::new("file"))?.is_empty()
+            && parent_path(OsStr::new("/")).is_err_and(|error| {
+                error.kind() == io::ErrorKind::InvalidInput
+            });
+        valid
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
