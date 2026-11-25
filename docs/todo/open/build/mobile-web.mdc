@@ -46,3 +46,10 @@ and all three libraries passed cross-target checking in fresh validation
 run 1795614497436019870-1973701. The Android SDK/NDK and browser packaging
 and runtime adapters remain unavailable or unimplemented. No device,
 WebAssembly module, graphics, touch or storage acceptance is claimed.
+
+The Android ARM64 opt-in check now includes the native storage adapter
+alongside the three portable libraries. Fresh validation run
+1795619165836589916-3124876 compiled the storage library for Android
+and repeated the WebAssembly library checks. Android atomic package
+publication remains GNU/Linux-specific; no Android link, device storage,
+runtime or package acceptance is inferred from cross-target checking.
