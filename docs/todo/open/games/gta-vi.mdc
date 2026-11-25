@@ -6,7 +6,7 @@ priority: "p5"
 area: "games"
 task: "TODO - Grand Theft Auto VI"
 depends_on:
-  - "hytale"
+  - "lego-star-wars-the-skywalker-saga"
 validation:
   - "cargo validate"
 ---
@@ -14,7 +14,8 @@ validation:
 
 ## Objective
 
-Evaluate the best official PlayStation edition after Hytale. Use PS5 with PS5
+Evaluate the best official PlayStation edition after LEGO Star Wars.
+Use PS5 with PS5
 Pro enhancements or PS6 if a suitable edition exists.
 
 ## Acceptance

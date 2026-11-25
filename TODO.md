@@ -366,23 +366,6 @@ recoverable from the APK.
 
 [TODO - SimCity BuildIt](docs/todo/open/games/simcity-buildit.mdc)
 
-### TODO - LEGO Star Wars: The Skywalker Saga
-
-Latest suitable official PC edition; preserve the campaign, local co-op,
-modular construction, destruction, physics and 3D exploration.
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - LEGO Star Wars: The Skywalker Saga](docs/todo/open/games/lego-star-wars-the-skywalker-saga.mdc)
-
-### TODO - Minecraft Java Edition
-
-Latest stable Java Edition native Rust client/server and independent launcher
-with legitimate Microsoft account and entitlement verification. Support
-historical official installations and pursue native Java mod compatibility
-with tested version/loader combinations.
-
-[TODO - Minecraft Java Edition](docs/todo/open/games/minecraft.mdc)
-
 ## P5 - Future experiments
 
 These conditional tasks stay last. Do not activate them before the
@@ -394,6 +377,23 @@ Wait for the official stable 1.0 PC release. Evaluate an independent Rust client
 and server.
 
 [TODO - Hytale](docs/todo/open/games/hytale.mdc)
+
+### TODO - Minecraft Java Edition
+
+Latest stable Java Edition native Rust client/server and independent launcher
+with legitimate Microsoft account and entitlement verification. Support
+historical official installations and pursue native Java mod compatibility
+with tested version/loader combinations.
+
+[TODO - Minecraft Java Edition](docs/todo/open/games/minecraft.mdc)
+
+### TODO - LEGO Star Wars: The Skywalker Saga
+
+Latest suitable official PC edition; preserve the campaign, local co-op,
+modular construction, destruction, physics and 3D exploration.
+
+<!-- MarkdownLint-disable-next-line MD013 MD044 -->
+[TODO - LEGO Star Wars: The Skywalker Saga](docs/todo/open/games/lego-star-wars-the-skywalker-saga.mdc)
 
 ### TODO - Grand Theft Auto VI
 

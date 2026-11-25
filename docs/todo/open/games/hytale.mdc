@@ -6,7 +6,7 @@ priority: "p5"
 area: "games"
 task: "TODO - Hytale"
 depends_on:
-  - "minecraft"
+  - "simcity-buildit"
 validation:
   - "cargo validate"
 ---

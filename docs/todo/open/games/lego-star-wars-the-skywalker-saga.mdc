@@ -1,12 +1,12 @@
 ---
 id: "lego-star-wars-the-skywalker-saga"
 status: "open"
-lane: "4"
-priority: "p4"
+lane: "5"
+priority: "p5"
 area: "games"
 task: "TODO - LEGO Star Wars: The Skywalker Saga"
 depends_on:
-  - "simcity-buildit"
+  - "minecraft"
 validation:
   - "cargo validate"
 ---

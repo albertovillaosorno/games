@@ -1,12 +1,12 @@
 ---
 id: "minecraft"
 status: "open"
-lane: "4"
-priority: "p4"
+lane: "5"
+priority: "p5"
 area: "games"
 task: "TODO - Minecraft Java Edition"
 depends_on:
-  - "lego-star-wars-the-skywalker-saga"
+  - "hytale"
 validation:
   - "cargo validate"
 ---
