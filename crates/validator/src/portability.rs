@@ -42,17 +42,26 @@ const LEGACY: &str = include_str!("portability-baseline.json");
 type Counts = BTreeMap<String, usize>;
 type Inventory = BTreeMap<String, Counts>;
 
+fn neutral_ir(path: &str) -> bool {
+    let mut components = path.split('/');
+    components.next() == Some("crates")
+        && matches!(components.next(), Some("platform" | "hardware"))
+        && components.next() == Some("src")
+        && matches!(components.next(), Some("ir" | "ir.rs"))
+}
+
 fn adapter(path: &str) -> bool {
-    matches!(
-        path.split('/').nth(1),
-        Some(
-            "platform"
-                | "platform-audio"
-                | "platform-graphics"
-                | "platform-host"
-                | "platform-storage"
+    !neutral_ir(path)
+        && matches!(
+            path.split('/').nth(1),
+            Some(
+                "platform"
+                    | "platform-audio"
+                    | "platform-graphics"
+                    | "platform-host"
+                    | "platform-storage"
+            )
         )
-    )
 }
 
 fn record(counts: &mut Counts, rule: &str) {
@@ -212,7 +221,7 @@ fn inventory(
         let text = fs::read_to_string(root.join(path))
             .map_err(|error| error.to_string())?;
         let counts = if is_rust {
-            if host_independent(&name) {
+            if neutral_ir(&name) || host_independent(&name) {
                 host_api::validate(&text)
                     .map_err(|error| format!("{name}: {error}"))?;
             }
@@ -247,10 +256,29 @@ fn excess(found: &Inventory, legacy: &Inventory) -> Inventory {
     violations
 }
 
-/// Reject newly introduced platform-specific coupling outside adapters.
+fn compare(found: &Inventory, legacy: &Inventory) -> Result<(), String> {
+    let violations = excess(found, legacy);
+    if !violations.is_empty() {
+        let details = serde_json::to_string_pretty(&violations)
+            .map_err(|error| error.to_string())?;
+        return Err(format!(
+            "new platform coupling outside adapters:\n{details}"
+        ));
+    }
+    if found == legacy {
+        return Ok(());
+    }
+    let details = serde_json::to_string_pretty(found)
+        .map_err(|error| error.to_string())?;
+    Err(format!(
+        "stale platform baseline; use the exact current inventory:\n{details}"
+    ))
+}
+
+/// Require an exact inventory of remaining platform migration debt.
 ///
 /// # Errors
-/// Reports unreadable sources, invalid baseline or additional coupling.
+/// Reports unreadable sources, invalid or stale baseline, or new coupling.
 pub fn validate(
     root: &Path,
     authored: &[PathBuf],
@@ -259,20 +287,14 @@ pub fn validate(
     let legacy: Inventory =
         serde_json::from_str(LEGACY).map_err(|error| error.to_string())?;
     let found = inventory(root, authored, workspace)?;
-    let violations = excess(&found, &legacy);
-    if violations.is_empty() {
-        return Ok(());
-    }
-    let details = serde_json::to_string_pretty(&violations)
-        .map_err(|error| error.to_string())?;
-    Err(format!(
-        "new platform coupling outside adapters:\n{details}"
-    ))
+    compare(&found, &legacy)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Counts, Inventory, adapter, excess, manifest, rust};
+    use super::{
+        Counts, Inventory, adapter, compare, excess, manifest, neutral_ir, rust,
+    };
     use crate::fixtures::require;
 
     #[test]
@@ -282,6 +304,21 @@ mod tests {
         );
         assert!(adapter("crates/platform-graphics/src/linux/input.rs"));
         assert!(!adapter("crates/game-linux/src/main.rs"));
+    }
+
+    #[test]
+    fn owning_ir_does_not_inherit_adapter_exemption() {
+        for path in [
+            "crates/platform/src/ir/network.rs",
+            "crates/hardware/src/ir/controller.rs",
+            "crates/platform/src/ir.rs",
+        ] {
+            assert!(neutral_ir(path));
+            assert!(!adapter(path));
+        }
+        assert!(!neutral_ir("crates/platform/src/linux/network.rs"));
+        let coupling = rust("use crate::linux::native;");
+        assert_eq!(coupling.get("os:linux"), Some(&1));
     }
 
     #[test]
@@ -345,6 +382,30 @@ mod tests {
                 .is_err(),
             "missing inherited package",
         )
+    }
+
+    #[test]
+    fn migration_reductions_must_update_baseline() -> Result<(), String> {
+        let prior = Inventory::from([(
+            "old.rs".to_owned(),
+            Counts::from([("os:linux".to_owned(), 2)]),
+        )]);
+        let current = Inventory::from([(
+            "old.rs".to_owned(),
+            Counts::from([("os:linux".to_owned(), 1)]),
+        )]);
+        require(compare(&prior, &prior).is_ok(), "equal inventory")?;
+        let stale = compare(&current, &prior);
+        require(
+            stale.is_err_and(|error| error.contains("stale platform baseline")),
+            "reject stale allowance",
+        )?;
+        require(compare(&current, &current).is_ok(), "admit reduction")?;
+        require(
+            compare(&Inventory::new(), &current).is_err(),
+            "remove obsolete entries",
+        )?;
+        require(compare(&prior, &current).is_err(), "reject reintroduction")
     }
 
     #[test]
