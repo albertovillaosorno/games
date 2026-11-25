@@ -262,10 +262,16 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         Target: RenderTarget,
     {
         let mut result = Err(RenderError::InvalidLength);
+        let region = Rect::new(
+            0,
+            0,
+            self.layout.width().get(),
+            self.layout.height().get(),
+        );
         canvas
             .with_texture_canvas(&mut self.target, |logical| {
                 result = logical
-                    .read_pixels(None, PixelFormatEnum::RGBA32)
+                    .read_pixels(region, PixelFormatEnum::RGBA32)
                     .map_err(RenderError::Backend);
             })
             .map_err(|error| RenderError::Backend(error.to_string()))?;
