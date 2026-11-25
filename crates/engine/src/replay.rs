@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Reusable deterministic input scripts for fixed-tick simulation.
+//   - Reusable deterministic input scripts and observable checkpoints.
 // - Must-Not:
 //   - Encode gameplay rules, transport protocols or renderer behaviour.
 // - Allows:
 //   - Inputs: Ordered actions keyed by simulation tick.
-//   - Outputs: Replayable action slices and inspectable simulation state.
+//   - Outputs: Replayable actions, inspectable state and checkpoint results.
 //   - Side effects: Delegates each tick to the supplied state machine.
 // - Split-When:
 //   - Real network transport or storage needs an independent adapter.
@@ -32,6 +32,7 @@
 //! Replay public action scripts without coupling to rendering frame rate.
 
 use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter, Result as FormatResult};
 
 use crate::timing::FixedTick;
 
@@ -104,14 +105,139 @@ impl<Simulation: InputStep> FixedTick for Scripted<Simulation> {
     }
 }
 
+/// Failure to match a sequence of reference observations after fixed ticks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckpointError {
+    /// The replay has not yet reached a required reference tick.
+    Incomplete(u64),
+    /// A reference must contain at least one strictly ordered checkpoint.
+    InvalidSequence,
+    /// The expected observation differed from the actual state at this tick.
+    Mismatch(u64),
+    /// The simulation skipped a required reference tick.
+    Skipped(u64),
+}
+
+/// Compare a scripted simulation against title-defined public observations.
+///
+/// Checkpoints are borrowed and sampled only after their indexed updates.
+/// The first divergence is retained across subsequent rendered frames.
+pub struct CheckpointReplay<'reference, Simulation, Observation, Observe>
+where
+    Simulation: InputStep,
+{
+    failure: Option<CheckpointError>,
+    observe: Observe,
+    remaining: &'reference [(u64, Observation)],
+    scripted: Scripted<Simulation>,
+}
+
+impl<'reference, Simulation, Observation, Observe>
+    CheckpointReplay<'reference, Simulation, Observation, Observe>
+where
+    Simulation: InputStep,
+    Observation: PartialEq,
+    Observe: Fn(&Simulation) -> Observation,
+{
+    /// Inspect the first mismatch, skipped tick or pending checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error until every checkpoint is reached and matches.
+    pub const fn finish(&self) -> Result<(), CheckpointError> {
+        if let Some(failure) = self.failure {
+            return Err(failure);
+        }
+        if let Some((tick, _expected)) = self.remaining.first() {
+            return Err(CheckpointError::Incomplete(*tick));
+        }
+        Ok(())
+    }
+
+    /// Construct a replay using public observations in ascending tick order.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty, duplicate or decreasing checkpoint indices.
+    pub fn new(
+        scripted: Scripted<Simulation>,
+        checkpoints: &'reference [(u64, Observation)],
+        observe: Observe,
+    ) -> Result<Self, CheckpointError> {
+        if checkpoints.is_empty()
+            || !checkpoints
+                .iter()
+                .map(|(tick, _expected)| *tick)
+                .is_sorted_by(|left, right| left < right)
+        {
+            return Err(CheckpointError::InvalidSequence);
+        }
+        Ok(Self {
+            failure: None,
+            observe,
+            remaining: checkpoints,
+            scripted,
+        })
+    }
+
+    /// Inspect the current simulation independently of comparison status.
+    #[must_use]
+    pub const fn state(&self) -> &Simulation {
+        self.scripted.state()
+    }
+}
+
+impl<Simulation, Observation, Observe> Debug
+    for CheckpointReplay<'_, Simulation, Observation, Observe>
+where
+    Simulation: InputStep,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> FormatResult {
+        f.debug_struct("CheckpointReplay")
+            .field("failure", &self.failure)
+            .field("remaining", &self.remaining.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Simulation, Observation, Observe> FixedTick
+    for CheckpointReplay<'_, Simulation, Observation, Observe>
+where
+    Simulation: InputStep,
+    Observation: PartialEq,
+    Observe: Fn(&Simulation) -> Observation,
+{
+    fn fixed_tick(&mut self, index: u64) {
+        self.scripted.fixed_tick(index);
+        if self.failure.is_some() {
+            return;
+        }
+        let Some(((tick, expected), remaining)) = self.remaining.split_first()
+        else {
+            return;
+        };
+        if index > *tick {
+            self.failure = Some(CheckpointError::Skipped(*tick));
+        } else if index == *tick {
+            if (self.observe)(self.scripted.state()) == *expected {
+                self.remaining = remaining;
+            } else {
+                self.failure = Some(CheckpointError::Mismatch(*tick));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter::repeat_n;
     use std::num::NonZeroU32;
     use std::time::Duration;
 
-    use super::{InputScript, InputStep, Scripted};
-    use crate::timing::{StepClock, StepError};
+    use super::{
+        CheckpointError, CheckpointReplay, InputScript, InputStep, Scripted,
+    };
+    use crate::timing::{FixedTick as _, StepClock, StepError};
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum Action {
@@ -253,5 +379,111 @@ mod tests {
                 ticks: 3
             }),
         );
+    }
+
+    fn checkpoint_script() -> Scripted<ObservableState> {
+        let mut recording = InputScript::new();
+        recording.record(0, Action::Move(3));
+        recording.record(1, Action::Shoot);
+        recording.record(2, Action::Move(-1));
+        Scripted::new(ObservableState::default(), recording)
+    }
+
+    fn observation(state: &ObservableState) -> (i64, u64) {
+        (state.position, state.shots)
+    }
+
+    #[test]
+    fn compares_reference_after_ticks_across_render_partitions() {
+        let checkpoints = [(0, (3, 0)), (1, (3, 1)), (2, (2, 1))];
+        for frame_lengths in [[10u64, 10, 10], [25, 0, 5]] {
+            let replay = CheckpointReplay::new(
+                checkpoint_script(),
+                &checkpoints,
+                observation,
+            );
+            let budget = NonZeroU32::new(2);
+            assert!(replay.is_ok());
+            assert!(budget.is_some());
+            let (Ok(mut comparison), Some(limit)) = (replay, budget) else {
+                return;
+            };
+            let clock = StepClock::new(Duration::from_millis(10), limit);
+            assert!(clock.is_ok());
+            let Ok(mut scheduler) = clock else {
+                return;
+            };
+            assert_eq!(
+                comparison.finish(),
+                Err(CheckpointError::Incomplete(0))
+            );
+            for elapsed in frame_lengths {
+                assert!(
+                    scheduler
+                        .advance(
+                            Duration::from_millis(elapsed),
+                            &mut comparison
+                        )
+                        .is_ok()
+                );
+            }
+            assert_eq!(comparison.finish(), Ok(()));
+            assert_eq!(comparison.state().ticks, 3);
+        }
+    }
+
+    #[test]
+    fn retains_first_mismatch_even_when_final_state_matches() {
+        let checkpoints = [(0, (7, 0)), (2, (2, 1))];
+        let replay = CheckpointReplay::new(
+            checkpoint_script(),
+            &checkpoints,
+            observation,
+        );
+        assert!(replay.is_ok());
+        if let Ok(mut comparison) = replay {
+            for tick in 0u64..3u64 {
+                comparison.fixed_tick(tick);
+            }
+            assert_eq!(observation(comparison.state()), (2, 1));
+            assert_eq!(comparison.finish(), Err(CheckpointError::Mismatch(0)));
+        }
+    }
+
+    #[test]
+    fn refuses_empty_duplicate_and_out_of_order_references() {
+        let duplicate = [(2, (0, 0)), (2, (0, 0))];
+        let reversed = [(2, (0, 0)), (1, (0, 0))];
+        for checkpoints in [duplicate.as_slice(), reversed.as_slice(), &[]] {
+            assert_eq!(
+                CheckpointReplay::new(
+                    checkpoint_script(),
+                    checkpoints,
+                    observation
+                )
+                .err(),
+                Some(CheckpointError::InvalidSequence),
+            );
+        }
+    }
+
+    #[test]
+    fn distinguishes_pending_and_skipped_checkpoints() {
+        let checkpoints = [(0, (3, 0)), (1, (3, 1))];
+        let replay = CheckpointReplay::new(
+            checkpoint_script(),
+            &checkpoints,
+            observation,
+        );
+        assert!(replay.is_ok());
+        if let Ok(mut comparison) = replay {
+            comparison.fixed_tick(0);
+            assert_eq!(
+                comparison.finish(),
+                Err(CheckpointError::Incomplete(1))
+            );
+            comparison.fixed_tick(2);
+            assert_eq!(comparison.finish(), Err(CheckpointError::Skipped(1)));
+        }
     }
 }

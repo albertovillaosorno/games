@@ -37,6 +37,13 @@ significance, row and column order, and rejection without partial output.
 The selected source adapter adds synthetic fixtures for the exact tile and
 sprite layouts, including the sprite nibble permutation.
 
-No reference executable is installed; the full MAME download timed out.
-No gameplay observations or parity are claimed. Reference files remain
+The initial full MAME source download timed out.
+No remake parity is claimed. Reference files remain
 private under `.reference/`.
+
+The shared fixed-tick replay now compares ordered public observations after
+each checkpoint tick, retaining the first mismatch and rejecting skipped,
+duplicate or unfinished checkpoints. Synthetic tests exercise different
+render frame partitions. A local MAME reference run is now available; see
+the Simpsons task for repeatable original observations. Those observations
+are not yet compared against remake gameplay.
