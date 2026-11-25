@@ -37,7 +37,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use games::audio::{AudioError, Channels, Clip, Mixer, StereoGain};
-use games::input::InputEvent;
+use games::input::{InputEvent, LogicalAction};
 use games::replay::LiveSimulation;
 use games_assets::ManifestLimits;
 use games_assets::pcm::PcmSamples;
@@ -45,8 +45,10 @@ use games_platform_audio::linux::{NativeAudio, PlaybackSpec};
 use games_platform_graphics::linux::RenderError;
 use games_platform_graphics::linux::input::key_code;
 
-use super::{Controls, KEYBOARD, failure, live, open_selected_bundle, size};
-use crate::{Cabinet, TICK_INTERVAL};
+use super::{
+    Controls, KEYBOARD, failure, live, open_selected_bundle, size, smoke_press,
+};
+use crate::{Action, Cabinet, Control, Phase, Player, TICK_INTERVAL};
 
 const CHUNK: usize = 256;
 const MAX_CHUNKS: u8 = 4;
@@ -137,11 +139,17 @@ pub(super) struct Playback<'samples> {
     clips: [Clip<'samples>; 4],
     cues: [u64; 4],
     device: NativeAudio,
+    live_output: bool,
     mixer: Mixer<'samples>,
+    running: bool,
     scratch: [[i16; 2]; CHUNK],
 }
 
 impl<'samples> Playback<'samples> {
+    pub(super) const fn enable_output(&mut self) {
+        self.live_output = true;
+    }
+
     fn fill(&mut self) -> Result<(), RenderError> {
         for _ in 0..MAX_CHUNKS {
             if self.mixer.active() == 0
@@ -172,14 +180,23 @@ impl<'samples> Playback<'samples> {
             clips: samples.clips()?,
             cues: [0; 4],
             device,
+            live_output: false,
             mixer: Mixer::new(RATE, NonZeroU16::MIN.saturating_add(15))
                 .map_err(failure)?,
+            running: false,
             scratch: [[0; 2]; CHUNK],
         })
     }
 
-    pub(super) fn resume(&self) {
-        self.device.resume();
+    fn set_running(&mut self, running: bool) {
+        if self.running != running {
+            if running {
+                self.device.resume();
+            } else {
+                self.device.pause();
+            }
+            self.running = running;
+        }
     }
 
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
@@ -202,6 +219,7 @@ impl<'samples> Playback<'samples> {
         self.device.clear();
         self.update(simulation.state())?;
         self.verify_submission(4)?;
+        self.smoke_pause(&mut simulation)?;
         for _ in 0..60u8 {
             self.device.clear();
             let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -213,6 +231,63 @@ impl<'samples> Playback<'samples> {
         {
             return Err(failure("held attack repeated or audio did not drain"));
         }
+        self.smoke_reset(&mut simulation)
+    }
+
+    fn smoke_pause(
+        &mut self,
+        simulation: &mut LiveSimulation<Cabinet>,
+    ) -> Result<(), RenderError> {
+        let mut controls = Controls::new(false)?;
+        smoke_press(&mut controls, simulation, Control::Pause)?;
+        self.device.clear();
+        self.update(simulation.state())?;
+        if self.device.queued_bytes() != 0 || self.mixer.active() != 4 {
+            return Err(failure("paused audio advanced"));
+        }
+        smoke_press(&mut controls, simulation, Control::Pause)?;
+        self.update(simulation.state())?;
+        self.verify_submission(4)
+    }
+
+    fn smoke_reset(
+        &mut self,
+        simulation: &mut LiveSimulation<Cabinet>,
+    ) -> Result<(), RenderError> {
+        let clip = *self.clips.first().ok_or(RenderError::InvalidSprite)?;
+        play(&mut self.mixer, clip, StereoGain::UNITY)?;
+        self.fill()?;
+        self.verify_submission(1)?;
+        simulation
+            .enqueue(simulation.next_tick(), vec![LogicalAction {
+                action: Action {
+                    control: Control::Primary,
+                    player: Player::Marge,
+                },
+                down: false,
+            }])
+            .map_err(|error| failure(error.reason))?;
+        let mut controls = Controls::new(false)?;
+        for control in [
+            Control::Pause,
+            Control::Down,
+            Control::Down,
+            Control::Primary,
+        ] {
+            smoke_press(&mut controls, simulation, control)?;
+        }
+        self.update(simulation.state())?;
+        if simulation.state().phase() != Phase::MainMenu
+            || self.device.queued_bytes() != 0
+            || self.mixer.active() != 0
+        {
+            return Err(failure(format!(
+                "reset retained stale audio: {:?}, {}, {}",
+                simulation.state().phase(),
+                self.device.queued_bytes(),
+                self.mixer.active()
+            )));
+        }
         Ok(())
     }
 
@@ -221,6 +296,19 @@ impl<'samples> Playback<'samples> {
         cabinet: &Cabinet,
     ) -> Result<(), RenderError> {
         let current = cabinet.stations().map(|station| station.attack_cues);
+        let phase = cabinet.phase();
+        let playing = phase == Phase::Playing;
+        self.set_running(self.live_output && playing);
+        if matches!(phase, Phase::MainMenu | Phase::Exited) {
+            self.cues = current;
+            if self.device.queued_bytes() != 0 {
+                self.device.clear();
+            }
+            self.mixer.clear();
+        }
+        if !playing {
+            return Ok(());
+        }
         for (((previous, count), clip), gain) in
             self.cues.iter_mut().zip(current).zip(self.clips).zip(GAINS)
         {

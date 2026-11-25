@@ -94,8 +94,9 @@ preview selects four station-specific attack samples from that bundle,
 using fixed-step cues and the shared native mixer. Without this option
 it opens no audio device. Nominal pitch, gain, queue timing and voice
 admission are provisional; background music and other sound effects
-are not reproduced. The hidden smoke uses a paused device to verify
-nonzero queued audio and one cue per held attack.
+The hidden smoke uses a paused device to verify
+nonzero queued audio and one cue per held attack. Pause suspends playback
+and Settings keeps it suspended; returning to the main menu clears audio.
 
 ### Local launch catalogue
 

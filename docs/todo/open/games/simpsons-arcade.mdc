@@ -744,3 +744,11 @@ changes rendered pixels, Start joined the selected character, and the
 four-player 600-frame workload missed zero frame-budget samples. The
 synthetic controller and touch paths also joined selected characters.
 Physical controller and touchscreen acceptance remain open.
+
+Native attack audio follows session suspension: the device pauses and
+the mixer stops advancing while paused or in Settings. Returning to the
+main menu discards queued audio and active voices without allocating new
+mixer storage. A shared mixer test verifies silence and slot reuse after
+clearing. The native dummy-device smoke verifies pause, resume, and
+discard on reset with previously submitted audio, in addition to the
+existing held-attack checks. Actual audio hardware remains unverified.

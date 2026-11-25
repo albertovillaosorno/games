@@ -583,8 +583,8 @@ impl<'preferences> Interactive<'preferences> {
         art: &mut Scene,
         mut playback: Option<&mut audio::Playback<'_>>,
     ) -> Result<(), RenderError> {
-        if let Some(audio) = &playback {
-            audio.resume();
+        if let Some(audio) = &mut playback {
+            audio.enable_output();
         }
         while self.simulation.state().phase() != Phase::Exited
             && poll(

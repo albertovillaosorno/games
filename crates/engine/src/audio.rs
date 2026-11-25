@@ -250,6 +250,11 @@ impl<'samples> Mixer<'samples> {
         self.voices.iter().flatten().count()
     }
 
+    /// Stop all voices without releasing the allocated slots.
+    pub fn clear(&mut self) {
+        self.voices.fill(None);
+    }
+
     /// Allocate a fixed number of reusable voice slots.
     /// # Errors
     /// Returns an allocation error if the requested storage cannot be reserved.
@@ -381,6 +386,22 @@ mod tests {
     fn clip_rejects_empty_and_partial_frames() {
         assert!(Clip::new(&[], Channels::Mono, rate(1)).is_err());
         assert!(Clip::new(&[1], Channels::Stereo, rate(1)).is_err());
+    }
+
+    #[test]
+    fn clearing_voices_discards_audio_and_reuses_slots()
+    -> Result<(), AudioError> {
+        let clip = Clip::new(&[1, 2, 3], Channels::Mono, rate(1))?;
+        let mut mixer = Mixer::new(rate(1), NonZeroU16::MIN)?;
+        let slot = mixer.play(clip, StereoGain::UNITY)?;
+        mixer.clear();
+        let mut frame = [[1; 2]];
+        mixer.render(&mut frame);
+        (mixer.active() == 0
+            && frame == [[0, 0]]
+            && mixer.play(clip, StereoGain::UNITY)? == slot)
+            .then_some(())
+            .ok_or(AudioError::InvalidClip)
     }
 
     #[test]
