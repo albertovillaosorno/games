@@ -391,7 +391,9 @@ mod tests {
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
 
-    use super::input::{Button, HostEvent, NativeInput, Scancode, key_code};
+    use super::input::{
+        Axis, Button, HostEvent, NativeInput, Scancode, key_code,
+    };
     use super::sprites::{SceneLimits, SpriteDraw, SpriteRect};
     use super::{
         FrameLayout, NativeWindow, RenderError, create_texture, draw_frame,
@@ -616,23 +618,7 @@ mod tests {
                 .all(|event| matches!(event, InputEvent::Attached { .. })),
             "initial event is not an attachment",
         )?;
-        let unknown = Event::ControllerButtonDown {
-            timestamp: 0,
-            which: u32::MAX,
-            button: Button::A,
-        };
-        require(
-            startup.input.translate(&unknown)?.is_none(),
-            "unknown controller produced an action",
-        )?;
-        let removed = Event::ControllerDeviceRemoved {
-            timestamp: 0,
-            which: u32::MAX,
-        };
-        require(
-            startup.input.translate(&removed)?.is_none(),
-            "unknown controller removal produced a detach",
-        )?;
+        verify_unknown_controller(&mut startup.input)?;
         let event = Event::KeyDown {
             timestamp: 0,
             window_id: window.canvas.window().id(),
@@ -659,5 +645,37 @@ mod tests {
         Err(RenderError::Backend(String::from(
             "queued native key did not reach the input router",
         )))
+    }
+
+    fn verify_unknown_controller(
+        input: &mut NativeInput,
+    ) -> Result<(), RenderError> {
+        for unknown in [
+            Event::ControllerButtonDown {
+                timestamp: 0,
+                which: u32::MAX,
+                button: Button::A,
+            },
+            Event::ControllerAxisMotion {
+                timestamp: 0,
+                which: u32::MAX,
+                axis: Axis::LeftX,
+                value: i16::MIN,
+            },
+        ] {
+            require(
+                input.translate(&unknown)?.is_none(),
+                "unknown controller produced an action",
+            )?;
+        }
+        let removed = Event::ControllerDeviceRemoved {
+            timestamp: 0,
+            which: u32::MAX,
+        };
+        require(
+            input.translate(&removed)?.is_none(),
+            "unknown controller removal produced a detach",
+        )?;
+        Ok(())
     }
 }

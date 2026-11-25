@@ -37,8 +37,8 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use games::input::InputEvent;
-pub use sdl2::controller::Button;
 use sdl2::controller::GameController;
+pub use sdl2::controller::{Axis, Button};
 use sdl2::event::{Event, WindowEvent};
 pub use sdl2::keyboard::Scancode;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
@@ -174,8 +174,9 @@ impl NativeInput {
             }));
         }
         let routed = route(event, self.window);
-        if let Some(HostEvent::Input(InputEvent::Button { device, .. })) =
-            routed
+        if let Some(HostEvent::Input(
+            InputEvent::Axis { device, .. } | InputEvent::Button { device, .. },
+        )) = routed
             && !self.controllers.contains_key(&device)
         {
             return Ok(None);
@@ -205,6 +206,16 @@ fn event_elapsed(origin: u64, now: u64, stamp: u32) -> Option<Duration> {
 )]
 pub const fn key_code(scancode: Scancode) -> u32 {
     scancode as u32
+}
+
+/// SDL controller axis code for use in a title's shared axis mapping.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "SDL controller axis C ABI discriminants are within u16"
+)]
+pub const fn axis_code(axis: Axis) -> u16 {
+    axis as u16
 }
 
 /// SDL controller button code for use in a title's shared button mapping.
@@ -256,6 +267,13 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
             down: false,
         }));
     }
+    if let Event::ControllerAxisMotion { which, axis, value, .. } = *event {
+        return Some(HostEvent::Input(InputEvent::Axis {
+            code: axis_code(axis),
+            device: u64::from(which),
+            value,
+        }));
+    }
     let (which, button, down) =
         if let Event::ControllerButtonDown { which, button, .. } = *event {
             (which, button, true)
@@ -280,9 +298,30 @@ mod tests {
     use sdl2::keyboard::Mod;
 
     use super::{
-        Button, HostEvent, Scancode, button_code, event_elapsed, key_code,
-        route,
+        Axis, Button, HostEvent, Scancode, axis_code, button_code,
+        event_elapsed, key_code, route,
     };
+
+    #[test]
+    fn controller_axes_preserve_signed_values_and_instance_identity() {
+        for value in [i16::MIN, -1, 0, 1, i16::MAX] {
+            let event = Event::ControllerAxisMotion {
+                timestamp: 0,
+                which: u32::MAX,
+                axis: Axis::LeftX,
+                value,
+            };
+            assert_eq!(
+                route(&event, 1),
+                Some(HostEvent::Input(InputEvent::Axis {
+                    code: axis_code(Axis::LeftX),
+                    device: u64::from(u32::MAX),
+                    value,
+                }))
+            );
+        }
+        assert_ne!(axis_code(Axis::LeftX), axis_code(Axis::LeftY));
+    }
 
     #[test]
     fn event_time_reconstructs_wrap_and_pre_start_events() {

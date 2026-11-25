@@ -178,3 +178,21 @@ busy rejection without disconnecting, unrelated local admission, encrypted
 delivery and subsequent idle state. Fresh validation passed in run
 1795588148767594009-55007. Caller-driven scheduling remains explicit;
 physical LAN, integrated game hosting and production enrolment remain open.
+
+The shared controller router now accepts signed axis events with explicit
+per-direction actions and validated press/release magnitudes. Separate
+physical axis and button sources aggregate into the existing logical
+holds. Hysteresis avoids threshold chatter; reversing an axis bound to
+the same action does not emit a spurious release. Exclusive per-device
+axis and button mappings release previous holds and do not fall back
+to shared mappings. The existing button-only mapping disables axes.
+
+SDL forwards unfiltered signed axis values only for admitted controller
+instance IDs. Synthetic tests cover exact thresholds, signed extrema,
+direct reversal, independent controllers, overlapping buttons, invalid
+thresholds, reassignment and reconnect. This is digital action mapping
+from an analog axis, not proportional analog movement. Physical
+controller calibration and hot-plug testing remain open.
+The opt-in native accelerated smoke also rejected an unknown controller's
+axis event. Fresh validation passed with the smoke enabled in run
+1795589083936501060-186109.

@@ -42,6 +42,15 @@ pub enum InputEvent {
         /// Stable host-local device identifier.
         device: u64,
     },
+    /// A controller axis changed its signed native value.
+    Axis {
+        /// Controller-specific axis code.
+        code: u16,
+        /// Host-local controller identifier.
+        device: u64,
+        /// Signed axis value, without host dead-zone filtering.
+        value: i16,
+    },
     /// A gamepad button changed state.
     Button {
         /// Host-local controller identifier.
@@ -51,7 +60,7 @@ pub enum InputEvent {
         /// Whether the button is pressed.
         down: bool,
     },
-    /// A controller disconnected and must release any held buttons.
+    /// A controller disconnected and must release all held controls.
     Detached {
         /// Identifier of the disconnected controller.
         device: u64,
@@ -74,9 +83,44 @@ pub enum InputEvent {
     },
 }
 
+/// Optional directional actions and hysteresis for a signed controller axis.
+#[derive(Clone, Debug)]
+pub struct AxisBinding<Action> {
+    negative: Option<Action>,
+    positive: Option<Action>,
+    press: u16,
+    release: u16,
+}
+
+impl<Action> AxisBinding<Action> {
+    /// Configure independent negative and positive actions.
+    ///
+    /// A direction presses at the inclusive press magnitude and releases
+    /// at or below the release magnitude. Both directions use the same
+    /// thresholds. Invalid thresholds are rejected; zero is neutral.
+    #[must_use]
+    pub fn new(
+        negative: Option<Action>,
+        positive: Option<Action>,
+        press: u16,
+        release: u16,
+    ) -> Option<Self> {
+        if press > 32_767 || release >= press {
+            return None;
+        }
+        Some(Self {
+            negative,
+            positive,
+            press,
+            release,
+        })
+    }
+}
+
 /// Bind physical control codes to title-owned logical actions.
 #[derive(Clone, Debug)]
 pub struct InputMapping<Action> {
+    axes: BTreeMap<u16, AxisBinding<Action>>,
     buttons: BTreeMap<u16, Action>,
     keys: BTreeMap<u32, Action>,
     touch: BTreeMap<u16, Action>,
@@ -93,18 +137,29 @@ pub struct LogicalAction<Action> {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Source {
+    Axis(u64, u16, AxisDirection),
     Button(u64, u16),
     Key(u32),
     Touch(u16),
 }
 
-type ControllerButtons<Action> = BTreeMap<u16, Action>;
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum AxisDirection {
+    Negative,
+    Positive,
+}
+
+#[derive(Debug)]
+struct ControllerMapping<Action> {
+    axes: BTreeMap<u16, AxisBinding<Action>>,
+    buttons: BTreeMap<u16, Action>,
+}
 
 /// Shared router that preserves logical state across multiple input devices.
 #[derive(Debug)]
 pub struct InputRouter<Action: Clone + Ord> {
     connected: BTreeSet<u64>,
-    controller_maps: BTreeMap<u64, ControllerButtons<Action>>,
+    controller_maps: BTreeMap<u64, ControllerMapping<Action>>,
     held: BTreeMap<Source, Action>,
     mapping: InputMapping<Action>,
     pressed: BTreeMap<Action, u32>,
@@ -117,6 +172,11 @@ impl<Action> Default for InputMapping<Action> {
 }
 
 impl<Action> InputMapping<Action> {
+    /// Bind an axis to optional negative and positive logical actions.
+    pub fn bind_axis(&mut self, code: u16, binding: AxisBinding<Action>) {
+        let _old = self.axes.insert(code, binding);
+    }
+
     /// Assign a controller button to a logical action.
     pub fn bind_button(&mut self, code: u16, action: Action) {
         let _old = self.buttons.insert(code, action);
@@ -136,6 +196,7 @@ impl<Action> InputMapping<Action> {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            axes: BTreeMap::new(),
             buttons: BTreeMap::new(),
             keys: BTreeMap::new(),
             touch: BTreeMap::new(),
@@ -144,6 +205,44 @@ impl<Action> InputMapping<Action> {
 }
 
 impl<Action: Clone + Ord> InputRouter<Action> {
+    fn axis(
+        &mut self,
+        device: u64,
+        code: u16,
+        value: i16,
+    ) -> Vec<LogicalAction<Action>> {
+        if !self.connected.contains(&device) {
+            return Vec::new();
+        }
+        let candidate = self
+            .controller_maps
+            .get(&device)
+            .map_or(&self.mapping.axes, |mapping| &mapping.axes)
+            .get(&code)
+            .cloned();
+        let Some(binding) = candidate else {
+            return Vec::new();
+        };
+        let negative = Source::Axis(device, code, AxisDirection::Negative);
+        let positive = Source::Axis(device, code, AxisDirection::Positive);
+        let (active, other, action) = if value < 0 {
+            (negative, positive, binding.negative)
+        } else {
+            (positive, negative, binding.positive)
+        };
+        let magnitude = value.unsigned_abs();
+        let down = if self.held.contains_key(&active) {
+            magnitude > binding.release
+        } else {
+            magnitude >= binding.press
+        };
+        // Press before releasing the opposite direction so the same
+        // logical action bound on both sides never flickers on reversal.
+        let mut changes = self.transition(active, action, down);
+        changes.extend(self.release(other));
+        changes
+    }
+
     fn detach(&mut self, device: u64) -> Vec<LogicalAction<Action>> {
         let _connected = self.connected.remove(&device);
         let _mapping = self.controller_maps.remove(&device);
@@ -160,6 +259,9 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                 let _connected = self.connected.insert(device);
                 Vec::new()
             },
+            InputEvent::Axis { code, device, value } => {
+                self.axis(device, code, value)
+            },
             InputEvent::Button { device, code, down } => {
                 if !self.connected.contains(&device) {
                     return Vec::new();
@@ -167,7 +269,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                 let mapping = self
                     .controller_maps
                     .get(&device)
-                    .unwrap_or(&self.mapping.buttons)
+                    .map_or(&self.mapping.buttons, |mapping| &mapping.buttons)
                     .get(&code)
                     .cloned();
                 self.transition(Source::Button(device, code), mapping, down)
@@ -227,9 +329,14 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         &mut self,
         device: u64,
     ) -> Vec<LogicalAction<Action>> {
-        self.release_range(
+        let mut changes = self.release_range(
+            Source::Axis(device, u16::MIN, AxisDirection::Negative)
+                ..=Source::Axis(device, u16::MAX, AxisDirection::Positive),
+        );
+        changes.extend(self.release_range(
             Source::Button(device, u16::MIN)..=Source::Button(device, u16::MAX),
-        )
+        ));
+        changes
     }
 
     fn release_range(
@@ -250,9 +357,30 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         changes
     }
 
+    /// Assign an attached controller exclusive button and axis mappings.
+    ///
+    /// Existing holds are released before reassignment. Unmapped axes and
+    /// buttons never fall back to the shared mapping.
+    /// Returns None if the device is not attached.
+    #[must_use]
+    pub fn set_controller_controls(
+        &mut self,
+        device: u64,
+        buttons: BTreeMap<u16, Action>,
+        axes: BTreeMap<u16, AxisBinding<Action>>,
+    ) -> Option<Vec<LogicalAction<Action>>> {
+        if !self.connected.contains(&device) {
+            return None;
+        }
+        let changes = self.release_controller(device);
+        let mapping = ControllerMapping { axes, buttons };
+        let _previous = self.controller_maps.insert(device, mapping);
+        Some(changes)
+    }
+
     /// Assign an attached controller an exclusive, player-specific mapping.
     ///
-    /// An empty mapping disables all its buttons. Unmapped buttons never
+    /// This button-only mapping disables axes. Unmapped buttons never
     /// fall back to the shared mapping. Existing holds are released before
     /// reassignment; a detached device must be assigned again.
     /// Returns None if the device is not attached.
@@ -262,12 +390,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         device: u64,
         buttons: BTreeMap<u16, Action>,
     ) -> Option<Vec<LogicalAction<Action>>> {
-        if !self.connected.contains(&device) {
-            return None;
-        }
-        let changes = self.release_controller(device);
-        let _previous = self.controller_maps.insert(device, buttons);
-        Some(changes)
+        self.set_controller_controls(device, buttons, BTreeMap::new())
     }
 
     fn transition(
@@ -289,12 +412,150 @@ impl<Action: Clone + Ord> InputRouter<Action> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{InputEvent, InputMapping, InputRouter, LogicalAction};
+    use super::{
+        AxisBinding, InputEvent, InputMapping, InputRouter, LogicalAction,
+    };
 
     #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
     enum Action {
         Confirm,
         Jump,
+    }
+
+    type Step<'actions> = (InputEvent, &'actions [LogicalAction<&'static str>]);
+
+    const fn axis_event(device: u64, value: i16) -> InputEvent {
+        InputEvent::Axis {
+            code: u16::MAX,
+            device,
+            value,
+        }
+    }
+
+    const fn change(action: &str, down: bool) -> LogicalAction<&str> {
+        LogicalAction { action, down }
+    }
+
+    fn verify_steps(
+        router: &mut InputRouter<&'static str>,
+        steps: &[Step<'_>],
+    ) -> Result<(), &'static str> {
+        for (event, expected) in steps {
+            if router.handle(*event) != *expected {
+                return Err("unexpected action transition");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn axis_hysteresis_and_direct_reversal() -> Result<(), &'static str> {
+        let mut map = InputMapping::new();
+        let binding =
+            AxisBinding::new(Some("left"), Some("right"), 16_000, 8000)
+                .ok_or("invalid test binding")?;
+        map.bind_axis(u16::MAX, binding);
+        let mut router = InputRouter::new(map);
+        verify_steps(&mut router, &[
+            (axis_event(7, i16::MIN), &[]),
+            (InputEvent::Attached { device: 7 }, &[]),
+            (axis_event(7, -15_999), &[]),
+            (axis_event(7, -16_000), &[change("left", true)]),
+            (InputEvent::FocusLost, &[]),
+            (axis_event(7, -8001), &[]),
+            (axis_event(7, -8000), &[change("left", false)]),
+            (axis_event(7, i16::MIN), &[change("left", true)]),
+            (axis_event(7, i16::MAX), &[
+                change("right", true),
+                change("left", false),
+            ]),
+            (axis_event(7, 8001), &[]),
+            (axis_event(7, 8000), &[change("right", false)]),
+            (axis_event(7, 0), &[]),
+        ])
+    }
+
+    #[test]
+    fn invalid_axis_thresholds_are_rejected() {
+        assert!(AxisBinding::<&str>::new(None, None, 0, 0).is_none());
+        assert!(AxisBinding::<&str>::new(None, None, 32_768, 0).is_none());
+        assert!(AxisBinding::<&str>::new(None, None, 8000, 8000).is_none());
+    }
+
+    #[test]
+    fn axes_and_buttons_aggregate_without_reversal_flicker()
+    -> Result<(), &'static str> {
+        let mut map = InputMapping::new();
+        let binding = AxisBinding::new(Some("move"), Some("move"), 10, 5)
+            .ok_or("invalid test binding")?;
+        map.bind_axis(u16::MAX, binding);
+        map.bind_button(0, "move");
+        let mut router = InputRouter::new(map);
+        verify_steps(&mut router, &[
+            (InputEvent::Attached { device: u64::MIN }, &[]),
+            (InputEvent::Attached { device: u64::MAX }, &[]),
+            (axis_event(u64::MIN, -10), &[change("move", true)]),
+            (axis_event(u64::MIN, 10), &[]),
+            (axis_event(u64::MAX, 10), &[]),
+            (
+                InputEvent::Button {
+                    device: u64::MAX,
+                    code: 0,
+                    down: true,
+                },
+                &[],
+            ),
+            (InputEvent::Detached { device: u64::MIN }, &[]),
+            (axis_event(u64::MAX, 0), &[]),
+            (InputEvent::Detached { device: u64::MAX }, &[change(
+                "move", false,
+            )]),
+            (axis_event(u64::MAX, 10), &[]),
+        ])
+    }
+
+    #[test]
+    fn axis_remapping_releases_holds_without_shared_fallback()
+    -> Result<(), &'static str> {
+        let mut map = InputMapping::new();
+        let shared = AxisBinding::new(None, Some("shared"), 10, 5)
+            .ok_or("invalid shared binding")?;
+        map.bind_axis(u16::MAX, shared);
+        let mut router = InputRouter::new(map);
+        let assigned = AxisBinding::new(None, Some("assigned"), 10, 5)
+            .ok_or("invalid assigned binding")?;
+        let axes = BTreeMap::from([(u16::MAX, assigned)]);
+        if router
+            .set_controller_controls(2, BTreeMap::new(), axes.clone())
+            .is_some()
+        {
+            return Err("detached mapping accepted");
+        }
+        verify_steps(&mut router, &[
+            (InputEvent::Attached { device: 2 }, &[]),
+            (axis_event(2, 10), &[change("shared", true)]),
+        ])?;
+        if router.set_controller_controls(2, BTreeMap::new(), axes)
+            != Some(vec![change("shared", false)])
+        {
+            return Err("shared axis hold not released");
+        }
+        verify_steps(&mut router, &[(axis_event(2, 10), &[change(
+            "assigned", true,
+        )])])?;
+        if router.set_controller_mapping(2, BTreeMap::new())
+            != Some(vec![change("assigned", false)])
+        {
+            return Err("assigned axis hold not released");
+        }
+        verify_steps(&mut router, &[
+            (axis_event(2, 10), &[]),
+            (InputEvent::Detached { device: 2 }, &[]),
+            (InputEvent::Attached { device: 2 }, &[]),
+            (axis_event(2, 10), &[change("shared", true)]),
+            (axis_event(2, -10), &[change("shared", false)]),
+            (axis_event(2, -20), &[]),
+        ])
     }
 
     #[test]
