@@ -640,6 +640,10 @@ mod tests {
                 .all(|event| matches!(event, InputEvent::Attached { .. })),
             "initial event is not an attachment",
         )?;
+        require(
+            startup.input.discover_available()?.is_empty(),
+            "repeated discovery attached an existing controller",
+        )?;
         verify_unknown_controller(&mut startup.input)?;
         let event = Event::KeyDown {
             timestamp: 0,

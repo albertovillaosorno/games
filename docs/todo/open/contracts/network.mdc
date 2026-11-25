@@ -211,3 +211,12 @@ priority, contact limits, overlapping actions, focus loss and native event
 conversion. Physical touch hardware, title layout integration and Android
 and browser adapters remain unverified.
 Fresh validation passed in run 1795589553236816708-281632.
+
+Native discovery now re-enumerates available SDL controllers after the
+host drains a removal event, preserving the admitted instance identities
+and respecting the existing capacity. The title's synthetic integration
+test verifies independent movement for four controllers, detach releases,
+vacant-slot assignment and rejection of the detached instance's input.
+Fresh validation with the native renderer smoke enabled passed in run
+1795594686600422366-1677369; repeated discovery did not report duplicate
+attachments. Physical controller replacement remains unverified.

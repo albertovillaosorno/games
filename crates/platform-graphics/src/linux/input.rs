@@ -107,6 +107,36 @@ impl NativeInput {
         Ok(Some(InputEvent::Attached { device }))
     }
 
+    /// Discover available controllers in the current joystick-index order.
+    ///
+    /// Call after routing a removal and draining the native event queue.
+    /// Controllers already admitted retain their identity; newly admitted
+    /// controllers produce attachment events for the host to route.
+    ///
+    /// # Errors
+    /// Reports failed controller enumeration or device open.
+    pub fn discover_available(
+        &mut self,
+    ) -> Result<Vec<InputEvent>, RenderError> {
+        let mut attached = Vec::new();
+        if self.controllers.len() == self.limit.get() {
+            return Ok(attached);
+        }
+        let count = self
+            .subsystem
+            .num_joysticks()
+            .map_err(RenderError::Backend)?;
+        for index in 0..count {
+            if self.controllers.len() == self.limit.get() {
+                break;
+            }
+            if let Some(event) = self.attach(index)? {
+                attached.push(event);
+            }
+        }
+        Ok(attached)
+    }
+
     /// Time since the input session began, using SDL's millisecond clock.
     ///
     /// Use successive elapsed samples to advance a simulation clock.
@@ -142,7 +172,6 @@ impl NativeInput {
     ) -> Result<InputStartup, RenderError> {
         let subsystem = sdl.game_controller().map_err(RenderError::Backend)?;
         let timer = sdl.timer().map_err(RenderError::Backend)?;
-        let count = subsystem.num_joysticks().map_err(RenderError::Backend)?;
         let mut input = Self {
             controllers: BTreeMap::new(),
             limit,
@@ -152,15 +181,7 @@ impl NativeInput {
             touch_enabled: false,
             window,
         };
-        let mut attached = Vec::new();
-        for index in 0..count {
-            if input.controllers.len() == limit.get() {
-                break;
-            }
-            if let Some(event) = input.attach(index)? {
-                attached.push(event);
-            }
-        }
+        let attached = input.discover_available()?;
         Ok(InputStartup { attached, input })
     }
 
@@ -168,7 +189,8 @@ impl NativeInput {
     ///
     /// Discovery uses the joystick index; subsequent button and removal
     /// events use the admitted controller's stable instance identifier.
-    /// Devices above the explicit capacity are not opened.
+    /// Devices above the explicit capacity are not opened. After removal,
+    /// the host can call `discover_available` to fill vacant slots.
     ///
     /// # Errors
     /// Reports failure to open a newly reported native controller.

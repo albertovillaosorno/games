@@ -604,3 +604,10 @@ rate and channel gain ratios, accounting for the reference half-gain
 stereo routes. Catalogue metadata remains at its nominal source rate.
 This approximates each isolated voice through the shared mixer; it does
 not reconstruct the chip's stepwise interpolation, music or full mix.
+
+The native controller integration now refills vacant input slots after
+removal, without reassigning the other stations. Synthetic input tests
+exercise four moving stations, a detached controller's released direction,
+a rejected stale button event and movement from its replacement. Repeated
+native discovery is covered by the opt-in platform smoke. Physical
+controller hot-plug and simultaneous hardware play remain unverified.

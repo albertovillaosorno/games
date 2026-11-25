@@ -603,10 +603,12 @@ fn poll(
     controls: &mut Controls,
     live: &mut LiveSimulation<Cabinet>,
 ) -> Result<bool, RenderError> {
+    let mut removed = false;
     while let Some(event) = scene.poll_event() {
         match input.translate(&event)? {
             Some(HostEvent::Quit) => return Ok(false),
             Some(HostEvent::Input(logical)) => {
+                removed |= matches!(logical, InputEvent::Detached { .. });
                 let elapsed = input
                     .event_elapsed(&event)
                     .ok_or_else(|| failure("ambiguous event timestamp"))?;
@@ -615,6 +617,13 @@ fn poll(
                 }
             },
             None => {},
+        }
+    }
+    if removed {
+        let attached = input.discover_available()?;
+        let elapsed = input.elapsed();
+        for event in attached {
+            controls.route(event, elapsed, live)?;
         }
     }
     Ok(true)
@@ -1057,4 +1066,115 @@ fn preview_layout(touch_enabled: bool) -> Result<FrameLayout, RenderError> {
         224
     };
     FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use games::input::InputEvent;
+    use games::replay::LiveSimulation;
+    use games_platform_graphics::linux::RenderError;
+    use games_platform_graphics::linux::input::{Button, button_code};
+
+    use super::{Cabinet, Controls, Station, TICK_INTERVAL, failure, live};
+
+    type TestCabinet = (Controls, LiveSimulation<Cabinet>);
+
+    fn route_now(
+        controls: &mut Controls,
+        simulation: &mut LiveSimulation<Cabinet>,
+        event: InputEvent,
+    ) -> Result<(), RenderError> {
+        let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+        controls.route(event, TICK_INTERVAL.saturating_mul(tick), simulation)
+    }
+
+    fn button(device: u64, button: Button, down: bool) -> InputEvent {
+        InputEvent::Button {
+            device,
+            code: button_code(button),
+            down,
+        }
+    }
+
+    fn advance(
+        simulation: &mut LiveSimulation<Cabinet>,
+    ) -> Result<[Station; 4], RenderError> {
+        let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        Ok(simulation.state().stations())
+    }
+
+    fn cabinet() -> Result<TestCabinet, RenderError> {
+        let mut simulation = live(false)?;
+        let mut controls = Controls::new(false)?;
+        for device in 10..14u64 {
+            route_now(&mut controls, &mut simulation, InputEvent::Attached {
+                device,
+            })?;
+            for event in [
+                button(device, Button::Back, true),
+                button(device, Button::Back, false),
+                button(device, Button::Start, true),
+                button(device, Button::Start, false),
+            ] {
+                route_now(&mut controls, &mut simulation, event)?;
+            }
+        }
+        for down in [true, false] {
+            route_now(
+                &mut controls,
+                &mut simulation,
+                button(10, Button::A, down),
+            )?;
+        }
+        let _stations = advance(&mut simulation)?;
+        Ok((controls, simulation))
+    }
+
+    #[test]
+    fn hotplug_releases_only_the_removed_station_and_reuses_it()
+    -> Result<(), RenderError> {
+        let (mut controls, mut simulation) = cabinet()?;
+        let start = simulation.state().stations();
+        for device in 10..14u64 {
+            route_now(
+                &mut controls,
+                &mut simulation,
+                button(device, Button::DPadRight, true),
+            )?;
+        }
+        let moving = advance(&mut simulation)?;
+        if start
+            .into_iter()
+            .zip(moving)
+            .any(|(before, after)| before.position == after.position)
+        {
+            return Err(failure("controller movement did not reach all slots"));
+        }
+        for event in [
+            InputEvent::Detached { device: 11 },
+            InputEvent::Attached { device: 14 },
+            button(11, Button::DPadLeft, true),
+        ] {
+            route_now(&mut controls, &mut simulation, event)?;
+        }
+        let stopped = advance(&mut simulation)?;
+        for (index, (before, after)) in
+            moving.into_iter().zip(stopped).enumerate()
+        {
+            if (before.position == after.position) != (index == 1) {
+                return Err(failure("disconnect affected the wrong stations"));
+            }
+        }
+        route_now(
+            &mut controls,
+            &mut simulation,
+            button(14, Button::DPadRight, true),
+        )?;
+        let [_, resumed, ..] = advance(&mut simulation)?;
+        let [_, old_homer, ..] = stopped;
+        if resumed.position.x <= old_homer.position.x {
+            return Err(failure("replacement did not control vacant slot"));
+        }
+        Ok(())
+    }
 }
