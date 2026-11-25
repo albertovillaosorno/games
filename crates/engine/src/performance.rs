@@ -49,25 +49,83 @@ pub struct QualityProfile {
 pub struct FrameObservation {
     /// Wall-time duration of this rendered frame.
     pub frame_time: Duration,
-    /// Host-reported age of the applied input event.
-    pub input_latency: Duration,
-    /// Approximate working set bytes at this observation.
-    pub resident_bytes: u64,
+    /// Age of an applied input event, if one was actually measured.
+    pub input_latency: Option<Duration>,
+    /// Approximate working set bytes, if supported by the platform.
+    pub resident_bytes: Option<u64>,
+}
+
+/// Constant-memory duration statistics without fabricated observations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimingSummary {
+    maximum: Duration,
+    samples: u64,
+    total: Duration,
+}
+
+impl TimingSummary {
+    const EMPTY: Self = Self {
+        maximum: Duration::ZERO,
+        samples: 0,
+        total: Duration::ZERO,
+    };
+
+    /// Return the largest measured duration, if a sample exists.
+    #[must_use]
+    pub const fn maximum(&self) -> Option<Duration> {
+        if self.samples == 0 {
+            None
+        } else {
+            Some(self.maximum)
+        }
+    }
+
+    /// Return mean measured duration at nanosecond resolution.
+    #[must_use]
+    pub fn mean(&self) -> Option<Duration> {
+        self.total
+            .as_nanos()
+            .checked_div(u128::from(self.samples))
+            .map(Duration::from_nanos_u128)
+    }
+
+    fn record(&mut self, duration: Duration) -> Result<(), PerformanceError> {
+        let total = self
+            .total
+            .checked_add(duration)
+            .ok_or(PerformanceError::Overflow)?;
+        let samples = self
+            .samples
+            .checked_add(1)
+            .ok_or(PerformanceError::Overflow)?;
+        self.maximum = self.maximum.max(duration);
+        self.samples = samples;
+        self.total = total;
+        Ok(())
+    }
+
+    /// Return the number of actual measurements.
+    #[must_use]
+    pub const fn samples(&self) -> u64 {
+        self.samples
+    }
+
+    /// Return the sum of observed durations.
+    #[must_use]
+    pub const fn total(&self) -> Duration {
+        self.total
+    }
 }
 
 /// Persistent measurement aggregates for one presentation quality profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PerformanceReport {
-    /// Number of sampled frames.
-    pub frames: u64,
-    /// Largest observed input age.
-    pub max_input_latency: Duration,
-    /// Largest observed resident memory footprint.
-    pub peak_resident_bytes: u64,
-    /// Slowest sampled frame time.
-    pub slowest_frame: Duration,
-    /// Total observed frame time.
-    pub total_frame_time: Duration,
+    /// Timings of all observed rendered frames.
+    pub frame_time: TimingSummary,
+    /// Timings of measured input events only, excluding unobserved inputs.
+    pub input_latency: TimingSummary,
+    /// Largest observed resident memory footprint, if measured.
+    pub peak_resident_bytes: Option<u64>,
 }
 
 /// Bounded instrumentation that does not retain individual frame samples.
@@ -89,12 +147,9 @@ impl PerformanceCollector {
     /// Return the mean frame throughput, rounded down to whole FPS.
     #[must_use]
     pub fn frames_per_second(&self) -> Option<u64> {
-        let elapsed_ns = self.report.total_frame_time.as_nanos();
-        if self.report.frames == 0 || elapsed_ns == 0 {
-            return None;
-        }
-        let numerator =
-            u128::from(self.report.frames).checked_mul(1_000_000_000)?;
+        let elapsed_ns = self.report.frame_time.total().as_nanos();
+        let numerator = u128::from(self.report.frame_time.samples())
+            .checked_mul(1_000_000_000)?;
         u64::try_from(numerator.checked_div(elapsed_ns)?).ok()
     }
 
@@ -112,42 +167,32 @@ impl PerformanceCollector {
             load_time: None,
             profile,
             report: PerformanceReport {
-                frames: 0,
-                max_input_latency: Duration::ZERO,
-                peak_resident_bytes: 0,
-                slowest_frame: Duration::ZERO,
-                total_frame_time: Duration::ZERO,
+                frame_time: TimingSummary::EMPTY,
+                input_latency: TimingSummary::EMPTY,
+                peak_resident_bytes: None,
             },
         }
     }
 
     /// Record one frame observation, without allocating a sample history.
     ///
+    /// No partial frame or resource measurement is kept on failure.
+    ///
     /// # Errors
     ///
-    /// Rejects cumulative duration or frame-count overflow.
+    /// Rejects cumulative duration or sample-count overflow.
     pub fn observe(
         &mut self,
         frame: FrameObservation,
     ) -> Result<(), PerformanceError> {
-        let total = self
-            .report
-            .total_frame_time
-            .checked_add(frame.frame_time)
-            .ok_or(PerformanceError::Overflow)?;
-        let frames = self
-            .report
-            .frames
-            .checked_add(1)
-            .ok_or(PerformanceError::Overflow)?;
-        self.report.total_frame_time = total;
-        self.report.frames = frames;
-        self.report.slowest_frame =
-            self.report.slowest_frame.max(frame.frame_time);
-        self.report.max_input_latency =
-            self.report.max_input_latency.max(frame.input_latency);
-        self.report.peak_resident_bytes =
-            self.report.peak_resident_bytes.max(frame.resident_bytes);
+        let mut report = self.report;
+        report.frame_time.record(frame.frame_time)?;
+        if let Some(latency) = frame.input_latency {
+            report.input_latency.record(latency)?;
+        }
+        report.peak_resident_bytes =
+            report.peak_resident_bytes.max(frame.resident_bytes);
+        self.report = report;
         Ok(())
     }
 
@@ -177,7 +222,7 @@ impl PerformanceCollector {
 /// A measurement could not be represented without losing information.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PerformanceError {
-    /// Duration or frame count cannot be safely accumulated.
+    /// Duration or sample count cannot be safely accumulated.
     Overflow,
 }
 
@@ -185,7 +230,10 @@ pub enum PerformanceError {
 mod tests {
     use std::time::Duration;
 
-    use super::{FrameObservation, PerformanceCollector, QualityProfile};
+    use super::{
+        FrameObservation, PerformanceCollector, PerformanceError,
+        QualityProfile,
+    };
 
     fn profile() -> QualityProfile {
         QualityProfile {
@@ -202,26 +250,90 @@ mod tests {
         assert_eq!(
             collector.observe(FrameObservation {
                 frame_time: Duration::from_millis(10),
-                input_latency: Duration::from_millis(2),
-                resident_bytes: 1_000_000,
+                input_latency: Some(Duration::from_millis(2)),
+                resident_bytes: Some(1_000_000),
             }),
             Ok(())
         );
         assert_eq!(
             collector.observe(FrameObservation {
                 frame_time: Duration::from_millis(30),
-                input_latency: Duration::from_millis(15),
-                resident_bytes: 2_000_000,
+                input_latency: Some(Duration::from_millis(15)),
+                resident_bytes: Some(2_000_000),
             }),
             Ok(())
         );
         let report = collector.report();
-        assert_eq!(report.frames, 2);
-        assert_eq!(report.total_frame_time, Duration::from_millis(40));
-        assert_eq!(report.slowest_frame, Duration::from_millis(30));
-        assert_eq!(report.max_input_latency, Duration::from_millis(15));
-        assert_eq!(report.peak_resident_bytes, 2_000_000);
+        assert_eq!(
+            (
+                report.frame_time.samples(),
+                report.frame_time.total(),
+                report.frame_time.maximum(),
+                report.frame_time.mean(),
+            ),
+            (
+                2,
+                Duration::from_millis(40),
+                Some(Duration::from_millis(30)),
+                Some(Duration::from_millis(20)),
+            ),
+        );
+        assert_eq!(
+            (
+                report.input_latency.samples(),
+                report.input_latency.maximum(),
+                report.input_latency.mean(),
+            ),
+            (
+                2,
+                Some(Duration::from_millis(15)),
+                Some(Duration::from_micros(8500)),
+            ),
+        );
+        assert_eq!(report.peak_resident_bytes, Some(2_000_000));
         assert_eq!(collector.frames_per_second(), Some(50));
+    }
+
+    #[test]
+    fn missing_measurements_are_not_recorded_as_zero() {
+        let mut collector = PerformanceCollector::new(profile());
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_millis(16),
+                input_latency: None,
+                resident_bytes: None,
+            }),
+            Ok(())
+        );
+        let report = collector.report();
+        assert_eq!(
+            (
+                report.frame_time.samples(),
+                report.input_latency.samples(),
+                report.input_latency.maximum(),
+                report.input_latency.mean(),
+                report.peak_resident_bytes,
+            ),
+            (1, 0, None, None, None),
+        );
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_millis(16),
+                input_latency: Some(Duration::ZERO),
+                resident_bytes: Some(0),
+            }),
+            Ok(())
+        );
+        let measured = collector.report();
+        assert_eq!(
+            (
+                measured.frame_time.samples(),
+                measured.input_latency.samples(),
+                measured.input_latency.mean(),
+                measured.peak_resident_bytes,
+            ),
+            (2, 1, Some(Duration::ZERO), Some(0)),
+        );
     }
 
     #[test]
@@ -239,17 +351,41 @@ mod tests {
         let mut collector = PerformanceCollector::new(profile());
         let first = FrameObservation {
             frame_time: Duration::MAX,
-            input_latency: Duration::ZERO,
-            resident_bytes: 1,
+            input_latency: None,
+            resident_bytes: Some(1),
         };
         assert_eq!(collector.observe(first), Ok(()));
         let before = collector.report();
+        assert_eq!(before.frame_time.mean(), Some(Duration::MAX));
         let second = FrameObservation {
             frame_time: Duration::from_nanos(1),
-            input_latency: Duration::from_secs(9),
-            resident_bytes: 100,
+            input_latency: Some(Duration::from_secs(9)),
+            resident_bytes: Some(100),
         };
-        assert!(collector.observe(second).is_err());
+        assert_eq!(collector.observe(second), Err(PerformanceError::Overflow));
+        assert_eq!(collector.report(), before);
+    }
+
+    #[test]
+    fn latency_overflow_does_not_partially_record_the_frame() {
+        let mut collector = PerformanceCollector::new(profile());
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_nanos(1),
+                input_latency: Some(Duration::MAX),
+                resident_bytes: None,
+            }),
+            Ok(())
+        );
+        let before = collector.report();
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_nanos(1),
+                input_latency: Some(Duration::from_nanos(1)),
+                resident_bytes: Some(100),
+            }),
+            Err(PerformanceError::Overflow),
+        );
         assert_eq!(collector.report(), before);
     }
 }

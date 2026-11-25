@@ -24,13 +24,20 @@ Measure useful throughput without degrading fidelity.
 
 ## Evidence
 
-Partial evidence, 2026-11-24: `cargo validate --no-cache` passes.
-`games::performance::PerformanceCollector` aggregates frame time, FPS,
+Partial evidence, 2026-11-24: fresh validation passed in run
+1795575501611655948-2483905 (72 tests).
+
+`games::performance::PerformanceCollector` aggregates frame durations, FPS,
 input latency, resident-memory peaks, loading duration and binary size
-from explicit host observations in constant memory. Synthetic tests check
-units, limits, overflow atomicity and comparable quality profiles. The
-fixed-step clock now computes eligible ticks directly instead of scanning
-the backlog before delivering updates.
+from explicit host observations in constant memory. One bounded timing
+summary provides sample counts, totals, maxima and nanosecond means for
+both frame and input measurements. Missing input or memory measurements
+remain absent rather than being fabricated as zero.
+
+Synthetic tests verify units, measured zero versus absent data, maximum
+representable durations, overflow atomicity (including partial frame
+updates) and unchanged quality settings. The fixed-step clock computes
+eligible ticks directly instead of scanning the backlog before updates.
 
 No representative playable game, actual GPU timings or reproducible
 platform benchmark matrix exists yet. Hardware-specific optimization
