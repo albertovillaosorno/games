@@ -51,3 +51,10 @@ cannot change the miss count. Tests demonstrate a 50 FPS mean with one
 over-budget frame and confirm that a rendering cap alone does not imply a
 benchmark deadline. Fresh validation passed in run
 1795577195880786433-2782349 (91 workspace tests).
+
+Controller detachment now uses the held-input map's controller-specific
+key range rather than repeatedly scanning unrelated input sources. A test
+covers both extreme controller identifiers, shared logical actions and
+stable release order. Fresh validation passed in run
+1795577450698187130-2832751 (95 workspace tests). No benchmark speedup is
+claimed from this algorithmic change alone.

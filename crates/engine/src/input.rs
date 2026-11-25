@@ -143,11 +143,12 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         let mut changes = Vec::new();
         while let Some(source) = self
             .held
-            .keys()
-            .find(|source| {
-                matches!(source, Source::Button(id, _) if *id == device)
-            })
-            .copied()
+            .range(
+                Source::Button(device, u16::MIN)
+                    ..=Source::Button(device, u16::MAX),
+            )
+            .next()
+            .map(|(source, _action)| *source)
         {
             if let Some(change) = self.release(source) {
                 changes.push(change);
@@ -351,6 +352,47 @@ mod tests {
         assert_eq!(first.handle(InputEvent::Touch { zone: 8, down: false }), [
             LogicalAction {
                 action: Action::Jump,
+                down: false
+            }
+        ]);
+    }
+
+    #[test]
+    fn detach_releases_only_its_held_buttons_in_control_order() {
+        let mut map = InputMapping::new();
+        for code in [0u16, 1, 2, u16::MAX] {
+            map.bind_button(code, code);
+        }
+        let mut router = InputRouter::new(map);
+        for device in [u64::MIN, 5, u64::MAX] {
+            drop(router.handle(InputEvent::Attached { device }));
+        }
+        for code in [u16::MAX, 2, 1, 0] {
+            assert_eq!(
+                router.handle(InputEvent::Button {
+                    device: 5,
+                    code,
+                    down: true,
+                }),
+                [LogicalAction { action: code, down: true }]
+            );
+        }
+        for (device, code) in [(u64::MIN, 1), (u64::MAX, u16::MAX)] {
+            assert_eq!(
+                router.handle(InputEvent::Button { device, code, down: true }),
+                []
+            );
+        }
+        assert_eq!(router.handle(InputEvent::Detached { device: 5 }), [
+            LogicalAction { action: 0, down: false },
+            LogicalAction { action: 2, down: false },
+        ]);
+        assert_eq!(router.handle(InputEvent::Detached { device: u64::MIN }), [
+            LogicalAction { action: 1, down: false }
+        ]);
+        assert_eq!(router.handle(InputEvent::Detached { device: u64::MAX }), [
+            LogicalAction {
+                action: u16::MAX,
                 down: false
             }
         ]);
