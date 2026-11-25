@@ -220,3 +220,14 @@ records, reject individual, aggregate and entry deficits before reading a
 deliberately damaged payload, and copy an empty manifest with one entry
 and no payload directory. Fresh validation passed in run
 1795606104464597010-17255.
+
+ZIP payload growth now uses the same fallible bounded reservation as
+canonical manifest encoding. Requested capacity never exceeds the
+admitted member size; a previously allocated larger buffer is retained
+for reuse, and allocator overhead is not covered by this guarantee.
+Metadata reservation records also grow incrementally with accepted
+entries instead of reserving the entire footer-declared count at once.
+Synthetic tests cover a 9,001-byte member, subsequent smaller member
+reuse, and unchanged contents after an overflowing reservation request.
+The original Simpsons archive still admits 14 members and 7,209,088
+bytes. Fresh validation passed in run 1795606389885141764-59056.

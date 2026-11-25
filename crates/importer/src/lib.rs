@@ -48,7 +48,7 @@ use std::str;
 use games_assets::archive::{
     ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
 };
-use games_assets::{AssetError, SourceIdentity};
+use games_assets::{AssetError, SourceIdentity, reserve_bounded};
 use zip::CompressionMethod;
 use zip::read::{ArchiveOffset, Config, ZipArchive, ZipFileEntry};
 use zip::unstable::read::ZipIterable;
@@ -208,9 +208,6 @@ fn admit_members(
     let mut directory_start = None;
     let mut names = BTreeSet::new();
     let mut reservations = Vec::new();
-    reservations
-        .try_reserve_exact(count)
-        .map_err(|_error| ImportError::TooLarge)?;
     for result in archive.files().map_err(|_error| ImportError::InvalidZip)? {
         let entry = result.map_err(|_error| ImportError::InvalidZip)?;
         if directory_start.is_none() {
@@ -221,7 +218,12 @@ fn admit_members(
         if !names.insert(name.to_ascii_lowercase()) {
             return Err(ImportError::Collision);
         }
+        reserve_bounded(&mut reservations, 1, count)
+            .ok_or(ImportError::TooLarge)?;
         reservations.push(reservation);
+    }
+    if reservations.len() != count {
+        return Err(ImportError::InvalidZip);
     }
     Ok(AdmittedMembers {
         directory_start: directory_start.ok_or(ImportError::InvalidZip)?,
@@ -263,6 +265,11 @@ fn decode_member<R>(
 where
     R: Read,
 {
+    let remaining = reservation
+        .remaining_bytes()
+        .ok_or(ArchiveError::InvalidEntry)?;
+    let maximum =
+        usize::try_from(remaining).map_err(|_error| ImportError::TooLarge)?;
     payload.clear();
     let mut buffer = [0; 8192];
     loop {
@@ -274,9 +281,8 @@ where
         }
         reservation.record(count)?;
         let chunk = buffer.get(..count).ok_or(ImportError::InvalidZip)?;
-        payload
-            .try_reserve(count)
-            .map_err(|_error| ImportError::TooLarge)?;
+        reserve_bounded(payload, count, maximum)
+            .ok_or(ImportError::TooLarge)?;
         payload.extend_from_slice(chunk);
     }
     reservation.finish()?;
@@ -613,6 +619,24 @@ mod tests {
             require(result == Err(rejection) && !called)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn decoded_buffer_growth_is_bounded_by_declared_member()
+    -> Result<(), ImportError> {
+        // A short second chunk would ordinarily double an 8192-byte buffer.
+        let bytes = vec![0x5a; 9001];
+        let mut budget = ArchiveBudget::new(bound(9001), bound(9005), bound(2));
+        let mut payload = Vec::new();
+        let exact = budget.admit("exact.bin", EntryKind::File, 9001)?;
+        decode_member(&mut Cursor::new(&bytes), exact, &mut payload)?;
+        require(payload == bytes)?;
+        let capacity = payload.capacity();
+        require(capacity == 9001)?;
+        let smaller = budget.admit("small.bin", EntryKind::File, 4)?;
+        decode_member(&mut Cursor::new(b"tiny"), smaller, &mut payload)?;
+        require(payload == b"tiny")?;
+        require(payload.capacity() == capacity)
     }
 
     #[test]

@@ -282,6 +282,36 @@ struct ManifestDocument {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetManifest(ManifestDocument);
 
+/// Fallibly grow an asset buffer under an explicit element-count limit.
+///
+/// The requested capacity grows geometrically but never above `maximum`.
+/// An existing allocation is reused, not shrunk; allocator overhead is
+/// outside this contract. This does not append elements to the buffer.
+///
+/// Returns `None` when the requested length overflows, exceeds the bound,
+/// or the allocation fails.
+pub fn reserve_bounded<T>(
+    items: &mut Vec<T>,
+    additional: usize,
+    maximum: usize,
+) -> Option<()> {
+    let required = items.len().checked_add(additional)?;
+    if required > maximum {
+        return None;
+    }
+    if required > items.capacity() {
+        let target = items
+            .capacity()
+            .saturating_mul(2)
+            .max(required)
+            .min(maximum);
+        items
+            .try_reserve_exact(target.checked_sub(items.len())?)
+            .ok()?;
+    }
+    Some(())
+}
+
 fn valid_key(value: &str) -> bool {
     value.len() <= MAX_KEY_BYTES && value.split('/').all(valid_slug)
 }
@@ -329,6 +359,21 @@ mod tests {
 
     fn require(condition: bool) -> Result<(), AssetError> {
         condition.then_some(()).ok_or(AssetError::InvalidEncoding)
+    }
+
+    #[test]
+    fn bounded_growth_rejects_overflow_without_changing_contents()
+    -> Result<(), AssetError> {
+        let mut buffer = Vec::new();
+        reserve_bounded(&mut buffer, 2, 3).ok_or(AssetError::TooLarge)?;
+        buffer.extend_from_slice(b"ab");
+        let capacity = buffer.capacity();
+        require(reserve_bounded(&mut buffer, 2, 3).is_none())?;
+        require(reserve_bounded(&mut buffer, usize::MAX, 3).is_none())?;
+        require(buffer == b"ab" && buffer.capacity() == capacity)?;
+        reserve_bounded(&mut buffer, 1, 3).ok_or(AssetError::TooLarge)?;
+        buffer.push(b'c');
+        require(buffer == b"abc")
     }
 
     #[test]

@@ -37,7 +37,7 @@ use serde_json::value::RawValue;
 
 use crate::{
     AssetError, AssetFormat, AssetManifest, AssetRecord, ContentHash,
-    ManifestDocument, ManifestLimits, SourceIdentity, VERSION,
+    ManifestDocument, ManifestLimits, SourceIdentity, VERSION, reserve_bounded,
 };
 
 #[derive(Debug, Deserialize)]
@@ -435,26 +435,4 @@ fn encode(
         }
     })?;
     Ok(output.bytes)
-}
-
-fn reserve_bounded<T>(
-    items: &mut Vec<T>,
-    additional: usize,
-    maximum: usize,
-) -> Option<()> {
-    let required = items.len().checked_add(additional)?;
-    if required > maximum {
-        return None;
-    }
-    if required > items.capacity() {
-        let target = items
-            .capacity()
-            .saturating_mul(2)
-            .max(required)
-            .min(maximum);
-        items
-            .try_reserve_exact(target.checked_sub(items.len())?)
-            .ok()?;
-    }
-    Some(())
 }

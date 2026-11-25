@@ -159,6 +159,12 @@ impl EntryBudget {
             .ok_or(ArchiveError::TooLarge)
             .map(|_value| ())
     }
+
+    /// Remaining declared bytes, or None after a previous overrun.
+    #[must_use]
+    pub const fn remaining_bytes(&self) -> Option<u64> {
+        self.remaining
+    }
 }
 
 /// Validate archive metadata before allocating or extracting an entry.
