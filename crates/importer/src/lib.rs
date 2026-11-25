@@ -33,6 +33,9 @@
 /// Transactional canonical conversion of verified source members.
 pub mod conversion;
 
+/// Bounded source graphics decoding.
+pub mod graphics;
+
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::num::NonZeroU64;
