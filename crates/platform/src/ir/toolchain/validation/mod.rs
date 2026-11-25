@@ -60,6 +60,40 @@ pub(crate) trait ValidationBackend {
     ) -> Result<Report, ToolchainError>;
 }
 
+/// A committed HEAD identifier, or an unborn symbolic branch.
+pub type RepositoryHead = Option<Vec<u8>>;
+
+/// Observe the repository HEAD, or an unborn symbolic branch.
+///
+/// # Errors
+/// Reports failed Git observations rather than silently accepting them.
+pub fn repository_head(root: &OsStr) -> Result<RepositoryHead, ToolchainError> {
+    repository_head_with::<()>(root)
+}
+
+fn repository_head_with<Backend>(
+    root: &OsStr,
+) -> Result<RepositoryHead, ToolchainError>
+where
+    Backend: ValidationBackend,
+{
+    let head = run_with::<Backend>(root, Request::Git(GitRequest::Head))?;
+    if head.success {
+        return Ok(Some(head.stdout));
+    }
+    if head.exit_code == Some(1i32) {
+        let symbolic =
+            run_with::<Backend>(root, Request::Git(GitRequest::SymbolicHead))?;
+        if symbolic.success {
+            return Ok(None);
+        }
+    }
+    Err(ToolchainError::Failed {
+        operation: "resolve repository HEAD",
+        diagnostic: head.diagnostic,
+    })
+}
+
 /// Execute one admitted workspace check and capture both output streams.
 ///
 /// Unsuccessful process completion is returned in the report; invalid
@@ -99,6 +133,44 @@ where
 mod tests {
     use super::*;
 
+    struct HeadRecording;
+
+    impl ValidationBackend for HeadRecording {
+        fn execute_validation(
+            root: &OsStr,
+            args: &Arguments,
+            command: String,
+        ) -> Result<Report, ToolchainError> {
+            if args.program() != "git" {
+                return Err(ToolchainError::InvalidValidationRequest);
+            }
+            let (exit_code, stdout) = if args.args()
+                == ["rev-parse", "--verify", "--quiet", "HEAD"]
+            {
+                match root.to_str() {
+                    Some("committed") => (Some(0i32), b"commit-id".to_vec()),
+                    Some("unborn" | "broken") => (Some(1i32), Vec::new()),
+                    Some("signaled") => (None, Vec::new()),
+                    Some(_) | None => (Some(128i32), Vec::new()),
+                }
+            } else if args.args() == ["symbolic-ref", "--quiet", "HEAD"]
+                && root == OsStr::new("unborn")
+            {
+                (Some(0i32), b"refs/heads/main".to_vec())
+            } else {
+                (Some(128i32), Vec::new())
+            };
+            Ok(Report {
+                command,
+                diagnostic: String::from("fixture"),
+                exit_code,
+                stderr: Vec::new(),
+                stdout,
+                success: exit_code == Some(0i32),
+            })
+        }
+    }
+
     struct Recording;
 
     impl ValidationBackend for Recording {
@@ -123,12 +195,30 @@ mod tests {
             Ok(Report {
                 command,
                 diagnostic: String::from("fixture failed"),
-                exit_code: Some(1),
+                exit_code: Some(1i32),
                 stderr: b"diagnostic".to_vec(),
                 stdout: b"ordinary".to_vec(),
                 success: false,
             })
         }
+    }
+
+    #[test]
+    fn head_observation_distinguishes_commit_unborn_and_failure()
+    -> Result<(), String> {
+        let observe =
+            |root| repository_head_with::<HeadRecording>(OsStr::new(root));
+        if observe("committed").map_err(|error| error.to_string())?
+            != Some(b"commit-id".to_vec())
+            || observe("unborn")
+                .map_err(|error| error.to_string())?
+                .is_some()
+            || observe("broken").is_ok()
+            || observe("signaled").is_ok()
+        {
+            return Err("repository HEAD outcome changed".into());
+        }
+        Ok(())
     }
 
     #[test]

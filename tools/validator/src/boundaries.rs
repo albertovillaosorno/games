@@ -1076,13 +1076,14 @@ serde_json = "1""#;
 
     #[test]
     fn checks_both_repository_cargo_config_names() -> Result<(), String> {
-        let root = directory("cargo-overrides")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::create_dir_all(root.join(".cargo"))
             .map_err(|error| error.to_string())?;
         let authored =
             [".cargo/config", ".cargo/config.toml"].map(PathBuf::from);
         require(
-            repository_cargo_config(&root, &authored).is_ok(),
+            repository_cargo_config(root, &authored).is_ok(),
             "missing optional config",
         )?;
         for name in ["config", "config.toml"] {
@@ -1090,12 +1091,12 @@ serde_json = "1""#;
             fs::write(&config, "paths = [\"../outside\"]")
                 .map_err(|error| error.to_string())?;
             require(
-                repository_cargo_config(&root, &authored).is_err(),
+                repository_cargo_config(root, &authored).is_err(),
                 "both Cargo config names must reject local path overrides",
             )?;
             fs::remove_file(config).map_err(|error| error.to_string())?;
         }
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
@@ -1133,7 +1134,8 @@ serde_json = "1""#;
 
     #[test]
     fn checks_nested_repository_cargo_includes() -> Result<(), String> {
-        let fixture = directory("cargo-nested-overrides")?;
+        let fixture_owner = directory()?;
+        let fixture = fixture_owner.path();
         let root = fixture.join("repo");
         let config = root.join(".cargo");
         fs::create_dir_all(config.join("nested"))
@@ -1177,7 +1179,7 @@ serde_json = "1""#;
             repository_cargo_config(&root, &authored).is_err(),
             "repository includes must not leave the repository",
         )?;
-        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
@@ -1185,7 +1187,8 @@ serde_json = "1""#;
         if !platform_fixtures::AVAILABLE {
             return Err(String::from("native fixture capability unavailable"));
         }
-        let root = directory("cargo-include-alias")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let config = root.join(".cargo");
         fs::create_dir_all(&config).map_err(|error| error.to_string())?;
         let primary = config.join("config.toml");
@@ -1199,9 +1202,9 @@ serde_json = "1""#;
         let authored =
             [".cargo/actual.toml", ".cargo/config.toml"].map(PathBuf::from);
         require(
-            repository_cargo_config(&root, &authored).is_err(),
+            repository_cargo_config(root, &authored).is_err(),
             "include aliases cannot hide outside authored inventory",
         )?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 }

@@ -69,9 +69,34 @@ fn command_for(root: &OsStr, args: &Arguments) -> Command {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::command_for;
     use crate::ir::security::toolchain::validation::Request;
     use crate::ir::storage::fixtures::TestRoot;
+    use crate::ir::toolchain::validation::run;
+
+    #[test]
+    fn markdown_hash_name_is_checked_literally() -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        root.write_file("#review.md", b"# Heading\n\nTrailing spaces   \n")
+            .map_err(|error| error.to_string())?;
+        let report = run(
+            root.path().as_os_str(),
+            Request::Markdown(&[OsStr::new("#review.md")]),
+        )
+        .map_err(|error| error.to_string())?;
+        let stdout = String::from_utf8_lossy(&report.stdout);
+        let stderr = String::from_utf8_lossy(&report.stderr);
+        let diagnostic = format!("{stdout}{stderr}");
+        if report.success
+            || !diagnostic.contains("#review.md")
+            || !diagnostic.contains("MD009")
+        {
+            return Err("invalid literal Markdown was omitted".into());
+        }
+        Ok(())
+    }
 
     #[test]
     fn discovery_ignores_personal_ripgrep_config() -> Result<(), String> {

@@ -455,7 +455,8 @@ mod tests {
 
     #[test]
     fn untracked_roadmaps_fail_the_real_task_gate() -> Result<(), String> {
-        let root = directory("roadmap-policy")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let nested = root.join("crates/games/example");
         fs::create_dir_all(&nested).map_err(|error| error.to_string())?;
         fs::write(root.join(".gitignore"), "/.reference/\n")
@@ -464,8 +465,7 @@ mod tests {
             .map_err(|error| error.to_string())?;
         fs::write(nested.join("TODO.md"), "# Duplicate\n")
             .map_err(|error| error.to_string())?;
-        let result = validate(&root);
-        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let result = validate(root);
         require(
             result.is_err_and(|error| {
                 error == "duplicate roadmap: crates/games/example/TODO.md"

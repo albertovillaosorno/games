@@ -37,17 +37,22 @@
 pub mod fixtures;
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
-use std::{env, fs};
 
-use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
+use games_platform::ir::toolchain::validation::{
+    GitRequest, Request, repository_head, run,
+};
+use games_platform::ir::toolchain::{arguments, workspace_root};
 
 type DiffPaths<'path> = Vec<&'path [u8]>;
 
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+fn root() -> Result<PathBuf, String> {
+    workspace_root()
+        .map(PathBuf::from)
+        .map_err(|error| error.to_string())
 }
 
 fn scope_valid(scope: &str) -> bool {
@@ -317,7 +322,7 @@ fn check_deleted(root: &Path, deleted: &[u8]) -> Result<(), String> {
 }
 
 fn check_staged() -> Result<(), String> {
-    let root = root();
+    let root = root()?;
     let staged = changed_paths(&root, GitRequest::ChangedStaged)?;
     check_paths(&staged)?;
     check_worktree(&staged, &changed_paths(&root, GitRequest::Unstaged)?)?;
@@ -341,23 +346,17 @@ fn check_history_bytes(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn check_history() -> Result<(), String> {
-    if !root().join(".git").exists() {
+    let root = root()?;
+    if !root.join(".git").exists() {
         return Ok(());
     }
-    let head = run(root().as_os_str(), Request::Git(GitRequest::Head))
-        .map_err(|error| error.to_string())?;
-    if head.exit_code == Some(1i32) {
-        let unborn =
-            run(root().as_os_str(), Request::Git(GitRequest::SymbolicHead))
-                .map_err(|error| error.to_string())?;
-        if unborn.success {
-            return Ok(());
-        }
+    if repository_head(root.as_os_str())
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
+        return Ok(());
     }
-    if !head.success {
-        return Err("cannot resolve commit history".into());
-    }
-    let history = run(root().as_os_str(), Request::Git(GitRequest::History))
+    let history = run(root.as_os_str(), Request::Git(GitRequest::History))
         .map_err(|error| error.to_string())?;
     if !history.success {
         return Err("cannot read commit history".into());
@@ -366,7 +365,7 @@ fn check_history() -> Result<(), String> {
 }
 
 fn main() -> Result<(), String> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
+    let args = arguments().map_err(|error| error.to_string())?;
     match args.as_slice() {
         [mode] if mode == "staged" => check_staged(),
         [mode] if mode == "history" => check_history(),
@@ -547,15 +546,16 @@ mod tests {
 
     #[test]
     fn rejects_restored_staged_deletions() -> Result<(), String> {
-        let fixture = directory("staged-deletion")?;
+        let fixture_owner = directory()?;
+        let fixture = fixture_owner.path();
         let deleted = b"old.md\0";
-        check_deleted(&fixture, deleted)?;
+        check_deleted(fixture, deleted)?;
         write(&fixture.join("old.md"), b"restored")?;
         require(
-            check_deleted(&fixture, deleted).is_err(),
+            check_deleted(fixture, deleted).is_err(),
             "restored deletion",
         )?;
-        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+        Ok(())
     }
 
     fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -564,7 +564,8 @@ mod tests {
 
     #[test]
     fn exercises_isolated_hook_fixtures() -> Result<(), String> {
-        let fixture = directory("hooks")?;
+        let fixture_owner = directory()?;
+        let fixture = fixture_owner.path();
         let message = fixture.join("COMMIT_MSG");
         write(
             &message,
@@ -588,12 +589,12 @@ mod tests {
         for hook in ["pre-commit", "commit-msg"] {
             let status = Command::new("sh")
                 .arg("-n")
-                .arg(root().join(".githooks").join(hook))
+                .arg(root()?.join(".githooks").join(hook))
                 .status()
                 .map_err(|error| error.to_string())?;
             require(status.success(), "hook dispatch shell syntax")?;
         }
-        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+        Ok(())
     }
 
     fn executable(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -611,7 +612,7 @@ mod tests {
         let calls = fixture.join("calls");
         write(&calls, b"")?;
         let status = Command::new("/bin/sh")
-            .arg(root().join(".githooks").join(hook))
+            .arg(root()?.join(".githooks").join(hook))
             .arg(fixture.join("COMMIT_MSG"))
             .current_dir(fixture)
             .env("PATH", fixture)
@@ -633,7 +634,8 @@ mod tests {
         if !platform_fixtures::AVAILABLE {
             return Err(String::from("native fixture capability unavailable"));
         }
-        let fixture = directory("hook-dispatch")?;
+        let fixture_owner = directory()?;
+        let fixture = fixture_owner.path();
         executable(
             &fixture.join("git"),
             b"#!/bin/sh\nprintf '%s\\n' \"$HOOK_FIXTURE\"\n",
@@ -652,15 +654,15 @@ mod tests {
         let staged = "run --locked -q -p games-validator --bin games-hooks";
         let first = format!("{staged} -- staged\n");
         let both = format!("{first}validate\n");
-        hook_dispatch(&fixture, "pre-commit", "", &both)?;
-        hook_dispatch(&fixture, "pre-commit", "staged", &first)?;
-        hook_dispatch(&fixture, "pre-commit", "validate", &both)?;
+        hook_dispatch(fixture, "pre-commit", "", &both)?;
+        hook_dispatch(fixture, "pre-commit", "staged", &first)?;
+        hook_dispatch(fixture, "pre-commit", "validate", &both)?;
         let message = format!(
             "{staged} -- commit-message {}/COMMIT_MSG\n",
             fixture.display()
         );
-        hook_dispatch(&fixture, "commit-msg", "", &message)?;
-        hook_dispatch(&fixture, "commit-msg", "commit-message", &message)?;
-        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+        hook_dispatch(fixture, "commit-msg", "", &message)?;
+        hook_dispatch(fixture, "commit-msg", "commit-message", &message)?;
+        Ok(())
     }
 }

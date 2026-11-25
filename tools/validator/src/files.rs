@@ -35,6 +35,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 
+use games_platform::ir::security::toolchain::validation::admit_paths;
 use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
 
 use crate::todo::roadmap_width;
@@ -109,12 +110,11 @@ fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
 }
 
 fn discover_bytes(bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
-    let mut paths = bytes
-        .split(|byte| *byte == 0)
-        .filter(|part| !part.is_empty())
-        .map(|part| from_utf8(part).map(PathBuf::from))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+    let mut paths: Vec<_> = admit_paths(bytes)
+        .map_err(|_error| "invalid authored inventory record")?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
     paths.sort();
     Ok(paths)
 }
@@ -276,40 +276,42 @@ mod tests {
 
     #[test]
     fn durable_ledgers_are_not_disposable() -> Result<(), String> {
-        let root = directory("ledger-policy")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::write(root.join(".gitignore"), "/.reference/\n/.cache/\n/.temp/\n")
             .map_err(|error| error.to_string())?;
         fs::create_dir_all(root.join(".reference/ledger"))
             .map_err(|error| error.to_string())?;
-        require(local_storage_policy(&root).is_ok(), "persistent ledger")?;
+        require(local_storage_policy(root).is_ok(), "persistent ledger")?;
         for name in [".cache/ledger", ".temp/ledger"] {
             let path = root.join(name);
             fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-            require(local_storage_policy(&root).is_err(), "disposable ledger")?;
+            require(local_storage_policy(root).is_err(), "disposable ledger")?;
             fs::remove_dir(&path).map_err(|error| error.to_string())?;
         }
         fs::write(root.join(".gitignore"), "/.cache/\n/.temp/\n")
             .map_err(|error| error.to_string())?;
-        require(local_storage_policy(&root).is_err(), "reference ignore")?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        require(local_storage_policy(root).is_err(), "reference ignore")?;
+        Ok(())
     }
 
     #[test]
     fn private_configuration_is_not_authored() -> Result<(), String> {
-        let root = directory("private-configuration")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::write(root.join(".gitignore"), "")
             .map_err(|error| error.to_string())?;
         fs::write(root.join(".env.example"), "EXAMPLE=1\n")
             .map_err(|error| error.to_string())?;
-        require(authored(&root).is_ok(), "example template is authored")?;
+        require(authored(root).is_ok(), "example template is authored")?;
         fs::write(root.join(".env"), "LOCAL=1\n")
             .map_err(|error| error.to_string())?;
-        require(authored(&root).is_err(), "private configuration rejected")?;
+        require(authored(root).is_err(), "private configuration rejected")?;
         require(
             private_configuration(Path::new("local/.env.production")),
             "private variant rejected",
         )?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
@@ -374,7 +376,8 @@ mod tests {
 
     #[test]
     fn discovers_authored_files_without_local_media() -> Result<(), String> {
-        let root = directory("files")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::write(root.join(".gitignore"), "/.reference/\n/target/\n")
             .map_err(|error| error.to_string())?;
         for name in [".reference", "target"] {
@@ -385,12 +388,12 @@ mod tests {
         }
         fs::write(root.join("lib.rs"), b"// source\n")
             .map_err(|error| error.to_string())?;
-        let files = authored(&root)?;
+        let files = authored(root)?;
         require(
             files == [Path::new(".gitignore"), Path::new("lib.rs")],
             "only authored source and configuration are visible",
         )?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     fn git(root: &Path, args: &[&str]) -> Result<(), String> {
@@ -407,31 +410,32 @@ mod tests {
         if !platform_fixtures::AVAILABLE {
             return Err(String::from("native fixture capability unavailable"));
         }
-        let root = directory("inventory")?;
-        git(&root, &["init", "--quiet"])?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
+        git(root, &["init", "--quiet"])?;
         fs::write(root.join(".gitignore"), b"/private/\n")
             .map_err(|error| error.to_string())?;
         fs::write(root.join("source.rs"), b"// source\n")
             .map_err(|error| error.to_string())?;
-        git(&root, &["add", "source.rs"])?;
-        require(authored(&root).is_ok(), "regular tracked source")?;
+        git(root, &["add", "source.rs"])?;
+        require(authored(root).is_ok(), "regular tracked source")?;
 
         let link = root.join("link.rs");
         platform_fixtures::file_link(Path::new("source.rs"), &link)
             .map_err(|error| error.to_string())?;
-        require(authored(&root).is_err(), "untracked source symlink")?;
-        git(&root, &["add", "link.rs"])?;
-        require(authored(&root).is_err(), "staged source symlink")?;
+        require(authored(root).is_err(), "untracked source symlink")?;
+        git(root, &["add", "link.rs"])?;
+        require(authored(root).is_err(), "staged source symlink")?;
         fs::remove_file(&link).map_err(|error| error.to_string())?;
-        require(authored(&root).is_ok(), "removed tracked link")?;
+        require(authored(root).is_ok(), "removed tracked link")?;
 
         let hidden = root.join("private");
         fs::create_dir_all(&hidden).map_err(|error| error.to_string())?;
         fs::write(hidden.join("asset"), b"synthetic")
             .map_err(|error| error.to_string())?;
-        require(authored(&root).is_ok(), "ignored local media")?;
-        git(&root, &["add", "-f", "private/asset"])?;
-        require(authored(&root).is_err(), "tracked ignored file")?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        require(authored(root).is_ok(), "ignored local media")?;
+        git(root, &["add", "-f", "private/asset"])?;
+        require(authored(root).is_err(), "tracked ignored file")?;
+        Ok(())
     }
 }

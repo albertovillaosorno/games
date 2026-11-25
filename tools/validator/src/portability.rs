@@ -377,15 +377,15 @@ mod tests {
     #[test]
     fn real_inventory_rejects_previously_allowed_source() -> Result<(), String>
     {
-        let root = directory("strict-portability")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let source = PathBuf::from("crates/games/example/src/lib.rs");
         let path = root.join(&source);
         fs::create_dir_all(path.parent().ok_or("missing fixture parent")?)
             .map_err(|error| error.to_string())?;
         fs::write(&path, "#[cfg(unix)] fn run() {}")
             .map_err(|error| error.to_string())?;
-        let result = validate(&root, &[source], &toml::Table::new());
-        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let result = validate(root, &[source], &toml::Table::new());
         require(
             result.is_err_and(|error| error.contains("os:unix")),
             "strict inventory must reject actual authored OS coupling",
@@ -395,7 +395,8 @@ mod tests {
     #[test]
     fn linux_entrypoints_and_tools_never_receive_allowances()
     -> Result<(), String> {
-        let root = directory("strict-entrypoints")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let authored = [
             "crates/games/example/src/lib.rs",
             "crates/games/example/src/main.rs",
@@ -413,8 +414,7 @@ mod tests {
             );
             fs::write(path, predicate).map_err(|error| error.to_string())?;
         }
-        let result = validate(&root, &authored, &toml::Table::new());
-        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let result = validate(root, &authored, &toml::Table::new());
         let error = result.err().ok_or("accepted target coupling")?;
         for path in authored {
             require(
@@ -427,7 +427,8 @@ mod tests {
 
     #[test]
     fn host_and_target_findings_are_reported_together() -> Result<(), String> {
-        let root = directory("complete-portability-inventory")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let paths = [
             "crates/platform/src/ir/example/mod.rs",
             "crates/platform/src/lib.rs",
@@ -444,8 +445,7 @@ mod tests {
                 .map_err(|error| error.to_string())?;
             fs::write(path, source).map_err(|error| error.to_string())?;
         }
-        let result = validate(&root, &paths, &toml::Table::new());
-        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let result = validate(root, &paths, &toml::Table::new());
         let error = result.err().ok_or("accepted portability findings")?;
         for diagnostic in ["host:std::fs", "os:unix", "target:target_os"] {
             require(error.contains(diagnostic), diagnostic)?;
@@ -456,7 +456,8 @@ mod tests {
     #[test]
     fn portable_source_cannot_embed_host_files_or_environment()
     -> Result<(), String> {
-        let root = directory("portable-compile-time-host")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let authored = [
             "crates/engine/src/lib.rs",
             "crates/importer/src/lib.rs",
@@ -479,8 +480,7 @@ mod tests {
             )
             .map_err(|error| error.to_string())?;
         }
-        let result = validate(&root, &authored, &toml::Table::new());
-        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let result = validate(root, &authored, &toml::Table::new());
         let error = result.err().ok_or("accepted compile-time host inputs")?;
         for relative in authored.iter().take(5) {
             require(

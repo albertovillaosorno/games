@@ -33,22 +33,20 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Write as _, stdout};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-use std::{env, process};
 
-use games_platform::ir::toolchain::validation::{
-    GitRequest, Request, run as observe,
+use games_platform::ir::toolchain::environment::{
+    self, Environment, FINGERPRINT_KEYS, FRESH_CHECK_FLAGS,
 };
-use games_platform::ir::toolchain::{ValidationTool, probe_version};
+use games_platform::ir::toolchain::validation::repository_head;
+use games_platform::ir::toolchain::{
+    ValidationTool, probe_version, write_line,
+};
 use sha2::{Digest as _, Sha256};
 
 use crate::files::{authored, ledger_location};
 use crate::{cargo_config, portability};
-
-const FRESH_CHECK_FLAGS: [&str; 2] =
-    ["GAMES_NATIVE_AUDIO_SMOKE", "GAMES_NATIVE_RENDER_SMOKE"];
 
 /// Function signature for a complete validation pass.
 pub type Check = fn(&Path, &mut File) -> Result<(), String>;
@@ -67,56 +65,10 @@ fn hash_environment(hash: &mut Sha256, key: &str, value: Option<&OsStr>) {
     }
 }
 
-// cc and pkg-config accept both HOST_/TARGET_ prefixes and target suffixes.
-// Include the native inputs used by Ring and SDL without collecting unrelated
-// shell variables or printing their potentially private values.
-fn native_override(raw: &[u8]) -> bool {
-    let name = raw
-        .strip_prefix(b"HOST_")
-        .or_else(|| raw.strip_prefix(b"TARGET_"))
-        .unwrap_or(raw);
-    [
-        b"CC".as_slice(),
-        b"CFLAGS",
-        b"CXX",
-        b"CXXFLAGS",
-        b"AR",
-        b"ARFLAGS",
-        b"RANLIB",
-        b"RANLIBFLAGS",
-        b"PKG_CONFIG",
-        b"SDL2",
-        b"CROSS_COMPILE",
-        b"CRATE_CC_NO_DEFAULTS",
-        b"RING_PREGENERATE_ASM",
-    ]
-    .into_iter()
-    .any(|base| {
-        name == base
-            || name
-                .strip_prefix(base)
-                .is_some_and(|tail| tail.starts_with(b"_"))
-    })
-}
-
 fn hash_build_overrides(
     hash: &mut Sha256,
-    values: impl IntoIterator<Item = (OsString, OsString)>,
+    overrides: &BTreeMap<OsString, OsString>,
 ) {
-    let overrides: BTreeMap<_, _> = values
-        .into_iter()
-        .filter(|(key, _value)| {
-            let name = key.as_encoded_bytes();
-            [
-                b"CARGO_BUILD_".as_slice(),
-                b"CARGO_TARGET_",
-                b"CARGO_PROFILE_",
-            ]
-            .into_iter()
-            .any(|prefix| name.starts_with(prefix))
-                || native_override(name)
-        })
-        .collect();
     hash_value(hash, b"build-overrides");
     hash_value(hash, &overrides.len().to_le_bytes());
     for (key, value) in overrides {
@@ -125,18 +77,15 @@ fn hash_build_overrides(
     }
 }
 
-fn fresh_check_requested(enabled: impl FnMut(&str) -> bool) -> bool {
-    FRESH_CHECK_FLAGS.into_iter().any(enabled)
-}
-
-fn cargo_home(root: &Path) -> Result<PathBuf, String> {
+fn cargo_home(root: &Path, observed: &Environment) -> Result<PathBuf, String> {
     if let Some(home) =
-        env::var_os("CARGO_HOME").filter(|path| !path.is_empty())
+        observed.value("CARGO_HOME").filter(|path| !path.is_empty())
     {
         return Ok(root.join(home));
     }
-    env::home_dir()
-        .map(|home| home.join(".cargo"))
+    observed
+        .home()
+        .map(|home| Path::new(home).join(".cargo"))
         .ok_or_else(|| String::from("cannot resolve Cargo home"))
 }
 
@@ -156,7 +105,11 @@ fn hash_cargo_config_files(
     })
 }
 
-fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
+fn tool_versions(
+    root: &Path,
+    hash: &mut Sha256,
+    observed: &Environment,
+) -> Result<(), String> {
     for tool in [
         ValidationTool::Rustc,
         ValidationTool::Cargo,
@@ -165,34 +118,17 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
         ValidationTool::RustupTargets,
         ValidationTool::Markdown,
         ValidationTool::Ripgrep,
+        ValidationTool::Git,
     ] {
         let output = probe_version(root.as_os_str(), tool)
             .map_err(|error| error.to_string())?;
         hash_value(hash, &output.stdout);
         hash_value(hash, &output.stderr);
     }
-    for key in [
-        "PATH",
-        "RUSTFLAGS",
-        "CARGO_ENCODED_RUSTFLAGS",
-        "RUSTDOCFLAGS",
-        "CARGO_ENCODED_RUSTDOCFLAGS",
-        "RUSTUP_TOOLCHAIN",
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-        "RUSTC",
-        "RUSTDOC",
-        "RUSTC_BOOTSTRAP",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
-        "CLIPPY_CONF_DIR",
-    ]
-    .into_iter()
-    .chain(FRESH_CHECK_FLAGS)
-    {
-        hash_environment(hash, key, env::var_os(key).as_deref());
+    for key in FINGERPRINT_KEYS.iter().copied().chain(FRESH_CHECK_FLAGS) {
+        hash_environment(hash, key, observed.value(key));
     }
-    hash_build_overrides(hash, env::vars_os());
+    hash_build_overrides(hash, observed.build_overrides());
     Ok(())
 }
 
@@ -200,14 +136,22 @@ fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
     ledger_location(root)?;
     portability::preflight(root)?;
     let mut hash = Sha256::new();
-    tool_versions(root, &mut hash)?;
+    let observed = environment::capture().map_err(|error| error.to_string())?;
+    tool_versions(root, &mut hash, &observed)?;
     let canonical = root.canonicalize().map_err(|error| error.to_string())?;
-    hash_cargo_config_files(&canonical, &cargo_home(&canonical)?, &mut hash)?;
+    hash_cargo_config_files(
+        &canonical,
+        &cargo_home(&canonical, &observed)?,
+        &mut hash,
+    )?;
     if root.join(".git").exists() {
-        let head = observe(root.as_os_str(), Request::Git(GitRequest::Head))
+        let head = repository_head(root.as_os_str())
             .map_err(|error| error.to_string())?;
         hash_value(&mut hash, b"git-history");
-        hash_value(&mut hash, &head.stdout);
+        hash_value(&mut hash, &[u8::from(head.is_some())]);
+        if let Some(identity) = head {
+            hash_value(&mut hash, &identity);
+        }
     }
     for path in authored(root)? {
         hash_value(&mut hash, path.as_os_str().as_encoded_bytes());
@@ -235,15 +179,13 @@ fn lock(root: &Path) -> Result<File, String> {
 fn log_path(root: &Path) -> Result<PathBuf, String> {
     let directory = root.join(".temp/validate");
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let stamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    Ok(directory.join(format!("{stamp}-{}.log", process::id())))
+    let filename = environment::validation_log_name()
+        .map_err(|error| error.to_string())?;
+    Ok(directory.join(filename))
 }
 
 fn announce(message: &str) -> Result<(), String> {
-    writeln!(stdout().lock(), "{message}").map_err(|error| error.to_string())
+    write_line(message).map_err(|error| error.to_string())
 }
 
 /// Serialize validation and reuse only successful unchanged results.
@@ -255,7 +197,9 @@ fn announce(message: &str) -> Result<(), String> {
 ///
 /// Returns an error for failed checks, I/O or concurrent source changes.
 pub fn run(root: &Path, fresh: bool, check: Check) -> Result<(), String> {
-    let requested = fresh_check_requested(|key| env::var_os(key).is_some());
+    let requested = environment::capture()
+        .map_err(|error| error.to_string())?
+        .fresh_requested();
     run_with(root, fresh || requested, check, fingerprint)
 }
 
@@ -316,9 +260,8 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        FRESH_CHECK_FLAGS, fingerprint, fresh_check_requested,
-        hash_build_overrides, hash_cargo_config_files, hash_environment,
-        run_with,
+        Environment, FRESH_CHECK_FLAGS, fingerprint, hash_build_overrides,
+        hash_cargo_config_files, hash_environment, run_with,
     };
     use crate::fixtures::{directory, require};
 
@@ -343,24 +286,25 @@ mod tests {
 
     #[test]
     fn caches_only_unchanged_success() -> Result<(), String> {
-        let root = directory("cache")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let input = root.join("input");
         fs::write(&input, b"original").map_err(|error| error.to_string())?;
         let marker = root.join(".cache/validate/success");
 
-        run_with(&root, false, pass, key)?;
+        run_with(root, false, pass, key)?;
         require(marker.exists(), "successful result must be cached")?;
-        run_with(&root, false, fail, key)?;
+        run_with(root, false, fail, key)?;
         require(
-            run_with(&root, true, fail, key).is_err(),
+            run_with(root, true, fail, key).is_err(),
             "fresh validation must bypass the cache",
         )?;
         require(!marker.exists(), "failure must invalidate the cache")?;
 
-        run_with(&root, false, pass, key)?;
+        run_with(root, false, pass, key)?;
         fs::write(&input, b"updated").map_err(|error| error.to_string())?;
         require(
-            run_with(&root, false, fail, key).is_err(),
+            run_with(root, false, fail, key).is_err(),
             "changed inputs must trigger checks",
         )?;
         require(
@@ -368,7 +312,7 @@ mod tests {
             "changed and failed input must not be cached",
         )?;
         require(
-            run_with(&root, true, mutate, key).is_err(),
+            run_with(root, true, mutate, key).is_err(),
             "changing inputs during checks must invalidate the pass",
         )?;
         require(
@@ -376,32 +320,34 @@ mod tests {
             "concurrent modification must not be cached",
         )?;
 
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
     fn ignored_disposable_ledger_invalidates_cached_success()
     -> Result<(), String> {
-        let root = directory("cache-ledger")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::write(root.join("input"), b"previously admitted")
             .map_err(|error| error.to_string())?;
-        run_with(&root, false, pass, key)?;
+        run_with(root, false, pass, key)?;
         let marker = root.join(".cache/validate/success");
         require(marker.exists(), "fixture success marker")?;
         fs::create_dir_all(root.join(".temp/ledger"))
             .map_err(|error| error.to_string())?;
-        let result = run_with(&root, false, pass, fingerprint);
+        let result = run_with(root, false, pass, fingerprint);
         require(
             result.is_err_and(|error| error.contains(".reference/ledger")),
             "durable ledger must fail before cache lookup",
         )?;
         require(!marker.exists(), "stale marker must be removed")?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
     fn forbidden_source_invalidates_cached_success() -> Result<(), String> {
-        let root = directory("cache-portability")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let source = root.join("crates/games/example/src");
         fs::create_dir_all(&source).map_err(|error| error.to_string())?;
         fs::write(root.join(".gitignore"), "/.cache/\n/.temp/\n")
@@ -410,41 +356,43 @@ mod tests {
             .map_err(|error| error.to_string())?;
         fs::write(root.join("input"), b"previously admitted")
             .map_err(|error| error.to_string())?;
-        run_with(&root, false, pass, key)?;
+        run_with(root, false, pass, key)?;
         let marker = root.join(".cache/validate/success");
         require(marker.exists(), "fixture must have a success marker")?;
         fs::write(source.join("main.rs"), "#[cfg(unix)] fn run() {}")
             .map_err(|error| error.to_string())?;
-        let result = run_with(&root, false, pass, fingerprint);
+        let result = run_with(root, false, pass, fingerprint);
         let diagnostic = result.err().unwrap_or_default();
         require(
             diagnostic.contains("os:unix"),
             "portability must fail first",
         )?;
         require(!marker.exists(), "stale marker must be invalidated")?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
     fn fresh_requests_cannot_reuse_ordinary_cache() -> Result<(), String> {
-        let root = directory("fresh-cache")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::write(root.join("input"), b"unchanged")
             .map_err(|error| error.to_string())?;
         require(
-            !fresh_check_requested(|_flag| false),
+            !Environment::new([], None).fresh_requested(),
             "ordinary validation may reuse cache",
         )?;
         for flag in FRESH_CHECK_FLAGS {
-            run_with(&root, false, pass, key)?;
-            run_with(&root, false, fail, key)?;
+            run_with(root, false, pass, key)?;
+            run_with(root, false, fail, key)?;
             let requested =
-                fresh_check_requested(|candidate| candidate == flag);
+                Environment::new([(flag.into(), OsString::new())], None)
+                    .fresh_requested();
             require(
-                run_with(&root, requested, fail, key).is_err(),
+                run_with(root, requested, fail, key).is_err(),
                 "explicit check must execute instead of reusing success",
             )?;
         }
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
@@ -464,12 +412,13 @@ mod tests {
 
     fn override_fingerprint(values: &[(&str, &str)]) -> Vec<u8> {
         let mut hash = Sha256::new();
-        hash_build_overrides(
-            &mut hash,
+        let environment = Environment::new(
             values.iter().map(|&(key, value)| {
                 (OsString::from(key), OsString::from(value))
             }),
+            None,
         );
+        hash_build_overrides(&mut hash, environment.build_overrides());
         hash.finalize().to_vec()
     }
 
@@ -542,7 +491,8 @@ mod tests {
     #[test]
     fn cargo_config_fingerprint_tracks_hierarchy_and_includes()
     -> Result<(), String> {
-        let fixture = directory("cargo-config-cache")?;
+        let fixture_owner = directory()?;
+        let fixture = fixture_owner.path();
         let root = fixture.join("repo");
         let parent = fixture.join(".cargo");
         let home = fixture.join("cargo-home");
@@ -580,17 +530,18 @@ mod tests {
         fs::write(home.join("config.toml"), "[build]\njobs = 5")
             .map_err(|error| error.to_string())?;
         require(legacy != fingerprint()?, "Cargo home config added")?;
-        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
     fn concurrent_runs_have_distinct_logs() -> Result<(), String> {
-        let root = directory("concurrent")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         fs::write(root.join("input"), b"original")
             .map_err(|error| error.to_string())?;
         thread::scope(|scope| {
-            let first = scope.spawn(|| run_with(&root, true, pass, key));
-            let second = scope.spawn(|| run_with(&root, true, pass, key));
+            let first = scope.spawn(|| run_with(root, true, pass, key));
+            let second = scope.spawn(|| run_with(root, true, pass, key));
             first.join().map_err(|_panic| "first worker panicked")??;
             second.join().map_err(|_panic| "second worker panicked")?
         })?;
@@ -604,6 +555,6 @@ mod tests {
                 .map_err(|error| error.to_string())?;
             require(log == "executed\nPASS\n", "complete independent log")?;
         }
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 }

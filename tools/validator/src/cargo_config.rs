@@ -184,7 +184,8 @@ mod tests {
 
     #[test]
     fn rejects_cycles_and_missing_required_includes() -> Result<(), String> {
-        let root = directory("cargo-include")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let config = root.join("config.toml");
         let child = root.join("child.toml");
         fs::write(&config, "include = [\"child.toml\"]")
@@ -212,12 +213,13 @@ mod tests {
             "initial configuration exists",
         )?;
         require(absent, "absent optional include is observable")?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 
     #[test]
     fn bounds_repeated_optional_include_attempts() -> Result<(), String> {
-        let root = directory("cargo-include-budget")?;
+        let root_owner = directory()?;
+        let root = root_owner.path();
         let config = root.join("config.toml");
         let document = |count| {
             let entries =
@@ -236,6 +238,6 @@ mod tests {
             visit(&config, false, &mut |_, _| Ok(())).is_err(),
             "configuration visit budget exhausted",
         )?;
-        fs::remove_dir_all(root).map_err(|error| error.to_string())
+        Ok(())
     }
 }

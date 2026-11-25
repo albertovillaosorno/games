@@ -30,6 +30,8 @@
 //   - Reject empty names, option-like names and path components.
 
 //! Host-independent authored Cargo argument admission.
+/// Validation environment admission.
+pub mod environment;
 /// Allowlisted reference request and revision admission.
 pub mod reference;
 /// Fixed contributor validation argument admission.
@@ -123,6 +125,8 @@ pub enum ValidationTool {
     Cargo,
     /// Rust lint driver.
     Clippy,
+    /// Read-only repository inspection tool.
+    Git,
     /// Markdown policy checker.
     Markdown,
     /// Source inventory search.
@@ -151,6 +155,7 @@ impl ValidationTool {
         match self {
             Self::Cargo => ("cargo", &["-V"]),
             Self::Clippy => ("cargo", &["clippy", "-V"]),
+            Self::Git => ("git", &["--version"]),
             Self::Markdown => ("markdownlint-cli2", &["--version"]),
             Self::Ripgrep => ("rg", &["--version"]),
             Self::Rustc => ("rustc", &["-vV"]),

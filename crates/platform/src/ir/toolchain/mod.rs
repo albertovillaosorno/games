@@ -31,6 +31,8 @@
 
 //! Portable contributor toolchain requests and outcomes.
 
+/// Admitted contributor environment observations.
+pub mod environment;
 /// Portable reference acquisition.
 pub mod reference;
 /// Fixed contributor validation process requests.

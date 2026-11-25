@@ -31,6 +31,7 @@
 
 //! Linux toolchain execution for independently authored workspace artifacts.
 
+mod environment;
 mod reference;
 mod validation;
 

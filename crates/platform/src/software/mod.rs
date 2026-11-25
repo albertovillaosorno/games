@@ -124,6 +124,8 @@ use crate::ir::security::toolchain::CargoArguments;
 use crate::ir::security::toolchain::validation::Arguments;
 use crate::ir::storage::ExecutableLocation;
 #[cfg(not(target_os = "linux"))]
+use crate::ir::toolchain::environment::{Environment, EnvironmentBackend};
+#[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::validation::{Report, ValidationBackend};
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::{
@@ -303,6 +305,17 @@ impl ValidationBackend for () {
         _args: &Arguments,
         _command: String,
     ) -> Result<Report, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl EnvironmentBackend for () {
+    fn environment() -> Result<Environment, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn validation_log_name() -> Result<String, ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
     }
 }

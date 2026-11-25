@@ -29,6 +29,7 @@
 // - Defaults:
 //   - Locked Cargo operations; reject unsafe or empty dynamic inputs.
 
+use core::str::from_utf8;
 use std::ffi::{OsStr, OsString};
 
 use games_assets::archive::validate_path;
@@ -142,7 +143,11 @@ impl<'input> Request<'input> {
                 return Ok(Arguments {
                     args: paths
                         .iter()
-                        .map(|path| path.to_os_string())
+                        .map(|path| {
+                            let mut literal = OsString::from(":");
+                            literal.push(path);
+                            literal
+                        })
                         .collect(),
                     program: "markdownlint-cli2",
                 });
@@ -227,6 +232,26 @@ impl<'input> Request<'input> {
             ]),
         }
     }
+}
+
+/// Admit complete NUL-delimited relative paths from an inventory tool.
+///
+/// Empty inventories are valid; malformed framing and unsafe names are not.
+/// # Errors
+/// Rejects incomplete records, non-UTF-8 names or unsafe path components.
+pub fn admit_paths(bytes: &[u8]) -> Result<Vec<&str>, InvalidRequest> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let complete = bytes.strip_suffix(&[0]).ok_or(InvalidRequest)?;
+    complete
+        .split(|byte| *byte == 0)
+        .map(|part| {
+            let name = from_utf8(part).map_err(|_error| InvalidRequest)?;
+            validate_path(name).map_err(|_error| InvalidRequest)?;
+            Ok(name)
+        })
+        .collect()
 }
 
 fn markdown(path: &OsStr) -> bool {
@@ -425,6 +450,26 @@ mod tests {
     }
 
     #[test]
+    fn inventory_requires_complete_safe_relative_records() {
+        for invalid in [
+            b"missing-terminator".as_slice(),
+            b"\0",
+            b"src\0\0",
+            b"../outside\0",
+            b"/absolute\0",
+            b"docs/../outside\0",
+            b"bad\xff\0",
+        ] {
+            assert!(admit_paths(invalid).is_err());
+        }
+        assert_eq!(admit_paths(b""), Ok(Vec::new()));
+        assert_eq!(
+            admit_paths(b".gitignore\0src/lib.rs\0"),
+            Ok(vec![".gitignore", "src/lib.rs"])
+        );
+    }
+
+    #[test]
     fn markdown_inputs_are_literal_authored_documents() {
         for invalid in [
             "--config.md",
@@ -438,10 +483,13 @@ mod tests {
             assert!(Request::Markdown(&[OsStr::new(invalid)]).admit().is_err());
         }
         assert!(Request::Markdown(&[]).admit().is_err());
-        assert!(
-            Request::Markdown(&[OsStr::new("docs/todo/open/a.mdc")])
-                .admit()
-                .is_ok()
-        );
+        let admitted = Request::Markdown(&[
+            OsStr::new("#review.md"),
+            OsStr::new("docs/todo/open/a.mdc"),
+        ])
+        .admit();
+        assert!(admitted.is_ok_and(
+            |args| args.args() == [":#review.md", ":docs/todo/open/a.mdc"]
+        ));
     }
 }

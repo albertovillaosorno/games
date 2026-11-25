@@ -29,29 +29,14 @@
 // - Defaults:
 //   - Use unique local temporary directories.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
-use std::{env, fs, process};
-
-static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+use games_platform::ir::storage::fixtures::TestRoot;
 
 /// Create a unique directory for an isolated test.
 ///
 /// # Errors
-/// Returns an error if the clock or filesystem fails.
-pub fn directory(label: &str) -> Result<PathBuf, String> {
-    let stamp = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = env::temp_dir().join(format!(
-        "games-{label}-{}-{stamp}-{sequence}",
-        process::id()
-    ));
-    fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-    Ok(path)
+/// Returns an error if the platform cannot create a private fixture.
+pub fn directory() -> Result<TestRoot, String> {
+    TestRoot::new().map_err(|error| error.to_string())
 }
 
 /// Report a failed test condition without a panic.
