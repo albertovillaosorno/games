@@ -1,0 +1,37 @@
+---
+id: "performance"
+status: "open"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Performance regression contracts"
+depends_on:
+  - "behaviour"
+validation:
+  - "cargo validate"
+---
+# TODO - Performance regression contracts
+
+## Objective
+
+Measure useful throughput without degrading fidelity.
+
+## Acceptance
+
+- Measure frame times, FPS, latency, memory, loading and binary size.
+- Use representative workloads and comparable quality settings.
+- Keep GPU acceleration, CPU work and cache budgets workload-driven.
+
+## Evidence
+
+Partial evidence, 2026-11-24: `cargo validate --no-cache` passes.
+`games::performance::PerformanceCollector` aggregates frame time, FPS,
+input latency, resident-memory peaks, loading duration and binary size
+from explicit host observations in constant memory. Synthetic tests check
+units, limits, overflow atomicity and comparable quality profiles. The
+fixed-step clock now computes eligible ticks directly instead of scanning
+the backlog before delivering updates.
+
+No representative playable game, actual GPU timings or reproducible
+platform benchmark matrix exists yet. Hardware-specific optimization
+choices and acceptance measurements remain open.

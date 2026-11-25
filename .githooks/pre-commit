@@ -1,0 +1,37 @@
+#!/bin/sh
+# Copyright:
+#   - Copyright © 2026 Alberto Villa Osorno.
+# SPDX-License-Identifier:
+#   - Apache-2.0
+# Confidential:
+#   - false
+# License-File:
+#   - LICENSE
+#
+# Boundary-Contract:
+# - Owns:
+#   - Pre-commit validation dispatch.
+# - Must-Not:
+#   - Duplicate lint policy or rewrite staged files.
+# - Allows:
+#   - Inputs: Staged repository paths and contributor workspace.
+#   - Outputs: Success or failure process status.
+#   - Side effects: Runs the validator and normal tool caches.
+# - Split-When:
+#   - A hook requires a different lifecycle.
+# - Merge-When:
+#   - Shared hook dispatch covers pre-commit checks.
+# - Summary:
+#   - Pre-commit contribution gate.
+# - Description:
+#   - Delegates staged-file and workspace checks.
+# - Usage:
+#   - Git pre-commit hook.
+# - Defaults:
+#   - Reject a failed validation.
+#
+
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+cargo run --locked -q -p games-validator --bin games-hooks -- staged
+cargo validate

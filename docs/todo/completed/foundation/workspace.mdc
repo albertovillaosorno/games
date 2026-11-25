@@ -1,0 +1,34 @@
+---
+id: "workspace"
+status: "completed"
+lane: "0"
+priority: "p0"
+area: "foundation"
+task: "TODO - Workspace and package metadata"
+validation:
+  - "cargo validate"
+---
+# TODO - Workspace and package metadata
+
+## Objective
+
+Complete the bootstrap without introducing extra workspace manifests.
+
+## Acceptance
+
+- Keep one root workspace with inherited dependencies, metadata and lints.
+- Keep stable and nightly channels floating; retain Cargo.lock.
+- Complete package metadata and confirm the engine is publishable.
+- Run Linux x86-64 compilation without errors.
+
+## Evidence
+
+Validated locally on Linux x86-64 with `cargo validate --no-cache`.
+The single workspace retains Cargo.lock and floating stable/nightly channels.
+The engine and tool manifests inherit workspace metadata and lint settings;
+tools are non-publishable and have role-specific descriptions.
+
+The validator packages and verifies the engine offline. The local archive
+contains only its manifests, lockfile, source, README and Apache-2.0 licence.
+The licence is checked against the canonical root text. No publication or
+Git operations were performed. The engine remains a bootstrap library.

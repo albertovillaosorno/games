@@ -1,0 +1,28 @@
+---
+id: "release-checks"
+status: "open"
+lane: "3"
+priority: "p3"
+area: "build"
+task: "TODO - Build and distribution checks"
+depends_on:
+  - "native"
+  - "mobile-web"
+validation:
+  - "cargo validate"
+---
+# TODO - Build and distribution checks
+
+## Objective
+
+Verify build outputs, portability and distribution boundaries.
+
+## Acceptance
+
+- Keep third-party notices and required licence texts with distributions.
+- Check startup, asset discovery, output size and target compatibility.
+- Treat other desktop platforms as community-driven.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

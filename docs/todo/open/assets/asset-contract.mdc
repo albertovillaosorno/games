@@ -1,0 +1,27 @@
+---
+id: "asset-contract"
+status: "open"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Canonical asset contract"
+depends_on:
+  - "dependency-audit"
+validation:
+  - "cargo validate"
+---
+# TODO - Canonical asset contract
+
+## Objective
+
+Define the shared asset format and manifest consumed by runtimes.
+
+## Acceptance
+
+- Record the selected source revision and SHA-256 at onboarding.
+- Keep source-platform knowledge out of gameplay and runtime crates.
+- Use synthetic fixtures for integrity and compatibility tests.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

@@ -1,0 +1,35 @@
+---
+id: "bugs-bunny-taz-time-busters"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "games"
+task: "TODO - Bugs Bunny & Taz: Time Busters"
+depends_on:
+  - "bugs-bunny-lost-in-time"
+validation:
+  - "cargo validate"
+---
+# TODO - Bugs Bunny & Taz: Time Busters
+
+## Objective
+
+Windows PC provisional base; compare PlayStation and select the best release.
+Preserve cooperative gameplay.
+
+## Acceptance
+
+- Use only a selected lawful original edition and locally imported assets.
+- Reuse shared engine mechanisms and extend them where necessary.
+- Verify observable gameplay or application behaviour, saves and input.
+- Report actual Linux, Android and browser acceptance where applicable.
+- Run `cargo validate` and record unresolved parity or platform limits.
+
+- Check original input under
+  `.reference/games/bugs-bunny-taz-time-busters/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.

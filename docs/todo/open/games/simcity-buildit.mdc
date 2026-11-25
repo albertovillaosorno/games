@@ -1,0 +1,41 @@
+---
+id: "simcity-buildit"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "games"
+task: "TODO - SimCity BuildIt"
+depends_on:
+  - "pvz-3"
+validation:
+  - "cargo validate"
+---
+# TODO - SimCity BuildIt
+
+## Objective
+
+latest complete lawfully accessible official Android release; city-building
+game. Preserve construction, zoning/building progression, traffic, utilities,
+economy, production chains, city expansion, disasters and relevant events.
+Implement offline-first city simulation and independently authored replacements
+for necessary services; no ads, purchases, subscriptions or
+monetisation-oriented delays. Optional independent multiplayer/trading only
+where feasible; missing server-side rules or resources must be documented rather
+than presumed recoverable from the APK.
+
+## Acceptance
+
+- Use only a selected lawful original edition and locally imported assets.
+- Reuse shared engine mechanisms and extend them where necessary.
+- Verify observable gameplay or application behaviour, saves and input.
+- Report actual Linux, Android and browser acceptance where applicable.
+- Run `cargo validate` and record unresolved parity or platform limits.
+
+- Check original input under
+  `.reference/games/simcity-buildit/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.

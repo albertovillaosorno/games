@@ -1,0 +1,29 @@
+---
+id: "onboarding"
+status: "open"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Title onboarding"
+depends_on:
+  - "importer"
+  - "reference-tests"
+validation:
+  - "cargo validate"
+---
+# TODO - Title onboarding
+
+## Objective
+
+Create title packages and their TODO.md files when implementation begins.
+
+## Acceptance
+
+- Use the existing catalogue order; no preliminary ranking audit needed.
+- Pin one preferred source edition per title when supplied.
+- Keep only unique gameplay and adapters in each title package.
+- Reference the canonical task record rather than duplicating its contents.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

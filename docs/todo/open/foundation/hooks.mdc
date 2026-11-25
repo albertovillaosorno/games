@@ -1,0 +1,28 @@
+---
+id: "hooks"
+status: "open"
+lane: "0"
+priority: "p0"
+area: "foundation"
+task: "TODO - Commit hooks and contribution gates"
+depends_on:
+  - "validator"
+validation:
+  - "cargo validate"
+---
+# TODO - Commit hooks and contribution gates
+
+## Objective
+
+Verify contribution validation and activate the repository hooks.
+
+## Acceptance
+
+- Test pre-commit and commit-msg hooks using isolated temporary fixtures.
+- Reject invalid Conventional Commits and missing or invalid DCO trailers.
+- Reject staged non-distributable files and keep commit checks reusable.
+- Activate local hooks and validate each signed Conventional Commit.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

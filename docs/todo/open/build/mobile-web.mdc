@@ -1,0 +1,27 @@
+---
+id: "mobile-web"
+status: "open"
+lane: "3"
+priority: "p3"
+area: "build"
+task: "TODO - Android and browser packaging"
+depends_on:
+  - "build-command"
+validation:
+  - "cargo validate"
+---
+# TODO - Android and browser packaging
+
+## Objective
+
+Support Android ARM64 and browser targets where compatible.
+
+## Acceptance
+
+- Use official Android and WASM toolchains on supported hosts.
+- Test touch, storage, graphics capabilities and packaging.
+- Report unavailable targets rather than claiming support.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

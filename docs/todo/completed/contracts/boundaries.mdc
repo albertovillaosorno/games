@@ -1,0 +1,37 @@
+---
+id: "boundaries"
+status: "completed"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Boundary and dependency contracts"
+depends_on:
+  - "validator"
+validation:
+  - "cargo validate"
+---
+# TODO - Boundary and dependency contracts
+
+## Objective
+
+Protect ownership and dependency direction across authored source.
+
+## Acceptance
+
+- Require meaningful Boundary-Contract headers on authored code.
+- Test workspace inheritance and prevent member-level lint weakening.
+- Reject shared-to-title, shared-to-tool and title-to-title dependencies.
+- Separate source-media adapters from runtime and platform adapters.
+
+## Evidence
+
+Fresh `cargo validate --no-cache` passed on Linux x86-64 on 2026-11-24.
+The validator now checks authored code for ownership headers and rejects
+member-level lint overrides or uninherited dependencies. Dependency direction
+checks reject shared-to-title, shared-to-tool, title-to-title and prohibited
+runtime/importer/platform edges. Synthetic negative controls cover missing
+headers, malformed ownership fields, lint weakening, undeclared dependencies
+and forbidden dependency directions. No original game media was required.
+
+These checks protect crate-level dependency boundaries. Fine-grained
+capability reuse and clone detection remain separate pending contracts.

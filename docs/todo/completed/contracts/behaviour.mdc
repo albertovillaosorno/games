@@ -1,0 +1,40 @@
+---
+id: "behaviour"
+status: "completed"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Behavioural test harness"
+depends_on:
+  - "boundaries"
+validation:
+  - "cargo validate"
+---
+# TODO - Behavioural test harness
+
+## Objective
+
+Create reusable tests for observable game behaviour.
+
+## Acceptance
+
+- Use public inputs, seeded scenarios, replays and property tests.
+- Check fixed-step simulation independently of rendering frame rate.
+- Do not freeze private implementation or incidental constants.
+- Update contracts and tests together for intentional gameplay changes.
+
+## Evidence
+
+On 2026-11-24, fresh `cargo validate --no-cache` passed. The engine
+now exposes reusable `InputScript`, `InputStep` and `Scripted` public-action
+contracts, composed with the canonical `StepClock`. Tests use a fixed-seed
+synthetic input generator and replay each recorded scenario across a
+one-millisecond render schedule and independently generated frame partitions.
+Property checks cover 128 seeds and compare observable state, not private
+implementation constants. Focused tests protect per-tick action order, idle
+ticks, correct public state updates and bounded fixed-step catch-up.
+
+This harness contains no original game data and makes no gameplay-parity
+claim. Title-specific behavioural examples will be added when owner-supplied
+reference files and observable outcomes become available. Intentional
+gameplay changes should update title contracts and fixtures together.

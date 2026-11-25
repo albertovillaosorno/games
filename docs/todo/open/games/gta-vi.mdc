@@ -1,0 +1,34 @@
+---
+id: "gta-vi"
+status: "open"
+lane: "5"
+priority: "p5"
+area: "games"
+task: "TODO - Grand Theft Auto VI"
+depends_on:
+  - "hytale"
+validation:
+  - "cargo validate"
+---
+# TODO - Grand Theft Auto VI
+
+## Objective
+
+Evaluate the best official PlayStation edition after Hytale. Use PS5 with PS5
+Pro enhancements or PS6 if a suitable edition exists.
+
+## Acceptance
+
+- Verify availability and select one lawful source edition.
+- Evaluate technical feasibility without promising a completed port.
+- Reuse the engine and verify observable behaviour if implementation proceeds.
+
+- Check original input under
+  `.reference/games/gta-vi/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.
+Activation also requires the preceding tasks and a suitable official release.

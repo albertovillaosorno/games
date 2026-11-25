@@ -1,0 +1,42 @@
+---
+id: "clone-detection"
+status: "completed"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Duplicate code detection"
+depends_on:
+  - "boundaries"
+validation:
+  - "cargo validate"
+---
+# TODO - Duplicate code detection
+
+## Objective
+
+Detect meaningful duplicated Rust code across project modules.
+
+## Acceptance
+
+- Check normalised tokens and report both source locations.
+- Reject clear substantial duplicates; report uncertain near-clones.
+- Exclude generated code and trivial boilerplate with explicit reasons.
+- Test exact clones, near-clones and non-clones using synthetic fixtures.
+
+## Evidence
+
+On 2026-11-24, fresh `cargo validate --no-cache` passed after wiring
+`tools/validator/src/clones.rs` into the mandatory contract gate. It
+normalises Rust function-body tokens by ignoring comments and whitespace,
+checks both source locations, and rejects exact substantial duplicates
+across files. Body eligibility requires at least 72 tokens and four
+statements to exclude trivial accessors and trait boilerplate. Renamed
+structural matches are logged for manual review rather than rejected.
+Generated directories, `.generated.rs` files, generated annotations, and
+the ignored build/reference trees are excluded explicitly.
+
+Synthetic tests cover exact matches, renamed near-clones, unrelated code,
+trivial functions, nested comments, whitespace and raw string literals.
+This is a conservative lexical gate, not a compiler-grade equivalence
+proof: reordered statements, extracted helpers and semantic clones may
+require separate human review.

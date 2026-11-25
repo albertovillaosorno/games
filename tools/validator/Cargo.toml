@@ -1,0 +1,26 @@
+[package]
+name = "games-validator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Contributor validation and dormant hook checks"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "games-validator"
+path = "src/validate.rs"
+
+[[bin]]
+name = "games-hooks"
+path = "src/hooks.rs"
+
+[dependencies]
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

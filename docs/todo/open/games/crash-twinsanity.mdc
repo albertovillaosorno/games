@@ -1,0 +1,36 @@
+---
+id: "crash-twinsanity"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "games"
+task: "TODO - Crash Twinsanity"
+depends_on:
+  - "simpsons-hit-and-run"
+validation:
+  - "cargo validate"
+---
+# TODO - Crash Twinsanity
+
+## Objective
+
+original Xbox provisional source; compare actual PS2 assets, lighting and
+content before pinning because visual differences are not solely resolution or
+performance. Preserve platforming, partner mechanics and the original campaign.
+
+## Acceptance
+
+- Use only a selected lawful original edition and locally imported assets.
+- Reuse shared engine mechanisms and extend them where necessary.
+- Verify observable gameplay or application behaviour, saves and input.
+- Report actual Linux, Android and browser acceptance where applicable.
+- Run `cargo validate` and record unresolved parity or platform limits.
+
+- Check original input under
+  `.reference/games/crash-twinsanity/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.

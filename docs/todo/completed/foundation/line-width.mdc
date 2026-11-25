@@ -1,0 +1,35 @@
+---
+id: "line-width"
+status: "completed"
+lane: "0"
+priority: "p0"
+area: "foundation"
+task: "TODO - Source formatting contract"
+depends_on:
+  - "validator"
+validation:
+  - "cargo validate"
+---
+# TODO - Source formatting contract
+
+## Objective
+
+Enforce the existing root formatting configurations.
+
+## Acceptance
+
+- Check all authored text files for the 80-character line limit.
+- Keep generated, binary and local user data outside authored-text checks.
+- Keep the current linter rules; do not weaken checks to pass validation.
+
+## Evidence
+
+Fresh `cargo validate --no-cache` passes with the width check on all
+discovered authored text, in addition to the existing Rustfmt, Clippy and
+MarkdownLint configuration. The diagnostic includes the file and line.
+
+Tests cover the 80/81 Unicode-character boundary, invalid source encoding,
+binary bytes, the generated Cargo.lock and ignored local directories.
+Only reviewed direct roadmap links with their explicit marker and the
+existing MarkdownLint schema identifier may exceed the width limit.
+A generic marker cannot exempt other authored prose or files.

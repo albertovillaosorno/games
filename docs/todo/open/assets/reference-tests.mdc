@@ -1,0 +1,27 @@
+---
+id: "reference-tests"
+status: "open"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Reference behaviour fixtures"
+depends_on:
+  - "asset-contract"
+validation:
+  - "cargo validate"
+---
+# TODO - Reference behaviour fixtures
+
+## Objective
+
+Establish reproducible behaviour comparisons from lawful local references.
+
+## Acceptance
+
+- Use appropriate reference execution tools and synthetic public fixtures.
+- Record unsupported or unverified behaviour without claiming parity.
+- Do not distribute proprietary inputs, executable code or assets.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

@@ -1,0 +1,36 @@
+#!/bin/sh
+# Copyright:
+#   - Copyright © 2026 Alberto Villa Osorno.
+# SPDX-License-Identifier:
+#   - Apache-2.0
+# Confidential:
+#   - false
+# License-File:
+#   - LICENSE
+#
+# Boundary-Contract:
+# - Owns:
+#   - Commit-message validation dispatch.
+# - Must-Not:
+#   - Rewrite commit messages or create commits.
+# - Allows:
+#   - Inputs: Git commit-message file path.
+#   - Outputs: Success or failure process status.
+#   - Side effects: Runs the contributor validator.
+# - Split-When:
+#   - A hook requires independent policy.
+# - Merge-When:
+#   - Shared hook dispatch covers commit-message checks.
+# - Summary:
+#   - Conventional Commit and DCO gate.
+# - Description:
+#   - Delegates commit-message validation to Rust.
+# - Usage:
+#   - Git commit-msg hook.
+# - Defaults:
+#   - Reject an invalid commit message.
+#
+
+set -eu
+cargo run --locked -q -p games-validator --bin games-hooks -- \
+    commit-message "$1"

@@ -1,0 +1,37 @@
+---
+id: "reuse"
+status: "completed"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Shared capability ownership"
+depends_on:
+  - "boundaries"
+validation:
+  - "cargo validate"
+---
+# TODO - Shared capability ownership
+
+## Objective
+
+Enforce reuse before new implementations.
+
+## Acceptance
+
+- Keep one canonical shared mechanism with configurable behaviour.
+- Use specialised strategies only for real title-specific differences.
+- Add regression tests across consumers when shared contracts change.
+
+## Evidence
+
+On 2026-11-24, `cargo validate --no-cache` passed after adding the
+canonical `games::timing::StepClock` mechanism. Its interval and per-frame
+work budget are configured once per scheduler; `FixedTick` composes different
+consumers without forking the implementation. Synthetic counter and motion
+consumers verify equivalent simulation under different frame rates, bounded
+catch-up without lost time, ordered indices and invalid interval rejection.
+
+The project has no onboarded titles yet. Title-specific specialisations are
+therefore deferred until genuine differences can be demonstrated; no original
+game parity is claimed. Cross-consumer regression tests protect the public
+shared scheduler as its contract evolves.

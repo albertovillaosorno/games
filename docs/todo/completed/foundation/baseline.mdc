@@ -1,0 +1,34 @@
+---
+id: "baseline"
+status: "completed"
+lane: "0"
+priority: "p0"
+area: "foundation"
+task: "TODO - Linux baseline"
+depends_on:
+  - "validator"
+  - "line-width"
+validation:
+  - "cargo validate"
+---
+# TODO - Linux baseline
+
+## Objective
+
+Verify the minimal workspace on Linux x86-64.
+
+## Acceptance
+
+- Run `cargo validate` successfully and report actual tests and failures.
+- Keep the public repository empty until the first commit is authorised.
+
+## Evidence
+
+On 2026-11-24, `cargo validate --no-cache` passed on Linux x86-64 with
+rustc 1.100.0. The fresh run executed 6 hook tests and 11 validator tests,
+with no test failures. Rustfmt, Clippy, workspace compilation, local crate
+packaging, roadmap and language contracts, and MarkdownLint all passed.
+
+The repository has no `.git` directory, and no commits or publishing actions
+were performed. Android, browser targets and playable game behaviour were
+not tested. This validates the minimal Linux bootstrap, not game parity.

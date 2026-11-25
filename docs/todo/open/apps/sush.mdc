@@ -1,0 +1,36 @@
+---
+id: "sush"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "apps"
+task: "TODO - SUSH"
+depends_on:
+  - "angry-birds-star-wars-2"
+validation:
+  - "cargo validate"
+---
+# TODO - SUSH
+
+## Objective
+
+Android reference; independently implement a shared virtual pet with care,
+evolution, cosmetics and authenticated two-user synchronisation. Support a
+user-controlled PWA and local caching where practical.
+
+## Acceptance
+
+- Use only a selected lawful original edition and locally imported assets.
+- Reuse shared engine mechanisms and extend them where necessary.
+- Verify observable gameplay or application behaviour, saves and input.
+- Report actual Linux, Android and browser acceptance where applicable.
+- Run `cargo validate` and record unresolved parity or platform limits.
+
+- Check original input under
+  `.reference/games/sush/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.

@@ -1,0 +1,36 @@
+---
+id: "input"
+status: "completed"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Input and presentation contracts"
+depends_on:
+  - "behaviour"
+validation:
+  - "cargo validate"
+---
+# TODO - Input and presentation contracts
+
+## Objective
+
+Protect shared controls and presentation behaviour.
+
+## Acceptance
+
+- Test keyboard, gamepad, hot-plugging and per-title touch configuration.
+- Test responsive rendering, localisation and configurable frame pacing.
+
+## Evidence
+
+On 2026-11-24, `cargo validate --no-cache` passed after introducing
+`games::input` and `games::presentation`. Synthetic input tests exercise
+keyboard, gamepad device attach/detach, simultaneous held controls and
+title-specific touch-zone mappings. Disconnection releases held buttons
+without releasing an action still held by another device. Presentation
+tests exercise landscape/portrait letterboxing, extreme viewport dimensions,
+regional localization fallback and capped/uncapped frame interval policies.
+
+The checks cover platform-neutral presentation contracts, not GPU output,
+real physical devices or platform event-loop timing. Native integration
+remains future platform work, and no actual game rendering is claimed.

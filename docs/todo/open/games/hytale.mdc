@@ -1,0 +1,34 @@
+---
+id: "hytale"
+status: "open"
+lane: "5"
+priority: "p5"
+area: "games"
+task: "TODO - Hytale"
+depends_on:
+  - "simcity-buildit"
+validation:
+  - "cargo validate"
+---
+# TODO - Hytale
+
+## Objective
+
+Wait for the official stable 1.0 PC release. Evaluate an independent Rust client
+and server.
+
+## Acceptance
+
+- Select the official stable 1.0 release and pin its revision.
+- Preserve world generation, building, combat and moddability.
+- Reuse engine capabilities and verify feasibility before implementation.
+
+- Check original input under
+  `.reference/games/hytale/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.
+Activation also requires the preceding tasks and a suitable official release.

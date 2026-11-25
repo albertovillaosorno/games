@@ -1,0 +1,31 @@
+---
+id: "contract-gate"
+status: "open"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Integrate architecture checks"
+depends_on:
+  - "reuse"
+  - "clone-detection"
+  - "input"
+  - "network"
+  - "security"
+  - "performance"
+validation:
+  - "cargo validate"
+---
+# TODO - Integrate architecture checks
+
+## Objective
+
+Make the P1 contracts a required part of the existing validator.
+
+## Acceptance
+
+- Run positive and negative tests without requiring original media.
+- Fail closed on verified contract violations.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

@@ -1,0 +1,41 @@
+---
+id: "validator"
+status: "completed"
+lane: "0"
+priority: "p0"
+area: "foundation"
+task: "TODO - Unified validator"
+depends_on:
+  - "workspace"
+validation:
+  - "cargo validate"
+---
+# TODO - Unified validator
+
+## Objective
+
+Finish the project-owned validation entry point.
+
+## Acceptance
+
+- Resolve the missing contracts module and all current compiler errors.
+- Run Rustfmt, Clippy, MarkdownLint, contracts, tests and compilation.
+- Return failure when a required tool or check fails.
+- Validate typed task records, links, priorities and dependency order.
+- Run the task validator's negative controls through `cargo validate`.
+- Cache successful results only; support `cargo validate --no-cache`.
+- Isolate concurrent validation logs in `.temp/validate/`.
+- Reject Python source and scripts in the authored repository.
+
+## Evidence
+
+Fresh validation passes: workspace metadata and typed roadmap contracts,
+authored language checks, nightly Rustfmt, stable Clippy, workspace tests
+and checks, local package verification, and MarkdownLint.
+
+Negative controls cover malformed task metadata, orphan tasks, dependency
+cycles, invalid phase headings and prohibited Python scripts. Isolated
+temporary fixtures verify cache hits, forced revalidation, failed checks,
+changed inputs, mutation during validation and distinct concurrent run logs.
+The validator serialises runs and rejects required subprocess failures.
+Cache contents and validation logs remain local.

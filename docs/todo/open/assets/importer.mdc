@@ -1,0 +1,28 @@
+---
+id: "importer"
+status: "open"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Universal asset importer"
+depends_on:
+  - "asset-contract"
+validation:
+  - "cargo validate"
+---
+# TODO - Universal asset importer
+
+## Objective
+
+Provide one shared import and conversion interface.
+
+## Acceptance
+
+- Identify supported original media and validate the input revision.
+- Safely extract and normalise user-provided assets into local storage.
+- Validate deterministic output without executing original binaries.
+- Support one preferred official edition per title initially.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

@@ -1,0 +1,36 @@
+---
+id: "network"
+status: "open"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Offline and multiplayer contracts"
+depends_on:
+  - "behaviour"
+validation:
+  - "cargo validate"
+---
+# TODO - Offline and multiplayer contracts
+
+## Objective
+
+Verify local and self-hosted play without commercial services.
+
+## Acceptance
+
+- Test host/join, local controllers, LAN clients and disconnect/rejoin.
+- Bound and validate untrusted messages; default to local-only services.
+- Require no central account for offline games.
+
+## Evidence
+
+Partial evidence, 2026-11-24: `cargo validate --no-cache` passes.
+The shared `games::network::Session` policy supports local identities,
+explicit opt-in LAN admission, bounded messages, reserved disconnect slots,
+and same-origin reconnect. Title-specific codecs reject malformed remote
+actions before simulation. Synthetic tests reject unknown identities,
+excessive payloads, accidental LAN exposure and over-capacity joins.
+
+This does not verify an actual socket transport, real LAN clients, peer
+authentication or live multiplayer gameplay. The host-owned transport and
+end-to-end LAN integration remain required before completion.

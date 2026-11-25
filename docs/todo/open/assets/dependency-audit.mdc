@@ -1,0 +1,27 @@
+---
+id: "dependency-audit"
+status: "open"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Shared dependency selection"
+depends_on:
+  - "contract-gate"
+validation:
+  - "cargo validate"
+---
+# TODO - Shared dependency selection
+
+## Objective
+
+Evaluate reusable Rust libraries before creating new mechanisms.
+
+## Acceptance
+
+- Evaluate storytold/craft-libs and other necessary ecosystem crates.
+- Verify licensing, provenance, portability, performance and maintenance.
+- Centralise adopted versions and update third-party notices.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.

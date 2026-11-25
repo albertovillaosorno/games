@@ -1,0 +1,36 @@
+---
+id: "pvz-3"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "games"
+task: "TODO - Plants vs. Zombies 3: Evolved"
+depends_on:
+  - "pvz-2"
+validation:
+  - "cargo validate"
+---
+# TODO - Plants vs. Zombies 3: Evolved
+
+## Objective
+
+preferred official Android edition, latest complete lawfully accessible release;
+verify exact package and availability. Reimplement local gameplay and required
+independent services.
+
+## Acceptance
+
+- Use only a selected lawful original edition and locally imported assets.
+- Reuse shared engine mechanisms and extend them where necessary.
+- Verify observable gameplay or application behaviour, saves and input.
+- Report actual Linux, Android and browser acceptance where applicable.
+- Run `cargo validate` and record unresolved parity or platform limits.
+
+- Check original input under
+  `.reference/games/pvz-3/`.
+- If required media is missing, record the blocker in Evidence; recheck
+  and clear it when a suitable original edition becomes available.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.

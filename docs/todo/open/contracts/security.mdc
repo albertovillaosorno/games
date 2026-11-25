@@ -1,0 +1,38 @@
+---
+id: "security"
+status: "open"
+lane: "1"
+priority: "p1"
+area: "contracts"
+task: "TODO - Host and asset safety"
+depends_on:
+  - "boundaries"
+validation:
+  - "cargo validate"
+---
+# TODO - Host and asset safety
+
+## Objective
+
+Protect the host from malformed or malicious user-supplied data.
+
+## Acceptance
+
+- Test archive traversal, symlinks, oversized resources and bad saves.
+- Use synthetic fixtures and reject execution of imported binaries.
+- Constrain mods, network inputs, file access and privilege requirements.
+
+## Evidence
+
+Partial evidence, 2026-11-24: `cargo validate --no-cache` passes.
+`games::safety` rejects synthetic traversal and Windows-drive paths,
+link/special archive members, executable extensions and oversize entries.
+SHA-256 save envelopes detect truncated, oversized, tampered or invalid
+versions, using strict caller-provided limits. All truncated save prefixes
+are also rejected. Network message budgets
+are enforced separately by `games::network`.
+
+These checks do not yet protect actual archive extraction from filesystem
+races or verify sandboxed mod execution, process privileges or real user
+file permissions. The importer and host platform adapters must integrate
+and test those constraints before task completion.

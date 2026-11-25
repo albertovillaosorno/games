@@ -1,0 +1,26 @@
+---
+id: "build-command"
+status: "open"
+lane: "3"
+priority: "p3"
+area: "build"
+task: "TODO - Universal build command"
+depends_on:
+  - "onboarding"
+validation:
+  - "cargo validate"
+---
+# TODO - Universal build command
+
+## Objective
+
+Expose one build command accepting a title and optional target.
+
+## Acceptance
+
+- Select only the required modules and features.
+- Use the host native toolchain for native desktop packages.
+
+## Evidence
+
+Pending. Record actual checks and remaining limitations before completion.
