@@ -24,10 +24,10 @@ Each hash identifies a verified canonical bundle with the corresponding
 Marge's bundle also provides the stage background. The visible main menu
 shows each seat's selected character and Start key. Left/Right selects
 a vacant character before joining; Enter starts seat 1 immediately.
-Other seats can choose and join during play. Local join and free-continue
-plates show the effective keyboard and gamepad Start bindings. Unusually
-long SDL key names may require checking the control profile. The continue
-plate retains the countdown without allocating extra textures.
+Other seats can choose and join during play. The pause menu shows
+the effective first local desktop controls and the seat join plates.
+Vacant-seat join labels are hidden during play; a continuing station
+retains its countdown. Long key names may require checking the profile.
 Up/Down navigates the menu
 and Primary confirms. Pause opens Resume, Settings, Main Menu and Exit;
 Pause or Start resumes.
@@ -35,10 +35,10 @@ Close the window or select Exit to quit.
 
 | Station | Pause | Start | Primary / Secondary | Movement |
 | --- | --- | --- | --- | --- |
-| Marge | Escape | Enter | Z / X | Arrows |
-| Homer | F2 | 6 | F / G | WASD |
-| Bart | F3 | 7 | O / P | IJKL |
-| Lisa | F4 | 8 | Keypad 1 / 2 | Keypad 8/4/5/6 |
+| Seat 1 | Escape (global) | Enter | Left mouse or Z / Space | WASD |
+| Seat 2 | — | 6 | F / G | Arrows |
+| Seat 3 | — | 7 | O / P | IJKL |
+| Seat 4 | — | 8 | Keypad 1 / 2 | Keypad 8/4/5/6 |
 
 Connected SDL controllers are assigned in order to available stations.
 Back pauses, Start joins immediately, A confirms or attacks,
@@ -246,6 +246,14 @@ cue. Without this option it opens no audio device. Nominal pitch, gain,
 queue timing and voice admission are provisional; background music and
 other sound effects remain unimplemented.
 
+Use `simpsons-arcade --list-audio-devices` to list available SDL
+playback devices. To select one, pass `--audio-device NAME` after the
+display and window flags or set `audio_device=NAME` in the local
+launch catalogue. Quote names containing spaces. The explicit flag
+overrides the catalogue; `default` selects the system default. Device
+selection requires an audio bundle. Startup reports the active SDL
+driver and device; physical audibility requires a listening test.
+
 Optionally insert `--audio-mod MOD_SHA` immediately after `--audio SHA`.
 The explicitly selected passive replacement bundle may replace only the
 four attack slots, `audio/sample-0004` through `audio/sample-0007`.
@@ -310,9 +318,11 @@ cargo run --locked -p games-build -- mame strip-publish simpsons \
 
 The command verifies two to eight complete scenes before stitching exactly
 overlapping world interiors. The title verifies the strip against the
-selected base art. The latest verified strip spans 764
-world columns (320 plus 444 additional pixels). The logical viewport
-is bounded to 512 columns; wider surfaces use
+selected base art. The latest verified strip contains 732 art columns
+(288 plus 444
+additional pixels). The original 320-column view retains its 16-pixel
+side margins; wider adaptive views use real art without those margins.
+The logical viewport is bounded to 512 columns; wider surfaces use
 aspect-fit without stretching the world. Earlier strips still work. The four
 station indicators
 spread across the width, menus and touch panel center, and hit regions
@@ -322,12 +332,14 @@ apply in every display mode. The provisional opening street advances
 rightward while retaining the active party and living initial enemy
 within the original-width play area. Reinforcements enter beyond its
 edges and approach independently in world coordinates. Art-only travel
-may reach 444 columns; opening combat is capped at 154. Full stage
+may reach 444 columns; opening combat is capped at 362 with six
+reinforcements and seven total enemies. Full stage
 progression remains open.
 Fill may crop the game HUD and is rejected with touch enabled.
 Settings
 can also be changed through the main or pause menu: Up/Down selects,
-Primary cycles display or toggles desktop fullscreen, and Back returns.
+Primary cycles display, toggles desktop fullscreen or cycles master
+volume (100, 75, 50, 25 and 0 percent); Back returns.
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
 Settings describes whether the selected world strip permits adaptive width.
 Changes apply immediately. To retain them across launches, create a
@@ -336,10 +348,11 @@ options and before the control options. Alternatively set `settings=DIR`
 in the launch catalogue; relative paths resolve from that file. An explicit
 settings path overrides the catalogue. Saved display values override
 catalogue defaults, and explicit display or window flags override saved
-values. Only in-game display changes are stored; smoke runs never write
+values. In-game display and volume changes are stored; smoke runs never write
 settings.
 The directory must exist and be trusted, and must not contain game-progress
-slots. The versioned settings payload is stored atomically in slot-0.gms.
+slots. The versioned display payload is stored atomically in slot-0.gms;
+master volume uses the independent slot-2.gms.
 Malformed data or failed persistence is reported as an error. A saved
 Fill preference is safely opened as aspect-fit when touch is enabled.
 
@@ -359,7 +372,8 @@ profile uses:
 ```text
 version=1
 key 1 right=Q
-key 1 secondary=Space
+key 1 secondary=E
+mouse 1 primary=left
 key 2 primary=R
 button 2 right=x
 ```
@@ -367,9 +381,11 @@ button 2 right=x
 Seat numbers 1-4 default to Marge, Homer, Bart and Lisa. Actions are
 pause, start, primary, secondary, left, right, up and down. Key names
 are SDL scancode names; button names follow SDL's game-controller
-mapping names. Unspecified controls keep the defaults. Duplicate
-keyboard bindings across stations and duplicate buttons within a
-station are rejected, as are unknown names and repeated overrides.
+mapping names. Unspecified controls keep the defaults. Use `none` for an unbound
+key or mouse button. Mouse names are left, middle, right, x1 and x2.
+Only seat 1 defines the global keyboard pause binding. Duplicate
+keyboard or mouse bindings across stations and duplicate buttons within
+a station are rejected, as are unknown names and repeated overrides.
 Controller replacement inherits the vacant station's profile.
 Digital controller axes can be assigned per station in the same file:
 
@@ -470,8 +486,8 @@ simpsons-arcade --lan-controller controller.local
 ```
 
 Watch the host screen. Enter or gamepad Start joins when the host has
-started the world. Arrow keys or the D-pad/left stick move; Z/A attacks
-and X/B jumps by default. The controller panel shows its effective digital
+started the world. WASD or the D-pad/left stick move; Z, left mouse or A attacks
+and Space/B jumps by default. The controller panel shows its effective digital
 bindings. Optionally add `controls=FILE` to its catalogue, resolving the
 existing version-one control profile relative to the catalogue directory.
 Use `settings=DIR` in the controller catalogue or append `--settings DIR`

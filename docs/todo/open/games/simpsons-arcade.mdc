@@ -2082,3 +2082,31 @@ modern keyboard/mouse controls and one Escape pause control. These are
 open acceptance requirements, not completed capabilities. The host default
 audio sink was HDMI, unmuted, at 16 percent volume; this is a diagnostic
 observation, not a proven cause of the missing sound.
+
+Owner-feedback follow-up: single-seat entry, WASD, Space, left mouse
+with Z as an alternate attack, and a single keyboard Escape pause
+binding now replace the legacy keyboard defaults. Additional seats
+join explicitly. Control profiles allow unbound keys and mouse
+buttons, and the pause menu displays the active local profile. Vacant
+seat prompts are hidden during play; continuing players retain their
+countdown. The master volume setting is independently persisted.
+SDL playback-device selection and startup diagnostics are implemented;
+dummy-device playback and real PipeWire enumeration were verified.
+Physical audibility and music remain open.
+
+The verified long strip contains 732 interior columns. Wider adaptive
+views now fill their logical width with actual street art, keeping
+original 320-column aspect-fit framing intact. Opening combat admits
+six provisional reinforcement gates through travel 362. Arrival
+anchors account for the widest supported logical viewport of the
+selected art, independently of actual window dimensions. Regression
+coverage checks every supported logical width at representative
+strip extents. Exact arrival positions and timing remain provisional.
+
+Fresh render/audio workspace validation passed in run
+1795635661135707705-1354421. Subsequent native smoke exercises each
+arrival in an independent normal-play encounter, so earlier waits do
+not exhaust player stocks. Both aspect-fit and adaptive native smoke
+verified all six reinforcement meters, both cooperative families and
+dedicated restraint recovery. The asset-backed runs used offscreen
+OpenGL and dummy audio, not physical input or listening tests.
