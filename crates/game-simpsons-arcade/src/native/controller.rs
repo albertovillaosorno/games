@@ -170,7 +170,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opt_in_controller_panel_smoke() -> Result<(), RenderError> {
+    fn opt_in_native_panels_smoke() -> Result<(), RenderError> {
         if env::var_os("GAMES_NATIVE_RENDER_SMOKE").is_none() {
             return Ok(());
         }
@@ -203,6 +203,8 @@ mod tests {
                 }
                 Ok(())
             },
-        )
+        )?;
+        drop(window);
+        super::super::station_hud::tests::remote_station_indicators_smoke()
     }
 }

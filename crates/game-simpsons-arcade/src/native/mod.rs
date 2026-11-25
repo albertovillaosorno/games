@@ -553,11 +553,12 @@ impl Scene {
         view: world::View,
     ) -> Result<(), RenderError> {
         let offset = world::station_offset(view.width, player)?;
-        if let Some(mut prompt) =
-            self.hud.draw(player, seat, station.participation)?
-        {
-            prompt.destination.x = prompt.destination.x.saturating_add(offset);
-            self.draws.push(prompt);
+        let prompt = self.hud.draw(player, seat, station.participation)?;
+        if let Some(mut draw) = prompt {
+            draw.destination.x = draw.destination.x.saturating_add(offset);
+            self.draws.push(draw);
+        }
+        if station.participation != Participation::Playing {
             return Ok(());
         }
         let actor = *self
@@ -566,7 +567,9 @@ impl Scene {
             .ok_or(RenderError::InvalidSprite)?;
         let mut icon = indicator(player)?;
         icon.x = icon.x.saturating_add(offset);
-        self.draws.push(actor.draw(icon, false));
+        if prompt.is_none() {
+            self.draws.push(actor.draw(icon, false));
+        }
         if let Some(combat) = &self.combat {
             combat.station_health(&mut self.draws, icon.x, station)?;
         }
@@ -731,7 +734,9 @@ impl<'preferences> Interactive<'preferences> {
             let delta = elapsed.saturating_sub(self.previous);
             self.previous = elapsed;
             let _advanced = self.simulation.advance(delta).map_err(failure)?;
-            let cabinet = self.simulation.state().state();
+            let hosted = self.simulation.state();
+            let cabinet = hosted.state();
+            art.hud.update_connections(hosted.connected_remotes());
             let desired = cabinet.session().effective_display();
             if desired != self.applied {
                 scene.apply_display_settings(desired)?;
@@ -1650,7 +1655,7 @@ fn window(
     )?;
     window.apply_display_settings(options.display)?;
     let layout = preview_layout(touch_enabled)?;
-    let limits = scene_limits(source, touch_enabled)?;
+    let limits = scene_limits(source, touch_enabled, reserved)?;
     let startup = window
         .input(size(reserved.into_iter().filter(|remote| !remote).count())?)?;
     let mut playback = source
@@ -1692,6 +1697,7 @@ fn window(
 fn scene_limits(
     source: &Sources<'_>,
     touch_enabled: bool,
+    reserved: [bool; 4],
 ) -> Result<SceneLimits, RenderError> {
     let enemy_atlases = if source.enemy.is_some() {
         3
@@ -1708,6 +1714,7 @@ fn scene_limits(
     Ok(SceneLimits {
         atlas_bytes: size(
             3_407_872usize
+                .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(count.saturating_mul(65_536))
                 .saturating_add(extension.saturating_mul(401_408)),
         )?,

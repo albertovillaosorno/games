@@ -216,6 +216,14 @@ impl HostedCabinet {
         }
     }
 
+    /// Verified remote connections after the most recent fixed update.
+    ///
+    /// Local and unreserved seats are always false.
+    #[must_use]
+    pub const fn connected_remotes(&self) -> [bool; 4] {
+        self.connected
+    }
+
     /// Construct a hosted cabinet with fixed remote seat reservations.
     ///
     /// Reserve at most three seats, leaving one local seat for host menus.
@@ -589,6 +597,41 @@ mod tests {
         check_pause(&mut host);
         if HostedCabinet::new(host.state(), [false; 4]).is_some() {
             return Err("active cabinet accepted");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn presentation_observes_only_verified_remote_connections()
+    -> Result<(), &'static str> {
+        let mut host = hosted()?;
+        if host.connected_remotes() != [false; 4] {
+            return Err("unconnected seats reported online");
+        }
+        host.input_step(0, &[
+            HostedInput::Connected(0),
+            HostedInput::Connected(1),
+            HostedInput::Connected(2),
+            HostedInput::Connected(3),
+            HostedInput::Connected(u64::MAX),
+        ]);
+        if host.connected_remotes() != [false, true, true, false] {
+            return Err("incorrect remote admission state");
+        }
+        host.input_step(1, &[
+            HostedInput::Disconnected(1),
+            remote(1, Control::Start, true),
+            HostedInput::Connected(2),
+        ]);
+        if host.connected_remotes() != [false, false, true, false] {
+            return Err("incorrect remote disconnect state");
+        }
+        host.input_step(2, &[HostedInput::Connected(1)]);
+        if host.connected_remotes() != [false, true, true, false] {
+            return Err("incorrect remote admission state");
+        }
+        if host.state().phase() != Phase::MainMenu {
+            return Err("remote status affected host menu");
         }
         Ok(())
     }
