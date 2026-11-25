@@ -237,14 +237,14 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         canvas: &mut Canvas<Target>,
         background: [u8; 3],
         sprites: &[SpriteDraw],
-    ) -> Result<bool, RenderError>
+    ) -> Result<Option<PresentationLayout>, RenderError>
     where
         Target: RenderTarget,
     {
         self.atlases.validate(sprites)?;
         let Some(drawable) = drawable_viewport(canvas, self.layout, self.mode)?
         else {
-            return Ok(false);
+            return Ok(None);
         };
         let mut result = Ok(());
         canvas
@@ -259,7 +259,7 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
             .map_err(|error| RenderError::Backend(error.to_string()))?;
         result?;
         copy_to_viewport(canvas, &self.target, drawable)?;
-        Ok(true)
+        Ok(Some(drawable))
     }
 
     fn fit(
@@ -335,6 +335,7 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
 pub struct SceneSession<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
     events: EventPump,
+    last_presented: Option<PresentationLayout>,
     textures: SceneTextures<'texture, WindowContext>,
 }
 
@@ -414,6 +415,13 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         self.textures.fit(surface, maximum)
     }
 
+    /// Exact layout of the last completed presentation attempt.
+    /// None before presentation or when no drawable was available.
+    #[must_use]
+    pub const fn last_presented_layout(&self) -> Option<PresentationLayout> {
+        self.last_presented
+    }
+
     /// Current logical target, including any admitted adaptive extension.
     #[must_use]
     pub const fn layout(&self) -> FrameLayout {
@@ -454,7 +462,12 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
                 "SDL render targets are unavailable",
             )));
         }
-        Ok(Self { canvas, events, textures })
+        Ok(Self {
+            canvas,
+            events,
+            last_presented: None,
+            textures,
+        })
     }
 
     /// Composite a frame with no full-frame CPU pixel upload.
@@ -465,11 +478,12 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         background: [u8; 3],
         sprites: &[SpriteDraw],
     ) -> Result<bool, RenderError> {
-        let drawn = self.textures.draw(self.canvas, background, sprites)?;
-        if drawn {
+        let drawable = self.textures.draw(self.canvas, background, sprites)?;
+        if drawable.is_some() {
             self.canvas.present();
         }
-        Ok(drawn)
+        self.last_presented = drawable;
+        Ok(drawable.is_some())
     }
 
     fn presentation_layout(
@@ -778,7 +792,14 @@ mod tests {
             flip_horizontal: false,
             ..sprite
         };
-        require(scene.draw(&mut canvas, [0; 3], &[edge])?, "not drawn")?;
+        require(
+            scene.draw(&mut canvas, [0; 3], &[edge])?
+                == Some(PresentationMode::Adaptive.layout(
+                    Dimensions::new(nz(4), nz(2)),
+                    Dimensions::new(nz(6), nz(2)),
+                )),
+            "submitted layout differs",
+        )?;
         let mut expected = [BLACK; 12];
         expected
             .get_mut(10..12)
@@ -797,7 +818,10 @@ mod tests {
         )?;
         scene.mode = PresentationMode::AspectFit;
         require(scene.fit(wide, maximum)? == base, "base not restored")?;
-        require(scene.draw(&mut canvas, [0; 3], &[sprite])?, "atlas lost")?;
+        require(
+            scene.draw(&mut canvas, [0; 3], &[sprite])?.is_some(),
+            "atlas lost",
+        )?;
         let expected_base = [GREEN, GREEN, RED, RED, GREEN, GREEN, RED, RED];
         require(
             scene.readback(&mut canvas)? == expected_base.as_flattened(),
@@ -849,7 +873,7 @@ mod tests {
         )?;
         let [base, overlay] = commands(&mut scene.atlases)?;
         require(
-            scene.draw(&mut canvas, [0; 3], &[base, overlay])?,
+            scene.draw(&mut canvas, [0; 3], &[base, overlay])?.is_some(),
             "scene not drawn",
         )?;
         let expected = [GREEN, GREEN, BLUE, RED, GREEN, GREEN, RED, RED];
@@ -867,7 +891,7 @@ mod tests {
             ..base
         };
         require(
-            scene.draw(&mut canvas, [0; 3], &[clipped])?,
+            scene.draw(&mut canvas, [0; 3], &[clipped])?.is_some(),
             "clipped scene not drawn",
         )?;
         let clipped_pixels =
@@ -890,7 +914,7 @@ mod tests {
         )?;
         let [base, overlay] = commands(&mut scene.atlases)?;
         require(
-            scene.draw(&mut canvas, [0; 3], &[base, overlay])?,
+            scene.draw(&mut canvas, [0; 3], &[base, overlay])?.is_some(),
             "scene not drawn",
         )?;
         let result = read(&canvas)?;

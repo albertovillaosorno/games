@@ -37,9 +37,9 @@ use std::time::Duration;
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
-use games::presentation::{DisplaySettings, FramePacing};
+use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
 use games_platform::performance::resident_bytes;
-use games_platform_graphics::linux::{FrameLayout, RenderError};
+use games_platform_graphics::linux::RenderError;
 
 use super::failure;
 
@@ -50,23 +50,29 @@ const RSS_SAMPLE_FRAMES: u64 = 120;
 pub(super) struct FrameSample {
     pub(super) display: DisplaySettings,
     pub(super) elapsed: Duration,
-    pub(super) layout: FrameLayout,
+    pub(super) layout: PresentationLayout,
     pub(super) work: Duration,
 }
 
 struct Segment {
     collector: PerformanceCollector,
     display: DisplaySettings,
+    layout: PresentationLayout,
 }
 
 impl Segment {
-    fn new(profile: QualityProfile, display: DisplaySettings) -> Self {
+    fn new(
+        profile: QualityProfile,
+        display: DisplaySettings,
+        layout: PresentationLayout,
+    ) -> Self {
         Self {
             collector: PerformanceCollector::with_percentiles(
                 profile,
                 NonZeroU64::new(16_666_667),
             ),
             display,
+            layout,
         }
     }
 
@@ -76,13 +82,16 @@ impl Segment {
         writeln!(
             stdout().lock(),
             concat!(
-                "Live gameplay {}x{} logical {:?}: {} submitted frames; ",
+                "Live gameplay {}x{} logical, {}x{} drawable {:?}: ",
+                "{} submitted frames; ",
                 "work mean {:?}; max {:?}; p95 {:?}; budget {:?}; ",
                 "oldest applied local input age {} samples; mean {:?}; ",
                 "p95 {:?}; sampled RSS peak {:?} bytes"
             ),
             profile.width,
             profile.height,
+            self.layout.surface.width.get(),
+            self.layout.surface.height.get(),
             self.display,
             report.frame_time.samples(),
             report.frame_time.mean(),
@@ -146,23 +155,22 @@ impl LiveMeasurement {
     ) -> Result<(), RenderError> {
         let profile = QualityProfile {
             frame_pacing: FramePacing::Uncapped,
-            height: sample.layout.height().get(),
+            height: sample.layout.design.height.get(),
             optional_effects: false,
-            width: sample.layout.width().get(),
+            width: sample.layout.design.width.get(),
         };
         let input_latency = self
             .applied
             .take()
             .and_then(|received| sample.elapsed.checked_sub(received));
         if self.segment.as_ref().is_some_and(|segment| {
-            segment.collector.profile() != profile
-                || segment.display != sample.display
+            segment.layout != sample.layout || segment.display != sample.display
         }) {
             self.finish()?;
         }
-        let segment = self
-            .segment
-            .get_or_insert_with(|| Segment::new(profile, sample.display));
+        let segment = self.segment.get_or_insert_with(|| {
+            Segment::new(profile, sample.display, sample.layout)
+        });
         let resident_bytes = segment
             .collector
             .report()
@@ -184,9 +192,9 @@ impl LiveMeasurement {
 
 #[cfg(test)]
 mod tests {
-    use games_platform_graphics::linux::FrameLayout;
+    use games::presentation::{Dimensions, PresentationMode};
 
-    use super::super::{dimension, size};
+    use super::super::dimension;
     use super::{
         DisplaySettings, Duration, FrameSample, LiveMeasurement, RenderError,
     };
@@ -212,8 +220,9 @@ mod tests {
     fn successful_frames_measure_applied_input_only_once()
     -> Result<(), RenderError> {
         let mut measurement = LiveMeasurement::default();
-        let layout =
-            FrameLayout::new(dimension(320)?, dimension(224)?, size(286_720)?)?;
+        let design = Dimensions::new(dimension(320)?, dimension(224)?);
+        let surface = Dimensions::new(dimension(960)?, dimension(672)?);
+        let layout = PresentationMode::AspectFit.layout(surface, design);
         let sample = FrameSample {
             display: DisplaySettings::default(),
             elapsed: Duration::from_millis(30),
@@ -234,6 +243,37 @@ mod tests {
         if report.frame_time.samples() != 3
             || report.input_latency.samples() != 1
             || report.input_latency.maximum() != Some(Duration::from_millis(20))
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn drawable_resize_starts_new_segment() -> Result<(), RenderError> {
+        let mut measurement = LiveMeasurement::default();
+        let design = Dimensions::new(dimension(320)?, dimension(224)?);
+        let first = Dimensions::new(dimension(960)?, dimension(672)?);
+        let second = Dimensions::new(dimension(1200)?, dimension(672)?);
+        let sample = FrameSample {
+            display: DisplaySettings::default(),
+            elapsed: Duration::from_millis(30),
+            layout: PresentationMode::AspectFit.layout(first, design),
+            work: Duration::from_millis(3),
+        };
+        measurement.observe(sample)?;
+        measurement.observe(sample)?;
+        let resized = PresentationMode::AspectFit.layout(second, design);
+        measurement.observe(FrameSample {
+            layout: resized,
+            ..sample
+        })?;
+        let segment = measurement
+            .segment
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?;
+        if segment.layout != resized
+            || segment.collector.report().frame_time.samples() != 1
         {
             return Err(RenderError::InvalidSprite);
         }

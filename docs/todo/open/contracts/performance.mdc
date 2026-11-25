@@ -327,8 +327,10 @@ Only nonempty admitted action batches enter the timing ledger; rejected
 batches retain their original timestamp through retry. Execution of
 their actual target tick makes them eligible for a subsequent successful
 gameplay submission. Remote input, physical scanout and GPU completion
-are not measured. Pausing or changing logical extent or display settings
-separates reports; skipped submissions do not create frame samples.
+are not measured. Pausing or changing the logical or drawable extent,
+viewport or display settings separates reports; skipped submissions do
+not create frame samples. The exact submitted presentation layout is
+retained by the renderer, avoiding a second drawable query.
 
 A visible Xvfb/software-OpenGL run with the verified local version-two
 art and four-seat X11 keyboard workload submitted 1,918 aspect-fit
@@ -342,3 +344,11 @@ The 400x224 segment averaged 1.40 ms host work and 10.47 ms age for
 before/after captures and exited through the keyboard-driven menu.
 The figures describe these local software-rendered sessions, not
 physical hardware, display latency or end-to-end LAN latency.
+
+A follow-up visible aspect-fit diagnostic retained 320x224 logical pixels
+while resizing the drawable 960x672, 1200x672, then 960x672. It emitted
+three distinct reports (252, 1,622 and 981 frames), all within the host
+work budget of 16.67 ms. The middle segment averaged 1.33 ms of work
+and 11.27 ms oldest applied input age over 30 samples. Before/after
+captures differed by 298,197 pixels. This is software OpenGL on Xvfb,
+not a physical display or GPU timing measurement.

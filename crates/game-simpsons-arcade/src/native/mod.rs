@@ -55,7 +55,9 @@ use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
-use games::presentation::{DisplaySettings, FramePacing, WindowMode};
+use games::presentation::{
+    DisplaySettings, FramePacing, PresentationLayout, WindowMode,
+};
 use games::replay::{
     InputStep, LiveInputLimits, LiveSimulation, QueueRejection, RejectedInput,
 };
@@ -749,19 +751,17 @@ impl<'preferences> Interactive<'preferences> {
 
     fn measure_presented(
         &mut self,
-        drawn: bool,
         started: Option<Instant>,
-        layout: FrameLayout,
+        layout: Option<PresentationLayout>,
     ) -> Result<(), RenderError> {
-        if drawn
-            && self.simulation.state().state().phase() == Phase::Playing
-            && let (Some(meter), Some(beginning)) =
-                (&mut self.measurement, started)
+        if self.simulation.state().state().phase() == Phase::Playing
+            && let (Some(meter), Some(beginning), Some(submitted)) =
+                (&mut self.measurement, started, layout)
         {
             meter.observe(measurement::FrameSample {
                 display: self.applied,
                 elapsed: self.input.elapsed(),
-                layout,
+                layout: submitted,
                 work: beginning.elapsed(),
             })?;
         }
@@ -911,7 +911,7 @@ impl<'preferences> Interactive<'preferences> {
                 let drawn = art.present(scene, cabinet)?;
                 presented = (drawn && cabinet.phase() != Phase::Playing)
                     .then_some(*hosted);
-                self.measure_presented(drawn, started, scene.layout())?;
+                self.measure_presented(started, scene.last_presented_layout())?;
             }
         }
         if let Some(measurement) = &mut self.measurement {
