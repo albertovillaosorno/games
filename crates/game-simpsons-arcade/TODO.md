@@ -53,8 +53,10 @@ touch devices and Android/browser presentation remain unverified.
 
 The isolated attack and jump timings are now modeled. Jump visibly
 raises the idle actor art using an approximate elevation curve. Attack
-retains its opening facing, with approximate slow horizontal drift and
-no vertical drift. Jump retains the last horizontal stride until landing
+retains its opening facing. Horizontal drift starts two ticks after
+admission, at one quarter-pixel per held direction tick through offset
+18. Its fractional remainder persists between actions; vertical drift
+is absent. Jump retains the last horizontal stride until landing
 or another horizontal direction is pressed. Depth follows held input.
 The pose catalogue and combat encounter extend this preview. Hold
 Jump for a longer, higher

@@ -1308,9 +1308,9 @@ same displayed interval, with Bart's final transient idle pose.
 Sixteen pose crops passed complete-scene pixel-exact import and
 extend the local catalogue to 134 records. Marge's back-to-back
 attack probes with one and three rightward drift ticks in separate
-actions did not cross a visible pixel boundary, consistent with the
-existing per-action remainder reset. Other fractional cases remain
-unverified.
+actions did not cross a visible pixel boundary. The later controlled
+probes below distinguish pose selection from actual drift and supersede
+the earlier per-action remainder-reset inference.
 
 The preview latches moving art from horizontal input on the tick
 after ground attack admission and retains it until the attack ends.
@@ -1398,3 +1398,27 @@ respectively. Lifetime peak RSS was 146,202,624 bytes. Fresh workspace
 validation including native render and audio smoke passed in run
 1795623142669088726-3761889. These are synthetic host-work measurements,
 not original combat parity or physical input/audio validation.
+
+Additional isolated ground-attack controls for all four stations show
+that offset one selects moving art without displacement. A left pulse
+at offset two moves one visible pixel; four rightward input ticks
+starting at offset one move zero, while five move one. Marge's last
+drift tick is offset 18, before the existing recovery boundary.
+Two successive three-tick directional pulses at offset one each
+contribute two effective quarters; for every character the pair
+moves exactly one pixel in the selected direction. Marge retains
+this carry across neutral delays, two ordinary walking ticks, a
+stationary short jump and a stationary special. An isolated left-edge
+control also shows that blocked outward drift cannot delay a later
+inward step.
+
+The fixed-step prototype now starts drift at offset two, preserves
+the floor-rounded fraction through unrelated maneuvers and walking,
+and discards it on actual horizontal clamping or explicit position
+restore. Right-edge handling is a bounded symmetric implementation
+policy; original right-edge and hit-induced fraction behavior remain
+unverified. Five visible-position regressions supplement the existing
+pose, recovery and facing tests. Fresh workspace validation passed in
+run 1795623279589323049-3778961; the complete adaptive touch, enemy,
+shadow and dummy-audio OpenGL smoke passed again with the 134-pose
+catalogue. Neither timing correction establishes original hitboxes.

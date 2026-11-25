@@ -431,7 +431,6 @@ impl Slot {
                 self.action_recovery =
                     Recovery::Ground(GROUND_ATTACK_RECOVERY_TICKS);
             }
-            self.attack_quarters = 0;
             self.station.maneuver = maneuver;
             self.station.walking = None;
         }
@@ -498,8 +497,8 @@ impl Slot {
                 };
                 (motion.step().saturating_mul(forward), 0)
             },
-            Maneuver::Special { .. } => (0, 0),
-            Maneuver::Attack { .. } => (self.attack_step(dx), 0),
+            Maneuver::Attack { tick: 2.., .. } => (self.attack_step(dx), 0),
+            Maneuver::Special { .. } | Maneuver::Attack { .. } => (0, 0),
             // Original drift continues through offset 18, then stops.
             Maneuver::Idle
                 if matches!(self.action_recovery, Recovery::Ground(2..)) =>
@@ -507,14 +506,8 @@ impl Slot {
                 (self.attack_step(dx), 0)
             },
             Maneuver::Idle if self.action_recovery != Recovery::Ready => (0, 0),
-            Maneuver::Jump(ref mut motion) => {
-                self.attack_quarters = 0;
-                (motion.horizontal_step(dx), dy)
-            },
-            Maneuver::Idle => {
-                self.attack_quarters = 0;
-                (dx, dy)
-            },
+            Maneuver::Jump(ref mut motion) => (motion.horizontal_step(dx), dy),
+            Maneuver::Idle => (dx, dy),
         }
     }
 
@@ -538,10 +531,16 @@ impl Slot {
         }
         let (step_x, step_y) = self.maneuver_step(dx, dy);
         let position = &mut self.station.position;
-        position.x = position
-            .x
-            .saturating_add(step_x)
-            .clamp(layout.min.x, layout.max.x);
+        let next_x = position.x.saturating_add(step_x);
+        // A remainder at the right edge would extend beyond the layout.
+        // At the left edge only an actual outward step is discarded.
+        if position.x.checked_add(step_x).is_none()
+            || next_x < layout.min.x
+            || next_x >= layout.max.x
+        {
+            self.attack_quarters = 0;
+        }
+        position.x = next_x.clamp(layout.min.x, layout.max.x);
         position.y = position
             .y
             .saturating_add(step_y)
@@ -1432,6 +1431,152 @@ mod tests {
             verify_recovery_direction(player, 22, 0, false);
             verify_recovery_direction(player, 23, -2, true);
         }
+    }
+
+    #[test]
+    fn attack_drift_begins_after_the_moving_pose_sample() {
+        for player in Player::ALL {
+            for (direction, offset, length, delta) in [
+                (Control::Left, 0, 1, 0),
+                (Control::Left, 1, 1, 0),
+                (Control::Left, 1, 2, -1),
+                (Control::Left, 2, 1, -1),
+                (Control::Right, 1, 4, 0),
+                (Control::Right, 1, 5, 1),
+                (Control::Right, 1, 8, 1),
+            ] {
+                let mut state = four_playing();
+                let before = station_for(&state, player);
+                ground_pulse(
+                    &mut state,
+                    player,
+                    direction,
+                    (3, offset, length),
+                );
+                let after = station_for(&state, player);
+                assert_eq!(
+                    after.position.x,
+                    before.position.x.saturating_add(delta)
+                );
+                assert_eq!(after.position.y, before.position.y);
+            }
+        }
+    }
+
+    fn ground_pulse(
+        state: &mut Cabinet,
+        player: Player,
+        direction: Control,
+        (start, offset, length): (u64, u64, u64),
+    ) {
+        let down = start.saturating_add(offset);
+        let up = down.saturating_add(length);
+        for tick in start..start.saturating_add(20) {
+            let mut edges = Vec::new();
+            if tick == start {
+                edges.extend(pulse(player, Control::Primary));
+            }
+            if tick == down {
+                edges.push(change(player, direction, true));
+            }
+            if tick == up {
+                edges.push(change(player, direction, false));
+            }
+            state.input_step(tick, &edges);
+        }
+    }
+
+    #[test]
+    fn two_attacks_share_the_visible_fractional_carry() {
+        for player in Player::ALL {
+            for (direction, delta) in [(Control::Left, -1), (Control::Right, 1)]
+            {
+                let mut state = four_playing();
+                let before = station_for(&state, player);
+                ground_pulse(&mut state, player, direction, (3, 1, 3));
+                ground_pulse(&mut state, player, direction, (23, 1, 3));
+                let after = station_for(&state, player);
+                assert_eq!(
+                    after.position.x,
+                    before.position.x.saturating_add(delta)
+                );
+                assert_eq!(after.position.y, before.position.y);
+            }
+        }
+    }
+
+    #[test]
+    fn carry_survives_walking_neutral_jump_and_special() {
+        let mut state = four_playing();
+        let player = Player::Marge;
+        let before = station_for(&state, player);
+        ground_pulse(&mut state, player, Control::Right, (3, 1, 3));
+        state.input_step(23, &[change(player, Control::Right, true)]);
+        state.input_step(24, &[]);
+        state.input_step(25, &[change(player, Control::Right, false)]);
+        state.input_step(26, &pulse(player, Control::Secondary));
+        for tick in 27..65 {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(65, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Secondary, true),
+            change(player, Control::Primary, false),
+            change(player, Control::Secondary, false),
+        ]);
+        assert!(matches!(
+            station_for(&state, player).maneuver,
+            Maneuver::Special { .. }
+        ));
+        for tick in 66..110 {
+            state.input_step(tick, &[]);
+        }
+        ground_pulse(&mut state, player, Control::Right, (110, 1, 3));
+        let after = station_for(&state, player);
+        assert_eq!(after.position.x, before.position.x.saturating_add(5));
+        assert_eq!(after.position.y, before.position.y);
+    }
+
+    #[test]
+    fn blocked_outward_fraction_cannot_delay_inward_motion() {
+        let player = Player::Marge;
+        let mut state = four_playing();
+        state.input_step(3, &[change(player, Control::Left, true)]);
+        for tick in 4..70 {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(70, &[change(player, Control::Left, false)]);
+        let edge = StreetLayout::DOWNTOWN.min.x;
+        assert_eq!(station_for(&state, player).position.x, edge);
+        ground_pulse(&mut state, player, Control::Left, (71, 2, 1));
+        assert_eq!(station_for(&state, player).position.x, edge);
+        ground_pulse(&mut state, player, Control::Right, (91, 1, 3));
+        assert_eq!(station_for(&state, player).position.x, edge);
+        ground_pulse(&mut state, player, Control::Right, (111, 1, 3));
+        assert_eq!(
+            station_for(&state, player).position.x,
+            edge.saturating_add(1)
+        );
+    }
+
+    #[test]
+    fn right_boundary_discards_outward_fraction() {
+        let player = Player::Marge;
+        let mut state = four_playing();
+        state.input_step(3, &[change(player, Control::Right, true)]);
+        for tick in 4..130 {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(130, &[change(player, Control::Right, false)]);
+        let edge = StreetLayout::DOWNTOWN.max.x;
+        assert_eq!(station_for(&state, player).position.x, edge);
+        ground_pulse(&mut state, player, Control::Right, (131, 2, 1));
+        assert_eq!(station_for(&state, player).position.x, edge);
+        ground_pulse(&mut state, player, Control::Left, (151, 2, 1));
+        assert_eq!(
+            station_for(&state, player).position.x,
+            edge.saturating_sub(1)
+        );
     }
 
     fn verify_recovery_direction(
