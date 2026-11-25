@@ -391,3 +391,33 @@ subsequent frames use the existing cadence meter's input distribution.
 Inline regressions verify independent local and remote ages, absence of
 repeated samples, pending-tick retention and suspension. These measures
 exclude client-side input, pre-decode network transit and scanout.
+
+An optimized offscreen OpenGL ES diagnostic at c215846 used the local
+version-two art catalogue, dummy audio and the NVIDIA EGL vendor.
+The renderer ran on a GeForce RTX 4060 (driver 620.70.06); the process
+appeared as a graphics client in NVIDIA's process monitor. Four repeated
+600-frame movement and 51-frame combat workloads passed, including
+three synthetic input samples per run. Repeated startup took 135.3 to
+157.6 ms; movement averaged 102.0 to 104.9 microseconds, with maxima
+3.255 to 3.534 ms; combat averaged 75.7 to 79.7 microseconds.
+No workload missed 16.667 ms. Repeated peak RSS ranged from 89,505,792
+to 89,784,320 bytes; the initial run was separately higher, at
+150,249,472 bytes and 273.0 ms startup. The executable was 3,169,408
+bytes. Process framebuffer memory sampled at idle was 14 MiB and
+reached 20 MiB during a separate successful workload. This is sampled
+driver-reported process memory, not a guaranteed peak or exact asset
+allocation. Host submission time is not GPU execution or scanout time.
+
+At 6298471 an optimized private Xvfb/software OpenGL host and three
+standalone controller processes used separate approved identities on
+loopback. All remote seats joined, moved and released controls; one
+disconnected while moving, the other remote seats continued, and the
+same approved identity rejoined. The host recorded 10,301 submissions
+and 10,300 intervals at 635 rounded-down submission FPS. Mean host
+work was 1.573 ms; mean interval was 1.574 ms; both had p95 bounds
+1.835 to 1.966 ms and 16 misses of 16.667 ms. One local input-age
+sample was 17 ms; 18 remote decode-age samples averaged 15.655 ms,
+with p95 bounds 29.360 to 30.399 ms. Sampled peak RSS was 120,524,800
+bytes. The host exited through its menu. This establishes host-side
+age under an authenticated concurrent loopback workload, not physical
+multi-device networking, client-to-host transit or display latency.
