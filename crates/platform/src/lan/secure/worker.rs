@@ -25,7 +25,7 @@
 // - Description:
 //   - Serialises operations without blocking submission or polling.
 // - Usage:
-//   - Submit only protocol-expected receives; poll correlated completions.
+//   - Poll handshakes and receives; poll correlated completions.
 // - Defaults:
 //   - No implicit LAN listener, polling receives or unbounded queue.
 
@@ -56,6 +56,8 @@ pub enum HostOperation {
     Disconnect(u64),
     /// Join a directly connected local controller.
     JoinLocal(u64),
+    /// Advance a pending handshake without blocking on an untrusted socket.
+    PollAuthenticate(Box<PendingConnection>),
     /// Poll one frame without blocking on an idle or incomplete peer.
     PollReceive(u64),
     /// Receive one protocol-expected frame; an idle timeout disconnects.
@@ -91,6 +93,8 @@ pub enum HostOutcome<Message> {
     Admitted(u64),
     /// Roster or transport operation completed without a value.
     Applied,
+    /// Resubmit this pending handshake or drop it to release its permit.
+    Authenticating(Box<PendingConnection>),
     /// Application message passed the host's schema.
     Message {
         /// Identity determined by the host, not the received payload.
@@ -167,8 +171,9 @@ struct Channels<Message> {
 /// Only the worker performs authentication, schema decoding and transfers.
 /// Requests and completions each have the supplied finite capacity. One
 /// operation is in flight at a time. A trusted title codec must be bounded
-/// and nonblocking. Use `PollReceive` for quiet clients; blocking receive
-/// requests still treat a receive timeout as a disconnect.
+/// and nonblocking. Use `PollAuthenticate` and `PollReceive` to prevent
+/// quiet sockets from delaying other requests; blocking operations remain
+/// available for protocol-expected transfers.
 ///
 /// Shutdown cancels queued operations and joins the worker. It may wait for
 /// an in-flight bounded transfer; do not shut down on the rendering path.
@@ -324,6 +329,17 @@ where
             session.join_local(peer)?;
             Ok(HostOutcome::Applied)
         },
+        HostOperation::PollAuthenticate(mut pending) => {
+            match pending
+                .poll_authenticate()
+                .map_err(|error| OperationError::Authentication(error.kind()))?
+            {
+                Some(stream) => {
+                    Ok(HostOutcome::Admitted(session.admit(stream)?))
+                },
+                None => Ok(HostOutcome::Authenticating(pending)),
+            }
+        },
         HostOperation::PollReceive(peer) => {
             Ok(session.poll_receive(peer, codec)?.map_or_else(
                 || HostOutcome::Pending,
@@ -376,6 +392,7 @@ fn serve<Codec>(
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpStream;
     use std::thread;
 
     use games::network::SessionError;
@@ -460,6 +477,27 @@ mod tests {
             remote
                 .join()
                 .map_err(|_error| io::Error::other("client panicked"))?
+        })
+    }
+
+    fn poll_admission(
+        worker: &HostWorker<u8>,
+        listener: &SecureLanListener,
+        id: u64,
+    ) -> io::Result<()> {
+        let mut pending =
+            Some(Box::new(poll_accept(|| listener.try_accept())?));
+        poll_accept(|| {
+            let next = pending.take().ok_or(ErrorKind::NotConnected)?;
+            submit(worker, id, HostOperation::PollAuthenticate(next))?;
+            match completion(worker, id)? {
+                Ok(HostOutcome::Authenticating(next_state)) => {
+                    pending = Some(next_state);
+                    Ok(None)
+                },
+                Ok(HostOutcome::Admitted(2)) => Ok(Some(())),
+                result => Err(io::Error::other(format!("{result:?}"))),
+            }
         })
     }
 
@@ -596,6 +634,62 @@ mod tests {
             ) && matches!(completion(&worker, 3)?, Ok(HostOutcome::Applied)),
             "commands complete in submission order",
         )?;
+        worker.shutdown()
+    }
+
+    #[test]
+    fn poll_handshake_keeps_host_commands_available() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, config()?, keys.server.clone())?;
+        let session =
+            HostSession::new(session_config(true), &[(keys.client_id, 2)])
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
+        let address = listener.local_addr()?;
+        let _silent = TcpStream::connect(address)?;
+        let silent = poll_accept(|| listener.try_accept())?;
+        submit(
+            &worker,
+            1,
+            HostOperation::PollAuthenticate(Box::new(silent)),
+        )?;
+        let Ok(HostOutcome::Authenticating(stalled)) = completion(&worker, 1)?
+        else {
+            return Err(io::Error::other("silent handshake must be pending"));
+        };
+        submit(&worker, 2, HostOperation::JoinLocal(1))?;
+        require(
+            matches!(completion(&worker, 2)?, Ok(HostOutcome::Applied)),
+            "local admission independent of silent handshake",
+        )?;
+        let server_name =
+            ServerName::try_from("games.test").map_err(io::Error::other)?;
+        thread::scope(|scope| {
+            let remote = scope.spawn(|| {
+                SecureFrameStream::connect(
+                    address,
+                    config()?,
+                    &keys.client,
+                    server_name,
+                )
+            });
+            poll_admission(&worker, &listener, 3)?;
+            let mut client = remote
+                .join()
+                .map_err(|_error| io::Error::other("client panicked"))??;
+            client.send(b"M\x07")?;
+            submit(&worker, 4, HostOperation::Receive(2))?;
+            require(
+                matches!(
+                    completion(&worker, 4)?,
+                    Ok(HostOutcome::Message { peer: 2, value: 7 })
+                ),
+                "second peer completes and sends while first is silent",
+            )
+        })?;
+        drop(stalled);
         worker.shutdown()
     }
 

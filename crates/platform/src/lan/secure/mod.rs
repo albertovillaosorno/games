@@ -60,7 +60,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::{
     DeadlineSocket, FrameChannel, LanConfig, LanListener, TimedStream,
-    connect_socket,
+    connect_socket, remaining,
 };
 
 const PROTOCOL: &[u8] = b"games-lan/1";
@@ -306,11 +306,17 @@ impl SecureLanListener {
         let Some(stream) = self.listener.try_socket()? else {
             return Ok(None);
         };
+        let connection = ServerConnection::new(Arc::clone(&self.tls.0))
+            .map_err(io::Error::other)?;
         Ok(Some(PendingConnection {
             config: self.listener.config,
-            permit,
-            stream,
-            tls: self.tls.clone(),
+            state: Some(PendingState {
+                permit,
+                stream: TlsSocket {
+                    connection: Connection::Server(connection),
+                    socket: stream,
+                },
+            }),
         }))
     }
 }
@@ -339,9 +345,13 @@ impl Drop for PendingPermit {
 #[derive(Debug)]
 pub struct PendingConnection {
     config: LanConfig,
+    state: Option<PendingState>,
+}
+
+#[derive(Debug)]
+struct PendingState {
     permit: PendingPermit,
-    stream: DeadlineSocket,
-    tls: ServerTls,
+    stream: TlsSocket,
 }
 
 impl PendingConnection {
@@ -351,15 +361,35 @@ impl PendingConnection {
     ///
     /// Rejects anonymous, untrusted or incompatible peers and timed-out I/O.
     pub fn authenticate(self) -> io::Result<SecureFrameStream> {
-        let Self {
-            config,
-            permit: _permit,
-            stream,
-            tls,
-        } = self;
-        let connection =
-            ServerConnection::new(tls.0).map_err(io::Error::other)?;
-        handshake(Connection::Server(connection), stream, config)
+        let PendingState { permit: _permit, stream } =
+            self.state.ok_or(ErrorKind::NotConnected)?;
+        handshake(stream, self.config)
+    }
+
+    /// Advance the same accepted socket without waiting for network I/O.
+    ///
+    /// A pending result retains the original deadline and listener permit.
+    /// Success or failure consumes the socket and releases that permit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects expired, incompatible or untrusted peers and consumed state.
+    pub fn poll_authenticate(
+        &mut self,
+    ) -> io::Result<Option<SecureFrameStream>> {
+        let state = self.state.as_mut().ok_or(ErrorKind::NotConnected)?;
+        match state.stream.poll_handshake() {
+            Ok(false) => Ok(None),
+            Ok(true) => {
+                let PendingState { permit: _permit, stream } =
+                    self.state.take().ok_or(ErrorKind::NotConnected)?;
+                finish_handshake(stream, self.config).map(Some)
+            },
+            Err(error) => {
+                drop(self.state.take());
+                Err(error)
+            },
+        }
     }
 }
 
@@ -387,7 +417,13 @@ impl SecureFrameStream {
         let socket = connect_socket(address, config)?;
         let connection = ClientConnection::new(Arc::clone(&tls.0), name)
             .map_err(io::Error::other)?;
-        handshake(Connection::Client(connection), socket, config)
+        handshake(
+            TlsSocket {
+                connection: Connection::Client(connection),
+                socket,
+            },
+            config,
+        )
     }
 
     /// Get the authenticated peer's leaf certificate fingerprint.
@@ -446,15 +482,53 @@ impl TlsSocket {
         Ok(())
     }
 
+    fn poll_handshake(&mut self) -> io::Result<bool> {
+        let _time = remaining(self.socket.deadline)?;
+        self.socket.socket.set_nonblocking(true)?;
+        let result = self.poll_handshake_io();
+        self.socket.socket.set_nonblocking(false)?;
+        result?;
+        let _remaining = remaining(self.socket.deadline)?;
+        Ok(!self.connection.is_handshaking() && !self.connection.wants_write())
+    }
+
+    fn poll_handshake_io(&mut self) -> io::Result<()> {
+        self.poll_write_tls()?;
+        if self.connection.is_handshaking() && self.connection.wants_read() {
+            match self.read_once() {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) => {},
+                result => result?,
+            }
+        }
+        Ok(())
+    }
+
     fn poll_tls(&mut self) -> io::Result<()> {
+        self.poll_write_tls()?;
+        self.read_once()
+    }
+
+    fn poll_write_tls(&mut self) -> io::Result<()> {
         if self.connection.wants_write() {
             match self.connection.write_tls(&mut self.socket.socket) {
                 Ok(0) => return Err(ErrorKind::WriteZero.into()),
                 Ok(_) => {},
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {},
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::Interrupted
+                    ) => {},
                 Err(error) => return Err(error),
             }
         }
+        Ok(())
+    }
+
+    fn read_once(&mut self) -> io::Result<()> {
         match self.connection.read_tls(&mut self.socket.socket) {
             Ok(0) => Err(ErrorKind::UnexpectedEof.into()),
             Ok(_) => {
@@ -471,17 +545,9 @@ impl TlsSocket {
     fn read_tls(&mut self) -> io::Result<()> {
         loop {
             self.socket.prepare_read()?;
-            match self.connection.read_tls(&mut self.socket.socket) {
-                Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
-                Ok(_) => {
-                    let _state = self
-                        .connection
-                        .process_new_packets()
-                        .map_err(io::Error::other)?;
-                    return Ok(());
-                },
+            match self.read_once() {
                 Err(error) if error.kind() == ErrorKind::Interrupted => {},
-                Err(error) => return Err(error),
+                result => return result,
             }
         }
     }
@@ -525,16 +591,21 @@ impl TimedStream for TlsSocket {
 }
 
 fn handshake(
-    connection: Connection,
-    socket: DeadlineSocket,
+    mut stream: TlsSocket,
     config: LanConfig,
 ) -> io::Result<SecureFrameStream> {
-    let mut stream = TlsSocket { connection, socket };
     while stream.connection.is_handshaking() {
         stream.flush_tls()?;
         stream.read_tls()?;
     }
     stream.flush_tls()?;
+    finish_handshake(stream, config)
+}
+
+fn finish_handshake(
+    stream: TlsSocket,
+    config: LanConfig,
+) -> io::Result<SecureFrameStream> {
     if stream.connection.alpn_protocol() != Some(PROTOCOL) {
         return Err(ErrorKind::InvalidData.into());
     }
@@ -988,5 +1059,78 @@ mod tests {
                 "queued handshake must not obtain a fresh deadline",
             )
         })
+    }
+    #[test]
+    fn poll_rejects_untrusted_client_and_releases_permit() -> io::Result<()> {
+        let issuer = authority()?;
+        let outsider = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let (untrusted, _identity) =
+            client_credentials(&issuer, &outsider, keys.server_id)?;
+        let mut limits = session_config(true);
+        limits.max_players = NonZeroU8::MIN;
+        let settings = LanConfig::new(limits, TIMEOUT)?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let address = listener.local_addr()?;
+        let name = ServerName::try_from(HOST).map_err(io::Error::other)?;
+        thread::scope(|scope| {
+            let remote = scope.spawn(|| {
+                SecureFrameStream::connect(address, settings, &untrusted, name)
+            });
+            let mut pending = poll_accept(|| listener.try_accept())?;
+            require(
+                error_kind(poll_accept(|| pending.poll_authenticate()))
+                    == Some(ErrorKind::Other),
+                "untrusted leaf cannot complete the polled handshake",
+            )?;
+            let _result = remote
+                .join()
+                .map_err(|_error| io::Error::other("client panicked"))?;
+            require(
+                error_kind(pending.poll_authenticate())
+                    == Some(ErrorKind::NotConnected),
+                "failed handshake state consumed",
+            )
+        })?;
+        let (host, remote) = pair(&listener, settings, &keys.client, HOST)?;
+        require(
+            host.is_ok() && remote.is_ok(),
+            "failed polling releases the sole admission permit",
+        )
+    }
+
+    #[test]
+    fn poll_expiry_releases_permit_and_consumes_socket() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings =
+            LanConfig::new(session_config(true), Duration::from_millis(50))?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let address = listener.local_addr()?;
+        let _first = TcpStream::connect(address)?;
+        let mut pending = poll_accept(|| listener.try_accept())?;
+        require(
+            pending.poll_authenticate()?.is_none(),
+            "silent peer pending",
+        )?;
+        let _second = TcpStream::connect(address)?;
+        let _held = poll_accept(|| listener.try_accept())?;
+        let _third = TcpStream::connect(address)?;
+        require(listener.try_accept()?.is_none(), "both permits held")?;
+        thread::sleep(Duration::from_millis(80));
+        require(
+            error_kind(pending.poll_authenticate())
+                == Some(ErrorKind::TimedOut),
+            "original acceptance deadline expires",
+        )?;
+        let _replacement = poll_accept(|| listener.try_accept())?;
+        require(
+            error_kind(pending.poll_authenticate())
+                == Some(ErrorKind::NotConnected)
+                && listener.try_accept()?.is_none(),
+            "expired state consumed and exactly one permit restored",
+        )
     }
 }

@@ -147,3 +147,18 @@ validation passed in run 1795586058926200097-4046029.
 Polling is explicitly caller-driven; authentication and outbound sends
 still use serialised bounded operations. Physical LAN and an integrated
 playable host remain open.
+
+The host worker now advances accepted TLS handshakes incrementally.
+A pending completion returns the same socket and permit to the caller
+for resubmission; quiet or incomplete negotiation cannot delay unrelated
+host commands when this polling path is selected. Authentication retains
+the original accepted-socket deadline, verifies the same TLS certificate
+and protocol policy, and only then invokes the existing enrolled roster
+admission. Failure or cancellation releases the listener permit.
+
+Loopback tests exercise local admission and a second approved TLS client
+while a first silent socket remains pending, expiry without renewed
+deadlines, and rejection of an untrusted certificate with permit recovery.
+The tests passed in both default and all-feature suites. Incremental
+outbound sends, automatic scheduling, credential provisioning and physical
+LAN play remain open.
