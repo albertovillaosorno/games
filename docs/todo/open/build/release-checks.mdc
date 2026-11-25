@@ -41,3 +41,14 @@ primitive. A failed write removes its private staging on normal return
 and does not publish a partial package. Tests exercise rollback,
 non-component destinations and existing-output preservation. Abrupt
 process termination and power-loss recovery have not been tested.
+
+Native packaging now checks the ELF64 executable header and the complete
+bounded program-header table before staging. Loadable segments must fit
+the file, have valid memory extents and declared alignment, and contain
+the entry point in file-backed executable bytes. Synthetic regressions
+reject every truncated prefix of a minimal fixture, wrong targets,
+missing tables, overflowing extents and non-executable or zero-filled
+entry points. This is structural admission, not loader emulation or
+cross-host ABI verification. Fresh validation passed in run
+1795616397517689693-2582351. A current package attempt exposed a separate
+licence inventory blocker for Ring; no new package was published.
