@@ -31,14 +31,14 @@
 
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use games::performance::{
     FrameObservation, InputLedger, PerformanceCollector, QualityProfile,
 };
 use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
 use games_platform::ir::frame::RenderError;
-use games_platform::ir::performance::{FrameMeter, resident_bytes};
+use games_platform::ir::measurement::{FrameMeter, resident_bytes};
 
 use super::failure;
 
@@ -47,7 +47,7 @@ const RSS_SAMPLE_FRAMES: u64 = 120;
 /// Timing of one successful gameplay frame from host work to submission.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FrameSample {
-    pub(super) completed: Instant,
+    pub(super) completed: Duration,
     pub(super) display: DisplaySettings,
     pub(super) elapsed: Duration,
     pub(super) layout: PresentationLayout,
@@ -55,7 +55,7 @@ pub(super) struct FrameSample {
 }
 
 struct Segment {
-    cadence: FrameMeter,
+    cadence: FrameMeter<Duration>,
     collector: PerformanceCollector,
     display: DisplaySettings,
     layout: PresentationLayout,
@@ -66,7 +66,7 @@ impl Segment {
         profile: QualityProfile,
         display: DisplaySettings,
         layout: PresentationLayout,
-        first_submission: Instant,
+        first_submission: Duration,
     ) -> Self {
         Self {
             cadence: FrameMeter::new(
@@ -135,7 +135,7 @@ impl Segment {
 #[derive(Default)]
 pub(super) struct LiveMeasurement {
     local: InputLedger<Duration>,
-    remote: InputLedger<Instant>,
+    remote: InputLedger<Duration>,
     segment: Option<Segment>,
 }
 
@@ -144,7 +144,7 @@ impl LiveMeasurement {
         self.local.admit(tick, elapsed);
     }
 
-    pub(super) fn admit_remote(&mut self, tick: u64, completed_at: Instant) {
+    pub(super) fn admit_remote(&mut self, tick: u64, completed_at: Duration) {
         self.remote.admit(tick, completed_at);
     }
 
@@ -230,8 +230,7 @@ mod tests {
 
     use super::super::dimension;
     use super::{
-        DisplaySettings, Duration, FrameSample, Instant, LiveMeasurement,
-        RenderError,
+        DisplaySettings, Duration, FrameSample, LiveMeasurement, RenderError,
     };
 
     #[test]
@@ -259,7 +258,7 @@ mod tests {
         let surface = Dimensions::new(dimension(960)?, dimension(672)?);
         let layout = PresentationMode::AspectFit.layout(surface, design);
         let sample = FrameSample {
-            completed: Instant::now(),
+            completed: Duration::from_millis(100),
             display: DisplaySettings::default(),
             elapsed: Duration::from_millis(30),
             layout,
@@ -292,7 +291,7 @@ mod tests {
         let first = Dimensions::new(dimension(960)?, dimension(672)?);
         let second = Dimensions::new(dimension(1200)?, dimension(672)?);
         let sample = FrameSample {
-            completed: Instant::now(),
+            completed: Duration::from_millis(100),
             display: DisplaySettings::default(),
             elapsed: Duration::from_millis(30),
             layout: PresentationMode::AspectFit.layout(first, design),
@@ -344,7 +343,7 @@ mod tests {
     -> Result<(), RenderError> {
         let mut measurement = LiveMeasurement::default();
         let design = Dimensions::new(dimension(320)?, dimension(224)?);
-        let completed = Instant::now();
+        let completed = Duration::from_millis(100);
         let decoded = completed
             .checked_sub(Duration::from_millis(7))
             .ok_or(RenderError::InvalidSprite)?;
@@ -392,7 +391,7 @@ mod tests {
     fn remote_age_survives_pending_ticks_but_not_suspension()
     -> Result<(), RenderError> {
         let mut measurement = LiveMeasurement::default();
-        let early = Instant::now();
+        let early = Duration::from_millis(100);
         let later = early
             .checked_add(Duration::from_millis(1))
             .ok_or(RenderError::InvalidSprite)?;
@@ -424,7 +423,7 @@ mod tests {
         let design = Dimensions::new(dimension(320)?, dimension(224)?);
         let surface = Dimensions::new(dimension(960)?, dimension(672)?);
         let sample = FrameSample {
-            completed: Instant::now(),
+            completed: Duration::from_millis(100),
             display: DisplaySettings::default(),
             elapsed: Duration::ZERO,
             layout: PresentationMode::AspectFit.layout(surface, design),

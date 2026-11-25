@@ -43,13 +43,12 @@ mod station_hud;
 mod touch;
 mod world;
 
-use std::env;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use games::audio::MasterVolume;
 use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
@@ -74,10 +73,10 @@ use games_platform::ir::graphics::scene_renderer::{SceneSession, SceneView};
 use games_platform::ir::input::{
     HostEvent, InputStartup, NativeInput, key_from_name, key_name,
 };
-use games_platform::ir::menu::{MenuArt, MenuContent};
-use games_platform::ir::performance::{
-    FrameMeter, peak_resident_bytes, resident_bytes,
+use games_platform::ir::measurement::{
+    FrameMeter, executable_bytes, now, peak_resident_bytes, resident_bytes,
 };
+use games_platform::ir::menu::{MenuArt, MenuContent};
 use games_platform::ir::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
 };
@@ -872,20 +871,20 @@ impl<'preferences> Interactive<'preferences> {
 
     fn measure_presented(
         &mut self,
-        started: Option<Instant>,
+        started: Option<Duration>,
         layout: Option<PresentationLayout>,
     ) -> Result<(), RenderError> {
         if self.simulation.state().state().phase() == Phase::Playing
             && let (Some(meter), Some(beginning), Some(submitted)) =
                 (&mut self.measurement, started, layout)
         {
-            let completed = Instant::now();
+            let completed = now().map_err(failure)?;
             meter.observe(measurement::FrameSample {
                 completed,
                 display: self.applied,
                 elapsed: self.input.elapsed(),
                 layout: submitted,
-                work: completed.saturating_duration_since(beginning),
+                work: completed.saturating_sub(beginning),
             })?;
         }
         Ok(())
@@ -1019,7 +1018,12 @@ impl<'preferences> Interactive<'preferences> {
         }
         let mut presented = None;
         while self.simulation.state().state().phase() != Phase::Exited {
-            let started = self.measurement.as_ref().map(|_| Instant::now());
+            let started = self
+                .measurement
+                .as_ref()
+                .map(|_| now())
+                .transpose()
+                .map_err(failure)?;
             let wait_ms = presentation_wait(self.simulation.state());
             let batch = self.poll(scene, wait_ms)?;
             if batch == EventBatch::Stopped {
@@ -1491,7 +1495,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "--lan-controller") {
         return controller::run(args);
     }
-    let load_started = Instant::now();
+    let load_started = now().map_err(|error| error.to_string())?;
     let launch::Launch {
         assets,
         audio_device,
@@ -2029,9 +2033,9 @@ fn smoke_peak_report() -> Result<(), RenderError> {
 fn startup_report(
     scene: &SceneSession<'_, '_>,
     renderer: &str,
-    started: Instant,
+    started: Duration,
 ) -> Result<(), RenderError> {
-    let completed = Instant::now();
+    let completed = now().map_err(failure)?;
     let layout = scene.layout();
     let profile = QualityProfile {
         frame_pacing: FramePacing::Uncapped,
@@ -2042,8 +2046,8 @@ fn startup_report(
     let mut meter =
         FrameMeter::new(PerformanceCollector::new(profile), completed);
     meter.record_load(started, completed).map_err(failure)?;
-    if let Ok(path) = env::current_exe() {
-        let _result = meter.record_artifact(&path);
+    if let Ok(bytes) = executable_bytes() {
+        meter.record_artifact_bytes(bytes);
     }
     writeln!(
         stdout().lock(),
@@ -2089,13 +2093,13 @@ fn smoke_movement_benchmark(
         )?;
         let rss = resident_bytes().ok();
         for frame in 0..30u8 {
-            let started = Instant::now();
+            let started = now().map_err(failure)?;
             let _advanced =
                 simulation.advance(TICK_INTERVAL).map_err(failure)?;
             let _drawn = art.present(scene, simulation.state())?;
             collector
                 .observe(FrameObservation {
-                    frame_time: started.elapsed(),
+                    frame_time: now().map_err(failure)?.saturating_sub(started),
                     input_latency: None,
                     resident_bytes: if frame == 0 {
                         rss
@@ -2612,7 +2616,7 @@ fn window(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
     host: Option<HostLan>,
-    load_started: Instant,
+    load_started: Duration,
 ) -> Result<(), RenderError> {
     let touch_enabled = options.touch_enabled;
     let reserved = host_reservations(options, host.as_ref())?;

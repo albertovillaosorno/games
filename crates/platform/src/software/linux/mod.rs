@@ -40,7 +40,7 @@ pub(super) mod input;
 #[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
 pub mod lan;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod performance;
+pub(super) mod performance;
 pub(super) mod storage;
 pub mod toolchain;
 

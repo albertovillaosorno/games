@@ -36,7 +36,7 @@ use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::Instant;
+use std::time::Duration;
 
 use games::performance::PerformanceCollector;
 use games_assets::ContentHash;
@@ -46,6 +46,7 @@ use games_importer::mame::Machine;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::NativeWindow;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::measurement::now;
 use games_platform::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
@@ -160,7 +161,7 @@ impl Arguments {
     /// # Errors
     /// Rejects invalid data, exceeded budgets or unequal logical pixels.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
-        let started = Instant::now();
+        let started = now().map_err(|error| error.to_string())?;
         let bundle = CanonicalBundle::open(
             &self.parent,
             self.digest,
@@ -274,7 +275,7 @@ impl PreparedAtlas {
         &self,
         count: NonZeroU32,
         benchmark_frames: Option<NonZeroU32>,
-        started: Instant,
+        started: Duration,
     ) -> Result<Execution, RenderError> {
         let layout = FrameLayout::new(
             self.layout.width(),
@@ -297,7 +298,8 @@ impl PreparedAtlas {
         window.with_scene(layout, limits, |scene| {
             let id = scene.load_atlas(layout, self.pixels.as_flattened())?;
             let commands = self.commands(id, count)?;
-            let loaded = Instant::now();
+            let loaded = now()
+                .map_err(|error| RenderError::Backend(error.to_string()))?;
             self.check_frame(scene, &commands)?;
             let performance = if let Some(frames) = benchmark_frames {
                 Some(render_benchmark::measure(

@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Host-independent timestamp ordering and measurement admission.
+//   - Host-independent measurement and delegated resource observation.
 // - Must-Not:
-//   - Read clocks, inspect files or estimate device execution latency.
+//   - Access native services or estimate device execution latency.
 // - Allows:
 //   - Inputs: Comparable timestamps, resource bytes and shared collector.
 //   - Outputs: Measured frame and load durations or typed failures.
-//   - Side effects: Bounded in-memory observation updates.
+//   - Side effects: Delegated read-only observations and in-memory updates.
 // - Split-When:
 //   - Another observation has independent aggregation requirements.
 // - Merge-When:
@@ -29,13 +29,22 @@
 // - Defaults:
 //   - Missing input and resource observations remain absent.
 
-//! Clock-independent frame measurement and observation admission.
+//! Portable frame measurement, clock and resource observation.
 
+use std::io::Result as IoResult;
 use std::time::Duration;
 
 use games::performance::{
     FrameObservation, PerformanceCollector, PerformanceError,
 };
+
+/// Private measurement source selected by the platform composition.
+pub(crate) trait MeasurementSource {
+    fn executable_bytes() -> IoResult<u64>;
+    fn now() -> IoResult<Duration>;
+    fn peak_resident_bytes() -> IoResult<u64>;
+    fn resident_bytes() -> IoResult<u64>;
+}
 
 /// Comparable points in one monotonic time domain.
 pub trait MeasurementTimestamp: Copy {
@@ -161,6 +170,43 @@ where
         .checked_elapsed(started)
         .ok_or(MeasurementError::TimestampOrder)
 }
+/// Actual byte length of the current executable.
+///
+/// # Errors
+/// Reports unavailable executable identity, metadata or non-file artifacts.
+pub fn executable_bytes() -> IoResult<u64> {
+    <() as MeasurementSource>::executable_bytes()
+}
+
+/// Read the process-wide monotonic observation clock.
+///
+/// The origin is arbitrary, shared within this process and distinct from
+/// wall time, simulation ticks and device input session clocks.
+///
+/// # Errors
+/// Reports an unavailable observation clock.
+pub fn now() -> IoResult<Duration> {
+    <() as MeasurementSource>::now()
+}
+
+/// Observe approximate process-lifetime peak resident bytes.
+///
+/// # Errors
+/// Reports unsupported, unavailable or malformed resource observations.
+pub fn peak_resident_bytes() -> IoResult<u64> {
+    <() as MeasurementSource>::peak_resident_bytes()
+}
+
+/// Observe approximate current process resident bytes.
+///
+/// Sample at an explicit cadence rather than on every rendered frame.
+///
+/// # Errors
+/// Reports unsupported, unavailable or malformed resource observations.
+pub fn resident_bytes() -> IoResult<u64> {
+    <() as MeasurementSource>::resident_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;

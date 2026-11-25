@@ -555,3 +555,13 @@ smoke with touch, dummy audio and the 134-pose local catalogue. All 600
 movement and 60 combat host submissions met the 16.667 ms budget.
 Whole-smoke lifetime peak RSS was 90,882,048 bytes. Physical audio and
 presentation latency and cross-device performance remain unverified.
+
+The process-local monotonic clock and resource observations now use the
+portable measurement contract. Native time and metadata reads remain in
+the software adapter; unavailable observations return an explicit error.
+LAN completion stamps preserve the worker observation time in the same
+clock domain. Title and build consumers use portable durations and the
+shared frame meter. Fresh combined native rendering, dummy audio and six
+portable-core target validation passed in run 1795644432750821019-4162270
+with 1,338 test executions. Physical timing and other native backends
+remain unverified.

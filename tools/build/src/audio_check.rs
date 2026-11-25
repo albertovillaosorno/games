@@ -35,7 +35,7 @@ use std::ffi::OsString;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use games::audio::{Channels, Clip, Mixer, StereoGain};
 use games_assets::ContentHash;
@@ -43,6 +43,7 @@ use games_assets::pcm::PcmSamples;
 use games_importer::mame::Machine;
 use games_importer::selection::AssetSelection;
 use games_platform::ir::audio::{NativeAudio, PlaybackSpec};
+use games_platform::ir::measurement::now;
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
 use crate::{USAGE, text};
@@ -210,10 +211,14 @@ fn verify_mix(
         let partition = actual
             .get_mut(..count)
             .ok_or_else(|| String::from("invalid mix extent"))?;
-        let started = Instant::now();
+        let started = now().map_err(|error| error.to_string())?;
         whole.render(block);
         mixing = mixing
-            .checked_add(started.elapsed())
+            .checked_add(
+                now()
+                    .map_err(|error| error.to_string())?
+                    .saturating_sub(started),
+            )
             .ok_or_else(|| String::from("mix timing overflow"))?;
         for segment in partition.chunks_mut(113) {
             split.render(segment);

@@ -325,7 +325,7 @@ fn interactive(
         stream,
         touch_enabled,
     } = connection;
-    let mut controller = ClientLan::new(stream);
+    let mut controller = ClientLan::new(stream).map_err(failure)?;
     let mut input = startup.input;
     let mut controls = controller_controls(&resolved.profiles, touch_enabled)?;
     if touch_enabled {

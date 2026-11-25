@@ -238,3 +238,12 @@ admission, window extent and stale touch geometry. Native smoke tests
 continue to exercise the actual adapter. Unsupported window hosts return
 an explicit failure. Fresh validation reached Clippy in run
 1795643763056479052-4059599, but the full gate has not yet passed.
+
+The full gate subsequently passed in run 1795644190060834627-4124868
+and the window/input migration was committed at 12f6131. Portable
+measurement now provides process-local monotonic durations and resource
+observations without exposing a native clock. Worker completion time
+is translated before delivery rather than sampled at the caller. Fresh
+combined rendering, dummy audio and portable-core checks passed in run
+1795644432750821019-4162270 (1,338 test executions). The target checks
+cover core libraries, not complete native runtimes.

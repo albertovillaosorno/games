@@ -31,10 +31,9 @@
 
 //! Imported graphics diagnostic host workload measurement.
 
-use std::env;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use games::performance::{
     PercentileRange, PerformanceCollector, QualityProfile,
@@ -42,8 +41,8 @@ use games::performance::{
 use games::presentation::FramePacing;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
-use games_platform::ir::performance::{
-    FrameMeter, peak_resident_bytes, resident_bytes,
+use games_platform::ir::measurement::{
+    FrameMeter, executable_bytes, now, peak_resident_bytes, resident_bytes,
 };
 use games_platform::ir::scene::SpriteDraw;
 
@@ -58,9 +57,9 @@ pub struct Schedule {
     /// Number of measured presentations, excluding warmup.
     pub frames: NonZeroU32,
     /// Completion of the initial verified atlas upload.
-    pub loaded: Instant,
+    pub loaded: Duration,
     /// Start of local bundle and palette preparation.
-    pub started: Instant,
+    pub started: Duration,
 }
 
 /// Measure a prepared scene using the existing native observation meter.
@@ -97,10 +96,14 @@ where
     };
     let collector =
         PerformanceCollector::with_percentiles(profile, Some(SIXTY_HZ_NS));
-    let mut meter = FrameMeter::new(collector, Instant::now());
+    let mut meter = FrameMeter::new(
+        collector,
+        now().map_err(|error| RenderError::Backend(error.to_string()))?,
+    );
     for frame in 1..=schedule.frames.get() {
         draw()?;
-        let completed = Instant::now();
+        let completed =
+            now().map_err(|error| RenderError::Backend(error.to_string()))?;
         let rss = if frame == 1
             || frame.is_multiple_of(60)
             || frame == schedule.frames.get()
@@ -116,11 +119,9 @@ where
     meter
         .record_load(schedule.started, schedule.loaded)
         .map_err(|error| RenderError::Backend(format!("load: {error:?}")))?;
-    let path = env::current_exe()
+    let bytes = executable_bytes()
         .map_err(|error| RenderError::Backend(error.to_string()))?;
-    meter
-        .record_artifact(&path)
-        .map_err(|error| RenderError::Backend(error.to_string()))?;
+    meter.record_artifact_bytes(bytes);
     Ok(meter.into_collector())
 }
 

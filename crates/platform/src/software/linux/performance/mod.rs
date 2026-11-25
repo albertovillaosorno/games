@@ -31,45 +31,13 @@
 
 //! Native timestamp and resource observations for the shared collector.
 
-use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
-pub use crate::ir::measurement::MeasurementError;
-use crate::ir::measurement::{
-    FrameMeter as PortableFrameMeter, MeasurementTimestamp,
-};
-
-/// Whether the selected host includes native measurement services.
-pub const AVAILABLE: bool = true;
-
-/// Native timestamp specialization of the portable measurement meter.
-pub type FrameMeter = PortableFrameMeter<Instant>;
-
-impl MeasurementTimestamp for Instant {
-    fn checked_elapsed(self, earlier: Self) -> Option<Duration> {
-        self.checked_duration_since(earlier)
-    }
-}
-
-impl FrameMeter {
-    /// Record the actual distribution artifact size using file metadata.
-    ///
-    /// # Errors
-    /// Rejects unreadable paths and paths which are not regular files.
-    pub fn record_artifact(&mut self, path: &Path) -> io::Result<()> {
-        let metadata = fs::metadata(path)?;
-        if !metadata.is_file() {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "artifact must be a regular file",
-            ));
-        }
-        self.record_artifact_bytes(metadata.len());
-        Ok(())
-    }
-}
+static ORIGIN: OnceLock<Instant> = OnceLock::new();
 
 /// Read the process's approximate resident set size in bytes from procfs.
 ///
@@ -79,7 +47,7 @@ impl FrameMeter {
 /// Returns an error if procfs is unavailable or its resident-size field is
 /// missing, malformed or outside the supported byte range.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn resident_bytes() -> io::Result<u64> {
+pub(in crate::software) fn resident_bytes() -> io::Result<u64> {
     memory_bytes("VmRSS:")
 }
 
@@ -91,7 +59,7 @@ pub fn resident_bytes() -> io::Result<u64> {
 /// # Errors
 /// Returns an error if procfs or its high-water mark is unavailable or invalid.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn peak_resident_bytes() -> io::Result<u64> {
+pub(in crate::software) fn peak_resident_bytes() -> io::Result<u64> {
     memory_bytes("VmHWM:")
 }
 
@@ -114,19 +82,48 @@ fn parse_memory_bytes(status: &str, prefix: &str) -> Option<u64> {
     kibibytes.checked_mul(1024)
 }
 
+fn artifact_bytes(path: &Path) -> io::Result<u64> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(ErrorKind::InvalidInput.into());
+    }
+    Ok(metadata.len())
+}
+
+pub(in crate::software) fn executable_bytes() -> io::Result<u64> {
+    artifact_bytes(&env::current_exe()?)
+}
+
+pub(in crate::software) fn now() -> Duration {
+    ORIGIN.get_or_init(Instant::now).elapsed()
+}
+
+#[cfg(feature = "secure-lan")]
+pub(in crate::software) fn timestamp_at(
+    observed: Instant,
+) -> io::Result<Duration> {
+    let origin = ORIGIN.get().ok_or(ErrorKind::InvalidData)?;
+    observed
+        .checked_duration_since(*origin)
+        .ok_or_else(|| ErrorKind::InvalidData.into())
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
     use std::fmt::Debug;
     use std::io::{self, ErrorKind};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use games::performance::{PerformanceCollector, QualityProfile};
     use games::presentation::FramePacing;
 
-    use super::{FrameMeter, MeasurementError};
+    use super::{artifact_bytes, now};
+    use crate::ir::measurement::{
+        FrameMeter, MeasurementError, executable_bytes,
+    };
 
-    fn meter(started: Instant) -> FrameMeter {
+    fn meter(started: Duration) -> FrameMeter<Duration> {
         FrameMeter::new(
             PerformanceCollector::new(QualityProfile {
                 frame_pacing: FramePacing::Uncapped,
@@ -151,15 +148,30 @@ mod tests {
         }
     }
 
-    fn later(started: Instant, milliseconds: u64) -> io::Result<Instant> {
+    fn later(started: Duration, milliseconds: u64) -> io::Result<Duration> {
         started
             .checked_add(Duration::from_millis(milliseconds))
             .ok_or_else(|| io::Error::other("test timestamp overflow"))
     }
 
+    #[cfg(feature = "secure-lan")]
+    #[test]
+    fn native_completion_uses_the_same_clock_domain() -> io::Result<()> {
+        use std::time::Instant;
+
+        use super::timestamp_at;
+
+        let before = now();
+        let observed = Instant::now();
+        let completed = timestamp_at(observed)?;
+        let after = now();
+        check(before <= completed, true)?;
+        check(completed <= after, true)
+    }
+
     #[test]
     fn native_timestamps_feed_the_portable_meter() -> io::Result<()> {
-        let started = Instant::now();
+        let started = now();
         let mut meter = meter(started);
         let completed = later(started, 10)?;
         check(meter.observe_frame(completed, Some(started), None), Ok(()))?;
@@ -176,7 +188,7 @@ mod tests {
     #[test]
     fn measures_load_and_artifact_without_replacing_them_on_error()
     -> io::Result<()> {
-        let started = Instant::now();
+        let started = now();
         let mut meter = meter(started);
         let completed = later(started, 25)?;
         check(meter.record_load(started, completed), Ok(()))?;
@@ -189,17 +201,14 @@ mod tests {
             Some(Duration::from_millis(25)),
         )?;
         let executable = env::current_exe()?;
-        meter.record_artifact(&executable)?;
+        meter.record_artifact_bytes(executable_bytes()?);
         check(
             meter.collector().binary_size(),
             Some(executable.metadata()?.len()),
         )?;
         let directory = env::temp_dir();
         check(
-            meter
-                .record_artifact(&directory)
-                .err()
-                .map(|error| error.kind()),
+            artifact_bytes(&directory).err().map(|error| error.kind()),
             Some(ErrorKind::InvalidInput),
         )?;
         check(

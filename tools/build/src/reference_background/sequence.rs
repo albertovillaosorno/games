@@ -33,12 +33,12 @@
 
 use std::ffi::OsString;
 use std::num::NonZeroU32;
-use std::time::Instant;
 
 use games_importer::mame::Machine;
 use games_importer::mame::background::Pixel;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::{FrameSession, NativeWindow};
+use games_platform::ir::measurement::now;
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
 use super::{
@@ -134,7 +134,7 @@ impl Sequence {
     /// # Errors
     /// Rejects bad inputs, nonmatching scenes or native workload failures.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
-        let started = Instant::now();
+        let started = now().map_err(|error| error.to_string())?;
         let path = self
             .paths
             .first()
@@ -168,7 +168,9 @@ impl Sequence {
             .with_frame(layout, |session| {
                 let schedule = Schedule {
                     frames: self.frames,
-                    loaded: Instant::now(),
+                    loaded: now().map_err(|error| {
+                        RenderError::Backend(error.to_string())
+                    })?,
                     started,
                 };
                 render_benchmark::measure_workload(layout, schedule, || {

@@ -34,7 +34,7 @@
 use std::io::{Write as _, stdout};
 use std::mem::take;
 use std::num::NonZeroU64;
-use std::time::Instant;
+use std::time::Duration;
 
 use games::input::InputEvent;
 use games::input::physical::KeyboardKey;
@@ -46,6 +46,7 @@ use games::replay::LiveSimulation;
 use games::session::LocalSession;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::measurement::now;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
@@ -707,7 +708,7 @@ fn smoke_strikes(
         },
         NonZeroU64::new(16_666_667),
     );
-    let injected = Instant::now();
+    let injected = now().map_err(failure)?;
     pulse(controls, simulation, KeyboardKey::LETTER_Z)?;
     measure_strike(scene, art, simulation, (&mut collector, injected))?;
     if simulation.state().enemy().map(|enemy| enemy.health) != Some(0) {
@@ -726,11 +727,11 @@ fn measure_strike(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     simulation: &mut LiveSimulation<Cabinet>,
-    measurement: (&mut PerformanceCollector, Instant),
+    measurement: (&mut PerformanceCollector, Duration),
 ) -> Result<(), RenderError> {
     let (collector, injected) = measurement;
     for tick in 0..GROUND_ATTACK_RECOVERY_TICKS {
-        let started = Instant::now();
+        let started = now().map_err(failure)?;
         advance(simulation, 1)?;
         let [marge, ..] = simulation.state().stations();
         let attack = Maneuver::Attack { moving: false, tick };
@@ -745,12 +746,12 @@ fn measure_strike(
         if !art.present(scene, simulation.state())? {
             return Err(failure("combat frame was not submitted"));
         }
-        let completed = Instant::now();
+        let completed = now().map_err(failure)?;
         collector
             .observe(FrameObservation {
-                frame_time: completed.duration_since(started),
+                frame_time: completed.saturating_sub(started),
                 input_latency: (tick == 0)
-                    .then(|| completed.duration_since(injected)),
+                    .then(|| completed.saturating_sub(injected)),
                 resident_bytes: None,
             })
             .map_err(failure)?;

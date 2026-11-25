@@ -40,20 +40,15 @@ pub mod lan {
     pub const AVAILABLE: bool = false;
 }
 
-/// Explicit absence of native measurement on this target.
-#[cfg(target_arch = "wasm32")]
-pub mod performance {
-    /// Whether the selected host supports native measurement.
-    pub const AVAILABLE: bool = false;
-}
-
+use std::io;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use std::io::ErrorKind;
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
 #[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
 pub use linux::lan;
-#[cfg(not(target_arch = "wasm32"))]
-pub use linux::performance;
 pub use linux::storage::*;
 pub use linux::toolchain;
 
@@ -63,6 +58,7 @@ use crate::ir::audio::{
 use crate::ir::frame::RenderError;
 use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::input::InputNames;
+use crate::ir::measurement::MeasurementSource;
 use crate::ir::security::audio::PlaybackRequest;
 
 #[cfg(all(feature = "interactive", target_os = "linux"))]
@@ -138,5 +134,35 @@ impl InputNames for () {
 
     fn key_name(_key: KeyboardKey) -> &'static str {
         "UNKNOWN"
+    }
+}
+
+impl MeasurementSource for () {
+    fn executable_bytes() -> io::Result<u64> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return linux::performance::executable_bytes();
+        #[cfg(target_arch = "wasm32")]
+        Err(ErrorKind::Unsupported.into())
+    }
+
+    fn now() -> io::Result<Duration> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return Ok(linux::performance::now());
+        #[cfg(target_arch = "wasm32")]
+        Err(ErrorKind::Unsupported.into())
+    }
+
+    fn peak_resident_bytes() -> io::Result<u64> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        return linux::performance::peak_resident_bytes();
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        Err(ErrorKind::Unsupported.into())
+    }
+
+    fn resident_bytes() -> io::Result<u64> {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        return linux::performance::resident_bytes();
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        Err(ErrorKind::Unsupported.into())
     }
 }

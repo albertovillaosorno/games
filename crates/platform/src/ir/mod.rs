@@ -57,7 +57,7 @@ pub use ui::{menu, scene};
 
 /// Selected service interfaces; concrete implementation paths stay
 /// private.
-pub use crate::selected::{lan, performance, toolchain};
+pub use crate::selected::{lan, toolchain};
 
 #[cfg(test)]
 pub(crate) fn check<T, U>(

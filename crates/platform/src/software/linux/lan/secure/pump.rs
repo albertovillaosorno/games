@@ -48,6 +48,7 @@ use super::{
     LanConfig, PeerFingerprint, PendingConnection, SecureLanListener,
     SendProgress, ServerTls,
 };
+use crate::software::linux::performance::{now, timestamp_at};
 
 /// One verified remote lifecycle or schema-checked input event.
 #[derive(Debug)]
@@ -64,7 +65,7 @@ pub enum RemoteEvent<Message> {
     /// An authenticated peer supplied a valid application message.
     Message {
         /// Host monotonic time when the worker completed valid decoding.
-        completed_at: Instant,
+        completed_at: Duration,
         /// Host-approved peer identity, independent of the frame payload.
         peer: u64,
         /// Decoded application message.
@@ -239,6 +240,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let capacity = NonZeroUsize::new(players.saturating_mul(2))
             .ok_or(ErrorKind::InvalidInput)?;
         let listener = SecureLanListener::bind(address, settings, tls)?;
+        let _clock_origin = now();
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
             frame_budget: limits.max_message_bytes.get(),
@@ -332,7 +334,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
                 if actual == peer =>
             {
                 PumpProgress::Event(RemoteEvent::Message {
-                    completed_at,
+                    completed_at: timestamp_at(completed_at)?,
                     peer,
                     value,
                 })
@@ -1005,7 +1007,7 @@ mod tests {
         client.send(b"M\x05")?;
         let completion = message_completion(&mut pump)?;
         let deadline = pending_deadline(&pump, &completion)?;
-        let decoded_at = completion.completed_at;
+        let decoded_at = timestamp_at(completion.completed_at)?;
         require(
             matches!(
                 pump.complete(completion, deadline)?,

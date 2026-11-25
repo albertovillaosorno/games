@@ -34,7 +34,7 @@ use std::io::{self, ErrorKind};
 use std::mem;
 use std::net::SocketAddr;
 use std::num::{NonZeroU8, NonZeroUsize};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use games::network::SessionConfig;
 use games::replay::{LiveSimulation, QueueRejection};
@@ -44,6 +44,7 @@ use games_platform::ir::lan::secure::pump::{
 use games_platform::ir::lan::secure::{
     PeerFingerprint, SecureFrameStream, ServerTls,
 };
+use games_platform::ir::measurement::now;
 
 use super::Cabinet;
 use super::remote::{
@@ -62,15 +63,15 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug)]
 pub(crate) struct ClientLan {
     idle_timeout: Duration,
-    last_received: Instant,
-    last_sent: Instant,
+    last_received: Duration,
+    last_sent: Duration,
     pending: VecDeque<RemoteControl>,
     stream: SecureFrameStream,
 }
 
 impl ClientLan {
-    fn check_lease(&self, observed_at: Instant) -> io::Result<()> {
-        if observed_at.duration_since(self.last_received) >= self.idle_timeout {
+    fn check_lease(&self, observed_at: Duration) -> io::Result<()> {
+        if observed_at.saturating_sub(self.last_received) >= self.idle_timeout {
             return Err(ErrorKind::TimedOut.into());
         }
         Ok(())
@@ -88,14 +89,14 @@ impl ClientLan {
         Ok(())
     }
 
-    pub(crate) fn new(stream: SecureFrameStream) -> Self {
+    pub(crate) fn new(stream: SecureFrameStream) -> io::Result<Self> {
         Self::with_idle(stream, IDLE_TIMEOUT)
     }
 
     fn observe_reply(
         &mut self,
         frame: Option<&[u8]>,
-        observed_at: Instant,
+        observed_at: Duration,
     ) -> io::Result<()> {
         self.check_lease(observed_at)?;
         if let Some(bytes) = frame {
@@ -108,24 +109,24 @@ impl ClientLan {
     }
 
     pub(crate) fn poll(&mut self) -> io::Result<()> {
-        self.check_lease(Instant::now())?;
+        self.check_lease(now()?)?;
         // Only a timely, exact versioned acknowledgement renews liveness.
         let reply = self.stream.poll_receive()?;
-        self.observe_reply(reply.as_deref(), Instant::now())?;
+        self.observe_reply(reply.as_deref(), now()?)?;
         for _step in 0..POLL_BUDGET {
-            self.check_lease(Instant::now())?;
+            self.check_lease(now()?)?;
             if !self.stream.has_pending_send() && !self.queue_next()? {
                 break;
             }
-            self.poll_queued_send(Instant::now())?;
+            self.poll_queued_send(now()?)?;
             if self.stream.has_pending_send() {
                 break;
             }
         }
-        self.check_lease(Instant::now())
+        self.check_lease(now()?)
     }
 
-    fn poll_queued_send(&mut self, observed_at: Instant) -> io::Result<()> {
+    fn poll_queued_send(&mut self, observed_at: Duration) -> io::Result<()> {
         self.check_lease(observed_at)?;
         let _progress = self.stream.poll_send()?;
         Ok(())
@@ -134,25 +135,30 @@ impl ClientLan {
     fn queue_next(&mut self) -> io::Result<bool> {
         let message = match self.pending.pop_front() {
             Some(value) => RemoteMessage::Control(value),
-            None if self.last_sent.elapsed() >= HEARTBEAT_INTERVAL => {
+            None if now()?.saturating_sub(self.last_sent)
+                >= HEARTBEAT_INTERVAL =>
+            {
                 RemoteMessage::Heartbeat
             },
             None => return Ok(false),
         };
         self.stream.queue_send(message.encode().to_vec())?;
-        self.last_sent = Instant::now();
+        self.last_sent = now()?;
         Ok(true)
     }
 
-    fn with_idle(stream: SecureFrameStream, idle_timeout: Duration) -> Self {
-        let now = Instant::now();
-        Self {
+    fn with_idle(
+        stream: SecureFrameStream,
+        idle_timeout: Duration,
+    ) -> io::Result<Self> {
+        let now = now()?;
+        Ok(Self {
             idle_timeout,
             last_received: now,
             last_sent: now,
             pending: VecDeque::new(),
             stream,
-        }
+        })
     }
 }
 
@@ -160,7 +166,7 @@ impl ClientLan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoteAdmission {
     /// Host monotonic timestamp of successful worker decoding.
-    pub completed_at: Instant,
+    pub completed_at: Duration,
     /// Actual unexecuted fixed simulation tick receiving the control.
     pub tick: u64,
 }
@@ -174,9 +180,9 @@ pub struct RemoteAdmission {
 /// until that event can be accepted; releases must never be discarded.
 #[derive(Debug)]
 pub struct HostLan {
-    last_reply: [Option<Instant>; 4],
+    last_reply: [Option<Duration>; 4],
     pending: Vec<HostedInput>,
-    pending_received: Option<Instant>,
+    pending_received: Option<Duration>,
     pump: HostInputPump<RemoteMessage>,
     reserved: [bool; 4],
 }
@@ -293,9 +299,9 @@ impl HostLan {
             *last = None;
             return Ok(());
         }
-        let now = Instant::now();
+        let now = now()?;
         if last.is_none_or(|previous| {
-            now.duration_since(previous) >= REPLY_INTERVAL
+            now.saturating_sub(previous) >= REPLY_INTERVAL
         }) {
             self.pump.queue_reply(peer, HOST_ACK.to_vec())?;
             *last = Some(now);
@@ -312,7 +318,7 @@ impl HostLan {
     fn retry(
         &mut self,
         live: &mut LiveSimulation<HostedCabinet>,
-        oldest: &mut Option<Instant>,
+        oldest: &mut Option<Duration>,
     ) -> io::Result<bool> {
         if self.pending.is_empty() {
             return Ok(true);
@@ -357,7 +363,7 @@ pub fn session_config() -> SessionConfig {
 
 const fn control_timestamp(
     event: &RemoteEvent<RemoteMessage>,
-) -> Option<Instant> {
+) -> Option<Duration> {
     match *event {
         RemoteEvent::Message {
             completed_at,
@@ -482,15 +488,14 @@ mod tests {
     where
         Ready: Fn(&HostLan, &LiveSimulation<HostedCabinet>) -> bool,
     {
-        let deadline = Instant::now()
-            .checked_add(TIMEOUT)
-            .ok_or(ErrorKind::TimedOut)?;
+        let deadline =
+            now()?.checked_add(TIMEOUT).ok_or(ErrorKind::TimedOut)?;
         loop {
             let _admitted = host.poll(live)?;
             if ready(host, live) {
                 return Ok(());
             }
-            if Instant::now() >= deadline {
+            if now()? >= deadline {
                 return Err(ErrorKind::TimedOut.into());
             }
             thread::yield_now();
@@ -674,16 +679,15 @@ mod tests {
         live: &mut LiveSimulation<HostedCabinet>,
         client: &mut ClientLan,
     ) -> io::Result<()> {
-        let deadline = Instant::now()
-            .checked_add(TIMEOUT)
-            .ok_or(ErrorKind::TimedOut)?;
+        let deadline =
+            now()?.checked_add(TIMEOUT).ok_or(ErrorKind::TimedOut)?;
         loop {
             client.poll()?;
             let _admitted = host.poll(live)?;
             if live.pending_actions() == 1 {
                 return advance(live);
             }
-            if Instant::now() >= deadline {
+            if now()? >= deadline {
                 return Err(ErrorKind::TimedOut.into());
             }
             thread::yield_now();
@@ -696,7 +700,7 @@ mod tests {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
-        let mut client = ClientLan::new(stream);
+        let mut client = ClientLan::new(stream)?;
         local(&mut live, Control::Start)?;
         advance(&mut live)?;
         let start = RemoteControl::new(Control::Start, true)
@@ -771,10 +775,10 @@ mod tests {
         live: &mut LiveSimulation<HostedCabinet>,
         client: &mut ClientLan,
     ) -> io::Result<()> {
-        let deadline = Instant::now()
+        let deadline = now()?
             .checked_add(Duration::from_millis(1300))
             .ok_or(ErrorKind::TimedOut)?;
-        while Instant::now() < deadline {
+        while now()? < deadline {
             client.poll()?;
             let admitted = host.poll(live)?;
             require(
@@ -793,7 +797,7 @@ mod tests {
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
         let timeout = Duration::from_secs(1);
-        let mut client = ClientLan::with_idle(stream, timeout);
+        let mut client = ClientLan::with_idle(stream, timeout)?;
         let original = client.last_received;
         let timely = original
             .checked_add(Duration::from_millis(999))
@@ -833,7 +837,7 @@ mod tests {
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
         let timeout = Duration::from_secs(1);
-        let mut client = ClientLan::with_idle(stream, timeout);
+        let mut client = ClientLan::with_idle(stream, timeout)?;
         let right = RemoteControl::new(Control::Right, true)
             .ok_or(ErrorKind::InvalidInput)?;
         client
@@ -852,9 +856,8 @@ mod tests {
             "expired lease prevents dispatch of the queued control",
         )?;
         drop(client);
-        let disconnect_deadline = Instant::now()
-            .checked_add(TIMEOUT)
-            .ok_or(ErrorKind::TimedOut)?;
+        let disconnect_deadline =
+            now()?.checked_add(TIMEOUT).ok_or(ErrorKind::TimedOut)?;
         loop {
             require(
                 host.poll(&mut live)?.is_none(),
@@ -863,7 +866,7 @@ mod tests {
             if live.pending_actions() == 1 {
                 break;
             }
-            if Instant::now() >= disconnect_deadline {
+            if now()? >= disconnect_deadline {
                 return Err(ErrorKind::TimedOut.into());
             }
             thread::yield_now();
@@ -881,16 +884,15 @@ mod tests {
         let (mut host, credentials) = host()?;
         let mut live = live(&host)?;
         let stream = connect(&mut host, &mut live, &credentials)?;
-        let mut client = ClientLan::with_idle(stream, Duration::from_secs(1));
+        let mut client = ClientLan::with_idle(stream, Duration::from_secs(1))?;
         maintain_lease(&mut host, &mut live, &mut client)?;
 
         // Stop host processing without closing either authenticated endpoint.
-        let deadline = Instant::now()
-            .checked_add(TIMEOUT)
-            .ok_or(ErrorKind::TimedOut)?;
+        let deadline =
+            now()?.checked_add(TIMEOUT).ok_or(ErrorKind::TimedOut)?;
         loop {
             match client.poll() {
-                Ok(()) if Instant::now() < deadline => thread::yield_now(),
+                Ok(()) if now()? < deadline => thread::yield_now(),
                 Err(error) if error.kind() == ErrorKind::TimedOut => break,
                 _ => {
                     return Err(io::Error::other(
@@ -921,7 +923,7 @@ mod tests {
         let mut live = live(&host)?;
         let mut stream = connect(&mut host, &mut live, &credentials)?;
         join_and_move(&mut stream, &mut host, &mut live)?;
-        let mut client = ClientLan::with_idle(stream, Duration::from_secs(1));
+        let mut client = ClientLan::with_idle(stream, Duration::from_secs(1))?;
         maintain_lease(&mut host, &mut live, &mut client)?;
 
         // Keep the TCP connection alive locally but stop sending heartbeats.
