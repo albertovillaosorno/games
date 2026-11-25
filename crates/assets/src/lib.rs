@@ -34,6 +34,7 @@
 pub mod archive;
 /// Integrity-checked runtime access to indexed graphics.
 pub mod indexed;
+mod manifest_codec;
 /// Integrity-checked runtime access to interleaved PCM audio.
 pub mod pcm;
 
@@ -272,8 +273,7 @@ pub enum AssetError {
     UnsupportedVersion,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct ManifestDocument {
     records: Vec<AssetRecord>,
     source: SourceIdentity,
@@ -283,160 +283,6 @@ struct ManifestDocument {
 /// Validated versioned asset metadata and content-addressed payloads.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetManifest(ManifestDocument);
-
-impl AssetManifest {
-    /// Encode validated manifest metadata deterministically.
-    ///
-    /// # Errors
-    /// Rejects serialization failure or an exceeded metadata budget.
-    pub fn encode(
-        &self,
-        limits: ManifestLimits,
-    ) -> Result<Vec<u8>, AssetError> {
-        self.validate(limits)?;
-        let bytes = serde_json::to_vec(&self.0)
-            .map_err(|_error| AssetError::InvalidEncoding)?;
-        if bytes.len() > limits.manifest_bytes.get() {
-            return Err(AssetError::TooLarge);
-        }
-        Ok(bytes)
-    }
-
-    /// Build a version-one manifest, sorting by canonical logical key.
-    ///
-    /// # Errors
-    /// Rejects invalid identities, duplicates and exceeded budgets.
-    pub fn new(
-        source: SourceIdentity,
-        mut records: Vec<AssetRecord>,
-        limits: ManifestLimits,
-    ) -> Result<Self, AssetError> {
-        if records.len() > limits.records.get() {
-            return Err(AssetError::TooLarge);
-        }
-        records.sort_unstable_by(|left, right| left.key.cmp(&right.key));
-        let manifest = Self(ManifestDocument {
-            records,
-            source,
-            version: VERSION,
-        });
-        let _encoded = manifest.encode(limits)?;
-        Ok(manifest)
-    }
-
-    /// Decode bounded metadata and verify version and all descriptors.
-    ///
-    /// # Errors
-    /// Rejects malformed, unsupported, unordered or oversized metadata.
-    pub fn parse(
-        bytes: &[u8],
-        limits: ManifestLimits,
-    ) -> Result<Self, AssetError> {
-        if bytes.len() > limits.manifest_bytes.get() {
-            return Err(AssetError::TooLarge);
-        }
-        let manifest = Self(
-            serde_json::from_slice(bytes)
-                .map_err(|_error| AssetError::InvalidEncoding)?,
-        );
-        manifest.validate(limits)?;
-        Ok(manifest)
-    }
-
-    /// Return an exact logical-key match in the validated sorted manifest.
-    #[must_use]
-    pub fn record(&self, key: &str) -> Option<&AssetRecord> {
-        let index = self
-            .records()
-            .binary_search_by(|record| record.key.as_str().cmp(key))
-            .ok()?;
-        self.records().get(index)
-    }
-
-    /// Return records in deterministic logical-key order.
-    #[must_use]
-    pub fn records(&self) -> &[AssetRecord] {
-        &self.0.records
-    }
-
-    /// Return the verified source identity recorded by the importer.
-    #[must_use]
-    pub const fn source(&self) -> &SourceIdentity {
-        &self.0.source
-    }
-
-    fn validate(&self, limits: ManifestLimits) -> Result<(), AssetError> {
-        if self.0.version != VERSION {
-            return Err(AssetError::UnsupportedVersion);
-        }
-        self.0.source.validate()?;
-        if self.0.records.len() > limits.records.get() {
-            return Err(AssetError::TooLarge);
-        }
-        let mut previous = None;
-        let mut remaining = limits.total_bytes.get();
-        for record in &self.0.records {
-            record.validate()?;
-            if previous.is_some_and(|key: &str| key >= record.key.as_str()) {
-                return Err(AssetError::InvalidOrder);
-            }
-            if record.size > limits.payload_bytes.get() {
-                return Err(AssetError::TooLarge);
-            }
-            remaining = remaining
-                .checked_sub(record.size)
-                .ok_or(AssetError::TooLarge)?;
-            previous = Some(record.key.as_str());
-        }
-        Ok(())
-    }
-
-    /// Validate a replacement descriptor for a title-approved media slot.
-    ///
-    /// The trusted runtime supplies the allowlist for this base manifest;
-    /// it must not derive approval from the untrusted replacement record.
-    /// Only existing RGBA8 and PCM slots with identical formats and byte
-    /// lengths can be replaced. Declarative game data requires separate
-    /// title-specific validation. No files are opened or installed here.
-    ///
-    /// # Errors
-    /// Rejects unknown or unapproved keys and incompatible media.
-    /// Payload bytes still require independent verification before use.
-    pub fn validate_media_replacement(
-        &self,
-        allowed_keys: &[&str],
-        replacement: &AssetRecord,
-    ) -> Result<(), AssetError> {
-        let key = replacement.key.as_str();
-        if !allowed_keys.contains(&key) {
-            return Err(AssetError::InvalidIdentity);
-        }
-        let original = self.record(key).ok_or(AssetError::InvalidIdentity)?;
-        if !matches!(
-            original.format,
-            AssetFormat::Rgba8 { .. } | AssetFormat::PcmS16Le { .. }
-        ) || replacement.format != original.format
-            || replacement.size != original.size
-        {
-            return Err(AssetError::InvalidFormat);
-        }
-        replacement.validate()
-    }
-
-    /// Verify a non-executing replacement and its exact payload bytes.
-    ///
-    /// # Errors
-    /// Rejects unapproved or incompatible media and mismatched payloads.
-    pub fn verify_media_replacement(
-        &self,
-        allowed_keys: &[&str],
-        replacement: &AssetRecord,
-        payload: &[u8],
-    ) -> Result<(), AssetError> {
-        self.validate_media_replacement(allowed_keys, replacement)?;
-        replacement.verify(payload)
-    }
-}
 
 fn valid_key(value: &str) -> bool {
     value.len() <= MAX_KEY_BYTES && value.split('/').all(valid_slug)
@@ -752,6 +598,66 @@ mod tests {
         require(
             AssetManifest::parse(document.as_bytes(), restrictive)
                 == Err(AssetError::TooLarge),
+        )
+    }
+
+    #[test]
+    fn record_budget_stops_before_decoding_an_excess_record()
+    -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(
+            source(),
+            vec![record("first", b"x"), record("second", b"y")],
+            limits(),
+        )?;
+        let bytes = manifest.encode(limits())?;
+        let mut restrictive = limits();
+        restrictive.records = NonZeroUsize::MIN;
+        require(
+            AssetManifest::parse(&bytes, restrictive)
+                == Err(AssetError::TooLarge),
+        )?;
+        let document = String::from_utf8(bytes)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let malformed = document.replace("\"key\":\"second\"", "\"key\":false");
+        require(
+            AssetManifest::parse(malformed.as_bytes(), restrictive)
+                == Err(AssetError::TooLarge),
+        )?;
+        require(
+            AssetManifest::parse(malformed.as_bytes(), limits())
+                == Err(AssetError::InvalidEncoding),
+        )?;
+        restrictive.records = NonZeroUsize::MIN.saturating_add(1);
+        require(
+            AssetManifest::parse(document.as_bytes(), restrictive)
+                == Ok(manifest),
+        )
+    }
+
+    #[test]
+    fn encoded_byte_budget_accepts_exact_length_without_changing_wire_bytes()
+    -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(
+            source(),
+            vec![record("asset", b"bytes")],
+            limits(),
+        )?;
+        let expected = serde_json::to_vec(&manifest.0)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let mut restrictive = limits();
+        restrictive.manifest_bytes = NonZeroUsize::new(expected.len())
+            .ok_or(AssetError::InvalidEncoding)?;
+        require(manifest.encode(restrictive)? == expected)?;
+        require(AssetManifest::parse(&expected, restrictive)? == manifest)?;
+        restrictive.manifest_bytes = NonZeroUsize::new(expected.len() - 1)
+            .ok_or(AssetError::InvalidEncoding)?;
+        require(manifest.encode(restrictive) == Err(AssetError::TooLarge))?;
+        require(
+            AssetManifest::new(
+                source(),
+                vec![record("asset", b"bytes")],
+                restrictive,
+            ) == Err(AssetError::TooLarge),
         )
     }
 

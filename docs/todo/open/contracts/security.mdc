@@ -105,3 +105,12 @@ replace the same slot, that the final bytes decode as exactly one of
 the complete payloads, and that no staging files remain. Both directory
 durability receipts succeeded on the Linux test filesystem. This is
 last-publication-wins evidence, not a physical power-loss experiment.
+
+Manifest JSON now admits records individually within the caller's count
+limit, using a borrowed raw array and the existing Serde JSON parser.
+The encoded byte limit is enforced before output growth, with fallible
+capacity reservation shared between the record and byte vectors. Tests
+cover rejection before decoding an excess malformed record, exact
+count and byte limits, and unchanged version-one serialized bytes.
+The input remains bounded by the original manifest byte limit; this
+does not establish a sandbox or independently authenticate metadata.
