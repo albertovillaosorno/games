@@ -34,12 +34,10 @@ mod license_inventory;
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs::DirBuilder;
-use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{ErrorKind, Write as _, stdout};
 use std::num::NonZeroU64;
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
-use std::str;
+use std::{fs, str};
 
 use games_assets::ContentHash;
 use games_platform_storage::file::snapshot;
@@ -149,22 +147,19 @@ impl Prepared {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        let stage = AuthoredStaging::new(parent)
+        let mut stage = AuthoredStaging::new(parent)
             .map_err(|error| format!("package stage: {error:?}"))?;
         for (path, file) in self.files {
-            let target = stage.path().join(path);
-            write_file(&target, &file.bytes, file.executable)?;
-            for directory in target
-                .ancestors()
-                .skip(1)
-                .take_while(|directory| *directory != stage.path())
-            {
-                File::open(directory)
-                    .and_then(|handle| handle.sync_all())
-                    .map_err(|error| error.to_string())?;
-            }
+            let entry = path.to_str().ok_or("non-UTF-8 package entry")?;
+            stage
+                .write_file(entry, &file.bytes, file.executable)
+                .map_err(|error| {
+                    format!("package entry {}: {error:?}", path.display())
+                })?;
         }
-        write_file(&stage.path().join(RECEIPT), receipt.as_bytes(), false)?;
+        stage
+            .write_file(RECEIPT, receipt.as_bytes(), false)
+            .map_err(|error| format!("package receipt: {error:?}"))?;
         let published = stage
             .publish(name)
             .map_err(|error| format!("package publish: {error:?}"))?;
@@ -284,34 +279,6 @@ fn native_entry(bytes: &[u8]) -> Option<()> {
     }
     executable_entry.then_some(())
 }
-fn write_file(
-    path: &Path,
-    bytes: &[u8],
-    executable: bool,
-) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| String::from("package entry has no parent"))?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let mode = if executable {
-        0o700
-    } else {
-        0o600
-    };
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(mode)
-        .open(path)
-        .map_err(|error| {
-            format!("package entry {}: {error}", path.display())
-        })?;
-    file.write_all(bytes).map_err(|error| error.to_string())?;
-    file.set_permissions(Permissions::from_mode(mode))
-        .map_err(|error| error.to_string())?;
-    file.sync_all().map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::DirBuilderExt as _;

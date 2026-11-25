@@ -70,3 +70,16 @@ missing its measured frame-submission budget. The dummy video backend
 was rejected because it could not provide accelerated rendering.
 Original media and assets remained outside the package. Physical input,
 GPU presentation latency and cross-host compatibility remain unverified.
+
+Authored native packaging now writes through the shared descriptor-relative
+staging tree, checks each finished file's identity and metadata, verifies
+the exact recursive entry set, synchronizes and rechecks before publication.
+Only authored executables receive owner execute permission. Regressions
+cover nested output, path collisions, substituted directories, changed
+files and unlisted entries. The current package succeeded with 88 files,
+a 3,224,528-byte executable and matching independent receipt SHA-256;
+regular files had owner-only read/write permissions and the executable
+had owner-only execute permission. Fresh validation passed in run
+1795618311474658738-2984730. The staging parent and its ancestors must
+remain trusted; this is not isolation against a malicious same-user
+process or proof of power-loss recovery.

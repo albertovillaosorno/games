@@ -122,6 +122,20 @@ struct Directory {
 struct Node {
     directory: Option<Directory>,
     name: String,
+    // Directory identity for subsequent descent; authored files also
+    // retain their completed write metadata for publication.
+    stamp: Option<Box<FileStat>>,
+}
+
+type CreatedFile<'directory> = (File, &'directory mut Node);
+type DescendedDirectory<'directory> =
+    (&'directory mut Directory, Option<OwnedFd>);
+type PathParts<'path> = (&'path str, &'path str);
+
+#[derive(Debug)]
+enum DirectoryAdmission<'budget> {
+    Explicit,
+    Implicit(Option<&'budget mut ArchiveBudget>),
 }
 
 impl Directory {
@@ -129,7 +143,8 @@ impl Directory {
         &mut self,
         parent: &OwnedFd,
         name: &str,
-    ) -> Result<File, StagingError> {
+        mode: Mode,
+    ) -> Result<CreatedFile<'_>, StagingError> {
         let Entry::Vacant(entry) =
             self.children.entry(name.to_ascii_lowercase())
         else {
@@ -143,32 +158,57 @@ impl Directory {
                 | OFlag::O_EXCL
                 | OFlag::O_NOFOLLOW
                 | OFlag::O_CLOEXEC,
-            Mode::S_IRUSR | Mode::S_IWUSR,
+            mode,
         )?;
-        let _node = entry.insert(Node {
+        let node = entry.insert(Node {
             directory: None,
             name: name.to_owned(),
+            stamp: None,
         });
-        Ok(File::from(fd))
+        Ok((File::from(fd), node))
+    }
+
+    fn descend(
+        &mut self,
+        root: &OwnedFd,
+        parents: &str,
+        mut budget: Option<&mut ArchiveBudget>,
+    ) -> Result<DescendedDirectory<'_>, StagingError> {
+        let mut directory = self;
+        let mut descriptor = None;
+        if !parents.is_empty() {
+            for part in parents.split('/') {
+                let parent = descriptor.as_ref().unwrap_or(root);
+                let OpenedDirectory { child, fd } = directory.open_child(
+                    parent,
+                    part,
+                    DirectoryAdmission::Implicit(budget.as_deref_mut()),
+                )?;
+                directory = child;
+                descriptor = Some(fd);
+            }
+        }
+        Ok((directory, descriptor))
     }
 
     fn open_child(
         &mut self,
         parent: &OwnedFd,
         name: &str,
-        budget: Option<&mut ArchiveBudget>,
+        admission: DirectoryAdmission<'_>,
     ) -> Result<OpenedDirectory<'_>, StagingError> {
-        let explicit = budget.is_none();
+        let explicit = matches!(admission, DirectoryAdmission::Explicit);
         let node = match self.children.entry(name.to_ascii_lowercase()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                if let Some(limits) = budget {
+                if let DirectoryAdmission::Implicit(Some(limits)) = admission {
                     limits.admit(name, EntryKind::Directory, 0)?.finish()?;
                 }
                 mkdirat(parent, name, Mode::S_IRWXU)?;
                 entry.insert(Node {
                     directory: Some(Self::default()),
                     name: name.to_owned(),
+                    stamp: None,
                 })
             },
         };
@@ -179,8 +219,20 @@ impl Directory {
         if explicit && child.explicit {
             return Err(StagingError::Collision);
         }
-        child.explicit |= explicit;
         let fd = openat(parent, name, DIRECTORY_FLAGS, Mode::empty())?;
+        let current = fstat(&fd)?;
+        if !trusted_directory(&fd)?
+            || node
+                .stamp
+                .as_deref()
+                .is_some_and(|stamp| !same_inode(stamp, &current))
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        if node.stamp.is_none() {
+            node.stamp = Some(Box::new(current));
+        }
+        child.explicit |= explicit;
         Ok(OpenedDirectory { child, fd })
     }
 }
@@ -391,34 +443,29 @@ impl ArchiveStaging {
     {
         let StagingEntry { kind, path, size } = metadata;
         let entry = self.budget.admit(path, kind, size)?;
-        if !path.is_ascii() || path.split('/').count() > MAX_DEPTH {
-            return Err(StagingError::UnsupportedPath);
-        }
-        let (parents, leaf) = path.rsplit_once('/').unwrap_or(("", path));
-        let mut directory = &mut self.registry;
-        let mut descriptor = None;
-        if !parents.is_empty() {
-            for part in parents.split('/') {
-                let parent =
-                    descriptor.as_ref().unwrap_or(&self.temporary.root);
-                let OpenedDirectory { child, fd } = directory.open_child(
-                    parent,
-                    part,
-                    Some(&mut self.budget),
-                )?;
-                directory = child;
-                descriptor = Some(fd);
-            }
-        }
+        let (parents, leaf) = staging_path(path)?;
+        let (directory, descriptor) = self.registry.descend(
+            &self.temporary.root,
+            parents,
+            Some(&mut self.budget),
+        )?;
         let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
         match kind {
             EntryKind::Directory => {
                 copy_bounded(input, &mut io::sink(), entry)?;
-                let _directory = directory.open_child(parent, leaf, None)?;
+                let _directory = directory.open_child(
+                    parent,
+                    leaf,
+                    DirectoryAdmission::Explicit,
+                )?;
                 Ok(None)
             },
             EntryKind::File => {
-                let mut output = directory.create_file(parent, leaf)?;
+                let (mut output, _node) = directory.create_file(
+                    parent,
+                    leaf,
+                    Mode::S_IRUSR | Mode::S_IWUSR,
+                )?;
                 copy_bounded(input, &mut output, entry)?;
                 Ok(Some(fstat(&output)?))
             },
@@ -645,6 +692,13 @@ fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
     Ok(same_inode(&before, &after))
 }
 
+fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
+    if !path.is_ascii() || path.split('/').count() > MAX_DEPTH {
+        return Err(StagingError::UnsupportedPath);
+    }
+    Ok(path.rsplit_once('/').unwrap_or(("", path)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::FileTimes;
@@ -677,6 +731,169 @@ mod tests {
             ))?;
             require(!temporary.exists())?;
         }
+        require(fs::read_dir(&parent.path)?.count() == 0)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn authored_tree_publishes_exact_bytes_and_modes()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let parent = fixture()?;
+        let mut stage = AuthoredStaging::new(&parent.path)?;
+        stage.write_file("program", b"program", true)?;
+        stage.write_file("licenses/NOTICE", b"notice", false)?;
+        stage.write_file("licenses/nested/LICENSE", b"licence", false)?;
+        stage.write_file("licenses/nested/OTHER", b"", false)?;
+        let result = stage.publish(OsStr::new("published"))?;
+        require(result.durability.is_ok())?;
+        let path = result.path;
+        for (name, bytes, mode) in [
+            ("program", b"program".as_slice(), 0o700),
+            ("licenses/NOTICE", b"notice".as_slice(), 0o600),
+            ("licenses/nested/LICENSE", b"licence".as_slice(), 0o600),
+            ("licenses/nested/OTHER", b"".as_slice(), 0o600),
+        ] {
+            require(fs::read(path.join(name))? == bytes)?;
+            require(
+                fs::metadata(path.join(name))?.permissions().mode() & 0o777
+                    == mode,
+            )?;
+        }
+        require(fs::read_dir(&path)?.count() == 2)?;
+        require(fs::read_dir(path.join("licenses/nested"))?.count() == 2)?;
+        require(fs::read_dir(&parent.path)?.count() == 1)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn authored_tree_rejects_unsafe_or_colliding_writes()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let parent = fixture()?;
+        for name in [
+            "../escape",
+            "A/other",
+            "a/file",
+            "a/file/nested",
+            "a",
+            "a//other",
+            "/absolute",
+            "a/./other",
+            "a/../other",
+        ] {
+            let mut stage = AuthoredStaging::new(&parent.path)?;
+            stage.write_file("a/file", b"old", false)?;
+            let path = stage.path().to_owned();
+            require(stage.write_file(name, b"new", false).is_err())?;
+            require(
+                stage.write_file("next", b"next", false)
+                    == Err(StagingError::Aborted),
+            )?;
+            require(matches!(
+                stage.publish(OsStr::new("published")),
+                Err(StagingError::Aborted)
+            ))?;
+            require(!path.exists())?;
+        }
+        require(fs::read_dir(&parent.path)?.count() == 0)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn authored_tree_rejects_changed_files_and_unlisted_entries()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let parent = fixture()?;
+        let outside = fixture()?;
+        let sentinel = outside.path.join("sentinel");
+        fs::write(&sentinel, b"safe")?;
+        for change in 0u8..6 {
+            let mut stage = AuthoredStaging::new(&parent.path)?;
+            stage.write_file("program", b"good", true)?;
+            stage.write_file("licenses/LICENSE", b"good", false)?;
+            let path = stage.path().to_owned();
+            let target = path.join("licenses/LICENSE");
+            match change {
+                0 => {
+                    fs::rename(&target, outside.path.join("prior"))?;
+                    fs::write(&target, b"evil")?;
+                },
+                1 => {
+                    fs::write(&target, b"evil")?;
+                    File::open(&target)?
+                        .set_times(FileTimes::new().set_modified(UNIX_EPOCH))?;
+                },
+                2 => fs::write(path.join("unlisted"), b"extra")?,
+                3 => fs::create_dir_all(path.join("licenses/extra"))?,
+                4 => {
+                    fs::remove_file(&target)?;
+                    symlink(&sentinel, &target)?;
+                },
+                _ => fs::set_permissions(
+                    path.join("program"),
+                    fs::Permissions::from_mode(0o600),
+                )?,
+            }
+            require(stage.publish(OsStr::new("published")).is_err())?;
+            require(!path.exists())?;
+            require(fs::read(&sentinel)? == b"safe")?;
+            require(fs::read_dir(&parent.path)?.count() == 0)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn authored_tree_rejects_substituted_directory_before_writing()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let parent = fixture()?;
+        let outside = fixture()?;
+        let mut stage = AuthoredStaging::new(&parent.path)?;
+        stage.write_file("licenses/first", b"first", false)?;
+        let directory = stage.path().join("licenses");
+        let original = outside.path.join("original");
+        fs::rename(&directory, &original)?;
+        fs::create_dir_all(&directory)?;
+        fs::write(directory.join("sentinel"), b"safe")?;
+        require(
+            stage.write_file("licenses/second", b"second", false)
+                == Err(StagingError::ChangedStorage),
+        )?;
+        require(!directory.join("second").exists())?;
+        require(fs::read(directory.join("sentinel"))? == b"safe")?;
+        require(matches!(
+            stage.publish(OsStr::new("published")),
+            Err(StagingError::Aborted)
+        ))?;
+        require(fs::read(original.join("first"))? == b"first")?;
+        require(fs::read_dir(&parent.path)?.count() == 0)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn authored_tree_rejects_substituted_directory_at_publication()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let parent = fixture()?;
+        let outside = fixture()?;
+        let mut stage = AuthoredStaging::new(&parent.path)?;
+        stage.write_file("licenses/LICENSE", b"good", false)?;
+        let directory = stage.path().join("licenses");
+        let original = outside.path.join("original");
+        fs::rename(&directory, &original)?;
+        fs::create_dir_all(&directory)?;
+        fs::rename(original.join("LICENSE"), directory.join("LICENSE"))?;
+        require(matches!(
+            stage.publish(OsStr::new("published")),
+            Err(StagingError::ChangedStorage)
+        ))?;
         require(fs::read_dir(&parent.path)?.count() == 0)
     }
 
@@ -767,10 +984,10 @@ mod tests {
         let parent = fixture.path.join("parent");
         let original = fixture.path.join("original");
         fs::create_dir_all(&parent)?;
-        let stage = AuthoredStaging::new(&parent)?;
+        let mut stage = AuthoredStaging::new(&parent)?;
         let named = stage.path().to_owned();
         let leaf = named.file_name().ok_or(StagingError::UnsupportedPath)?;
-        fs::write(named.join("asset"), b"tile")?;
+        stage.write_file("asset", b"tile", false)?;
         fs::rename(&parent, &original)?;
         fs::create_dir_all(&named)?;
         fs::write(named.join("sentinel"), b"untouched")?;

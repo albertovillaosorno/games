@@ -190,11 +190,22 @@ pub fn validate_entry(
     if kind == EntryKind::Directory && size != 0 {
         return Err(ArchiveError::InvalidEntry);
     }
-    if path.len() > 4096 || path.split('/').any(unsafe_component) {
-        return Err(ArchiveError::UnsafePath);
-    }
+    validate_path(path)?;
     if kind == EntryKind::File && executable_extension(path) {
         return Err(ArchiveError::Executable);
+    }
+    Ok(())
+}
+
+/// Admit a relative path in the shared portable file namespace.
+///
+/// This checks names only, not archive member kinds or executable content.
+///
+/// # Errors
+/// Rejects traversal, reserved names and nonportable components.
+pub fn validate_path(path: &str) -> Result<(), ArchiveError> {
+    if path.len() > 4096 || path.split('/').any(unsafe_component) {
+        return Err(ArchiveError::UnsafePath);
     }
     Ok(())
 }

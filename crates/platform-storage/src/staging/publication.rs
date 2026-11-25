@@ -32,14 +32,20 @@
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::ffi::OsStr;
 use std::fs::{self, File};
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::Path;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::{io, path::PathBuf};
 
 use games_assets::ContentHash;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use games_assets::archive::validate_path;
 use nix::fcntl::openat;
 use nix::sys::stat::{FileStat, Mode};
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use nix::sys::stat::{fchmod, fstat};
 use nix::unistd::fsync;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use nix::{
@@ -47,12 +53,14 @@ use nix::{
     fcntl::{RenameFlags, renameat2},
 };
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use super::PrivateDirectory;
 use super::{ArchiveStaging, PayloadStamps, StagedArchive, StagingError};
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use super::{Directory, PrivateDirectory, staging_path};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::bundle::bundle_name;
 use crate::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::file::same_inode;
 use crate::file::{
     DIRECTORY_FLAGS, FileReadError, sync_regular, trusted_directory,
     verify_staged_regular,
@@ -123,12 +131,17 @@ pub type PublishedBundle = PublishedDirectory;
 
 /// Private staging for already-authored, trusted host output.
 ///
-/// This does not admit untrusted archives or enforce archive budgets. The
-/// caller must write only validated files, synchronise their contents and
-/// nested directories, and keep the parent and ancestors trusted and stable.
+/// The caller supplies validated files and their byte and count budgets.
+/// Writes use the same descriptor-relative namespace as archive staging,
+/// but may set the owner execute bit for independently authored binaries.
+/// Observable file and directory changes prevent publication.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[derive(Debug)]
-pub struct AuthoredStaging(PrivateDirectory);
+pub struct AuthoredStaging {
+    failed: bool,
+    registry: Directory,
+    temporary: PrivateDirectory,
+}
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 impl AuthoredStaging {
@@ -137,27 +150,118 @@ impl AuthoredStaging {
     /// # Errors
     /// Rejects untrusted parents and filesystem failures.
     pub fn new(parent: &Path) -> Result<Self, StagingError> {
-        PrivateDirectory::create_in(parent).map(Self)
+        Ok(Self {
+            failed: false,
+            registry: Directory::default(),
+            temporary: PrivateDirectory::create_in(parent)?,
+        })
     }
 
-    /// Access the private output directory, removed on drop unless published.
+    /// Access the private directory, removed on drop unless published.
+    ///
+    /// Only files recorded through `write_file` may be published.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.0.path
+        &self.temporary.path
     }
 
-    /// Synchronise the root and publish the complete directory without replace.
+    /// Verify, synchronise and publish the exact recorded output tree.
     ///
     /// # Errors
-    /// Rejects non-component names, collisions and pre-publication failures.
-    /// The receipt reports a post-publication parent sync failure separately.
+    /// Rejects aborted writes, changed storage, non-component destinations,
+    /// collisions and pre-publication failures. The receipt reports a
+    /// post-publication parent sync failure separately.
     pub fn publish(
         mut self,
         name: &OsStr,
     ) -> Result<PublishedDirectory, StagingError> {
-        fsync(&self.0.root)?;
-        publish_directory(&mut self.0, name)
+        if self.failed {
+            return Err(StagingError::Aborted);
+        }
+        self.temporary.verify_location()?;
+        check_authored_tree(&self.registry, &self.temporary.root, true)?;
+        check_authored_tree(&self.registry, &self.temporary.root, false)?;
+        publish_directory(&mut self.temporary, name)
     }
+
+    /// Write an admitted, independently authored file without replacement.
+    ///
+    /// The caller must bound bytes and entry count and must never supply
+    /// executable bytes from untrusted media. Paths use portable ASCII names.
+    ///
+    /// # Errors
+    /// Rejects collisions, unsafe paths and observed directory substitution.
+    /// Any write failure permanently aborts publication.
+    pub fn write_file(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        executable: bool,
+    ) -> Result<(), StagingError> {
+        if self.failed {
+            return Err(StagingError::Aborted);
+        }
+        let result = self.write_member(path, bytes, executable);
+        self.failed = result.is_err();
+        result
+    }
+
+    fn write_member(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        executable: bool,
+    ) -> Result<(), StagingError> {
+        validate_path(path)?;
+        let (parents, leaf) = staging_path(path)?;
+        let (directory, descriptor) =
+            self.registry.descend(&self.temporary.root, parents, None)?;
+        let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
+        let mode = Mode::S_IRUSR
+            | Mode::S_IWUSR
+            | if executable {
+                Mode::S_IXUSR
+            } else {
+                Mode::empty()
+            };
+        let (mut file, node) = directory.create_file(parent, leaf, mode)?;
+        file.write_all(bytes)?;
+        fchmod(&file, mode)?;
+        node.stamp = Some(Box::new(fstat(&file)?));
+        Ok(())
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn check_authored_tree(
+    directory: &Directory,
+    fd: &OwnedFd,
+    sync: bool,
+) -> Result<(), StagingError> {
+    check_entry_count(fd, directory.children.len())?;
+    let check = if sync {
+        sync_regular
+    } else {
+        verify_staged_regular
+    };
+    for node in directory.children.values() {
+        let stamp =
+            node.stamp.as_deref().ok_or(StagingError::ChangedStorage)?;
+        if let Some(child) = &node.directory {
+            let child_fd =
+                openat(fd, node.name.as_str(), DIRECTORY_FLAGS, Mode::empty())?;
+            if !same_inode(stamp, &fstat(&child_fd)?) {
+                return Err(StagingError::ChangedStorage);
+            }
+            check_authored_tree(child, &child_fd, sync)?;
+        } else {
+            check(fd, &node.name, stamp).map_err(sync_error)?;
+        }
+    }
+    if sync {
+        fsync(fd)?;
+    }
+    Ok(())
 }
 
 pub(super) fn finish(
