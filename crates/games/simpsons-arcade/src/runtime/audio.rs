@@ -516,16 +516,15 @@ fn smoke_join(
 
 #[cfg(test)]
 mod tests {
+    use std::array;
     use std::ffi::OsString;
-    use std::{array, env};
 
     use games_assets::archive::ArchiveBudget;
     use games_assets::{
         AssetFormat, AssetManifest, AssetRecord, ContentHash, SourceIdentity,
     };
-    use games_platform::ir::storage::staging::{
-        AuthoredStaging, CanonicalStaging,
-    };
+    use games_platform::ir::storage::fixtures::TestRoot;
+    use games_platform::ir::storage::staging::CanonicalStaging;
 
     use super::*;
 
@@ -585,8 +584,7 @@ mod tests {
     #[test]
     fn opted_in_audio_replacement_is_selective_and_fail_closed()
     -> Result<(), RenderError> {
-        let directory = env::current_dir().map_err(failure)?;
-        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let root = TestRoot::new().map_err(failure)?;
         let parent = root.path();
         let base = CLIPS.map(|(key, frames)| (key, frames, 12));
         let mut selection = AudioSelection {

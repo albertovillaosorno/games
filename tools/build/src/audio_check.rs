@@ -32,7 +32,6 @@
 //! Finite canonical audio consumption diagnostic.
 
 use std::ffi::OsString;
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -45,6 +44,7 @@ use games_platform::ir::importer::reference::Machine;
 use games_platform::ir::importer::{AssetFamily, ImportProfile, SourceFormat};
 use games_platform::ir::measurement::now;
 use games_platform::ir::storage::bundle::CanonicalBundle;
+use games_platform::ir::toolchain;
 
 use crate::{USAGE, text};
 
@@ -124,18 +124,11 @@ impl Arguments {
             verify_mix(&mut whole, &mut split, &device, frames.get())?;
         let count = self.frames;
         let active = whole.active();
-        let mut out = stdout().lock();
-        writeln!(
-            out,
-            "{count} frames: {audible} nonzero, {active} active at 48000 Hz"
-        )
-        .and_then(|()| {
-            writeln!(
-                out,
-                "Whole-block mix wall time: {} ns (excludes split and queue)",
-                mixing.as_nanos()
-            )
-        })
+        toolchain::write_line(&format!(
+            "{count} frames: {audible} nonzero, {active} active at 48000 Hz\n\
+             Whole-block mix wall time: {} ns (excludes split and queue)",
+            mixing.as_nanos()
+        ))
         .map_err(|error| error.to_string())
     }
 }

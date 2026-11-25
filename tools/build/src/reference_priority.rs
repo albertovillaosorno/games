@@ -31,12 +31,12 @@
 
 //! Host-side video priority comparison.
 
-use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_platform::ir::importer::reference::{Machine, VideoPriority};
 use games_platform::ir::storage::snapshot;
+use games_platform::ir::toolchain;
 
 /// Compare observed palette bases and sorted layer priorities.
 /// # Errors
@@ -55,7 +55,7 @@ pub fn check(
         .decode_video_priority(&raw)
         .map_err(|error| format!("priority decode: {error:?}"))?;
     compare(decoded, &reference)?;
-    writeln!(stdout().lock(), "Matched seven video mixer observations")
+    toolchain::write_line("Matched seven video mixer observations")
         .map_err(|error| error.to_string())
 }
 

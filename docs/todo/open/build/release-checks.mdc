@@ -23,6 +23,11 @@ Verify build outputs, portability and distribution boundaries.
 - Check startup, asset discovery, output size and target compatibility.
 - Treat other desktop platforms as community-driven.
 
+- Prove shared content is physically stored once across manifests.
+- Reject unsafe or corrupted existing objects and mixed legacy stores.
+- Test publication with tiny fixtures only; no multi-GB test exports.
+- Verify configured package destinations and asset-root independence.
+
 ## Evidence
 
 The native prototype package now includes the project licence and notices,
@@ -112,3 +117,21 @@ removing the private catalogue, the original package file inventory,
 permissions and lengths matched. No original media, assets or local
 catalogue are distributed. Cross-host ABI and physical-device acceptance
 remain open.
+
+Persistent layout work admits a private local configuration and separates
+one title object store from target-specific executable packages. A read-only
+local audit checked 329 manifest digest names and 1,130 canonical payload
+entries without mismatches; 148,368,792 redundant logical inode bytes are
+candidates for deduplication, not measured disk savings. The evidence lives
+in the ignored persistent reference ledger. The engine, assets and importer
+suites passed 220 tests. Shared-object publication and configured packaging
+still require the full validation gate and a verified legacy migration.
+No existing payload or original was moved or deleted.
+
+Fresh validation 1795647945634452273-176012 passed 1,413 test
+executions and all six portable core targets. Synthetic shared-store
+regressions verify one unchanged physical payload inode across distinct
+manifests, fail-closed changed objects and rejection of legacy directories
+inserted before or during staging. Legacy readers remain supported. The
+actual owner asset store and launch catalogue have not been migrated;
+configured package execution on the owner's data remains open.

@@ -32,7 +32,6 @@
 //! Native rendering diagnostics for explicitly selected imported tiles.
 
 use std::ffi::OsString;
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -50,6 +49,7 @@ use games_platform::ir::measurement::now;
 use games_platform::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::toolchain;
 
 use crate::render_benchmark::Schedule;
 use crate::{USAGE, reference_palette, render_benchmark, text};
@@ -196,12 +196,11 @@ impl Arguments {
             );
         }
         let renderer = execution.renderer;
-        writeln!(
-            stdout().lock(),
+        toolchain::write_line(&format!(
             "Verified {} tiles, {} RGBA bytes, two frames ({renderer})",
             self.count,
             atlas.layout.bytes(),
-        )
+        ))
         .map_err(|error| error.to_string())
     }
 }

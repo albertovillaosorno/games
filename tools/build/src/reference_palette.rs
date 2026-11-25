@@ -31,12 +31,12 @@
 
 //! Host-side palette reference comparison without asset publication.
 
-use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_platform::ir::importer::reference::Machine;
 use games_platform::ir::storage::snapshot;
+use games_platform::ir::toolchain;
 
 pub(super) type Colors = Vec<[u8; 4]>;
 
@@ -53,7 +53,7 @@ pub fn check(
     let reference = snapshot(reference_path, byte_limit(machine, 4)?)
         .map_err(|error| format!("palette reference: {error:?}"))?;
     let entries = compare(machine, &raw, &reference)?;
-    writeln!(stdout().lock(), "Matched {entries} palette entries")
+    toolchain::write_line(&format!("Matched {entries} palette entries"))
         .map_err(|error| error.to_string())
 }
 

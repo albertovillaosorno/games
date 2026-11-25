@@ -30,6 +30,8 @@
 // - Defaults:
 //   - Reject links, executables, collisions and partial imports.
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+mod pool;
 mod publication;
 
 use std::collections::BTreeMap;
@@ -500,20 +502,21 @@ type PayloadSizes = BTreeMap<ContentHash, u64>;
 /// The archive budget includes the manifest file and payload directory.
 #[derive(Debug)]
 pub struct CanonicalStaging {
+    #[cfg(test)]
+    legacy: bool,
     payloads: PayloadSizes,
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    pool: Option<pool::SharedPool>,
     stage: ArchiveStaging,
 }
 
 impl CanonicalStaging {
-    /// Copy a pinned bundle into a new complete canonical staging transaction.
+    /// Re-publish a pinned bundle in the same shared content store.
     ///
-    /// Each distinct payload is verified before copying. Shared payloads
-    /// occupy one staged file; all declared lengths must agree. A legacy
-    /// manifest is encoded using the current fingerprint-free source metadata.
-    /// The source bundle is never modified.
-    ///
+    /// Verify each distinct payload and reuse the existing verified object.
+    /// Legacy roots must be migrated before re-publication.
     /// # Errors
-    /// Rejects unsafe, corrupted or oversized input and any staging failure.
+    /// Rejects unsafe, corrupted or oversized input and staging failures.
     pub fn copy_bundle(
         parent: &Path,
         budget: ArchiveBudget,
@@ -524,15 +527,39 @@ impl CanonicalStaging {
         let bytes = manifest.encode(limits)?;
         let expected = manifest.payload_sizes();
         admit_copy(budget, &bytes, &expected)?;
-        let mut stage = Self::new(parent, budget)?;
-        for record in manifest.records() {
+        let stage = Self::new(parent, budget)?;
+        Self::copy_into(stage, source, &bytes, &expected)
+    }
+
+    fn copy_into(
+        mut stage: Self,
+        source: &CanonicalBundle,
+        bytes: &[u8],
+        expected: &PayloadSizes,
+    ) -> Result<StagedBundle, StagingError> {
+        for record in source.manifest().records() {
             if stage.payloads.contains_key(&record.digest) {
                 continue;
             }
             let payload = source.read_payload(&record.key)?;
             stage.write_payload(record.digest, &payload)?;
         }
-        stage.finish_encoded(&bytes, &expected)
+        stage.finish_encoded(bytes, expected)
+    }
+
+    #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+    fn copy_legacy_bundle(
+        parent: &Path,
+        budget: ArchiveBudget,
+        source: &CanonicalBundle,
+        limits: ManifestLimits,
+    ) -> Result<StagedBundle, StagingError> {
+        let manifest = source.manifest();
+        let bytes = manifest.encode(limits)?;
+        let expected = manifest.payload_sizes();
+        admit_copy(budget, &bytes, &expected)?;
+        let stage = Self::new_legacy(parent, budget)?;
+        Self::copy_into(stage, source, &bytes, &expected)
     }
 
     /// Finish a bundle only if every staged payload is declared and present.
@@ -565,21 +592,105 @@ impl CanonicalStaging {
         let _entry = budget.admit(MANIFEST_NAME, EntryKind::File, size)?;
         let digest = ContentHash::calculate(bytes);
         self.stage.record_file(MANIFEST_NAME, size, &mut bytes)?;
-        publication::finish(self.stage, digest)
+        let finished = publication::finish(self.stage, digest)?;
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        let staged = finished.with_pool(self.pool);
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        let staged = finished;
+        Ok(staged)
+    }
+
+    /// Create a manifest transaction using one title-wide object store.
+    ///
+    /// Existing verified payloads are reused; only absent content is written.
+    /// A failed import can leave verified, unreferenced objects, but never a
+    /// partial manifest. Legacy bundle roots must be migrated first.
+    /// # Errors
+    /// Rejects mixed layouts, untrusted parents and storage failures.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    pub fn new(
+        parent: &Path,
+        budget: ArchiveBudget,
+    ) -> Result<Self, StagingError> {
+        let stage = ArchiveStaging::new(parent, budget)?;
+        let pool = pool::SharedPool::open(&stage.temporary)?;
+        Ok(Self {
+            #[cfg(test)]
+            legacy: false,
+            payloads: BTreeMap::new(),
+            pool: Some(pool),
+            stage,
+        })
+    }
+
+    /// Report an unavailable publication capability without writing data.
+    /// # Errors
+    /// Always reports unsupported shared publication on this target.
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    pub const fn new(
+        _parent: &Path,
+        _budget: ArchiveBudget,
+    ) -> Result<Self, StagingError> {
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
     }
 
     /// Create a private canonical bundle transaction.
     ///
     /// # Errors
     /// Rejects untrusted parents and filesystem failures.
-    pub fn new(
+    #[cfg(test)]
+    fn new_legacy(
         parent: &Path,
         budget: ArchiveBudget,
     ) -> Result<Self, StagingError> {
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        pool::reject_shared(parent)?;
         Ok(Self {
+            legacy: true,
             payloads: BTreeMap::new(),
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            pool: None,
             stage: ArchiveStaging::new(parent, budget)?,
         })
+    }
+
+    fn stage_payload(
+        &mut self,
+        digest: ContentHash,
+        bytes: &[u8],
+        budget: ArchiveBudget,
+    ) -> Result<(), StagingError> {
+        #[cfg(test)]
+        if self.legacy {
+            let path = payload_path(digest);
+            let size = manifest_size(bytes)?;
+            let mut input = bytes;
+            return self.stage.record_file(&path, size, &mut input);
+        }
+        self.stage_shared_payload(digest, bytes, budget)
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn stage_shared_payload(
+        &mut self,
+        digest: ContentHash,
+        bytes: &[u8],
+        budget: ArchiveBudget,
+    ) -> Result<(), StagingError> {
+        let pool = self.pool.as_mut().ok_or(StagingError::Aborted)?;
+        pool.put(digest, bytes)?;
+        self.stage.budget = budget;
+        Ok(())
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn stage_shared_payload(
+        &mut self,
+        _digest: ContentHash,
+        _bytes: &[u8],
+        _budget: ArchiveBudget,
+    ) -> Result<(), StagingError> {
+        Err(StagingError::Aborted)
     }
 
     /// Verify and stage one unique canonical payload.
@@ -589,7 +700,7 @@ impl CanonicalStaging {
     pub fn write_payload(
         &mut self,
         digest: ContentHash,
-        mut bytes: &[u8],
+        bytes: &[u8],
     ) -> Result<(), StagingError> {
         if self.stage.failed {
             return Err(StagingError::Aborted);
@@ -615,7 +726,10 @@ impl CanonicalStaging {
             self.stage.failed = true;
             return Err(AssetError::PayloadMismatch.into());
         }
-        self.stage.record_file(&path, size, &mut bytes)?;
+        if let Err(error) = self.stage_payload(digest, bytes, budget) {
+            self.stage.failed = true;
+            return Err(error);
+        }
         let _previous = self.payloads.insert(digest, size);
         Ok(())
     }
@@ -1088,7 +1202,7 @@ mod tests {
         let digest = ContentHash::calculate(b"tile");
         let manifest = manifest(digest)?;
         let mut stage =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         stage.write_payload(digest, b"tile")?;
         let staged = stage.finish(&manifest, canonical_limits())?;
         let named = staged.path().to_owned();
@@ -1331,7 +1445,7 @@ mod tests {
         let digest = ContentHash::calculate(b"tile");
         let manifest = manifest(digest)?;
         let mut stage =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         stage.write_payload(digest, b"tile")?;
         let bundle = stage.finish(&manifest, canonical_limits())?;
         let encoded = fs::read(bundle.path().join("manifest.json"))?;
@@ -1366,7 +1480,7 @@ mod tests {
             "writable",
         ] {
             let mut stage =
-                CanonicalStaging::new(&parent.path, canonical_budget())?;
+                CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
             stage.write_payload(digest, b"tile")?;
             let path = stage.stage.temporary.path.clone();
             let payload = path.join(payload_path(digest));
@@ -1407,7 +1521,7 @@ mod tests {
         let manifest = manifest(digest)?;
         for extra in ["", "extra", "payloads/extra"] {
             let mut stage =
-                CanonicalStaging::new(&parent.path, canonical_budget())?;
+                CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
             stage.write_payload(digest, b"tile")?;
             let path = stage.stage.temporary.path.clone();
             if extra.is_empty() {
@@ -1438,7 +1552,7 @@ mod tests {
         for name in [MANIFEST_NAME, payload.as_str(), "payloads/extra", "extra"]
         {
             let mut stage =
-                CanonicalStaging::new(&parent.path, canonical_budget())?;
+                CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
             stage.write_payload(digest, b"tile")?;
             let staged = stage.finish(&manifest, canonical_limits())?;
             let path = staged.path().to_owned();
@@ -1470,13 +1584,14 @@ mod tests {
         let parent = fixture()?;
         let digest = ContentHash::calculate(b"tile");
         let manifest = manifest(digest)?;
-        let missing = CanonicalStaging::new(&parent.path, canonical_budget())?;
+        let missing =
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         require(matches!(
             missing.finish(&manifest, canonical_limits()),
             Err(StagingError::Asset(AssetError::PayloadMismatch))
         ))?;
         let mut extra =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         extra.write_payload(digest, b"tile")?;
         extra.write_payload(ContentHash::calculate(b"other"), b"other")?;
         require(matches!(
@@ -1484,7 +1599,7 @@ mod tests {
             Err(StagingError::Asset(AssetError::PayloadMismatch))
         ))?;
         let mut wrong =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         require(
             wrong.write_payload(digest, b"evil")
                 == Err(StagingError::Asset(AssetError::PayloadMismatch)),
@@ -1517,7 +1632,7 @@ mod tests {
                 NonZeroU64::MIN,
             ),
         ] {
-            let mut stage = CanonicalStaging::new(&parent.path, limits)?;
+            let mut stage = CanonicalStaging::new_legacy(&parent.path, limits)?;
             let path = stage.stage.temporary.path.clone();
             require(
                 stage.write_payload(wrong, b"tile")
@@ -1545,7 +1660,7 @@ mod tests {
             NonZeroU64::new(8192).unwrap_or(NonZeroU64::MIN),
             NonZeroU64::new(2).unwrap_or(NonZeroU64::MIN),
         );
-        let mut stage = CanonicalStaging::new(&parent.path, limits)?;
+        let mut stage = CanonicalStaging::new_legacy(&parent.path, limits)?;
         stage.write_payload(digest, b"tile")?;
         let path = stage.stage.temporary.path.clone();
         require(matches!(
@@ -1557,13 +1672,122 @@ mod tests {
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
+    fn shared_manifests_reuse_one_payload() -> Result<(), StagingError> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let mut addresses = Vec::new();
+        let object = parent.path.join(format!("objects/{digest}/payload"));
+        let mut inode = None;
+        for revision in ["first", "second"] {
+            let descriptor = manifest(digest)?;
+            let mut source = descriptor.source().clone();
+            source.revision = revision.to_owned();
+            let selected = AssetManifest::new(
+                source,
+                descriptor.records().to_vec(),
+                canonical_limits(),
+            )?;
+            let mut stage =
+                CanonicalStaging::new(&parent.path, canonical_budget())?;
+            stage.write_payload(digest, b"tile")?;
+            let metadata = fs::metadata(&object)?;
+            let identity =
+                (metadata.dev(), metadata.ino(), metadata.mtime_nsec());
+            require(inode.is_none_or(|previous| previous == identity))?;
+            inode = Some(identity);
+            let ready = stage.finish(&selected, canonical_limits())?;
+            let address = ready.digest();
+            let receipt = ready.publish()?;
+            require(receipt.durability.is_ok())?;
+            require(fs::read_dir(&receipt.path)?.count() == 1)?;
+            addresses.push(address);
+        }
+        require(addresses.len() == 2)?;
+        require(addresses.first() != addresses.last())?;
+        require(fs::read_dir(parent.path.join("objects"))?.count() == 1)?;
+        for address in addresses {
+            let reader = CanonicalBundle::open(
+                &parent.path,
+                address,
+                canonical_limits(),
+            )?;
+            require(reader.read_payload("tile")? == b"tile")?;
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn shared_publication_rejects_changed_objects() -> Result<(), StagingError>
+    {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(digest, b"tile")?;
+        let ready = stage.finish(&manifest(digest)?, canonical_limits())?;
+        let address = ready.digest();
+        let object = parent.path.join(format!("objects/{digest}/payload"));
+        fs::write(&object, b"fake")?;
+        require(ready.publish().is_err())?;
+        require(!parent.path.join(format!("bundle-{address}")).exists())?;
+        let mut retry =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        require(retry.write_payload(digest, b"tile").is_err())?;
+        require(fs::read(object)? == b"fake")
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn shared_store_rejects_legacy_root() -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let mut legacy =
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
+        legacy.write_payload(digest, b"tile")?;
+        let previous = legacy
+            .finish(&manifest(digest)?, canonical_limits())?
+            .publish()?;
+        require(
+            CanonicalStaging::new(&parent.path, canonical_budget()).is_err(),
+        )?;
+        require(!parent.path.join("objects").exists())?;
+        require(
+            fs::read(previous.path.join(format!("payloads/{digest}")))?
+                == b"tile",
+        )
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn existing_pool_rejects_inserted_legacy_directory()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(digest, b"tile")?;
+        let ready = stage.finish(&manifest(digest)?, canonical_limits())?;
+        let address = ready.digest();
+        fs::create_dir_all(parent.path.join("bundle-legacy/payloads"))?;
+        require(ready.publish().is_err())?;
+        require(!parent.path.join(format!("bundle-{address}")).exists())?;
+        require(
+            CanonicalStaging::new(&parent.path, canonical_budget()).is_err(),
+        )
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
     fn publication_is_content_addressed_and_persistent()
     -> Result<(), StagingError> {
         let parent = fixture()?;
         let digest = ContentHash::calculate(b"tile");
         let manifest = manifest(digest)?;
         let mut stage =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         stage.write_payload(digest, b"tile")?;
         let staged = stage.finish(&manifest, canonical_limits())?;
         let temporary = staged.path().to_owned();
@@ -1622,7 +1846,7 @@ mod tests {
             legacy_digest,
             canonical_limits(),
         )?;
-        let staged = CanonicalStaging::copy_bundle(
+        let staged = CanonicalStaging::copy_legacy_bundle(
             &parent.path,
             canonical_budget(),
             &source,
@@ -1662,7 +1886,7 @@ mod tests {
             ..canonical_limits()
         };
         require(matches!(
-            CanonicalStaging::copy_bundle(
+            CanonicalStaging::copy_legacy_bundle(
                 &parent.path,
                 canonical_budget(),
                 &source,
@@ -1671,7 +1895,7 @@ mod tests {
             Err(StagingError::Asset(AssetError::TooLarge))
         ))?;
         require(matches!(
-            CanonicalStaging::copy_bundle(
+            CanonicalStaging::copy_legacy_bundle(
                 &parent.path,
                 canonical_budget(),
                 &source,
@@ -1690,7 +1914,7 @@ mod tests {
         manifest: &AssetManifest,
     ) -> Result<CopyFixture, StagingError> {
         let mut stage =
-            CanonicalStaging::new(&parent.path, canonical_budget())?;
+            CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
         stage.write_payload(ContentHash::calculate(b"tile"), b"tile")?;
         let staged = stage.finish(manifest, canonical_limits())?;
         let address = staged.digest();
@@ -1716,7 +1940,7 @@ mod tests {
             bound(size.saturating_add(4))?,
             bound(3)?,
         );
-        let copied = CanonicalStaging::copy_bundle(
+        let copied = CanonicalStaging::copy_legacy_bundle(
             &parent.path,
             exact,
             &source,
@@ -1752,7 +1976,7 @@ mod tests {
             ),
         ] {
             require(matches!(
-                CanonicalStaging::copy_bundle(
+                CanonicalStaging::copy_legacy_bundle(
                     &parent.path,
                     deficient,
                     &source,
@@ -1781,7 +2005,7 @@ mod tests {
         let size = NonZeroU64::new(manifest_size(&bytes)?)
             .ok_or(AssetError::TooLarge)?;
         let budget = ArchiveBudget::new(size, size, NonZeroU64::MIN);
-        let stage = CanonicalStaging::new(&parent.path, budget)?;
+        let stage = CanonicalStaging::new_legacy(&parent.path, budget)?;
         let published =
             stage.finish(&manifest, canonical_limits())?.publish()?;
         require(published.durability.is_ok())?;
@@ -1790,7 +2014,7 @@ mod tests {
             ContentHash::calculate(&bytes),
             canonical_limits(),
         )?;
-        let copied = CanonicalStaging::copy_bundle(
+        let copied = CanonicalStaging::copy_legacy_bundle(
             &parent.path,
             budget,
             &source,
@@ -1810,7 +2034,7 @@ mod tests {
         let manifest = manifest(digest)?;
         for is_link in [false, true] {
             let mut stage =
-                CanonicalStaging::new(&parent.path, canonical_budget())?;
+                CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
             stage.write_payload(digest, b"tile")?;
             let staged = stage.finish(&manifest, canonical_limits())?;
             let temporary = staged.path().to_owned();

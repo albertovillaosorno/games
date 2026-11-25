@@ -641,7 +641,6 @@ fn sibling_catalogue(executable: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
 
     use games::presentation::WindowMode;
     use games_platform::ir::storage::fixtures::TestRoot;
@@ -688,7 +687,8 @@ mod tests {
         }
 
         fn write(&self, name: &str, text: &str) -> Result<(), String> {
-            fs::write(self.0.path().join(name), text)
+            self.0
+                .write_file(name, text.as_bytes())
                 .map_err(|error| error.to_string())
         }
     }

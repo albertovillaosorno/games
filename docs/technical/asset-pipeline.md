@@ -14,6 +14,39 @@ cargo run --locked -p games-build -- import mame graphics simpsons \
   world-4p-set-1 PATH SOURCE ENTRY TOTAL COUNT
 ```
 
+## Persistent storage layout
+
+The local ignored `.env` selects an absolute `GAMES_ASSET_ROOT`,
+`GAMES_OUTPUT_ROOT` and `GAMES_TARGET`; see `.env.example`.
+Keep this file owner-readable and owner-writable only. Asset roots
+are target-independent. Executable packages are target-specific.
+
+```text
+ASSET_ROOT/<title>/assets/
+  objects/<payload-digest>/payload
+  bundle-<manifest-digest>/manifest.json
+OUTPUT_ROOT/<title>/bin/<target>/
+  executable and licence documents
+```
+
+Each admitted object is verified and published once. Subsequent
+manifests refer to the same object without copying the payload; a
+repeat import checks existing bytes through a bounded streaming read.
+Publication never replaces a verified object. Changed or unsafe
+objects fail closed. A failed import may leave an unreferenced verified
+object, but must not publish a partial manifest. Object reclamation
+needs an explicit reachability and retention policy.
+
+The legacy per-bundle payload layout remains readable, but cannot be
+used for new publication. Migrate existing bundles without creating a
+second asset store, verify all pinned manifests and update their launch
+catalogues before removing redundant files. A legacy root is rejected
+rather than automatically copied. The physical migration remains open.
+
+Downloaded originals and tools remain in `.reference/games/` and
+`.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
+Do not store reference data in disposable `.cache/` or `.temp/`.
+
 The host build tool selects arcade originals by MAME machine and revision.
 The importer owns supported media layouts, word-lane assembly, reusable
 chip layouts and canonical graphics conversion. Unknown profiles fail closed.
@@ -32,8 +65,9 @@ On GNU/Linux, use
 `mame publish MACHINE REV PARENT PATH SOURCE ENTRY TOTAL COUNT` or
 `mame check MACHINE REV PARENT MANIFEST_SHA256`. The four numeric limits
 bound source bytes, individual decoded members, total bytes and member count.
-Create a trusted, private output parent inside the ignored reference directory
-before publication. `zip verify PATH TITLE REV SOURCE ENTRY TOTAL COUNT`
+Create the trusted, private configured per-title asset directory
+before publication. Do not create an alternate copy of the asset store.
+`zip verify PATH TITLE REV SOURCE ENTRY TOTAL COUNT`
 remains available for explicit generic flat ZIP admission. Neither command
 establishes authenticity of original media. New version-two manifests record
 only the selected title and layout; canonical payload and manifest hashes
@@ -58,7 +92,7 @@ GNU/Linux supports `neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL
 COUNT` and `neo check TITLE REV PARENT MANIFEST_SHA256`. Original program
 regions are not executed or retained in canonical bundles. Audio, palettes,
 scene reconstruction and gameplay are not provided by these profiles.
-On GNU/Linux, republish legacy canonical bundles with
+After migrating legacy payloads into the shared store, upgrade metadata with
 
 ```text
 bundle upgrade PARENT MANIFEST_SHA256 MANIFEST_BYTES PAYLOAD_BYTES \
@@ -66,9 +100,9 @@ bundle upgrade PARENT MANIFEST_SHA256 MANIFEST_BYTES PAYLOAD_BYTES \
 ```
 
 The four numeric limits bound metadata, per-payload and total logical bytes,
-and record count. This command verifies the pinned canonical bundle and writes
-a new version-two sibling; it never replaces or removes the old bundle.
-Keep the original bundle until its consumers use the new canonical address.
+and record count. This command verifies the pinned canonical bundle and
+writes a new version-two manifest referencing shared objects. It never
+replaces or removes the old bundle.
 
 Author one passive-media replacement from a pinned base descriptor:
 

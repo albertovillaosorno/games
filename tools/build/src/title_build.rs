@@ -32,9 +32,12 @@
 //! Host-side selection of authored title executables.
 
 use std::ffi::OsString;
-use std::io::{Write as _, stdout};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::str;
 
+use games_platform::ir::storage::file::snapshot_secret;
+use games_platform::ir::storage::layout::Layout;
 use games_platform::ir::toolchain::{self, CargoTitle, Target};
 
 pub(crate) const NATIVE_TARGET: Target = Target::LinuxX86_64Gnu;
@@ -93,9 +96,18 @@ impl Title {
     /// Returns an error for an unsupported host or an unsuccessful build.
     pub fn run(self) -> Result<(), String> {
         let executable = self.compile(&workspace_root()?)?;
-        writeln!(stdout().lock(), "Executable: {}", executable.display())
+        toolchain::write_line(&format!("Executable: {}", executable.display()))
             .map_err(|error| error.to_string())
     }
+}
+
+pub(crate) fn local_layout(root: &Path) -> Result<Layout, String> {
+    let maximum = NonZeroU64::MIN.saturating_add(65_535);
+    let config = snapshot_secret(&root.join(".env"), maximum)
+        .map_err(|error| format!("local configuration: {error:?}"))?;
+    let text =
+        str::from_utf8(&config).map_err(|_error| "invalid .env encoding")?;
+    Layout::parse(text).map_err(str::to_owned)
 }
 
 pub(crate) fn workspace_root() -> Result<PathBuf, String> {

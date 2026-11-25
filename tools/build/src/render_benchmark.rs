@@ -31,7 +31,6 @@
 
 //! Imported graphics diagnostic host workload measurement.
 
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
@@ -45,6 +44,7 @@ use games_platform::ir::measurement::{
     FrameMeter, executable_bytes, now, peak_resident_bytes, resident_bytes,
 };
 use games_platform::ir::scene::SpriteDraw;
+use games_platform::ir::toolchain;
 
 use crate::render_check::present;
 
@@ -147,44 +147,18 @@ pub fn report(
     let lifetime_peak = observed(peak_resident_bytes().ok());
     let bytes = observed(collector.binary_size());
     let misses = observed(report.frame_budget.map(|budget| budget.missed));
-    let mut out = stdout().lock();
-    writeln!(
-        out,
-        "Host submission: {renderer}, {}x{} logical, {workload}, uncapped",
-        profile.width, profile.height,
-    )
-    .and_then(|()| {
-        writeln!(
-            out,
-            "Frames: {}, mean: {mean}, max: {maximum}, FPS: {fps}",
-            frames.samples(),
-        )
-    })
-    .and_then(|()| {
-        writeln!(
-            out,
-            "Frame percentile ranges: p50 {p50}, p95 {p95}, p99 {p99}"
-        )
-    })
-    .and_then(|()| writeln!(out, "60 Hz target misses: {misses}, load: {load}"))
-    .and_then(|()| {
-        writeln!(
-            out,
-            "Sampled peak RSS bytes: {rss}, executable bytes: {bytes}",
-        )
-    })
-    .and_then(|()| {
-        writeln!(
-            out,
-            "Approximate process-lifetime peak RSS bytes: {lifetime_peak}",
-        )
-    })
-    .and_then(|()| {
-        writeln!(
-            out,
-            "Physical input/display latency and GPU/VRAM usage: not measured",
-        )
-    })
+    toolchain::write_line(&format!(
+        "Host submission: {renderer}, {}x{} logical, {workload}, uncapped\n\
+         Frames: {}, mean: {mean}, max: {maximum}, FPS: {fps}\n\
+         Frame percentile ranges: p50 {p50}, p95 {p95}, p99 {p99}\n\
+         60 Hz target misses: {misses}, load: {load}\n\
+         Sampled peak RSS bytes: {rss}, executable bytes: {bytes}\n\
+         Approximate process-lifetime peak RSS bytes: {lifetime_peak}\n\
+         Physical input/display latency and GPU/VRAM usage: not measured",
+        profile.width,
+        profile.height,
+        frames.samples(),
+    ))
     .map_err(|error| error.to_string())
 }
 

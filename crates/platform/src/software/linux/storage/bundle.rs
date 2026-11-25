@@ -44,6 +44,8 @@ pub(super) use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
 
 pub(super) const MANIFEST_NAME: &str = "manifest.json";
 pub(super) const PAYLOADS_DIRECTORY: &str = "payloads";
+pub(super) const OBJECTS_DIRECTORY: &str = "objects";
+pub(super) const OBJECT_PAYLOAD: &str = "payload";
 
 impl From<Errno> for BundleError {
     fn from(error: Errno) -> Self {
@@ -51,18 +53,27 @@ impl From<Errno> for BundleError {
     }
 }
 
-/// The native payload directory remains pinned for the bundle lifetime.
+/// A pinned payload namespace remains alive for the bundle lifetime.
 #[derive(Debug)]
-struct DirectorySource(Option<OwnedFd>);
+enum DirectorySource {
+    Empty,
+    Legacy(OwnedFd),
+    Shared(OwnedFd),
+}
 
 impl PayloadSource for DirectorySource {
     fn read(&self, record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
-        let directory = self.0.as_ref().ok_or(BundleError::MissingKey)?;
-        Ok(read_regular(
-            directory,
-            &record.digest.to_string(),
-            record.size,
-        )?)
+        let name = record.digest.to_string();
+        match self {
+            Self::Empty => Err(BundleError::MissingKey),
+            Self::Legacy(directory) => {
+                Ok(read_regular(directory, &name, record.size)?)
+            },
+            Self::Shared(directory) => {
+                let object = open_directory(directory, &name)?;
+                Ok(read_regular(&object, OBJECT_PAYLOAD, record.size)?)
+            },
+        }
     }
 }
 
@@ -80,16 +91,21 @@ pub(super) fn open_bundle(
             .map_err(|_error| AssetError::TooLarge)?,
     )?;
     let manifest = CanonicalBundle::admit_manifest(&bytes, digest, limits)?;
-    let payloads = if manifest.records().is_empty() {
-        None
+    let source = if manifest.records().is_empty() {
+        DirectorySource::Empty
     } else {
-        Some(open_directory(&root, PAYLOADS_DIRECTORY)?)
+        match open_directory(&root, PAYLOADS_DIRECTORY) {
+            Ok(directory) => DirectorySource::Legacy(directory),
+            Err(BundleError::Io(io::ErrorKind::NotFound)) => {
+                DirectorySource::Shared(open_directory(
+                    &parent_fd,
+                    OBJECTS_DIRECTORY,
+                )?)
+            },
+            Err(error) => return Err(error),
+        }
     };
-    Ok(CanonicalBundle::with_source(
-        digest,
-        manifest,
-        DirectorySource(payloads),
-    ))
+    Ok(CanonicalBundle::with_source(digest, manifest, source))
 }
 
 pub(super) fn bundle_name(digest: ContentHash) -> String {

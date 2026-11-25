@@ -31,13 +31,13 @@
 
 //! Exact local reference audio comparison.
 
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 
 use games_assets::AssetFormat;
 use games_platform::ir::importer::reference::WavePcm;
 use games_platform::ir::storage::snapshot;
+use games_platform::ir::toolchain;
 
 /// Compare two bounded complete PCM16 reference recordings.
 /// # Errors
@@ -56,7 +56,7 @@ pub fn check(
     let second_wave = WavePcm::new(&second, limit)
         .map_err(|error| format!("right WAV: {error:?}"))?;
     let frames = compare(first_wave, second_wave)?;
-    writeln!(stdout().lock(), "Matched {frames} PCM sample frames")
+    toolchain::write_line(&format!("Matched {frames} PCM sample frames"))
         .map_err(|error| error.to_string())
 }
 

@@ -31,12 +31,12 @@
 
 //! Host-side original object buffer comparison.
 
-use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_platform::ir::importer::reference::{Machine, RAM_BYTES};
 use games_platform::ir::storage::snapshot;
+use games_platform::ir::toolchain;
 
 /// Compare observed CPU and device object buffers.
 /// # Errors
@@ -57,13 +57,9 @@ pub fn check(
     let report = machine
         .compare_object_transfer(&cpu_ram, &device_ram)
         .map_err(|error| format!("object transfer: {error:?}"))?;
-    writeln!(
-        stdout().lock(),
+    toolchain::write_line(&format!(
         "Selected {}, active {}, exact records {}, uncleared headers {}",
-        report.selected,
-        report.active,
-        report.matched,
-        report.uncleared,
-    )
+        report.selected, report.active, report.matched, report.uncleared,
+    ))
     .map_err(|error| error.to_string())
 }

@@ -35,6 +35,12 @@ Produce portable Linux x86-64 executables with local asset discovery.
 - Verify adaptive wide scene and gameplay HUD on the owner's maximized
   desktop; keep control hints in pause/settings rather than gameplay.
 
+- Read configured asset and executable roots from the private local .env.
+- Use exactly one persistent per-title asset namespace across targets.
+- Publish target-specific binaries and notices without asset copies.
+- Repeat package publication must not rewrite or duplicate asset payloads.
+- Migrate legacy stores only after verified consumer compatibility.
+
 ## Evidence
 
 The selected-title release build produced an 835,768-byte dynamically

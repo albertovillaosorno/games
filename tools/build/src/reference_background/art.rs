@@ -144,6 +144,10 @@ impl Art {
     /// # Errors
     /// Rejects differences from the observed frame and any invalid art.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
+        publication::require_asset_parent(
+            &self.output,
+            &machine.identity().title,
+        )?;
         let bundle = graphics_bundle(&self.scene, machine)?;
         let payloads = GraphicsPayloads::load(&bundle, true)?;
         let assets = payloads.bind(&bundle)?;
@@ -206,6 +210,10 @@ impl Strip {
     /// # Errors
     /// Rejects inconsistent scroll, differing overlap or invalid assets.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
+        publication::require_asset_parent(
+            &self.output,
+            &machine.identity().title,
+        )?;
         let first = self.scenes.first().ok_or_else(|| String::from(USAGE))?;
         let bundle = graphics_bundle(first, machine)?;
         let payloads = GraphicsPayloads::load(&bundle, true)?;

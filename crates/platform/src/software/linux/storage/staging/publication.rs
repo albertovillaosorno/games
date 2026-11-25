@@ -59,6 +59,8 @@ use super::super::file::{
     DIRECTORY_FLAGS, FileReadError, same_inode, sync_regular,
     trusted_directory_stat, verify_staged_regular,
 };
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use super::pool::SharedPool;
 use super::{ArchiveStaging, Directory, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::{PrivateDirectory, staging_path};
@@ -71,6 +73,8 @@ use super::{PrivateDirectory, staging_path};
 pub struct StagedBundle {
     archive: StagedArchive,
     digest: ContentHash,
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    pool: Option<SharedPool>,
 }
 
 impl StagedBundle {
@@ -96,8 +100,17 @@ impl StagedBundle {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     pub fn publish(mut self) -> Result<PublishedBundle, StagingError> {
         self.archive.verify()?;
+        if let Some(pool) = &self.pool {
+            pool.recheck(&self.archive.temporary)?;
+        }
         let name = bundle_name(self.digest);
         publish_directory(&mut self.archive.temporary, OsStr::new(&name))
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    pub(super) fn with_pool(mut self, pool: Option<SharedPool>) -> Self {
+        self.pool = pool;
+        self
     }
 }
 
@@ -266,6 +279,8 @@ pub(super) fn finish(
     Ok(StagedBundle {
         archive: stage.finish_with(true)?,
         digest,
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        pool: None,
     })
 }
 
@@ -288,7 +303,7 @@ fn check_entry_count(
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn publish_directory(
+pub(super) fn publish_directory(
     temporary: &mut PrivateDirectory,
     name: &OsStr,
 ) -> Result<PublishedDirectory, StagingError> {

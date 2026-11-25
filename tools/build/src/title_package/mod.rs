@@ -32,18 +32,19 @@
 mod license_inventory;
 
 use std::collections::BTreeMap;
-use std::io::{ErrorKind, Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::{fs, str};
+use std::str;
 
 use games_assets::ContentHash;
 use games_assets::archive::validate_path;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::AuthoredStaging;
+use games_platform::ir::storage::{PathKind, path_kind};
+use games_platform::ir::toolchain::write_line;
 
 use self::license_inventory::Inventory;
-use crate::title_build::{NATIVE_TARGET, Title, workspace_root};
+use crate::title_build::{NATIVE_TARGET, Title, local_layout, workspace_root};
 
 const ELF_HEADER: usize = 64;
 const ELF_PROGRAM_HEADER: usize = 56;
@@ -170,25 +171,50 @@ impl Prepared {
     }
 }
 
+/// Package into the operator-selected persistent deployment directory.
+///
+/// Asset files remain external and are never included in the binary package.
+/// # Errors
+/// Rejects missing or invalid local settings and unavailable output parents.
+pub fn configured(title: Title) -> Result<(), String> {
+    let root = workspace_root()?;
+    let layout = local_layout(&root)?;
+    if layout.target() != NATIVE_TARGET {
+        return Err(String::from("configured package target is unsupported"));
+    }
+    let output = PathBuf::from(layout.binaries(title.binary())?);
+    let assets = PathBuf::from(layout.assets(title.binary())?);
+    if !output.is_absolute() || !assets.is_absolute() {
+        return Err(String::from("persistent roots must be absolute"));
+    }
+    let parent = output.parent().ok_or("invalid package parent")?;
+    if path_kind(parent.as_os_str()).map_err(|error| error.to_string())?
+        != PathKind::Directory
+    {
+        return Err(String::from("create the configured bin directory first"));
+    }
+    run(title, &output)?;
+    write_line(&format!("Shared assets: {}", assets.display()))
+        .map_err(|error| error.to_string())
+}
+
 /// Build and package one admitted native title in a new local directory.
 ///
 /// # Errors
 /// Rejects build, licence inventory, source admission and filesystem errors.
 /// Publication is atomic; a post-rename sync failure is reported separately.
 pub fn run(title: Title, output: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(output) {
-        Ok(_) => {
-            return Err(String::from("package destination already exists"));
-        },
-        Err(error) if error.kind() == ErrorKind::NotFound => {},
-        Err(error) => return Err(error.to_string()),
+    if path_kind(output.as_os_str()).map_err(|error| error.to_string())?
+        != PathKind::Missing
+    {
+        return Err(String::from("package destination already exists"));
     }
     let root = workspace_root()?;
     let executable = title.compile(&root)?;
     let inventory = Inventory::load(&root, title)?;
     let prepared = Prepared::prepare(&root, title, &executable, inventory)?;
     prepared.publish(output)?;
-    writeln!(stdout().lock(), "Package: {}", output.display())
+    write_line(&format!("Package: {}", output.display()))
         .map_err(|error| error.to_string())
 }
 
@@ -394,12 +420,7 @@ mod tests {
         let mut executable_receipt = Prepared::default();
         executable_receipt.add(RECEIPT.into(), b"receipt".to_vec(), true)?;
         require(executable_receipt.publish(&output).is_err())?;
-        require(
-            fs::read_dir(root.path())
-                .map_err(|error| error.to_string())?
-                .count()
-                == 0,
-        )
+        require(root.entry_count().map_err(|error| error.to_string())? == 0)
     }
 
     #[test]
@@ -418,22 +439,21 @@ mod tests {
         replacement.add(RECEIPT.into(), b"replacement".to_vec(), false)?;
         require(replacement.publish(&output).is_err())?;
         require(
-            fs::read(output.join("title"))
-                .map_err(|error| error.to_string())?
+            snapshot(&output.join("title"), MAX_DOCUMENT)
+                .map_err(|error| format!("{error:?}"))?
                 == [1, 2, 3],
         )?;
         require(
-            fs::read(output.join(RECEIPT))
-                .map_err(|error| error.to_string())?
+            snapshot(&output.join(RECEIPT), MAX_DOCUMENT)
+                .map_err(|error| format!("{error:?}"))?
                 == b"complete",
         )?;
-        require(!root.path().join("escape").exists())?;
         require(
-            fs::read_dir(root.path())
+            path_kind(root.path().join("escape").as_os_str())
                 .map_err(|error| error.to_string())?
-                .count()
-                == 1,
-        )
+                == PathKind::Missing,
+        )?;
+        require(root.entry_count().map_err(|error| error.to_string())? == 1)
     }
 
     #[test]
@@ -445,13 +465,11 @@ mod tests {
         prepared.add("licenses/MIT".into(), vec![2], false)?;
         prepared.add(RECEIPT.into(), b"incomplete".to_vec(), false)?;
         require(prepared.publish(&output).is_err())?;
-        require(!output.exists())?;
         require(
-            fs::read_dir(root.path())
-                .map_err(|error| error.to_string())?
-                .count()
-                == 0,
-        )
+            path_kind(output.as_os_str()).map_err(|error| error.to_string())?
+                == PathKind::Missing,
+        )?;
+        require(root.entry_count().map_err(|error| error.to_string())? == 0)
     }
 
     fn require(condition: bool) -> Result<(), String> {

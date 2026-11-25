@@ -63,9 +63,7 @@ pub mod title_build;
 /// Package the selected authored native executable.
 pub mod title_package;
 
-use std::env;
 use std::ffi::OsString;
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
@@ -79,10 +77,11 @@ use games_platform::ir::importer::{
     import, verify,
 };
 use games_platform::ir::storage::snapshot;
+use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
-    "games-build package TITLE OUTPUT\n",
+    "games-build package TITLE [OUTPUT]\n",
     "games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle replace-media PARENT BASE_SHA256 KEY ",
@@ -201,7 +200,7 @@ enum Command {
     Check(ImportProfile, PathBuf, ContentHash),
     Import(ImportProfile, Arguments),
     ObjectCheck(Machine, PathBuf, PathBuf),
-    PackageTitle(title_build::Title, PathBuf),
+    PackageTitle(title_build::Title, Option<PathBuf>),
     PaletteCheck(Machine, PathBuf, PathBuf),
     PriorityCheck(Machine, PathBuf, PathBuf),
     Publish(ImportProfile, PathBuf, Arguments),
@@ -233,12 +232,13 @@ impl Command {
                 title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
             )),
             (Some("package"), Some(title)) => {
-                let [output] =
-                    <[OsString; 1]>::try_from(args.collect::<Vec<_>>())
-                        .map_err(|_args| String::from(USAGE))?;
+                let output = args.next().map(PathBuf::from);
+                if args.next().is_some() {
+                    return Err(String::from(USAGE));
+                }
                 Ok(Self::PackageTitle(
                     title_build::Title::parse(title, &[])?,
-                    output.into(),
+                    output,
                 ))
             },
             (Some("bundle"), Some("upgrade")) => {
@@ -574,9 +574,10 @@ impl Command {
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
-            Self::PackageTitle(title, output) => {
+            Self::PackageTitle(title, Some(output)) => {
                 title_package::run(title, &output)
             },
+            Self::PackageTitle(title, None) => title_package::configured(title),
             Self::ArtPublish(machine, args) => args.run(machine),
             Self::StripPublish(machine, args) => args.run(machine),
             #[cfg(feature = "native-preview")]
@@ -706,7 +707,12 @@ where
 }
 
 fn main() -> Result<(), String> {
-    Command::parse(env::args_os().skip(1))?.run()
+    Command::parse(
+        toolchain::arguments()
+            .map_err(|error| error.to_string())?
+            .into_iter(),
+    )?
+    .run()
 }
 
 fn verify_source(
@@ -719,12 +725,10 @@ fn verify_source(
     let count = report.members;
     let total = report.decoded_bytes;
     let identity = source.identity();
-    writeln!(
-        stdout().lock(),
+    toolchain::write_line(&format!(
         "Admitted {} {}: {count} members, {total} decoded bytes",
-        identity.title,
-        identity.revision,
-    )
+        identity.title, identity.revision,
+    ))
     .map_err(|error| error.to_string())
 }
 
@@ -742,14 +746,10 @@ fn report_samples(
             .map_err(|error| format!("observation: {error:?}"))?;
         let report = compare_observations(&rom, &bytes)
             .map_err(|error| format!("sample comparison: {error:?}"))?;
-        writeln!(
-            stdout().lock(),
+        toolchain::write_line(&format!(
             "{} frames: {} PCM, {} differential, {} mismatches",
-            report.frames,
-            report.pcm,
-            report.differential,
-            report.mismatches,
-        )
+            report.frames, report.pcm, report.differential, report.mismatches,
+        ))
         .map_err(|error| error.to_string())?;
         (report.mismatches == 0)
             .then_some(())
@@ -761,16 +761,14 @@ fn report_manifest(
     converted: &AssetManifest,
     digest: ContentHash,
 ) -> Result<(), String> {
-    let mut output = stdout().lock();
     for record in converted.records() {
-        writeln!(
-            output,
+        toolchain::write_line(&format!(
             "{}: {} bytes ({})",
             record.key, record.size, record.digest
-        )
+        ))
         .map_err(|error| error.to_string())?;
     }
-    writeln!(output, "Canonical manifest: {digest}")
+    toolchain::write_line(&format!("Canonical manifest: {digest}"))
         .map_err(|error| error.to_string())
 }
 
@@ -813,17 +811,29 @@ mod tests {
     }
 
     #[test]
-    fn package_command_requires_admitted_title_and_output() {
+    fn package_command_admits_explicit_or_configured_output() {
         let args = ["package", "simpsons-arcade", "local-package"];
         assert!(matches!(
             Command::parse(args.into_iter().map(OsString::from)),
             Ok(Command::PackageTitle(title_build::Title::SimpsonsArcade, _))
         ));
-        let invalid: [&[&str]; 3] = [
-            &["package", "simpsons-arcade"],
-            &["package", "metal-slug", "out"],
-            &["package", "simpsons-arcade", "out", "extra"],
-        ];
+        assert!(matches!(
+            Command::parse(
+                ["package", "simpsons-arcade"]
+                    .map(OsString::from)
+                    .into_iter()
+            ),
+            Ok(Command::PackageTitle(
+                title_build::Title::SimpsonsArcade,
+                None
+            ))
+        ));
+        let invalid: [&[&str]; 2] = [&["package", "metal-slug", "out"], &[
+            "package",
+            "simpsons-arcade",
+            "out",
+            "extra",
+        ]];
         for candidate in invalid {
             assert!(
                 Command::parse(candidate.iter().map(OsString::from)).is_err()

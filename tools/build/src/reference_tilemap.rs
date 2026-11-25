@@ -31,12 +31,12 @@
 
 //! Host-side tile RAM admission diagnostic.
 
-use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_platform::ir::importer::reference::Machine;
 use games_platform::ir::storage::snapshot;
+use games_platform::ir::toolchain;
 
 /// Resolve all observed cells from a bounded local snapshot.
 /// # Errors
@@ -52,7 +52,7 @@ pub fn check(
         snapshot(registers_path, NonZeroU64::MIN.saturating_add(21))
             .map_err(|error| format!("tile registers: {error:?}"))?;
     let count = resolve(machine, &ram, &registers)?;
-    writeln!(stdout().lock(), "Resolved {count} local tile cells")
+    toolchain::write_line(&format!("Resolved {count} local tile cells"))
         .map_err(|error| error.to_string())
 }
 

@@ -29,7 +29,6 @@
 // - Defaults:
 //   - Never overwrite and do not publish on conversion failure.
 
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
@@ -44,6 +43,10 @@ use games_platform::ir::importer::{
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::{CanonicalStaging, StagedBundle};
+use games_platform::ir::storage::{PathKind, path_kind};
+use games_platform::ir::toolchain;
+
+use crate::title_build::{local_layout, workspace_root};
 
 /// Supported user-authored media encodings, explicitly selected.
 #[derive(Clone, Copy, Debug)]
@@ -105,10 +108,18 @@ pub(crate) struct MediaReplacement {
 
 impl MediaReplacement {
     pub(crate) fn run(self) -> Result<(), String> {
+        self.run_with(require_asset_parent)
+    }
+
+    fn run_with<Check>(self, check: Check) -> Result<(), String>
+    where
+        Check: FnOnce(&Path, &str) -> Result<(), String>,
+    {
         let bundle =
             CanonicalBundle::open(&self.parent, self.base, self.limits)
                 .map_err(|error| format!("base bundle: {error:?}"))?;
         let base = bundle.manifest();
+        check(&self.parent, &base.source().title)?;
         let original = base
             .record(&self.key)
             .ok_or_else(|| String::from("unknown base slot"))?;
@@ -155,6 +166,7 @@ pub fn publish(
     source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
+    require_asset_parent(parent, &selection.identity().title)?;
     let manifest = selection.limits();
     let mut stage = CanonicalStaging::new(parent, staging_budget(manifest)?)
         .map_err(|error| format!("stage: {error:?}"))?;
@@ -203,13 +215,37 @@ fn publish_staged(
             receipt.path.display()
         ));
     }
-    writeln!(
-        stdout().lock(),
+    toolchain::write_line(&format!(
         "Published canonical bundle {digest} at {}",
         receipt.path.display()
-    )
+    ))
     .map_err(|error| error.to_string())?;
     super::report_manifest(converted, digest)
+}
+
+pub(crate) fn require_asset_parent(
+    parent: &Path,
+    title: &str,
+) -> Result<(), String> {
+    let root = workspace_root()?;
+    let layout = local_layout(&root)?;
+    let expected = PathBuf::from(layout.assets(title)?);
+    if !expected.is_absolute() || expected != parent {
+        return Err(format!(
+            "asset publication requires {}",
+            expected.display()
+        ));
+    }
+    let legacy = root.join(".reference/games").join(title).join("bundles");
+    if legacy != expected
+        && path_kind(legacy.as_os_str()).map_err(|error| error.to_string())?
+            != PathKind::Missing
+    {
+        return Err(String::from(
+            "migrate the legacy asset store before publication",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn staging_budget(
@@ -246,6 +282,7 @@ pub fn upgrade(
     let source = CanonicalBundle::open(parent, digest, limits)
         .map_err(|error| format!("bundle: {error:?}"))?;
     let manifest = source.manifest();
+    require_asset_parent(parent, &manifest.source().title)?;
     let encoded = manifest
         .encode(limits)
         .map_err(|error| format!("manifest: {error:?}"))?;
@@ -268,11 +305,10 @@ pub fn upgrade(
 mod tests {
     use std::fmt::Debug;
     use std::num::{NonZeroU8, NonZeroU32};
-    use std::{env, fs};
 
     use games_assets::SourceIdentity;
     use games_platform::ir::importer::{AssetFamily, SourceFormat};
-    use games_platform::ir::storage::staging::AuthoredStaging;
+    use games_platform::ir::storage::fixtures::TestRoot;
 
     use super::*;
 
@@ -357,8 +393,7 @@ mod tests {
 
     #[test]
     fn media_authoring_requires_exact_passive_slots() -> Result<(), String> {
-        let directory = env::current_dir().map_err(failure)?;
-        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let root = TestRoot::new().map_err(failure)?;
         let parent = root.path();
         let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
@@ -379,13 +414,13 @@ mod tests {
             ("rules", b"rgba".as_slice()),
             ("unknown", b"rgba".as_slice()),
         ] {
-            fs::write(&raw, bytes).map_err(failure)?;
-            if select(key).run().is_ok() {
+            root.write_file("authored.raw", bytes).map_err(failure)?;
+            if select(key).run_with(|_parent, _title| Ok(())).is_ok() {
                 return Err(String::from("invalid replacement accepted"));
             }
         }
-        fs::write(&raw, b"rgba").map_err(failure)?;
-        select("image/hero").run()?;
+        root.write_file("authored.raw", b"rgba").map_err(failure)?;
+        select("image/hero").run_with(|_parent, _title| Ok(()))?;
         let image = manifest
             .record("image/hero")
             .ok_or_else(|| String::from("missing image fixture"))?;
@@ -407,7 +442,9 @@ mod tests {
             || published.read_payload("image/hero").map_err(failure)? != b"rgba"
             || original.read_payload("image/hero").map_err(failure)? != b"abcd"
             || original.read_payload("rules").map_err(failure)? != b"rule"
-            || select("image/hero").run().is_ok()
+            || select("image/hero")
+                .run_with(|_parent, _title| Ok(()))
+                .is_ok()
         {
             return Err(String::from("replacement publication mismatch"));
         }
@@ -416,8 +453,7 @@ mod tests {
 
     #[test]
     fn wave_authoring_requires_exact_pcm_layout() -> Result<(), String> {
-        let directory = env::current_dir().map_err(failure)?;
-        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let root = TestRoot::new().map_err(failure)?;
         let parent = root.path();
         let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
@@ -435,15 +471,22 @@ mod tests {
             .get_mut(24..32)
             .ok_or("bad fixture")?
             .copy_from_slice(&[64, 31, 0, 0, 128, 62, 0, 0]);
-        fs::write(&source, wrong_rate).map_err(failure)?;
-        if select("audio/tone").run().is_ok() {
+        root.write_file("authored.wav", &wrong_rate)
+            .map_err(failure)?;
+        if select("audio/tone")
+            .run_with(|_parent, _title| Ok(()))
+            .is_ok()
+        {
             return Err(String::from("incompatible rate accepted"));
         }
-        fs::write(&source, WAVE).map_err(failure)?;
-        if select("image/hero").run().is_ok() {
+        root.write_file("authored.wav", &WAVE).map_err(failure)?;
+        if select("image/hero")
+            .run_with(|_parent, _title| Ok(()))
+            .is_ok()
+        {
             return Err(String::from("WAV admitted for image slot"));
         }
-        select("audio/tone").run()?;
+        select("audio/tone").run_with(|_parent, _title| Ok(()))?;
         let manifest = original.manifest();
         let pcm = manifest.record("audio/tone").ok_or("missing PCM fixture")?;
         let replacement = AssetManifest::new(
@@ -465,12 +508,22 @@ mod tests {
         {
             return Err(String::from("WAV publication mismatch"));
         }
-        fs::write(&source, b"PCM!").map_err(failure)?;
+        reject_equivalent_raw(&root, select("audio/tone"))
+    }
+
+    fn reject_equivalent_raw(
+        root: &TestRoot,
+        replacement: MediaReplacement,
+    ) -> Result<(), String> {
+        root.write_file("authored.wav", b"PCM!").map_err(failure)?;
         let raw = MediaReplacement {
             encoding: MediaEncoding::Raw,
-            ..select("audio/tone")
+            ..replacement
         };
-        if !matches!(raw.run(), Err(error) if error == "publish: Collision") {
+        if !matches!(
+            raw.run_with(|_parent, _title| Ok(())),
+            Err(error) if error == "publish: Collision"
+        ) {
             return Err(String::from("equivalent raw bundle overwritten"));
         }
         Ok(())
@@ -478,14 +531,13 @@ mod tests {
 
     #[test]
     fn invalid_wave_layouts_publish_nothing() -> Result<(), String> {
-        let directory = env::current_dir().map_err(failure)?;
-        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let root = TestRoot::new().map_err(failure)?;
         let parent = root.path();
         let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
         let source = parent.join("authored.wav");
-        fs::write(&source, WAVE).map_err(failure)?;
-        let entries = fs::read_dir(parent).map_err(failure)?.count();
+        root.write_file("authored.wav", &WAVE).map_err(failure)?;
+        let entries = root.entry_count().map_err(failure)?;
         let mut stereo = WAVE;
         stereo
             .get_mut(22..24)
@@ -511,7 +563,7 @@ mod tests {
         let mut extra = WAVE.to_vec();
         extra.push(0);
         for bytes in [stereo.as_slice(), short.as_slice(), extra.as_slice()] {
-            fs::write(&source, bytes).map_err(failure)?;
+            root.write_file("authored.wav", bytes).map_err(failure)?;
             let replacement = MediaReplacement {
                 base: original.digest(),
                 encoding: MediaEncoding::Wave,
@@ -520,8 +572,8 @@ mod tests {
                 parent: parent.to_path_buf(),
                 source: source.clone(),
             };
-            if replacement.run().is_ok()
-                || fs::read_dir(parent).map_err(failure)?.count() != entries
+            if replacement.run_with(|_parent, _title| Ok(())).is_ok()
+                || root.entry_count().map_err(failure)? != entries
             {
                 return Err(String::from("invalid WAV published output"));
             }

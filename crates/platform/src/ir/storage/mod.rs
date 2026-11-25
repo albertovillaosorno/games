@@ -32,8 +32,10 @@
 
 /// Verified canonical asset bundles and passive media overlays.
 pub mod bundle;
+/// Configured persistent asset and executable locations.
+pub mod layout;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Result as IoResult;
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -47,6 +49,28 @@ pub(crate) trait ExecutableLocation {
     fn executable_path() -> IoResult<OsString>;
 }
 
+/// Observed kind of a local entry, without following its final link.
+///
+/// This is not a verified descriptor or permission to access its contents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PathKind {
+    /// An existing directory.
+    Directory,
+    /// No entry exists at the observed path.
+    Missing,
+    /// An existing special entry, such as a device or socket.
+    Other,
+    /// An existing regular file.
+    RegularFile,
+    /// A symbolic link, including one with a missing target.
+    SymbolicLink,
+}
+
+/// Native metadata observation without exposing a host metadata object.
+pub(crate) trait PathObservation {
+    fn path_kind(path: &OsStr) -> IoResult<PathKind>;
+}
+
 /// Observe the running executable's location for explicit local resolution.
 ///
 /// This does not search for assets, inspect their contents or grant trust.
@@ -54,4 +78,15 @@ pub(crate) trait ExecutableLocation {
 /// Returns a host error if the location cannot be determined.
 pub fn executable_path() -> IoResult<OsString> {
     <() as ExecutableLocation>::executable_path()
+}
+
+/// Observe the final entry kind for preflight diagnostics.
+///
+/// Use descriptor-based admission for subsequent reads or publication:
+/// the observation is not a promise that the entry will remain unchanged.
+///
+/// # Errors
+/// Returns metadata or unavailable capability errors.
+pub fn path_kind(path: &OsStr) -> IoResult<PathKind> {
+    <() as PathObservation>::path_kind(path)
 }

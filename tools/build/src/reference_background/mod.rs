@@ -38,7 +38,6 @@ pub mod art;
 pub mod sequence;
 
 use std::ffi::OsString;
-use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 #[cfg(feature = "native-preview")]
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -59,6 +58,7 @@ use games_platform::ir::importer::reference::{
 use games_platform::ir::scene::{SceneLimits, SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::toolchain;
 
 #[cfg(feature = "native-preview")]
 use crate::render_check::present;
@@ -108,12 +108,11 @@ impl Arguments {
         } else {
             "Background-only"
         };
-        writeln!(
-            stdout().lock(),
+        toolchain::write_line(&format!(
             "{label}: {matched}/{} pixels match; {} differ",
             pens.len(),
             pens.len().saturating_sub(matched),
-        )
+        ))
         .map_err(|error| error.to_string())
     }
 
@@ -454,10 +453,9 @@ fn native_check(
             Ok(())
         })
         .map_err(|error| format!("native scene: {error:?}"))?;
-    writeln!(
-        stdout().lock(),
+    toolchain::write_line(&format!(
         "Native scene readback matches ({renderer})"
-    )
+    ))
     .map_err(|error| error.to_string())
 }
 

@@ -31,10 +31,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use games_platform::ir::storage::{PathKind, path_kind};
 use serde::Deserialize;
 
 use crate::title_build::Title;
@@ -247,17 +246,17 @@ impl Package {
         };
         for &name in names {
             let path = directory.join(name);
-            match fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.is_file() => {
+            match path_kind(path.as_os_str()) {
+                Ok(PathKind::RegularFile) => {
                     let _previous = files.insert(name.to_owned(), path);
                 },
+                Ok(PathKind::Missing) => {},
                 Ok(_) => {
                     return Err(format!(
                         "not a licence file: {}",
                         path.display()
                     ));
                 },
-                Err(error) if error.kind() == ErrorKind::NotFound => {},
                 Err(error) => return Err(error.to_string()),
             }
         }

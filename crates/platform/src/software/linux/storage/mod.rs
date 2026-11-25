@@ -144,6 +144,7 @@ use games_assets::{ContentHash, ManifestLimits};
 /// Shared portable snapshot admission failure.
 pub use crate::ir::security::file::FileReadError;
 use crate::ir::storage::bundle::{BundleError, BundleFactory, CanonicalBundle};
+use crate::ir::storage::{PathKind, PathObservation};
 
 /// Reject a snapshot request when safe regular-file admission is unavailable.
 ///
@@ -185,6 +186,37 @@ pub(in crate::software) fn executable_path() -> io::Result<PathBuf> {
     env::current_exe()
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl PathObservation for () {
+    fn path_kind(path: &OsStr) -> io::Result<PathKind> {
+        use std::fs;
+
+        let metadata = match fs::symlink_metadata(Path::new(path)) {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(PathKind::Missing);
+            },
+            Err(error) => return Err(error),
+        };
+        Ok(if metadata.is_file() {
+            PathKind::RegularFile
+        } else if metadata.is_dir() {
+            PathKind::Directory
+        } else if metadata.file_type().is_symlink() {
+            PathKind::SymbolicLink
+        } else {
+            PathKind::Other
+        })
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl PathObservation for () {
+    fn path_kind(_path: &OsStr) -> io::Result<PathKind> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +229,28 @@ mod tests {
         let observed = observed_executable_path()?;
         let expected = env::current_exe()?;
         (expected.is_absolute() && observed == expected.into_os_string())
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn path_observation_does_not_follow_final_links() -> io::Result<()> {
+        use std::fs;
+
+        use crate::ir::storage::path_kind;
+
+        let root = fixtures::TestRoot::new()?;
+        let file = root.path().join("file");
+        let missing = root.path().join("missing");
+        let link = root.path().join("link");
+        fs::write(&file, b"fixture")?;
+        fixtures::file_link(&missing, &link)?;
+        let valid = path_kind(root.path().as_os_str())? == PathKind::Directory
+            && path_kind(file.as_os_str())? == PathKind::RegularFile
+            && path_kind(missing.as_os_str())? == PathKind::Missing
+            && path_kind(link.as_os_str())? == PathKind::SymbolicLink;
+        valid
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())
     }

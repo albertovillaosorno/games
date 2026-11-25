@@ -35,6 +35,8 @@ pub mod archive;
 /// Integrity-checked runtime access to indexed graphics.
 pub mod indexed;
 mod manifest_codec;
+/// Shared content-addressed payload publication planning.
+pub mod payload_inventory;
 /// Integrity-checked runtime access to interleaved PCM audio.
 pub mod pcm;
 

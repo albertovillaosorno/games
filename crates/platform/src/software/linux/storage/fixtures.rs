@@ -31,10 +31,12 @@
 
 //! Isolated native storage fixtures for workspace integration tests.
 
+use std::io::Write as _;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
+use games_assets::archive::validate_path;
 use nix::unistd::mkdtemp;
 
 /// Whether the platform provides link and executable test fixtures.
@@ -47,6 +49,18 @@ pub struct TestRoot {
 }
 
 impl TestRoot {
+    /// Count directory entries, including unpublished staging remnants.
+    /// # Errors
+    /// Reports an enumeration or counter overflow failure.
+    pub fn entry_count(&self) -> io::Result<usize> {
+        fs::read_dir(&self.path)?.try_fold(0usize, |count, entry| {
+            let _entry = entry?;
+            count
+                .checked_add(1)
+                .ok_or_else(|| io::ErrorKind::InvalidData.into())
+        })
+    }
+
     /// Atomically create an owner-only directory under the temporary root.
     /// # Errors
     /// Reports a native temporary-directory creation failure.
@@ -61,6 +75,28 @@ impl TestRoot {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Write or replace a caller-authored fixture at a single local leaf.
+    /// # Errors
+    /// Rejects invalid relative paths and native write failures.
+    pub fn write_file(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
+        validate_path(name).map_err(|_error| io::ErrorKind::InvalidInput)?;
+        if name.contains('/') {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let path = self.path.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() => fs::remove_file(&path)?,
+            Ok(_) => return Err(io::ErrorKind::InvalidInput.into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error),
+        }
+        fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)?
+            .write_all(bytes)
     }
 }
 
@@ -88,6 +124,23 @@ pub fn owner_executable(path: &Path) -> io::Result<()> {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn fixture_admits_only_local_paths() -> io::Result<()> {
+        let root = TestRoot::new()?;
+        root.write_file("local", b"test")?;
+        root.write_file("local", b"replacement")?;
+        file_link(&root.path().join("local"), &root.path().join("link"))?;
+        let valid = root.entry_count()? == 2
+            && root.write_file("link", b"bad").is_err()
+            && root.write_file("nested/leaf", b"bad").is_err()
+            && fs::read(root.path().join("local"))? == b"replacement"
+            && root.write_file("../escape", b"bad").is_err()
+            && root.write_file("/absolute", b"bad").is_err();
+        valid
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
 
     #[test]
     fn distinct_private_roots_are_removed() -> Result<(), String> {
