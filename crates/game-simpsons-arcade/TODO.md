@@ -157,10 +157,16 @@ Secondary starts a 29-tick vertical action, reaching a representative
 66-pixel elevation. In-flight button edges are discarded; both members
 can steer, with first-member priority. After landing, only Homer moves
 the pair, and the last post-landing pose holds when motion stops. The
-optional shadow mask is drawn independently of elevation. Grounded
-Primary retains the provisional solo behavior pending the separate
-two-edge paired action. The combined catalogue now reaches the existing
-200-record limit. Exact pivots, hit eligibility, seat sampling and
+optional shadow mask is drawn independently of elevation.
+With this complete jump sequence enabled, grounded Primary from either
+member advances the held walking pose phase without moving the pair.
+The original tested pre-jump cycle displays a new pose every four
+edges, and the landed cycle every two edges. Moving Primary preserves
+locomotion; a chord selects Secondary. Neither behavior adds damage.
+The phase advancement reuses existing pose records; the combined
+catalogue remains within its 200-record and 16 KiB limits. Without
+the jump sequence, Primary retains the earlier solo behavior.
+Exact pivots, hit eligibility, seat sampling and initial movement
 control restoration remain provisional.
 
 Optional `--shadow SHA` follows the audio selection (if used) and

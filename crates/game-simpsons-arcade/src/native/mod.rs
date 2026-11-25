@@ -2331,8 +2331,9 @@ fn smoke_marge_homer_jump(
     {
         return Err(failure("Marge/Homer landing not visible"));
     }
+    smoke_marge_homer_primary(scene, art, cabinet)?;
     let landed = scene.readback()?;
-    cabinet.input_step(111, &[LogicalAction {
+    cabinet.input_step(113, &[LogicalAction {
         action: Action {
             control: Control::Left,
             player: Player::Homer,
@@ -2341,7 +2342,7 @@ fn smoke_marge_homer_jump(
     }]);
     let _walk = art.present(scene, cabinet)?;
     if cabinet.pair_pose(Pair::MargeHomer).map(|pose| pose.motion)
-        != Some(crate::PairMotion::AfterJump { tick: 2 })
+        != Some(crate::PairMotion::AfterJump { tick: 4 })
         || landed == scene.readback()?
     {
         return Err(failure("Marge/Homer post-landing walk not visible"));
@@ -2351,6 +2352,41 @@ fn smoke_marge_homer_jump(
         "Marge/Homer combined jump and walk verified"
     )
     .map_err(failure)
+}
+
+fn smoke_marge_homer_primary(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &mut Cabinet,
+) -> Result<(), RenderError> {
+    let landed = scene.readback()?;
+    let stations = cabinet.stations();
+    for (tick, player) in [(111, Player::Marge), (112, Player::Homer)] {
+        let actions = [true, false].map(|down| LogicalAction {
+            action: Action {
+                control: Control::Primary,
+                player,
+            },
+            down,
+        });
+        cabinet.input_step(tick, &actions);
+        let _phase = art.present(scene, cabinet)?;
+        let same = landed == scene.readback()?;
+        let expected = if tick == 111 {
+            1
+        } else {
+            2
+        };
+        if cabinet.stations() != stations
+            || cabinet.pair_pose(Pair::MargeHomer).map(|pose| pose.motion)
+                != Some(crate::PairMotion::AfterJump { tick: expected })
+            || same != (tick == 111)
+        {
+            return Err(failure("Marge/Homer Primary phase not visible"));
+        }
+    }
+    writeln!(stdout().lock(), "Marge/Homer paired Primary verified")
+        .map_err(failure)
 }
 
 fn smoke_optional(

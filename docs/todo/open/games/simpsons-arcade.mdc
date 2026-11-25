@@ -1852,3 +1852,44 @@ evidence of damage. The pre-Secondary two-edge pose differs and
 requires separately admitted art. Leave Primary behavior provisional
 until both modes, reset and movement rules can be implemented with
 complete evidence and a bounded catalogue.
+
+Repeated stationary Marge/Homer Primary controls resolve the earlier
+two-edge observation as pose-phase advancement. At the tested stopped
+pre-jump walking phase, the second edge changes the pose, then every
+four edges selects the next pose; 37 repeated edges traverse all eight
+poses and wrap. After Secondary lands, every two edges selects the
+next of the same eight phases, wrapping twice in the 37-edge control.
+A simultaneous edge from each member advances the same visible phase
+as two separate edges at the tested starting phases. A 100-frame hold
+does not repeat. Primary pulses during sustained movement match the
+neutral movement control across all 101 complete object-DMA frames.
+The paired jump resets the held phase.
+
+A fresh post-landing scene reconstruction passed all 71,680 pixels.
+Its actor payload is the exact horizontal mirror of the already
+admitted post-landing walking phase; the pre-jump candidate likewise
+matches the mirror of an existing walking crop. Therefore no new
+pose records, atlas budget or original assets are needed. With the
+optional Marge/Homer jump catalogue active, grounded Primary advances
+the existing held phase by one tick per member edge, without
+translation or solo attack admission. Movement advances the same
+pre-jump phase rather than restarting it. Chords retain Secondary
+priority; airborne edges remain discarded. Same-tick edges within
+one station are still coalesced. The model uses a provisional
+phase-zero admission from the opening idle and preserves the existing
+directional arbitration. A late Marge-only movement control was
+ignored even without Primary, so no new movement authority or hit
+eligibility is inferred from these experiments.
+
+Core regressions cover held and fresh edges, both members, simultaneous
+presses, complete phase wraparound, moving Primary, jump reset, chord
+priority and legacy solo fallback. Fresh native render/audio workspace
+validation passed in run 1795630915887449568-742635. The unchanged
+200-pose catalogue passed native adaptive 426-by-304 touch/dummy-audio
+smoke with the 3,341,072-byte Linux executable. Readback verified an
+unchanged first landed edge and a visible second edge without changing
+either station, followed by resumed movement. All 600 movement and
+20 strike submissions met the 16.667 ms work budget; mean work was
+66.974 and 220.892 microseconds respectively, and lifetime peak RSS
+was 134,541,312 bytes. These observations do not establish original
+damage, physical controls, full stage progression or gameplay parity.

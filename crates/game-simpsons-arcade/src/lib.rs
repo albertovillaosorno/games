@@ -627,7 +627,7 @@ impl Slot {
 enum PairCommand {
     Jump,
     None,
-    Primary,
+    Primary { presses: u8 },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

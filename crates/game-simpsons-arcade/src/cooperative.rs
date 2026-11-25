@@ -201,11 +201,10 @@ impl PairState {
                     self.motion = Some(PairMotion::Jump { tick: 0 });
                     self.walking = false;
                 },
-                PairCommand::Primary if direction == (0, 0) => {
-                    self.motion = Some(PairMotion::Primary);
-                    self.walking = false;
+                PairCommand::Primary { presses } if direction == (0, 0) => {
+                    self.advance_primary(pair, motion, presses);
                 },
-                PairCommand::Primary | PairCommand::None => {
+                PairCommand::Primary { .. } | PairCommand::None => {
                     self.update_motion(pair, motion, direction);
                 },
             }
@@ -230,6 +229,34 @@ impl PairState {
         });
     }
 
+    fn advance_primary(&mut self, pair: Pair, motion: PairMotion, presses: u8) {
+        // Grounded Marge/Homer Primary advances the same held pose
+        // sequence as locomotion, without translating either station.
+        let next = if pair == Pair::BartLisa {
+            PairMotion::Primary
+        } else {
+            match motion {
+                PairMotion::AfterJump { tick } => PairMotion::AfterJump {
+                    tick: tick.saturating_add(presses) & 15,
+                },
+                PairMotion::Walk { tick } => PairMotion::Walk {
+                    tick: tick
+                        .saturating_add(presses)
+                        .checked_rem(pair.walk_duration())
+                        .unwrap_or_default(),
+                },
+                PairMotion::Idle { .. } | PairMotion::Primary => {
+                    PairMotion::Walk {
+                        tick: presses.saturating_sub(1),
+                    }
+                },
+                PairMotion::Jump { .. } => motion,
+            }
+        };
+        self.motion = Some(next);
+        self.walking = false;
+    }
+
     fn direction(self, first: &Slot, second: &Slot, jump: bool) -> (i16, i16) {
         let airborne =
             jump || matches!(self.motion, Some(PairMotion::Jump { .. }));
@@ -240,11 +267,7 @@ impl PairState {
         }
     }
 
-    fn filter_actions(
-        self,
-        pair: Pair,
-        pending: [&mut PendingManeuver; 2],
-    ) -> PairCommand {
+    fn filter_actions(self, pending: [&mut PendingManeuver; 2]) -> PairCommand {
         if self.support != PairSupport::Jump || self.motion.is_none() {
             return PairCommand::None;
         }
@@ -253,9 +276,6 @@ impl PairState {
         let jump = actions
             .into_iter()
             .any(|action| matches!(action, Some(Maneuver::Jump(_))));
-        if !airborne && !jump && pair == Pair::MargeHomer {
-            return PairCommand::None;
-        }
         for action in pending {
             *action = PendingManeuver::default();
         }
@@ -263,13 +283,18 @@ impl PairState {
             PairCommand::None
         } else if jump {
             PairCommand::Jump
-        } else if actions
-            .into_iter()
-            .any(|action| matches!(action, Some(Maneuver::Attack { .. })))
-        {
-            PairCommand::Primary
         } else {
-            PairCommand::None
+            let presses = actions.into_iter().fold(0u8, |count, action| {
+                count.saturating_add(u8::from(matches!(
+                    action,
+                    Some(Maneuver::Attack { .. })
+                )))
+            });
+            if presses == 0 {
+                PairCommand::None
+            } else {
+                PairCommand::Primary { presses }
+            }
         }
     }
 
@@ -340,10 +365,15 @@ impl PairState {
             self.walking = true;
         } else {
             let tick = match motion {
-                PairMotion::Walk { tick } if self.walking => tick
-                    .saturating_add(1)
-                    .checked_rem(pair.walk_duration())
-                    .unwrap_or_default(),
+                PairMotion::Walk { tick }
+                    if self.walking
+                        || (pair == Pair::MargeHomer
+                            && self.support == PairSupport::Jump) =>
+                {
+                    tick.saturating_add(1)
+                        .checked_rem(pair.walk_duration())
+                        .unwrap_or_default()
+                },
                 PairMotion::AfterJump { .. }
                 | PairMotion::Idle { .. }
                 | PairMotion::Jump { .. }
@@ -411,9 +441,8 @@ impl Cooperation {
     ) -> [PairCommand; 2] {
         let [marge, homer, bart, lisa] = pending;
         [
-            self.marge_homer
-                .filter_actions(Pair::MargeHomer, [marge, homer]),
-            self.bart_lisa.filter_actions(Pair::BartLisa, [bart, lisa]),
+            self.marge_homer.filter_actions([marge, homer]),
+            self.bart_lisa.filter_actions([bart, lisa]),
         ]
     }
 
@@ -858,6 +887,113 @@ mod tests {
                 assert_eq!(chord, control);
             }
         }
+    }
+
+    fn primary(state: &mut Cabinet, player: Player) {
+        state.input_step(0, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Primary, false),
+        ]);
+    }
+
+    #[test]
+    fn marge_homer_primary_advances_held_walk_without_translation() {
+        let mut state = joined().with_pair_jump(Pair::MargeHomer, true);
+        state.input_step(41, &[change(Player::Homer, Control::Right, true)]);
+        wait(&mut state, 14);
+        state.input_step(56, &[change(Player::Homer, Control::Right, false)]);
+        let stations = state.stations();
+        let motion = |cabinet: &Cabinet| {
+            cabinet.pair_pose(Pair::MargeHomer).map(|pose| pose.motion)
+        };
+        assert_eq!(motion(&state), Some(PairMotion::Walk { tick: 14 }));
+        state.input_step(57, &[change(Player::Marge, Control::Primary, true)]);
+        assert_eq!(motion(&state), Some(PairMotion::Walk { tick: 15 }));
+        wait(&mut state, 100);
+        assert_eq!(motion(&state), Some(PairMotion::Walk { tick: 15 }));
+        state.input_step(58, &[change(Player::Marge, Control::Primary, false)]);
+        primary(&mut state, Player::Homer);
+        assert_eq!(motion(&state), Some(PairMotion::Walk { tick: 16 }));
+        assert_eq!(state.stations(), stations);
+        check_marge_homer_primary_resume(state);
+    }
+
+    fn check_marge_homer_primary_resume(mut state: Cabinet) {
+        let stations = state.stations();
+        let motion = |cabinet: &Cabinet| {
+            cabinet.pair_pose(Pair::MargeHomer).map(|pose| pose.motion)
+        };
+        state.input_step(59, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Homer, Control::Primary, true),
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Homer, Control::Primary, false),
+        ]);
+        assert_eq!(motion(&state), Some(PairMotion::Walk { tick: 18 }));
+        assert_eq!(state.stations(), stations);
+        state.input_step(60, &[change(Player::Homer, Control::Left, true)]);
+        assert_eq!(motion(&state), Some(PairMotion::Walk { tick: 19 }));
+        assert_ne!(state.stations(), stations);
+        let mut control = state;
+        primary(&mut state, Player::Marge);
+        wait(&mut control, 1);
+        assert_eq!(state, control);
+    }
+
+    #[test]
+    fn marge_homer_primary_enters_and_wraps_grounded_sequence() {
+        let mut state = joined().with_pair_jump(Pair::MargeHomer, true);
+        wait(&mut state, 13);
+        let stations = state.stations();
+        for tick in (0..32).cycle().take(65) {
+            primary(&mut state, Player::Marge);
+            assert_eq!(
+                state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+                Some(PairMotion::Walk { tick })
+            );
+            assert_eq!(state.stations(), stations);
+        }
+    }
+
+    #[test]
+    fn marge_homer_primary_after_jump_reuses_two_tick_pose_cycle() {
+        let mut state = joined().with_pair_jump(Pair::MargeHomer, true);
+        primary(&mut state, Player::Marge);
+        state.input_step(41, &[
+            change(Player::Homer, Control::Secondary, true),
+            change(Player::Homer, Control::Secondary, false),
+        ]);
+        wait(&mut state, 29);
+        let stations = state.stations();
+        for tick in (0..16).cycle().skip(1).take(32) {
+            primary(&mut state, Player::Homer);
+            wait(&mut state, 3);
+            assert_eq!(
+                state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+                Some(PairMotion::AfterJump { tick })
+            );
+            assert_eq!(state.stations(), stations);
+        }
+        let mut control = state;
+        state.input_step(42, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Marge, Control::Secondary, true),
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Marge, Control::Secondary, false),
+        ]);
+        control.input_step(42, &[
+            change(Player::Marge, Control::Secondary, true),
+            change(Player::Marge, Control::Secondary, false),
+        ]);
+        assert_eq!(state, control);
+    }
+
+    #[test]
+    fn legacy_marge_homer_primary_remains_solo() {
+        let mut state = joined();
+        primary(&mut state, Player::Marge);
+        assert!(state.pair_pose(Pair::MargeHomer).is_none());
+        assert!(state.pair_pose(Pair::BartLisa).is_some());
     }
 
     #[test]
