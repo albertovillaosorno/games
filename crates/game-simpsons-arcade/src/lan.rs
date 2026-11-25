@@ -47,19 +47,22 @@ use games_platform::lan::secure::{
 
 use super::Cabinet;
 use super::remote::{
-    CONTROL_BYTES, HostedCabinet, HostedInput, RemoteCodec, RemoteControl,
-    RemoteMessage,
+    CONTROL_BYTES, HOST_ACK, HostedCabinet, HostedInput, RemoteCodec,
+    RemoteControl, RemoteMessage,
 };
 
 const POLL_BUDGET: usize = 32;
 const CLIENT_QUEUE: usize = 128;
 const TIMEOUT: Duration = Duration::from_secs(2);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
+const REPLY_INTERVAL: Duration = Duration::from_millis(250);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Bounded outgoing controller channel for a shared-screen client.
+/// Bounded controller channel with authenticated host liveness detection.
 #[derive(Debug)]
 pub(crate) struct ClientLan {
+    idle_timeout: Duration,
+    last_received: Instant,
     last_sent: Instant,
     pending: VecDeque<RemoteControl>,
     stream: SecureFrameStream,
@@ -75,17 +78,19 @@ impl ClientLan {
     }
 
     pub(crate) fn new(stream: SecureFrameStream) -> Self {
-        Self {
-            last_sent: Instant::now(),
-            pending: VecDeque::new(),
-            stream,
-        }
+        Self::with_idle(stream, IDLE_TIMEOUT)
     }
 
     pub(crate) fn poll(&mut self) -> io::Result<()> {
-        // Detect EOF and reject unsolicited application data.
-        if self.stream.poll_receive()?.is_some() {
-            return Err(ErrorKind::InvalidData.into());
+        if self.last_received.elapsed() >= self.idle_timeout {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        // Only the exact versioned host acknowledgement refreshes liveness.
+        if let Some(frame) = self.stream.poll_receive()? {
+            if frame.as_slice() != HOST_ACK {
+                return Err(ErrorKind::InvalidData.into());
+            }
+            self.last_received = Instant::now();
         }
         for _step in 0..POLL_BUDGET {
             if !self.stream.has_pending_send() && !self.queue_next()? {
@@ -111,6 +116,17 @@ impl ClientLan {
         self.last_sent = Instant::now();
         Ok(true)
     }
+
+    fn with_idle(stream: SecureFrameStream, idle_timeout: Duration) -> Self {
+        let now = Instant::now();
+        Self {
+            idle_timeout,
+            last_received: now,
+            last_sent: now,
+            pending: VecDeque::new(),
+            stream,
+        }
+    }
 }
 
 /// Native input bridge for explicitly hosted free play.
@@ -122,6 +138,7 @@ impl ClientLan {
 /// until that event can be accepted; releases must never be discarded.
 #[derive(Debug)]
 pub struct HostLan {
+    last_reply: [Option<Instant>; 4],
     pending: Vec<HostedInput>,
     pump: HostInputPump<RemoteMessage>,
     reserved: [bool; 4],
@@ -173,6 +190,7 @@ impl HostLan {
             RemoteCodec,
         )?;
         Ok(Self {
+            last_reply: [None; 4],
             pending: Vec::new(),
             pump,
             reserved,
@@ -202,6 +220,7 @@ impl HostLan {
         for _step in 0..POLL_BUDGET {
             match self.pump.poll()? {
                 PumpProgress::Event(event) => {
+                    self.reply(&event)?;
                     self.pending.extend(hosted_input(&event));
                 },
                 PumpProgress::Idle => break,
@@ -210,6 +229,32 @@ impl HostLan {
             if !self.retry(live)? {
                 break;
             }
+        }
+        Ok(())
+    }
+
+    fn reply(&mut self, event: &RemoteEvent<RemoteMessage>) -> io::Result<()> {
+        let (peer, message) = match *event {
+            RemoteEvent::Connected(peer)
+            | RemoteEvent::Disconnected { peer, .. } => (peer, false),
+            RemoteEvent::Message { peer, .. } => (peer, true),
+        };
+        let index =
+            usize::try_from(peer).map_err(|_error| ErrorKind::InvalidData)?;
+        let last = self
+            .last_reply
+            .get_mut(index)
+            .ok_or(ErrorKind::InvalidData)?;
+        if !message {
+            *last = None;
+            return Ok(());
+        }
+        let now = Instant::now();
+        if last.is_none_or(|previous| {
+            now.duration_since(previous) >= REPLY_INTERVAL
+        }) {
+            self.pump.queue_reply(peer, HOST_ACK.to_vec())?;
+            *last = Some(now);
         }
         Ok(())
     }
@@ -601,12 +646,52 @@ mod tests {
     }
 
     #[test]
+    fn controller_expires_when_connected_host_stops_polling() -> io::Result<()>
+    {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let stream = connect(&mut host, &mut live, &credentials)?;
+        let mut client = ClientLan::with_idle(stream, Duration::from_secs(1));
+        maintain_lease(&mut host, &mut live, &mut client)?;
+
+        // Stop host processing without closing either authenticated endpoint.
+        let deadline = Instant::now()
+            .checked_add(TIMEOUT)
+            .ok_or(ErrorKind::TimedOut)?;
+        loop {
+            match client.poll() {
+                Ok(()) if Instant::now() < deadline => thread::yield_now(),
+                Err(error) if error.kind() == ErrorKind::TimedOut => break,
+                _ => {
+                    return Err(io::Error::other(
+                        "controller did not expire on host silence",
+                    ));
+                },
+            }
+        }
+        require(
+            live.state().connected_remotes().get(1) == Some(&true),
+            "host still owns the remote seat",
+        )?;
+        drop(client);
+        await_poll(&mut host, &mut live, |_bridge, state| {
+            state.pending_actions() == 1
+        })?;
+        advance(&mut live)?;
+        let _rejoined = connect(&mut host, &mut live, &credentials)?;
+        require(
+            live.state().connected_remotes().get(1) == Some(&true),
+            "the same identity can rejoin after host silence",
+        )
+    }
+
+    #[test]
     fn silent_controller_expires_and_releases_direction() -> io::Result<()> {
         let (mut host, credentials) = host_with_idle(Duration::from_secs(1))?;
         let mut live = live(&host)?;
         let mut stream = connect(&mut host, &mut live, &credentials)?;
         join_and_move(&mut stream, &mut host, &mut live)?;
-        let mut client = ClientLan::new(stream);
+        let mut client = ClientLan::with_idle(stream, Duration::from_secs(1));
         maintain_lease(&mut host, &mut live, &mut client)?;
 
         // Keep the TCP connection alive locally but stop sending heartbeats.

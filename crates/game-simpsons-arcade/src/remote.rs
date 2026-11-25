@@ -37,9 +37,12 @@ use games::replay::InputStep;
 
 use super::{Action, Cabinet, Control, Maneuver, Phase, Player};
 
-/// Exact length of a version-one remote control message.
+/// Exact length of a version-two remote control message.
 pub const CONTROL_BYTES: usize = 3;
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
+
+/// Exact host-to-controller liveness acknowledgement, never a control.
+pub const HOST_ACK: [u8; CONTROL_BYTES] = [VERSION, 0, 1];
 
 // These are the seven ordinary station controls. Pause is host-only.
 const REMOTE_CONTROLS: [Control; 7] = [
@@ -87,7 +90,7 @@ pub enum RemoteMessage {
 }
 
 impl RemoteMessage {
-    /// Encode a version-one message.
+    /// Encode a version-two message.
     #[must_use]
     pub fn encode(self) -> [u8; CONTROL_BYTES] {
         match self {
@@ -97,7 +100,7 @@ impl RemoteMessage {
     }
 }
 
-/// Strict version-one codec for an authenticated peer's station input.
+/// Strict version-two codec for an authenticated peer's station input.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RemoteCodec;
 
@@ -332,7 +335,7 @@ mod tests {
 
     fn check_wire_code(code: u8, control: Option<Control>) {
         for down in [false, true] {
-            let encoded = [1, code, u8::from(down)];
+            let encoded = [2, code, u8::from(down)];
             let expected = if code == 0 && !down {
                 Some(RemoteMessage::Heartbeat)
             } else {
@@ -406,11 +409,13 @@ mod tests {
     fn codec_rejects_wrong_length_version_and_state() {
         let codec = RemoteCodec;
         assert_eq!(codec.decode(&[]), None);
-        assert_eq!(codec.decode(&[1, 2]), None);
-        assert_eq!(codec.decode(&[1, 2, 1, 0]), None);
-        assert_eq!(codec.decode(&[2, 2, 1]), None);
+        assert_eq!(codec.decode(&[2, 2]), None);
+        assert_eq!(codec.decode(&[2, 2, 1, 0]), None);
+        assert_eq!(codec.decode(&[1, 2, 1]), None);
+        assert_eq!(HOST_ACK, [2, 0, 1]);
+        assert_eq!(codec.decode(&HOST_ACK), None);
         for invalid in 2..=u8::MAX {
-            assert_eq!(codec.decode(&[1, 2, invalid]), None);
+            assert_eq!(codec.decode(&[2, 2, invalid]), None);
         }
     }
 
@@ -434,17 +439,17 @@ mod tests {
     }
 
     fn check_roster(roster: &mut Session) {
-        let start = [1, 2, 1];
+        let start = [2, 2, 1];
         assert_eq!(
             roster.decode(3, &start, &RemoteCodec),
             Err(SessionError::UnknownPeer)
         );
         assert_eq!(
-            roster.decode(1, &[1, 1, 1], &RemoteCodec),
+            roster.decode(1, &[2, 1, 1], &RemoteCodec),
             Err(SessionError::MalformedMessage)
         );
         assert_eq!(
-            roster.decode(1, &[1, 2, 1, 0], &RemoteCodec),
+            roster.decode(1, &[2, 2, 1, 0], &RemoteCodec),
             Err(SessionError::MessageTooLarge)
         );
         assert_eq!(roster.disconnect(1), Ok(()));
@@ -530,7 +535,7 @@ mod tests {
         let mut host = hosted()?;
         let roster = roster()?;
         let message = roster
-            .decode(1, &[1, 2, 1], &RemoteCodec)
+            .decode(1, &[2, 2, 1], &RemoteCodec)
             .map_err(|_error| "decode approved start")?;
         let RemoteMessage::Control(control) = message else {
             return Err("unexpected heartbeat");

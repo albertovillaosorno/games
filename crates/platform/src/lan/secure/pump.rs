@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded fair scheduling of native inbound host operations.
+//   - Bounded fair scheduling of native host input and reply operations.
 // - Must-Not:
 //   - Authenticate identities, decode title messages or simulate games.
 // - Allows:
@@ -29,7 +29,7 @@
 // - Defaults:
 //   - Explicit private-address binding and pre-approved identities only.
 
-//! Fair caller-driven admission and inbound progress on the host worker.
+//! Fair caller-driven admission, input and replies on the host worker.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, ErrorKind};
@@ -45,7 +45,8 @@ use super::worker::{
     HostWorker, OperationError, RejectionReason,
 };
 use super::{
-    LanConfig, PeerFingerprint, PendingConnection, SecureLanListener, ServerTls,
+    LanConfig, PeerFingerprint, PendingConnection, SecureLanListener,
+    SendProgress, ServerTls,
 };
 
 /// One verified remote lifecycle or schema-checked input event.
@@ -85,6 +86,7 @@ enum PollKind {
     Authenticate,
     Disconnect(u64),
     Receive(u64, Option<Instant>),
+    Reply(u64, Option<Instant>),
 }
 
 #[derive(Debug)]
@@ -114,6 +116,13 @@ impl PollTask {
             operation: HostOperation::PollReceive(peer),
         }
     }
+
+    const fn reply(peer: u64, deadline: Option<Instant>) -> Self {
+        Self {
+            kind: PollKind::Reply(peer, deadline),
+            operation: HostOperation::PollSend(peer),
+        }
+    }
 }
 
 /// Explicit endpoint, transport limits and pre-approved player identities.
@@ -134,7 +143,7 @@ pub struct HostInputConfig<'roster> {
     pub timeout: Duration,
 }
 
-/// Nonblocking host input scheduler over the existing authenticated worker.
+/// Nonblocking host input and reply scheduler over the authenticated worker.
 ///
 /// Pending sockets are bounded by the listener permit count. Active
 /// channels are bounded by the roster. Each socket or channel has exactly
@@ -144,9 +153,11 @@ pub struct HostInputConfig<'roster> {
 /// Polling does not open outbound sockets, schedule gameplay or buffer
 /// delivered events. Callers must cap their own polls per update and stop
 /// on backpressure rather than discarding a lifecycle or input event.
-/// This inbound scheduler does not publish game state to clients.
+/// One bounded reply can replace a ready receive task; it cannot grow the
+/// queue or renew an inbound lease. It does not publish world state.
 #[derive(Debug)]
 pub struct HostInputPump<Message> {
+    frame_budget: usize,
     idle_timeout: Option<Duration>,
     in_flight: BTreeMap<u64, PollKind>,
     listener: SecureLanListener,
@@ -227,6 +238,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let listener = SecureLanListener::bind(address, settings, tls)?;
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
+            frame_budget: limits.max_message_bytes.get(),
             idle_timeout,
             in_flight: BTreeMap::new(),
             listener,
@@ -260,6 +272,9 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             },
             PollKind::Receive(peer, deadline) => {
                 self.complete_receive((peer, deadline), completion, observed_at)
+            },
+            PollKind::Reply(peer, deadline) => {
+                self.complete_reply(peer, deadline, &completion.result)
             },
         }
     }
@@ -339,6 +354,33 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         Ok(progress)
     }
 
+    fn complete_reply(
+        &mut self,
+        peer: u64,
+        deadline: Option<Instant>,
+        result: &HostResult<Message>,
+    ) -> io::Result<PumpProgress<Message>> {
+        match result {
+            Ok(
+                HostOutcome::Applied
+                | HostOutcome::SendState(SendProgress::Pending),
+            ) => {
+                self.ready.push_back(PollTask::reply(peer, deadline));
+            },
+            Ok(HostOutcome::SendState(SendProgress::Complete)) => {
+                self.ready.push_back(PollTask::receive(peer, deadline));
+            },
+            Err(OperationError::Host(HostError::Transport(reason))) => {
+                return Ok(PumpProgress::Event(RemoteEvent::Disconnected {
+                    peer,
+                    reason: *reason,
+                }));
+            },
+            _ => return Err(ErrorKind::InvalidData.into()),
+        }
+        Ok(PumpProgress::Progress)
+    }
+
     fn deadline(&self, since: Instant) -> io::Result<Option<Instant>> {
         self.idle_timeout
             .map(|timeout| {
@@ -379,6 +421,31 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         }
     }
 
+    /// Schedule a bounded reply before the next receive for this peer.
+    ///
+    /// Call before polling again after receiving the peer event. The same
+    /// round-robin slot handles send progress and resumes receive on success.
+    ///
+    /// # Errors
+    /// Rejects oversized replies and unavailable or already busy peers.
+    pub fn queue_reply(&mut self, peer: u64, bytes: Vec<u8>) -> io::Result<()> {
+        if bytes.len() > self.frame_budget {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        for task in &mut self.ready {
+            if let PollKind::Receive(actual, deadline) = task.kind
+                && actual == peer
+            {
+                *task = PollTask {
+                    kind: PollKind::Reply(peer, deadline),
+                    operation: HostOperation::QueueSend { peer, bytes },
+                };
+                return Ok(());
+            }
+        }
+        Err(ErrorKind::WouldBlock.into())
+    }
+
     /// Close the listener, cancel queued work and join the I/O worker.
     ///
     /// # Errors
@@ -395,13 +462,15 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let next = id.checked_add(1).ok_or(ErrorKind::InvalidData)?;
         let PollTask { kind, operation } = match task.kind {
             PollKind::Receive(peer, Some(deadline))
+            | PollKind::Reply(peer, Some(deadline))
                 if Instant::now() >= deadline =>
             {
                 PollTask::disconnect(peer)
             },
             PollKind::Authenticate
             | PollKind::Disconnect(_)
-            | PollKind::Receive(..) => task,
+            | PollKind::Receive(..)
+            | PollKind::Reply(..) => task,
         };
         let request = HostRequest { id, operation };
         match self.worker.try_submit(request) {
@@ -437,6 +506,12 @@ mod tests {
     };
     use super::super::{ClientTls, SecureFrameStream, ServerName};
     use super::*;
+
+    struct TestPeers {
+        first: ClientTls,
+        pump: HostInputPump<u8>,
+        second: ClientTls,
+    }
 
     fn next_event(pump: &mut HostInputPump<u8>) -> io::Result<RemoteEvent<u8>> {
         poll_accept(|| match pump.poll()? {
@@ -535,8 +610,7 @@ mod tests {
         expect_message(pump, 1, 10)
     }
 
-    #[test]
-    fn scheduler_drives_independent_authenticated_peers() -> io::Result<()> {
+    fn two_peers() -> io::Result<TestPeers> {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
         let (second_keys, second_id) =
@@ -544,7 +618,7 @@ mod tests {
         let mut session = session_config(true);
         session.max_players =
             NonZeroU8::new(3).ok_or(ErrorKind::InvalidInput)?;
-        let mut pump = HostInputPump::bind(
+        let pump = HostInputPump::bind(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[(keys.client_id, 1), (second_id, 2)],
@@ -556,18 +630,81 @@ mod tests {
             keys.server,
             TestCodec,
         )?;
+        Ok(TestPeers {
+            first: keys.client,
+            pump,
+            second: second_keys,
+        })
+    }
+
+    #[test]
+    fn scheduler_drives_independent_authenticated_peers() -> io::Result<()> {
+        let TestPeers {
+            mut pump,
+            first: first_keys,
+            second: second_keys,
+        } = two_peers()?;
         // A quiet unauthenticated socket must not monopolize the worker.
         let silent = TcpStream::connect(pump.local_addr()?)?;
         require(
             matches!(pump.poll()?, PumpProgress::Progress),
             "silent socket admitted only as pending",
         )?;
-        let mut first = connect(&mut pump, &keys.client, 1)?;
+        let mut first = connect(&mut pump, &first_keys, 1)?;
         let mut second = connect(&mut pump, &second_keys, 2)?;
         partial_frame(&mut pump, &mut first, &mut second)?;
         malformed_frame(&mut pump, &mut first, &mut second)?;
-        disconnect_rejoin(&mut pump, first, &keys.client, &mut second)?;
+        disconnect_rejoin(&mut pump, first, &first_keys, &mut second)?;
         drop(silent);
+        pump.shutdown()
+    }
+
+    #[test]
+    fn bounded_reply_preserves_peer_order_and_capacity() -> io::Result<()> {
+        let TestPeers {
+            mut pump,
+            first: first_keys,
+            second: second_keys,
+        } = two_peers()?;
+        let mut first = connect(&mut pump, &first_keys, 1)?;
+        let mut second = connect(&mut pump, &second_keys, 2)?;
+        first.send(b"M\x05")?;
+        expect_message(&mut pump, 1, 5)?;
+        require(
+            pump.queue_reply(1, vec![0; pump.frame_budget.saturating_add(1)])
+                .err()
+                .map(|error| error.kind())
+                == Some(ErrorKind::InvalidInput),
+            "oversized reply rejected without consuming the receive slot",
+        )?;
+        pump.queue_reply(1, b"ACK".to_vec())?;
+        require(
+            pump.queue_reply(1, b"ACK".to_vec())
+                .err()
+                .map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock)
+                && pump
+                    .queue_reply(0, b"ACK".to_vec())
+                    .err()
+                    .map(|error| error.kind())
+                    == Some(ErrorKind::WouldBlock),
+            "one reply per active remote, not a local or busy seat",
+        )?;
+        second.send(b"M\x06")?;
+        expect_message(&mut pump, 2, 6)?;
+        let reply = poll_accept(|| {
+            require(
+                !matches!(pump.poll()?, PumpProgress::Event(_)),
+                "reply is not application input",
+            )?;
+            first.poll_receive()
+        })?;
+        require(
+            reply == b"ACK" && second.poll_receive()?.is_none(),
+            "reply reaches only the intended peer",
+        )?;
+        first.send(b"M\x07")?;
+        expect_message(&mut pump, 1, 7)?;
         pump.shutdown()
     }
 
