@@ -42,3 +42,12 @@ eligible ticks directly instead of scanning the backlog before updates.
 No representative playable game, actual GPU timings or reproducible
 platform benchmark matrix exists yet. Hardware-specific optimization
 choices and acceptance measurements remain open.
+
+The collector now records the explicit capped or uncapped presentation
+policy in the quality profile. A caller may configure a separate nonzero
+frame-time target; deadline misses are counted exactly in constant memory.
+A frame at the target is not counted as missed, and rejected observations
+cannot change the miss count. Tests demonstrate a 50 FPS mean with one
+over-budget frame and confirm that a rendering cap alone does not imply a
+benchmark deadline. Fresh validation passed in run
+1795577195880786433-2782349 (91 workspace tests).

@@ -31,11 +31,16 @@
 //
 //! Portable bounded aggregation for performance observations.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
+
+use crate::presentation::FramePacing;
 
 /// A comparable presentation setup supplied by a title's host adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QualityProfile {
+    /// Rendering cap policy used during this observation.
+    pub frame_pacing: FramePacing,
     /// Presentation height in pixels.
     pub height: u32,
     /// Whether optional graphics effects are enabled.
@@ -117,9 +122,20 @@ impl TimingSummary {
     }
 }
 
+/// Counts frames exceeding an explicit benchmark target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameBudgetReport {
+    /// Number of measured frames strictly longer than the target.
+    pub missed: u64,
+    /// Maximum acceptable frame duration, independent of a rendering cap.
+    pub target: Duration,
+}
+
 /// Persistent measurement aggregates for one presentation quality profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PerformanceReport {
+    /// Deadline misses, only when a benchmark target was configured.
+    pub frame_budget: Option<FrameBudgetReport>,
     /// Timings of all observed rendered frames.
     pub frame_time: TimingSummary,
     /// Timings of measured input events only, excluding unobserved inputs.
@@ -167,6 +183,7 @@ impl PerformanceCollector {
             load_time: None,
             profile,
             report: PerformanceReport {
+                frame_budget: None,
                 frame_time: TimingSummary::EMPTY,
                 input_latency: TimingSummary::EMPTY,
                 peak_resident_bytes: None,
@@ -187,6 +204,14 @@ impl PerformanceCollector {
     ) -> Result<(), PerformanceError> {
         let mut report = self.report;
         report.frame_time.record(frame.frame_time)?;
+        if let Some(budget) = &mut report.frame_budget
+            && frame.frame_time > budget.target
+        {
+            budget.missed = budget
+                .missed
+                .checked_add(1)
+                .ok_or(PerformanceError::Overflow)?;
+        }
         if let Some(latency) = frame.input_latency {
             report.input_latency.record(latency)?;
         }
@@ -217,6 +242,22 @@ impl PerformanceCollector {
     pub const fn report(&self) -> PerformanceReport {
         self.report
     }
+
+    /// Construct a collector with an explicit nonzero frame-time target.
+    ///
+    /// A presentation cap limits frequency; it is not a benchmark target.
+    #[must_use]
+    pub const fn with_frame_budget(
+        profile: QualityProfile,
+        target_ns: NonZeroU64,
+    ) -> Self {
+        let mut collector = Self::new(profile);
+        collector.report.frame_budget = Some(FrameBudgetReport {
+            missed: 0,
+            target: Duration::from_nanos(target_ns.get()),
+        });
+        collector
+    }
 }
 
 /// A measurement could not be represented without losing information.
@@ -228,15 +269,18 @@ pub enum PerformanceError {
 
 #[cfg(test)]
 mod tests {
+    use std::num::{NonZeroU32, NonZeroU64};
     use std::time::Duration;
 
     use super::{
-        FrameObservation, PerformanceCollector, PerformanceError,
-        QualityProfile,
+        FrameBudgetReport, FrameObservation, PerformanceCollector,
+        PerformanceError, QualityProfile,
     };
+    use crate::presentation::FramePacing;
 
     fn profile() -> QualityProfile {
         QualityProfile {
+            frame_pacing: FramePacing::Uncapped,
             height: 720,
             optional_effects: false,
             width: 1280,
@@ -385,6 +429,76 @@ mod tests {
                 resident_bytes: Some(100),
             }),
             Err(PerformanceError::Overflow),
+        );
+        assert_eq!(collector.report(), before);
+    }
+
+    #[test]
+    fn explicit_frame_budget_counts_only_strict_overruns() {
+        let target = NonZeroU64::new(20_000_000).unwrap_or(NonZeroU64::MIN);
+        let mut collector =
+            PerformanceCollector::with_frame_budget(profile(), target);
+        for milliseconds in [10, 20, 30, 20] {
+            assert_eq!(
+                collector.observe(FrameObservation {
+                    frame_time: Duration::from_millis(milliseconds),
+                    input_latency: None,
+                    resident_bytes: None,
+                }),
+                Ok(())
+            );
+        }
+        assert_eq!(collector.frames_per_second(), Some(50));
+        assert_eq!(
+            collector.report().frame_budget,
+            Some(FrameBudgetReport {
+                missed: 1,
+                target: Duration::from_millis(20),
+            })
+        );
+        assert_eq!(collector.report().frame_time.samples(), 4);
+    }
+
+    #[test]
+    fn render_cap_does_not_implicitly_define_a_benchmark_target() {
+        let cap = NonZeroU32::new(60).unwrap_or(NonZeroU32::MIN);
+        let capped = QualityProfile {
+            frame_pacing: FramePacing::Capped(cap),
+            ..profile()
+        };
+        let mut collector = PerformanceCollector::new(capped);
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_millis(30),
+                input_latency: None,
+                resident_bytes: None,
+            }),
+            Ok(())
+        );
+        assert_eq!(collector.report().frame_budget, None);
+        assert_ne!(collector.profile(), profile());
+    }
+
+    #[test]
+    fn rejected_observation_does_not_count_as_a_budget_miss() {
+        let mut collector =
+            PerformanceCollector::with_frame_budget(profile(), NonZeroU64::MIN);
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_nanos(1),
+                input_latency: Some(Duration::MAX),
+                resident_bytes: None,
+            }),
+            Ok(())
+        );
+        let before = collector.report();
+        assert_eq!(
+            collector.observe(FrameObservation {
+                frame_time: Duration::from_millis(20),
+                input_latency: Some(Duration::from_nanos(1)),
+                resident_bytes: Some(100),
+            }),
+            Err(PerformanceError::Overflow)
         );
         assert_eq!(collector.report(), before);
     }
