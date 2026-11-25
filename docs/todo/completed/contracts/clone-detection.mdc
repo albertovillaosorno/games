@@ -26,7 +26,7 @@ Detect meaningful duplicated Rust code across project modules.
 ## Evidence
 
 On 2026-11-24, fresh `cargo validate --no-cache` passed after wiring
-`tools/validator/src/clones.rs` into the mandatory contract gate. It
+`crates/validator/src/clones.rs` into the mandatory contract gate. It
 normalises Rust function-body tokens by ignoring comments and whitespace,
 checks both source locations, and rejects exact substantial duplicates
 across files. Body eligibility requires at least 72 tokens and four

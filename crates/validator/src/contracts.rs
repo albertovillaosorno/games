@@ -30,17 +30,12 @@
 //   - Reject invalid metadata or failed task checks.
 //
 
-#[path = "clones.rs"]
-mod clones;
-
-#[path = "boundaries.rs"]
-mod boundaries;
-
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
 use crate::todo::validate as validate_tasks;
+use crate::{boundaries, clones};
 
 /// Validate the task inventory.
 ///

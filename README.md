@@ -1,7 +1,7 @@
 # games
 
-Independent, unofficial Rust implementations of games and applications, built
-around a shared cross-platform engine.
+Modular Rust game engine with fixed-step simulation, deterministic replay,
+action-mapped input, asset conversion and native/WASM targets.
 
 **Preserve the gameplay, not the technical debt.**
 
@@ -60,7 +60,23 @@ the task ID in TODO.md. Run `cargo download` to fetch upstream
 reference sources under `.reference/tools/`. These directories are local.
 The intended build command is `build <game>` (not implemented yet). Keep
 the engine modular, dependency versions centralised and game code limited to
-unique behaviour. Use one TODO.md per title once onboarded.
+unique behaviour. All Rust code and development tools live under `crates/`.
+Keep behavioural tests inline in their source modules. Use one TODO.md per
+title once onboarded.
+
+## Shared bootstrap contracts
+
+The Rust library now has fixed-step scheduling and scripted-input replay,
+logical keyboard/controller/touch routing, viewport and localisation policies,
+and display frame-pacing configuration. These modules have synthetic behaviour
+tests and do not require an installed original game.
+
+The library also provides local-first multiplayer session rules, byte-bounded
+message/schema validation, archive-entry checks, integrity-checked save
+envelopes and constant-memory performance accounting. The native platform
+adapter provides bounded raw TCP framing; authentication and real LAN
+verification remain pending. Archive extraction, sandboxing, graphics and
+playable titles remain open work.
 
 ## Catalogue
 

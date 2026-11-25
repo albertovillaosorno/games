@@ -32,6 +32,11 @@
 
 //! Contributor validation entry point.
 
+/// Source and dependency boundary checks.
+pub mod boundaries;
+/// Substantial source clone detection.
+pub mod clones;
+
 /// Cached validation and isolated run logs.
 pub mod cache;
 /// Repository contract checks.
@@ -40,7 +45,6 @@ pub mod contracts;
 pub mod files;
 /// Isolated test fixture helpers.
 #[cfg(test)]
-#[path = "../../../tests/validator/fixtures.rs"]
 pub mod fixtures;
 /// Typed task validation.
 pub mod todo;

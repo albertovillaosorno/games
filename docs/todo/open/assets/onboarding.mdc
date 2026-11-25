@@ -22,6 +22,7 @@ Create title packages and their TODO.md files when implementation begins.
 - Use the existing catalogue order; no preliminary ranking audit needed.
 - Pin one preferred source edition per title when supplied.
 - Keep only unique gameplay and adapters in each title package.
+- Use `crates/game-<id>` or `crates/app-<id>` and inline behavioural tests.
 - Reference the canonical task record rather than duplicating its contents.
 
 ## Evidence

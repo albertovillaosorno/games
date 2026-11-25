@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/engine", "tools/validator", "tools/download"]
+members = [
+    "crates/engine",
+    "crates/platform",
+    "crates/validator",
+    "crates/download",
+]
 resolver = "3"
 
 [workspace.package]
@@ -13,12 +18,13 @@ keywords = ["games", "engine", "cross-platform"]
 categories = ["game-development", "game-engines"]
 
 [workspace.dependencies]
+games = { path = "crates/engine" }
 serde_json = "*"
 toml = "*"
 sha2 = "0.11"
 
 [workspace.lints.rust]
-# Absolute policy for every owned crate, mirrored test and native-call adapter.
+# Absolute policy for every owned crate, inline test and native-call adapter.
 # No member may weaken the inherited forbid or opt out of root lint inheritance.
 # C, C++ and assembly shims must never be used to bypass safe Rust.
 warnings = "deny"

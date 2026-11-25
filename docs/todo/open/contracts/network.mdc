@@ -31,6 +31,13 @@ and same-origin reconnect. Title-specific codecs reject malformed remote
 actions before simulation. Synthetic tests reject unknown identities,
 excessive payloads, accidental LAN exposure and over-capacity joins.
 
-This does not verify an actual socket transport, real LAN clients, peer
-authentication or live multiplayer gameplay. The host-owned transport and
-end-to-end LAN integration remain required before completion.
+The native `games-platform::lan` adapter now provides explicit private-address
+TCP binding and bounded frames, with whole-transfer deadlines and connection
+closure on invalid or incomplete wire data. Six loopback tests verify
+bidirectional framing, opt-in, size and timeout handling, and composition
+with session decoding and reconnect using test-controlled identities.
+Fresh validation passed in run 1795573514614423045-2067685.
+
+Real multi-device LAN play, verified peer identities, encrypted transport,
+and integration into a playable host remain untested or unimplemented.
+The raw adapter must not be used to admit unverified peer identities.

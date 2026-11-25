@@ -35,6 +35,11 @@
   formats. Platform adapters own OS access; importers own source formats.
 - No reverse dependencies from shared crates to games, apps or tools.
   No title-to-title dependencies. Use a single Cargo workspace.
+- All authored Rust code lives under `crates/`, including tools and titles.
+  Use crate directories named `game-<id>` or `app-<id>` for new titles.
+- Keep tests inline in their corresponding Rust source file using
+  `#[cfg(test)] mod tests`. Shared test fixtures may live in the owning crate.
+  No root tests or tools directory and no mirrored test-path attributes.
 - All dependency versions and lints are owned by the root manifest.
   Member manifests inherit metadata, dependencies and lints.
 - Every authored source file has a Boundary-Contract: ownership,
