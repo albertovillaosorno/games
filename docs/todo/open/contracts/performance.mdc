@@ -528,3 +528,30 @@ workload now spans 60 frames rather than the prior 51, so the results
 are not an identical-workload before/after benchmark. They measure host
 submission, not physical display latency, execution on the GPU, or
 actual VRAM use.
+
+The shared rational PCM mixer now advances through zero or one source
+frame using comparison and subtraction, retaining division for larger
+skips. Mono interpolation is evaluated once before independent stereo
+gains are applied. No voice storage or allocation is added. Exact-output
+regressions cover fractional and equal rates, skipped source frames,
+extreme supported rates, distinct stereo channels, unequal gains and
+voice exhaustion; existing chunk-invariance checks remain.
+
+The bounded native audio diagnostic now reports accumulated whole-block
+mix wall time separately from the split comparison and native queue.
+Eight interleaved release trials per variant used the same two verified
+local mono clips at 20,000 and 7,990 Hz, 480,000 output frames at 48 kHz,
+1,024-frame blocks, and SDL dummy audio. Every run produced 314,290
+nonzero frames, exhausted both voices, and passed exact per-run split
+comparison and software-queue extent checks. Baseline whole-block times
+were 16.537–16.976 ms; optimized times were 13.234–13.524 ms, rounded
+outwards. This includes active and silent blocks and measurement overhead;
+it is not a physical playback, full four-voice or real-time deadline test.
+
+Fresh combined native rendering, audio and portable-core validation
+passed in run 1795621276936128398-3575322. The rebuilt 3,233,520-byte
+Simpsons preview passed adaptive 400x304 NVIDIA offscreen OpenGL ES
+smoke with touch, dummy audio and the 134-pose local catalogue. All 600
+movement and 60 combat host submissions met the 16.667 ms budget.
+Whole-smoke lifetime peak RSS was 90,882,048 bytes. Physical audio and
+presentation latency and cross-device performance remain unverified.

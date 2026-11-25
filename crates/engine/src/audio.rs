@@ -192,8 +192,19 @@ impl Voice<'_> {
         let phase = self
             .phase
             .saturating_add(NonZeroU64::from(self.clip.rate()).get());
-        let advance = phase.checked_div(output_rate).unwrap_or(0);
-        self.phase = phase.checked_rem(output_rate).unwrap_or(0);
+        // For source rates at or below the output rate, phase can cross at
+        // most one source-frame boundary. Avoid division in that hot path.
+        let (advance, remainder) = if phase < output_rate {
+            (0, phase)
+        } else if phase < output_rate.saturating_mul(2) {
+            (1, phase.saturating_sub(output_rate))
+        } else {
+            (
+                phase.checked_div(output_rate).unwrap_or(0),
+                phase.checked_rem(output_rate).unwrap_or(0),
+            )
+        };
+        self.phase = remainder;
         self.frame = self
             .frame
             .saturating_add(usize::try_from(advance).unwrap_or(usize::MAX));
@@ -201,35 +212,36 @@ impl Voice<'_> {
     }
 
     fn sample(self, output_rate: u64) -> [i64; 2] {
-        let current = self.clip.stereo(self.frame);
-        let next = self.clip.stereo(
+        let [first_left, first_right] = self.clip.stereo(self.frame);
+        let [last_left, last_right] = self.clip.stereo(
             self.frame
                 .saturating_add(1)
                 .min(self.clip.frames().saturating_sub(1)),
         );
         let fraction = i64::try_from(self.phase).unwrap_or(0);
         let divisor = i64::try_from(output_rate).unwrap_or(1);
-        let mut scaled = [0i64; 2];
-        for (((output, first), last), gain) in scaled
-            .iter_mut()
-            .zip(current)
-            .zip(next)
-            .zip([self.gain.left, self.gain.right])
-        {
+        let interpolate = |first: i16, last: i16| {
             let base = i64::from(first);
             let delta = i64::from(last).saturating_sub(base);
-            let sample = base.saturating_add(
+            base.saturating_add(
                 delta
                     .saturating_mul(fraction)
                     .checked_div(divisor)
                     .unwrap_or(0),
-            );
-            *output = sample
+            )
+        };
+        let left = interpolate(first_left, last_left);
+        let right = match self.clip.channels {
+            Channels::Mono => left,
+            Channels::Stereo => interpolate(first_right, last_right),
+        };
+        let scale = |sample: i64, gain: u16| {
+            sample
                 .saturating_mul(i64::from(gain))
                 .checked_div(i64::from(u16::MAX))
-                .unwrap_or(0);
-        }
-        scaled
+                .unwrap_or(0)
+        };
+        [scale(left, self.gain.left), scale(right, self.gain.right)]
     }
 }
 
@@ -446,6 +458,67 @@ mod tests {
             && joined.into_iter().eq(first.into_iter().chain(last))
             && split.active() == 0
             && whole.active() == 0)
+            .then_some(())
+            .ok_or(AudioError::InvalidClip)
+    }
+
+    fn ratio_trace(
+        source: u32,
+        output: u32,
+        expected: &[i16; 8],
+        remaining: usize,
+    ) -> Result<(), AudioError> {
+        let source_samples = [0, 12_000, -12_000, 6_000, -6_000, 1_200];
+        let clip = Clip::new(&source_samples, Channels::Mono, rate(source))?;
+        let mut mixer = Mixer::new(rate(output), NonZeroU16::MIN)?;
+        let _slot = mixer.play(clip, StereoGain::UNITY)?;
+        let mut rendered = [[0; 2]; 8];
+        mixer.render(&mut rendered);
+        (rendered == expected.map(|sample| [sample; 2])
+            && mixer.active() == remaining)
+            .then_some(())
+            .ok_or(AudioError::InvalidClip)
+    }
+
+    #[test]
+    fn rational_rate_boundaries_and_skipped_source_frames()
+    -> Result<(), AudioError> {
+        ratio_trace(5, 3, &[0, -4_000, 2_000, 1_200, 0, 0, 0, 0], 0)?;
+        ratio_trace(8, 3, &[0, 0, 1_200, 0, 0, 0, 0, 0], 0)?;
+        ratio_trace(u32::MAX, 1, &[0; 8], 0)?;
+        ratio_trace(1, u32::MAX, &[0; 8], 1)?;
+        let direct = [0, 12_000, -12_000, 6_000, -6_000, 1_200, 0, 0];
+        ratio_trace(u32::MAX, u32::MAX, &direct, 0)?;
+        ratio_trace(u32::MAX, u32::MAX.saturating_sub(1), &direct, 0)
+    }
+
+    #[test]
+    fn mono_and_stereo_interpolation_preserve_independent_gains()
+    -> Result<(), AudioError> {
+        let mono = Clip::new(&[12_000, -12_000], Channels::Mono, rate(2))?;
+        let stereo = Clip::new(
+            &[12_000, -12_000, -12_000, 12_000],
+            Channels::Stereo,
+            rate(2),
+        )?;
+        let gain = StereoGain {
+            left: 32_767,
+            right: u16::MAX,
+        };
+        let mut mixer = Mixer::new(rate(3), NonZeroU16::MIN)?;
+        let _mono = mixer.play(mono, gain)?;
+        let mut mono_frames = [[0; 2]; 4];
+        mixer.render(&mut mono_frames);
+        let expected_mono =
+            [[5_999, 12_000], [-1_999, -4_000], [-5_999, -12_000], [0, 0]];
+        let _stereo = mixer.play(stereo, gain)?;
+        let mut stereo_frames = [[0; 2]; 4];
+        mixer.render(&mut stereo_frames);
+        let expected_stereo =
+            [[5_999, -12_000], [-1_999, 4_000], [-5_999, 12_000], [0, 0]];
+        (mono_frames == expected_mono
+            && stereo_frames == expected_stereo
+            && mixer.active() == 0)
             .then_some(())
             .ok_or(AudioError::InvalidClip)
     }

@@ -35,6 +35,7 @@ use std::ffi::OsString;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use games::audio::{Channels, Clip, Mixer, StereoGain};
 use games_assets::ContentHash;
@@ -112,14 +113,22 @@ impl Arguments {
         .map_err(|error| format!("device: {error:?}"))?;
         let frames = NonZeroUsize::try_from(self.frames)
             .map_err(|_error| String::from("frame count not representable"))?;
-        let audible =
+        let MixReport { audible, mixing } =
             verify_mix(&mut whole, &mut split, &device, frames.get())?;
         let count = self.frames;
         let active = whole.active();
+        let mut out = stdout().lock();
         writeln!(
-            stdout().lock(),
+            out,
             "{count} frames: {audible} nonzero, {active} active at 48000 Hz"
         )
+        .and_then(|()| {
+            writeln!(
+                out,
+                "Whole-block mix wall time: {} ns (excludes split and queue)",
+                mixing.as_nanos()
+            )
+        })
         .map_err(|error| error.to_string())
     }
 }
@@ -161,6 +170,12 @@ impl Decoded {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct MixReport {
+    audible: usize,
+    mixing: Duration,
+}
+
 fn stereo_pair<'samples>(
     left: &'samples Decoded,
     right: &'samples Decoded,
@@ -181,11 +196,12 @@ fn verify_mix(
     split: &mut Mixer<'_>,
     device: &NativeAudio,
     frames: usize,
-) -> Result<usize, String> {
+) -> Result<MixReport, String> {
     let mut expected = [[0; 2]; CHUNK];
     let mut actual = [[0; 2]; CHUNK];
     let mut remaining = frames;
     let mut audible = 0usize;
+    let mut mixing = Duration::ZERO;
     while remaining != 0 {
         let count = remaining.min(CHUNK);
         let block = expected
@@ -194,7 +210,11 @@ fn verify_mix(
         let partition = actual
             .get_mut(..count)
             .ok_or_else(|| String::from("invalid mix extent"))?;
+        let started = Instant::now();
         whole.render(block);
+        mixing = mixing
+            .checked_add(started.elapsed())
+            .ok_or_else(|| String::from("mix timing overflow"))?;
         for segment in partition.chunks_mut(113) {
             split.render(segment);
         }
@@ -218,7 +238,7 @@ fn verify_mix(
         device.clear();
         remaining = remaining.saturating_sub(count);
     }
-    Ok(audible)
+    Ok(MixReport { audible, mixing })
 }
 
 #[cfg(test)]
