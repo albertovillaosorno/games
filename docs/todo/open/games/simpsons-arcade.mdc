@@ -918,3 +918,11 @@ The combined 63-entry local catalogue passed native offscreen
 touch-and-pose smoke with the held-jump readback check. The regression
 tests also reject partial or out-of-range lift groups and compare
 legacy, short-tap, opening, raised and descent selection.
+
+Five additional isolated Marge captures of 5-, 10-, 15-, 25- and
+30-tick holds produced respectively 35, 40, 46, 54 and 58 displayed
+airborne ticks. The 10-tick hold skipped the middle pose; the 15-
+and 25-tick holds selected it and then returned to the descent pose
+before landing. Presentation now ends the middle pose on simulated
+release or tick 31, whichever occurs first. Exact input-to-pose
+latency and the intermediate hold trajectory remain approximate.

@@ -323,10 +323,10 @@ mod tests {
         assert!(Catalogue::parse(&format!("marge attack 0 {HASH}")).is_err());
     }
 
-    fn jump_at(tick: u8, held: bool) -> Option<JumpMotion> {
+    fn jump_at(tick: u8, hold: u8) -> Option<JumpMotion> {
         let mut state = Maneuver::jump();
-        for _ in 0..tick {
-            state = state.advance(Player::Marge, held);
+        for elapsed in 1..=tick {
+            state = state.advance(Player::Marge, elapsed < hold);
         }
         if let Maneuver::Jump(motion) = state {
             Some(motion)
@@ -366,18 +366,25 @@ mod tests {
             ((Player::Marge, Kind::Jump, 0), "opening"),
             ((Player::Marge, Kind::Jump, 4), "landing"),
         ]);
-        let select = |map: &BTreeMap<_, _>, tick, held| {
-            jump_at(tick, held)
+        let select = |map: &BTreeMap<_, _>, tick, hold| {
+            jump_at(tick, hold)
                 .and_then(|motion| jump_entry(map, Player::Marge, motion))
                 .copied()
         };
-        assert_eq!(select(&entries, 20, true), Some("landing"));
+        assert_eq!(select(&entries, 20, 60), Some("landing"));
         let _prior = entries.insert((Player::Marge, Kind::Lift, 0), "raised");
-        assert_eq!(select(&entries, 10, true), Some("opening"));
-        assert_eq!(select(&entries, 11, true), Some("raised"));
-        assert_eq!(select(&entries, 30, true), Some("raised"));
-        assert_eq!(select(&entries, 31, true), Some("raised"));
-        assert_eq!(select(&entries, 32, true), Some("landing"));
-        assert_eq!(select(&entries, 12, false), Some("landing"));
+        for (tick, hold, expected) in [
+            (10, 60, "opening"),
+            (11, 60, "raised"),
+            (30, 60, "raised"),
+            (31, 60, "landing"),
+            (32, 60, "landing"),
+            (12, 3, "landing"),
+            (11, 10, "landing"),
+            (14, 15, "raised"),
+            (15, 15, "landing"),
+        ] {
+            assert_eq!(select(&entries, tick, hold), Some(expected));
+        }
     }
 }

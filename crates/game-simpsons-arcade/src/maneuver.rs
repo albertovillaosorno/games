@@ -98,15 +98,15 @@ impl JumpMotion {
         self.tick.min(SHORT_JUMP_TICKS.saturating_sub(1))
     }
 
-    // Select the middle pose above short-tap height near the ascent,
-    // including the brief apex transition.
+    // Retain the middle pose only through the sustained hold,
+    // ending at release or the observed apex transition.
     #[cfg(all(
         feature = "native-preview",
         target_os = "linux",
         target_env = "gnu"
     ))]
     pub(super) const fn raised_pose(self) -> bool {
-        self.tick >= 11 && self.height > 210 && self.velocity >= -2
+        self.tick >= 11 && self.tick < 31 && !self.released
     }
 
     const fn start() -> Self {
