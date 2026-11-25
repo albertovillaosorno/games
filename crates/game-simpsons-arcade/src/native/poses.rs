@@ -382,7 +382,9 @@ mod tests {
             (12, 3, "landing"),
             (11, 10, "landing"),
             (14, 15, "raised"),
-            (15, 15, "landing"),
+            (15, 15, "raised"),
+            (16, 15, "landing"),
+            (10, 10, "opening"),
         ] {
             assert_eq!(select(&entries, tick, hold), Some(expected));
         }

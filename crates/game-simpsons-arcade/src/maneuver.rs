@@ -42,18 +42,22 @@ const MIN_LIFT_TICKS: u8 = 4;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JumpMotion {
     height: i16,
-    released: bool,
+    release_tick: Option<u8>,
     tick: u8,
     velocity: i16,
 }
 
 impl JumpMotion {
-    const fn advance(self, held: bool) -> Option<Self> {
+    const fn advance(mut self, held: bool) -> Option<Self> {
+        if !held {
+            self.release();
+        }
         let tick = self.tick.saturating_add(1);
-        let released = self.released || !held;
         // Early release increases deceleration only during ascent.
         // The common minimum lift preserves the observed short tap.
-        let gravity = if released && tick >= MIN_LIFT_TICKS && self.velocity > 0
+        let gravity = if self.released_at(tick)
+            && tick >= MIN_LIFT_TICKS
+            && self.velocity > 0
         {
             3
         } else {
@@ -61,12 +65,12 @@ impl JumpMotion {
         };
         let velocity = self.velocity.saturating_sub(gravity);
         let height = self.height.saturating_add(velocity);
-        if height <= 0 {
+        if height < QUARTERS_PER_PIXEL {
             None
         } else {
             Some(Self {
                 height,
-                released,
+                release_tick: self.release_tick,
                 tick,
                 velocity,
             })
@@ -85,7 +89,7 @@ impl JumpMotion {
         target_env = "gnu"
     ))]
     pub(super) const fn opening_pose(self) -> bool {
-        self.tick < 11 && !self.released
+        self.tick < 11 && !self.released_at(self.tick)
     }
 
     // Bound selection to the existing short-jump catalogue.
@@ -106,13 +110,25 @@ impl JumpMotion {
         target_env = "gnu"
     ))]
     pub(super) const fn raised_pose(self) -> bool {
-        self.tick >= 11 && self.tick < 31 && !self.released
+        self.tick >= 11 && self.tick < 31 && !self.released_at(self.tick)
+    }
+
+    const fn release(&mut self) {
+        if self.release_tick.is_none() {
+            // Input precedes the next fixed update. The first observable
+            // release transition is one displayed tick after that update.
+            self.release_tick = Some(self.tick.saturating_add(2));
+        }
+    }
+
+    const fn released_at(self, tick: u8) -> bool {
+        matches!(self.release_tick, Some(release) if tick >= release)
     }
 
     const fn start() -> Self {
         Self {
             height: 29,
-            released: false,
+            release_tick: None,
             tick: 0,
             velocity: 29,
         }
@@ -197,7 +213,7 @@ impl Maneuver {
 
     pub(super) const fn release_jump(&mut self) {
         if let Self::Jump(motion) = self {
-            motion.released = true;
+            motion.release();
         }
     }
 }
@@ -244,7 +260,7 @@ mod tests {
             let medium = trajectory(player, 20);
             let long = trajectory(player, 60);
             assert_eq!(tap.len(), 31);
-            assert_eq!(medium.len(), 49);
+            assert_eq!(medium.len(), 51);
             assert_eq!(long.len(), 58);
             assert!(tap.iter().max() < medium.iter().max());
             assert!(medium.iter().max() < long.iter().max());
@@ -264,6 +280,36 @@ mod tests {
             }
         }));
         assert_eq!(Maneuver::Idle.elevation(), 0);
+    }
+
+    #[test]
+    fn release_matches_observed_intermediate_hold_heights() {
+        // Lower sprite-cell edge relative to the stationary shadow.
+        let short = [
+            7, 14, 21, 27, 33, 39, 45, 49, 53, 56, 58, 60, 60, 60, 60, 60, 59,
+            58, 57, 55, 53, 51, 49, 47, 44, 41, 38, 34, 30, 26, 22, 18, 13, 8,
+            3,
+        ];
+        let medium = [
+            7, 14, 21, 27, 33, 39, 45, 51, 56, 61, 66, 70, 74, 78, 82, 86, 88,
+            90, 92, 92, 92, 91, 91, 90, 88, 87, 85, 83, 81, 78, 76, 73, 69, 66,
+            62, 58, 54, 49, 45, 40, 34, 29, 23, 17, 11, 4,
+        ];
+        assert_eq!(trajectory(Player::Marge, 5), short);
+        assert_eq!(trajectory(Player::Marge, 15), medium);
+        for (hold, duration, peak) in [
+            (5, 35, 60),
+            (10, 40, 78),
+            (15, 46, 92),
+            (20, 51, 102),
+            (25, 54, 107),
+            (30, 58, 108),
+            (60, 58, 108),
+        ] {
+            let heights = trajectory(Player::Marge, hold);
+            assert_eq!(heights.len(), duration);
+            assert_eq!(heights.iter().max(), Some(&peak));
+        }
     }
 
     #[test]

@@ -1222,6 +1222,33 @@ mod tests {
     }
 
     #[test]
+    fn jump_release_edges_match_measured_hold_timing() {
+        for (hold, duration) in [(5, 35), (10, 40), (15, 46), (20, 51)] {
+            let mut state = four_playing();
+            let [before, ..] = state.stations();
+            state.input_step(3, &[change(
+                Player::Marge,
+                Control::Secondary,
+                true,
+            )]);
+            advance_empty(&mut state, 4..3 + hold);
+            state.input_step(3 + hold, &[
+                change(Player::Marge, Control::Secondary, false),
+                change(Player::Marge, Control::Secondary, true),
+            ]);
+            for elapsed in hold + 1..=duration {
+                state.input_step(3 + elapsed, &[]);
+                let [station, ..] = state.stations();
+                assert_eq!(station.position, before.position);
+                assert_eq!(
+                    station.maneuver == Maneuver::Idle,
+                    elapsed == duration
+                );
+            }
+        }
+    }
+
+    #[test]
     fn jump_requires_new_press_after_landing() {
         let mut state = four_playing();
         let [_, homer, ..] = state.stations();

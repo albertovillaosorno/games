@@ -942,3 +942,25 @@ default binding after reset. The same test exercised an authenticated
 standalone controller with a separate settings directory. It used
 synthetic native X11 keyboard events and verified local art; physical
 controller and touchscreen acceptance remain open.
+
+Further inspection of the seven isolated Marge captures compared each
+actor's lower sprite-cell edge with its stationary shadow anchor.
+The observed opening, middle and descent groups share the same
+quarter-pixel trajectory when the first release transition occurs
+one displayed tick after the corresponding held duration. Landing
+occurs when the remaining elevation rounds down to zero pixels.
+The revised fixed-step model matches every sampled displayed height
+for 5- and 15-tick holds and the durations and peaks for all seven
+holds (5, 10, 15, 20, 25, 30 and 60 ticks). The peak heights range
+from 60 to 108 logical pixels. The 20-tick hold now lasts 51 instead
+of 49 ticks. Pose selection retains the appropriate ascent pose
+until that same delayed transition. A release followed by another
+press within one input batch cannot restore lift.
+
+Fresh workspace validation passed, including full height sequences,
+peak and duration checks, input-batch release and native pose selection.
+A native offscreen smoke with local verified 63-pose art, touch controls,
+encounter and dummy audio also passed: all 600 movement frames and
+51 combat submissions met the 16.667 ms budget. These measurements
+establish selected stationary Marge behavior and not exact opaque-pixel
+pivots, moving or interrupted jumps, or complete game parity.
