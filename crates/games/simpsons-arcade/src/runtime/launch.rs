@@ -431,7 +431,7 @@ impl Launch {
         let settings = explicit_settings.or(paths.settings);
         let preferences = settings
             .as_deref()
-            .map(DisplayStore::open)
+            .map(|directory| DisplayStore::open(directory.as_os_str()))
             .transpose()
             .map_err(|error| format!("display store: {error:?}"))?;
         let stored = preferences
@@ -494,7 +494,7 @@ fn selected_audio_device(
 
 fn load_volume(settings: Option<&Path>) -> Result<VolumePreferences, String> {
     let store = settings
-        .map(VolumeStore::open)
+        .map(|directory| VolumeStore::open(directory.as_os_str()))
         .transpose()
         .map_err(|error| format!("volume store: {error:?}"))?;
     let volume = store
@@ -526,7 +526,7 @@ fn open_control_store(
     }
     settings
         .map(|directory| {
-            ControlStore::open(directory, profile_limit()?)
+            ControlStore::open(directory.as_os_str(), profile_limit()?)
                 .map_err(|error| format!("control store: {error:?}"))
         })
         .transpose()
@@ -682,7 +682,7 @@ mod tests {
         }
 
         fn store(&self) -> Result<ControlStore, String> {
-            ControlStore::open(self.0.path(), profile_limit()?)
+            ControlStore::open(self.0.path().as_os_str(), profile_limit()?)
                 .map_err(|error| format!("{error:?}"))
         }
 
@@ -744,7 +744,7 @@ mod tests {
         if Launch::parse(args.clone().into())?.volume != MasterVolume::Full {
             return Err("wrong initial volume".into());
         }
-        let volume = VolumeStore::open(fixture.0.path())
+        let volume = VolumeStore::open(fixture.0.path().as_os_str())
             .map_err(|error| format!("{error:?}"))?;
         let receipt = volume
             .store(MasterVolume::Half)

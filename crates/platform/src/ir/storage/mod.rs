@@ -36,13 +36,17 @@ pub mod bundle;
 pub mod file;
 /// Configured persistent asset and executable locations.
 pub mod layout;
+/// Portable display, audio and input preferences.
+pub mod preferences;
+/// Bounded integrity-checked numeric save slots.
+pub mod save;
 
 use std::ffi::{OsStr, OsString};
 use std::io::Result as IoResult;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use crate::selected::fixtures;
-pub use crate::selected::{preferences, save, staging};
+pub use crate::selected::staging;
 
 /// Backend observation of the process executable location.
 pub(crate) trait ExecutableLocation {

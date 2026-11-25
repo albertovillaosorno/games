@@ -49,52 +49,14 @@ use super::file::{
     DIRECTORY_FLAGS, FileReadError, check_staged_metadata, private_regular,
     read_bounded_descriptor, read_regular_with, same_inode, trusted_directory,
 };
+use crate::ir::storage::save::{SaveBackend, SaveError, SaveReceipt};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-/// Save admission or pre-publication failure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SaveError {
-    /// The save envelope is invalid or exceeds its payload limit.
-    Envelope(SafetyError),
-    /// A native storage operation failed before publication.
-    Io(io::ErrorKind),
-    /// Bounded file admission rejected the requested slot.
-    Read(FileReadError),
-    /// The directory or destination is linked or otherwise untrusted.
-    UnsafeStorage,
-}
 
 impl From<Errno> for SaveError {
     fn from(error: Errno) -> Self {
         Self::Io(io::Error::from(error).kind())
     }
-}
-
-impl From<io::Error> for SaveError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error.kind())
-    }
-}
-
-impl From<SafetyError> for SaveError {
-    fn from(error: SafetyError) -> Self {
-        Self::Envelope(error)
-    }
-}
-
-impl From<FileReadError> for SaveError {
-    fn from(error: FileReadError) -> Self {
-        Self::Read(error)
-    }
-}
-
-/// Save publication succeeded; directory sync can fail after publication.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SaveReceipt {
-    /// Error here means the new save is visible but crash durability is
-    /// uncertain. It does not mean the old save was preserved.
-    pub durability: Result<(), io::ErrorKind>,
 }
 
 /// Pinned directory of integrity-checked numeric save slots.
@@ -104,7 +66,7 @@ pub struct SaveReceipt {
 /// Concurrent writes to one slot have last-publication-wins semantics.
 /// Loads pin a complete file before reading through trusted kernel procfs.
 #[derive(Debug)]
-pub struct SaveStore {
+pub(super) struct SaveStore {
     directory: File,
     maximum: NonZeroU64,
 }
@@ -114,7 +76,7 @@ impl SaveStore {
     ///
     /// # Errors
     /// Rejects unsafe storage, missing or malformed files and oversized data.
-    pub fn load(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
+    pub(super) fn load(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
         let directory = &self.directory;
         read_regular_with(
             directory,
@@ -142,7 +104,7 @@ impl SaveStore {
     ///
     /// # Errors
     /// Rejects missing, linked, non-directory or writable-by-others paths.
-    pub fn open(
+    pub(super) fn open(
         directory: &Path,
         maximum: NonZeroU64,
     ) -> Result<Self, SaveError> {
@@ -161,7 +123,7 @@ impl SaveStore {
     /// # Errors
     /// Rejects invalid storage and oversized saves before publication.
     /// A pre-publication failure leaves an existing slot unchanged.
-    pub fn store(
+    pub(super) fn store(
         &self,
         slot: u32,
         payload: &[u8],
@@ -186,6 +148,20 @@ impl SaveStore {
         Ok(SaveReceipt {
             durability: self.directory.sync_all().map_err(|error| error.kind()),
         })
+    }
+}
+
+impl SaveBackend for SaveStore {
+    fn read_slot(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
+        Self::load(self, slot)
+    }
+
+    fn write_slot(
+        &self,
+        slot: u32,
+        payload: &[u8],
+    ) -> Result<SaveReceipt, SaveError> {
+        Self::store(self, slot, payload)
     }
 }
 

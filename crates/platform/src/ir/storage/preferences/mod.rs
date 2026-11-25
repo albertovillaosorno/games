@@ -1,0 +1,226 @@
+// Copyright:
+//   - Copyright © 2026 Alberto Villa Osorno.
+// SPDX-License-Identifier:
+//   - Apache-2.0
+// Confidential:
+//   - false
+// License-File:
+//   - LICENSE
+//
+// Boundary-Contract:
+// - Owns:
+//   - Portable persistence of shared display, audio and input preferences.
+// - Must-Not:
+//   - Select a title's settings directory or change its display.
+// - Allows:
+//   - Inputs: Dedicated trusted directory and portable settings.
+//   - Outputs: Verified preferences or durable publication receipt.
+//   - Side effects: Atomic local save publication through SaveStore.
+// - Split-When:
+//   - A platform requires a different persistence mechanism.
+// - Merge-When:
+//   - Other shared preferences use the same persistence contract.
+// - Summary:
+//   - Store preferences separately from title progress and assets.
+// - Description:
+//   - Use a bounded versioned payload in an existing atomic save envelope.
+// - Usage:
+//   - Open a dedicated settings directory and load or store preferences.
+// - Defaults:
+//   - Missing preferences return None; malformed data is rejected.
+
+//! Portable preference persistence.
+
+use std::ffi::OsStr;
+use std::io::ErrorKind;
+use std::num::NonZeroU64;
+
+use games::audio::MasterVolume;
+use games::presentation::DisplaySettings;
+
+use super::file::FileReadError;
+use super::save::{SaveError, SaveReceipt, SaveStore};
+use crate::ir::security::preferences::{
+    InvalidPreference, control_payload_limit, decode_control, decode_volume,
+    encode_control, encode_volume,
+};
+
+const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(63);
+const DISPLAY_SLOT: u32 = 0;
+const CONTROL_SLOT: u32 = 1;
+const VOLUME_SLOT: u32 = 2;
+
+/// Display preference admission or publication error.
+pub type DisplayStoreError = PreferenceError;
+type SlotPayload = Option<Vec<u8>>;
+
+/// Preference admission or publication error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreferenceError {
+    /// The portable preferences payload is invalid.
+    InvalidPayload,
+    /// The underlying atomic store rejected the operation.
+    Storage(SaveError),
+}
+
+impl From<SaveError> for PreferenceError {
+    fn from(error: SaveError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+impl From<InvalidPreference> for PreferenceError {
+    fn from(_error: InvalidPreference) -> Self {
+        Self::InvalidPayload
+    }
+}
+
+/// Display preferences in a dedicated, caller-selected directory.
+#[derive(Debug)]
+pub struct DisplayStore {
+    store: SaveStore,
+}
+
+impl DisplayStore {
+    /// Read saved display preferences, or None on first use.
+    ///
+    /// # Errors
+    /// Rejects unsafe storage and malformed or incompatible preferences.
+    pub fn load(&self) -> Result<Option<DisplaySettings>, PreferenceError> {
+        load_optional(&self.store, DISPLAY_SLOT)?
+            .map(|bytes| {
+                DisplaySettings::decode(&bytes)
+                    .map_err(|_error| PreferenceError::InvalidPayload)
+            })
+            .transpose()
+    }
+
+    /// Pin an existing dedicated settings directory.
+    ///
+    /// # Errors
+    /// Rejects missing, linked, non-directory or writable-by-others paths.
+    pub fn open(directory: &OsStr) -> Result<Self, PreferenceError> {
+        Ok(Self {
+            store: SaveStore::open(directory, MAX_BYTES)?,
+        })
+    }
+
+    /// Atomically replace the saved preferences.
+    ///
+    /// # Errors
+    /// Rejects unsafe storage, malformed existing preferences or failures
+    /// before publication. The receipt reports directory sync status.
+    /// The caller must dedicate the directory to preferences; this check
+    /// is not a compare-and-swap against other same-user writers.
+    pub fn store(
+        &self,
+        settings: DisplaySettings,
+    ) -> Result<SaveReceipt, PreferenceError> {
+        let _existing = self.load()?;
+        Ok(self
+            .store
+            .store(DISPLAY_SLOT, settings.encode().as_bytes())?)
+    }
+}
+
+/// Master audio volume in the same dedicated preferences directory.
+#[derive(Debug)]
+pub struct VolumeStore {
+    store: SaveStore,
+}
+
+impl VolumeStore {
+    /// Load saved volume, or None when no preference has been saved.
+    /// # Errors
+    /// Rejects unsafe storage and malformed or incompatible preferences.
+    pub fn load(&self) -> Result<Option<MasterVolume>, PreferenceError> {
+        load_optional(&self.store, VOLUME_SLOT)?
+            .map(|bytes| decode_volume(&bytes).map_err(PreferenceError::from))
+            .transpose()
+    }
+
+    /// Pin an existing dedicated settings directory.
+    /// # Errors
+    /// Rejects missing, linked, non-directory or writable-by-others paths.
+    pub fn open(directory: &OsStr) -> Result<Self, PreferenceError> {
+        Ok(Self {
+            store: SaveStore::open(directory, MAX_BYTES)?,
+        })
+    }
+
+    /// Atomically replace saved volume.
+    /// # Errors
+    /// Rejects unsafe storage, incompatible existing data or save failure.
+    pub fn store(
+        &self,
+        volume: MasterVolume,
+    ) -> Result<SaveReceipt, PreferenceError> {
+        let _existing = self.load()?;
+        let payload = encode_volume(volume);
+        Ok(self.store.store(VOLUME_SLOT, payload.as_bytes())?)
+    }
+}
+
+/// Input profile preferences in a dedicated settings directory.
+///
+/// The caller validates the profile's title-specific bindings before use.
+#[derive(Debug)]
+pub struct ControlStore {
+    maximum: NonZeroU64,
+    store: SaveStore,
+}
+
+impl ControlStore {
+    /// Read a saved UTF-8 profile, or None when no profile has been saved.
+    ///
+    /// # Errors
+    /// Rejects unsafe storage, other payload types and malformed UTF-8.
+    pub fn load(&self) -> Result<Option<String>, PreferenceError> {
+        load_optional(&self.store, CONTROL_SLOT)?
+            .map(|bytes| {
+                decode_control(&bytes, self.maximum)
+                    .map(str::to_owned)
+                    .map_err(PreferenceError::from)
+            })
+            .transpose()
+    }
+
+    /// Pin an existing settings directory with a caller-selected byte bound.
+    ///
+    /// # Errors
+    /// Rejects unsafe directories and an overflowing payload bound.
+    pub fn open(
+        directory: &OsStr,
+        maximum: NonZeroU64,
+    ) -> Result<Self, PreferenceError> {
+        let bound = control_payload_limit(maximum)?;
+        Ok(Self {
+            maximum,
+            store: SaveStore::open(directory, bound)?,
+        })
+    }
+
+    /// Atomically replace the input profile with already validated text.
+    ///
+    /// # Errors
+    /// Rejects empty or oversized input, unsafe storage, an incompatible
+    /// existing payload or publication failure.
+    pub fn store(&self, profile: &str) -> Result<SaveReceipt, PreferenceError> {
+        let payload = encode_control(profile, self.maximum)?;
+        let _existing = self.load()?;
+        Ok(self.store.store(CONTROL_SLOT, payload.as_bytes())?)
+    }
+}
+
+fn load_optional(
+    store: &SaveStore,
+    slot: u32,
+) -> Result<SlotPayload, PreferenceError> {
+    match store.load(slot) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(SaveError::Read(FileReadError::Io(ErrorKind::NotFound))) => {
+            Ok(None)
+        },
+        Err(error) => Err(error.into()),
+    }
+}

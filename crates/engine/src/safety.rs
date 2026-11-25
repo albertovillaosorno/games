@@ -70,7 +70,14 @@ impl SaveHeader {
     }
 }
 
-fn checked_size(size: u64, max_size: NonZeroU64) -> Result<u32, SafetyError> {
+/// Admit an observed payload length against the budget and envelope format.
+///
+/// # Errors
+/// Rejects lengths exceeding the configured or format maximum.
+pub fn admit_save_size(
+    size: u64,
+    max_size: NonZeroU64,
+) -> Result<u32, SafetyError> {
     if size > max_size.get() {
         return Err(SafetyError::TooLarge);
     }
@@ -123,7 +130,7 @@ pub fn encode_save_header(
     payload: &[u8],
     max_size: NonZeroU64,
 ) -> Result<[u8; SAVE_HEADER], SafetyError> {
-    let length = checked_size(payload_size(payload), max_size)?;
+    let length = admit_save_size(payload_size(payload), max_size)?;
     let mut header = [0u8; SAVE_HEADER];
     let (magic, remainder) = header.split_at_mut(4);
     let (declared, checksum) = remainder.split_at_mut(4);
@@ -170,7 +177,7 @@ pub fn validate_save_header(
             .try_into()
             .map_err(|_error| SafetyError::InvalidSave)?,
     );
-    if length != checked_size(size, max_size)? {
+    if length != admit_save_size(size, max_size)? {
         return Err(SafetyError::InvalidSave);
     }
     let checksum = header

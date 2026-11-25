@@ -72,31 +72,17 @@ pub mod fixtures {
     }
 }
 
-/// Atomic persistence for portable display and input preferences.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod preferences;
+/// Native integration tests of the portable preference contracts.
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+mod preferences;
 
 /// Integrity-checked local save slots.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod save;
+mod save;
 
 /// Private, bounded native archive staging.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod staging;
-
-/// Preferences require a verified atomic storage adapter.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub mod preferences {
-    /// Whether preference persistence is implemented on the target.
-    pub const AVAILABLE: bool = false;
-}
-
-/// Saves require a verified atomic storage adapter.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub mod save {
-    /// Whether save persistence is implemented on the target.
-    pub const AVAILABLE: bool = false;
-}
 
 /// Staging requires a verified descriptor-relative storage adapter.
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -121,7 +107,27 @@ use crate::ir::storage::bundle::{BundleError, BundleFactory, CanonicalBundle};
 use crate::ir::storage::file::{
     FileReadError, SecretSnapshot, SnapshotBackend,
 };
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use crate::ir::storage::save::SaveError;
+use crate::ir::storage::save::{OpenSave, SaveFactory};
 use crate::ir::storage::{PathKind, PathObservation};
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl SaveFactory for () {
+    fn open(directory: &OsStr, maximum: NonZeroU64) -> OpenSave {
+        Ok(Box::new(save::SaveStore::open(
+            Path::new(directory),
+            maximum,
+        )?))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl SaveFactory for () {
+    fn open(_directory: &OsStr, _maximum: NonZeroU64) -> OpenSave {
+        Err(SaveError::Io(io::ErrorKind::Unsupported))
+    }
+}
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl SnapshotBackend for () {
