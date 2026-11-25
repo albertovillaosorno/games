@@ -68,3 +68,23 @@ mandatory incremental portability gate. Its initial inventory records
 1795635890959083883-1411397. The gate prevents additional matching
 couplings above the recorded ceilings, but strict zero-debt isolation,
 semantic coverage, native haptics and cross-target support remain open.
+
+The Linux input adapter now implements the shared haptic capability using
+the same admitted controller identity as input. SDL reports support for
+the standard two-channel command interface, not the actual actuator
+count. Finite effects replace existing rumble; unfocused, unsupported
+and detached devices reject new effects. Focus loss, hiding, minimizing,
+close, detach and adapter drop request a stop when a device is available.
+A failed cleanup cannot extend the bounded effect duration. Synthetic
+delivery tests cover normalized intensity, maximum duration, fallback,
+explicit stop and backend rejection. The native rendering smoke also
+rejects feedback for an unknown device. Fresh validation with Xvfb,
+native rendering and dummy audio passed in run
+1795636187133956702-1494963. Physical haptics, title feedback integration
+and non-Linux adapters remain unverified.
+
+Commit 103b1e4 resolves canonical SDK package identities in direct and
+workspace-inherited dependency aliases, including target-specific and
+nested dependency groups. Tests cover aliases, normalized spellings
+and missing workspace references. The same fresh joint gate above
+passed without increasing the migration baseline.

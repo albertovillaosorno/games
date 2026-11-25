@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - SDL input admission and event timestamp reconstruction.
+//   - SDL input admission, timestamps and controller feedback.
 // - Must-Not:
 //   - Assign players, define title actions or advance simulation.
 // - Allows:
 //   - Inputs: SDL events, presented geometry and native controller capacity.
-//   - Outputs: Platform-neutral input transitions and close requests.
-//   - Side effects: Opens and closes SDL controller handles.
+//   - Outputs: Platform-neutral input and feedback results.
+//   - Side effects: Opens controllers and submits bounded rumble.
 // - Split-When:
 //   - Additional native device families require distinct lifetimes.
 // - Merge-When:
@@ -35,9 +35,12 @@ pub mod profile;
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
+use games::capability::{
+    HapticCommand, HapticEffect, HapticError, HapticSupport, Haptics,
+};
 use games::input::InputEvent;
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::presentation::PresentationLayout;
@@ -46,6 +49,7 @@ pub use sdl2::controller::{Axis, Button};
 use sdl2::event::{Event, WindowEvent};
 pub use sdl2::keyboard::Scancode;
 pub use sdl2::mouse::MouseButton;
+use sdl2::video::Window;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
 use super::RenderError;
@@ -63,6 +67,7 @@ pub enum HostEvent {
 /// Owns the opened native controllers for one host window.
 pub struct NativeInput {
     controllers: BTreeMap<u64, GameController>,
+    feedback_allowed: bool,
     limit: NonZeroUsize,
     origin: u64,
     rediscover: bool,
@@ -202,13 +207,15 @@ impl NativeInput {
 
     pub(super) fn open(
         sdl: &Sdl,
-        window: u32,
+        window: &Window,
         limit: NonZeroUsize,
     ) -> Result<InputStartup, RenderError> {
         let subsystem = sdl.game_controller().map_err(RenderError::Backend)?;
         let timer = sdl.timer().map_err(RenderError::Backend)?;
         let mut input = Self {
             controllers: BTreeMap::new(),
+            feedback_allowed: window.has_input_focus()
+                && !window.is_minimized(),
             limit,
             origin: timer.ticks64(),
             rediscover: false,
@@ -216,10 +223,16 @@ impl NativeInput {
             timer,
             touch_enabled: false,
             touch_geometry: TouchGeometry::default(),
-            window,
+            window: window.id(),
         };
         let attached = input.discover_available()?;
         Ok(InputStartup { attached, input })
+    }
+
+    fn stop_all_feedback(&mut self) {
+        for controller in self.controllers.values_mut() {
+            stop_feedback(controller);
+        }
     }
 
     /// Reconcile touch input with the scene before polling native events.
@@ -262,7 +275,8 @@ impl NativeInput {
             let device = u64::from(which);
             let removed = self.controllers.remove(&device);
             self.rediscover |= self.controllers.len() < self.limit.get();
-            return removed.map(|_controller| {
+            return removed.map(|mut controller| {
+                stop_feedback(&mut controller);
                 HostEvent::Input(InputEvent::Detached { device })
             });
         }
@@ -273,6 +287,22 @@ impl NativeInput {
             return route_contact(event);
         }
         let routed = route(event, self.window);
+        if matches!(
+            routed,
+            Some(HostEvent::Quit | HostEvent::Input(InputEvent::FocusLost))
+        ) {
+            self.feedback_allowed = false;
+            self.stop_all_feedback();
+        } else if matches!(
+            event,
+            Event::Window {
+                window_id,
+                win_event: WindowEvent::FocusGained,
+                ..
+            } if *window_id == self.window
+        ) {
+            self.feedback_allowed = true;
+        }
         if let Some(HostEvent::Input(
             InputEvent::Axis { device, .. }
             | InputEvent::Button { device, .. }
@@ -286,7 +316,80 @@ impl NativeInput {
     }
 }
 
+impl Drop for NativeInput {
+    fn drop(&mut self) {
+        self.stop_all_feedback();
+    }
+}
+
+impl Haptics for NativeInput {
+    fn submit(&mut self, command: HapticCommand) -> Result<(), HapticError> {
+        let controller = self
+            .controllers
+            .get_mut(&command.device)
+            .ok_or(HapticError::Disconnected)?;
+        deliver_feedback(
+            controller_support(controller),
+            self.feedback_allowed,
+            command.effect,
+            |low, high, milliseconds| {
+                controller
+                    .set_rumble(low, high, milliseconds)
+                    .map_err(|_error| HapticError::Unavailable)
+            },
+        )
+    }
+
+    fn support(&self, device: u64) -> Option<HapticSupport> {
+        self.controllers.get(&device).and_then(controller_support)
+    }
+}
+
 type Discovered<Handle> = Result<Option<(u64, Handle)>, RenderError>;
+
+fn controller_support(controller: &GameController) -> Option<HapticSupport> {
+    if !controller.attached() {
+        return None;
+    }
+    // SDL reports standard two-channel rumble support, not the physical
+    // actuator count. The backend may combine the channels itself.
+    Some(if controller.has_rumble() {
+        HapticSupport::DualMotor
+    } else {
+        HapticSupport::Unsupported
+    })
+}
+
+fn deliver_feedback(
+    support: Option<HapticSupport>,
+    allowed: bool,
+    effect: HapticEffect,
+    deliver: impl FnOnce(u16, u16, u32) -> Result<(), HapticError>,
+) -> Result<(), HapticError> {
+    let admitted = match support {
+        None => return Err(HapticError::Disconnected),
+        Some(HapticSupport::Unsupported) => {
+            return Err(HapticError::Unsupported);
+        },
+        Some(HapticSupport::SingleMotor) => effect.single_motor(),
+        Some(HapticSupport::DualMotor) => effect,
+    };
+    match admitted {
+        HapticEffect::Stop => deliver(0, 0, 0),
+        HapticEffect::Rumble { low, high, milliseconds } if allowed => {
+            deliver(low, high, NonZeroU32::from(milliseconds).get())
+        },
+        HapticEffect::Rumble { .. } => Err(HapticError::Unavailable),
+    }
+}
+
+fn stop_feedback(controller: &mut GameController) {
+    if controller.attached() && controller.has_rumble() {
+        // Loss of the native device can race with cleanup. Effects have
+        // finite duration even if a stop fails or the device disappears.
+        let _result = controller.set_rumble(0, 0, 0);
+    }
+}
 
 fn discover_controller(
     subsystem: &GameControllerSubsystem,
@@ -594,9 +697,10 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
+    use games::capability::{HapticEffect, HapticError, HapticSupport};
     use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use games::presentation::{Dimensions, PresentationMode};
@@ -606,10 +710,48 @@ mod tests {
 
     use super::{
         Axis, Button, HostEvent, Scancode, TouchGeometry, admit_discovery,
-        axis_code, button_code, event_elapsed, key_code, mouse_code,
-        open_candidate, route, route_contact,
+        axis_code, button_code, deliver_feedback, event_elapsed, key_code,
+        mouse_code, open_candidate, route, route_contact,
     };
     use crate::linux::RenderError;
+
+    #[test]
+    fn feedback_delivers_only_bounded_supported_foreground_effects() {
+        let mut deliveries = Vec::new();
+        let mut send = |support, allowed, effect| {
+            deliver_feedback(support, allowed, effect, |low, high, time| {
+                deliveries.push((low, high, time));
+                Ok(())
+            })
+        };
+        let effect = HapticEffect::Rumble {
+            low: u16::MAX,
+            high: 7,
+            milliseconds: NonZeroU16::MAX,
+        };
+        let dual = Some(HapticSupport::DualMotor);
+        let single = Some(HapticSupport::SingleMotor);
+        assert_eq!(send(None, true, effect), Err(HapticError::Disconnected));
+        assert_eq!(
+            send(Some(HapticSupport::Unsupported), true, effect),
+            Err(HapticError::Unsupported),
+        );
+        assert_eq!(send(dual, false, effect), Err(HapticError::Unavailable));
+        assert_eq!(send(dual, true, effect), Ok(()));
+        assert_eq!(send(single, true, effect), Ok(()));
+        assert_eq!(send(dual, false, HapticEffect::Stop), Ok(()));
+        assert_eq!(deliveries, [
+            (u16::MAX, 7, 65_535),
+            (u16::MAX, u16::MAX, 65_535),
+            (0, 0, 0)
+        ],);
+        assert_eq!(
+            deliver_feedback(dual, true, effect, |_, _, _| {
+                Err(HapticError::Unavailable)
+            }),
+            Err(HapticError::Unavailable),
+        );
+    }
 
     #[test]
     fn mouse_edges_only_route_for_physical_buttons_in_own_window() {

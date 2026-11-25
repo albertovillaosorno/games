@@ -175,7 +175,7 @@ impl NativeWindow {
         &self,
         limit: NonZeroUsize,
     ) -> Result<InputStartup, RenderError> {
-        NativeInput::open(&self.sdl, self.canvas.window().id(), limit)
+        NativeInput::open(&self.sdl, self.canvas.window(), limit)
     }
 
     /// Open a resizable window without requesting vertical synchronization.
@@ -456,6 +456,9 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
+    use games::capability::{
+        HapticCommand, HapticEffect, HapticError, Haptics as _,
+    };
     use games::input::touch::{
         ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone,
     };
@@ -1089,6 +1092,14 @@ mod tests {
     fn verify_unknown_controller(
         input: &mut NativeInput,
     ) -> Result<(), RenderError> {
+        require(
+            input.support(u64::MAX).is_none()
+                && input.submit(HapticCommand {
+                    device: u64::MAX,
+                    effect: HapticEffect::Stop,
+                }) == Err(HapticError::Disconnected),
+            "unknown controller accepted haptic feedback",
+        )?;
         for unknown in [
             Event::ControllerButtonDown {
                 timestamp: 0,
