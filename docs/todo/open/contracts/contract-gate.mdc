@@ -103,3 +103,11 @@ On the prior validator, a successful ordinary gate followed by
 (1795606875781646286-160251). The corrected validator ran doctests and
 rejected the invalid flag (1795606925003201188-166930).
 This does not fingerprint all machine-level Cargo configuration.
+
+The clone scanner now preserves character literals and escaped braces,
+raw byte and C strings, and nonoverlapping nested comment delimiters.
+It distinguishes lifetime punctuation and function-pointer types from
+function declarations and skips nested signature delimiters, including
+array lengths and const-generic expressions. Synthetic tests exercise
+substantial exact clones containing these constructs. This is still a
+conservative lexical check, not a full Rust parser.

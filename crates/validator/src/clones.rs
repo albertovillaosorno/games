@@ -86,24 +86,19 @@ fn string_literal(iter: &mut Peekable<Chars<'_>>, line: &mut usize) -> String {
 
 fn block_comment(iter: &mut Peekable<Chars<'_>>, line: &mut usize) {
     let mut depth = 1usize;
-    let mut previous = '\0';
-    for symbol in iter.by_ref() {
+    while let Some(symbol) = iter.next() {
         if symbol == '\n' {
             *line = line.saturating_add(1);
+        } else if symbol == '/' && iter.peek() == Some(&'*') {
+            let _opening = iter.next();
+            depth = depth.saturating_add(1);
+        } else if symbol == '*' && iter.peek() == Some(&'/') {
+            let _closing = iter.next();
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                break;
+            }
         }
-        match (previous, symbol) {
-            ('/', '*') => {
-                depth = depth.saturating_add(1);
-            },
-            ('*', '/') => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    break;
-                }
-            },
-            _ => {},
-        }
-        previous = symbol;
     }
 }
 
@@ -173,6 +168,76 @@ fn raw_literal(
     }
 }
 
+fn unicode_escape(
+    iter: &mut Peekable<Chars<'_>>,
+    literal: &mut String,
+) -> Option<()> {
+    if iter.next()? != '{' {
+        return None;
+    }
+    literal.push('{');
+    let mut digits = 0u8;
+    loop {
+        let digit = iter.next()?;
+        literal.push(digit);
+        if digit == '}' {
+            return (digits != 0).then_some(());
+        }
+        if digit.is_ascii_hexdigit() {
+            digits = digits.saturating_add(1);
+            if digits > 6 {
+                return None;
+            }
+        } else if digit != '_' || digits == 0 {
+            return None;
+        }
+    }
+}
+
+fn character_escape(
+    iter: &mut Peekable<Chars<'_>>,
+    literal: &mut String,
+) -> Option<()> {
+    let escape = iter.next()?;
+    literal.push(escape);
+    match escape {
+        'x' => {
+            for _ in 0u8..2 {
+                let digit = iter.next()?;
+                if !digit.is_ascii_hexdigit() {
+                    return None;
+                }
+                literal.push(digit);
+            }
+        },
+        'u' => unicode_escape(iter, literal)?,
+        'n' | 'r' | 't' | '\\' | '\'' | '"' | '0' => {},
+        _ => return None,
+    }
+    Some(())
+}
+
+// A valid character literal has a closing quote after one scalar or
+// escape. A lifetime or label begins with the same punctuation but does
+// not have that closing quote; do not consume it on failed lookahead.
+fn character_literal(iter: &mut Peekable<Chars<'_>>) -> Option<String> {
+    let mut lookahead = iter.clone();
+    let first = lookahead.next()?;
+    let mut literal = String::from("'");
+    literal.push(first);
+    match first {
+        '\\' => character_escape(&mut lookahead, &mut literal)?,
+        '\'' | '\n' | '\r' | '\t' => return None,
+        _ => {},
+    }
+    if lookahead.next()? != '\'' {
+        return None;
+    }
+    literal.push('\'');
+    *iter = lookahead;
+    Some(literal)
+}
+
 fn symbol_text(
     symbol: char,
     iter: &mut Peekable<Chars<'_>>,
@@ -182,6 +247,17 @@ fn symbol_text(
         string_literal(iter, line)
     } else if symbol == 'r' {
         raw_literal(iter, line).unwrap_or_else(|| identifier(symbol, iter))
+    } else if symbol == '\'' {
+        character_literal(iter).unwrap_or_else(|| String::from(symbol))
+    } else if matches!(symbol, 'b' | 'c') && iter.peek() == Some(&'r') {
+        let mut lookahead = iter.clone();
+        let _prefix = lookahead.next();
+        if let Some(raw) = raw_literal(&mut lookahead, line) {
+            *iter = lookahead;
+            format!("{symbol}{raw}")
+        } else {
+            identifier(symbol, iter)
+        }
     } else if symbol.is_alphanumeric() || symbol == '_' {
         identifier(symbol, iter)
     } else {
@@ -219,11 +295,17 @@ fn tokens(source: &str) -> Vec<Token> {
 }
 
 fn structural_token(value: &str) -> String {
-    if value.starts_with("r\"") || value.starts_with("r#") {
+    if ["r\"", "r#", "br\"", "br#", "cr\"", "cr#"]
+        .iter()
+        .any(|prefix| value.starts_with(prefix))
+    {
         return String::from("STRING");
     }
     if value.starts_with('"') {
         return String::from("STRING");
+    }
+    if value.starts_with('\'') && value.len() > 1 {
+        return String::from("CHAR");
     }
     if value.chars().next().is_some_and(char::is_numeric) {
         return String::from("NUMBER");
@@ -248,21 +330,50 @@ fn structural_token(value: &str) -> String {
     String::from(value)
 }
 
+// Ignore delimiters in argument types, array lengths and const-generic
+// expressions. Only a top-level opening brace starts a function body.
+fn signature_opening(tokens: &[Token]) -> Option<usize> {
+    let mut groups = Vec::new();
+    let mut angles = 0usize;
+    let mut previous = "";
+    for (offset, token) in tokens.iter().take(160).enumerate() {
+        let symbol = token.text.as_str();
+        match symbol {
+            "(" => groups.push(")"),
+            "[" => groups.push("]"),
+            "{" if !groups.is_empty() || angles != 0 => groups.push("}"),
+            ")" | "]" | "}" if groups.pop() != Some(symbol) => return None,
+            _ if !groups.is_empty() => {},
+            "{" => return Some(offset),
+            ";" if angles == 0 => return None,
+            "<" => angles = angles.saturating_add(1),
+            ">" if previous != "-" => angles = angles.saturating_sub(1),
+            _ => {},
+        }
+        previous = symbol;
+    }
+    None
+}
+
 fn function_body(
     path: &str,
     tokens: &[Token],
     start: usize,
 ) -> Option<Function> {
     let function = tokens.get(start)?;
-    if function.text != "fn" {
+    let name = tokens.get(start.checked_add(1)?)?;
+    if function.text != "fn"
+        || !name
+            .text
+            .chars()
+            .next()
+            .is_some_and(|symbol| symbol.is_alphabetic() || symbol == '_')
+    {
         return None;
     }
-    let signature = tokens.iter().skip(start.saturating_add(2));
-    let offset = signature
-        .take(160)
-        .take_while(|token| token.text != ";")
-        .position(|token| token.text == "{")?;
-    let opening = start.saturating_add(2).saturating_add(offset);
+    let signature = start.checked_add(2)?;
+    let offset = signature_opening(tokens.get(signature..)?)?;
+    let opening = signature.checked_add(offset)?;
     let mut depth = 1usize;
     let mut body = Vec::new();
     for token in tokens.iter().skip(opening.saturating_add(1)) {
@@ -472,10 +583,84 @@ mod tests {
     }
 
     #[test]
+    fn character_literals_do_not_truncate_substantial_clones() {
+        let first = fixture("alpha", "entity", "+").replacen(
+            "{\n",
+            "{\nlet brace = '}';\n",
+            1,
+        );
+        let second = fixture("beta", "entity", "+").replacen(
+            "{\n",
+            "{\nlet brace = '}';\n",
+            1,
+        );
+        let mut records = functions("crates/a/src/lib.rs", &first);
+        records.extend(functions("crates/b/src/lib.rs", &second));
+        assert_eq!(records.len(), 2);
+        assert_eq!(compare(&records).exact.len(), 1);
+    }
+
+    #[test]
+    fn characters_and_lifetimes_have_distinct_tokens() {
+        let source = concat!(
+            "fn example<'a>(x: &'a str) { ",
+            r"let a = '}'; let b = '\''; let c = '\u{7b}'; ",
+            r"let d = '\x7d'; let e = b'{'; }",
+        );
+        let stream = tokens(source);
+        for literal in ["'}'", r"'\''", r"'\u{7b}'", r"'\x7d'", "'{'"] {
+            assert!(stream.iter().any(|token| token.text == literal));
+        }
+        assert_eq!(stream.iter().filter(|token| token.text == "'").count(), 2);
+        assert_eq!(stream.iter().filter(|token| token.text == "{").count(), 1);
+        assert_eq!(stream.iter().filter(|token| token.text == "}").count(), 1);
+    }
+
+    #[test]
+    fn nested_comment_delimiters_do_not_overlap() {
+        let stream = tokens("/* outer /*/ fn fake() {} */ outer */ fn real()");
+        assert!(!stream.iter().any(|token| token.text == "fake"));
+        assert!(stream.iter().any(|token| token.text == "real"));
+    }
+
+    #[test]
+    fn function_pointer_types_are_not_named_function_bodies() {
+        let source = fixture("example", "entity", "+")
+            .replace("example()", "example(callback: fn())");
+        assert_eq!(functions("crates/a/src/lib.rs", &source).len(), 1);
+    }
+
+    #[test]
+    fn array_and_const_generic_signatures_retain_function_bodies() {
+        let body = fixture("first", "same", "+");
+        for signature in [
+            "fn first(items: [u8; 4]) -> [u8; 4]",
+            "fn first<const N: usize>() -> [u8; N]",
+            "fn first() -> Holder<{ 2 + 3 }>",
+            "fn first<F: Fn() -> u8>() -> [u8; 3]",
+        ] {
+            let source = body.replace("fn first()", signature);
+            let parsed = functions("crates/a/src/lib.rs", &source);
+            let ordinary = functions("crates/b/src/lib.rs", &body);
+            assert_eq!(parsed.len(), 1, "{signature}");
+            assert_eq!(compare(parsed.iter().chain(&ordinary)).exact.len(), 1);
+        }
+    }
+
+    #[test]
     fn raw_literals_do_not_expose_fake_functions() {
-        let raw = "const EXAMPLE: &str = r##\"fn nested() { \" hello }\"##;";
-        let stream = tokens(raw);
-        assert_eq!(stream.iter().filter(|token| token.text == "fn").count(), 0);
-        assert_eq!(stream.iter().filter(|token| token.text == "{").count(), 0);
+        for prefix in ["r", "br", "cr"] {
+            let raw =
+                format!("const EXAMPLE = {prefix}##\"fn nested() {{ \"}}\"##;");
+            let stream = tokens(&raw);
+            assert_eq!(
+                stream.iter().filter(|token| token.text == "fn").count(),
+                0,
+            );
+            assert_eq!(
+                stream.iter().filter(|token| token.text == "{").count(),
+                0,
+            );
+        }
     }
 }
