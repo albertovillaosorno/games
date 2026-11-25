@@ -1393,7 +1393,8 @@ fn smoke_air_attack(
 ) -> Result<(), RenderError> {
     let [before, ..] = simulation.state().stations();
     smoke_jump_edge(controls, simulation, true)?;
-    for _ in 0..15u8 {
+    smoke_early_air_attack(controls, simulation, before.position)?;
+    for _ in 0..13u8 {
         let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
     }
     let _jump = art.present(scene, simulation.state())?;
@@ -1422,6 +1423,22 @@ fn smoke_air_attack(
         || landed.position.y != before.position.y
     {
         return Err(failure("aerial attack did not land at expected position"));
+    }
+    Ok(())
+}
+
+fn smoke_early_air_attack(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    position: Point,
+) -> Result<(), RenderError> {
+    let _takeoff = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    smoke_press(controls, simulation, Control::Primary)?;
+    let [early, ..] = simulation.state().stations();
+    if !matches!(early.maneuver, Maneuver::Jump(jump) if jump.tick() == 1)
+        || early.position != position
+    {
+        return Err(failure("early aerial attack interrupted takeoff"));
     }
     Ok(())
 }

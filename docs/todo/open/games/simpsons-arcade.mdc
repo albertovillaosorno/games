@@ -1055,3 +1055,15 @@ offsets 32 through 34 select a ground attack after landing. The
 existing simulation already distinguishes offsets 31 and 32, and
 fixed-step regressions now preserve that boundary. The late samples
 establish action selection, not the complete late attack trajectory.
+
+The native smoke now routes a synthetic primary pulse on the first
+post-takeoff tick, checks that jump and position remain intact, and
+then verifies the existing later aerial attack, rendered pose and
+84-pixel landing displacement. The optimized 3,224,528-byte build
+passed this smoke with the verified 88-pose catalogue, adaptive
+400x304 scene, touch controls and offscreen NVIDIA OpenGL ES.
+The 600 movement and 51 combat submissions missed no 16.667 ms
+host-work budget; maximum measured movement work was 3.285 ms.
+Lifetime peak RSS was 90,300,416 bytes. This remains synthetic
+input and offscreen submission evidence, not physical device or
+presentation latency acceptance.
