@@ -22,6 +22,20 @@ Create title packages and their TODO.md files when implementation begins.
 - Use the existing catalogue order; no preliminary ranking audit needed.
 - Pin one preferred source edition per title when supplied.
 - Keep only unique gameplay and adapters in each title package.
+- Before implementing each new title, review every previously implemented
+  game and app package, including unfinished titles, without exception.
+  Inspect their code and tests as well as existing shared capabilities.
+- Extract genuinely reusable mechanisms into their owning shared crates
+  before duplicating them. Migrate existing consumers and retain their
+  behavioural regression tests. Keep only unique rules and data in titles.
+- Record the reviewed title identifiers, reused or extracted mechanisms,
+  and justified title-specific exceptions in the existing task evidence.
+  Recheck newly introduced mechanisms for reuse before closing the task.
+- Declare whether the title supports adaptive height-fit world rendering.
+  Where supported, retain the original vertical field and uniform scale,
+  render real additional scene content at wider aspect ratios, and adapt
+  HUD and input transforms without changing simulation behaviour.
+  Use aspect-fit fallback when real scene extension is not supported.
 - Use `crates/game-<id>` or `crates/app-<id>` and inline behavioural tests.
 - Reference the canonical task record rather than duplicating its contents.
 
