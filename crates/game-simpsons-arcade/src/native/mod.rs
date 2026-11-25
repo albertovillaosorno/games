@@ -32,6 +32,7 @@
 //! Native initial street preview using only verified canonical art.
 
 mod audio;
+mod controller;
 mod encounter;
 mod lan;
 mod launch;
@@ -1037,6 +1038,14 @@ fn project_contact(
 /// # Errors
 /// Rejects invalid inputs, missing art, unsupported native device or input.
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
+    if args.first().is_some_and(|arg| arg == "--lan-controller") {
+        let [_, path] = args.as_slice() else {
+            return Err(String::from(
+                "usage: simpsons-arcade --lan-controller FILE",
+            ));
+        };
+        return controller::run(Path::new(path));
+    }
     let launch::Launch {
         assets,
         controls,

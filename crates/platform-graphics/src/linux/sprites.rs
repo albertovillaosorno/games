@@ -468,6 +468,12 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
             .presentation_layout()?
             .and_then(|layout| point.on_presentation(layout)))
     }
+
+    /// Wait briefly for a native event without busy-spinning a static scene.
+    #[must_use]
+    pub fn wait_event_timeout(&mut self, timeout_ms: u32) -> Option<Event> {
+        self.events.wait_event_timeout(timeout_ms)
+    }
 }
 
 fn compose<Target>(

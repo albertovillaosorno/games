@@ -835,3 +835,11 @@ controller seats while preserving local shared-screen rendering. The
 host owns menu and pause controls and uses the existing fixed-tick
 simulation. No network opens by default. A separate controller client,
 physical multi-device play and remote world presentation remain open.
+
+A standalone GNU/Linux native controller can now send authenticated
+keyboard or gamepad transitions to the shared-screen host without
+original or canonical assets on the controller machine. Its window
+provides input instructions rather than replicating the game world.
+Loopback TLS tests verify ordered press and release delivery and
+bounded backpressure; an opt-in software-renderer native smoke
+verified the panel readback. Real multi-device acceptance remains open.

@@ -32,12 +32,13 @@
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::str;
+use std::time::Duration;
 
-use games_platform::lan::secure::PeerFingerprint;
+use games_platform::lan::LanConfig;
 use games_platform::lan::secure::identity::{LocalIdentity, PublicIdentity};
+use games_platform::lan::secure::{PeerFingerprint, SecureFrameStream};
 use games_platform_storage::file::{snapshot, snapshot_secret};
-use rustls::pki_types::PrivateKeyDer;
+use rustls::pki_types::{PrivateKeyDer, ServerName};
 
 use super::launch::{Fields, fields, required};
 use crate::lan::{HostLan, session_config};
@@ -86,15 +87,18 @@ struct LocalFiles {
 }
 
 impl LocalFiles {
-    fn host(&self, name: &str) -> Result<LocalIdentity, String> {
+    fn identity(&self, name: Option<&str>) -> Result<LocalIdentity, String> {
         let root = certificate(&self.public.root)?;
         let leaf = certificate(&self.public.leaf)?;
         let key = snapshot_secret(&self.key, MAX_KEY)
             .map_err(|error| format!("private key admission: {error:?}"))?;
         let private = PrivateKeyDer::try_from(key)
             .map_err(|_error| String::from("invalid DER private key"))?;
-        LocalIdentity::host(name, &root, &leaf, private)
-            .map_err(|error| format!("host identity: {error}"))
+        match name {
+            Some(server) => LocalIdentity::host(server, &root, &leaf, private),
+            None => LocalIdentity::client(&root, &leaf, private),
+        }
+        .map_err(|error| format!("local identity: {error}"))
     }
 
     fn parse(base: &Path, values: &mut Fields<'_>) -> Result<Self, String> {
@@ -108,6 +112,27 @@ impl LocalFiles {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+struct Endpoint {
+    address: SocketAddr,
+    identity: LocalFiles,
+    name: String,
+}
+
+impl Endpoint {
+    fn parse(base: &Path, values: &mut Fields<'_>) -> Result<Self, String> {
+        if values.remove("version") != Some("1") {
+            return Err(String::from("expected LAN catalogue version=1"));
+        }
+        let address = required(values, "address")?
+            .parse()
+            .map_err(|_error| String::from("invalid private LAN address"))?;
+        let name = required(values, "name")?.to_owned();
+        let identity = LocalFiles::parse(base, values)?;
+        Ok(Self { address, identity, name })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct HostSelection {
     address: SocketAddr,
     identity: LocalFiles,
@@ -117,7 +142,7 @@ struct HostSelection {
 
 impl HostSelection {
     fn bind(&self) -> Result<HostLan, String> {
-        let identity = self.identity.host(&self.name)?;
+        let identity = self.identity.identity(Some(&self.name))?;
         let mut approved = [None; 4];
         let mut public = Vec::new();
         for (peer, slot) in self.peers.iter().zip(&mut approved) {
@@ -137,14 +162,8 @@ impl HostSelection {
     fn parse(path: &Path, text: &str) -> Result<Self, String> {
         let base = path.parent().ok_or("invalid LAN catalogue path")?;
         let mut values = fields(text)?;
-        if values.remove("version") != Some("1") {
-            return Err(String::from("expected LAN catalogue version=1"));
-        }
-        let address = required(&mut values, "address")?
-            .parse()
-            .map_err(|_error| String::from("invalid private LAN address"))?;
-        let name = required(&mut values, "name")?.to_owned();
-        let identity = LocalFiles::parse(base, &mut values)?;
+        let Endpoint { address, identity, name } =
+            Endpoint::parse(base, &mut values)?;
         let mut peers = [None, None, None, None];
         for (seat, peer) in (1u8..=4).zip(&mut peers) {
             *peer =
@@ -163,16 +182,65 @@ impl HostSelection {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct ClientSelection {
+    address: SocketAddr,
+    host: PublicFiles,
+    identity: LocalFiles,
+    name: String,
+}
+
+impl ClientSelection {
+    fn connect(&self) -> Result<SecureFrameStream, String> {
+        let identity = self.identity.identity(None)?;
+        let host = self.host.load()?;
+        let tls = identity
+            .client_tls(&host)
+            .map_err(|error| format!("client trust: {error}"))?;
+        let name = ServerName::try_from(self.name.clone())
+            .map_err(|error| error.to_string())?;
+        let config = LanConfig::new(session_config(), Duration::from_secs(2))
+            .map_err(|error| error.to_string())?;
+        SecureFrameStream::connect(self.address, config, &tls, name)
+            .map_err(|error| format!("LAN controller: {error}"))
+    }
+
+    fn parse(path: &Path, text: &str) -> Result<Self, String> {
+        let base = path.parent().ok_or("invalid LAN catalogue path")?;
+        let mut values = fields(text)?;
+        let Endpoint { address, identity, name } =
+            Endpoint::parse(base, &mut values)?;
+        let host = PublicFiles::parse(base, &mut values, "host_")?
+            .ok_or("missing approved host certificate paths")?;
+        if !values.is_empty() {
+            return Err(String::from("unknown controller field"));
+        }
+        Ok(Self {
+            address,
+            host,
+            identity,
+            name,
+        })
+    }
+}
+
+pub(super) fn open_client(path: &Path) -> Result<SecureFrameStream, String> {
+    ClientSelection::parse(path, &catalogue(path)?)?.connect()
+}
+
 fn certificate(path: &Path) -> Result<Vec<u8>, String> {
     snapshot(path, MAX_CERTIFICATE)
         .map_err(|error| format!("certificate {}: {error:?}", path.display()))
 }
 
-pub(super) fn open_host(path: &Path) -> Result<HostLan, String> {
+fn catalogue(path: &Path) -> Result<String, String> {
     let bytes = snapshot(path, MAX_CATALOGUE)
         .map_err(|error| format!("LAN catalogue: {error:?}"))?;
-    let text = str::from_utf8(&bytes).map_err(|error| error.to_string())?;
-    HostSelection::parse(path, text)?.bind()
+    String::from_utf8(bytes).map_err(|error| error.to_string())
+}
+
+pub(super) fn open_host(path: &Path) -> Result<HostLan, String> {
+    HostSelection::parse(path, &catalogue(path)?)?.bind()
 }
 
 #[cfg(test)]
@@ -225,5 +293,31 @@ mod tests {
                 HostSelection::parse(path, &format!("{BASE}{suffix}")).is_err()
             );
         }
+    }
+
+    #[test]
+    fn controller_requires_explicit_host_and_local_identity()
+    -> Result<(), String> {
+        let path = Path::new("client/controller.local");
+        let text = format!(
+            "{BASE}host_root=approved-root.der\nhost_leaf=approved-leaf.der\n"
+        );
+        let selection = ClientSelection::parse(path, &text)?;
+        if selection.host.root != Path::new("client/approved-root.der")
+            || selection.host.leaf != Path::new("client/approved-leaf.der")
+        {
+            return Err(String::from("host paths not anchored"));
+        }
+        for invalid in [
+            String::from(BASE),
+            format!("{BASE}host_leaf=l\n"),
+            format!("{text}peer2_leaf=l\n"),
+            format!("{text}name=override\n"),
+        ] {
+            if ClientSelection::parse(path, &invalid).is_ok() {
+                return Err(String::from("invalid controller trust accepted"));
+            }
+        }
+        Ok(())
     }
 }

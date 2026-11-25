@@ -246,4 +246,30 @@ the world and controls menus and Pause. A verified client can join an
 assigned seat once the world is playing. The host screen is authoritative;
 the client protocol carries control transitions, not a replicated world.
 No LAN listener opens without the explicit flag, and hidden smoke cannot
-open one. A standalone native controller is still to be implemented.
+open one.
+
+On the controller machine, create a separate private catalogue:
+
+```text
+version=1
+address=192.168.1.20:45000
+name=games.test
+root=guest-root.der
+leaf=guest-leaf.der
+key=guest-key.der
+host_root=host-root.der
+host_leaf=host-leaf.der
+```
+
+Use the host's address, its certificate name, and the corresponding
+approved certificate pair. Launch without game assets:
+
+```sh
+simpsons-arcade --lan-controller controller.local
+```
+
+Watch the host screen. Enter or gamepad Start joins when the host has
+started the world. Arrow keys or the D-pad/left stick move; Z/A attacks
+and X/B jumps. The host handles Pause and menus. Close the controller
+window to disconnect. Re-launch with the same approved identity to
+rejoin; no automatic discovery or reconnection is attempted.

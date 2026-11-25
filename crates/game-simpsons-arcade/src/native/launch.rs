@@ -50,7 +50,9 @@ const USAGE: &str = concat!(
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
-    "Without an asset selection, read simpsons-arcade.local beside the binary."
+    "Without an asset selection, read simpsons-arcade.local ",
+    "beside the binary.\n",
+    "usage: simpsons-arcade --lan-controller FILE"
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;

@@ -29,6 +29,7 @@
 // - Defaults:
 //   - No implicit network access or account service.
 
+use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::mem;
 use std::net::SocketAddr;
@@ -40,7 +41,9 @@ use games::replay::{LiveSimulation, QueueRejection};
 use games_platform::lan::secure::pump::{
     HostInputConfig, HostInputPump, PumpProgress, RemoteEvent,
 };
-use games_platform::lan::secure::{PeerFingerprint, ServerTls};
+use games_platform::lan::secure::{
+    PeerFingerprint, SecureFrameStream, ServerTls,
+};
 
 use super::Cabinet;
 use super::remote::{
@@ -48,7 +51,57 @@ use super::remote::{
 };
 
 const POLL_BUDGET: usize = 32;
+const CLIENT_QUEUE: usize = 128;
 const TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Bounded outgoing controller channel for a shared-screen client.
+#[derive(Debug)]
+pub(crate) struct ClientLan {
+    pending: VecDeque<RemoteControl>,
+    stream: SecureFrameStream,
+}
+
+impl ClientLan {
+    pub(crate) fn enqueue(&mut self, value: RemoteControl) -> io::Result<()> {
+        if self.pending.len() >= CLIENT_QUEUE {
+            return Err(ErrorKind::WouldBlock.into());
+        }
+        self.pending.push_back(value);
+        Ok(())
+    }
+
+    pub(crate) const fn new(stream: SecureFrameStream) -> Self {
+        Self {
+            pending: VecDeque::new(),
+            stream,
+        }
+    }
+
+    pub(crate) fn poll(&mut self) -> io::Result<()> {
+        // Detect EOF and reject unsolicited application data.
+        if self.stream.poll_receive()?.is_some() {
+            return Err(ErrorKind::InvalidData.into());
+        }
+        for _step in 0..POLL_BUDGET {
+            if !self.stream.has_pending_send() && !self.queue_next()? {
+                break;
+            }
+            let _progress = self.stream.poll_send()?;
+            if self.stream.has_pending_send() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn queue_next(&mut self) -> io::Result<bool> {
+        let Some(value) = self.pending.pop_front() else {
+            return Ok(false);
+        };
+        self.stream.queue_send(value.encode().to_vec())?;
+        Ok(true)
+    }
+}
 
 /// Native input bridge for explicitly hosted free play.
 ///
@@ -208,8 +261,8 @@ mod tests {
     use games::replay::LiveInputLimits;
     use games::timing::StepClock;
     use games_platform::lan::LanConfig;
+    use games_platform::lan::secure::ClientTls;
     use games_platform::lan::secure::identity::LocalIdentity;
-    use games_platform::lan::secure::{ClientTls, SecureFrameStream};
     use rcgen::{
         BasicConstraints, CertificateParams, CertifiedIssuer,
         ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
@@ -434,6 +487,68 @@ mod tests {
         require(
             reversed.position.x < stopped.position.x,
             "same authenticated identity reclaimed its station",
+        )
+    }
+
+    fn await_client(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        client: &mut ClientLan,
+    ) -> io::Result<()> {
+        let deadline = Instant::now()
+            .checked_add(TIMEOUT)
+            .ok_or(ErrorKind::TimedOut)?;
+        loop {
+            client.poll()?;
+            host.poll(live)?;
+            if live.pending_actions() == 1 {
+                return advance(live);
+            }
+            if Instant::now() >= deadline {
+                return Err(ErrorKind::TimedOut.into());
+            }
+            thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn controller_preserves_order_and_rejects_queue_overflow() -> io::Result<()>
+    {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let stream = connect(&mut host, &mut live, &credentials)?;
+        let mut client = ClientLan::new(stream);
+        local(&mut live, Control::Start)?;
+        advance(&mut live)?;
+        let start = RemoteControl::new(Control::Start, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        let right = RemoteControl::new(Control::Right, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        let release = RemoteControl::new(Control::Right, false)
+            .ok_or(ErrorKind::InvalidInput)?;
+        for edge in [start, right, release] {
+            client.enqueue(edge)?;
+        }
+        await_client(&mut host, &mut live, &mut client)?;
+        let [_, joined, ..] = live.state().state().stations();
+        await_client(&mut host, &mut live, &mut client)?;
+        let [_, moved, ..] = live.state().state().stations();
+        await_client(&mut host, &mut live, &mut client)?;
+        let [_, stopped, ..] = live.state().state().stations();
+        require(
+            joined.participation == Participation::Playing
+                && moved.position.x > joined.position.x
+                && stopped.position == moved.position,
+            "controller edge ordering",
+        )?;
+        for _edge in 0..CLIENT_QUEUE {
+            client.enqueue(right)?;
+        }
+        require(
+            client.enqueue(release).err().map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock)
+                && client.pending.len() == CLIENT_QUEUE,
+            "bounded outgoing queue",
         )
     }
 }

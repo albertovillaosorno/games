@@ -300,3 +300,20 @@ the bridge before fixed updates, retaining normal rendering, audio,
 menus and display preferences. Offline play remains the default; hidden
 smoke rejects network hosting. Native remote controller and physical
 multi-device acceptance are still open.
+
+A standalone native controller now uses an explicit catalogue and the
+same protected local credential admission with an independently approved
+host leaf and root. It does not load canonical game bundles. The small
+static window uses the existing keyboard and gamepad mappings, omits
+Pause from the wire, waits for input between nonblocking polls, and
+redraws only in response to native events. Its finite outgoing queue
+retains transition order; overflow or transport failure exits rather
+than dropping a release. The host remains the sole world display.
+
+The real TLS queue regression delivered Start, Right press and Right
+release through the shared fixed-tick bridge and verified that movement
+stopped. It also rejected an extra edge at capacity. Explicit controller
+catalogue parsing and an opt-in native controller panel readback passed.
+Fresh validation with Xvfb, software GL and dummy audio passed in run
+1795603183924768559-3103778. Physical multi-device input, remote world
+presentation, partition detection and credential issuance remain open.
