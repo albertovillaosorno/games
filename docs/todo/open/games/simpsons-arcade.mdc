@@ -43,12 +43,10 @@ preserve original four-player cooperative gameplay and pixel art.
 ## Evidence
 
 Local original input found: `simpsons.zip` in the required reference directory.
-The archive contains 14 members (7,209,088 decoded bytes). Every decoded
-member SHA-1 matches the MAME `simpsons` World four-player set 1 definition
-at upstream revision `cdcbdf509292257dcdaedc8d8452f79d89ff20d4`.
-Archive SHA-256:
-
-`c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa`
+The archive contains 14 members (7,209,088 decoded bytes), matching the
+MAME World four-player set 1 layout. Original media fingerprints are not
+an acceptance condition. The runtime checks title and layout identifiers
+and canonical asset integrity, not an original archive SHA.
 
 No original binaries were executed. The full MAME download timed out; the
 relevant pinned driver metadata was retrieved separately. Local input is

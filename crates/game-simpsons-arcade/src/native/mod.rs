@@ -80,8 +80,6 @@ use super::{
     Point, Station, StreetLayout, TICK_INTERVAL,
 };
 
-const SOURCE_SHA: &str =
-    "c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa";
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
 const CONTROLS: [Control; 8] = [
@@ -879,9 +877,7 @@ fn open_selected_bundle(
     let bundle =
         CanonicalBundle::open(parent, hash, limits).map_err(failure)?;
     let source = bundle.manifest().source();
-    if source.title != "simpsons-arcade"
-        || source.revision != "world-4p-set-1"
-        || source.digest != SOURCE_SHA.parse().map_err(failure)?
+    if source.title != "simpsons-arcade" || source.revision != "world-4p-set-1"
     {
         return Err(failure("unexpected source edition"));
     }
