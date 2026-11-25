@@ -33,6 +33,7 @@
 
 mod audio;
 mod encounter;
+mod lan;
 mod launch;
 mod poses;
 mod station_hud;
@@ -49,12 +50,16 @@ use std::str;
 use std::time::{Duration, Instant};
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
-use games::input::{AxisBinding, InputEvent, InputMapping, InputRouter};
+use games::input::{
+    AxisBinding, InputEvent, InputMapping, InputRouter, LogicalAction,
+};
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
 use games::presentation::{DisplaySettings, FramePacing, WindowMode};
-use games::replay::{LiveInputLimits, LiveSimulation, QueueRejection};
+use games::replay::{
+    InputStep, LiveInputLimits, LiveSimulation, QueueRejection,
+};
 use games::session::LocalSession;
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
@@ -79,6 +84,8 @@ use super::{
     Action, Cabinet, Control, Facing, Maneuver, Participation, Phase, Player,
     Point, Station, StreetLayout, TICK_INTERVAL,
 };
+use crate::lan::HostLan;
+use crate::remote::HostedCabinet;
 
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
@@ -161,21 +168,41 @@ const DEFAULT_PROFILES: Profiles = Profiles {
     touch_player: 0,
     touch_slots: [[0, 1, 2, 3, 4, 5, 6, 7]; 4],
 };
+type LocalActions = Vec<LogicalAction<Action>>;
 type Profiles = DigitalProfiles<4, 8>;
 
 #[derive(Debug)]
 struct Controls {
     devices: [Option<u64>; 4],
     profiles: Profiles,
+    reserved: [bool; 4],
     router: InputRouter<Action>,
 }
 
 impl Controls {
+    fn actions(
+        &mut self,
+        event: InputEvent,
+    ) -> Result<LocalActions, RenderError> {
+        let actions = self.router.handle(event);
+        if let InputEvent::Attached { device } = event {
+            self.attach(device)?;
+        } else if let InputEvent::Detached { device } = event {
+            self.detach(device);
+        }
+        Ok(actions)
+    }
+
     fn attach(&mut self, device: u64) -> Result<(), RenderError> {
         if self.devices.contains(&Some(device)) {
             return Ok(());
         }
-        let Some(index) = self.devices.iter().position(Option::is_none) else {
+        let Some(index) = self
+            .devices
+            .iter()
+            .zip(self.reserved)
+            .position(|(assigned, remote)| assigned.is_none() && !remote)
+        else {
             return Ok(());
         };
         let player =
@@ -236,18 +263,18 @@ impl Controls {
         Self::with_profiles(touch_enabled, &DEFAULT_PROFILES)
     }
 
-    fn route(
+    fn route<Simulation>(
         &mut self,
         event: InputEvent,
         elapsed: Duration,
-        live: &mut LiveSimulation<Cabinet>,
-    ) -> Result<(), RenderError> {
-        let actions = self.router.handle(event);
-        if let InputEvent::Attached { device } = event {
-            self.attach(device)?;
-        } else if let InputEvent::Detached { device } = event {
-            self.detach(device);
-        }
+        live: &mut LiveSimulation<Simulation>,
+    ) -> Result<(), RenderError>
+    where
+        Simulation: InputStep,
+        Simulation::Input: From<LogicalAction<Action>>,
+    {
+        let actions: Vec<_> =
+            self.actions(event)?.into_iter().map(Into::into).collect();
         if actions.is_empty() {
             return Ok(());
         }
@@ -265,19 +292,36 @@ impl Controls {
         touch_enabled: bool,
         profiles: &Profiles,
     ) -> Result<Self, RenderError> {
+        Self::with_reserved(touch_enabled, profiles, [false; 4])
+    }
+
+    fn with_reserved(
+        touch_enabled: bool,
+        profiles: &Profiles,
+        reserved: [bool; 4],
+    ) -> Result<Self, RenderError> {
         profiles.validate().map_err(failure)?;
         let mut mapping = InputMapping::new();
-        for (player, keys) in Player::ALL.into_iter().zip(profiles.keys) {
+        for ((player, keys), remote) in
+            Player::ALL.into_iter().zip(profiles.keys).zip(reserved)
+        {
+            if remote {
+                continue;
+            }
             for (key, control) in keys.into_iter().zip(CONTROLS) {
                 mapping.bind_key(key_code(key), Action { control, player });
             }
         }
         if touch_enabled {
+            if reserved.get(profiles.touch_player) != Some(&false) {
+                return Err(failure("touch seat reserved for remote input"));
+            }
             touch::install(&mut mapping, profiles)?;
         }
         Ok(Self {
             devices: [None; 4],
             profiles: *profiles,
+            reserved,
             router: InputRouter::new(mapping),
         })
     }
@@ -365,9 +409,11 @@ impl Scene {
     fn load(
         scene: &mut SceneSession<'_, '_>,
         source: &Sources<'_>,
-        touch_enabled: bool,
-        profiles: &Profiles,
+        options: PreviewOptions<'_>,
+        reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
+        let touch_enabled = options.touch_enabled;
+        let profiles = options.profiles;
         let [first, _, _, _] = &source.actors;
         let (mut background, original) =
             Art::load_with_pixels(scene, first, "scene/background")?;
@@ -408,7 +454,7 @@ impl Scene {
             } else {
                 17
             }),
-            hud: station_hud::StationHud::load(scene, profiles)?,
+            hud: station_hud::StationHud::load(scene, profiles, reserved)?,
             menu: load_menu(scene)?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles)?)
@@ -617,25 +663,30 @@ struct PreviewOptions<'profiles> {
 struct Interactive<'preferences> {
     applied: DisplaySettings,
     controls: Controls,
+    host: Option<HostLan>,
     input: NativeInput,
     preferences: Option<&'preferences DisplayStore>,
     previous: Duration,
     requested: DisplaySettings,
-    simulation: LiveSimulation<Cabinet>,
+    simulation: LiveSimulation<HostedCabinet>,
 }
 
 impl<'preferences> Interactive<'preferences> {
     fn new(
         startup: InputStartup,
         options: PreviewOptions<'preferences>,
-        combat: bool,
-        scroll_limit: u16,
+        cabinet: &Cabinet,
+        host: Option<HostLan>,
     ) -> Result<Self, RenderError> {
-        let session =
-            LocalSession::with_display(options.display, options.touch_enabled);
-        let mut simulation = live_with_scroll(combat, session, scroll_limit)?;
-        let mut controls =
-            Controls::with_profiles(options.touch_enabled, options.profiles)?;
+        let reserved = host.as_ref().map_or([false; 4], HostLan::reserved);
+        let hosted = HostedCabinet::new(cabinet, reserved)
+            .ok_or_else(|| failure("invalid cabinet reservation"))?;
+        let mut simulation = fixed(hosted)?;
+        let mut controls = Controls::with_reserved(
+            options.touch_enabled,
+            options.profiles,
+            reserved,
+        )?;
         for event in startup.attached {
             controls.route(event, Duration::ZERO, &mut simulation)?;
         }
@@ -646,10 +697,11 @@ impl<'preferences> Interactive<'preferences> {
         Ok(Self {
             applied: options.display,
             controls,
+            host,
             input,
             preferences: options.preferences,
             previous: Duration::ZERO,
-            requested: session.display(),
+            requested: cabinet.session().display(),
             simulation,
         })
     }
@@ -663,7 +715,7 @@ impl<'preferences> Interactive<'preferences> {
         if let Some(audio) = &mut playback {
             audio.enable_output();
         }
-        while self.simulation.state().phase() != Phase::Exited
+        while self.simulation.state().state().phase() != Phase::Exited
             && poll(
                 scene,
                 &mut self.input,
@@ -671,11 +723,14 @@ impl<'preferences> Interactive<'preferences> {
                 &mut self.simulation,
             )?
         {
+            if let Some(host) = &mut self.host {
+                host.poll(&mut self.simulation).map_err(failure)?;
+            }
             let elapsed = self.input.elapsed();
             let delta = elapsed.saturating_sub(self.previous);
             self.previous = elapsed;
             let _advanced = self.simulation.advance(delta).map_err(failure)?;
-            let cabinet = self.simulation.state();
+            let cabinet = self.simulation.state().state();
             let desired = cabinet.session().effective_display();
             if desired != self.applied {
                 scene.apply_display_settings(desired)?;
@@ -830,6 +885,14 @@ fn live_with_scroll(
     session: LocalSession,
     scroll_limit: u16,
 ) -> Result<LiveSimulation<Cabinet>, RenderError> {
+    fixed(cabinet_with_scroll(combat, session, scroll_limit)?)
+}
+
+fn cabinet_with_scroll(
+    combat: bool,
+    session: LocalSession,
+    scroll_limit: u16,
+) -> Result<Cabinet, RenderError> {
     let mut cabinet = if combat {
         Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
             x: 246,
@@ -841,9 +904,18 @@ fn live_with_scroll(
     .map_err(failure)?;
     cabinet = cabinet.with_scroll_limit(scroll_limit).map_err(failure)?;
     cabinet.session = session;
+    Ok(cabinet)
+}
+
+fn fixed<Simulation>(
+    simulation: Simulation,
+) -> Result<LiveSimulation<Simulation>, RenderError>
+where
+    Simulation: InputStep,
+{
     let clock =
         StepClock::new(TICK_INTERVAL, dimension(8)?).map_err(failure)?;
-    Ok(LiveSimulation::new(cabinet, clock, LiveInputLimits {
+    Ok(LiveSimulation::new(simulation, clock, LiveInputLimits {
         future_ticks: 120,
         pending_actions: size(2048)?,
     }))
@@ -896,12 +968,16 @@ fn open_bundles<const COUNT: usize>(
         .map_err(|_error| failure("bundle count"))
 }
 
-fn poll(
+fn poll<Simulation>(
     scene: &mut SceneSession<'_, '_>,
     input: &mut NativeInput,
     controls: &mut Controls,
-    live: &mut LiveSimulation<Cabinet>,
-) -> Result<bool, RenderError> {
+    live: &mut LiveSimulation<Simulation>,
+) -> Result<bool, RenderError>
+where
+    Simulation: InputStep,
+    Simulation::Input: From<LogicalAction<Action>>,
+{
     let mut removed = false;
     while let Some(event) = scene.poll_event() {
         match input.translate(&event)? {
@@ -965,11 +1041,13 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         assets,
         controls,
         display,
+        host,
         preferences,
         smoke,
         touch_enabled,
     } = launch::Launch::parse(args)?;
     let profiles = load_profiles(controls.as_deref())?;
+    let listener = host.as_deref().map(lan::open_host).transpose()?;
     let catalogue = assets
         .poses
         .as_deref()
@@ -985,13 +1063,17 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             world: assets.world,
         })
         .and_then(|source| {
-            window(&source, PreviewOptions {
-                display,
-                hidden: smoke,
-                preferences: preferences.as_ref(),
-                profiles: &profiles,
-                touch_enabled,
-            })
+            window(
+                &source,
+                PreviewOptions {
+                    display,
+                    hidden: smoke,
+                    preferences: preferences.as_ref(),
+                    profiles: &profiles,
+                    touch_enabled,
+                },
+                listener,
+            )
         });
     result.map_err(|error| format!("{error:?}"))
 }
@@ -1515,11 +1597,34 @@ fn smoke_optional(
     Ok(())
 }
 
+fn host_reservations(
+    options: PreviewOptions<'_>,
+    host: Option<&HostLan>,
+) -> Result<[bool; 4], RenderError> {
+    let reserved = host.map_or([false; 4], HostLan::reserved);
+    if options.touch_enabled
+        && reserved.get(options.profiles.touch_player) != Some(&false)
+    {
+        return Err(failure("touch seat reserved for remote input"));
+    }
+    if let Some(listener) = host {
+        writeln!(
+            stdout().lock(),
+            "LAN host: {}",
+            listener.local_addr().map_err(failure)?
+        )
+        .map_err(failure)?;
+    }
+    Ok(reserved)
+}
+
 fn window(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
+    host: Option<HostLan>,
 ) -> Result<(), RenderError> {
     let touch_enabled = options.touch_enabled;
+    let reserved = host_reservations(options, host.as_ref())?;
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
         dimension(if options.hidden && source.world.is_some() {
@@ -1537,15 +1642,15 @@ fn window(
     window.apply_display_settings(options.display)?;
     let layout = preview_layout(touch_enabled)?;
     let limits = scene_limits(source, touch_enabled)?;
-    let startup = window.input(size(4)?)?;
+    let startup = window
+        .input(size(reserved.into_iter().filter(|remote| !remote).count())?)?;
     let mut playback = source
         .audio
         .as_ref()
         .map(audio::Playback::open)
         .transpose()?;
     window.with_scene(layout, limits, |scene| {
-        let mut art =
-            Scene::load(scene, source, touch_enabled, options.profiles)?;
+        let mut art = Scene::load(scene, source, options, reserved)?;
         if options.hidden {
             smoke_settings(scene, &mut art, options)?;
             if let Some(bundle) = &source.world {
@@ -1566,12 +1671,11 @@ fn window(
         }
         let scroll_limit =
             art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
-        let preview = Interactive::new(
-            startup,
-            options,
-            source.enemy.is_some(),
-            scroll_limit,
-        )?;
+        let session =
+            LocalSession::with_display(options.display, touch_enabled);
+        let cabinet =
+            cabinet_with_scroll(source.enemy.is_some(), session, scroll_limit)?;
+        let preview = Interactive::new(startup, options, &cabinet, host)?;
         preview.run(scene, &mut art, playback.as_mut())
     })
 }
@@ -1640,8 +1744,8 @@ mod tests {
     };
 
     use super::{
-        ACTION_NAMES, Cabinet, Controls, DEFAULT_PROFILES, Profiles, Station,
-        TICK_INTERVAL, failure, live,
+        ACTION_NAMES, Cabinet, Controls, DEFAULT_PROFILES, Player, Profiles,
+        Station, TICK_INTERVAL, failure, live,
     };
 
     type TestCabinet = (Controls, LiveSimulation<Cabinet>);
@@ -1686,6 +1790,41 @@ mod tests {
         }
         let _stations = advance(&mut simulation)?;
         Ok((controls, simulation))
+    }
+
+    #[test]
+    fn native_devices_skip_reserved_remote_seats() -> Result<(), RenderError> {
+        let mut controls =
+            Controls::with_reserved(false, &DEFAULT_PROFILES, [
+                true, false, true, false,
+            ])?;
+        let _first = controls.actions(InputEvent::Attached { device: 10 })?;
+        let _second = controls.actions(InputEvent::Attached { device: 11 })?;
+        let _extra = controls.actions(InputEvent::Attached { device: 12 })?;
+        if controls.devices != [None, Some(10), None, Some(11)] {
+            return Err(failure("controller assigned a reserved seat"));
+        }
+        let local = controls.actions(button(10, Button::Start, true))?;
+        if local.first().map(|change| change.action.player)
+            != Some(Player::Homer)
+        {
+            return Err(failure("local controller assigned wrong seat"));
+        }
+        let remote = controls.actions(InputEvent::Key {
+            code: key_code(Scancode::Return),
+            down: true,
+        })?;
+        if !remote.is_empty()
+            || Controls::with_reserved(true, &DEFAULT_PROFILES, [
+                true, false, true, false,
+            ])
+            .is_ok()
+        {
+            return Err(failure(
+                "reserved seat accepted local keyboard or touch",
+            ));
+        }
+        Ok(())
     }
 
     #[test]

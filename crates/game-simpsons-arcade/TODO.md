@@ -213,3 +213,37 @@ Each station's complete slot mapping must be a permutation. Symbols and
 hit regions move together; the other stations retain keyboard/controller
 input. The default remains station 1. Simultaneous independent touch
 panels and actual touchscreen testing remain open.
+
+### Explicit LAN hosting
+
+Pass `--lan-host FILE` before the asset selection (and after the other
+optional controls and display flags). For example, prepare this private
+host catalogue with one remote seat:
+
+```text
+version=1
+address=192.168.1.20:45000
+name=games.test
+root=host-root.der
+leaf=host-leaf.der
+key=host-key.der
+peer2_root=guest-root.der
+peer2_leaf=guest-leaf.der
+```
+
+Replace the address with the host's actual private interface and the
+certificate paths with separately approved DER credentials. Relative paths
+are resolved from the catalogue directory. Use a valid server certificate
+for the selected name and a valid client-auth certificate for each remote
+seat. Keep each private key on its owning machine in an owner-only regular
+file; exchange only the public root and leaf certificates over a trusted
+channel. Credential issuance and a trust-confirmation UI are not provided.
+
+Seat reservations use the numbered `peer1` through `peer4` field pairs.
+Reserve one to three seats; local keyboards and controllers skip them.
+Touch is rejected when its configured seat is remote. The host starts
+the world and controls menus and Pause. A verified client can join an
+assigned seat once the world is playing. The host screen is authoritative;
+the client protocol carries control transitions, not a replicated world.
+No LAN listener opens without the explicit flag, and hidden smoke cannot
+open one. A standalone native controller is still to be implemented.

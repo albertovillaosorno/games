@@ -121,6 +121,12 @@ pub enum HostedInput {
     },
 }
 
+impl From<LogicalAction<Action>> for HostedInput {
+    fn from(action: LogicalAction<Action>) -> Self {
+        Self::Local(action)
+    }
+}
+
 /// Cabinet input adapter for a host with explicitly reserved remote seats.
 ///
 /// The reservation is fixed for the session, including disconnections.
@@ -264,6 +270,7 @@ impl InputStep for HostedCabinet {
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU8, NonZeroUsize};
+    use std::slice;
 
     use games::network::{PeerKind, Session, SessionConfig, SessionError};
 
@@ -304,6 +311,41 @@ mod tests {
                 expected.map(|_value| encoded)
             );
         }
+    }
+
+    #[test]
+    fn unreserved_host_is_identical_to_offline_cabinet()
+    -> Result<(), &'static str> {
+        let mut offline = Cabinet::new(StreetLayout::DOWNTOWN)
+            .map_err(|_error| "valid street")?;
+        let mut host = HostedCabinet::new(&offline, [false; 4])
+            .ok_or("valid local cabinet")?;
+        for (tick, (control, down)) in (0u64..).zip([
+            (Control::Start, true),
+            (Control::Start, false),
+            (Control::Right, true),
+            (Control::Primary, true),
+            (Control::Pause, true),
+            (Control::Right, false),
+            (Control::Pause, false),
+            (Control::Start, true),
+            (Control::Secondary, true),
+            (Control::Start, false),
+        ]) {
+            let change = LogicalAction {
+                action: Action {
+                    control,
+                    player: Player::Marge,
+                },
+                down,
+            };
+            offline.input_step(tick, slice::from_ref(&change));
+            host.input_step(tick, &[change.into()]);
+            if *host.state() != offline {
+                return Err("offline cabinet diverged");
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -46,6 +46,7 @@ const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke] [--touch] ",
     "[--display MODE] [--window MODE] [--settings DIR] [--controls FILE] ",
+    "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -54,7 +55,7 @@ const USAGE: &str = concat!(
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
-type Fields<'text> = BTreeMap<&'text str, &'text str>;
+pub(super) type Fields<'text> = BTreeMap<&'text str, &'text str>;
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct LocalPaths {
@@ -171,6 +172,7 @@ pub(super) struct Launch {
     pub(super) assets: Assets,
     pub(super) controls: Option<PathBuf>,
     pub(super) display: DisplaySettings,
+    pub(super) host: Option<PathBuf>,
     pub(super) preferences: Option<DisplayStore>,
     pub(super) smoke: bool,
     pub(super) touch_enabled: bool,
@@ -183,16 +185,12 @@ impl Launch {
         let touch_enabled = flag(&mut remaining, "--touch");
         let mode = optional_value(&mut remaining, "--display")?;
         let window = optional_value(&mut remaining, "--window")?;
-        let explicit_settings = if flag(&mut remaining, "--settings") {
-            Some(PathBuf::from(next(&mut remaining)?))
-        } else {
-            None
-        };
-        let explicit_controls = if flag(&mut remaining, "--controls") {
-            Some(PathBuf::from(next(&mut remaining)?))
-        } else {
-            None
-        };
+        let explicit_settings = optional_path(&mut remaining, "--settings")?;
+        let explicit_controls = optional_path(&mut remaining, "--controls")?;
+        let host = optional_path(&mut remaining, "--lan-host")?;
+        if smoke && host.is_some() {
+            return Err(String::from("smoke cannot open a LAN host"));
+        }
         let (assets, defaults, paths) = if flag(&mut remaining, "--config") {
             let config = PathBuf::from(next(&mut remaining)?);
             if remaining.next().is_some() {
@@ -233,6 +231,7 @@ impl Launch {
             assets,
             controls: explicit_controls.or(paths.controls),
             display,
+            host,
             preferences,
             smoke,
             touch_enabled,
@@ -262,7 +261,7 @@ fn resolve_display(
     Ok(display)
 }
 
-fn fields(text: &str) -> Result<Fields<'_>, String> {
+pub(super) fn fields(text: &str) -> Result<Fields<'_>, String> {
     let mut values = BTreeMap::new();
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let (name, value) =
@@ -298,6 +297,17 @@ fn next(args: &mut Arguments) -> Result<OsString, String> {
     args.next().ok_or_else(|| String::from(USAGE))
 }
 
+fn optional_path(
+    args: &mut Arguments,
+    name: &str,
+) -> Result<Option<PathBuf>, String> {
+    if flag(args, name) {
+        Ok(Some(PathBuf::from(next(args)?)))
+    } else {
+        Ok(None)
+    }
+}
+
 fn optional_value(
     args: &mut Arguments,
     name: &str,
@@ -312,7 +322,7 @@ fn optional_value(
     }
 }
 
-fn required<'text>(
+pub(super) fn required<'text>(
     values: &mut Fields<'text>,
     key: &str,
 ) -> Result<&'text str, String> {
@@ -462,6 +472,30 @@ mod tests {
             {
                 return Err(String::from("invalid display setting accepted"));
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hosting_requires_explicit_selection_and_rejects_smoke()
+    -> Result<(), String> {
+        let args = ["--lan-host", "host.local", "parent", "m", "h", "b", "l"];
+        let launch = Launch::parse(args.map(OsString::from).into())?;
+        if launch.host.as_deref() != Some(Path::new("host.local")) {
+            return Err(String::from("host selection lost"));
+        }
+        let invalid = [
+            "--smoke",
+            "--lan-host",
+            "host.local",
+            "parent",
+            "m",
+            "h",
+            "b",
+            "l",
+        ];
+        if Launch::parse(invalid.map(OsString::from).into()).is_ok() {
+            return Err(String::from("smoke unexpectedly opened host"));
         }
         Ok(())
     }

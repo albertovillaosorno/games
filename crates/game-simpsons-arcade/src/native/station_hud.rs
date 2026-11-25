@@ -86,15 +86,24 @@ impl StationHud {
     pub(super) fn load(
         scene: &mut SceneSession<'_, '_>,
         profiles: &Profiles,
+        reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
-        let joins = profiles.keys.map(|[_, key, ..]| {
-            let name = key_label(key);
-            if name.len() <= 11 {
-                format!("JOIN {name}")
-            } else {
-                String::from("PRESS START")
-            }
-        });
+        let joins: Vec<_> = profiles
+            .keys
+            .into_iter()
+            .zip(reserved)
+            .map(|([_, key, ..], remote)| {
+                if remote {
+                    return String::from("REMOTE START");
+                }
+                let name = key_label(key);
+                if name.len() <= 11 {
+                    format!("JOIN {name}")
+                } else {
+                    String::from("PRESS START")
+                }
+            })
+            .collect();
         let prompts = (1..=LAST_SECONDS)
             .map(|seconds| format!("START {seconds:02}"))
             .collect::<Vec<_>>();

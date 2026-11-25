@@ -820,3 +820,18 @@ A separate visible X11 keyboard run without the optional encounter held
 Right in aspect-fit mode until the 80-column camera cap; all 864-by-84
 captured unobscured street pixels matched the three-times-scaled strip,
 and the game exited normally through the menu.
+
+The concurrent storage migration agent reported an isolated Xvfb smoke
+using upgraded version-two bundles, software GL and dummy audio. Across
+67 bundle pairs, all 292 payload files (23,331,508 bytes) were identical.
+The adaptive touch scene reached 400-by-304 logical pixels with 80
+additional columns and the 80-column camera cap. Four-player movement
+over 600 frames averaged 1.175294 ms, maximum 2.324734 ms, with no
+16.666667 ms deadline misses. This is software-renderer regression
+evidence, not physical GPU, device or complete gameplay acceptance.
+
+An explicit native LAN-host catalogue now reserves authenticated remote
+controller seats while preserving local shared-screen rendering. The
+host owns menu and pause controls and uses the existing fixed-tick
+simulation. No network opens by default. A separate controller client,
+physical multi-device play and remote world presentation remain open.

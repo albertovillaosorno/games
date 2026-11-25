@@ -289,3 +289,14 @@ station keeps moving. The same certificate then reconnects and moves the
 same station in the opposite direction. The full fresh gate passed in
 1795602549609489814-2994574. Native window launch and a remote controller
 application are still required for interactive play.
+
+The interactive native Simpsons window now accepts an explicit private
+host catalogue. Bounded DER certificate reads and owner-only private
+key admission precede mutual TLS listener creation. Each approved
+leaf fingerprint maps to one reserved input seat. Keyboard mappings,
+controller assignment and join prompts respect reservations; touch
+cannot select a remote seat. The existing interactive simulation polls
+the bridge before fixed updates, retaining normal rendering, audio,
+menus and display preferences. Offline play remains the default; hidden
+smoke rejects network hosting. Native remote controller and physical
+multi-device acceptance are still open.
