@@ -43,20 +43,27 @@ use crate::todo::roadmap_width;
 ///
 /// Returns an error if discovery fails.
 pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let output = Command::new("rg")
-        .current_dir(root)
-        .args([
-            "--files",
-            "--hidden",
-            "--no-ignore",
-            "--ignore-file",
-            ".gitignore",
-            "-g",
-            "!.git/**",
-            "-0",
-        ])
-        .output()
-        .map_err(|error| error.to_string())?;
+    discover(&mut authored_command(root))
+}
+
+fn authored_command(root: &Path) -> Command {
+    let mut command = Command::new("rg");
+    let _configured = command.current_dir(root).args([
+        "--no-config",
+        "--files",
+        "--hidden",
+        "--no-ignore",
+        "--ignore-file",
+        ".gitignore",
+        "-g",
+        "!.git/**",
+        "-0",
+    ]);
+    command
+}
+
+fn discover(command: &mut Command) -> Result<Vec<PathBuf>, String> {
+    let output = command.output().map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(String::from("authored file discovery failed"));
     }
@@ -177,7 +184,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::{authored, line_width, python};
+    use super::{authored, authored_command, discover, line_width, python};
     use crate::fixtures::{directory, require};
 
     #[test]
@@ -258,6 +265,12 @@ mod tests {
             files == [Path::new(".gitignore"), Path::new("lib.rs")],
             "only authored source and configuration are visible",
         )?;
+        let config = root.join(".reference/ripgrep.conf");
+        fs::write(&config, "--glob\n!*.rs\n")
+            .map_err(|error| error.to_string())?;
+        let mut command = authored_command(&root);
+        let _configured = command.env("RIPGREP_CONFIG_PATH", config);
+        require(discover(&mut command)? == files, "ignore local rg config")?;
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 }

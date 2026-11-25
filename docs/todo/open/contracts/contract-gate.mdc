@@ -50,3 +50,9 @@ crate and the authored-file inventory. Custom target declarations cannot
 point into another crate, ignored assets or private reference storage.
 Fresh validation passed in run 1795577329926246004-2812824
 (94 workspace tests).
+
+Authored-file discovery explicitly ignores personal ripgrep configuration,
+so a local glob cannot hide source files from validation or fingerprints.
+An isolated regression fixture supplies a configuration that would otherwise
+exclude Rust files. Fresh validation passed in run
+1795577633179381736-2865763.
