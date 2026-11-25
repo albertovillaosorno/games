@@ -406,12 +406,7 @@ fn smoke_four_player_encounter(
             return Err(failure("four-player encounter was not submitted"));
         }
         verify_active_stations(scene, simulation.state())?;
-        verify_enemy_health(
-            art,
-            simulation.state(),
-            &scene.readback()?,
-            scene.layout().width().get(),
-        )?;
+        verify_enemy_health(scene, art, simulation.state())?;
     }
     if simulation
         .state()
@@ -705,12 +700,7 @@ fn smoke_strikes(
 ) -> Result<(), RenderError> {
     let _drawn = art.present(scene, simulation.state())?;
     let initial = scene.readback().map_err(failure)?;
-    verify_enemy_health(
-        art,
-        simulation.state(),
-        &initial,
-        scene.layout().width().get(),
-    )?;
+    verify_enemy_health(scene, art, simulation.state())?;
     let layout = scene.layout();
     let mut collector = PerformanceCollector::with_percentiles(
         QualityProfile {
@@ -731,12 +721,7 @@ fn smoke_strikes(
     if initial == pixels {
         return Err(failure("enemy defeat was not presented"));
     }
-    verify_enemy_health(
-        art,
-        simulation.state(),
-        &pixels,
-        layout.width().get(),
-    )?;
+    verify_enemy_health(scene, art, simulation.state())?;
     verify_enemy_art(scene, art, simulation.state(), &pixels)?;
     report_strikes(&collector)
 }
@@ -937,22 +922,25 @@ fn verify_hurt_art(
 }
 
 fn verify_enemy_health(
+    scene: &mut SceneSession<'_, '_>,
     art: &Scene,
     cabinet: &Cabinet,
-    pixels: &[u8],
-    width: u32,
 ) -> Result<(), RenderError> {
-    let enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
+    let pixels = scene.readback()?;
+    let view = art.presentation_view(scene, cabinet)?;
+    let width = view.width;
+    let mut enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
+    enemy.position = view.project(enemy.position);
     let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
     let position =
         combat.enemy_health_position(enemy, art.poses.enemy(enemy.action))?;
     if enemy.health == 0 {
-        let row = health_row(pixels, position, width, 24)?;
+        let row = health_row(&pixels, position, width, 24)?;
         if row.as_chunks::<4>().0.iter().all(|pixel| *pixel == MISSING) {
             return Err(failure("defeated enemy still has a health bar"));
         }
     } else {
-        verify_bar(pixels, (position, width), Meter::enemy(enemy.health), [
+        verify_bar(&pixels, (position, width), Meter::enemy(enemy.health), [
             FILLED, MISSING,
         ])?;
     }
@@ -1033,15 +1021,20 @@ fn smoke_continue(
 
 fn verify_prompt(scene: &mut SceneSession<'_, '_>) -> Result<(), RenderError> {
     let pixels = scene.readback().map_err(failure)?;
-    for y in [3, 14, 20] {
-        let row = health_row(
-            &pixels,
-            Point { x: 8, y },
-            scene.layout().width().get(),
-            64,
-        )?;
-        if !row.as_chunks::<4>().0.contains(&[248, 228, 168, 255]) {
-            return Err(failure("missing native free rejoin prompt"));
+    let width = scene.layout().width().get();
+    let top = health_row(&pixels, Point { x: 8, y: 3 }, width, 64)?;
+    if !top.as_chunks::<4>().0.contains(&[248, 228, 168, 255]) {
+        return Err(failure("missing native free rejoin countdown"));
+    }
+    for y in 14..26 {
+        let row = health_row(&pixels, Point { x: 8, y }, width, 64)?;
+        if !row
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [24, 22, 30, 255])
+        {
+            return Err(failure("unexpected native gameplay join binding"));
         }
     }
     Ok(())
@@ -1111,12 +1104,7 @@ fn restart_after_expiry(
         restarted,
         scene.layout().width().get(),
     )?;
-    verify_enemy_health(
-        art,
-        simulation.state(),
-        &pixels,
-        scene.layout().width().get(),
-    )
+    verify_enemy_health(scene, art, simulation.state())
 }
 
 pub(super) fn verify_active_stations(
