@@ -31,8 +31,6 @@
 
 //! Bounded opening-street art and responsive native placement.
 
-use std::io::{Write as _, stdout};
-
 use games::input::LogicalAction;
 use games::presentation::{
     DisplaySettings, PresentationMode, centered_expansion, expanded_anchor,
@@ -41,6 +39,7 @@ use games::replay::InputStep as _;
 use games_assets::AssetFormat;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
@@ -299,13 +298,12 @@ pub(super) fn smoke(
         .map_err(failure)?;
     let actual = scene.readback()?;
     verify_extension(layout, &actual, width.get(), &expected)?;
-    writeln!(
-        stdout().lock(),
+    write_status(format_args!(
         "Adaptive logical scene: {}x{}; {} added columns verified",
         layout.width(),
         layout.height(),
         layout.width().get().saturating_sub(BASE_WIDTH),
-    )
+    ))
     .map_err(failure)?;
     smoke_camera(scene, art, options.display, (width.get(), &expected))
 }
@@ -332,7 +330,7 @@ fn smoke_camera(
     let _redrawn = art.present(scene, &cabinet)?;
     let view = art.presentation_view(scene, &cabinet)?;
     verify_camera_rows(scene.layout(), &scene.readback()?, strip, view.origin)?;
-    writeln!(stdout().lock(), "Street camera: {origin} columns verified")
+    write_status(format_args!("Street camera: {origin} columns verified"))
         .map_err(failure)
 }
 

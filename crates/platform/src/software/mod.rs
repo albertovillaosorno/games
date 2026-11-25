@@ -99,6 +99,8 @@ mod unavailable_lan {
 #[cfg(not(target_os = "linux"))]
 use std::ffi::OsStr;
 use std::ffi::OsString;
+#[cfg(not(target_os = "linux"))]
+use std::fmt::Arguments as StatusMessage;
 use std::io;
 #[cfg(not(target_os = "linux"))]
 use std::io::ErrorKind;
@@ -118,6 +120,8 @@ use crate::ir::frame::RenderError;
 use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::input::InputNames;
 use crate::ir::measurement::MeasurementSource;
+#[cfg(not(target_os = "linux"))]
+use crate::ir::process::ProcessPort;
 use crate::ir::security::audio::PlaybackRequest;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::security::toolchain::CargoArguments;
@@ -254,11 +258,18 @@ impl ExecutableLocation for () {
 }
 
 #[cfg(not(target_os = "linux"))]
-impl ToolchainFactory for () {
-    fn arguments() -> Result<Vec<OsString>, ToolchainError> {
-        Err(ToolchainError::UnsupportedHost)
+impl ProcessPort for () {
+    fn arguments() -> io::Result<Vec<OsString>> {
+        Err(ErrorKind::Unsupported.into())
     }
 
+    fn write_status(_message: StatusMessage<'_>) -> io::Result<()> {
+        Err(ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl ToolchainFactory for () {
     fn available(_target: Target) -> bool {
         false
     }
@@ -293,10 +304,6 @@ impl ToolchainFactory for () {
     }
 
     fn workspace_root() -> Result<OsString, ToolchainError> {
-        Err(ToolchainError::UnsupportedHost)
-    }
-
-    fn write_line(_line: &str) -> Result<(), ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
     }
 }

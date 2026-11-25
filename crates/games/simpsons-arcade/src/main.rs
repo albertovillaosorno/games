@@ -31,10 +31,9 @@
 
 //! Executable entry point for the native movement preview.
 
-use std::env::args_os;
-
+use games_platform::ir::process::arguments;
 use games_simpsons_arcade::runtime;
 
 fn main() -> Result<(), String> {
-    runtime::run(args_os().skip(1).collect())
+    runtime::run(arguments().map_err(|error| error.to_string())?)
 }

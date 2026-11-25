@@ -35,9 +35,7 @@ mod environment;
 mod reference;
 mod validation;
 
-use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -48,10 +46,6 @@ use crate::ir::toolchain::{
 };
 
 impl ToolchainFactory for () {
-    fn arguments() -> Result<Vec<OsString>, ToolchainError> {
-        Ok(env::args_os().skip(1).collect())
-    }
-
     fn available(target: Target) -> bool {
         match target {
             Target::LinuxX86_64Gnu => {
@@ -160,15 +154,6 @@ impl ToolchainFactory for () {
                 operation: "workspace root",
                 source,
             })
-    }
-
-    fn write_line(line: &str) -> Result<(), ToolchainError> {
-        writeln!(stdout().lock(), "{line}").map_err(|source| {
-            ToolchainError::Io {
-                operation: "write status",
-                source,
-            }
-        })
     }
 }
 

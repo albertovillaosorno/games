@@ -41,6 +41,8 @@ pub(super) mod input;
 mod lan;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod performance;
+#[cfg(target_os = "linux")]
+mod process;
 pub(super) mod storage;
 #[cfg(target_os = "linux")]
 mod toolchain;

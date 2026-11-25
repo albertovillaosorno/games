@@ -46,6 +46,8 @@ pub mod input;
 pub mod lan;
 /// Clock-independent measurement.
 pub mod measurement;
+/// Portable launch arguments and status messages.
+pub mod process;
 /// Mandatory shared host admission policies.
 pub mod security;
 /// Portable storage capabilities.

@@ -31,7 +31,6 @@
 
 //! Opt-in playback of observed attack-associated PCM clips.
 
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::path::Path;
 use std::time::Duration;
@@ -45,6 +44,7 @@ use games_assets::ManifestLimits;
 use games_assets::pcm::PcmSamples;
 use games_platform::ir::audio::{NativeAudio, PlaybackSpec};
 use games_platform::ir::frame::RenderError;
+use games_platform::ir::process::write_status;
 use games_platform::ir::storage::bundle::MediaOverlay;
 
 use super::launch::AudioSelection;
@@ -196,11 +196,10 @@ impl<'samples> Playback<'samples> {
         };
         let device = NativeAudio::open_on(spec, name).map_err(failure)?;
         let (driver, requested) = device.output();
-        writeln!(
-            stdout().lock(),
+        write_status(format_args!(
             "Audio: SDL {driver}, requested output: {}",
             requested.unwrap_or("system default").escape_debug(),
-        )
+        ))
         .map_err(failure)?;
         Ok(Self {
             clips: samples.clips()?,
@@ -418,14 +417,16 @@ impl<'samples> Playback<'samples> {
 
 pub(super) fn list_devices() -> Result<(), RenderError> {
     let devices = NativeAudio::playback_devices().map_err(failure)?;
-    let mut out = stdout().lock();
-    writeln!(out, "SDL audio backend: {}", devices.driver).map_err(failure)?;
+    write_status(format_args!("SDL audio backend: {}", devices.driver))
+        .map_err(failure)?;
     if let Some(names) = devices.names {
         for name in names {
-            writeln!(out, "{}", name.escape_debug()).map_err(failure)?;
+            write_status(format_args!("{}", name.escape_debug()))
+                .map_err(failure)?;
         }
     } else {
-        writeln!(out, "Device enumeration unavailable").map_err(failure)?;
+        write_status(format_args!("Device enumeration unavailable"))
+            .map_err(failure)?;
     }
     Ok(())
 }
@@ -437,7 +438,7 @@ pub(super) fn open_optional<'samples>(
     if let Some(available) = samples {
         return Playback::open(available, name).map(Some);
     }
-    writeln!(stdout().lock(), "Audio: disabled (no audio bundle)")
+    write_status(format_args!("Audio: disabled (no audio bundle)"))
         .map_err(failure)?;
     Ok(None)
 }

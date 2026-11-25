@@ -40,8 +40,9 @@ pub mod validation;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::Error;
+use std::io::{Error, ErrorKind};
 
+use super::process;
 use super::security::toolchain::CargoArguments;
 pub use super::security::toolchain::{ToolVersion, ValidationTool};
 
@@ -168,7 +169,6 @@ impl fmt::Display for ToolchainError {
 
 /// Private adapter for admitted workspace toolchain requests.
 pub(crate) trait ToolchainFactory {
-    fn arguments() -> Result<Vec<OsString>, ToolchainError>;
     fn available(target: Target) -> bool;
     fn compile(
         args: CargoArguments<'_>,
@@ -188,7 +188,6 @@ pub(crate) trait ToolchainFactory {
         tool: ValidationTool,
     ) -> Result<ToolVersion, ToolchainError>;
     fn workspace_root() -> Result<OsString, ToolchainError>;
-    fn write_line(line: &str) -> Result<(), ToolchainError>;
 }
 
 /// Fixed Cargo request for one independently authored workspace binary.
@@ -268,7 +267,8 @@ impl<'name> CargoTitle<'name> {
 /// # Errors
 /// Reports an unavailable contributor command capability.
 pub fn arguments() -> Result<Vec<OsString>, ToolchainError> {
-    <() as ToolchainFactory>::arguments()
+    process::arguments()
+        .map_err(|source| process_error("read arguments", source))
 }
 
 /// Write one contributor status line.
@@ -276,7 +276,8 @@ pub fn arguments() -> Result<Vec<OsString>, ToolchainError> {
 /// # Errors
 /// Reports an unavailable capability or output failure.
 pub fn write_line(line: &str) -> Result<(), ToolchainError> {
-    <() as ToolchainFactory>::write_line(line)
+    process::write_status(format_args!("{line}"))
+        .map_err(|source| process_error("write status", source))
 }
 
 /// Read the exact version of a known contributor tool.
@@ -298,6 +299,14 @@ pub fn workspace_root() -> Result<OsString, ToolchainError> {
     <() as ToolchainFactory>::workspace_root()
 }
 
+fn process_error(operation: &'static str, source: Error) -> ToolchainError {
+    if source.kind() == ErrorKind::Unsupported {
+        ToolchainError::UnsupportedHost
+    } else {
+        ToolchainError::Io { operation, source }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,10 +315,6 @@ mod tests {
     struct Recording<const AVAILABLE: bool>;
 
     impl<const AVAILABLE: bool> ToolchainFactory for Recording<AVAILABLE> {
-        fn arguments() -> Result<Vec<OsString>, ToolchainError> {
-            Err(ToolchainError::UnsupportedHost)
-        }
-
         fn available(_target: Target) -> bool {
             AVAILABLE
         }
@@ -362,10 +367,6 @@ mod tests {
         }
 
         fn workspace_root() -> Result<OsString, ToolchainError> {
-            Err(ToolchainError::UnsupportedHost)
-        }
-
-        fn write_line(_line: &str) -> Result<(), ToolchainError> {
             Err(ToolchainError::UnsupportedHost)
         }
     }

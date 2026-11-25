@@ -31,7 +31,6 @@
 
 //! Native presentation of the optional first-street encounter.
 
-use std::io::{Write as _, stdout};
 use std::mem::take;
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -47,6 +46,7 @@ use games::session::LocalSession;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::measurement::now;
+use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
@@ -434,11 +434,8 @@ fn smoke_reinforcements(
             (limit, gate, verified),
         )?;
     }
-    writeln!(
-        stdout().lock(),
-        "Reinforcements: {verified} meters verified"
-    )
-    .map_err(failure)
+    write_status(format_args!("Reinforcements: {verified} meters verified"))
+        .map_err(failure)
 }
 
 fn smoke_reinforcement_gate(
@@ -552,11 +549,8 @@ fn smoke_restraint(
         ));
     }
     verify_repelled_art(scene, art, simulation.state())?;
-    writeln!(
-        stdout().lock(),
-        "Restraint: combined art and escape verified"
-    )
-    .map_err(failure)
+    write_status(format_args!("Restraint: combined art and escape verified"))
+        .map_err(failure)
 }
 
 fn restrained(cabinet: &Cabinet) -> bool {
@@ -595,11 +589,8 @@ fn verify_repelled_art(
     if pixels == scene.readback()? {
         return Err(failure("dedicated recovery art was not visible"));
     }
-    writeln!(
-        stdout().lock(),
-        "Restraint: dedicated recovery art verified"
-    )
-    .map_err(failure)
+    write_status(format_args!("Restraint: dedicated recovery art verified"))
+        .map_err(failure)
 }
 
 fn verify_restraint_art(
@@ -763,8 +754,7 @@ fn report_strikes(collector: &PerformanceCollector) -> Result<(), RenderError> {
     let report = collector.report();
     let frames = report.frame_time;
     let input = report.input_latency;
-    writeln!(
-        stdout().lock(),
+    write_status(format_args!(
         concat!(
             "Combat strike submission: {} frames; mean {:?}; ",
             "max {:?}; p95 {:?}; budget {:?}\n",
@@ -778,7 +768,7 @@ fn report_strikes(collector: &PerformanceCollector) -> Result<(), RenderError> {
         input.samples(),
         input.mean(),
         input.maximum(),
-    )
+    ))
     .map_err(failure)
 }
 

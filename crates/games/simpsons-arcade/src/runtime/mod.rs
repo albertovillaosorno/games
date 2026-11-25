@@ -45,7 +45,6 @@ mod world;
 
 use std::ffi::OsString;
 use std::fmt::Debug;
-use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::time::Duration;
@@ -77,6 +76,7 @@ use games_platform::ir::measurement::{
     FrameMeter, executable_bytes, now, peak_resident_bytes, resident_bytes,
 };
 use games_platform::ir::menu::{MenuArt, MenuContent};
+use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
 };
@@ -2024,11 +2024,8 @@ fn smoke_peak_report() -> Result<(), RenderError> {
         |_error| String::from("unobserved"),
         |bytes| bytes.to_string(),
     );
-    writeln!(
-        stdout().lock(),
-        "Whole-smoke lifetime peak RSS: {peak} bytes"
-    )
-    .map_err(failure)
+    write_status(format_args!("Whole-smoke lifetime peak RSS: {peak} bytes"))
+        .map_err(failure)
 }
 
 fn startup_report(
@@ -2050,8 +2047,7 @@ fn startup_report(
     if let Ok(bytes) = executable_bytes() {
         meter.record_artifact_bytes(bytes);
     }
-    writeln!(
-        stdout().lock(),
+    write_status(format_args!(
         concat!(
             "Native startup: {}; {}x{} initial logical; config, asset and ",
             "scene load {:?}; RSS {:?} bytes; executable {:?} bytes"
@@ -2062,7 +2058,7 @@ fn startup_report(
         meter.collector().load_duration(),
         resident_bytes().ok(),
         meter.collector().binary_size(),
-    )
+    ))
     .map_err(failure)
 }
 
@@ -2151,8 +2147,7 @@ fn smoke_movement_report(
     collector: &PerformanceCollector,
 ) -> Result<(), RenderError> {
     let report = collector.report();
-    writeln!(
-        stdout().lock(),
+    write_status(format_args!(
         concat!(
             "Four-player movement: {} frames; mean {:?}; ",
             "max {:?}; p95 {:?}; budget {:?}; sampled RSS peak {:?} bytes"
@@ -2163,7 +2158,7 @@ fn smoke_movement_report(
         collector.frame_percentile(95),
         report.frame_budget,
         report.peak_resident_bytes,
-    )
+    ))
     .map_err(failure)
 }
 
@@ -2373,11 +2368,8 @@ fn smoke_cooperation(
     if art.poses.pair_jump(Pair::MargeHomer) {
         smoke_marge_homer_jump(scene, art, &mut cabinet)?;
     }
-    writeln!(
-        stdout().lock(),
-        "Cooperative pose smoke: {families} families"
-    )
-    .map_err(failure)
+    write_status(format_args!("Cooperative pose smoke: {families} families"))
+        .map_err(failure)
 }
 
 fn smoke_cooperation_jump(
@@ -2418,7 +2410,7 @@ fn smoke_cooperation_jump(
     {
         return Err(failure("combined jump landing not visible"));
     }
-    writeln!(stdout().lock(), "Bart/Lisa combined jump verified")
+    write_status(format_args!("Bart/Lisa combined jump verified"))
         .map_err(failure)
 }
 
@@ -2475,7 +2467,7 @@ fn smoke_cooperation_primary(
     if still != scene.readback()? {
         return Err(failure("combined primary did not restore idle art"));
     }
-    writeln!(stdout().lock(), "Bart/Lisa combined Primary verified")
+    write_status(format_args!("Bart/Lisa combined Primary verified"))
         .map_err(failure)
 }
 
@@ -2534,11 +2526,8 @@ fn smoke_marge_homer_jump(
     {
         return Err(failure("Marge/Homer post-landing walk not visible"));
     }
-    writeln!(
-        stdout().lock(),
-        "Marge/Homer combined jump and walk verified"
-    )
-    .map_err(failure)
+    write_status(format_args!("Marge/Homer combined jump and walk verified"))
+        .map_err(failure)
 }
 
 fn smoke_marge_homer_primary(
@@ -2572,7 +2561,7 @@ fn smoke_marge_homer_primary(
             return Err(failure("Marge/Homer Primary phase not visible"));
         }
     }
-    writeln!(stdout().lock(), "Marge/Homer paired Primary verified")
+    write_status(format_args!("Marge/Homer paired Primary verified"))
         .map_err(failure)
 }
 
@@ -2603,11 +2592,10 @@ fn host_reservations(
         return Err(failure("touch seat reserved for remote input"));
     }
     if let Some(listener) = host {
-        writeln!(
-            stdout().lock(),
+        write_status(format_args!(
             "LAN host: {}",
             listener.local_addr().map_err(failure)?
-        )
+        ))
         .map_err(failure)?;
     }
     Ok(reserved)

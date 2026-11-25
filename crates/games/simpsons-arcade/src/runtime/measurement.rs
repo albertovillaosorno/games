@@ -29,7 +29,6 @@
 // - Defaults:
 //   - No instrumentation in ordinary play.
 
-use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::time::Duration;
 
@@ -39,6 +38,7 @@ use games::performance::{
 use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::measurement::{FrameMeter, resident_bytes};
+use games_platform::ir::process::write_status;
 
 use super::failure;
 
@@ -90,8 +90,7 @@ impl Segment {
         let report = self.collector.report();
         let cadence = self.cadence.collector();
         let intervals = cadence.report();
-        writeln!(
-            stdout().lock(),
+        write_status(format_args!(
             concat!(
                 "Live gameplay {}x{} logical, {}x{} drawable {:?}: ",
                 "{} submitted frames; ",
@@ -126,7 +125,7 @@ impl Segment {
             intervals.input_latency.mean(),
             cadence.input_percentile(95),
             report.peak_resident_bytes,
-        )
+        ))
         .map_err(failure)
     }
 }

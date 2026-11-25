@@ -318,3 +318,13 @@ reporting remain in the adapter. Fake ports exercise stream handling,
 canonical identity, aborts and durability failure. Fresh joint validation
 1795649572277607920-390118 passed 1,453 aggregate test executions and all
 six portable core targets. Native staging support is not extended.
+
+The title and contributor commands now share a process port for launch
+arguments and formatted status messages. The Linux adapter preserves
+native argument encoding and locked output, while absent implementations
+return typed unsupported errors. Title startup, audio enumeration and
+smoke reports retain their text and propagate output failures; the fake
+port verifies argument and formatting dispatch and failure propagation.
+Fresh joint validation 1795649826427734182-479878 passed 1,457 aggregate
+test executions and all six portable core targets. Host scheduling and
+native smoke environment checks in title tests remain open.
