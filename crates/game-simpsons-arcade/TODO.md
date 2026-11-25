@@ -22,11 +22,11 @@ cargo run --locked -p games-simpsons-arcade --features native-preview \
 Each hash identifies a verified canonical bundle with the corresponding
 `actor/marge`, `actor/homer`, `actor/bart` or `actor/lisa` record.
 Marge's bundle also provides the stage background. The visible main menu
-shows each character's Start key. Press Enter to play as Marge, or another
-station's Start key to play as that character. Other stations may join
-while the game is running. Up/Down navigates the menu and Primary
-confirms. Pause opens Resume, Settings, Main Menu and Exit; Pause or Start
-resumes.
+shows each seat's selected character and Start key. Left/Right selects
+a vacant character before joining; Enter starts seat 1 immediately.
+Other seats can choose and join during play. Up/Down navigates the menu
+and Primary confirms. Pause opens Resume, Settings, Main Menu and Exit;
+Pause or Start resumes.
 Close the window or select Exit to quit.
 
 | Station | Pause | Start | Primary / Secondary | Movement |
@@ -43,7 +43,7 @@ native smoke, insert `--smoke` before PARENT. This is a movement
 prototype, not a complete arcade recreation.
 
 Insert `--touch` before PARENT to append a touch panel below the scene.
-The panel controls Marge by default: the pause symbol suspends the game
+The panel controls seat 1 by default: the pause symbol suspends the game
 and the triangle joins or resumes, A confirms or attacks, B jumps, and
 the four arrows move.
 Use two fingers for diagonal movement. Other stations retain keyboard
@@ -166,7 +166,7 @@ key 2 primary=R
 button 2 right=x
 ```
 
-Station numbers 1-4 are Marge, Homer, Bart and Lisa. Actions are
+Seat numbers 1-4 default to Marge, Homer, Bart and Lisa. Actions are
 pause, start, primary, secondary, left, right, up and down. Key names
 are SDL scancode names; button names follow SDL's game-controller
 mapping names. Unspecified controls keep the defaults. Duplicate

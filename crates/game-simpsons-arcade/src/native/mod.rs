@@ -384,7 +384,7 @@ impl Scene {
                 15
             }),
             hud: station_hud::StationHud::load(scene, profiles)?,
-            menu: load_menu(scene, profiles)?,
+            menu: load_menu(scene)?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles)?)
             } else {
@@ -404,14 +404,7 @@ impl Scene {
         self.draws
             .push(self.background.draw(self.background.rect, false));
         self.world.clear();
-        for (player, station) in Player::ALL.into_iter().zip(cabinet.stations())
-        {
-            self.queue_station(
-                player,
-                station,
-                cabinet.session().world_visible(),
-            )?;
-        }
+        self.queue_visible_stations(cabinet)?;
         if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
             && cabinet.session().world_visible()
             && enemy.health > 0
@@ -429,6 +422,13 @@ impl Scene {
         }
         self.menu
             .queue(cabinet.session(), (20i32, 16i32), &mut self.draws)?;
+        if cabinet.phase() == Phase::MainMenu {
+            for (seat, character) in
+                Player::ALL.into_iter().zip(cabinet.choices())
+            {
+                self.draws.push(self.hud.draw_choice(seat, character)?);
+            }
+        }
         if let Some(panel) = self.panel {
             self.draws.push(panel);
         }
@@ -438,13 +438,12 @@ impl Scene {
     fn queue_station(
         &mut self,
         player: Player,
+        seat: Player,
         station: Station,
-        world_visible: bool,
     ) -> Result<(), RenderError> {
-        if !world_visible {
-            return Ok(());
-        }
-        if let Some(prompt) = self.hud.draw(player, station.participation)? {
+        if let Some(prompt) =
+            self.hud.draw(player, seat, station.participation)?
+        {
             self.draws.push(prompt);
             return Ok(());
         }
@@ -469,6 +468,24 @@ impl Scene {
                     station.facing == Facing::Left,
                 ),
             ));
+        }
+        Ok(())
+    }
+
+    fn queue_visible_stations(
+        &mut self,
+        cabinet: &Cabinet,
+    ) -> Result<(), RenderError> {
+        if !cabinet.session().world_visible() {
+            return Ok(());
+        }
+        let stations = cabinet.stations();
+        for (seat, character) in Player::ALL.into_iter().zip(cabinet.choices())
+        {
+            let station = *stations
+                .get(character.index())
+                .ok_or(RenderError::InvalidSprite)?;
+            self.queue_station(character, seat, station)?;
         }
         Ok(())
     }
@@ -622,16 +639,7 @@ fn key_label(key: Scancode) -> &'static str {
     }
 }
 
-fn load_menu(
-    scene: &mut SceneSession<'_, '_>,
-    profiles: &Profiles,
-) -> Result<MenuArt, RenderError> {
-    let [marge, homer, bart, lisa] =
-        profiles.keys.map(|[_, key, ..]| key_label(key));
-    let marge_hint = format!("MARGE: {marge}");
-    let homer_hint = format!("HOMER: {homer}");
-    let bart_hint = format!("BART: {bart}");
-    let lisa_hint = format!("LISA: {lisa}");
+fn load_menu(scene: &mut SceneSession<'_, '_>) -> Result<MenuArt, RenderError> {
     MenuArt::load(
         scene,
         PlateLayout {
@@ -642,11 +650,8 @@ fn load_menu(
         },
         MenuContent {
             main_hints: &[
-                "CHOOSE YOUR CHARACTER WITH START",
-                &marge_hint,
-                &homer_hint,
-                &bart_hint,
-                &lisa_hint,
+                "LEFT/RIGHT CHOOSE YOUR CHARACTER",
+                "PRESS YOUR START KEY TO JOIN",
                 "GAMEPAD / TOUCH: START TO JOIN",
                 "UP/DOWN SELECT - PRIMARY CONFIRM",
             ],
@@ -957,6 +962,93 @@ fn smoke(
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
     smoke_movement_benchmark(scene, art, &mut controls, &mut simulation)
+}
+
+fn smoke_character_selection(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    options: PreviewOptions<'_>,
+) -> Result<(), RenderError> {
+    let mut simulation = live(false)?;
+    let mut controls =
+        Controls::with_profiles(options.touch_enabled, options.profiles)?;
+    let _drawn = art.present(scene, simulation.state())?;
+    let before = scene.readback()?;
+    smoke_press(&mut controls, &mut simulation, Control::Right)?;
+    if simulation.state().choices().first() != Some(&Player::Homer) {
+        return Err(failure("character selection did not follow the seat"));
+    }
+    let _updated = art.present(scene, simulation.state())?;
+    if scene.readback()? == before {
+        return Err(failure("character selection was not visibly presented"));
+    }
+    smoke_press(&mut controls, &mut simulation, Control::Start)?;
+    let [marge, homer, ..] = simulation.state().stations();
+    if marge.participation != Participation::Absent
+        || homer.participation != Participation::Playing
+    {
+        return Err(failure("selected character did not join"));
+    }
+    Ok(())
+}
+
+fn smoke_controller_selection(profiles: &Profiles) -> Result<(), RenderError> {
+    let mut simulation = live(false)?;
+    let mut controls = Controls::with_profiles(false, profiles)?;
+    let device = 1;
+    controls.route(
+        InputEvent::Attached { device },
+        Duration::ZERO,
+        &mut simulation,
+    )?;
+    let [_, start, _, _, _, right, ..] =
+        profiles.buttons.first().ok_or(RenderError::InvalidSprite)?;
+    for button in [right, start] {
+        for down in [true, false] {
+            controls.route(
+                InputEvent::Button {
+                    device,
+                    code: button_code(*button),
+                    down,
+                },
+                Duration::ZERO,
+                &mut simulation,
+            )?;
+        }
+    }
+    let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let [marge, homer, ..] = simulation.state().stations();
+    if marge.participation != Participation::Absent
+        || homer.participation != Participation::Playing
+    {
+        return Err(failure("controller selection did not join Homer"));
+    }
+    Ok(())
+}
+
+fn smoke_touch_selection(
+    scene: &SceneSession<'_, '_>,
+    profiles: &Profiles,
+) -> Result<(), RenderError> {
+    let mut simulation = live(false)?;
+    let mut controls = Controls::with_profiles(true, profiles)?;
+    smoke_touch(scene, &mut controls, &mut simulation, &[
+        Control::Right,
+        Control::Start,
+    ])?;
+    let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let next = profiles
+        .touch_player
+        .saturating_add(1)
+        .checked_rem(Player::ALL.len())
+        .ok_or(RenderError::InvalidSprite)?;
+    let character = simulation.state().stations().get(next).copied();
+    if character.map(|station| station.participation)
+        != Some(Participation::Playing)
+    {
+        return Err(failure("touch selection did not join next character"));
+    }
+    Ok(())
 }
 
 fn smoke_settings(
@@ -1355,6 +1447,11 @@ fn window(
             Scene::load(scene, source, touch_enabled, options.profiles)?;
         if options.hidden {
             smoke_settings(scene, &mut art, options)?;
+            smoke_character_selection(scene, &mut art, options)?;
+            smoke_controller_selection(options.profiles)?;
+            if touch_enabled {
+                smoke_touch_selection(scene, options.profiles)?;
+            }
             smoke(scene, &mut art, touch_enabled, options.profiles)?;
             return smoke_optional(
                 scene,

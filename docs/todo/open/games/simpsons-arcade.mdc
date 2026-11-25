@@ -731,3 +731,16 @@ with an explicit stretch override also passed without modifying the
 saved file, with one missed movement frame sample. This verifies the
 visible native event and save path under Xvfb, not physical keyboard,
 controller, touch, audio or GPU hardware. Captures remain private.
+
+Character selection now follows the physical input seat independently of
+the character. Left/Right cycles vacant characters before Start, swapping
+only vacant assignments and preserving held-input ownership. Joined and
+continuing characters cannot be taken by another seat. The main menu and
+vacant-character join indicators show seat-specific selection and key
+labels. Tests cover joining the selected character, movement and release
+after selection, held selection without repeat, and skipping an active
+character for late join. The combined native smoke verified selection
+changes rendered pixels, Start joined the selected character, and the
+four-player 600-frame workload missed zero frame-budget samples. The
+synthetic controller and touch paths also joined selected characters.
+Physical controller and touchscreen acceptance remain open.

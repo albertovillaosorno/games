@@ -41,6 +41,7 @@ mod maneuver;
 ))]
 /// Native prototype host for locally imported art.
 pub mod native;
+use std::mem;
 use std::time::Duration;
 
 pub use encounter::{Enemy, EnemyAction};
@@ -57,7 +58,7 @@ pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
 pub const CONTINUE_TICKS: u16 = 1200;
 const PLAYER_HEALTH: u8 = 3;
 
-/// Fixed cabinet positions for the original four-player edition.
+/// Characters and default input seat order for the four-player edition.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Player {
     /// Third station.
@@ -123,12 +124,12 @@ impl Control {
     }
 }
 
-/// A logical action routed to exactly one cabinet station.
+/// A logical action routed through exactly one input seat.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Action {
     /// Digital control being pressed or released.
     pub control: Control,
-    /// Cabinet station receiving the input.
+    /// Input seat receiving the action, independent of character choice.
     pub player: Player,
 }
 
@@ -387,6 +388,7 @@ impl Slot {
 /// It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
+    choices: [Player; 4],
     enemy: Option<Enemy>,
     layout: StreetLayout,
     session: LocalSession,
@@ -417,7 +419,11 @@ impl Cabinet {
         change: &LogicalAction<Action>,
         pending: &mut [Option<Maneuver>; 4],
     ) {
-        let index = change.action.player.index();
+        let seat = change.action.player;
+        let Some(&character) = self.choices.get(seat.index()) else {
+            return;
+        };
+        let index = character.index();
         let Some(slot) = self.slots.get_mut(index) else {
             return;
         };
@@ -426,6 +432,13 @@ impl Cabinet {
             return;
         }
         let playing = self.session.phase() == Phase::Playing;
+        if matches!(control, Control::Left | Control::Right)
+            && slot.station.participation == Participation::Absent
+            && matches!(self.session.phase(), Phase::MainMenu | Phase::Playing)
+        {
+            self.cycle_character(seat, character, control);
+            return;
+        }
         let command = match control {
             Control::Start => MenuInput::Start,
             Control::Pause => MenuInput::Pause,
@@ -454,6 +467,39 @@ impl Cabinet {
         }
     }
 
+    /// Selected character for each input seat, in physical seat order.
+    #[must_use]
+    pub const fn choices(&self) -> [Player; 4] {
+        self.choices
+    }
+
+    fn cycle_character(
+        &mut self,
+        seat: Player,
+        current: Player,
+        direction: Control,
+    ) {
+        let count = Player::ALL.len();
+        let offset = if direction == Control::Right {
+            1
+        } else {
+            count.saturating_sub(1)
+        };
+        let mut index = current.index();
+        for _ in 1..count {
+            index = index
+                .saturating_add(offset)
+                .checked_rem(count)
+                .unwrap_or_default();
+            let Some(&candidate) = Player::ALL.get(index) else {
+                return;
+            };
+            if self.swap_vacant_character(seat, current, candidate) {
+                return;
+            }
+        }
+    }
+
     /// Inspect the optional experimental enemy, including after defeat.
     #[must_use]
     pub const fn enemy(&self) -> Option<Enemy> {
@@ -469,6 +515,7 @@ impl Cabinet {
             return Err(LayoutError::SpawnOutside);
         }
         Ok(Self {
+            choices: Player::ALL,
             enemy: None,
             layout,
             session: LocalSession::default(),
@@ -510,10 +557,36 @@ impl Cabinet {
         self.session
     }
 
-    /// Inspect all four stations in cabinet order.
+    /// Inspect all four stations in character order.
     #[must_use]
     pub fn stations(&self) -> [Station; 4] {
         self.slots.map(|slot| slot.station)
+    }
+
+    fn swap_vacant_character(
+        &mut self,
+        seat: Player,
+        current: Player,
+        candidate: Player,
+    ) -> bool {
+        let Some(other) =
+            self.choices.iter().position(|&choice| choice == candidate)
+        else {
+            return false;
+        };
+        let Ok([first, second]) = self
+            .slots
+            .get_disjoint_mut([current.index(), candidate.index()])
+        else {
+            return false;
+        };
+        if second.station.participation != Participation::Absent {
+            return false;
+        }
+        // Physical holds follow the input seat, not the chosen character.
+        mem::swap(&mut first.held, &mut second.held);
+        self.choices.swap(seat.index(), other);
+        true
     }
 
     /// Enable one provisional enemy at a specified walkable ground position.
@@ -605,6 +678,7 @@ mod tests {
         // A valid constant layout cannot fail; keep fixture construction
         // independent from any mutable global or host input.
         result.unwrap_or_else(|_error| Cabinet {
+            choices: Player::ALL,
             enemy: None,
             layout: StreetLayout::DOWNTOWN,
             session: LocalSession::default(),
@@ -643,6 +717,70 @@ mod tests {
         let [unchanged, joined, ..] = state.stations();
         assert_eq!(unchanged, marge);
         assert_eq!(joined.participation, Participation::Playing);
+    }
+
+    #[test]
+    fn vacant_seat_selects_and_joins_its_character() {
+        let mut state = cabinet();
+        state.input_step(0, &pulse(Player::Marge, Control::Right));
+        assert_eq!(state.choices(), [
+            Player::Homer,
+            Player::Marge,
+            Player::Bart,
+            Player::Lisa
+        ]);
+        state.input_step(1, &pulse(Player::Marge, Control::Start));
+        let [marge, homer, ..] = state.stations();
+        assert_eq!(marge.participation, Participation::Absent);
+        assert_eq!(homer.participation, Participation::Playing);
+        state.input_step(2, &[change(Player::Marge, Control::Right, true)]);
+        let [_, moved, ..] = state.stations();
+        assert_eq!(moved.position.x, homer.position.x + 2);
+        state.input_step(3, &[change(Player::Marge, Control::Right, false)]);
+        assert_eq!(
+            state.stations().get(1).map(|station| station.position),
+            Some(moved.position)
+        );
+    }
+
+    #[test]
+    fn selection_hold_follows_seat_until_release() {
+        let mut state = cabinet();
+        for tick in 0..2 {
+            state.input_step(tick, &[change(
+                Player::Marge,
+                Control::Right,
+                true,
+            )]);
+        }
+        assert_eq!(state.choices().first(), Some(&Player::Homer));
+        state.input_step(2, &[change(Player::Marge, Control::Right, false)]);
+        state.input_step(3, &pulse(Player::Marge, Control::Start));
+        let [_, homer, ..] = state.stations();
+        assert_eq!(Some(&homer.position), StreetLayout::DOWNTOWN.spawn.get(1));
+        state.input_step(4, &[]);
+        assert_eq!(
+            state.stations().get(1).map(|station| station.position),
+            Some(homer.position)
+        );
+    }
+
+    #[test]
+    fn late_join_selection_skips_active_characters() {
+        let mut state = cabinet();
+        state.input_step(0, &pulse(Player::Homer, Control::Start));
+        let [_, homer, ..] = state.stations();
+        state.input_step(1, &pulse(Player::Marge, Control::Right));
+        assert_eq!(state.choices(), [
+            Player::Bart,
+            Player::Homer,
+            Player::Marge,
+            Player::Lisa
+        ]);
+        state.input_step(2, &pulse(Player::Marge, Control::Start));
+        let [_, unchanged, bart, ..] = state.stations();
+        assert_eq!(unchanged, homer);
+        assert_eq!(bart.participation, Participation::Playing);
     }
 
     fn four_playing() -> Cabinet {
