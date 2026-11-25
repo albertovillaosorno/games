@@ -40,7 +40,9 @@ use games_platform_graphics::linux::sprites::{
 };
 use games_platform_graphics::linux::{FrameLayout, RenderError, ui};
 
-use super::{Action, CONTROLS, Control, Player, Profiles, dimension, size};
+use super::{
+    Action, CONTROLS, Control, Player, Profiles, dimension, size, world,
+};
 
 pub(super) const SCENE_HEIGHT: u16 = 304;
 const PANEL_HEIGHT: u16 = 80;
@@ -266,6 +268,38 @@ fn panel(profiles: &Profiles) -> Result<[PanelButton; 8], RenderError> {
     }
     Ok(result)
 }
+/// Convert full logical coordinates to the centered base-width panel.
+pub(super) fn to_panel(point: TouchPoint, width: u32) -> Option<TouchPoint> {
+    if width < u32::from(WIDTH) {
+        return None;
+    }
+    let maximum = u64::from(u16::MAX);
+    let offset =
+        u64::from(world::centered_offset(width)).checked_mul(maximum)?;
+    let scaled = u64::from(point.x).checked_mul(u64::from(width))?;
+    let local = scaled.checked_sub(offset)?.checked_div(u64::from(WIDTH))?;
+    Some(TouchPoint {
+        x: u16::try_from(local).ok()?,
+        ..point
+    })
+}
+
+/// Project base-panel coordinates into the full logical scene.
+pub(super) fn to_scene(point: TouchPoint, width: u32) -> Option<TouchPoint> {
+    if width < u32::from(WIDTH) {
+        return None;
+    }
+    let offset = u64::from(world::centered_offset(width))
+        .checked_mul(u64::from(u16::MAX))?;
+    let scaled = u64::from(point.x)
+        .checked_mul(u64::from(WIDTH))?
+        .checked_add(offset)?;
+    let horizontal = scaled.div_ceil(u64::from(width));
+    Some(TouchPoint {
+        x: u16::try_from(horizontal).ok()?,
+        ..point
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -274,8 +308,48 @@ mod tests {
     use games_platform_graphics::linux::RenderError;
 
     use super::super::DEFAULT_PROFILES;
-    use super::{BUTTONS, center, install};
+    use super::{BUTTONS, TouchPoint, center, install, to_panel, to_scene};
     use crate::{Action, Player};
+
+    #[test]
+    fn centered_panel_projects_button_centers_and_rejects_side_space()
+    -> Result<(), RenderError> {
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, &DEFAULT_PROFILES)?;
+        let mut router = InputRouter::new(mapping);
+        let id = ContactId { device: 1, finger: 2 };
+        for (width, button) in [320u32, 321, 362, 512]
+            .into_iter()
+            .flat_map(|width| BUTTONS.map(|button| (width, button)))
+        {
+            let center = center(button.control, &DEFAULT_PROFILES)?;
+            let surface = to_scene(center, width)
+                .ok_or(RenderError::InvalidDimensions)?;
+            let local = to_panel(surface, width)
+                .ok_or(RenderError::InvalidDimensions)?;
+            let action = Action {
+                control: button.control,
+                player: Player::Marge,
+            };
+            if router.handle(InputEvent::Contact {
+                id,
+                phase: ContactPhase::Down(local),
+            }) != [LogicalAction { action, down: true }]
+                || router.handle(InputEvent::Contact {
+                    id,
+                    phase: ContactPhase::Up,
+                }) != [LogicalAction { action, down: false }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        for x in [0, u16::MAX] {
+            if to_panel(TouchPoint { x, y: 60_000 }, 362).is_some() {
+                return Err(RenderError::InvalidDimensions);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn visible_buttons_route_to_one_station() -> Result<(), RenderError> {

@@ -37,6 +37,7 @@ mod launch;
 mod poses;
 mod station_hud;
 mod touch;
+mod world;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -290,6 +291,8 @@ struct Art {
     rect: SpriteRect,
 }
 
+type LoadedArt = (Art, Vec<u8>);
+
 impl Art {
     const fn draw(self, destination: SpriteRect, flip: bool) -> SpriteDraw {
         SpriteDraw {
@@ -306,6 +309,14 @@ impl Art {
         bundle: &CanonicalBundle,
         key: &str,
     ) -> Result<Self, RenderError> {
+        Self::load_with_pixels(scene, bundle, key).map(|(art, _pixels)| art)
+    }
+
+    fn load_with_pixels(
+        scene: &mut SceneSession<'_, '_>,
+        bundle: &CanonicalBundle,
+        key: &str,
+    ) -> Result<LoadedArt, RenderError> {
         let record = bundle
             .manifest()
             .record(key)
@@ -313,11 +324,19 @@ impl Art {
         let AssetFormat::Rgba8 { height, width } = record.format else {
             return Err(failure("art must be RGBA8"));
         };
-        let layout = FrameLayout::new(width, height, size(1_048_576)?)?;
         let pixels = bundle.read_payload(key).map_err(failure)?;
-        let atlas = scene
-            .load_atlas(layout, &pixels)
+        let art = Self::upload(scene, (width, height), &pixels)
             .map_err(|error| failure(format!("load {key}: {error:?}")))?;
+        Ok((art, pixels))
+    }
+
+    fn upload(
+        scene: &mut SceneSession<'_, '_>,
+        (width, height): (NonZeroU32, NonZeroU32),
+        pixels: &[u8],
+    ) -> Result<Self, RenderError> {
+        let layout = FrameLayout::new(width, height, size(1_048_576)?)?;
+        let atlas = scene.load_atlas(layout, pixels)?;
         Ok(Self {
             atlas,
             rect: SpriteRect {
@@ -341,6 +360,7 @@ struct Scene {
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
     world: Vec<(i16, SpriteDraw)>,
+    world_art: Option<world::WorldArt>,
 }
 
 impl Scene {
@@ -351,15 +371,22 @@ impl Scene {
         profiles: &Profiles,
     ) -> Result<Self, RenderError> {
         let [first, _, _, _] = &source.actors;
-        let mut background = Art::load(scene, first, "scene/background")?;
+        let (mut background, original) =
+            Art::load_with_pixels(scene, first, "scene/background")?;
         if (background.rect.width.get(), background.rect.height.get())
-            != (320, 224)
+            != (world::BASE_WIDTH, world::BASE_HEIGHT)
         {
             return Err(failure("unexpected background dimensions"));
         }
         // The original HUD reflects the captured player, not live state.
         background.rect.y = 28i32;
         background.rect.height = dimension(196)?;
+        let world_art = source
+            .world
+            .as_ref()
+            .map(|bundle| world::WorldArt::load(scene, &original, bundle))
+            .transpose()?;
+        drop(original);
         let mut actors = Vec::new();
         for (bundle, key) in source.actors.iter().zip(KEYS) {
             let actor = Art::load(scene, bundle, key)?;
@@ -379,9 +406,9 @@ impl Scene {
                 .map(|bundles| encounter::CombatArt::load(scene, bundles))
                 .transpose()?,
             draws: Vec::with_capacity(if source.enemy.is_some() {
-                26
+                28
             } else {
-                15
+                17
             }),
             hud: station_hud::StationHud::load(scene, profiles)?,
             menu: load_menu(scene)?,
@@ -392,6 +419,7 @@ impl Scene {
             },
             poses: source.poses.load(source.parent, scene)?,
             world: Vec::with_capacity(5),
+            world_art,
         })
     }
 
@@ -400,11 +428,23 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
     ) -> Result<bool, RenderError> {
+        let width = if let Some(art) = self.world_art {
+            let maximum = art.maximum(preview_layout(self.panel.is_some())?)?;
+            scene.fit_adaptive_width(maximum)?.width().get()
+        } else {
+            scene.layout().width().get()
+        };
+        let center =
+            i32::try_from(world::centered_offset(width)).map_err(failure)?;
         self.draws.clear();
-        self.draws
-            .push(self.background.draw(self.background.rect, false));
+        if let Some(art) = self.world_art {
+            art.queue(self.background, width, &mut self.draws)?;
+        } else {
+            self.draws
+                .push(self.background.draw(self.background.rect, false));
+        }
         self.world.clear();
-        self.queue_visible_stations(cabinet)?;
+        self.queue_visible_stations(cabinet, width)?;
         if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
             && cabinet.session().world_visible()
             && enemy.health > 0
@@ -420,16 +460,25 @@ impl Scene {
         {
             combat.enemy_health(&mut self.draws, enemy)?;
         }
-        self.menu
-            .queue(cabinet.session(), (20i32, 16i32), &mut self.draws)?;
+        self.menu.queue(
+            cabinet.session(),
+            (20i32.saturating_add(center), 16i32),
+            &mut self.draws,
+        )?;
         if cabinet.phase() == Phase::MainMenu {
             for (seat, character) in
                 Player::ALL.into_iter().zip(cabinet.choices())
             {
-                self.draws.push(self.hud.draw_choice(seat, character)?);
+                let mut choice = self.hud.draw_choice(seat, character)?;
+                choice.destination.x = choice
+                    .destination
+                    .x
+                    .saturating_add(world::station_offset(width, seat)?);
+                self.draws.push(choice);
             }
         }
-        if let Some(panel) = self.panel {
+        if let Some(mut panel) = self.panel {
+            panel.destination.x = center;
             self.draws.push(panel);
         }
         scene.present([24, 22, 30], &self.draws)
@@ -437,13 +486,15 @@ impl Scene {
 
     fn queue_station(
         &mut self,
-        player: Player,
-        seat: Player,
+        (player, seat): (Player, Player),
         station: Station,
+        width: u32,
     ) -> Result<(), RenderError> {
-        if let Some(prompt) =
+        let offset = world::station_offset(width, player)?;
+        if let Some(mut prompt) =
             self.hud.draw(player, seat, station.participation)?
         {
+            prompt.destination.x = prompt.destination.x.saturating_add(offset);
             self.draws.push(prompt);
             return Ok(());
         }
@@ -451,9 +502,11 @@ impl Scene {
             .actors
             .get(player.index())
             .ok_or(RenderError::InvalidSprite)?;
-        self.draws.push(actor.draw(indicator(player)?, false));
+        let mut icon = indicator(player)?;
+        icon.x = icon.x.saturating_add(offset);
+        self.draws.push(actor.draw(icon, false));
         if let Some(combat) = &self.combat {
-            combat.station_health(&mut self.draws, player, station)?;
+            combat.station_health(&mut self.draws, icon.x, station)?;
         }
         if station.health > 0 {
             let pose = self.poses.select(player, station).unwrap_or(actor);
@@ -475,6 +528,7 @@ impl Scene {
     fn queue_visible_stations(
         &mut self,
         cabinet: &Cabinet,
+        width: u32,
     ) -> Result<(), RenderError> {
         if !cabinet.session().world_visible() {
             return Ok(());
@@ -485,7 +539,7 @@ impl Scene {
             let station = *stations
                 .get(character.index())
                 .ok_or(RenderError::InvalidSprite)?;
-            self.queue_station(character, seat, station)?;
+            self.queue_station((character, seat), station, width)?;
         }
         Ok(())
     }
@@ -495,6 +549,7 @@ struct OptionalSources {
     audio: Option<OsString>,
     enemy: Option<[OsString; 2]>,
     poses: poses::Catalogue,
+    world: Option<OsString>,
 }
 
 struct Sources<'source> {
@@ -503,6 +558,7 @@ struct Sources<'source> {
     enemy: Option<[CanonicalBundle; 2]>,
     parent: &'source Path,
     poses: poses::Catalogue,
+    world: Option<CanonicalBundle>,
 }
 
 impl<'source> Sources<'source> {
@@ -525,6 +581,11 @@ impl<'source> Sources<'source> {
                 .transpose()?,
             parent,
             poses: options.poses,
+            world: options
+                .world
+                .as_ref()
+                .map(|hash| open_bundle(parent, hash))
+                .transpose()?,
         })
     }
 }
@@ -853,14 +914,20 @@ fn project_contact(
     };
     let projected = match phase {
         ContactPhase::Down(point) => {
-            let Some(logical) = scene.logical_touch(point)? else {
+            let Some(logical) =
+                scene.logical_touch(point)?.and_then(|projected| {
+                    touch::to_panel(projected, scene.layout().width().get())
+                })
+            else {
                 return Ok(None);
             };
             ContactPhase::Down(logical)
         },
-        ContactPhase::Motion(Some(point)) => {
-            ContactPhase::Motion(scene.logical_touch(point)?)
-        },
+        ContactPhase::Motion(Some(point)) => ContactPhase::Motion(
+            scene.logical_touch(point)?.and_then(|projected| {
+                touch::to_panel(projected, scene.layout().width().get())
+            }),
+        ),
         ContactPhase::Motion(None) | ContactPhase::Up => phase,
     };
     Ok(Some(InputEvent::Contact { id, phase: projected }))
@@ -892,6 +959,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             audio: assets.audio,
             enemy: assets.enemy,
             poses: catalogue,
+            world: assets.world,
         })
         .and_then(|source| {
             window(&source, PreviewOptions {
@@ -1203,7 +1271,7 @@ fn smoke_movement_benchmark(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    let layout = preview_layout(art.panel.is_some())?;
+    let layout = scene.layout();
     let mut collector = PerformanceCollector::with_percentiles(
         QualityProfile {
             frame_pacing: FramePacing::Uncapped,
@@ -1399,7 +1467,13 @@ fn smoke_touch_point(
     profiles: &Profiles,
 ) -> Result<TouchPoint, RenderError> {
     scene
-        .surface_touch(touch::center(control, profiles)?)?
+        .surface_touch(
+            touch::to_scene(
+                touch::center(control, profiles)?,
+                scene.layout().width().get(),
+            )
+            .ok_or(RenderError::InvalidDimensions)?,
+        )?
         .ok_or_else(|| failure("touch control outside visible scene"))
 }
 
@@ -1425,7 +1499,11 @@ fn window(
     let touch_enabled = options.touch_enabled;
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
-        dimension(960)?,
+        dimension(if options.hidden && source.world.is_some() {
+            1280
+        } else {
+            960
+        })?,
         dimension(if touch_enabled {
             912
         } else {
@@ -1447,6 +1525,9 @@ fn window(
             Scene::load(scene, source, touch_enabled, options.profiles)?;
         if options.hidden {
             smoke_settings(scene, &mut art, options)?;
+            if let Some(bundle) = &source.world {
+                world::smoke(scene, &mut art, bundle, options.profiles)?;
+            }
             smoke_character_selection(scene, &mut art, options)?;
             smoke_controller_selection(options.profiles)?;
             if touch_enabled {
@@ -1481,20 +1562,29 @@ fn scene_limits(
         0
     };
     let count = source.poses.count().saturating_add(enemy_atlases);
+    let extension = usize::from(source.world.is_some());
     Ok(SceneLimits {
         atlas_bytes: size(
-            3_407_872usize.saturating_add(count.saturating_mul(65_536)),
+            3_407_872usize
+                .saturating_add(count.saturating_mul(65_536))
+                .saturating_add(extension.saturating_mul(401_408)),
         )?,
-        atlases: size(count.saturating_add(if touch_enabled {
-            9
-        } else {
-            8
-        }))?,
-        sprites: size(enemy_sprites.saturating_add(if touch_enabled {
-            15
-        } else {
-            14
-        }))?,
+        atlases: size(count.saturating_add(extension).saturating_add(
+            if touch_enabled {
+                9
+            } else {
+                8
+            },
+        ))?,
+        sprites: size(
+            enemy_sprites
+                .saturating_add(extension.saturating_mul(2))
+                .saturating_add(if touch_enabled {
+                    15
+                } else {
+                    14
+                }),
+        )?,
     })
 }
 
@@ -1502,9 +1592,13 @@ fn preview_layout(touch_enabled: bool) -> Result<FrameLayout, RenderError> {
     let height = if touch_enabled {
         u32::from(touch::SCENE_HEIGHT)
     } else {
-        224
+        world::BASE_HEIGHT
     };
-    FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)
+    FrameLayout::new(
+        dimension(world::BASE_WIDTH)?,
+        dimension(height)?,
+        size(389_120)?,
+    )
 }
 
 #[cfg(test)]

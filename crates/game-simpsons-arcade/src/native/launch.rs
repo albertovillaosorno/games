@@ -47,7 +47,7 @@ const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke] [--touch] ",
     "[--display MODE] [--window MODE] [--settings DIR] [--controls FILE] ",
     "[--config FILE | [--poses FILE] ",
-    "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] ",
+    "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local beside the binary."
 );
@@ -69,6 +69,7 @@ pub(super) struct Assets {
     pub(super) directory: PathBuf,
     pub(super) enemy: Option<[OsString; 2]>,
     pub(super) poses: Option<PathBuf>,
+    pub(super) world: Option<OsString>,
 }
 
 impl Assets {
@@ -99,6 +100,7 @@ impl Assets {
             _ => return Err(String::from("both enemy hashes are required")),
         };
         let audio = values.remove("audio").map(hash).transpose()?;
+        let world = values.remove("world").map(hash).transpose()?;
         let poses = values.remove("poses").map(|value| base.join(value));
         let controls = values.remove("controls").map(|value| base.join(value));
         let settings = values.remove("settings").map(|value| base.join(value));
@@ -114,6 +116,7 @@ impl Assets {
                 directory,
                 enemy,
                 poses,
+                world,
             },
             display,
             LocalPaths { controls, settings },
@@ -136,6 +139,11 @@ impl Assets {
         } else {
             None
         };
+        let world = if flag(&mut args, "--world") {
+            Some(next(&mut args)?)
+        } else {
+            None
+        };
         let [directory, marge, homer, bart, lisa] =
             <[OsString; 5]>::try_from(args.collect::<Vec<_>>())
                 .map_err(|_error| String::from(USAGE))?;
@@ -145,6 +153,7 @@ impl Assets {
             directory: directory.into(),
             enemy,
             poses,
+            world,
         })
     }
 
@@ -340,7 +349,7 @@ mod tests {
         let path = Path::new("/package/simpsons-arcade.local");
         let text = format!(
             "{}poses=poses.txt\ncontrols=controls.txt\n\
-             settings=preferences\naudio={DIGEST}\n\
+             settings=preferences\naudio={DIGEST}\nworld={DIGEST}\n\
              enemy_approach={DIGEST}\nenemy_strike={DIGEST}\n",
             catalogue()
         );
@@ -351,6 +360,7 @@ mod tests {
             directory: PathBuf::from("/package/../local assets"),
             enemy: Some([DIGEST.into(), DIGEST.into()]),
             poses: Some(PathBuf::from("/package/poses.txt")),
+            world: Some(DIGEST.into()),
         };
         if assets != expected
             || display != DisplaySettings::default()
@@ -373,6 +383,7 @@ mod tests {
             "enemy_approach=invalid\n",
             "poses=\n",
             "audio=not-a-hash\n",
+            "world=not-a-hash\n",
         ] {
             assert!(
                 Assets::catalogue(path, &format!("{base}{suffix}")).is_err()
@@ -393,7 +404,8 @@ mod tests {
     fn explicit_arguments_preserve_legacy_selection() -> Result<(), String> {
         let args = [
             "--smoke", "--touch", "--poses", "poses", "--enemy", "approach",
-            "strike", "--audio", "audio", "parent", "m", "h", "b", "l",
+            "strike", "--audio", "audio", "--world", "world", "parent", "m",
+            "h", "b", "l",
         ];
         let launch = Launch::parse(args.map(OsString::from).into())?;
         let expected = Assets {
@@ -402,6 +414,7 @@ mod tests {
             directory: PathBuf::from("parent"),
             enemy: Some(["approach".into(), "strike".into()]),
             poses: Some(PathBuf::from("poses")),
+            world: Some("world".into()),
         };
         if !launch.smoke || !launch.touch_enabled || launch.assets != expected {
             return Err(String::from("incorrect explicit selection"));

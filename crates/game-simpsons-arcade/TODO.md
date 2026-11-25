@@ -114,7 +114,7 @@ lisa=LISA_SHA
 ```
 
 Replace the placeholders with locally verified manifest digests. Optional
-fields are `poses`, `audio`, and the pair `enemy_approach` and
+fields are `poses`, `audio`, `world`, and the pair `enemy_approach` and
 `enemy_strike`. The pose field names a catalogue file; the other optional
 fields name manifest digests. Relative paths resolve from the launch
 catalogue directory, not the working directory. Without explicit asset
@@ -134,10 +134,27 @@ optional `display` and `window` fields in the local launch catalogue;
 explicit command-line choices override those fields.
 
 Integer mode uses aspect-fit below native logical resolution. Adaptive
-currently falls back to aspect-fit for this fixed scene; real camera,
-scene and HUD extension remains open. Fill may crop the game HUD and
-is rejected when the current fixed touch panel is enabled. Responsive
-HUD placement and independent touch overlays remain open. Settings
+widens the logical frame only when a matching world strip is selected;
+otherwise it uses aspect-fit. Use the optional `world` catalogue digest
+or `--world SHA` after `--audio` (if used) and before PARENT. Generate
+the local strip with the original observations and the build command:
+
+```sh
+cargo run --locked -p games-build -- mame strip-publish simpsons \
+  world-4p-set-1 OUTPUT PARENT SHA256 28 16 \
+  RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS \
+  RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS
+```
+
+The command verifies both complete scenes before stitching exactly
+overlapping world interiors. The title verifies the strip against the
+selected base art. The currently verified strip supports up to 362
+logical columns (320 plus 42 additional pixels); wider surfaces use
+aspect-fit without stretching the world. The four station indicators
+spread across the width, menus and touch panel center, and hit regions
+follow the panel. Movement bounds and stage progression remain unchanged.
+Fill may crop the game HUD and is rejected with touch enabled.
+Independent simultaneous touch overlays remain open. Settings
 can also be changed through the main or pause menu: Up/Down selects,
 Primary cycles display or toggles desktop fullscreen, and Back returns.
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
@@ -191,4 +208,4 @@ touch 3 left=right
 Each station's complete slot mapping must be a permutation. Symbols and
 hit regions move together; the other stations retain keyboard/controller
 input. The default remains station 1. Simultaneous independent touch
-panels, adaptive layout and actual touchscreen testing remain open.
+panels and actual touchscreen testing remain open.

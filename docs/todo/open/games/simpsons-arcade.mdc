@@ -765,3 +765,26 @@ each side allowed a 42-pixel extension of the 288-pixel world interior.
 The resulting 330-by-196 strip exactly matches the current Marge
 background over all 56,448 base interior pixels. The local bundle is
 available for adaptive rendering; no original assets are tracked.
+
+The optional world manifest now extends the title's logical viewport
+without changing the fixed-step simulation or stretching sprites.
+Admission checks every base interior pixel and both black side margins,
+and rejects transparent or oversized strips. The native renderer
+reuses resident atlases while changing the logical target only when its
+extent changes. Station indicators and health spread across the width;
+menus and the single touch panel center, with inverse touch projection
+and side-space rejection. Fixed modes and missing strips retain the
+320-pixel base.
+
+An isolated Xvfb run with SDL X11, software GL and dummy audio verified
+the actual 362-by-224 and 362-by-304 logical readbacks: all 8,232
+additional world pixels matched the imported strip. The two aspect-fit
+runs stayed at 320 columns. All four combined 600-frame workloads
+missed zero samples, including synthetic touch movement in adaptive
+mode. A visible X11 run joined using Enter, resized from 960-by-672 to
+1086-by-672 and matched all 126-by-588 scaled extension pixels; shrinking
+restored the black right margin and the native menu exited normally.
+Two earlier visible attempts timed out because the SDL video backend
+was not explicitly X11. Current support is a bounded 42-column opening
+street extension, not scrolling stage progression, complete widescreen
+coverage or physical display/touch/controller acceptance.

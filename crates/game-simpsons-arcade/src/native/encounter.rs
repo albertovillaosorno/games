@@ -41,12 +41,11 @@ use games_platform_graphics::linux::{FrameLayout, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
-    Art, Controls, Scene, dimension, failure, ground_position, indicator, live,
-    size,
+    Art, Controls, Scene, dimension, failure, ground_position, live, size,
 };
 use crate::{
     CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing, Participation, Phase,
-    Player, Point, Station, TICK_INTERVAL,
+    Point, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -160,14 +159,13 @@ impl CombatArt {
     pub(super) fn station_health(
         &self,
         draws: &mut Vec<SpriteDraw>,
-        player: Player,
+        x: i32,
         station: Station,
     ) -> Result<(), RenderError> {
-        let rect = indicator(player)?;
         self.health(
             draws,
             Point {
-                x: i16::try_from(rect.x).map_err(failure)?,
+                x: i16::try_from(x).map_err(failure)?,
                 y: 25,
             },
             station.health,
@@ -245,7 +243,12 @@ pub(super) fn smoke(
     approach(&mut controls, &mut simulation)?;
     let _drawn = art.present(scene, simulation.state())?;
     let initial = scene.readback().map_err(failure)?;
-    verify_enemy_health(art, simulation.state(), &initial)?;
+    verify_enemy_health(
+        art,
+        simulation.state(),
+        &initial,
+        scene.layout().width().get(),
+    )?;
     let mut previous = initial;
     for health in [2, 1, 0] {
         pulse(&mut controls, &mut simulation, Scancode::Z)?;
@@ -259,7 +262,12 @@ pub(super) fn smoke(
         if previous == pixels {
             return Err(failure("enemy damage was not presented"));
         }
-        verify_enemy_health(art, simulation.state(), &pixels)?;
+        verify_enemy_health(
+            art,
+            simulation.state(),
+            &pixels,
+            scene.layout().width().get(),
+        )?;
         previous = pixels;
     }
     let _settle = simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -286,7 +294,12 @@ fn smoke_counterstrike(
         let _drawn = art.present(scene, simulation.state())?;
         let pixels = scene.readback().map_err(failure)?;
         let [marge, ..] = simulation.state().stations();
-        verify_bar(&pixels, Point { x: 28, y: 25 }, marge.health)?;
+        verify_bar(
+            &pixels,
+            Point { x: 28, y: 25 },
+            marge.health,
+            scene.layout().width().get(),
+        )?;
         if marge.health == 2 {
             return smoke_continue(scene, art, &mut controls, &mut simulation);
         }
@@ -299,29 +312,35 @@ fn verify_enemy_health(
     art: &Scene,
     cabinet: &Cabinet,
     pixels: &[u8],
+    width: u32,
 ) -> Result<(), RenderError> {
     let enemy = cabinet.enemy().ok_or(RenderError::InvalidSprite)?;
     let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
     let position = combat.enemy_health_position(enemy)?;
     if enemy.health == 0 {
-        let row = health_row(pixels, position)?;
+        let row = health_row(pixels, position, width)?;
         if row.as_chunks::<4>().0.iter().all(|pixel| *pixel == MISSING) {
             return Err(failure("defeated enemy still has a health bar"));
         }
     } else {
-        verify_bar(pixels, position, enemy.health)?;
+        verify_bar(pixels, position, enemy.health, width)?;
     }
     Ok(())
 }
 
-fn health_row(pixels: &[u8], point: Point) -> Result<&[u8], RenderError> {
+fn health_row(
+    pixels: &[u8],
+    point: Point,
+    width: u32,
+) -> Result<&[u8], RenderError> {
     let horizontal = usize::try_from(point.x).map_err(failure)?;
     let vertical = usize::try_from(point.y).map_err(failure)?;
-    if horizontal.saturating_add(24) > 320 {
+    let stride = usize::try_from(width).map_err(failure)?;
+    if horizontal.saturating_add(24) > stride {
         return Err(RenderError::InvalidDimensions);
     }
     let offset = vertical
-        .saturating_mul(320)
+        .saturating_mul(stride)
         .saturating_add(horizontal)
         .saturating_mul(4);
     pixels
@@ -333,8 +352,9 @@ fn verify_bar(
     pixels: &[u8],
     position: Point,
     health: u8,
+    width: u32,
 ) -> Result<(), RenderError> {
-    let row = health_row(pixels, position)?;
+    let row = health_row(pixels, position, width)?;
     for (column, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
         let expected = if column < usize::from(health).saturating_mul(8) {
             FILLED
@@ -370,13 +390,14 @@ fn smoke_continue(
         &scene.readback().map_err(failure)?,
         Point { x: 28, y: 25 },
         3,
+        scene.layout().width().get(),
     )
 }
 
 fn verify_prompt(scene: &mut SceneSession<'_, '_>) -> Result<(), RenderError> {
     let pixels = scene.readback().map_err(failure)?;
     for point in [Point { x: 17, y: 3 }, Point { x: 9, y: 15 }] {
-        let row = health_row(&pixels, point)?;
+        let row = health_row(&pixels, point, scene.layout().width().get())?;
         if row.get(..4) != Some(&[248, 228, 168, 255]) {
             return Err(failure("missing native free rejoin prompt"));
         }
@@ -441,6 +462,16 @@ fn restart_after_expiry(
     }
     let _restarted = art.present(scene, simulation.state())?;
     let pixels = scene.readback().map_err(failure)?;
-    verify_bar(&pixels, Point { x: 28, y: 25 }, 3)?;
-    verify_enemy_health(art, simulation.state(), &pixels)
+    verify_bar(
+        &pixels,
+        Point { x: 28, y: 25 },
+        3,
+        scene.layout().width().get(),
+    )?;
+    verify_enemy_health(
+        art,
+        simulation.state(),
+        &pixels,
+        scene.layout().width().get(),
+    )
 }

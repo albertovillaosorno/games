@@ -263,10 +263,10 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         let design = surface.map_or(base, |extent| {
             self.mode.design_for_surface(extent, base, maximum.width())
         });
-        let budget =
-            NonZeroUsize::new(maximum.bytes()).ok_or(RenderError::TooLarge)?;
-        let layout = FrameLayout::new(design.width, design.height, budget)?;
-        if layout != self.layout {
+        if design.width != self.layout.width() {
+            let budget = NonZeroUsize::new(maximum.bytes())
+                .ok_or(RenderError::TooLarge)?;
+            let layout = FrameLayout::new(design.width, design.height, budget)?;
             let target = create_target(self.atlases.creator, layout)?;
             self.target = target;
             self.layout = layout;
@@ -358,6 +358,11 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         &mut self,
         maximum: FrameLayout,
     ) -> Result<FrameLayout, RenderError> {
+        if self.textures.mode != PresentationMode::Adaptive
+            || maximum.width() <= self.textures.base.width()
+        {
+            return self.textures.fit(None, maximum);
+        }
         let (width, height) =
             self.canvas.output_size().map_err(RenderError::Backend)?;
         let surface = NonZeroU32::new(width)
