@@ -58,3 +58,14 @@ color and alpha order, tampered payloads, and atomic rejection of invalid
 indices, palettes and output lengths. Fresh validation passed in run
 1795582081880825184-3442644. Palette reconstruction and a hardware-backed
 renderer remain unverified.
+
+Canonical indexed tiles can now be packed directly into a bounded,
+row-major RGBA atlas with caller-defined slot order and palettes.
+The same source tile may appear with different palettes; empty cells
+in the final row remain transparent. The layout exposes exact upload
+dimensions and per-slot rectangles, and packing allocates no additional
+buffers. Palette checks are shared with individual tile expansion.
+Synthetic tests verify the complete RGBA output, explicit alpha, palette
+reuse, layout overflow, byte budgets and unchanged buffers after rejected
+selections. Fresh validation passed in run 1795582623653954940-3515380.
+No original palette selection or GPU scene fidelity is implied.

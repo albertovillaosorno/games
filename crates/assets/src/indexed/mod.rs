@@ -30,6 +30,8 @@
 //   - Reject invalid descriptors, indices, palettes and output lengths.
 
 //! Source-independent indexed graphics access.
+/// Bounded row-major RGBA atlases built from selected indexed tiles.
+pub mod atlas;
 
 use std::num::{NonZeroU32, NonZeroU64};
 
@@ -60,19 +62,11 @@ impl<'payload> IndexedTiles<'payload> {
         output: &mut [[u8; 4]],
     ) -> Result<(), AssetError> {
         let pixels = self.tile(index).ok_or(AssetError::InvalidFormat)?;
-        if pixels.len() != output.len()
-            || pixels
-                .iter()
-                .any(|pixel| usize::from(*pixel) >= palette.len())
-        {
+        if pixels.len() != output.len() {
             return Err(AssetError::InvalidFormat);
         }
-        for (pixel, color) in pixels.iter().zip(output) {
-            *color = *palette
-                .get(usize::from(*pixel))
-                .ok_or(AssetError::InvalidFormat)?;
-        }
-        Ok(())
+        validate_palette(pixels, palette)?;
+        write_colors(pixels, palette, output)
     }
 
     /// Height in pixels of every tile.
@@ -139,6 +133,32 @@ impl<'payload> IndexedTiles<'payload> {
     pub const fn width(&self) -> NonZeroU32 {
         self.width
     }
+}
+
+fn validate_palette(
+    pixels: &[u8],
+    palette: &[[u8; 4]],
+) -> Result<(), AssetError> {
+    if pixels
+        .iter()
+        .any(|pixel| usize::from(*pixel) >= palette.len())
+    {
+        return Err(AssetError::InvalidFormat);
+    }
+    Ok(())
+}
+
+fn write_colors(
+    pixels: &[u8],
+    palette: &[[u8; 4]],
+    output: &mut [[u8; 4]],
+) -> Result<(), AssetError> {
+    for (pixel, color) in pixels.iter().zip(output) {
+        *color = *palette
+            .get(usize::from(*pixel))
+            .ok_or(AssetError::InvalidFormat)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
