@@ -24,15 +24,27 @@ Protect the host from malformed or malicious user-supplied data.
 
 ## Evidence
 
-Partial evidence, 2026-11-24: `cargo validate --no-cache` passes.
+Partial evidence, 2026-11-24: fresh validation passed in run
+1795575348175824037-2468367 (70 tests).
+
 `games::safety` rejects synthetic traversal and Windows-drive paths,
 link/special archive members, executable extensions and oversize entries.
+Portable path checks also reject device aliases, control characters,
+ambiguous trailing dots/spaces and overlong paths or components.
+Directory members must declare zero payload bytes.
+
+The constant-memory archive budget reserves declared uncompressed bytes and
+member counts before processing. Synthetic tests verify aggregate exhaustion,
+zero-length members, atomic admission failures, exact-length streamed data,
+truncation and persistent rejection after an overrun.
+
 SHA-256 save envelopes detect truncated, oversized, tampered or invalid
 versions, using strict caller-provided limits. All truncated save prefixes
-are also rejected. Network message budgets
-are enforced separately by `games::network`.
+are also rejected. Network message budgets are enforced separately by
+`games::network`.
 
 These checks do not yet protect actual archive extraction from filesystem
-races or verify sandboxed mod execution, process privileges or real user
-file permissions. The importer and host platform adapters must integrate
-and test those constraints before task completion.
+races, duplicate destinations or case-folding collisions, or verify sandboxed
+mod execution, process privileges or real user file permissions. The importer
+and host platform adapters must integrate and test those constraints before
+task completion.
