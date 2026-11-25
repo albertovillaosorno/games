@@ -38,11 +38,9 @@ use games::input::touch::{TouchLayout, TouchPoint, TouchZone};
 use games_platform_graphics::linux::sprites::{
     SceneSession, SpriteDraw, SpriteRect,
 };
-use games_platform_graphics::linux::{FrameLayout, RenderError};
+use games_platform_graphics::linux::{FrameLayout, RenderError, ui};
 
-use super::{
-    Action, CONTROLS, Control, Player, Profiles, dimension, glyph, size,
-};
+use super::{Action, CONTROLS, Control, Player, Profiles, dimension, size};
 
 pub(super) const SCENE_HEIGHT: u16 = 304;
 const PANEL_HEIGHT: u16 = 80;
@@ -50,8 +48,8 @@ const PANEL_TOP: u16 = 224;
 const WIDTH: u16 = 320;
 
 const BUTTONS: [PanelButton; 8] = [
-    PanelButton::new(Control::Coin, [180, 4, 56, 32], [
-        0b01110, 0b10001, 0b10101, 0b10001, 0b01110,
+    PanelButton::new(Control::Pause, [180, 4, 56, 32], [
+        0b11011, 0b11011, 0b11011, 0b11011, 0b11011,
     ]),
     PanelButton::new(Control::Start, [240, 4, 56, 32], [
         0b10000, 0b11100, 0b11111, 0b11100, 0b10000,
@@ -151,7 +149,7 @@ impl PanelButton {
         else {
             return false;
         };
-        glyph::ink(&self.glyph, 5, column, row)
+        ui::ink(&self.glyph, 5, column, row)
     }
 }
 

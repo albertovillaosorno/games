@@ -46,5 +46,7 @@ pub mod presentation;
 pub mod replay;
 /// Integrity checks for untrusted local save data.
 pub mod safety;
+/// Shared free-play menu and local gameplay session transitions.
+pub mod session;
 /// Fixed-step simulation time shared across titles and platforms.
 pub mod timing;

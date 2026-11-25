@@ -40,7 +40,6 @@ use games_platform_graphics::linux::sprites::{
 use games_platform_graphics::linux::{FrameLayout, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
-use super::continue_hud::ContinueArt;
 use super::{
     Art, Controls, Scene, dimension, failure, ground_position, indicator, live,
     size,
@@ -56,22 +55,12 @@ const MISSING: [u8; 4] = [128, 45, 53, 255];
 #[derive(Debug)]
 pub(super) struct CombatArt {
     approach: Art,
-    continue_hud: ContinueArt,
     filled: Art,
     missing: Art,
     strike: Art,
 }
 
 impl CombatArt {
-    pub(super) fn continue_draw(
-        &self,
-        player: Player,
-        paid: bool,
-        ticks_left: u16,
-    ) -> Result<SpriteDraw, RenderError> {
-        self.continue_hud.draw(player, paid, ticks_left)
-    }
-
     pub(super) fn enemy_draw(
         &self,
         enemy: Enemy,
@@ -162,7 +151,6 @@ impl CombatArt {
         };
         Ok(Self {
             approach,
-            continue_hud: ContinueArt::load(scene)?,
             filled,
             missing,
             strike,
@@ -229,9 +217,7 @@ fn approach(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    for scancode in [Scancode::Num1, Scancode::Num5, Scancode::Z] {
-        pulse(controls, simulation, scancode)?;
-    }
+    pulse(controls, simulation, Scancode::Return)?;
     advance(simulation, 1)?;
     key(controls, simulation, Scancode::Right, true)?;
     for _ in 0..60u8 {
@@ -370,29 +356,14 @@ fn smoke_continue(
 ) -> Result<(), RenderError> {
     wait_for_continue(simulation)?;
     let _drawn = art.present(scene, simulation.state())?;
-    verify_prompt(scene, false)?;
-    pulse(controls, simulation, Scancode::Num5)?;
-    advance(simulation, 1)?;
-    let [unpaid, ..] = simulation.state().stations();
-    if unpaid.health != 0 {
-        return Err(failure("unpaid start restored native player"));
-    }
-    pulse(controls, simulation, Scancode::Num1)?;
-    advance(simulation, 1)?;
-    let [paid, ..] = simulation.state().stations();
-    if paid.credits != 1 || paid.health != 0 {
-        return Err(failure("native coin incorrectly restored player"));
-    }
-    let _paid_drawn = art.present(scene, simulation.state())?;
-    verify_prompt(scene, true)?;
-    pulse(controls, simulation, Scancode::Num5)?;
+    verify_prompt(scene)?;
+    pulse(controls, simulation, Scancode::Return)?;
     advance(simulation, 1)?;
     let [continued, ..] = simulation.state().stations();
     if continued.health != 3
-        || continued.credits != 0
         || continued.participation != Participation::Playing
     {
-        return Err(failure("native paid start did not continue player"));
+        return Err(failure("native free start did not continue player"));
     }
     let _continued_drawn = art.present(scene, simulation.state())?;
     verify_bar(
@@ -402,20 +373,13 @@ fn smoke_continue(
     )
 }
 
-fn verify_prompt(
-    scene: &mut SceneSession<'_, '_>,
-    paid: bool,
-) -> Result<(), RenderError> {
+fn verify_prompt(scene: &mut SceneSession<'_, '_>) -> Result<(), RenderError> {
     let pixels = scene.readback().map_err(failure)?;
-    let row = health_row(&pixels, Point { x: 9, y: 3 })?;
-    let start = row.get(..4).ok_or(RenderError::InvalidLength)?;
-    let paid_start = row.get(48..52).ok_or(RenderError::InvalidLength)?;
-    let ink = [248, 228, 168, 255];
-    let background = [24, 22, 30, 255];
-    if (paid && (start != background || paid_start != ink))
-        || (!paid && start != ink)
-    {
-        return Err(failure("unexpected native continue prompt pixels"));
+    for point in [Point { x: 17, y: 3 }, Point { x: 9, y: 15 }] {
+        let row = health_row(&pixels, point)?;
+        if row.get(..4) != Some(&[248, 228, 168, 255]) {
+            return Err(failure("missing native free rejoin prompt"));
+        }
     }
     Ok(())
 }
@@ -443,25 +407,24 @@ fn smoke_expiry(
     approach(&mut controls, &mut simulation)?;
     wait_for_continue(&mut simulation)?;
     let _initial = art.present(scene, simulation.state())?;
-    verify_prompt(scene, false)?;
+    verify_prompt(scene)?;
     let before = scene.readback().map_err(failure)?;
     advance(&mut simulation, 60)?;
     let _counted = art.present(scene, simulation.state())?;
-    verify_prompt(scene, false)?;
+    verify_prompt(scene)?;
     if before == scene.readback().map_err(failure)? {
         return Err(failure("native continue countdown did not change"));
     }
-    pulse(&mut controls, &mut simulation, Scancode::Num1)?;
     advance(&mut simulation, CONTINUE_TICKS.saturating_sub(60))?;
     let [expired, ..] = simulation.state().stations();
     if expired.participation != Participation::Absent
-        || expired.credits != 1
-        || simulation.state().phase() != Phase::Selection
+        || simulation.state().phase() != Phase::MainMenu
     {
-        return Err(failure("native paid timeout did not retain credit"));
+        return Err(failure(
+            "native free continue timeout did not return to menu",
+        ));
     }
     let _expired_drawn = art.present(scene, simulation.state())?;
-    verify_prompt(scene, true)?;
     restart_after_expiry(scene, art, &mut controls, &mut simulation)
 }
 
@@ -471,17 +434,9 @@ fn restart_after_expiry(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    pulse(controls, simulation, Scancode::Num5)?;
+    pulse(controls, simulation, Scancode::Return)?;
     advance(simulation, 1)?;
-    let [selected, ..] = simulation.state().stations();
-    if selected.participation != Participation::Selected
-        || selected.credits != 0
-    {
-        return Err(failure("native expired credit did not select station"));
-    }
-    pulse(controls, simulation, Scancode::Z)?;
-    advance(simulation, 1)?;
-    if simulation.state().phase() != Phase::Street {
+    if simulation.state().phase() != Phase::Playing {
         return Err(failure("native restart did not enter street"));
     }
     let _restarted = art.present(scene, simulation.state())?;

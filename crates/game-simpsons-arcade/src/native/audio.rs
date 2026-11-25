@@ -262,11 +262,7 @@ fn play<'samples>(
 fn smoke_entry() -> Result<LiveSimulation<Cabinet>, RenderError> {
     let mut simulation = live(false)?;
     let mut controls = Controls::new(false)?;
-    let [[_, _, confirm, ..], ..] = KEYBOARD;
-    let entries = KEYBOARD
-        .into_iter()
-        .flat_map(|keys| keys.into_iter().take(2))
-        .chain([confirm]);
+    let entries = KEYBOARD.into_iter().map(|[_, start, ..]| start);
     for key in entries {
         for down in [true, false] {
             controls.route(

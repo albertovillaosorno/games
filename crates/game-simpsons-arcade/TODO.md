@@ -6,10 +6,8 @@ See the [canonical title task](
 ../../docs/todo/open/games/simpsons-arcade.mdc) for acceptance,
 reference evidence and unresolved parity.
 
-**Obsolete preview admission:** the owner requires modern free play only.
-The coin and continue controls documented below describe the current
-prototype, not an approved shipping experience. Replace them with the
-visible shared menu and immediate Start/Enter; see canonical acceptance.
+The prototype uses modern free play only. Original paid admission is
+reference evidence, not a supported interaction.
 
 ## Native movement preview
 
@@ -23,25 +21,30 @@ cargo run --locked -p games-simpsons-arcade --features native-preview \
 
 Each hash identifies a verified canonical bundle with the corresponding
 `actor/marge`, `actor/homer`, `actor/bart` or `actor/lisa` record.
-Marge's bundle also provides the stage background. Insert a virtual coin,
-press Start, then Primary to enter the prototype. Close the window to quit.
+Marge's bundle also provides the stage background. The visible main menu
+shows each character's Start key. Press Enter to play as Marge, or another
+station's Start key to play as that character. Other stations may join
+while the game is running. Up/Down navigates the menu and Primary
+confirms. Pause opens Resume, Main Menu and Exit; Pause or Start resumes.
+Close the window or select Exit to quit.
 
-| Station | Coin | Start | Primary / Secondary | Movement |
+| Station | Pause | Start | Primary / Secondary | Movement |
 | --- | --- | --- | --- | --- |
-| Marge | 1 | 5 | Z / X | Arrows |
-| Homer | 2 | 6 | F / G | WASD |
-| Bart | 3 | 7 | O / P | IJKL |
-| Lisa | 4 | 8 | Keypad 1 / 2 | Keypad 8/4/5/6 |
+| Marge | Escape | Enter | Z / X | Arrows |
+| Homer | F2 | 6 | F / G | WASD |
+| Bart | F3 | 7 | O / P | IJKL |
+| Lisa | F4 | 8 | Keypad 1 / 2 | Keypad 8/4/5/6 |
 
 Connected SDL controllers are assigned in order to available stations.
-Back inserts a coin, Start claims the station, A confirms or attacks,
+Back pauses, Start joins immediately, A confirms or attacks,
 B jumps, and the D-pad or left stick moves the character. For a finite hidden
 native smoke, insert `--smoke` before PARENT. This is a movement
 prototype, not a complete arcade recreation.
 
 Insert `--touch` before PARENT to append a touch panel below the scene.
-The panel controls Marge: the coin and triangle insert a virtual coin
-and start, A confirms or attacks, B jumps, and the four arrows move.
+The panel controls Marge by default: the pause symbol suspends the game
+and the triangle joins or resumes, A confirms or attacks, B jumps, and
+the four arrows move.
 Use two fingers for diagonal movement. Other stations retain keyboard
 and controller mappings. Combine the options as `--smoke --touch` to
 run the finite synthetic contact and native rendering check. Physical
@@ -78,9 +81,11 @@ and can damage grounded players. Jump evades a ground strike.
 Health indicators and enemy actions are independently authored
 prototype rules, not an original-game hitbox or health reconstruction.
 The optional encounter supports a provisional 1200-tick continue window.
-Insert a coin and press Start before expiry to resume; coin alone changes
-the prompt and preserves the unused credit after expiry. Stage progression
-and the original game-over interlude are not implemented.
+Press Start before expiry to rejoin for free. If all stations expire,
+the main menu returns and the encounter resets. Pausing freezes movement,
+combat, maneuver timing and the countdown. The countdown, health and
+respawn rules remain provisional. Stage progression and the original
+game-over interlude are not implemented.
 
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
 The hash identifies the verified canonical PCM sample catalogue. The
@@ -148,7 +153,7 @@ button 2 right=x
 ```
 
 Station numbers 1-4 are Marge, Homer, Bart and Lisa. Actions are
-coin, start, primary, secondary, left, right, up and down. Key names
+pause, start, primary, secondary, left, right, up and down. Key names
 are SDL scancode names; button names follow SDL's game-controller
 mapping names. Unspecified controls keep the defaults. Duplicate
 keyboard bindings across stations and duplicate buttons within a

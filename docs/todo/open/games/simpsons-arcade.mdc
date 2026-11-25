@@ -674,3 +674,26 @@ directory. Fill with the fixed touch panel and a symlink profile were
 rejected. All fourteen successful matrix runs reported zero missed
 samples across their respective 600-frame movement workloads.
 Adaptive is still fixed-scene fallback, not extended content.
+
+The modern free-play slice supersedes the temporary paid admission
+described above. A shared deterministic local session owns the main
+menu, pause menu, selection, reset and exit. The visible native menu
+advertises the four configured keyboard Start keys. Enter starts
+Marge immediately; the other stations can enter or join independently.
+Controller Start and the selected touch panel join the assigned station;
+there is no payment, coin control, credit balance or paid prompt. Vacant
+stations advertise their join key. Knockout retains the provisional
+1200-tick free rejoin opportunity; expiry of all stations returns to the
+main menu and resets the encounter. Pause freezes the title world on
+the input tick, including attack cues and countdowns. Regression tests
+cover immediate join, held Start, expiry, pause at an attack cue, menu
+wrap, reset and exit. Menu glyphs and station prompts share bounded,
+persistent native text atlases, without per-frame texture uploads.
+
+The native hidden smoke passed under Xvfb with the local actor, pose,
+enemy and audio bundles, synthetic touch and a dummy audio device.
+The run rendered all four stations, maneuvers, health and free rejoin
+prompts; it reported one missed sample in the 600-frame movement
+workload. This is not physical input, audio, GPU or desktop acceptance.
+Interactive settings, independent controller character selection and
+real adaptive scene extension remain open.

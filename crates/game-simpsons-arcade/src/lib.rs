@@ -23,11 +23,11 @@
 // - Summary:
 //   - Initial four-player entry and street movement prototype.
 // - Description:
-//   - Models coin, start and confirmation before fixed-step movement.
+//   - Models direct free-play admission and fixed-step street movement.
 // - Usage:
 //   - Drive with the shared InputRouter and StepClock or replay adapter.
 // - Defaults:
-//   - All players absent; no implicit credits or platform activity.
+//   - All players absent; no payment or platform activity.
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
@@ -46,6 +46,8 @@ use std::time::Duration;
 pub use encounter::{Enemy, EnemyAction};
 use games::input::LogicalAction;
 use games::replay::InputStep;
+pub use games::session::SessionPhase as Phase;
+use games::session::{LocalSession, MenuInput, SessionEffect};
 pub use maneuver::Maneuver;
 
 /// Fixed reference screen period: 384 by 264 clocks at 6 MHz.
@@ -88,19 +90,19 @@ impl Player {
 /// Public digital controls of one cabinet station.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Control {
-    /// Virtual coin; no monetary transaction.
-    Coin,
     /// Down on the eight-way stick.
     Down,
     /// Left on the eight-way stick.
     Left,
-    /// First button; confirms entry or starts an attack in the street.
+    /// Suspend or resume the local session.
+    Pause,
+    /// First button; confirms a menu choice or starts a street attack.
     Primary,
     /// Right on the eight-way stick.
     Right,
     /// Second button; starts a jump in the street.
     Secondary,
-    /// Claim a station after inserting a virtual coin.
+    /// Start immediately, join or rejoin the street.
     Start,
     /// Up on the eight-way stick.
     Up,
@@ -109,7 +111,7 @@ pub enum Control {
 impl Control {
     const fn mask(self) -> u8 {
         match self {
-            Self::Coin => 1,
+            Self::Pause => 1,
             Self::Start => 2,
             Self::Primary => 4,
             Self::Secondary => 8,
@@ -130,31 +132,18 @@ pub struct Action {
     pub player: Player,
 }
 
-/// The three implemented cabinet phases.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Phase {
-    /// Waiting for a first virtual coin.
-    Attract,
-    /// Four-player entry; Start claims a station and Primary confirms.
-    Selection,
-    /// Initial street movement; the intervening intro is not yet modelled.
-    Street,
-}
-
 /// A station's current admission state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Participation {
     /// Not playing.
     Absent,
-    /// Knocked out; a credit and a new Start edge can restore play.
+    /// Knocked out; a new Start edge can restore play for free.
     Continuing {
         /// Remaining countdown ticks.
         ticks_left: u16,
     },
     /// Station is active in the street.
     Playing,
-    /// Station claimed in the selection screen.
-    Selected,
 }
 
 /// Integer screen-space foot position in the first street prototype.
@@ -222,8 +211,6 @@ pub enum LayoutError {
 pub struct Station {
     /// Cumulative attack cues at the observed provisional onset tick.
     pub attack_cues: u64,
-    /// Remaining virtual credits.
-    pub credits: u8,
     /// Current sprite facing.
     pub facing: Facing,
     /// Experimental encounter health; zero means the station is knocked out.
@@ -253,41 +240,6 @@ struct Slot {
 }
 
 impl Slot {
-    fn action(&mut self, control: Control, down: bool, phase: Phase) -> bool {
-        let mask = control.mask();
-        let was_held = self.held & mask != 0;
-        if down {
-            self.held |= mask;
-        } else {
-            self.held &= !mask;
-        }
-        if !down || was_held {
-            return false;
-        }
-        match control {
-            Control::Coin => {
-                self.station.credits = self.station.credits.saturating_add(1);
-            },
-            Control::Start => self.start(phase),
-            Control::Primary => {
-                if phase == Phase::Selection {
-                    return self.station.participation
-                        == Participation::Selected;
-                }
-                if phase == Phase::Street {
-                    self.begin_maneuver(Maneuver::Attack { tick: 0 });
-                }
-            },
-            Control::Secondary => {
-                if phase == Phase::Street {
-                    self.begin_maneuver(Maneuver::Jump { tick: 0 });
-                }
-            },
-            Control::Down | Control::Left | Control::Right | Control::Up => {},
-        }
-        false
-    }
-
     // Accumulate the observed approximate quarter-pixel horizontal rate.
     const fn attack_step(&mut self, horizontal: i16) -> i16 {
         let next = self.attack_quarters.saturating_add(horizontal.signum());
@@ -318,6 +270,17 @@ impl Slot {
                 ticks_left: CONTINUE_TICKS,
             };
         }
+    }
+
+    const fn edge(&mut self, control: Control, down: bool) -> bool {
+        let mask = control.mask();
+        let was_held = self.held & mask != 0;
+        if down {
+            self.held |= mask;
+        } else {
+            self.held &= !mask;
+        }
+        down && !was_held
     }
 
     const fn expire_continue(&mut self) {
@@ -390,7 +353,6 @@ impl Slot {
             spawn: position,
             station: Station {
                 attack_cues: 0,
-                credits: 0,
                 facing: Facing::Right,
                 health: PLAYER_HEALTH,
                 maneuver: Maneuver::Idle,
@@ -401,27 +363,20 @@ impl Slot {
         }
     }
 
-    fn start(&mut self, phase: Phase) {
-        if self.station.credits == 0
-            || !matches!(
-                self.station.participation,
-                Participation::Absent | Participation::Continuing { .. }
-            )
-        {
+    const fn start(&mut self) {
+        if !matches!(
+            self.station.participation,
+            Participation::Absent | Participation::Continuing { .. }
+        ) {
             return;
         }
         self.attack_quarters = 0;
-        self.station.credits = self.station.credits.saturating_sub(1);
         self.station.health = PLAYER_HEALTH;
         self.station.position = self.spawn;
         self.station.facing = Facing::Right;
         self.station.maneuver = Maneuver::Idle;
         self.station.walking_ticks = None;
-        self.station.participation = if phase == Phase::Street {
-            Participation::Playing
-        } else {
-            Participation::Selected
-        };
+        self.station.participation = Participation::Playing;
     }
 }
 
@@ -434,22 +389,13 @@ impl Slot {
 pub struct Cabinet {
     enemy: Option<Enemy>,
     layout: StreetLayout,
-    phase: Phase,
+    session: LocalSession,
     slots: [Slot; 4],
 }
 
 impl Cabinet {
-    fn activate_selected(&mut self) {
-        self.phase = Phase::Street;
-        for selected in &mut self.slots {
-            if selected.station.participation == Participation::Selected {
-                selected.station.participation = Participation::Playing;
-            }
-        }
-    }
-
     fn advance_continue(&mut self) {
-        if self.phase != Phase::Street || self.enemy.is_none() {
+        if self.phase() != Phase::Playing || self.enemy.is_none() {
             return;
         }
         for slot in &mut self.slots {
@@ -462,26 +408,49 @@ impl Cabinet {
         {
             return;
         }
-        self.enemy = self.enemy.map(Enemy::restart);
-        self.phase = if self.slots.iter().any(|slot| slot.station.credits > 0) {
-            Phase::Selection
-        } else {
-            Phase::Attract
-        };
+        self.session.return_to_menu();
+        self.reset_world();
     }
 
-    fn apply(&mut self, change: &LogicalAction<Action>) {
-        let Some(slot) = self.slots.get_mut(change.action.player.index())
-        else {
+    fn apply(
+        &mut self,
+        change: &LogicalAction<Action>,
+        pending: &mut [Option<Maneuver>; 4],
+    ) {
+        let index = change.action.player.index();
+        let Some(slot) = self.slots.get_mut(index) else {
             return;
         };
-        let confirm =
-            slot.action(change.action.control, change.down, self.phase);
-        if self.phase == Phase::Attract && slot.station.credits > 0 {
-            self.phase = Phase::Selection;
+        let control = change.action.control;
+        if !slot.edge(control, change.down) {
+            return;
         }
-        if confirm {
-            self.activate_selected();
+        let playing = self.session.phase() == Phase::Playing;
+        let command = match control {
+            Control::Start => MenuInput::Start,
+            Control::Pause => MenuInput::Pause,
+            Control::Primary | Control::Secondary if playing => {
+                if slot.station.can_fight() {
+                    queue_maneuver(pending, index, control);
+                }
+                return;
+            },
+            Control::Primary => MenuInput::Confirm,
+            Control::Up if !playing => MenuInput::Previous,
+            Control::Down if !playing => MenuInput::Next,
+            Control::Down
+            | Control::Left
+            | Control::Right
+            | Control::Secondary
+            | Control::Up => return,
+        };
+        match self.session.input(command) {
+            SessionEffect::Join => slot.start(),
+            SessionEffect::Reset => self.reset_world(),
+            SessionEffect::None | SessionEffect::Exit => {},
+        }
+        if self.phase() != Phase::Playing {
+            *pending = [None; 4];
         }
     }
 
@@ -502,7 +471,7 @@ impl Cabinet {
         Ok(Self {
             enemy: None,
             layout,
-            phase: Phase::Attract,
+            session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
         })
     }
@@ -510,7 +479,7 @@ impl Cabinet {
     /// Current cabinet phase.
     #[must_use]
     pub const fn phase(&self) -> Phase {
-        self.phase
+        self.session.phase()
     }
 
     fn record_attack_cues(&mut self) {
@@ -522,6 +491,23 @@ impl Cabinet {
                     slot.station.attack_cues.saturating_add(1);
             }
         }
+    }
+
+    fn reset_world(&mut self) {
+        self.enemy = self.enemy.map(Enemy::restart);
+        for slot in &mut self.slots {
+            let held = slot.held;
+            let cues = slot.station.attack_cues;
+            *slot = Slot::new(slot.spawn);
+            slot.held = held;
+            slot.station.attack_cues = cues;
+        }
+    }
+
+    /// Shared menu state used by native and future host presentations.
+    #[must_use]
+    pub const fn session(&self) -> LocalSession {
+        self.session
     }
 
     /// Inspect all four stations in cabinet order.
@@ -551,14 +537,23 @@ impl InputStep for Cabinet {
     type Input = LogicalAction<Action>;
 
     fn input_step(&mut self, _tick: u64, actions: &[Self::Input]) {
-        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
-            slot.station.maneuver = slot.station.maneuver.advance(player);
-        }
+        let mut pending = [None; 4];
         for action in actions {
-            self.apply(action);
+            self.apply(action, &mut pending);
+        }
+        if self.phase() != Phase::Playing {
+            return;
+        }
+        for ((player, slot), queued) in
+            Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
+        {
+            slot.station.maneuver = slot.station.maneuver.advance(player);
+            if let Some(maneuver) = queued {
+                slot.begin_maneuver(maneuver);
+            }
         }
         self.advance_continue();
-        if self.phase == Phase::Street {
+        if self.phase() == Phase::Playing {
             for slot in &mut self.slots {
                 slot.move_tick(self.layout);
             }
@@ -580,6 +575,21 @@ const fn axis(negative: bool, positive: bool) -> i16 {
     }
 }
 
+fn queue_maneuver(
+    pending: &mut [Option<Maneuver>; 4],
+    index: usize,
+    control: Control,
+) {
+    let maneuver = if control == Control::Primary {
+        Maneuver::Attack { tick: 0 }
+    } else {
+        Maneuver::Jump { tick: 0 }
+    };
+    if let Some(queued) = pending.get_mut(index) {
+        let _first = queued.get_or_insert(maneuver);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -597,7 +607,7 @@ mod tests {
         result.unwrap_or_else(|_error| Cabinet {
             enemy: None,
             layout: StreetLayout::DOWNTOWN,
-            phase: Phase::Attract,
+            session: LocalSession::default(),
             slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
         })
     }
@@ -621,36 +631,25 @@ mod tests {
     }
 
     #[test]
-    fn coin_start_and_confirmation_are_distinct() {
+    fn start_enters_immediately_and_other_stations_can_join() {
         let mut state = cabinet();
+        assert_eq!(state.phase(), Phase::MainMenu);
         state.input_step(0, &pulse(Player::Marge, Control::Start));
-        assert_eq!(state.phase(), Phase::Attract);
-        state.input_step(1, &pulse(Player::Marge, Control::Coin));
-        assert_eq!(state.phase(), Phase::Selection);
-        assert_eq!(state.stations().first().map(|slot| slot.credits), Some(1));
-        state.input_step(2, &pulse(Player::Marge, Control::Start));
-        assert_eq!(state.phase(), Phase::Selection);
-        assert_eq!(
-            state.stations().first().map(|slot| slot.participation),
-            Some(Participation::Selected)
-        );
-        state.input_step(3, &pulse(Player::Homer, Control::Primary));
-        assert_eq!(state.phase(), Phase::Selection);
-        state.input_step(4, &pulse(Player::Marge, Control::Primary));
-        assert_eq!(state.phase(), Phase::Street);
-        assert_eq!(
-            state.stations().first().map(|slot| slot.participation),
-            Some(Participation::Playing)
-        );
+        assert_eq!(state.phase(), Phase::Playing);
+        let [marge, homer, ..] = state.stations();
+        assert_eq!(marge.participation, Participation::Playing);
+        assert_eq!(homer.participation, Participation::Absent);
+        state.input_step(1, &pulse(Player::Homer, Control::Start));
+        let [unchanged, joined, ..] = state.stations();
+        assert_eq!(unchanged, marge);
+        assert_eq!(joined.participation, Participation::Playing);
     }
 
     fn four_playing() -> Cabinet {
         let mut state = cabinet();
         for player in Player::ALL {
-            state.input_step(0, &pulse(player, Control::Coin));
-            state.input_step(1, &pulse(player, Control::Start));
+            state.input_step(2, &pulse(player, Control::Start));
         }
-        state.input_step(2, &pulse(Player::Marge, Control::Primary));
         state
     }
 
@@ -693,21 +692,53 @@ mod tests {
     }
 
     #[test]
-    fn held_coin_does_not_repeat_and_late_join_has_own_credit() {
-        let mut state = cabinet();
-        let coin = change(Player::Marge, Control::Coin, true);
-        state.input_step(0, &[coin.clone(), coin]);
-        state.input_step(1, &pulse(Player::Marge, Control::Start));
-        state.input_step(2, &pulse(Player::Marge, Control::Primary));
-        state.input_step(3, &pulse(Player::Marge, Control::Start));
-        state.input_step(4, &pulse(Player::Homer, Control::Start));
-        let [marge, homer, ..] = state.stations();
-        assert_eq!(marge.credits, 0);
-        assert_eq!(homer.participation, Participation::Absent);
-        state.input_step(5, &pulse(Player::Homer, Control::Coin));
-        state.input_step(6, &pulse(Player::Homer, Control::Start));
-        let [_, joined, ..] = state.stations();
-        assert_eq!(joined.participation, Participation::Playing);
+    fn start_does_not_reset_an_already_active_station() {
+        let mut state = four_playing();
+        state.input_step(3, &[change(Player::Marge, Control::Right, true)]);
+        state.input_step(4, &pulse(Player::Marge, Control::Start));
+        let [marge, ..] = state.stations();
+        assert_eq!(marge.position.x, 114);
+        assert_eq!(marge.health, 3);
+    }
+
+    #[test]
+    fn pause_suspends_motion_and_attack_until_resume() {
+        let mut state = four_playing();
+        state.input_step(3, &pulse(Player::Marge, Control::Primary));
+        let frozen = state.stations();
+        state.input_step(4, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.phase(), Phase::Paused);
+        assert_eq!(state.stations(), frozen);
+        for tick in 5..60 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations(), frozen);
+        state.input_step(60, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.phase(), Phase::Playing);
+        state.input_step(61, &[]);
+        assert_ne!(state.stations(), frozen);
+    }
+
+    #[test]
+    fn pause_at_the_attack_cue_does_not_skip_or_repeat_it() {
+        let mut state = four_playing();
+        state.input_step(3, &pulse(Player::Marge, Control::Primary));
+        for tick in 4..7 {
+            state.input_step(tick, &[]);
+        }
+        let mut uninterrupted = state;
+        let before = state.stations();
+        state.input_step(7, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.stations(), before);
+        for tick in 8..20 {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(20, &pulse(Player::Marge, Control::Pause));
+        uninterrupted.input_step(7, &[]);
+        assert_eq!(state.stations(), uninterrupted.stations());
+        state.input_step(21, &[]);
+        uninterrupted.input_step(8, &[]);
+        assert_eq!(state.stations(), uninterrupted.stations());
     }
 
     #[test]
@@ -928,13 +959,7 @@ mod tests {
     #[test]
     fn replay_is_independent_of_render_frame_partition() {
         let mut script = InputScript::new();
-        for action in pulse(Player::Marge, Control::Coin) {
-            script.record(0, action);
-        }
         for action in pulse(Player::Marge, Control::Start) {
-            script.record(1, action);
-        }
-        for action in pulse(Player::Marge, Control::Primary) {
             script.record(2, action);
         }
         script.record(3, change(Player::Marge, Control::Right, true));

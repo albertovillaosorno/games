@@ -241,13 +241,7 @@ mod tests {
     fn playing(spawn: Point) -> Result<Cabinet, LayoutError> {
         let mut cabinet =
             Cabinet::with_encounter(StreetLayout::DOWNTOWN, spawn)?;
-        for (tick, control) in [
-            (0, Control::Coin),
-            (1, Control::Start),
-            (2, Control::Primary),
-        ] {
-            cabinet.input_step(tick, &pulse(control));
-        }
+        cabinet.input_step(2, &pulse(Control::Start));
         Ok(cabinet)
     }
 
@@ -261,10 +255,10 @@ mod tests {
         };
         cabinet.input_step(0, &[]);
         assert_eq!(cabinet.enemy().map(|enemy| enemy.position), Some(spawn));
-        cabinet.input_step(1, &pulse(Control::Coin));
-        cabinet.input_step(2, &pulse(Control::Start));
+        cabinet.input_step(1, &[]);
+        cabinet.input_step(2, &[]);
         assert_eq!(cabinet.enemy().map(|enemy| enemy.position), Some(spawn));
-        cabinet.input_step(3, &pulse(Control::Primary));
+        cabinet.input_step(3, &pulse(Control::Start));
         assert_eq!(
             cabinet.enemy().map(|enemy| enemy.position),
             Some(Point { x: 249, y: 190 })
@@ -384,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn paid_continue_requires_start_and_preserves_other_stations() {
+    fn free_continue_requires_only_a_new_start() {
         let result = knocked_out();
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
@@ -394,24 +388,13 @@ mod tests {
         assert_eq!(initial.participation, Participation::Continuing {
             ticks_left: CONTINUE_TICKS,
         });
-        cabinet.input_step(100, &pulse(Control::Start));
-        let [unpaid, ..] = cabinet.stations();
-        assert_eq!(
-            (unpaid.health, unpaid.participation),
-            (0, Participation::Continuing {
-                ticks_left: CONTINUE_TICKS.saturating_sub(1),
-            })
-        );
-        cabinet.input_step(101, &pulse(Control::Coin));
-        let [paid, ..] = cabinet.stations();
-        assert_eq!((paid.health, paid.credits), (0, 1));
-        for tick in 102..112 {
+        for tick in 100..112 {
             cabinet.input_step(tick, &[]);
         }
         let [waiting, ..] = cabinet.stations();
         assert_eq!(
-            (waiting.health, waiting.credits, waiting.participation),
-            (0, 1, Participation::Continuing {
+            (waiting.health, waiting.participation),
+            (0, Participation::Continuing {
                 ticks_left: CONTINUE_TICKS.saturating_sub(12),
             })
         );
@@ -421,14 +404,12 @@ mod tests {
         assert_eq!(
             (
                 continued.participation,
-                continued.credits,
                 continued.health,
                 continued.position,
                 continued.attack_cues
             ),
             (
                 Participation::Playing,
-                0,
                 3,
                 Point { x: 110, y: 190 },
                 initial.attack_cues
@@ -438,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn unpaid_expiry_resets_empty_cabinet_and_admits_a_new_game() {
+    fn expiry_resets_empty_world_and_start_admits_a_new_game() {
         let result = knocked_out();
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
@@ -451,18 +432,16 @@ mod tests {
         assert_eq!(last.participation, Participation::Continuing {
             ticks_left: 1
         });
-        assert_eq!(cabinet.phase(), Phase::Street);
+        assert_eq!(cabinet.phase(), Phase::Playing);
         cabinet.input_step(1200, &[]);
-        assert_eq!(cabinet.phase(), Phase::Attract);
+        assert_eq!(cabinet.phase(), Phase::MainMenu);
         assert_eq!(cabinet.enemy(), Some(Enemy::new(Point { x: 128, y: 190 })));
-        cabinet.input_step(1201, &pulse(Control::Coin));
-        cabinet.input_step(1202, &pulse(Control::Start));
-        cabinet.input_step(1203, &pulse(Control::Primary));
-        assert_eq!(cabinet.phase(), Phase::Street);
+        cabinet.input_step(1201, &pulse(Control::Start));
+        assert_eq!(cabinet.phase(), Phase::Playing);
         let [rejoined, ..] = cabinet.stations();
         assert_eq!(
-            (rejoined.participation, rejoined.health, rejoined.credits),
-            (Participation::Playing, 3, 0)
+            (rejoined.participation, rejoined.health),
+            (Participation::Playing, 3)
         );
     }
 
@@ -482,18 +461,14 @@ mod tests {
         let Ok(mut cabinet) = result else {
             return;
         };
-        for (tick, control) in [(0, Control::Coin), (1, Control::Start)] {
-            let actions = pulse(control);
-            let homer = pulse(control).map(|event| LogicalAction {
-                action: Action {
-                    control,
-                    player: Player::Homer,
-                },
-                ..event
-            });
-            cabinet.input_step(tick, &[actions, homer].concat());
-        }
-        cabinet.input_step(2, &pulse(Control::Primary));
+        let homer = pulse(Control::Start).map(|event| LogicalAction {
+            action: Action {
+                player: Player::Homer,
+                ..event.action
+            },
+            ..event
+        });
+        cabinet.input_step(2, &[pulse(Control::Start), homer].concat());
         for tick in 3..100 {
             let [marge, ..] = cabinet.stations();
             if marge.health == 0 {
@@ -507,8 +482,7 @@ mod tests {
             (before.participation, before.health),
             (Participation::Playing, 3)
         );
-        cabinet.input_step(100, &pulse(Control::Coin));
-        cabinet.input_step(101, &pulse(Control::Start));
+        cabinet.input_step(100, &pulse(Control::Start));
         let [continued, after, ..] = cabinet.stations();
         assert_eq!(
             (continued.health, continued.participation),
@@ -518,8 +492,11 @@ mod tests {
     }
 
     #[test]
-    fn held_start_cannot_spend_a_new_continue_credit() {
-        let result = knocked_out();
+    fn held_start_cannot_automatically_continue_after_knockout() {
+        let result = Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
+            x: 128,
+            y: 190,
+        });
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
             return;
@@ -528,44 +505,28 @@ mod tests {
             control: Control::Start,
             player: Player::Marge,
         };
-        cabinet.input_step(100, &[LogicalAction { action, down: true }]);
-        cabinet.input_step(101, &pulse(Control::Coin));
-        cabinet.input_step(102, &[LogicalAction { action, down: true }]);
-        let [waiting, ..] = cabinet.stations();
-        assert_eq!(waiting.credits, 1);
-        assert_eq!(waiting.health, 0);
-        cabinet.input_step(103, &[LogicalAction { action, down: false }]);
-        cabinet.input_step(104, &pulse(Control::Start));
-        let [continued, ..] = cabinet.stations();
-        assert_eq!(continued.credits, 0);
-        assert_eq!(continued.health, 3);
-    }
-
-    #[test]
-    fn paid_start_on_final_tick_continues_the_same_game() {
-        let result = knocked_out();
-        assert!(result.is_ok());
-        let Ok(mut cabinet) = result else {
-            return;
-        };
-        for tick in 0..u64::from(CONTINUE_TICKS.saturating_sub(2)) {
+        cabinet.input_step(0, &[LogicalAction { action, down: true }]);
+        for tick in 1..100 {
+            if cabinet
+                .stations()
+                .first()
+                .is_some_and(|slot| slot.health == 0)
+            {
+                break;
+            }
             cabinet.input_step(tick, &[]);
         }
-        cabinet.input_step(1200, &pulse(Control::Coin));
+        cabinet.input_step(100, &[LogicalAction { action, down: true }]);
         let [waiting, ..] = cabinet.stations();
-        assert_eq!(waiting.participation, Participation::Continuing {
-            ticks_left: 1,
-        });
-        cabinet.input_step(1201, &pulse(Control::Start));
+        assert_eq!(waiting.health, 0);
+        cabinet.input_step(101, &[LogicalAction { action, down: false }]);
+        cabinet.input_step(102, &pulse(Control::Start));
         let [continued, ..] = cabinet.stations();
-        assert_eq!(cabinet.phase(), Phase::Street);
-        assert_eq!(continued.participation, Participation::Playing);
-        assert_eq!(continued.credits, 0);
         assert_eq!(continued.health, 3);
     }
 
     #[test]
-    fn last_tick_coin_survives_expiry_without_reviving_old_game() {
+    fn start_on_final_tick_continues_the_same_game() {
         let result = knocked_out();
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
@@ -574,23 +535,36 @@ mod tests {
         for tick in 0..u64::from(CONTINUE_TICKS.saturating_sub(1)) {
             cabinet.input_step(tick, &[]);
         }
-        cabinet.input_step(1200, &pulse(Control::Coin));
-        let [paid, ..] = cabinet.stations();
-        assert_eq!(paid.participation, Participation::Absent);
-        assert_eq!(paid.credits, 1);
-        assert_eq!(cabinet.phase(), Phase::Selection);
-        assert_eq!(cabinet.enemy(), Some(Enemy::new(Point { x: 128, y: 190 })));
+        let [waiting, ..] = cabinet.stations();
+        assert_eq!(waiting.participation, Participation::Continuing {
+            ticks_left: 1,
+        });
         cabinet.input_step(1201, &pulse(Control::Start));
-        assert_eq!(
-            cabinet
-                .stations()
-                .first()
-                .map(|station| station.participation),
-            Some(Participation::Selected)
-        );
-        cabinet.input_step(1202, &pulse(Control::Primary));
         let [continued, ..] = cabinet.stations();
+        assert_eq!(cabinet.phase(), Phase::Playing);
         assert_eq!(continued.participation, Participation::Playing);
         assert_eq!(continued.health, 3);
+    }
+
+    #[test]
+    fn paused_world_keeps_continue_opportunity_and_enemy_state() {
+        let result = knocked_out();
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(100, &pulse(Control::Pause));
+        assert_eq!(cabinet.phase(), Phase::Paused);
+        let frozen = cabinet.stations();
+        let enemy = cabinet.enemy();
+        for tick in 101..1500 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations(), frozen);
+        assert_eq!(cabinet.enemy(), enemy);
+        cabinet.input_step(1500, &pulse(Control::Pause));
+        assert_eq!(cabinet.phase(), Phase::Playing);
+        cabinet.input_step(1501, &pulse(Control::Start));
+        assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
     }
 }

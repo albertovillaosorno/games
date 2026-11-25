@@ -32,8 +32,12 @@
 //! Accelerated SDL2 RGBA presentation for Linux hosts.
 /// Bounded native keyboard, game-controller and touch event admission.
 pub mod input;
+/// Native presentation for shared local free-play session menus.
+pub mod menu;
 /// Bounded GPU-resident sprite atlases and ordered scene composition.
 pub mod sprites;
+/// Shared bounded bitmap text and native UI atlas rendering.
+pub mod ui;
 
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};

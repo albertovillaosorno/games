@@ -32,11 +32,10 @@
 //! Native initial street preview using only verified canonical art.
 
 mod audio;
-mod continue_hud;
 mod encounter;
-mod glyph;
 mod launch;
 mod poses;
+mod station_hud;
 mod touch;
 
 use std::collections::BTreeMap;
@@ -64,9 +63,11 @@ use games_platform_graphics::linux::input::{
     Axis, Button, HostEvent, NativeInput, Scancode, axis_code, button_code,
     key_code,
 };
+use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
     AtlasId, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
 };
+use games_platform_graphics::linux::ui::PlateLayout;
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
@@ -81,7 +82,7 @@ const SOURCE_SHA: &str =
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
 const CONTROLS: [Control; 8] = [
-    Control::Coin,
+    Control::Pause,
     Control::Start,
     Control::Primary,
     Control::Secondary,
@@ -92,8 +93,8 @@ const CONTROLS: [Control; 8] = [
 ];
 const KEYBOARD: [[Scancode; 8]; 4] = [
     [
-        Scancode::Num1,
-        Scancode::Num5,
+        Scancode::Escape,
+        Scancode::Return,
         Scancode::Z,
         Scancode::X,
         Scancode::Left,
@@ -102,7 +103,7 @@ const KEYBOARD: [[Scancode; 8]; 4] = [
         Scancode::Down,
     ],
     [
-        Scancode::Num2,
+        Scancode::F2,
         Scancode::Num6,
         Scancode::F,
         Scancode::G,
@@ -112,7 +113,7 @@ const KEYBOARD: [[Scancode; 8]; 4] = [
         Scancode::S,
     ],
     [
-        Scancode::Num3,
+        Scancode::F3,
         Scancode::Num7,
         Scancode::O,
         Scancode::P,
@@ -122,7 +123,7 @@ const KEYBOARD: [[Scancode; 8]; 4] = [
         Scancode::K,
     ],
     [
-        Scancode::Num4,
+        Scancode::F4,
         Scancode::Num8,
         Scancode::Kp1,
         Scancode::Kp2,
@@ -144,7 +145,7 @@ const BUTTONS: [Button; 8] = [
 ];
 
 const ACTION_NAMES: [&str; 8] = [
-    "coin",
+    "pause",
     "start",
     "primary",
     "secondary",
@@ -333,6 +334,8 @@ struct Scene {
     background: Art,
     combat: Option<encounter::CombatArt>,
     draws: Vec<SpriteDraw>,
+    hud: station_hud::StationHud,
+    menu: MenuArt,
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
     world: Vec<(i16, SpriteDraw)>,
@@ -374,10 +377,12 @@ impl Scene {
                 .map(|bundles| encounter::CombatArt::load(scene, bundles))
                 .transpose()?,
             draws: Vec::with_capacity(if source.enemy.is_some() {
-                21
+                22
             } else {
-                10
+                11
             }),
+            hud: station_hud::StationHud::load(scene, profiles)?,
+            menu: load_menu(scene, profiles)?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles)?)
             } else {
@@ -402,7 +407,7 @@ impl Scene {
             self.queue_station(player, station, cabinet.phase())?;
         }
         if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
-            && cabinet.phase() == Phase::Street
+            && matches!(cabinet.phase(), Phase::Playing | Phase::Paused)
             && enemy.health > 0
         {
             self.world
@@ -411,10 +416,13 @@ impl Scene {
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
         if let (Some(combat), Some(enemy)) = (&self.combat, cabinet.enemy())
-            && cabinet.phase() == Phase::Street
+            && matches!(cabinet.phase(), Phase::Playing | Phase::Paused)
             && enemy.health > 0
         {
             combat.enemy_health(&mut self.draws, enemy)?;
+        }
+        if let Some(menu) = self.menu.draw(cabinet.session(), 20, 24)? {
+            self.draws.push(menu);
         }
         if let Some(panel) = self.panel {
             self.draws.push(panel);
@@ -428,51 +436,34 @@ impl Scene {
         station: Station,
         phase: Phase,
     ) -> Result<(), RenderError> {
-        if let (Some(combat), Participation::Continuing { ticks_left }) =
-            (&self.combat, station.participation)
-        {
-            self.draws.push(combat.continue_draw(
-                player,
-                station.credits > 0,
-                ticks_left,
-            )?);
+        if !matches!(phase, Phase::Playing | Phase::Paused) {
             return Ok(());
         }
-        if let Some(combat) = &self.combat
-            && station.participation == Participation::Absent
-            && station.credits > 0
-        {
-            self.draws.push(combat.continue_draw(player, true, 0)?);
+        if let Some(prompt) = self.hud.draw(player, station.participation)? {
+            self.draws.push(prompt);
             return Ok(());
         }
         let actor = *self
             .actors
             .get(player.index())
             .ok_or(RenderError::InvalidSprite)?;
-        if station.credits > 0 || station.participation != Participation::Absent
-        {
-            self.draws.push(actor.draw(indicator(player)?, false));
+        self.draws.push(actor.draw(indicator(player)?, false));
+        if let Some(combat) = &self.combat {
+            combat.station_health(&mut self.draws, player, station)?;
         }
-        if station.participation == Participation::Playing
-            && phase == Phase::Street
-        {
-            if let Some(combat) = &self.combat {
-                combat.station_health(&mut self.draws, player, station)?;
-            }
-            if station.health > 0 {
-                let pose = self.poses.select(player, station).unwrap_or(actor);
-                self.world.push((
-                    station.position.y,
-                    pose.draw(
-                        ground_position(
-                            pose,
-                            station.position,
-                            station.maneuver.elevation(),
-                        )?,
-                        station.facing == Facing::Left,
-                    ),
-                ));
-            }
+        if station.health > 0 {
+            let pose = self.poses.select(player, station).unwrap_or(actor);
+            self.world.push((
+                station.position.y,
+                pose.draw(
+                    ground_position(
+                        pose,
+                        station.position,
+                        station.maneuver.elevation(),
+                    )?,
+                    station.facing == Facing::Left,
+                ),
+            ));
         }
         Ok(())
     }
@@ -525,6 +516,51 @@ struct PreviewOptions<'profiles> {
 }
 
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
+
+fn key_label(key: Scancode) -> &'static str {
+    if key == Scancode::Return {
+        "ENTER"
+    } else {
+        key.name()
+    }
+}
+
+fn load_menu(
+    scene: &mut SceneSession<'_, '_>,
+    profiles: &Profiles,
+) -> Result<MenuArt, RenderError> {
+    let [marge, homer, bart, lisa] =
+        profiles.keys.map(|[_, key, ..]| key_label(key));
+    let marge_hint = format!("MARGE: {marge}");
+    let homer_hint = format!("HOMER: {homer}");
+    let bart_hint = format!("BART: {bart}");
+    let lisa_hint = format!("LISA: {lisa}");
+    MenuArt::load(
+        scene,
+        PlateLayout {
+            background: [24, 22, 30, 255],
+            height: 176,
+            max_bytes: size(1_048_576)?,
+            width: 280,
+        },
+        MenuContent {
+            main_hints: &[
+                "CHOOSE YOUR CHARACTER WITH START",
+                &marge_hint,
+                &homer_hint,
+                &bart_hint,
+                &lisa_hint,
+                "GAMEPAD / TOUCH: START TO JOIN",
+                "UP/DOWN SELECT - PRIMARY CONFIRM",
+            ],
+            pause_hints: &[
+                "PAUSE OR START TO RESUME",
+                "UP/DOWN SELECT - PRIMARY CONFIRM",
+            ],
+            title: "THE SIMPSONS ARCADE",
+        },
+    )
+}
 
 fn ground_position(
     actor: Art,
@@ -818,32 +854,13 @@ fn smoke_admission(
     touch_enabled: bool,
 ) -> Result<(), RenderError> {
     if touch_enabled {
-        smoke_touch(scene, controls, simulation, &[
-            Control::Coin,
-            Control::Start,
-        ])?;
+        smoke_touch(scene, controls, simulation, &[Control::Start])?;
     }
     for (player, keys) in Player::ALL.into_iter().zip(controls.profiles.keys) {
         if touch_enabled && player.index() == controls.profiles.touch_player {
             continue;
         }
-        for key in keys.into_iter().take(2) {
-            for down in [true, false] {
-                controls.route(
-                    InputEvent::Key {
-                        code: key_code(key),
-                        down,
-                    },
-                    Duration::ZERO,
-                    simulation,
-                )?;
-            }
-        }
-    }
-    if touch_enabled {
-        smoke_touch(scene, controls, simulation, &[Control::Primary])?;
-    } else {
-        let key = controls.key(Player::Marge, Control::Primary)?;
+        let [_, key, ..] = keys;
         for down in [true, false] {
             controls.route(
                 InputEvent::Key {
@@ -1107,6 +1124,21 @@ fn smoke_touch_point(
         .ok_or_else(|| failure("touch control outside visible scene"))
 }
 
+fn smoke_optional(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+    playback: Option<&mut audio::Playback<'_>>,
+) -> Result<(), RenderError> {
+    if art.combat.is_some() {
+        encounter::smoke(scene, art, touch_enabled)?;
+    }
+    if let Some(audio) = playback {
+        audio.smoke()?;
+    }
+    Ok(())
+}
+
 fn window(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
@@ -1136,13 +1168,12 @@ fn window(
             Scene::load(scene, source, touch_enabled, options.profiles)?;
         if options.hidden {
             smoke(scene, &mut art, touch_enabled, options.profiles)?;
-            if source.enemy.is_some() {
-                encounter::smoke(scene, &mut art, touch_enabled)?;
-            }
-            if let Some(audio) = &mut playback {
-                audio.smoke()?;
-            }
-            return Ok(());
+            return smoke_optional(
+                scene,
+                &mut art,
+                touch_enabled,
+                playback.as_mut(),
+            );
         }
         if let Some(audio) = &playback {
             audio.resume();
@@ -1158,7 +1189,9 @@ fn window(
             input.enable_touch();
         }
         let mut previous = Duration::ZERO;
-        while poll(scene, &mut input, &mut controls, &mut simulation)? {
+        while simulation.state().phase() != Phase::Exited
+            && poll(scene, &mut input, &mut controls, &mut simulation)?
+        {
             let elapsed = input.elapsed();
             let delta = elapsed.saturating_sub(previous);
             previous = elapsed;
@@ -1177,7 +1210,7 @@ fn scene_limits(
     touch_enabled: bool,
 ) -> Result<SceneLimits, RenderError> {
     let enemy_atlases = if source.enemy.is_some() {
-        4
+        3
     } else {
         0
     };
@@ -1189,17 +1222,17 @@ fn scene_limits(
     let count = source.poses.count().saturating_add(enemy_atlases);
     Ok(SceneLimits {
         atlas_bytes: size(
-            2_097_152usize.saturating_add(count.saturating_mul(65_536)),
+            3_145_728usize.saturating_add(count.saturating_mul(65_536)),
         )?,
         atlases: size(count.saturating_add(if touch_enabled {
-            6
+            8
         } else {
-            5
+            7
         }))?,
         sprites: size(enemy_sprites.saturating_add(if touch_enabled {
-            10
+            11
         } else {
-            9
+            10
         }))?,
     })
 }
@@ -1261,20 +1294,11 @@ mod tests {
                 device,
             })?;
             for event in [
-                button(device, Button::Back, true),
-                button(device, Button::Back, false),
                 button(device, Button::Start, true),
                 button(device, Button::Start, false),
             ] {
                 route_now(&mut controls, &mut simulation, event)?;
             }
-        }
-        for down in [true, false] {
-            route_now(
-                &mut controls,
-                &mut simulation,
-                button(10, Button::A, down),
-            )?;
         }
         let _stations = advance(&mut simulation)?;
         Ok((controls, simulation))
