@@ -33,6 +33,13 @@
   Reuse first, extend second, implement once only if absent.
 - Extract shared mechanisms; express title-specific behaviour through
   parameters, composition, strategies and narrow adapters.
+- Before beginning each new title, inspect ALL previously implemented games
+  and apps, including unfinished ones, without exception. Review their code,
+  tests and shared mechanisms for reuse. Extract genuinely reusable logic
+  into its owning shared crate, migrate existing consumers and preserve
+  regression coverage; never copy a previous title's implementation.
+  Record the reviewed titles and reuse decisions in existing task evidence.
+  Recheck reuse before completing each title; avoid speculative abstractions.
 - Keep game logic independent of operating systems and original media
   formats. Platform adapters own OS access; importers own source formats.
 - Organise importers by source format and hardware family, not by title.
@@ -67,6 +74,11 @@
 - Share persistent display and input settings across titles. Use a responsive
   resizable viewport with aspect-preserving letterbox by default. Offer integer
   pixel scaling, fill/crop and explicit stretch as selectable display modes.
+  Offer adaptive height-fit rendering: retain the original vertical field
+  and uniform scale while expanding the camera horizontally to render real
+  additional world content. Never stretch, crop, duplicate pixels or invent
+  assets in this mode. Use aspect-fit fallback when the scene or camera
+  cannot safely support expansion, including narrow display ratios.
   Support windowed and fullscreen presentation; adapt HUD and touch layout.
   Keep gameplay coordinates and timing independent of window dimensions.
   Map pointer and touch coordinates through the actual presentation transform.

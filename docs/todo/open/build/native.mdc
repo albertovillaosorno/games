@@ -23,6 +23,8 @@ Produce portable Linux x86-64 executables with local asset discovery.
 - Verify shared persistent display and input settings in native gameplay:
   resizable aspect-fit, integer scaling, fill/crop, stretch and fullscreen.
 - Verify resize, high-DPI and touch-coordinate mapping across display modes.
+- Verify adaptive height-fit rendering with real additional scene content,
+  uniform scale, safe camera bounds and aspect-fit fallback where unsupported.
 - Verify remappable per-player keyboard, controller and touch profiles.
 
 ## Evidence
