@@ -62,6 +62,12 @@ and supports local controllers without any socket or account service.
 
 Physical multi-device LAN play, real credential provisioning and integration
 into a playable host remain open. The synchronous host adapter is intended
-for an I/O worker; a bounded pending-handshake scheduler is still needed.
+for an I/O worker; integration with the playable host is still needed.
 
 Fresh validation passed in run 1795576800190768628-2685436 (78 tests).
+
+The listener now limits outstanding unauthenticated sockets to the configured
+player count. The permit is released on drop or handshake completion/failure.
+A handshake uses the original accepted-socket deadline even after queueing.
+Tests cover saturation, capacity recovery and rejection after queue expiry.
+Fresh validation passed in run 1795576898196627474-2708567 (80 tests).

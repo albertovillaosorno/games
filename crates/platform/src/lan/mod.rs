@@ -42,6 +42,7 @@ use games::network::SessionConfig;
 #[derive(Clone, Copy, Debug)]
 pub struct LanConfig {
     max_bytes: u32,
+    max_pending: u8,
     timeout: Duration,
 }
 
@@ -73,7 +74,11 @@ impl LanConfig {
         }
         let max_bytes = u32::try_from(session.max_message_bytes.get())
             .map_err(|_error| ErrorKind::InvalidInput)?;
-        Ok(Self { max_bytes, timeout })
+        Ok(Self {
+            max_bytes,
+            max_pending: session.max_players.get(),
+            timeout,
+        })
     }
 }
 

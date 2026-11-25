@@ -35,6 +35,7 @@ pub mod host;
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use rustls::client::Resumption;
@@ -152,6 +153,7 @@ impl ServerTls {
 #[derive(Debug)]
 pub struct SecureLanListener {
     listener: LanListener,
+    pending: Arc<AtomicU8>,
     tls: ServerTls,
 }
 
@@ -167,7 +169,11 @@ impl SecureLanListener {
         tls: ServerTls,
     ) -> io::Result<Self> {
         let listener = LanListener::bind(address, config)?;
-        Ok(Self { listener, tls })
+        Ok(Self {
+            listener,
+            pending: Arc::new(AtomicU8::new(0)),
+            tls,
+        })
     }
 
     /// Return the listening address, including an assigned ephemeral port.
@@ -181,19 +187,47 @@ impl SecureLanListener {
 
     /// Poll for a pending connection without performing a blocking handshake.
     ///
-    /// Hosts must bound pending connections before dispatching I/O work.
+    /// Returns no connection while the configured player-count budget is full.
     ///
     /// # Errors
     ///
     /// Rejects non-private peers and propagates socket failures.
     pub fn try_accept(&self) -> io::Result<Option<PendingConnection>> {
-        self.listener.try_socket().map(|socket| {
-            socket.map(|stream| PendingConnection {
-                config: self.listener.config,
-                stream,
-                tls: self.tls.clone(),
+        let Some(permit) = PendingPermit::acquire(
+            &self.pending,
+            self.listener.config.max_pending,
+        ) else {
+            return Ok(None);
+        };
+        let Some(stream) = self.listener.try_socket()? else {
+            return Ok(None);
+        };
+        Ok(Some(PendingConnection {
+            config: self.listener.config,
+            permit,
+            stream,
+            tls: self.tls.clone(),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct PendingPermit(Arc<AtomicU8>);
+
+impl PendingPermit {
+    fn acquire(counter: &Arc<AtomicU8>, limit: u8) -> Option<Self> {
+        let _previous = counter
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_add(1).filter(|next| *next <= limit)
             })
-        })
+            .ok()?;
+        Some(Self(Arc::clone(counter)))
+    }
+}
+
+impl Drop for PendingPermit {
+    fn drop(&mut self) {
+        let _previous = self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -201,6 +235,7 @@ impl SecureLanListener {
 #[derive(Debug)]
 pub struct PendingConnection {
     config: LanConfig,
+    permit: PendingPermit,
     stream: DeadlineSocket,
     tls: ServerTls,
 }
@@ -212,9 +247,15 @@ impl PendingConnection {
     ///
     /// Rejects anonymous, untrusted or incompatible peers and timed-out I/O.
     pub fn authenticate(self) -> io::Result<SecureFrameStream> {
+        let Self {
+            config,
+            permit: _permit,
+            stream,
+            tls,
+        } = self;
         let connection =
-            ServerConnection::new(self.tls.0).map_err(io::Error::other)?;
-        handshake(Connection::Server(connection), self.stream, self.config)
+            ServerConnection::new(tls.0).map_err(io::Error::other)?;
+        handshake(Connection::Server(connection), stream, config)
     }
 }
 
@@ -335,10 +376,9 @@ impl TimedStream for TlsSocket {
 
 fn handshake(
     connection: Connection,
-    mut socket: DeadlineSocket,
+    socket: DeadlineSocket,
     config: LanConfig,
 ) -> io::Result<SecureFrameStream> {
-    socket.reset_deadline(config.deadline()?);
     let mut stream = TlsSocket { connection, socket };
     while stream.connection.is_handshaking() {
         stream.flush_tls()?;
@@ -363,6 +403,7 @@ fn handshake(
 #[cfg(test)]
 mod tests {
     use std::net::TcpStream;
+    use std::num::NonZeroU8;
     use std::thread;
     use std::time::Duration;
 
@@ -374,7 +415,8 @@ mod tests {
     use rustls::pki_types::PrivatePkcs8KeyDer;
 
     use super::super::tests::{
-        LOOPBACK, config, error_kind, poll_accept, require, session_config,
+        LOOPBACK, TIMEOUT, config, error_kind, poll_accept, require,
+        session_config,
     };
     use super::{
         ClientTls, ErrorKind, LanConfig, PeerFingerprint, RootCertStore,
@@ -532,7 +574,9 @@ mod tests {
         let outsider = authority()?;
         let keys = credentials(&issuer, &issuer)?;
         let untrusted = credentials(&issuer, &outsider)?;
-        let settings = config()?;
+        let mut limits = session_config(true);
+        limits.max_players = NonZeroU8::MIN;
+        let settings = LanConfig::new(limits, TIMEOUT)?;
         let listener =
             SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
         let (host, remote) =
@@ -546,6 +590,11 @@ mod tests {
         require(
             rejected_host.is_err(),
             "untrusted client must not authenticate",
+        )?;
+        let (approved, client) = pair(&listener, settings, &keys.client, HOST)?;
+        require(
+            approved.is_ok() && client.is_ok(),
+            "failed permits released",
         )
     }
 
@@ -564,5 +613,64 @@ mod tests {
             matches!(error, Some(ErrorKind::TimedOut | ErrorKind::WouldBlock)),
             "silent TLS handshake must time out",
         )
+    }
+
+    #[test]
+    fn pending_socket_budget_releases_on_drop() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let address = listener.local_addr()?;
+        let _first_client = TcpStream::connect(address)?;
+        let first = poll_accept(|| listener.try_accept())?;
+        let _second_client = TcpStream::connect(address)?;
+        let _second = poll_accept(|| listener.try_accept())?;
+        let _third_client = TcpStream::connect(address)?;
+        require(
+            listener.try_accept()?.is_none(),
+            "pending sockets cannot exceed player budget",
+        )?;
+        drop(first);
+        let _third = poll_accept(|| listener.try_accept())?;
+        require(
+            listener.try_accept()?.is_none(),
+            "dropped pending socket frees exactly one slot",
+        )
+    }
+
+    #[test]
+    fn expired_pending_socket_cannot_authenticate() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let client_settings = config()?;
+        let host_settings =
+            LanConfig::new(session_config(true), Duration::from_millis(50))?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, host_settings, keys.server)?;
+        let address = listener.local_addr()?;
+        let name = ServerName::try_from(HOST).map_err(io::Error::other)?;
+        thread::scope(|scope| {
+            let client = scope.spawn(|| {
+                SecureFrameStream::connect(
+                    address,
+                    client_settings,
+                    &keys.client,
+                    name,
+                )
+            });
+            let pending = poll_accept(|| listener.try_accept())?;
+            // Deliberately exceed the real accepted-socket deadline.
+            thread::sleep(Duration::from_millis(80));
+            let error = error_kind(pending.authenticate());
+            let remote = client
+                .join()
+                .map_err(|_error| io::Error::other("TLS worker failed"))?;
+            require(
+                error == Some(ErrorKind::TimedOut) && remote.is_err(),
+                "queued handshake must not obtain a fresh deadline",
+            )
+        })
     }
 }
