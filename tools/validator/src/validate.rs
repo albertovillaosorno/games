@@ -60,73 +60,43 @@ pub mod unified_ir;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::str;
 
+use games_platform::ir::toolchain::validation::{self, Request};
 use games_platform::ir::toolchain::{self, Target};
 
 use crate::contracts::Package;
 
-const CHECKS: &[&[&str]] = &[
-    &[
-        "run",
-        "--locked",
-        "--quiet",
-        "-p",
-        "games-validator",
-        "--bin",
-        "games-hooks",
-        "--",
-        "history",
-    ],
-    &[
-        "+nightly",
-        "fmt",
-        "--all",
-        "--",
-        "--config-path",
-        "rustfmt.toml",
-        "--check",
-    ],
-    &[
-        "clippy",
-        "--workspace",
-        "--all-targets",
-        "--locked",
-        "--",
-        "-D",
-        "warnings",
-    ],
-    &["test", "--workspace", "--locked"],
-    &["test", "--workspace", "--all-features", "--locked"],
-    &["check", "--workspace", "--all-targets", "--locked"],
-    &[
-        "check",
-        "--workspace",
-        "--all-targets",
-        "--all-features",
-        "--locked",
-    ],
-    &[
-        "package",
-        "--package",
-        "games",
-        "--locked",
-        "--offline",
-        "--allow-dirty",
-    ],
+const CHECKS: [Request<'static>; 8] = [
+    Request::History,
+    Request::Format,
+    Request::ClippyWorkspace,
+    Request::TestWorkspace { all_features: false },
+    Request::TestWorkspace { all_features: true },
+    Request::CompileWorkspace { all_features: false },
+    Request::CompileWorkspace { all_features: true },
+    Request::PackageEngine,
 ];
 
-fn execute(command: &mut Command, log: &mut File) -> Result<(), String> {
-    let output = command.output().map_err(|error| error.to_string())?;
+fn execute(
+    root: &Path,
+    request: Request<'_>,
+    log: &mut File,
+) -> Result<(), String> {
+    let output = validation::run(root.as_os_str(), request)
+        .map_err(|error| error.to_string())?;
+    writeln!(log, "{}", output.command).map_err(|error| error.to_string())?;
     log.write_all(&output.stdout)
         .map_err(|error| error.to_string())?;
     log.write_all(&output.stderr)
         .map_err(|error| error.to_string())?;
-    if output.status.success() {
+    if output.success {
         Ok(())
     } else {
-        Err(format!("validation subprocess failed: {}", output.status))
+        Err(format!(
+            "validation subprocess failed: {}",
+            output.diagnostic
+        ))
     }
 }
 
@@ -155,24 +125,10 @@ fn runtime_dependency_graph(graph: &str) -> Result<(), String> {
 }
 
 fn validate_runtime_graph(root: &Path, package: &str) -> Result<(), String> {
-    let graph = Command::new("cargo")
-        .current_dir(root)
-        .args([
-            "tree",
-            "--locked",
-            "-p",
-            package,
-            "--all-features",
-            "--target",
-            "all",
-            "--edges",
-            "normal,build",
-            "--prefix",
-            "none",
-        ])
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !graph.status.success() {
+    let graph =
+        validation::run(root.as_os_str(), Request::RuntimeGraph(package))
+            .map_err(|error| error.to_string())?;
+    if !graph.success {
         return Err(format!("runtime dependency graph failed: {package}"));
     }
     runtime_dependency_graph(
@@ -181,19 +137,12 @@ fn validate_runtime_graph(root: &Path, package: &str) -> Result<(), String> {
     .map_err(|error| format!("{package}: {error}"))
 }
 
-fn portable_arguments(target: Target, packages: &[Package]) -> Vec<&str> {
-    let mut args = vec![
-        "check",
-        "--locked",
-        "--target",
-        target.triple(),
-        "--lib",
-        "--no-default-features",
-    ];
-    for package in packages.iter().filter(|package| package.portable) {
-        args.extend(["-p", package.name.as_str()]);
-    }
-    args
+fn portable_packages(packages: &[Package]) -> Vec<&str> {
+    packages
+        .iter()
+        .filter(|package| package.portable)
+        .map(|package| package.name.as_str())
+        .collect()
 }
 
 fn validate_portable(
@@ -201,11 +150,16 @@ fn validate_portable(
     packages: &[Package],
     log: &mut File,
 ) -> Result<(), String> {
+    let selected = portable_packages(packages);
     for target in Target::portable_checks() {
-        let args = portable_arguments(target, packages);
-        writeln!(log, "cargo {}", args.join(" "))
-            .map_err(|error| error.to_string())?;
-        execute(Command::new("cargo").current_dir(root).args(args), log)?;
+        execute(
+            root,
+            Request::Portable {
+                packages: &selected,
+                target,
+            },
+            log,
+        )?;
     }
     Ok(())
 }
@@ -215,24 +169,9 @@ fn validate_feature_graphs(
     packages: &[Package],
     log: &mut File,
 ) -> Result<(), String> {
-    let graph = Command::new("cargo")
-        .current_dir(root)
-        .args([
-            "tree",
-            "--locked",
-            "-p",
-            "games-build",
-            "--all-features",
-            "--target",
-            "all",
-            "--edges",
-            "normal,build,dev",
-            "--prefix",
-            "none",
-        ])
-        .output()
+    let graph = validation::run(root.as_os_str(), Request::BuildGraph)
         .map_err(|error| error.to_string())?;
-    if !graph.status.success() {
+    if !graph.success {
         return Err(String::from("build dependency graph failed"));
     }
     build_dependency_graph(
@@ -244,20 +183,7 @@ fn validate_feature_graphs(
         if package.runtime {
             validate_runtime_graph(root, &package.name)?;
         }
-        let args = [
-            "clippy",
-            "--locked",
-            "-p",
-            &package.name,
-            "--all-targets",
-            "--all-features",
-            "--",
-            "-D",
-            "warnings",
-        ];
-        writeln!(log, "cargo {}", args.join(" "))
-            .map_err(|error| error.to_string())?;
-        execute(Command::new("cargo").current_dir(root).args(args), log)?;
+        execute(root, Request::ClippyPackage(&package.name), log)?;
     }
     Ok(())
 }
@@ -269,25 +195,21 @@ fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
     writeln!(log, "Authored language and width policy")
         .map_err(|error| error.to_string())?;
     files::validate(root)?;
-    for args in CHECKS {
-        writeln!(log, "cargo {}", args.join(" "))
-            .map_err(|error| error.to_string())?;
-        execute(Command::new("cargo").current_dir(root).args(*args), log)?;
+    for request in CHECKS {
+        execute(root, request, log)?;
     }
     validate_feature_graphs(root, &packages, log)?;
     validate_portable(root, &packages, log)?;
     let paths = files::authored(root)?;
-    let markdown = paths.iter().filter(|path| {
-        path.extension()
-            .is_some_and(|ext| ext == "md" || ext == "mdc")
-    });
-    writeln!(log, "markdownlint-cli2").map_err(|error| error.to_string())?;
-    execute(
-        Command::new("markdownlint-cli2")
-            .current_dir(root)
-            .args(markdown),
-        log,
-    )
+    let markdown: Vec<_> = paths
+        .iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext == "md" || ext == "mdc")
+        })
+        .map(|path| path.as_os_str())
+        .collect();
+    execute(root, Request::Markdown(&markdown), log)
 }
 
 fn main() -> Result<(), String> {
@@ -307,7 +229,7 @@ fn main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Package, Target, build_dependency_graph, portable_arguments,
+        Package, build_dependency_graph, portable_packages,
         runtime_dependency_graph,
     };
 
@@ -345,14 +267,7 @@ mod tests {
                 runtime: false,
             },
         ];
-        for target in Target::portable_checks() {
-            let args = portable_arguments(target, &packages);
-            assert!(args.contains(&target.triple()));
-            assert!(args.contains(&"new-title"));
-            assert!(args.contains(&"new-shared"));
-            assert!(args.contains(&"--no-default-features"));
-            assert!(!args.contains(&"host-tool"));
-        }
+        assert_eq!(portable_packages(&packages), ["new-title", "new-shared"]);
     }
 
     #[test]

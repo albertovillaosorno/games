@@ -284,3 +284,15 @@ only the selected adapter resolves their concrete type on connection or
 binding. The fresh validation 1795647945634452273-176012 passed 1,413
 aggregate test executions and all six portable core targets. This does not
 verify a native runtime on each target or physical LAN performance.
+
+The bounded regular-file snapshot interface now owns ordinary and
+zeroizing private reads in the portable storage IR. The same path value
+and nonzero byte budget reach a private adapter; returned byte lengths
+are checked again before publication. The existing descriptor-based
+Linux-kernel admission, ownership and observable-change checks remain
+unchanged. Other hosts return the same typed unsupported failure,
+including for private snapshots. Build and title consumers no longer
+import the selected native file module or its target-dependent types.
+Portable fake-backend fixtures cover exact and empty reads, excess
+results, failure propagation and credential debug redaction. This does
+not implement new native storage backends.

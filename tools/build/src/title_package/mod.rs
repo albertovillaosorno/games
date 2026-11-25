@@ -100,7 +100,7 @@ impl Prepared {
         executable: &Path,
         inventory: Inventory,
     ) -> Result<Self, String> {
-        let bytes = snapshot(executable, MAX_EXECUTABLE)
+        let bytes = snapshot(executable.as_os_str(), MAX_EXECUTABLE)
             .map_err(|error| format!("authored executable: {error:?}"))?;
         if !native_elf(&bytes) {
             return Err(String::from("expected an x86-64 ELF executable"));
@@ -219,7 +219,7 @@ pub fn run(title: Title, output: &Path) -> Result<(), String> {
 }
 
 fn document(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = snapshot(path, MAX_DOCUMENT)
+    let bytes = snapshot(path.as_os_str(), MAX_DOCUMENT)
         .map_err(|error| format!("licence {}: {error:?}", path.display()))?;
     let text = str::from_utf8(&bytes)
         .map_err(|error| format!("licence {}: {error}", path.display()))?;
@@ -439,12 +439,12 @@ mod tests {
         replacement.add(RECEIPT.into(), b"replacement".to_vec(), false)?;
         require(replacement.publish(&output).is_err())?;
         require(
-            snapshot(&output.join("title"), MAX_DOCUMENT)
+            snapshot(output.join("title").as_os_str(), MAX_DOCUMENT)
                 .map_err(|error| format!("{error:?}"))?
                 == [1, 2, 3],
         )?;
         require(
-            snapshot(&output.join(RECEIPT), MAX_DOCUMENT)
+            snapshot(output.join(RECEIPT).as_os_str(), MAX_DOCUMENT)
                 .map_err(|error| format!("{error:?}"))?
                 == b"complete",
         )?;

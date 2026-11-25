@@ -14,6 +14,7 @@ games.workspace = true
 games-assets.workspace = true
 games-importer = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+zeroize.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rustls = { workspace = true, optional = true }
@@ -26,7 +27,6 @@ rcgen.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 nix.workspace = true
-zeroize.workspace = true
 
 [features]
 importer = ["dep:games-importer"]

@@ -33,6 +33,8 @@
 
 /// Portable reference acquisition.
 pub mod reference;
+/// Fixed contributor validation process requests.
+pub mod validation;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -119,6 +121,8 @@ pub enum ToolchainError {
     InvalidIdentifier,
     /// An upstream reference revision is invalid.
     InvalidReferenceRevision,
+    /// A contributor validation request has invalid arguments.
+    InvalidValidationRequest,
     /// The host failed to start the requested operation.
     Io {
         /// Operation that could not start.
@@ -143,6 +147,9 @@ impl fmt::Display for ToolchainError {
             ),
             Self::InvalidReferenceRevision => {
                 f.write_str("invalid upstream reference revision")
+            },
+            Self::InvalidValidationRequest => {
+                f.write_str("invalid contributor validation request")
             },
             Self::Io { operation, source } => {
                 write!(f, "{operation}: {source}")

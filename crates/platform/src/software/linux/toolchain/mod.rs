@@ -32,6 +32,7 @@
 //! Linux toolchain execution for independently authored workspace artifacts.
 
 mod reference;
+mod validation;
 
 use std::env;
 use std::ffi::{OsStr, OsString};

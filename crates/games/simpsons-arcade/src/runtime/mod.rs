@@ -1555,9 +1555,10 @@ fn profile_limit() -> Result<NonZeroU64, String> {
 }
 
 fn read_profile(path: &Path) -> Result<String, String> {
-    let bytes = snapshot(path, profile_limit()?).map_err(|error| {
-        format!("control profile {}: {error:?}", path.display())
-    })?;
+    let bytes =
+        snapshot(path.as_os_str(), profile_limit()?).map_err(|error| {
+            format!("control profile {}: {error:?}", path.display())
+        })?;
     String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 

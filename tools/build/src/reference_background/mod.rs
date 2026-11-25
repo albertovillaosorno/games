@@ -255,7 +255,7 @@ impl Observation {
             return Err(String::from("invalid scroll control"));
         };
         let raw = snapshot(
-            &paths.palette,
+            paths.palette.as_os_str(),
             reference_palette::byte_limit(machine, 2)?,
         )
         .map_err(|error| format!("palette RAM: {error:?}"))?;
@@ -479,7 +479,7 @@ fn read(path: &Path, length: usize) -> Result<Vec<u8>, String> {
         .ok()
         .and_then(NonZeroU64::new)
         .ok_or_else(|| String::from("invalid observation length"))?;
-    let bytes = snapshot(path, limit)
+    let bytes = snapshot(path.as_os_str(), limit)
         .map_err(|error| format!("observation: {error:?}"))?;
     if bytes.len() != length {
         return Err(String::from("incorrect observation length"));

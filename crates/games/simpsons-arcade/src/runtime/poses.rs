@@ -147,8 +147,9 @@ impl Catalogue {
     }
 
     pub(super) fn open(path: &Path) -> Result<Self, RenderError> {
-        let bytes = snapshot(path, NonZeroU64::MIN.saturating_add(18_431))
-            .map_err(failure)?;
+        let bytes =
+            snapshot(path.as_os_str(), NonZeroU64::MIN.saturating_add(18_431))
+                .map_err(failure)?;
         Self::parse(from_utf8(&bytes).map_err(failure)?)
     }
 

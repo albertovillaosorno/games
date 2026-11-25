@@ -128,7 +128,7 @@ impl MediaReplacement {
         let size = NonZeroU64::new(original.size)
             .ok_or_else(|| String::from("empty media slot"))?;
         let limit = self.encoding.limit(original)?;
-        let source = snapshot(&self.source, limit)
+        let source = snapshot(self.source.as_os_str(), limit)
             .map_err(|error| format!("replacement input: {error:?}"))?;
         let bytes = self.encoding.payload(&source, original, limit)?;
         if u64::try_from(bytes.len()).ok() != Some(size.get()) {

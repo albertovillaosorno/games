@@ -32,6 +32,8 @@
 //! Host-independent authored Cargo argument admission.
 /// Allowlisted reference request and revision admission.
 pub mod reference;
+/// Fixed contributor validation argument admission.
+pub mod validation;
 
 /// The request contains an invalid package, binary or feature identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

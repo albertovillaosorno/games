@@ -36,7 +36,7 @@ use std::path::Path;
 
 use games_assets::AssetFormat;
 use games_platform::ir::importer::reference::WavePcm;
-use games_platform::ir::storage::snapshot;
+use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 /// Compare two bounded complete PCM16 reference recordings.
@@ -47,9 +47,9 @@ pub fn check(
     right: &Path,
     limit: NonZeroU64,
 ) -> Result<(), String> {
-    let first = snapshot(left, limit)
+    let first = snapshot(left.as_os_str(), limit)
         .map_err(|error| format!("left audio: {error:?}"))?;
-    let second = snapshot(right, limit)
+    let second = snapshot(right.as_os_str(), limit)
         .map_err(|error| format!("right audio: {error:?}"))?;
     let first_wave = WavePcm::new(&first, limit)
         .map_err(|error| format!("left WAV: {error:?}"))?;

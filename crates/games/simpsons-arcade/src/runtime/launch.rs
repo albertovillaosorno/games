@@ -216,7 +216,7 @@ impl Assets {
     }
 
     fn open(path: &Path) -> Result<ConfiguredAssets, String> {
-        let bytes = snapshot(path, MAX_BYTES).map_err(|error| {
+        let bytes = snapshot(path.as_os_str(), MAX_BYTES).map_err(|error| {
             format!("launch catalogue {}: {error:?}", path.display())
         })?;
         let text = str::from_utf8(&bytes).map_err(|error| error.to_string())?;

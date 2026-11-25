@@ -31,14 +31,16 @@
 //
 
 use std::collections::BTreeMap;
-use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
 use std::time::SystemTime;
+use std::{env, process};
 
+use games_platform::ir::toolchain::validation::{
+    GitRequest, Request, run as observe,
+};
 use games_platform::ir::toolchain::{ValidationTool, probe_version};
 use sha2::{Digest as _, Sha256};
 
@@ -202,10 +204,7 @@ fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
     let canonical = root.canonicalize().map_err(|error| error.to_string())?;
     hash_cargo_config_files(&canonical, &cargo_home(&canonical)?, &mut hash)?;
     if root.join(".git").exists() {
-        let head = Command::new("git")
-            .current_dir(root)
-            .args(["rev-parse", "--verify", "--quiet", "HEAD"])
-            .output()
+        let head = observe(root.as_os_str(), Request::Git(GitRequest::Head))
             .map_err(|error| error.to_string())?;
         hash_value(&mut hash, b"git-history");
         hash_value(&mut hash, &head.stdout);

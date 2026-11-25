@@ -103,7 +103,7 @@ impl Title {
 
 pub(crate) fn local_layout(root: &Path) -> Result<Layout, String> {
     let maximum = NonZeroU64::MIN.saturating_add(65_535);
-    let config = snapshot_secret(&root.join(".env"), maximum)
+    let config = snapshot_secret(root.join(".env").as_os_str(), maximum)
         .map_err(|error| format!("local configuration: {error:?}"))?;
     let text =
         str::from_utf8(&config).map_err(|_error| "invalid .env encoding")?;

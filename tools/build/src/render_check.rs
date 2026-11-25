@@ -180,9 +180,11 @@ impl Arguments {
             .map_err(|error| format!("asset: {error:?}"))?;
         let sheet = IndexedTiles::new(record, &bytes)
             .map_err(|error| format!("indexed asset: {error:?}"))?;
-        let raw =
-            snapshot(&self.raw, reference_palette::byte_limit(machine, 2)?)
-                .map_err(|error| format!("palette RAM: {error:?}"))?;
+        let raw = snapshot(
+            self.raw.as_os_str(),
+            reference_palette::byte_limit(machine, 2)?,
+        )
+        .map_err(|error| format!("palette RAM: {error:?}"))?;
         let colors = reference_palette::decode(machine, &raw)?;
         let atlas = self.prepare(&sheet, &colors)?;
         let execution = atlas

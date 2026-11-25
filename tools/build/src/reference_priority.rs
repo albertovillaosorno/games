@@ -35,7 +35,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_platform::ir::importer::reference::{Machine, VideoPriority};
-use games_platform::ir::storage::snapshot;
+use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 /// Compare observed palette bases and sorted layer priorities.
@@ -46,11 +46,14 @@ pub fn check(
     raw_path: &Path,
     reference_path: &Path,
 ) -> Result<(), String> {
-    let raw = snapshot(raw_path, NonZeroU64::MIN.saturating_add(15))
-        .map_err(|error| format!("mixer registers: {error:?}"))?;
-    let reference =
-        snapshot(reference_path, NonZeroU64::MIN.saturating_add(27))
-            .map_err(|error| format!("priority reference: {error:?}"))?;
+    let raw =
+        snapshot(raw_path.as_os_str(), NonZeroU64::MIN.saturating_add(15))
+            .map_err(|error| format!("mixer registers: {error:?}"))?;
+    let reference = snapshot(
+        reference_path.as_os_str(),
+        NonZeroU64::MIN.saturating_add(27),
+    )
+    .map_err(|error| format!("priority reference: {error:?}"))?;
     let decoded = machine
         .decode_video_priority(&raw)
         .map_err(|error| format!("priority decode: {error:?}"))?;

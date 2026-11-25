@@ -76,7 +76,7 @@ use games_platform::ir::importer::{
     AssetFamily, ImportProfile, SourceFormat, SourceSnapshot, Verification,
     import, verify,
 };
-use games_platform::ir::storage::snapshot;
+use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
@@ -167,7 +167,7 @@ impl Arguments {
     }
 
     fn snapshot(&self) -> Result<Vec<u8>, String> {
-        snapshot(&self.path, self.source_limit)
+        snapshot(self.path.as_os_str(), self.source_limit)
             .map_err(|error| format!("source file: {error:?}"))
     }
 
@@ -742,7 +742,7 @@ fn report_samples(
         let rom = machine
             .sample_rom(source, archive)
             .map_err(|error| format!("sample ROM: {error:?}"))?;
-        let bytes = snapshot(raw, limit)
+        let bytes = snapshot(raw.as_os_str(), limit)
             .map_err(|error| format!("observation: {error:?}"))?;
         let report = compare_observations(&rom, &bytes)
             .map_err(|error| format!("sample comparison: {error:?}"))?;

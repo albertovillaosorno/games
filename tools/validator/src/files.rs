@@ -33,8 +33,9 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::str::from_utf8;
+
+use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
 
 use crate::todo::roadmap_width;
 
@@ -44,7 +45,12 @@ use crate::todo::roadmap_width;
 ///
 /// Returns an error if discovery fails.
 pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let paths = discover(&mut authored_command(root))?;
+    let output = run(root.as_os_str(), Request::AuthoredFiles)
+        .map_err(|error| error.to_string())?;
+    if !output.success {
+        return Err("authored file discovery failed".into());
+    }
+    let paths = discover_bytes(&output.stdout)?;
     if let Some(path) = paths.iter().find(|path| private_configuration(path)) {
         return Err(format!(
             "private configuration cannot be authored: {}",
@@ -86,15 +92,12 @@ pub(crate) fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
 }
 
 fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
-    let mut command = Command::new("git");
-    let _configured = command.current_dir(root).args([
-        "ls-files",
-        "--cached",
-        "--others",
-        "--exclude-from=.gitignore",
-        "-z",
-    ]);
-    for path in discover(&mut command)? {
+    let output = run(root.as_os_str(), Request::Git(GitRequest::Inventory))
+        .map_err(|error| error.to_string())?;
+    if !output.success {
+        return Err("Git inventory discovery failed".into());
+    }
+    for path in discover_bytes(&output.stdout)? {
         if regular_path(root, &path)? && paths.binary_search(&path).is_err() {
             return Err(format!(
                 "Git path omitted from authored inventory: {}",
@@ -105,29 +108,8 @@ fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-fn authored_command(root: &Path) -> Command {
-    let mut command = Command::new("rg");
-    let _configured = command.current_dir(root).args([
-        "--no-config",
-        "--files",
-        "--hidden",
-        "--no-ignore",
-        "--ignore-file",
-        ".gitignore",
-        "-g",
-        "!.git/**",
-        "-0",
-    ]);
-    command
-}
-
-fn discover(command: &mut Command) -> Result<Vec<PathBuf>, String> {
-    let output = command.output().map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from("authored file discovery failed"));
-    }
-    let mut paths = output
-        .stdout
+fn discover_bytes(bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
+    let mut paths = bytes
         .split(|byte| *byte == 0)
         .filter(|part| !part.is_empty())
         .map(|part| from_utf8(part).map(PathBuf::from))
@@ -287,8 +269,8 @@ mod tests {
     use games_platform::ir::storage::fixtures as platform_fixtures;
 
     use super::{
-        authored, authored_command, discover, line_width, local_storage_policy,
-        private_configuration, python,
+        authored, line_width, local_storage_policy, private_configuration,
+        python,
     };
     use crate::fixtures::{directory, require};
 
@@ -408,12 +390,6 @@ mod tests {
             files == [Path::new(".gitignore"), Path::new("lib.rs")],
             "only authored source and configuration are visible",
         )?;
-        let config = root.join(".reference/ripgrep.conf");
-        fs::write(&config, "--glob\n!*.rs\n")
-            .map_err(|error| error.to_string())?;
-        let mut command = authored_command(&root);
-        let _configured = command.env("RIPGREP_CONFIG_PATH", config);
-        require(discover(&mut command)? == files, "ignore local rg config")?;
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 

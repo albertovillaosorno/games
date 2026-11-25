@@ -37,7 +37,7 @@ mod bundle;
 
 /// Bounded native regular-file snapshots.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod file;
+mod file;
 
 /// Shared native storage fixtures for workspace tests.
 #[cfg(all(
@@ -84,27 +84,6 @@ pub mod save;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod staging;
 
-/// Safe file admission is unavailable until the target has a backend.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub mod file {
-    use std::io::ErrorKind;
-    use std::num::NonZeroU64;
-    use std::path::Path;
-
-    pub use super::snapshot;
-    pub use crate::ir::security::file::FileReadError;
-
-    /// Reject secret reads before touching any host resource.
-    /// # Errors
-    /// Always reports unsupported storage admission.
-    pub const fn snapshot_secret(
-        _path: &Path,
-        _maximum: NonZeroU64,
-    ) -> Result<Vec<u8>, FileReadError> {
-        Err(FileReadError::Io(ErrorKind::Unsupported))
-    }
-}
-
 /// Preferences require a verified atomic storage adapter.
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub mod preferences {
@@ -130,33 +109,52 @@ pub mod staging {
 use std::env;
 use std::ffi::OsStr;
 use std::io;
-#[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 use std::num::NonZeroU64;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
-/// Read a bounded snapshot using the host's regular-file adapter.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub use file::snapshot;
 use games_assets::{ContentHash, ManifestLimits};
 
-/// Shared portable snapshot admission failure.
-pub use crate::ir::security::file::FileReadError;
 use crate::ir::storage::bundle::{BundleError, BundleFactory, CanonicalBundle};
+use crate::ir::storage::file::{
+    FileReadError, SecretSnapshot, SnapshotBackend,
+};
 use crate::ir::storage::{PathKind, PathObservation};
 
-/// Reject a snapshot request when safe regular-file admission is unavailable.
-///
-/// No path lookup or content access is attempted.
-/// # Errors
-/// Always returns an unsupported host error.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl SnapshotBackend for () {
+    fn read(
+        path: &OsStr,
+        maximum: NonZeroU64,
+    ) -> Result<Vec<u8>, FileReadError> {
+        file::snapshot(Path::new(path), maximum)
+    }
+
+    fn read_secret(
+        path: &OsStr,
+        maximum: NonZeroU64,
+    ) -> Result<SecretSnapshot, FileReadError> {
+        file::snapshot_secret(Path::new(path), maximum)
+    }
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub const fn snapshot(
-    _path: &Path,
-    _maximum: NonZeroU64,
-) -> Result<Vec<u8>, FileReadError> {
-    Err(FileReadError::Io(io::ErrorKind::Unsupported))
+impl SnapshotBackend for () {
+    fn read(
+        _path: &OsStr,
+        _maximum: NonZeroU64,
+    ) -> Result<Vec<u8>, FileReadError> {
+        Err(FileReadError::Io(io::ErrorKind::Unsupported))
+    }
+
+    fn read_secret(
+        _path: &OsStr,
+        _maximum: NonZeroU64,
+    ) -> Result<SecretSnapshot, FileReadError> {
+        Err(FileReadError::Io(io::ErrorKind::Unsupported))
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -222,6 +220,7 @@ mod tests {
     use super::*;
     #[cfg(not(target_arch = "wasm32"))]
     use crate::ir::storage::executable_path as observed_executable_path;
+    use crate::ir::storage::file::snapshot;
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -264,11 +263,12 @@ mod tests {
         let path = root.path().join("file");
         let max = NonZeroU64::new(4).unwrap_or(NonZeroU64::MIN);
         fs::write(&path, b"four")?;
-        let exact = snapshot(&path, max)? == b"four";
+        let exact = snapshot(path.as_os_str(), max)? == b"four";
         fs::write(&path, b"fives")?;
-        let oversized = snapshot(&path, max) == Err(FileReadError::TooLarge);
+        let oversized =
+            snapshot(path.as_os_str(), max) == Err(FileReadError::TooLarge);
         fs::write(&path, b"")?;
-        (exact && oversized && snapshot(&path, max)?.is_empty())
+        (exact && oversized && snapshot(path.as_os_str(), max)?.is_empty())
             .then_some(())
             .ok_or(FileReadError::Io(io::ErrorKind::InvalidData))
     }
@@ -277,7 +277,14 @@ mod tests {
     #[test]
     fn unsupported_snapshot_does_not_open_a_path() {
         assert_eq!(
-            snapshot(Path::new("unavailable"), NonZeroU64::MIN),
+            snapshot(OsStr::new("unavailable"), NonZeroU64::MIN),
+            Err(FileReadError::Io(io::ErrorKind::Unsupported))
+        );
+        assert_eq!(
+            crate::ir::storage::file::snapshot_secret(
+                OsStr::new("unavailable"),
+                NonZeroU64::MIN,
+            ),
             Err(FileReadError::Io(io::ErrorKind::Unsupported))
         );
     }

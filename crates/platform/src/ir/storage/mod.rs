@@ -32,6 +32,8 @@
 
 /// Verified canonical asset bundles and passive media overlays.
 pub mod bundle;
+/// Bounded ordinary and private file snapshots.
+pub mod file;
 /// Configured persistent asset and executable locations.
 pub mod layout;
 
@@ -40,9 +42,7 @@ use std::io::Result as IoResult;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use crate::selected::fixtures;
-pub use crate::selected::{
-    FileReadError, file, preferences, save, snapshot, staging,
-};
+pub use crate::selected::{preferences, save, staging};
 
 /// Backend observation of the process executable location.
 pub(crate) trait ExecutableLocation {

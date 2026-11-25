@@ -42,10 +42,11 @@ use nix::unistd::geteuid;
 use zeroize::Zeroizing;
 
 /// Admission failure shared by the portable facade and native readers.
-pub use crate::ir::security::file::FileReadError;
+pub(super) use crate::ir::security::file::FileReadError;
 use crate::ir::security::file::{admit_size, allocation_length};
+use crate::ir::storage::file::SecretSnapshot;
 
-pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
+pub(super) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
     .union(OFlag::O_NOFOLLOW)
     .union(OFlag::O_CLOEXEC);
@@ -60,8 +61,6 @@ impl From<Errno> for FileReadError {
     }
 }
 
-/// Owned credential bytes with zeroizing drop and redacted debug output.
-pub type SecretSnapshot = Zeroizing<Vec<u8>>;
 type OpenedRegular = (File, FileStat);
 
 /// Read a bounded snapshot of a user-selected regular file.
@@ -78,7 +77,7 @@ type OpenedRegular = (File, FileStat);
 /// # Errors
 /// Rejects non-regular files, final symlinks, unavailable procfs, oversized
 /// files, allocation failures and observed content changes during the read.
-pub fn snapshot(
+pub(super) fn snapshot(
     path: &Path,
     maximum: NonZeroU64,
 ) -> Result<Vec<u8>, FileReadError> {
@@ -97,7 +96,7 @@ pub fn snapshot(
 /// # Errors
 /// Rejects unsafe ownership, permissions, links, non-regular files,
 /// oversize input and observable content changes during the read.
-pub fn snapshot_secret(
+pub(super) fn snapshot_secret(
     path: &Path,
     maximum: NonZeroU64,
 ) -> Result<SecretSnapshot, FileReadError> {
@@ -153,7 +152,7 @@ fn reopen_pinned(
     Ok((File::from(fd), after))
 }
 
-pub(crate) const fn same_inode(left: &FileStat, right: &FileStat) -> bool {
+pub(super) const fn same_inode(left: &FileStat, right: &FileStat) -> bool {
     left.st_dev == right.st_dev && left.st_ino == right.st_ino
 }
 
@@ -188,7 +187,7 @@ fn check_content_metadata(
     Ok(())
 }
 
-pub(crate) fn read_bounded_descriptor(
+pub(super) fn read_bounded_descriptor(
     file: &mut File,
     size: u64,
     bytes: &mut Vec<u8>,
@@ -215,11 +214,11 @@ fn file_size(stat: &FileStat) -> Result<u64, FileReadError> {
     u64::try_from(stat.st_size).map_err(|_error| FileReadError::TooLarge)
 }
 
-pub(crate) fn trusted_directory(fd: impl AsFd) -> nix::Result<bool> {
+pub(super) fn trusted_directory(fd: impl AsFd) -> nix::Result<bool> {
     Ok(trusted_directory_stat(&fstat(fd)?))
 }
 
-pub(crate) fn trusted_directory_stat(stat: &FileStat) -> bool {
+pub(super) fn trusted_directory_stat(stat: &FileStat) -> bool {
     stat.st_mode & SFlag::S_IFMT.bits() == SFlag::S_IFDIR.bits()
         && stat.st_mode & 0o022 == 0
         && stat.st_uid == geteuid().as_raw()
@@ -227,7 +226,7 @@ pub(crate) fn trusted_directory_stat(stat: &FileStat) -> bool {
 
 // A zero-link inode can be the complete previous file after an atomic rename.
 // Multiple links remain inadmissible, as does any untrusted owner or mode.
-pub(crate) fn private_regular(stat: &FileStat) -> bool {
+pub(super) fn private_regular(stat: &FileStat) -> bool {
     regular(stat)
         && stat.st_nlink <= 1
         && stat.st_uid == geteuid().as_raw()
@@ -238,7 +237,7 @@ fn secret_regular(stat: &FileStat) -> bool {
     private_regular(stat) && stat.st_mode.trailing_zeros() >= 6
 }
 
-pub(crate) fn read_regular(
+pub(super) fn read_regular(
     parent: &impl AsFd,
     name: &str,
     maximum: u64,
@@ -251,7 +250,7 @@ pub(crate) fn read_regular(
 }
 
 // Read a pinned regular file through a caller-supplied bounded decoder.
-pub(crate) fn read_regular_with<T, E>(
+pub(super) fn read_regular_with<T, E>(
     parent: &impl AsFd,
     name: &str,
     maximum: u64,
@@ -277,7 +276,7 @@ fn staged_regular(stat: &FileStat) -> bool {
 
 // A staged file cannot legitimately change identity, length, ownership,
 // permissions or content timestamps after the writer closes it.
-pub(crate) fn check_staged_metadata(
+pub(super) fn check_staged_metadata(
     expected: &FileStat,
     current: &FileStat,
 ) -> Result<(), FileReadError> {
@@ -294,7 +293,7 @@ pub(crate) fn check_staged_metadata(
     Ok(())
 }
 
-pub(crate) fn verify_staged_regular(
+pub(super) fn verify_staged_regular(
     parent: &impl AsFd,
     name: &str,
     expected: &FileStat,
@@ -306,7 +305,7 @@ pub(crate) fn verify_staged_regular(
     check_staged_metadata(expected, &fstat(&pinned)?)
 }
 
-pub(crate) fn sync_regular(
+pub(super) fn sync_regular(
     parent: &impl AsFd,
     name: &str,
     expected: &FileStat,

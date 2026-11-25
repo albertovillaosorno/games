@@ -39,9 +39,10 @@ pub mod fixtures;
 use std::collections::BTreeSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::str::from_utf8;
 use std::{env, fs};
+
+use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
 
 type DiffPaths<'path> = Vec<&'path [u8]>;
 
@@ -271,22 +272,10 @@ fn check_paths(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn changed_paths(root: &Path, options: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args([
-            "diff",
-            "--name-only",
-            "--no-renames",
-            "--no-ext-diff",
-            "--no-textconv",
-            "-z",
-        ])
-        .args(options)
-        .arg("--")
-        .output()
+fn changed_paths(root: &Path, request: GitRequest) -> Result<Vec<u8>, String> {
+    let output = run(root.as_os_str(), Request::Git(request))
         .map_err(|error| error.to_string())?;
-    if !output.status.success() {
+    if !output.success {
         return Err("cannot inspect changed paths".into());
     }
     Ok(output.stdout)
@@ -329,13 +318,10 @@ fn check_deleted(root: &Path, deleted: &[u8]) -> Result<(), String> {
 
 fn check_staged() -> Result<(), String> {
     let root = root();
-    let staged = changed_paths(&root, &["--cached", "--diff-filter=ACMRT"])?;
+    let staged = changed_paths(&root, GitRequest::ChangedStaged)?;
     check_paths(&staged)?;
-    check_worktree(&staged, &changed_paths(&root, &[])?)?;
-    check_deleted(
-        &root,
-        &changed_paths(&root, &["--cached", "--diff-filter=D"])?,
-    )
+    check_worktree(&staged, &changed_paths(&root, GitRequest::Unstaged)?)?;
+    check_deleted(&root, &changed_paths(&root, GitRequest::DeletedStaged)?)
 }
 
 fn check_history_bytes(bytes: &[u8]) -> Result<(), String> {
@@ -358,30 +344,22 @@ fn check_history() -> Result<(), String> {
     if !root().join(".git").exists() {
         return Ok(());
     }
-    let head = Command::new("git")
-        .current_dir(root())
-        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
-        .output()
+    let head = run(root().as_os_str(), Request::Git(GitRequest::Head))
         .map_err(|error| error.to_string())?;
-    if head.status.code() == Some(1i32) {
-        let unborn = Command::new("git")
-            .current_dir(root())
-            .args(["symbolic-ref", "--quiet", "HEAD"])
-            .output()
-            .map_err(|error| error.to_string())?;
-        if unborn.status.success() {
+    if head.exit_code == Some(1i32) {
+        let unborn =
+            run(root().as_os_str(), Request::Git(GitRequest::SymbolicHead))
+                .map_err(|error| error.to_string())?;
+        if unborn.success {
             return Ok(());
         }
     }
-    if !head.status.success() {
+    if !head.success {
         return Err("cannot resolve commit history".into());
     }
-    let history = Command::new("git")
-        .current_dir(root())
-        .args(["log", "-z", "--format=%H%n%B", "HEAD"])
-        .output()
+    let history = run(root().as_os_str(), Request::Git(GitRequest::History))
         .map_err(|error| error.to_string())?;
-    if !history.status.success() {
+    if !history.success {
         return Err("cannot read commit history".into());
     }
     check_history_bytes(&history.stdout)

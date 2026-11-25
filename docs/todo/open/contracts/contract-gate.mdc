@@ -356,3 +356,16 @@ reference ledgers, weakened lint levels and incomplete completion evidence.
 The download tool now receives the host-independence check. Remaining
 contributor and title host access, full semantic resolution, and native
 execution on other targets are not established by these checks.
+
+Contributor subprocess requests now pass through the toolchain IR with
+fixed Cargo, Markdown, ripgrep and read-only Git operations. Package and
+Markdown inputs are admitted before native execution; Git diff selectors
+cannot introduce arbitrary options. The Linux adapter retains exact
+output streams and exit outcomes, and unsupported hosts fail explicitly.
+The native discovery regression still proves that personal ripgrep
+configuration cannot hide authored files. Joint fresh gate
+1795648464193834015-230996 passed 1,427 test executions and all six
+portable core checks. The validator's filesystem, environment, locking
+and test process fixtures still require migration. Earlier fresh native
+Xvfb rendering and dummy-audio validation passed at
+1795648148052171462-207773; these are not physical device acceptance.

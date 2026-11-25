@@ -34,8 +34,8 @@ mod ir_layout;
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
+use games_platform::ir::toolchain::validation::{self, Request};
 use serde_json::Value;
 
 use crate::todo::validate as validate_tasks;
@@ -70,12 +70,9 @@ fn manifest(root: &Path) -> Result<Value, String> {
     if !value.contains_key("workspace") {
         return Err(String::from("missing workspace manifest"));
     }
-    let output = Command::new("cargo")
-        .current_dir(root)
-        .args(["metadata", "--no-deps", "--locked", "--format-version", "1"])
-        .output()
+    let output = validation::run(root.as_os_str(), Request::WorkspaceMetadata)
         .map_err(|error| error.to_string())?;
-    if !output.status.success() {
+    if !output.success {
         return Err(String::from("Cargo metadata failed"));
     }
     let metadata: Value = serde_json::from_slice(&output.stdout)

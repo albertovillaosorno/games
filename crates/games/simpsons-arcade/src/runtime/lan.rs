@@ -89,9 +89,11 @@ impl LocalFiles {
     fn identity(&self, name: Option<&str>) -> Result<LocalIdentity, String> {
         let root = certificate(&self.public.root)?;
         let leaf = certificate(&self.public.leaf)?;
-        let key =
-            snapshot_secret(&self.key, CredentialKind::PrivateKey.max_bytes())
-                .map_err(|error| format!("private key admission: {error:?}"))?;
+        let key = snapshot_secret(
+            self.key.as_os_str(),
+            CredentialKind::PrivateKey.max_bytes(),
+        )
+        .map_err(|error| format!("private key admission: {error:?}"))?;
         name.map_or_else(
             || LocalIdentity::client(&root, &leaf, key.as_slice()),
             |server| LocalIdentity::host(server, &root, &leaf, key.as_slice()),
@@ -269,12 +271,12 @@ pub(super) fn open_client(
 }
 
 fn certificate(path: &Path) -> Result<Vec<u8>, String> {
-    snapshot(path, CredentialKind::Certificate.max_bytes())
+    snapshot(path.as_os_str(), CredentialKind::Certificate.max_bytes())
         .map_err(|error| format!("certificate {}: {error:?}", path.display()))
 }
 
 fn catalogue(path: &Path) -> Result<String, String> {
-    let bytes = snapshot(path, MAX_CATALOGUE)
+    let bytes = snapshot(path.as_os_str(), MAX_CATALOGUE)
         .map_err(|error| format!("LAN catalogue: {error:?}"))?;
     String::from_utf8(bytes).map_err(|error| error.to_string())
 }

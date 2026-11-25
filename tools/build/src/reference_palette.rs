@@ -35,7 +35,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 
 use games_platform::ir::importer::reference::Machine;
-use games_platform::ir::storage::snapshot;
+use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 pub(super) type Colors = Vec<[u8; 4]>;
@@ -48,10 +48,11 @@ pub fn check(
     raw_path: &Path,
     reference_path: &Path,
 ) -> Result<(), String> {
-    let raw = snapshot(raw_path, byte_limit(machine, 2)?)
+    let raw = snapshot(raw_path.as_os_str(), byte_limit(machine, 2)?)
         .map_err(|error| format!("palette RAM: {error:?}"))?;
-    let reference = snapshot(reference_path, byte_limit(machine, 4)?)
-        .map_err(|error| format!("palette reference: {error:?}"))?;
+    let reference =
+        snapshot(reference_path.as_os_str(), byte_limit(machine, 4)?)
+            .map_err(|error| format!("palette reference: {error:?}"))?;
     let entries = compare(machine, &raw, &reference)?;
     toolchain::write_line(&format!("Matched {entries} palette entries"))
         .map_err(|error| error.to_string())
