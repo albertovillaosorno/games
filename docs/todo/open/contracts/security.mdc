@@ -132,3 +132,16 @@ can no longer silently overwrite an unrelated game-progress payload or a
 corrupted save envelope. Existing valid preferences retain atomic
 replacement and first-use behavior. The dedicated-directory contract and
 trusted same-user writer assumption remain; this is not compare-and-swap.
+
+The shared native descriptor reader also rechecks modification time, length,
+identity and admission policy after the bounded read. A deterministic fixture
+rewrites a three-byte file in place and changes its modification timestamp;
+the reader rejects the stale observation. Atomic replacement still permits
+reading the unchanged, pinned previous inode. This detects observable changes,
+not all races or deliberate timestamp restoration by a same-user writer.
+
+A dedicated credential snapshot reuses this reader while requiring effective
+user ownership, no group or other permission bits and no additional hard
+links. Synthetic checks reject public modes, symlinks, hard links and oversize
+credentials while accepting an owner-only file. Trusted ancestor and procfs
+assumptions remain; the caller owns parsing and credential memory lifetime.

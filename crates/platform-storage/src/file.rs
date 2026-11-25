@@ -56,7 +56,7 @@ pub enum FileReadError {
     Io(io::ErrorKind),
     /// The file size or allocation exceeds the supplied limit.
     TooLarge,
-    /// The descriptor is not a regular file or its identity changed.
+    /// The file failed admission or its content metadata changed.
     UnsafeFile,
 }
 
@@ -80,15 +80,36 @@ impl From<io::Error> for FileReadError {
 /// procfs must be trusted; the snapshot does not authenticate its contents.
 /// Treat externally supplied bytes as untrusted and validate their structure.
 ///
+/// Observable length or modification-time changes are rejected. This is
+/// not a lock against concurrent writers or an authenticity guarantee.
+///
 /// # Errors
 /// Rejects non-regular files, final symlinks, unavailable procfs, oversized
-/// files, allocation failures and file length changes during the read.
+/// files, allocation failures and observed content changes during the read.
 pub fn snapshot(
     path: &Path,
     maximum: NonZeroU64,
 ) -> Result<Vec<u8>, FileReadError> {
     let pinned = open(path, PIN_FLAGS, Mode::empty())?;
     read_pinned(&pinned, maximum.get(), regular)
+}
+
+/// Read a bounded owner-only credential file without following its final link.
+///
+/// The same inode must remain an ordinary file owned by the effective user
+/// with no group or other permissions or additional hard links. Trusted
+/// ancestors and procfs are still required. The returned bytes are not
+/// automatically zeroized; callers own credential lifetime and parsing.
+///
+/// # Errors
+/// Rejects unsafe ownership, permissions, links, non-regular files,
+/// oversize input and observable content changes during the read.
+pub fn snapshot_secret(
+    path: &Path,
+    maximum: NonZeroU64,
+) -> Result<Vec<u8>, FileReadError> {
+    let pinned = open(path, PIN_FLAGS, Mode::empty())?;
+    read_pinned(&pinned, maximum.get(), secret_regular)
 }
 
 fn read_pinned(
@@ -111,18 +132,39 @@ fn read_pinned(
         Mode::empty(),
     )?;
     let after = fstat(&fd)?;
-    if !admitted(&after)
-        || before.st_dev != after.st_dev
-        || before.st_ino != after.st_ino
-        || before.st_size != after.st_size
-    {
+    if !admitted(&after) || !same_content_metadata(&before, &after) {
         return Err(FileReadError::UnsafeFile);
     }
-    read_bounded_descriptor(fd, size, maximum)
+    read_consistent(File::from(fd), &after, maximum, admitted)
+}
+
+// Ignore ctime and link count: atomic replacement can legitimately unlink
+// the old inode while a reader still holds it. Admission checks the latter.
+const fn same_content_metadata(before: &FileStat, after: &FileStat) -> bool {
+    before.st_dev == after.st_dev
+        && before.st_ino == after.st_ino
+        && before.st_size == after.st_size
+        && before.st_mtime == after.st_mtime
+        && before.st_mtime_nsec == after.st_mtime_nsec
+}
+
+fn read_consistent(
+    mut file: File,
+    before: &FileStat,
+    maximum: u64,
+    admitted: fn(&FileStat) -> bool,
+) -> Result<Vec<u8>, FileReadError> {
+    let bytes =
+        read_bounded_descriptor(&mut file, file_size(before)?, maximum)?;
+    let after = fstat(&file)?;
+    if !admitted(&after) || !same_content_metadata(before, &after) {
+        return Err(FileReadError::UnsafeFile);
+    }
+    Ok(bytes)
 }
 
 fn read_bounded_descriptor(
-    fd: OwnedFd,
+    file: &mut File,
     size: u64,
     maximum: u64,
 ) -> Result<Vec<u8>, FileReadError> {
@@ -136,7 +178,6 @@ fn read_bounded_descriptor(
         .try_reserve_exact(length)
         .map_err(|_error| FileReadError::TooLarge)?;
     bytes.resize(length, 0);
-    let mut file = File::from(fd);
     file.read_exact(&mut bytes)?;
     let mut extra = [0u8; 1];
     match file.read_exact(&mut extra) {
@@ -168,6 +209,10 @@ pub(crate) fn private_regular(stat: &FileStat) -> bool {
         && stat.st_mode & 0o022 == 0
 }
 
+fn secret_regular(stat: &FileStat) -> bool {
+    private_regular(stat) && stat.st_mode.trailing_zeros() >= 6
+}
+
 pub(crate) fn read_regular(
     parent: &impl AsFd,
     name: &str,
@@ -183,7 +228,9 @@ pub(crate) fn read_regular(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::symlink;
+    use std::fs::FileTimes;
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::time::{Duration, UNIX_EPOCH};
 
     use nix::unistd::mkfifo;
 
@@ -243,6 +290,60 @@ mod tests {
     }
 
     #[test]
+    fn secret_snapshot_requires_owner_only_file() -> Result<(), FileReadError> {
+        let root = TestRoot::new()?;
+        let path = root.path.join("key");
+        let link = root.path.join("link");
+        fs::write(&path, b"key")?;
+        let limit = NonZeroU64::new(3).unwrap_or(NonZeroU64::MIN);
+        for mode in [0o644, 0o640, 0o604, 0o620, 0o602, 0o601] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
+            require(
+                snapshot_secret(&path, limit) == Err(FileReadError::UnsafeFile),
+            )?;
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        require(snapshot_secret(&path, limit)? == b"key")?;
+        require(
+            snapshot_secret(&path, NonZeroU64::MIN)
+                == Err(FileReadError::TooLarge),
+        )?;
+        fs::hard_link(&path, &link)?;
+        require(
+            snapshot_secret(&path, limit) == Err(FileReadError::UnsafeFile),
+        )?;
+        fs::remove_file(&link)?;
+        symlink(&path, &link)?;
+        require(
+            snapshot_secret(&link, limit) == Err(FileReadError::UnsafeFile),
+        )?;
+        require(snapshot_secret(&path, limit)? == b"key")
+    }
+
+    #[test]
+    fn descriptor_same_length_modification_fails_closed()
+    -> Result<(), FileReadError> {
+        let root = TestRoot::new()?;
+        let path = root.path.join("file");
+        fs::write(&path, b"old")?;
+        let file = File::open(&path)?;
+        let before = fstat(&file)?;
+        fs::write(&path, b"new")?;
+        let writer = fs::OpenOptions::new().write(true).open(&path)?;
+        writer.set_times(
+            FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1)),
+        )?;
+        require(
+            read_consistent(file, &before, 3, private_regular)
+                == Err(FileReadError::UnsafeFile),
+        )?;
+        require(
+            snapshot(&path, NonZeroU64::new(3).unwrap_or(NonZeroU64::MIN))?
+                == b"new",
+        )
+    }
+
+    #[test]
     fn descriptor_length_changes_fail_closed() -> Result<(), FileReadError> {
         let root = TestRoot::new()?;
         let path = root.path.join("file");
@@ -250,12 +351,13 @@ mod tests {
         let fd = open(&path, OFlag::O_RDONLY, Mode::empty())?;
         fs::write(&path, b"fives")?;
         require(
-            read_bounded_descriptor(fd, 4, 4) == Err(FileReadError::TooLarge),
+            read_bounded_descriptor(&mut File::from(fd), 4, 4)
+                == Err(FileReadError::TooLarge),
         )?;
         let shortened = open(&path, OFlag::O_RDONLY, Mode::empty())?;
         fs::write(&path, b"x")?;
         require(matches!(
-            read_bounded_descriptor(shortened, 5, 5),
+            read_bounded_descriptor(&mut File::from(shortened), 5, 5),
             Err(FileReadError::Io(io::ErrorKind::UnexpectedEof))
         ))
     }
