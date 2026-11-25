@@ -31,7 +31,6 @@
 
 //! Opt-in playback of observed attack-associated PCM clips.
 
-use std::ffi::OsString;
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::path::Path;
 use std::time::Duration;
@@ -44,7 +43,9 @@ use games_assets::pcm::PcmSamples;
 use games_platform_audio::linux::{NativeAudio, PlaybackSpec};
 use games_platform_graphics::linux::RenderError;
 use games_platform_graphics::linux::input::key_code;
+use games_platform_storage::bundle::MediaOverlay;
 
+use super::launch::AudioSelection;
 use super::{
     Controls, KEYBOARD, failure, live, open_selected_bundle, size, smoke_press,
 };
@@ -100,21 +101,37 @@ impl Samples {
 
     pub(super) fn load(
         parent: &Path,
-        hash: &OsString,
+        selection: &AudioSelection,
     ) -> Result<Self, RenderError> {
-        let bundle = open_selected_bundle(parent, hash, ManifestLimits {
-            manifest_bytes: size(65_536)?,
-            payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
-            records: size(161)?,
-            total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
-        })?;
+        let bundle =
+            open_selected_bundle(parent, &selection.base, ManifestLimits {
+                manifest_bytes: size(65_536)?,
+                payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
+                records: size(161)?,
+                total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
+            })?;
+        let replacement = selection
+            .replacement
+            .as_ref()
+            .map(|hash| {
+                open_selected_bundle(parent, hash, replacement_limits()?)
+            })
+            .transpose()?;
+        let allowed = CLIPS.map(|(key, _frames)| key);
+        let overlay = replacement
+            .as_ref()
+            .map(|changes| MediaOverlay::new(&bundle, changes, &allowed))
+            .transpose()
+            .map_err(failure)?;
         let mut clips = Vec::with_capacity(CLIPS.len());
         for (key, frames) in CLIPS {
-            let record = bundle
-                .manifest()
-                .record(key)
-                .ok_or_else(|| failure("missing attack PCM"))?;
-            let bytes = bundle.read_payload(key).map_err(failure)?;
+            let (descriptor, payload) = overlay.as_ref().map_or_else(
+                || (bundle.manifest().record(key), bundle.read_payload(key)),
+                |changes| (changes.record(key), changes.read_payload(key)),
+            );
+            let record =
+                descriptor.ok_or_else(|| failure("missing attack PCM"))?;
+            let bytes = payload.map_err(failure)?;
             let pcm = PcmSamples::new(record, &bytes).map_err(failure)?;
             if pcm.channels() != NonZeroU8::MIN
                 || pcm.sample_rate() != SOURCE_RATE
@@ -336,6 +353,22 @@ impl<'samples> Playback<'samples> {
     }
 }
 
+fn replacement_limits() -> Result<ManifestLimits, RenderError> {
+    let frames = CLIPS.map(|(_key, count)| count);
+    let bytes = |count: u64| {
+        count
+            .checked_mul(2)
+            .and_then(NonZeroU64::new)
+            .ok_or(RenderError::TooLarge)
+    };
+    Ok(ManifestLimits {
+        manifest_bytes: size(4096)?,
+        payload_bytes: bytes(frames.into_iter().max().unwrap_or(0))?,
+        records: size(CLIPS.len())?,
+        total_bytes: bytes(frames.into_iter().sum())?,
+    })
+}
+
 fn play<'samples>(
     mixer: &mut Mixer<'samples>,
     clip: Clip<'samples>,
@@ -379,9 +412,112 @@ fn smoke_entry() -> Result<LiveSimulation<Cabinet>, RenderError> {
 
 #[cfg(test)]
 mod tests {
-    use std::array;
+    use std::ffi::OsString;
+    use std::{array, env};
+
+    use games_assets::archive::ArchiveBudget;
+    use games_assets::{
+        AssetFormat, AssetManifest, AssetRecord, ContentHash, SourceIdentity,
+    };
+    use games_platform_storage::staging::{AuthoredStaging, CanonicalStaging};
 
     use super::*;
+
+    type FixtureClip<'key> = (&'key str, u64, i16);
+
+    fn publish_fixture(
+        parent: &Path,
+        clips: &[FixtureClip<'_>],
+    ) -> Result<OsString, RenderError> {
+        let limits = replacement_limits()?;
+        let maximum = NonZeroU64::MIN.saturating_add(65_535);
+        let budget = ArchiveBudget::new(
+            maximum,
+            maximum,
+            NonZeroU64::MIN.saturating_add(7),
+        );
+        let mut stage =
+            CanonicalStaging::new(parent, budget).map_err(failure)?;
+        let mut records = Vec::new();
+        for &(key, frames, value) in clips {
+            let bytes = value
+                .to_le_bytes()
+                .repeat(usize::try_from(frames).map_err(failure)?);
+            let digest = ContentHash::calculate(&bytes);
+            let format = AssetFormat::PcmS16Le {
+                channels: NonZeroU8::MIN,
+                frames: NonZeroU64::new(frames).ok_or(RenderError::TooLarge)?,
+                sample_rate: SOURCE_RATE,
+            };
+            stage.write_payload(digest, &bytes).map_err(failure)?;
+            records.push(AssetRecord {
+                digest,
+                format,
+                key: key.to_owned(),
+                size: u64::try_from(bytes.len()).map_err(failure)?,
+            });
+        }
+        let manifest = AssetManifest::new(
+            SourceIdentity {
+                title: String::from("simpsons-arcade"),
+                revision: String::from("world-4p-set-1"),
+            },
+            records,
+            limits,
+        )
+        .map_err(failure)?;
+        let staged = stage.finish(&manifest, limits).map_err(failure)?;
+        let digest = staged.digest().to_string();
+        staged
+            .publish()
+            .map_err(failure)?
+            .durability
+            .map_err(failure)?;
+        Ok(digest.into())
+    }
+
+    #[test]
+    fn opted_in_audio_replacement_is_selective_and_fail_closed()
+    -> Result<(), RenderError> {
+        let directory = env::current_dir().map_err(failure)?;
+        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let parent = root.path();
+        let base = CLIPS.map(|(key, frames)| (key, frames, 12));
+        let mut selection = AudioSelection {
+            base: publish_fixture(parent, &base)?,
+            replacement: None,
+        };
+        let original = Samples::load(parent, &selection)?;
+        if original.clips.iter().flatten().any(|sample| *sample != 12) {
+            return Err(failure("incorrect original clip samples"));
+        }
+        let (key, frames) = CLIPS
+            .first()
+            .copied()
+            .ok_or_else(|| failure("missing fixture clip"))?;
+        selection.replacement =
+            Some(publish_fixture(parent, &[(key, frames, -7)])?);
+        let modified = Samples::load(parent, &selection)?;
+        let [first, rest @ ..] = &modified.clips;
+        if first.iter().any(|sample| *sample != -7)
+            || rest.iter().flatten().any(|sample| *sample != 12)
+        {
+            return Err(failure("replacement did not remain selective"));
+        }
+        for (invalid_key, invalid_frames) in
+            [("audio/unknown", frames), (key, frames.saturating_sub(1))]
+        {
+            selection.replacement = Some(publish_fixture(parent, &[(
+                invalid_key,
+                invalid_frames,
+                -7,
+            )])?);
+            if Samples::load(parent, &selection).is_ok() {
+                return Err(failure("invalid replacement accepted"));
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn isolated_attack_clips_use_observed_stereo_ratios_and_rate()

@@ -287,3 +287,13 @@ This retains inode admission and post-read metadata checks. Synthetic
 controls include a sparse one-GiB file with an invalid header or a
 mismatched declared length, without requiring a payload-sized allocation.
 The portable format and existing atomic replacement semantics are unchanged.
+
+The native Simpsons preview can opt into a pinned passive audio overlay
+with an explicit base audio bundle and replacement manifest digest.
+The title-owned allowlist admits only its four attack PCM slots, with
+identical channel count, sample rate, frame count and byte length.
+Replacement metadata is bounded by those four slots; the shared overlay
+rejects any unapproved record and corrupted replacement reads do not
+fall back to the original. The catalogue and explicit CLI reject a
+replacement without a base. Synthetic native fixtures exercise a
+selective override, unchanged other clips and invalid keys or lengths.

@@ -48,7 +48,8 @@ const USAGE: &str = concat!(
     "[--display MODE] [--window MODE] [--settings DIR] [--controls FILE] ",
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
-    "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] [--world SHA] ",
+    "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA [--audio-mod SHA]] ",
+    "[--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local ",
     "beside the binary.\n",
@@ -66,9 +67,40 @@ struct LocalPaths {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(super) struct AudioSelection {
+    pub(super) base: OsString,
+    pub(super) replacement: Option<OsString>,
+}
+
+impl AudioSelection {
+    fn explicit(args: &mut Arguments) -> Result<Option<Self>, String> {
+        let base = flag(args, "--audio").then(|| next(args)).transpose()?;
+        let replacement =
+            flag(args, "--audio-mod").then(|| next(args)).transpose()?;
+        Self::new(base, replacement)
+    }
+
+    fn new(
+        base: Option<OsString>,
+        replacement: Option<OsString>,
+    ) -> Result<Option<Self>, String> {
+        match (base, replacement) {
+            (Some(digest), changes) => Ok(Some(Self {
+                base: digest,
+                replacement: changes,
+            })),
+            (None, None) => Ok(None),
+            (None, Some(_)) => {
+                Err(String::from("audio replacement requires a base bundle"))
+            },
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(super) struct Assets {
     pub(super) actors: [OsString; 4],
-    pub(super) audio: Option<OsString>,
+    pub(super) audio: Option<AudioSelection>,
     pub(super) directory: PathBuf,
     pub(super) enemy: Option<[OsString; 2]>,
     pub(super) poses: Option<PathBuf>,
@@ -102,7 +134,10 @@ impl Assets {
             },
             _ => return Err(String::from("both enemy hashes are required")),
         };
-        let audio = values.remove("audio").map(hash).transpose()?;
+        let audio = AudioSelection::new(
+            values.remove("audio").map(hash).transpose()?,
+            values.remove("audio_mod").map(hash).transpose()?,
+        )?;
         let world = values.remove("world").map(hash).transpose()?;
         let poses = values.remove("poses").map(|value| base.join(value));
         let controls = values.remove("controls").map(|value| base.join(value));
@@ -137,11 +172,7 @@ impl Assets {
         } else {
             None
         };
-        let audio = if flag(&mut args, "--audio") {
-            Some(next(&mut args)?)
-        } else {
-            None
-        };
+        let audio = AudioSelection::explicit(&mut args)?;
         let world = if flag(&mut args, "--world") {
             Some(next(&mut args)?)
         } else {
@@ -368,7 +399,10 @@ mod tests {
         let (assets, display, paths) = Assets::catalogue(path, &text)?;
         let expected = Assets {
             actors: [DIGEST, DIGEST, DIGEST, DIGEST].map(OsString::from),
-            audio: Some(DIGEST.into()),
+            audio: Some(AudioSelection {
+                base: DIGEST.into(),
+                replacement: None,
+            }),
             directory: PathBuf::from("/package/../local assets"),
             enemy: Some([DIGEST.into(), DIGEST.into()]),
             poses: Some(PathBuf::from("/package/poses.txt")),
@@ -395,6 +429,7 @@ mod tests {
             "enemy_approach=invalid\n",
             "poses=\n",
             "audio=not-a-hash\n",
+            "audio_mod=not-a-hash\n",
             "world=not-a-hash\n",
         ] {
             assert!(
@@ -422,7 +457,10 @@ mod tests {
         let launch = Launch::parse(args.map(OsString::from).into())?;
         let expected = Assets {
             actors: ["m", "h", "b", "l"].map(OsString::from),
-            audio: Some("audio".into()),
+            audio: Some(AudioSelection {
+                base: "audio".into(),
+                replacement: None,
+            }),
             directory: PathBuf::from("parent"),
             enemy: Some(["approach".into(), "strike".into()]),
             poses: Some(PathBuf::from("poses")),
@@ -430,6 +468,48 @@ mod tests {
         };
         if !launch.smoke || !launch.touch_enabled || launch.assets != expected {
             return Err(String::from("incorrect explicit selection"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn passive_audio_replacement_requires_explicit_base_selection()
+    -> Result<(), String> {
+        let path = Path::new("local");
+        let base = catalogue();
+        let replacement = format!("{base}audio_mod={DIGEST}\n");
+        if Assets::catalogue(path, &replacement).is_ok() {
+            return Err(String::from("replacement without base accepted"));
+        }
+        let (configured, _, _) =
+            Assets::catalogue(path, &format!("{replacement}audio={DIGEST}\n"))?;
+        let selected = configured.audio.ok_or("missing audio selection")?;
+        if selected.replacement != Some(DIGEST.into()) {
+            return Err(String::from("catalogue lost replacement"));
+        }
+        let invalid = ["--audio-mod", "mod", "parent", "m", "h", "b", "l"];
+        if Launch::parse(invalid.map(OsString::from).into()).is_ok() {
+            return Err(String::from("explicit replacement without base"));
+        }
+        let valid = [
+            "--audio",
+            "base",
+            "--audio-mod",
+            "mod",
+            "parent",
+            "m",
+            "h",
+            "b",
+            "l",
+        ];
+        let launch = Launch::parse(valid.map(OsString::from).into())?;
+        if launch.assets.audio
+            != Some(AudioSelection {
+                base: "base".into(),
+                replacement: Some("mod".into()),
+            })
+        {
+            return Err(String::from("explicit replacement lost"));
         }
         Ok(())
     }

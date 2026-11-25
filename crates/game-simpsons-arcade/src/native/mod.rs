@@ -633,7 +633,7 @@ impl Scene {
 }
 
 struct OptionalSources {
-    audio: Option<OsString>,
+    audio: Option<launch::AudioSelection>,
     enemy: Option<[OsString; 2]>,
     poses: poses::Catalogue,
     world: Option<OsString>,
@@ -659,7 +659,7 @@ impl<'source> Sources<'source> {
             audio: options
                 .audio
                 .as_ref()
-                .map(|hash| audio::Samples::load(parent, hash))
+                .map(|selection| audio::Samples::load(parent, selection))
                 .transpose()?,
             enemy: options
                 .enemy
