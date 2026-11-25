@@ -33,6 +33,8 @@
 
 mod encounter;
 mod maneuver;
+/// Host-authoritative remote input for the free-play cabinet.
+pub mod remote;
 
 #[cfg(all(
     feature = "native-preview",
@@ -548,6 +550,34 @@ impl Cabinet {
         self.enemy
     }
 
+    fn finish_tick(&mut self, pending: [Option<Maneuver>; 4]) {
+        if self.phase() != Phase::Playing {
+            return;
+        }
+        for ((player, slot), queued) in
+            Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
+        {
+            slot.station.maneuver = slot.station.maneuver.advance(player);
+            if let Some(maneuver) = queued {
+                slot.begin_maneuver(maneuver);
+            }
+        }
+        self.advance_continue();
+        if self.phase() == Phase::Playing {
+            let layout = self.movement_layout();
+            for slot in &mut self.slots {
+                slot.move_tick(layout);
+            }
+            if let Some(enemy) = &mut self.enemy
+                && self.slots.iter().any(|slot| slot.station.can_fight())
+            {
+                enemy.advance(layout, &mut self.slots);
+            }
+            self.advance_camera();
+            self.record_attack_cues();
+        }
+    }
+
     const fn movement_layout(&self) -> StreetLayout {
         let mut layout = self.layout;
         layout.min.x = layout.min.x.saturating_add(self.camera);
@@ -686,31 +716,7 @@ impl InputStep for Cabinet {
         for action in actions {
             self.apply(action, &mut pending);
         }
-        if self.phase() != Phase::Playing {
-            return;
-        }
-        for ((player, slot), queued) in
-            Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
-        {
-            slot.station.maneuver = slot.station.maneuver.advance(player);
-            if let Some(maneuver) = queued {
-                slot.begin_maneuver(maneuver);
-            }
-        }
-        self.advance_continue();
-        if self.phase() == Phase::Playing {
-            let layout = self.movement_layout();
-            for slot in &mut self.slots {
-                slot.move_tick(layout);
-            }
-            if let Some(enemy) = &mut self.enemy
-                && self.slots.iter().any(|slot| slot.station.can_fight())
-            {
-                enemy.advance(layout, &mut self.slots);
-            }
-            self.advance_camera();
-            self.record_attack_cues();
-        }
+        self.finish_tick(pending);
     }
 }
 

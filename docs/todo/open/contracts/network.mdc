@@ -241,3 +241,19 @@ prevent the other from delivering a validated action; the first can then
 complete its own frame. Disconnect and same-certificate rejoin preserve
 that player's identity without interrupting the other client. This is
 caller-driven scheduling evidence, not physical LAN or gameplay parity.
+
+The Simpsons cabinet now provides a strict version-one, three-byte remote
+control codec. Frames contain one ordinary station control and its binary
+transition; they cannot specify a player, tick or host-only Pause command.
+A transport-neutral hosted cabinet consumes the host's verified lifecycle
+events and decoded messages through the same ordered fixed-step interface
+as local play. Explicit seat reservations prevent local devices from
+controlling a remote seat. Only local seats can start the world or control
+host menus; disconnect and host suspension release remote holds before
+movement resumes. At least one local seat is required.
+
+Synthetic tests cover every possible control byte, invalid state and
+version, exact lengths, roster identity and size rejection, two independent
+remote seats alongside a local station, seat isolation, disconnect/rejoin
+and host-only menu transitions. This adapter does not open a listener,
+schedule the I/O worker, provision credentials or replicate game state.
