@@ -1415,10 +1415,12 @@ fn smoke_air_attack(
         return Err(failure("aerial attack not visibly presented"));
     }
     smoke_jump_edge(controls, simulation, false)?;
-    for _ in 0..21u8 {
+    for _ in 0..20u8 {
         let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
         let _cycle_draw = art.present(scene, simulation.state())?;
     }
+    smoke_press(controls, simulation, Control::Primary)?;
+    let _land_draw = art.present(scene, simulation.state())?;
     let [landed, ..] = simulation.state().stations();
     if landed.maneuver != Maneuver::Idle
         || landed.position.x.abs_diff(before.position.x) != 84

@@ -1119,3 +1119,37 @@ All 600 movement and 60 combat submissions met the 16.667 ms
 host-work budget. Mean submission work was 109.583 and 82.622
 microseconds respectively; lifetime peak RSS was 88,539,136 bytes.
 This does not establish original combat or physical display parity.
+
+Aerial follow-up timing was compared against the original isolated
+forward attacks at five, fifteen and thirty jump-input offsets.
+For Marge, both buttons were rejected at respective flight offsets
+33, 21 and 24, and accepted at 34, 22 and 25. All rejected
+comparisons matched 101 object-DMA frames. The other three characters
+matched the 21/22 boundary for both buttons. Releasing the held
+secondary button one tick after initiating each observed aerial
+attack reproduced all 101 original hold-control frames, so the
+secondary follow-ups used a genuine new edge.
+
+Repeated short jumps for all four characters likewise rejected
+secondary at offset 31 and admitted it at 32. A 30-tick Marge jump
+hold rejected secondary at offset 58 and admitted it at 59.
+An initially misaligned Bart comparison was discarded; his corrected
+earlier isolated scene reproduced the same short-jump boundary.
+The preview now sets its existing one-tick recovery on the transition
+from any airborne maneuver to idle. The last-airborne-tick primary
+attack during a regular jump remains available. The special attack
+uses this same transition instead of an independent fixed duration.
+Tests cover both buttons and the three aerial flight durations,
+two repeated-jump durations, and all four stations. Original
+directional recovery, combat interruption and other moving or
+variable-duration traces remain open.
+
+Fresh portable validation passed in run 1795618492489171106-3014915.
+An initial native smoke exposed a one-tick error in its synthetic
+release timing; the corrected smoke rejects the primary edge at the
+actual aerial landing while retaining the 84-pixel displacement.
+The optimized 3,224,784-byte build passed adaptive touch smoke with
+the verified 88-pose catalogue. All 600 movement and 60 combat
+submissions met the 16.667 ms host-work budget; mean submission work
+was 108.848 and 85.168 microseconds, respectively. Lifetime peak
+RSS was 88,268,800 bytes. This remains offscreen evidence only.

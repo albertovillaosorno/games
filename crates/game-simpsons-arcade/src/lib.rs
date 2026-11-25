@@ -68,8 +68,6 @@ pub const CONTINUE_TICKS: u16 = 1200;
 const PLAYER_HEALTH: u8 = 3;
 // Original ground-attack follow-up edges first take effect at offset 20.
 const GROUND_ATTACK_RECOVERY_TICKS: u8 = 20;
-// Original special follow-up edges first take effect at offset 31.
-const SPECIAL_ATTACK_RECOVERY_TICKS: u8 = 31;
 
 /// Characters and default input seat order for the four-player edition.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -267,10 +265,13 @@ impl Slot {
             self.station.maneuver = Maneuver::air_attack(jump);
             return;
         }
-        self.station.maneuver = self
-            .station
-            .maneuver
-            .advance(player, self.held(Control::Secondary));
+        let previous = self.station.maneuver;
+        self.station.maneuver =
+            previous.advance(player, self.held(Control::Secondary));
+        if previous.airborne() && self.station.maneuver == Maneuver::Idle {
+            // Landing is visible before new ground actions can begin.
+            self.action_recovery = 1;
+        }
         if let Some(maneuver) = queued {
             self.begin_maneuver(maneuver);
         }
@@ -293,13 +294,9 @@ impl Slot {
             && self.station.maneuver == Maneuver::Idle
             && self.action_recovery == 0
         {
-            self.action_recovery = match maneuver {
-                Maneuver::Attack { .. } => GROUND_ATTACK_RECOVERY_TICKS,
-                Maneuver::Special { .. } => SPECIAL_ATTACK_RECOVERY_TICKS,
-                Maneuver::AirAttack(_) | Maneuver::Idle | Maneuver::Jump(_) => {
-                    0
-                },
-            };
+            if matches!(maneuver, Maneuver::Attack { .. }) {
+                self.action_recovery = GROUND_ATTACK_RECOVERY_TICKS;
+            }
             self.attack_quarters = 0;
             self.station.maneuver = maneuver;
             self.station.walking_ticks = None;
@@ -1164,7 +1161,7 @@ mod tests {
             for offset in 17..=20 {
                 let mut state = four_playing();
                 state.input_step(3, &pulse(player, Control::Primary));
-                let timing = (offset, offset == 20);
+                let timing = (3, 3 + offset, offset == 20);
                 verify_follow_up(state, player, Control::Primary, timing);
                 verify_follow_up(state, player, Control::Secondary, timing);
             }
@@ -1176,11 +1173,74 @@ mod tests {
         for player in Player::ALL {
             for offset in 29..=31 {
                 let state = special_started(player);
-                let timing = (offset, offset == 31);
+                let timing = (3, 3 + offset, offset == 31);
                 verify_follow_up(state, player, Control::Primary, timing);
                 verify_follow_up(state, player, Control::Secondary, timing);
             }
         }
+    }
+
+    #[test]
+    fn aerial_attack_follow_up_waits_until_after_landing() {
+        for player in Player::ALL {
+            for (takeoff, flight) in [(8u64, 33u64), (18, 21), (33, 24)] {
+                verify_aerial_landing_edges(player, takeoff, flight);
+            }
+        }
+    }
+
+    fn verify_aerial_landing_edges(player: Player, takeoff: u64, flight: u64) {
+        let mut state = four_playing();
+        state.input_step(3, &[change(player, Control::Secondary, true)]);
+        for tick in 4..takeoff {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(takeoff, &pulse(player, Control::Primary));
+        assert!(matches!(station_for(&state, player).maneuver,
+            Maneuver::AirAttack(motion) if motion.tick() == 0));
+        let start = takeoff.saturating_add(1);
+        state.input_step(start, &[change(player, Control::Secondary, false)]);
+        let landing = takeoff.saturating_add(flight);
+        for control in [Control::Primary, Control::Secondary] {
+            verify_follow_up(state, player, control, (start, landing, false));
+            verify_follow_up(
+                state,
+                player,
+                control,
+                (start, landing.saturating_add(1), true),
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_jump_waits_until_after_landing() {
+        for player in Player::ALL {
+            verify_jump_landing_edges(player, 3, 31);
+            verify_jump_landing_edges(player, 30, 58);
+        }
+    }
+
+    fn verify_jump_landing_edges(player: Player, hold: u64, flight: u64) {
+        let mut state = four_playing();
+        state.input_step(3, &[change(player, Control::Secondary, true)]);
+        let release = 3u64.saturating_add(hold);
+        for tick in 4..release {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(release, &[change(player, Control::Secondary, false)]);
+        let landing = 3u64.saturating_add(flight);
+        verify_follow_up(
+            state,
+            player,
+            Control::Secondary,
+            (release, landing, false),
+        );
+        verify_follow_up(
+            state,
+            player,
+            Control::Secondary,
+            (release, landing.saturating_add(1), true),
+        );
     }
 
     fn special_started(player: Player) -> Cabinet {
@@ -1202,11 +1262,10 @@ mod tests {
         mut state: Cabinet,
         player: Player,
         control: Control,
-        timing: (u64, bool),
+        timing: (u64, u64, bool),
     ) {
-        let (offset, allowed) = timing;
-        let target = 3u64.saturating_add(offset);
-        for tick in 4..target {
+        let (start, target, allowed) = timing;
+        for tick in start.saturating_add(1)..target {
             state.input_step(tick, &[]);
         }
         let baseline = state;
