@@ -18,19 +18,24 @@ Provide one shared import and conversion interface.
 
 ## Acceptance
 
-- Identify supported original media and validate the input revision.
+- Identify supported media formats and layouts without requiring a known
+  source SHA or checksum inventory. Attempt bounded extraction of supplied
+  media and report unsupported structures; preserve all safety checks.
+- Remove mandatory original-media digest admission from shared and MAME
+  import paths. Do not persist original-media checksum inventories.
 - Safely extract and normalise user-provided assets into local storage.
 - Validate deterministic output without executing original binaries.
 - Support one preferred official edition per title initially.
 
 ## Evidence
 
-The shared importer verifies SHA-256 of an immutable source snapshot before
-opening the ZIP. The flat-file adapter admits stored and deflated entries
+The shared importer admits a size-bounded immutable source snapshot before
+opening the ZIP, with no original-media fingerprint requirement. The flat-file
+adapter admits stored and deflated entries
 through shared archive budgets, rejects duplicate and case-colliding names,
 unsafe paths, unsupported member types and inconsistent ZIP headers. It
 checks decoded length and CRC before each conversion callback. Six synthetic
-tests pass. The read-only verification CLI also passed on the pinned
+tests pass. The read-only verification CLI also passed on the supplied
 Simpsons World set 1 input with exact source, member, total and count limits.
 It decoded 14 members and 7,209,088 bytes without extraction or execution.
 Synthetic conversion tests cover deterministic manifest ordering, payload
@@ -53,14 +58,14 @@ unverified. The publication parent and staging files must remain trusted.
 
 The host composition tool now connects the selected graphics converter
 to native transactional staging without introducing an importer-to-platform
-dependency. On GNU/Linux the actual pinned Simpsons archive produced a
+dependency. On GNU/Linux the actual supplied Simpsons archive produced a
 published manifest-addressed bundle with 10,485,760 payload bytes.
 Independent pinned-manifest read-back verified both payloads.
 A repeated import rejected the existing destination and left its contents
 unchanged. Outputs are retained only beneath the ignored local reference
 directory. Other titles, Android publication and full gameplay remain open.
 
-The MAME adapter now selects an explicit machine and pinned revision. The
+The MAME adapter now selects an explicit machine and supported layout. The
 Simpsons machine is a declarative Konami board profile: the shared adapter
 collects exact ROM lanes, reuses chip bit layouts, converts each region and
 checks the expected manifest shape. The host CLI uses MAME verify, import,
@@ -72,9 +77,24 @@ Only the selected Simpsons profile is verified; other boards remain open.
 The same machine selection and transactional publication path now support
 a distinct canonical audio family. The KDSC catalogue parser checks every
 header and contiguous sample extent before converting one clip at a time.
-The pinned Simpsons source produced 161 mono PCM16 records, 3,798,888
+The supplied Simpsons source produced 161 mono PCM16 records, 3,798,888
 payload bytes in total, with declared nominal rates preserved. Two imports
 and native published read-back returned the same manifest; repeated
 publication rejected the destination and read-back remained unchanged.
-The graphics family retains its previous manifest identity. A cross-family
-read-back was rejected. This verifies asset conversion, not game audio.
+At that checkpoint the graphics family retained its manifest identity. A
+cross-family read-back was rejected. This verifies conversion, not game audio.
+
+The shared source snapshot and generic ZIP command no longer accept a
+pre-known original digest. MAME verify checks every declared graphics
+and sample lane by name and size, in addition to shared archive safety
+and internal ZIP integrity checks. Imports still enforce exact selected
+layout, family-specific media structure and transactional publication.
+The checks do not establish original-media authenticity.
+
+Local Simpsons generic and MAME verification each admitted 14 members
+and 7,209,088 decoded bytes without a source checksum argument.
+Fresh graphics and audio publications produced version-two manifests
+with no source fingerprint; independent read-back verified both families.
+Their canonical payload records match the existing version-one bundles
+exactly. Legacy graphics and audio read-back also retained their original
+canonical manifest addresses. No original archive or payload is tracked.

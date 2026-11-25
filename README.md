@@ -118,15 +118,16 @@ RGBA frames and ordered sprite scenes using persistent accelerated textures,
 nearest-neighbor scaling and aspect-preserving letterboxing.
 The shared asset crate defines deterministic versioned manifests, SHA-256
 content identities and checked RGBA8, PCM16 and indexed-tile descriptors.
-The importer validates a pinned immutable ZIP source and checks each flat
-archive member before conversion. The conversion interface assembles a
+The importer admits an immutable, size-bounded ZIP source and checks each
+flat archive member before conversion without an original-media digest.
+The conversion interface assembles a
 canonical manifest with deduplicated, validated payload staging requests.
 The Linux platform stages content by SHA-256 and completes a private bundle
 only when its exact payload set matches the manifest. GNU/Linux supports
 atomic publication without replacement and native verified read-back.
 
 The host build tool selects arcade originals by MAME machine and revision.
-The importer owns trusted source identities, word-lane assembly, reusable
+The importer owns supported media layouts, word-lane assembly, reusable
 chip layouts and canonical graphics conversion. Unknown profiles fail closed.
 
 ```sh
@@ -134,13 +135,18 @@ cargo run --locked -p games-build -- mame import simpsons world-4p-set-1 \
   .reference/games/simpsons-arcade/simpsons.zip 3000000 1048576 7209088 14
 ```
 
-Use `mame verify` for read-only archive admission. On GNU/Linux, use
+Use `mame verify` for read-only archive and required media-lane admission.
+On GNU/Linux, use
 `mame publish MACHINE REV PARENT PATH SOURCE ENTRY TOTAL COUNT` or
 `mame check MACHINE REV PARENT MANIFEST_SHA256`. The four numeric limits
 bound source bytes, individual decoded members, total bytes and member count.
 Create a trusted, private output parent inside the ignored reference directory
-before publication. `zip verify PATH TITLE REV SHA256 SOURCE ENTRY TOTAL COUNT`
-remains available for explicit generic flat ZIP admission. The selected
+before publication. `zip verify PATH TITLE REV SOURCE ENTRY TOTAL COUNT`
+remains available for explicit generic flat ZIP admission. Neither command
+establishes authenticity of original media. New version-two manifests record
+only the selected title and layout; canonical payload and manifest hashes
+remain required. Existing canonical version-one bundles remain readable at
+their original addresses without propagating source fingerprints. The selected
 Simpsons bundle is verified locally. Its observed palette RAM and mixer
 assignments match independent reference values; bounded tilemap admission
 and exact PCM reference comparison also pass. The optional GNU/Linux

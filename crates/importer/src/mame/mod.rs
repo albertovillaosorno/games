@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Execute original code, infer palettes or implement title gameplay.
 // - Allows:
-//   - Inputs: Verified local source archive and explicit archive budget.
+//   - Inputs: Bounded local source archive and explicit archive budget.
 //   - Outputs: Complete tile-major arrays of row-major palette indices.
 //   - Side effects: Bounded allocations only; no filesystem access.
 // - Split-When:
@@ -25,7 +25,7 @@
 // - Description:
 //   - Assemble verified graphics lanes in hardware order and decode pixels.
 // - Usage:
-//   - Verify the selected archive and select a supported machine and revision.
+//   - Select a supported machine and layout, then decode the archive.
 // - Defaults:
 //   - Reject any other revision and incomplete or incorrectly sized lanes.
 
@@ -46,6 +46,7 @@ pub mod sprites;
 /// Observed local tile-cell addresses and attributes.
 pub mod tilemap;
 
+use std::collections::BTreeMap;
 use std::iter::once;
 use std::num::{NonZeroU32, NonZeroUsize};
 
@@ -54,9 +55,9 @@ use games_assets::{
     AssetFormat, AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
 
-use crate::conversion::{ConversionLimits, convert_verified};
+use crate::conversion::{ConversionLimits, convert_snapshot};
 use crate::graphics::{TileLayout, interleave_words};
-use crate::{ImportError, VerifiedSource};
+use crate::{ImportError, SourceSnapshot};
 
 #[derive(Clone, Copy, Debug)]
 struct Region {
@@ -96,7 +97,6 @@ impl Region {
 #[derive(Debug)]
 struct Profile {
     audio_limits: ManifestLimits,
-    digest: &'static str,
     graphics: &'static [Region],
     limits: ManifestLimits,
     machine: &'static str,
@@ -111,7 +111,7 @@ struct Profile {
     video: priority::Wiring,
 }
 
-/// The selected canonical asset family for a pinned source machine.
+/// The selected canonical asset family for a supported machine.
 #[derive(Clone, Copy, Debug)]
 pub enum AssetSelection {
     /// Mono PCM sound samples at their source-declared nominal rates.
@@ -126,7 +126,7 @@ impl AssetSelection {
     /// Rejects invalid source identity, assets or staging failures.
     pub fn convert<Stage>(
         self,
-        source: &VerifiedSource<'_>,
+        source: &SourceSnapshot<'_>,
         limits: ConversionLimits,
         stage: Stage,
     ) -> Result<AssetManifest, ImportError>
@@ -137,7 +137,7 @@ impl AssetSelection {
             Self::Graphics(machine) => {
                 machine.convert_graphics(source, limits, stage)
             },
-            Self::Audio(machine) => convert_verified(
+            Self::Audio(machine) => convert_snapshot(
                 source,
                 limits.manifest,
                 stage,
@@ -173,7 +173,7 @@ impl AssetSelection {
         match self {
             Self::Graphics(machine) => machine.validate_manifest(manifest),
             Self::Audio(machine) => {
-                if manifest.source() != &machine.identity()? {
+                if manifest.source() != &machine.identity() {
                     return Err(ImportError::IncorrectSource);
                 }
                 samples::catalogue::validate_manifest(
@@ -185,7 +185,7 @@ impl AssetSelection {
     }
 }
 
-/// A supported machine and pinned original revision, selected by name.
+/// A supported machine and source layout, selected by name.
 #[derive(Clone, Copy, Debug)]
 pub struct Machine(&'static Profile);
 
@@ -213,17 +213,17 @@ impl Machine {
     /// Rejects mismatched sources, incomplete lanes and conversion failures.
     pub fn convert_graphics<Stage>(
         self,
-        source: &VerifiedSource<'_>,
+        source: &SourceSnapshot<'_>,
         limits: ConversionLimits,
         stage: Stage,
     ) -> Result<AssetManifest, ImportError>
     where
         Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
     {
-        if source.identity() != &self.identity()? {
+        if source.identity() != &self.identity() {
             return Err(ImportError::IncorrectSource);
         }
-        convert_verified(source, limits.manifest, stage, |verified, output| {
+        convert_snapshot(source, limits.manifest, stage, |verified, output| {
             let mut collected: Vec<_> = self
                 .0
                 .graphics
@@ -274,16 +274,13 @@ impl Machine {
         self.0.limits
     }
 
-    /// Trusted source identity, not a hash inferred from supplied media.
-    ///
-    /// # Errors
-    /// Rejects a malformed compiled-in profile digest.
-    pub fn identity(self) -> Result<SourceIdentity, ImportError> {
-        Ok(SourceIdentity {
-            digest: self.0.digest.parse()?,
+    /// The selected title and supported layout, not media authenticity.
+    #[must_use]
+    pub fn identity(self) -> SourceIdentity {
+        SourceIdentity {
             revision: self.0.revision.to_owned(),
             title: self.0.title.to_owned(),
-        })
+        }
     }
 
     /// Exact number of entries in the machine palette RAM.
@@ -292,15 +289,15 @@ impl Machine {
         self.0.palette.entries
     }
 
-    /// Assemble only the profiled sample ROM members from the verified archive.
+    /// Assemble only the profiled sample ROM members from a bounded archive.
     /// # Errors
     /// Rejects an incorrect source or missing or malformed sample members.
     pub fn sample_rom(
         self,
-        source: &VerifiedSource<'_>,
+        source: &SourceSnapshot<'_>,
         budget: ArchiveBudget,
     ) -> Result<samples::SampleRom, ImportError> {
-        if source.identity() != &self.identity()? {
+        if source.identity() != &self.identity() {
             return Err(ImportError::IncorrectSource);
         }
         samples::SampleRom::load(source, budget, self.0.sample_members)
@@ -356,7 +353,7 @@ impl Machine {
         self,
         manifest: &AssetManifest,
     ) -> Result<(), ImportError> {
-        if manifest.source() != &self.identity()?
+        if manifest.source() != &self.identity()
             || manifest.records().len() != self.0.graphics.len()
         {
             return Err(ImportError::IncorrectSource);
@@ -369,6 +366,56 @@ impl Machine {
             }
         }
         Ok(())
+    }
+
+    /// Visit a bounded archive and require every profiled media lane.
+    ///
+    /// This checks layout compatibility, not original-media authenticity.
+    /// The callback can run before a later member fails, so any outputs
+    /// must remain private until the entire visit succeeds.
+    ///
+    /// # Errors
+    /// Rejects the wrong layout, absent or incorrectly sized required
+    /// lanes, unsafe archive members and callback failures.
+    pub fn visit_layout<Visit>(
+        self,
+        source: &SourceSnapshot<'_>,
+        budget: ArchiveBudget,
+        mut visit: Visit,
+    ) -> Result<(), ImportError>
+    where
+        Visit: FnMut(&str, &[u8]) -> Result<(), ImportError>,
+    {
+        if source.identity() != &self.identity() {
+            return Err(ImportError::IncorrectSource);
+        }
+        let mut required: BTreeMap<_, _> = self
+            .0
+            .graphics
+            .iter()
+            .flat_map(|region| {
+                region.lanes.iter().map(|name| (*name, region.lane_bytes))
+            })
+            .chain(
+                self.0
+                    .sample_members
+                    .iter()
+                    .map(|member| (member.name, member.bytes)),
+            )
+            .collect();
+        source.visit_flat_zip(budget, |name, payload| {
+            if required
+                .remove(name)
+                .is_some_and(|size| payload.len() != size)
+            {
+                return Err(ImportError::UnsupportedMember);
+            }
+            visit(name, payload)
+        })?;
+        required
+            .is_empty()
+            .then_some(())
+            .ok_or(ImportError::UnsupportedMember)
     }
 }
 
@@ -467,10 +514,10 @@ mod tests {
     {
         let machine = Machine::select("simpsons", "world-4p-set-1")?;
         let media = b"synthetic";
-        let mut identity = machine.identity()?;
-        identity.digest = ContentHash::calculate(media);
+        let mut identity = machine.identity();
+        identity.revision = String::from("different-layout");
         let budget = NonZeroU64::new(32).unwrap_or(NonZeroU64::MIN);
-        let verified = VerifiedSource::new(media, &identity, budget)?;
+        let verified = SourceSnapshot::new(media, &identity, budget)?;
         let limits = ConversionLimits {
             archive: ArchiveBudget::new(budget, budget, budget),
             manifest: machine.graphics_limits(),

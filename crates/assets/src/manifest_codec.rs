@@ -32,12 +32,12 @@
 use std::num::NonZeroUsize;
 use std::{fmt, io};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::{
-    AssetError, AssetFormat, AssetManifest, AssetRecord, ManifestDocument,
-    ManifestLimits, SourceIdentity, VERSION,
+    AssetError, AssetFormat, AssetManifest, AssetRecord, ContentHash,
+    ManifestDocument, ManifestLimits, SourceIdentity, VERSION,
 };
 
 #[derive(Debug, Deserialize)]
@@ -45,7 +45,25 @@ use crate::{
 struct BorrowedDocument<'input> {
     #[serde(borrow)]
     records: &'input RawValue,
-    source: SourceIdentity,
+    #[serde(borrow)]
+    source: &'input RawValue,
+    version: u16,
+}
+
+// Read-only compatibility with previously published, pinned v1 bundles.
+// The obsolete fingerprint is never retained or emitted in a new manifest.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySource {
+    digest: ContentHash,
+    revision: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyDocument<'input> {
+    records: &'input [AssetRecord],
+    source: LegacySource,
     version: u16,
 }
 
@@ -141,7 +159,7 @@ impl AssetManifest {
         encode(&self.0, limits.manifest_bytes)
     }
 
-    /// Build a version-one manifest, sorting by canonical logical key.
+    /// Build a version-two manifest, sorting by canonical logical key.
     ///
     /// # Errors
     /// Rejects invalid identities, duplicates and exceeded budgets.
@@ -164,6 +182,7 @@ impl AssetManifest {
     }
 
     /// Decode bounded metadata and verify version and all descriptors.
+    /// Legacy canonical v1 metadata is normalized to v2 on encoding.
     ///
     /// # Errors
     /// Rejects malformed, unsupported, unordered or oversized metadata.
@@ -171,7 +190,24 @@ impl AssetManifest {
         bytes: &[u8],
         limits: ManifestLimits,
     ) -> Result<Self, AssetError> {
-        let manifest = Self(decode(bytes, limits)?);
+        let manifest = Self(decode(bytes, limits, false)?);
+        manifest.validate(limits)?;
+        Ok(manifest)
+    }
+
+    /// Decode only exact canonical wire bytes, including legacy v1 bundles.
+    ///
+    /// The returned metadata contains only the selected title and layout.
+    /// A caller pinning a legacy bundle must hash its original wire bytes,
+    /// not the normalized version-two encoding.
+    ///
+    /// # Errors
+    /// Rejects noncanonical bytes, unsupported versions and invalid metadata.
+    pub fn parse_canonical(
+        bytes: &[u8],
+        limits: ManifestLimits,
+    ) -> Result<Self, AssetError> {
+        let manifest = Self(decode(bytes, limits, true)?);
         manifest.validate(limits)?;
         Ok(manifest)
     }
@@ -192,7 +228,7 @@ impl AssetManifest {
         &self.0.records
     }
 
-    /// Return the verified source identity recorded by the importer.
+    /// Return the selected source layout, not proof of media authenticity.
     #[must_use]
     pub const fn source(&self) -> &SourceIdentity {
         &self.0.source
@@ -278,17 +314,55 @@ impl AssetManifest {
 fn decode(
     bytes: &[u8],
     limits: ManifestLimits,
+    canonical: bool,
 ) -> Result<ManifestDocument, AssetError> {
     if bytes.len() > limits.manifest_bytes.get() {
         return Err(AssetError::TooLarge);
     }
     let document: BorrowedDocument<'_> = serde_json::from_slice(bytes)
         .map_err(|_error| AssetError::InvalidEncoding)?;
+    if !matches!(document.version, 1 | VERSION) {
+        return Err(AssetError::UnsupportedVersion);
+    }
     let records = decode_records(document.records, limits.records)?;
+    if document.version == 1 {
+        return decode_legacy(bytes, document.source, records, limits);
+    }
+    let manifest = ManifestDocument {
+        records,
+        source: serde_json::from_str(document.source.get())
+            .map_err(|_error| AssetError::InvalidEncoding)?,
+        version: VERSION,
+    };
+    if canonical && encode(&manifest, limits.manifest_bytes)? != bytes {
+        return Err(AssetError::InvalidEncoding);
+    }
+    Ok(manifest)
+}
+
+fn decode_legacy(
+    bytes: &[u8],
+    raw_source: &RawValue,
+    records: Vec<AssetRecord>,
+    limits: ManifestLimits,
+) -> Result<ManifestDocument, AssetError> {
+    let legacy = LegacyDocument {
+        records: &records,
+        source: serde_json::from_str(raw_source.get())
+            .map_err(|_error| AssetError::InvalidEncoding)?,
+        version: 1,
+    };
+    if encode(&legacy, limits.manifest_bytes)? != bytes {
+        return Err(AssetError::InvalidEncoding);
+    }
+    let source = SourceIdentity {
+        revision: legacy.source.revision,
+        title: legacy.source.title,
+    };
     Ok(ManifestDocument {
         records,
-        source: document.source,
-        version: document.version,
+        source,
+        version: VERSION,
     })
 }
 
@@ -330,7 +404,7 @@ fn decode_records(
 
 /// Encode using the existing JSON serializer into a bounded output buffer.
 fn encode(
-    document: &ManifestDocument,
+    document: &impl Serialize,
     maximum: NonZeroUsize,
 ) -> Result<Vec<u8>, AssetError> {
     let mut output = BoundedBytes {

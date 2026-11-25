@@ -18,7 +18,9 @@ Define the shared asset format and manifest consumed by runtimes.
 
 ## Acceptance
 
-- Record the selected source revision and SHA-256 at onboarding.
+- Record the source edition and supported format/layout at onboarding.
+  Do not store original-media checksums or require them for extraction.
+  Generated canonical payload integrity remains a separate contract.
 - Keep source-platform knowledge out of gameplay and runtime crates.
 - Use synthetic fixtures for integrity and compatibility tests.
 
@@ -29,7 +31,7 @@ logical identifiers, SHA-256 payloads, explicit per-entry and aggregate
 budgets, RGBA8 images and interleaved signed 16-bit PCM audio. Synthetic
 tests cover deterministic ordering, format size validation, tampering,
 duplicate keys, unsupported versions and malformed metadata.
-The first original archive is pinned in the Simpsons task. Synthetic
+The first supported original layout is recorded in the Simpsons task. Synthetic
 importer conversion exercises canonical descriptors and manifests. Runtime
 consumption and target compatibility still require evidence.
 
@@ -88,3 +90,11 @@ decoding, exact-format admission and overflow rejection. The opt-in native
 smoke uses the SDL2 dummy driver to exercise paused queue admission and
 clearing without requiring an audio output device. Physical output,
 latency, Android, WASM and gameplay audio parity remain unverified.
+
+Version-two manifests contain only title and selected layout provenance.
+They retain all canonical record payload SHA-256 checks. Canonical legacy
+version-one wire bytes are accepted only with their exact original encoding
+and pinned manifest address; the obsolete source fingerprint is discarded
+from the decoded model and never emitted in newly published manifests.
+Synthetic tests cover exact legacy decoding, address preservation,
+rejection of obsolete fields in version two and tampered payloads.

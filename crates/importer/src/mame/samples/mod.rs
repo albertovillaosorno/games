@@ -36,7 +36,7 @@ pub(super) mod catalogue;
 use games_assets::archive::ArchiveBudget;
 
 use super::allocated_bytes;
-use crate::{ImportError, VerifiedSource};
+use crate::{ImportError, SourceSnapshot};
 
 const RECORD_BYTES: usize = 24;
 const VOICES: usize = 4;
@@ -89,7 +89,7 @@ impl SampleRom {
     }
 
     pub(super) fn load(
-        source: &VerifiedSource<'_>,
+        source: &SourceSnapshot<'_>,
         budget: ArchiveBudget,
         members: &[Member],
     ) -> Result<Self, ImportError> {

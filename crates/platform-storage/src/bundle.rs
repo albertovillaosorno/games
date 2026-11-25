@@ -101,11 +101,18 @@ impl From<io::Error> for BundleError {
 /// verified on demand, not assumed valid because their filenames match.
 #[derive(Debug)]
 pub struct CanonicalBundle {
+    digest: ContentHash,
     manifest: AssetManifest,
     payloads: Option<OwnedFd>,
 }
 
 impl CanonicalBundle {
+    /// The exact pinned manifest address, including for legacy bundles.
+    #[must_use]
+    pub const fn digest(&self) -> ContentHash {
+        self.digest
+    }
+
     /// Access the validated metadata for title-specific interpretation.
     #[must_use]
     pub const fn manifest(&self) -> &AssetManifest {
@@ -133,16 +140,17 @@ impl CanonicalBundle {
         if ContentHash::calculate(&bytes) != digest {
             return Err(AssetError::PayloadMismatch.into());
         }
-        let manifest = AssetManifest::parse(&bytes, limits)?;
-        if manifest.encode(limits)? != bytes {
-            return Err(AssetError::InvalidEncoding.into());
-        }
+        let manifest = AssetManifest::parse_canonical(&bytes, limits)?;
         let payloads = if manifest.records().is_empty() {
             None
         } else {
             Some(open_directory(&root, PAYLOADS_DIRECTORY)?)
         };
-        Ok(Self { manifest, payloads })
+        Ok(Self {
+            digest,
+            manifest,
+            payloads,
+        })
     }
 
     /// Read the declared payload for one logical key and verify its bytes.
@@ -284,7 +292,6 @@ mod tests {
             let name = first.0.digest.to_string();
             let manifest = AssetManifest::new(
                 SourceIdentity {
-                    digest: ContentHash::calculate(b"source"),
                     revision: String::from("fixture"),
                     title: String::from(title),
                 },
@@ -491,6 +498,43 @@ mod tests {
                 == Err(AssetError::TooLarge.into()),
         )?;
         fs::write(&fixture.payload, b"")?;
+        require(
+            bundle.read_payload("tiles/hero")
+                == Err(AssetError::PayloadMismatch.into()),
+        )
+    }
+
+    #[test]
+    fn legacy_bundle_keeps_its_address_and_verifies_payloads()
+    -> Result<(), BundleError> {
+        let fixture = Fixture::new()?;
+        let encoded = fixture.manifest.encode(limits())?;
+        let document = String::from_utf8(encoded)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let fingerprint = ["0"; 32].join(",");
+        let legacy = document
+            .replace(
+                "\"source\":{",
+                &format!("\"source\":{{\"digest\":[{fingerprint}],"),
+            )
+            .replace("\"version\":2", "\"version\":1");
+        let digest = ContentHash::calculate(legacy.as_bytes());
+        fs::write(fixture.bundle.join(MANIFEST_NAME), legacy.as_bytes())?;
+        require(matches!(
+            fixture.open(),
+            Err(BundleError::Asset(AssetError::PayloadMismatch))
+        ))?;
+        let directory = fixture.parent.path.join(bundle_name(digest));
+        fs::rename(&fixture.bundle, &directory)?;
+        let bundle =
+            CanonicalBundle::open(&fixture.parent.path, digest, limits())?;
+        require(bundle.digest() == digest)?;
+        require(bundle.manifest() == &fixture.manifest)?;
+        require(bundle.read_payload("tiles/hero")? == b"tile")?;
+        let payload = directory
+            .join(PAYLOADS_DIRECTORY)
+            .join(ContentHash::calculate(b"tile").to_string());
+        fs::write(payload, b"evil")?;
         require(
             bundle.read_payload("tiles/hero")
                 == Err(AssetError::PayloadMismatch.into()),

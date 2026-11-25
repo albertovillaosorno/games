@@ -39,7 +39,7 @@ use games_assets::{
     ManifestLimits, SourceIdentity,
 };
 
-use super::{ImportError, VerifiedSource};
+use super::{ImportError, SourceSnapshot};
 
 /// Explicit, independent admission budgets for source and output.
 #[derive(Clone, Copy, Debug)]
@@ -57,7 +57,7 @@ struct Payload {
     size: u64,
 }
 
-/// Canonical payload admission during one verified source conversion.
+/// Canonical payload admission during one bounded source conversion.
 ///
 /// The sink must keep data private until the returned manifest is accepted.
 /// Logical keys never become destination paths; only content hashes are
@@ -189,7 +189,7 @@ where
 /// # Errors
 /// Propagates source, conversion, budget, descriptor or sink failures.
 pub fn convert_flat_zip<Stage, Convert>(
-    source: &VerifiedSource<'_>,
+    source: &SourceSnapshot<'_>,
     limits: ConversionLimits,
     stage: Stage,
     mut convert: Convert,
@@ -202,19 +202,19 @@ where
         &mut Conversion<'_, Stage>,
     ) -> Result<(), ImportError>,
 {
-    convert_verified(source, limits.manifest, stage, |verified, output| {
+    convert_snapshot(source, limits.manifest, stage, |verified, output| {
         verified.visit_flat_zip(limits.archive, |name, payload| {
             convert(name, payload, output)
         })
     })
 }
 
-/// Assemble assets from a verified source, including multi-member decoders.
+/// Assemble assets from a bounded source, including multi-member decoders.
 /// The private sink must be discarded if conversion or completion fails.
 /// # Errors
 /// Propagates conversion, staging and manifest validation failures.
-pub(crate) fn convert_verified<Stage, Convert>(
-    source: &VerifiedSource<'_>,
+pub(crate) fn convert_snapshot<Stage, Convert>(
+    source: &SourceSnapshot<'_>,
     limits: ManifestLimits,
     stage: Stage,
     convert: Convert,
@@ -222,7 +222,7 @@ pub(crate) fn convert_verified<Stage, Convert>(
 where
     Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
     Convert: FnOnce(
-        &VerifiedSource<'_>,
+        &SourceSnapshot<'_>,
         &mut Conversion<'_, Stage>,
     ) -> Result<(), ImportError>,
 {
@@ -243,7 +243,6 @@ mod tests {
 
     fn source() -> SourceIdentity {
         SourceIdentity {
-            digest: ContentHash::calculate(b"synthetic"),
             revision: String::from("fixture-1"),
             title: String::from("synthetic"),
         }

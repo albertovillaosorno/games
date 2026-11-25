@@ -787,7 +787,6 @@ mod tests {
     fn manifest(digest: ContentHash) -> Result<AssetManifest, StagingError> {
         Ok(AssetManifest::new(
             SourceIdentity {
-                digest: ContentHash::calculate(b"source"),
                 title: String::from("synthetic"),
                 revision: String::from("fixture"),
             },

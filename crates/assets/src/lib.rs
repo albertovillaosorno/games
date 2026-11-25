@@ -25,7 +25,7 @@
 // - Description:
 //   - Identifies content-addressed payloads independently of source formats.
 // - Usage:
-//   - Verify source identity, construct a manifest and validate asset bytes.
+//   - Select source layout, construct a manifest and validate asset bytes.
 // - Defaults:
 //   - Reject unknown versions, malformed keys and invalid payload lengths.
 
@@ -45,10 +45,10 @@ use std::str::{FromStr, from_utf8};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const MAX_KEY_BYTES: usize = 255;
 
-/// SHA-256 content identity, encoded as 32 bytes in a version-one manifest.
+/// SHA-256 content identity, encoded as 32 bytes in a canonical manifest.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -220,9 +220,7 @@ impl AssetRecord {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceIdentity {
-    /// SHA-256 of the exact source archive or input container.
-    pub digest: ContentHash,
-    /// Verified official edition and revision identifier.
+    /// Selected source edition and supported layout identifier.
     pub revision: String,
     /// Canonical catalogue title identifier.
     pub title: String,
@@ -315,7 +313,6 @@ mod tests {
 
     fn source() -> SourceIdentity {
         SourceIdentity {
-            digest: ContentHash::calculate(b"synthetic source"),
             revision: String::from("world-set-1"),
             title: String::from("synthetic-title"),
         }
@@ -579,15 +576,15 @@ mod tests {
         let document = String::from_utf8(bytes)
             .map_err(|_error| AssetError::InvalidEncoding)?;
         let unknown_version =
-            document.replace("\"version\":1", "\"version\":2");
+            document.replace("\"version\":2", "\"version\":3");
         require(
             AssetManifest::parse(unknown_version.as_bytes(), limits())
                 == Err(AssetError::UnsupportedVersion),
         )?;
         for replacement in
-            ["\"version\":1,\"extra\":0", "\"version\":1,\"version\":1"]
+            ["\"version\":2,\"extra\":0", "\"version\":2,\"version\":2"]
         {
-            let malformed = document.replace("\"version\":1", replacement);
+            let malformed = document.replace("\"version\":2", replacement);
             require(
                 AssetManifest::parse(malformed.as_bytes(), limits())
                     == Err(AssetError::InvalidEncoding),
@@ -598,6 +595,43 @@ mod tests {
         require(
             AssetManifest::parse(document.as_bytes(), restrictive)
                 == Err(AssetError::TooLarge),
+        )
+    }
+
+    #[test]
+    fn legacy_manifest_is_checked_and_normalized_without_source_fingerprint()
+    -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(
+            source(),
+            vec![record("tile", b"tile")],
+            limits(),
+        )?;
+        let encoded = manifest.encode(limits())?;
+        let document = String::from_utf8(encoded.clone())
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let digest = serde_json::to_string(&ContentHash::from_bytes([7; 32]))
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let with_digest = document.replace(
+            "\"source\":{",
+            &format!("\"source\":{{\"digest\":{digest},"),
+        );
+        let legacy = with_digest.replace("\"version\":2", "\"version\":1");
+        let parsed =
+            AssetManifest::parse_canonical(legacy.as_bytes(), limits())?;
+        require(parsed == manifest)?;
+        require(parsed.encode(limits())? == encoded)?;
+        require(
+            ContentHash::calculate(legacy.as_bytes())
+                != ContentHash::calculate(&encoded),
+        )?;
+        require(
+            AssetManifest::parse(with_digest.as_bytes(), limits())
+                == Err(AssetError::InvalidEncoding),
+        )?;
+        let noncanonical = format!("{legacy} ");
+        require(
+            AssetManifest::parse_canonical(noncanonical.as_bytes(), limits())
+                == Err(AssetError::InvalidEncoding),
         )
     }
 

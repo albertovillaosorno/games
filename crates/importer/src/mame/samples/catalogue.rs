@@ -221,8 +221,8 @@ mod tests {
     use games_assets::SourceIdentity;
 
     use super::*;
-    use crate::VerifiedSource;
-    use crate::conversion::convert_verified;
+    use crate::SourceSnapshot;
+    use crate::conversion::convert_snapshot;
 
     fn header(first: u32, last: u32, rate: u32, tag: &[u8; 16]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -240,11 +240,10 @@ mod tests {
         bytes.extend(header(66, 67, 12000, b"KDSC KADPCM     "));
         bytes.extend([0x80, 0x7f, 0x77, 0x8f]);
         let identity = SourceIdentity {
-            digest: ContentHash::calculate(b"synthetic"),
             revision: String::from("revision"),
             title: String::from("synthetic"),
         };
-        let source = VerifiedSource::new(
+        let source = SourceSnapshot::new(
             b"synthetic",
             &identity,
             NonZeroU64::MIN.saturating_add(8),
@@ -257,7 +256,7 @@ mod tests {
         };
         let rom = SampleRom { bytes };
         let mut payloads = Vec::new();
-        let manifest = convert_verified(
+        let manifest = convert_snapshot(
             &source,
             limits,
             |_digest, payload| {

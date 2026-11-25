@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Execute originals, decode media layouts or bypass platform storage.
 // - Allows:
-//   - Inputs: Verified source, explicit budgets, trusted publication parent.
+//   - Inputs: Bounded source, explicit budgets, trusted publication parent.
 //   - Outputs: Published bundle receipt or verified payload summary.
 //   - Side effects: Private staging, atomic publication and stdout summaries.
 // - Split-When:
@@ -37,7 +37,7 @@ use games_assets::archive::ArchiveBudget;
 use games_assets::{AssetManifest, ContentHash, ManifestLimits};
 use games_importer::conversion::ConversionLimits;
 use games_importer::mame::AssetSelection;
-use games_importer::{ImportError, VerifiedSource};
+use games_importer::{ImportError, SourceSnapshot};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::staging::CanonicalStaging;
 
@@ -64,17 +64,17 @@ pub fn check(
                 .map_err(|error| format!("{}: {error:?}", record.key))?,
         );
     }
-    super::report_manifest(manifest, limits)
+    super::report_manifest(manifest, bundle.digest())
 }
 
-/// Convert and publish a verified archive without replacing any output.
+/// Convert and publish a bounded archive without replacing any output.
 ///
 /// # Errors
 /// Returns conversion, staging, publication or output failures.
 pub fn publish(
     selection: AssetSelection,
     parent: &Path,
-    source: &VerifiedSource<'_>,
+    source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
     let manifest = selection.limits();
@@ -129,7 +129,7 @@ pub fn finish(
         receipt.path.display()
     )
     .map_err(|error| error.to_string())?;
-    super::report_manifest(converted, manifest)
+    super::report_manifest(converted, digest)
 }
 
 pub(crate) fn staging_budget(

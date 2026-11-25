@@ -46,7 +46,7 @@
   Arcade ROM sets use a shared MAME adapter under the importer crate.
   Share ROM admission, region assembly, chip layouts and asset conversion.
   Title or board differences belong in small profiles or reusable strategies.
-  Select the MAME machine and pinned revision through a generic build/import
+  Select the MAME machine and supported layout through a generic build/import
   interface; do not create title-specific importer commands or pipelines.
   MAME is a reference format and emulator, never a remake runtime.
   Verify supported profiles individually; do not assume universal compatibility.
@@ -120,8 +120,12 @@
   and is usable. If absent, record the task as blocked in its Evidence
   section, specifying the required edition and path. Keep its open record
   and dependencies intact; do not invent assets or claim completion.
-- Recheck blocked titles when inputs become available. Verify the revision,
-  record its hash and clear the blocker only when the input is suitable.
+- Recheck blocked titles when inputs become available. Inspect media format,
+  edition and layout; do not require or store original-media SHA or checksum
+  inventories. Attempt bounded extraction without a pre-known source digest.
+  Preserve structural, path, size and resource safety checks. Keep generated
+  asset integrity and build/cache identities separate from original admission.
+  Record actual extraction results and any unsupported layout.
   Continue with other unblocked work without violating dependency order.
 - Run `cargo download` to fetch current upstream source snapshots, or
   `cargo download craft-libs` to fetch just that repository. Tools and

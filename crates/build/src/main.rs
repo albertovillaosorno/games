@@ -94,21 +94,19 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use games_assets::archive::ArchiveBudget;
-use games_assets::{
-    AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
-};
+use games_assets::{AssetManifest, ContentHash, SourceIdentity};
 use games_importer::conversion::ConversionLimits;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_importer::mame::samples::compare_observations;
 use games_importer::mame::{AssetSelection, Machine};
-use games_importer::{ImportError, VerifiedSource};
+use games_importer::{ImportError, SourceSnapshot};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_platform_storage::file::snapshot;
 
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
     "GNU/Linux: games-build package TITLE OUTPUT\n",
-    "games-build zip verify PATH TITLE REV SHA256 ",
+    "games-build zip verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
@@ -156,13 +154,10 @@ struct Arguments {
 
 impl Arguments {
     fn parse(args: Vec<OsString>) -> Result<Self, String> {
-        let [path, title, revision, digest, source, entry, total, count] =
-            <[OsString; 8]>::try_from(args)
+        let [path, title, revision, source, entry, total, count] =
+            <[OsString; 7]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
         let identity = SourceIdentity {
-            digest: text(&digest)?
-                .parse()
-                .map_err(|_error| String::from("invalid lowercase SHA-256"))?,
             revision: text(&revision)?.to_owned(),
             title: text(&title)?.to_owned(),
         };
@@ -179,9 +174,7 @@ impl Arguments {
         let [path, source, entry, total, count] =
             <[OsString; 5]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
-        let identity = machine
-            .identity()
-            .map_err(|error| format!("profile: {error:?}"))?;
+        let identity = machine.identity();
         Self::with_identity(identity, path, [source, entry, total, count])
     }
 
@@ -269,7 +262,7 @@ enum Command {
     StripPublish(Machine, reference_background::art::Strip),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     TilemapCheck(Machine, PathBuf, PathBuf),
-    Verify(Arguments),
+    Verify(Option<Machine>, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     WaveCompare(PathBuf, PathBuf, NonZeroU64),
 }
@@ -296,7 +289,7 @@ impl Command {
                 ))
             },
             (Some("zip"), Some("verify")) => {
-                Ok(Self::Verify(Arguments::parse(args.collect())?))
+                Ok(Self::Verify(None, Arguments::parse(args.collect())?))
             },
             #[cfg(any(target_os = "linux", target_os = "android"))]
             (Some("wave"), Some("compare")) => {
@@ -417,10 +410,10 @@ impl Command {
             },
             #[cfg(any(target_os = "linux", target_os = "android"))]
             "sample-check" => Self::parse_sample(selected, args),
-            "verify" => Ok(Self::Verify(Arguments::parse_mame(
-                selected,
-                args.collect(),
-            )?)),
+            "verify" => Ok(Self::Verify(
+                Some(selected),
+                Arguments::parse_mame(selected, args.collect())?,
+            )),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             "object-check" | "palette-check" | "priority-check"
             | "tilemap-check" => {
@@ -575,7 +568,11 @@ impl Command {
 
     fn run_assets(self) -> Result<(), String> {
         match self {
-            Self::Verify(args) => with_source(&args, verify_archive),
+            Self::Verify(machine, args) => {
+                with_source(&args, |source, archive| {
+                    verify_archive(source, archive, machine)
+                })
+            },
             Self::Import(selection, args) => {
                 with_source(&args, |source, archive| {
                     report_assets(selection, source, archive)
@@ -636,10 +633,10 @@ where
 
 fn with_source<Run>(args: &Arguments, run: Run) -> Result<(), String>
 where
-    Run: FnOnce(&VerifiedSource<'_>, ArchiveBudget) -> Result<(), String>,
+    Run: FnOnce(&SourceSnapshot<'_>, ArchiveBudget) -> Result<(), String>,
 {
     let bytes = args.snapshot()?;
-    let source = VerifiedSource::new(&bytes, &args.identity, args.source_limit)
+    let source = SourceSnapshot::new(&bytes, &args.identity, args.source_limit)
         .map_err(|error| format!("source: {error:?}"))?;
     run(&source, args.archive)
 }
@@ -649,30 +646,33 @@ fn main() -> Result<(), String> {
 }
 
 fn verify_archive(
-    source: &VerifiedSource<'_>,
+    source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
+    machine: Option<Machine>,
 ) -> Result<(), String> {
     let mut count = 0u64;
     let mut total = 0u64;
-    source
-        .visit_flat_zip(archive, |_name, payload| {
-            count = count.checked_add(1).ok_or(ImportError::TooLarge)?;
-            total = total
-                .checked_add(
-                    u64::try_from(payload.len())
-                        .map_err(|_error| ImportError::TooLarge)?,
-                )
-                .ok_or(ImportError::TooLarge)?;
-            Ok(())
-        })
-        .map_err(|error| format!("archive: {error:?}"))?;
+    let mut visit = |_name: &str, payload: &[u8]| {
+        count = count.checked_add(1).ok_or(ImportError::TooLarge)?;
+        total = total
+            .checked_add(
+                u64::try_from(payload.len())
+                    .map_err(|_error| ImportError::TooLarge)?,
+            )
+            .ok_or(ImportError::TooLarge)?;
+        Ok(())
+    };
+    match machine {
+        Some(selected) => selected.visit_layout(source, archive, visit),
+        None => source.visit_flat_zip(archive, &mut visit),
+    }
+    .map_err(|error| format!("archive: {error:?}"))?;
     let identity = source.identity();
     writeln!(
         stdout().lock(),
-        "Verified {} {} ({}): {count} members, {total} decoded bytes",
+        "Admitted {} {}: {count} members, {total} decoded bytes",
         identity.title,
         identity.revision,
-        identity.digest,
     )
     .map_err(|error| error.to_string())
 }
@@ -709,7 +709,7 @@ fn report_samples(
 
 fn report_manifest(
     converted: &AssetManifest,
-    limits: ManifestLimits,
+    digest: ContentHash,
 ) -> Result<(), String> {
     let mut output = stdout().lock();
     for record in converted.records() {
@@ -720,20 +720,13 @@ fn report_manifest(
         )
         .map_err(|error| error.to_string())?;
     }
-    let encoded = converted
-        .encode(limits)
-        .map_err(|error| format!("manifest: {error:?}"))?;
-    writeln!(
-        output,
-        "Canonical manifest: {}",
-        ContentHash::calculate(&encoded)
-    )
-    .map_err(|error| error.to_string())
+    writeln!(output, "Canonical manifest: {digest}")
+        .map_err(|error| error.to_string())
 }
 
 fn report_assets(
     selection: AssetSelection,
-    source: &VerifiedSource<'_>,
+    source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
     let manifest = selection.limits();
@@ -744,7 +737,10 @@ fn report_assets(
             |_digest, _bytes| Ok(()),
         )
         .map_err(|error| format!("assets: {error:?}"))?;
-    report_manifest(&converted, manifest)
+    let encoded = converted
+        .encode(manifest)
+        .map_err(|error| format!("manifest: {error:?}"))?;
+    report_manifest(&converted, ContentHash::calculate(&encoded))
 }
 
 #[cfg(test)]
@@ -807,18 +803,16 @@ mod tests {
             "archive.zip",
             "synthetic",
             "world-set-1",
-            "abc",
             "100",
             "50",
             "200",
             "4",
         ]
         .map(OsString::from);
-        assert!(Arguments::parse(args.to_vec()).is_err());
-        if let Some(digest) = args.get_mut(3) {
-            *digest = OsString::from("1".repeat(64));
-        }
         assert!(Arguments::parse(args.to_vec()).is_ok());
+        let mut legacy = args.to_vec();
+        legacy.insert(3, OsString::from("1".repeat(64)));
+        assert!(Arguments::parse(legacy).is_err());
         if let Some(count) = args.last_mut() {
             *count = OsString::from("0");
         }

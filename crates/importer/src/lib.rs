@@ -9,11 +9,11 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Verified source media and bounded archive member decoding.
+//   - Bounded source snapshots and archive member decoding.
 // - Must-Not:
 //   - Execute original code, publish files or depend on a runtime.
 // - Allows:
-//   - Inputs: Immutable source bytes, pinned identities and resource limits.
+//   - Inputs: Immutable source bytes, selected layouts and resource limits.
 //   - Outputs: Validated source members for explicit conversion.
 //   - Side effects: Calls a caller-owned conversion callback.
 // - Split-When:
@@ -21,11 +21,11 @@
 // - Merge-When:
 //   - A shared source decoder already provides the same admission contract.
 // - Summary:
-//   - Verify original media before any source-format interpretation.
+//   - Admit bounded source media for safe structural decoding.
 // - Description:
 //   - Decode one bounded member at a time without filesystem extraction.
 // - Usage:
-//   - Verify the input snapshot, then visit its permitted source entries.
+//   - Admit the input snapshot, then visit its permitted source entries.
 // - Defaults:
 //   - Reject unknown source identities, ambiguous names and unsupported files.
 
@@ -48,7 +48,7 @@ use std::str;
 use games_assets::archive::{
     ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
 };
-use games_assets::{AssetError, ContentHash, SourceIdentity};
+use games_assets::{AssetError, SourceIdentity};
 use zip::CompressionMethod;
 use zip::read::{ArchiveOffset, Config, ZipArchive};
 
@@ -65,7 +65,7 @@ pub enum ImportError {
     Collision,
     /// The converter produced no canonical assets.
     EmptyConversion,
-    /// Source bytes do not match the exact expected identity.
+    /// The selected source layout is not supported by the converter.
     IncorrectSource,
     /// The title or revision identifier is not canonical.
     InvalidSourceIdentity,
@@ -93,27 +93,27 @@ impl From<ArchiveError> for ImportError {
     }
 }
 
-/// Immutable source snapshot verified against a selected original edition.
+/// Immutable, size-bounded source snapshot for a selected source layout.
 ///
-/// The bytes are borrowed so the decoded archive cannot change after hashing.
-/// The caller owns source selection and must use a trusted expected identity.
+/// The bytes are borrowed throughout decoding. Source selection is caller
+/// supplied; it is not evidence of the authenticity of the original media.
 #[derive(Clone, Copy, Debug)]
-pub struct VerifiedSource<'source> {
+pub struct SourceSnapshot<'source> {
     bytes: &'source [u8],
     identity: &'source SourceIdentity,
 }
 
-impl<'source> VerifiedSource<'source> {
-    /// Return the selected, verified source identity.
+impl<'source> SourceSnapshot<'source> {
+    /// Return the selected title and supported layout.
     #[must_use]
     pub const fn identity(&self) -> &SourceIdentity {
         self.identity
     }
 
-    /// Verify an immutable bounded source snapshot before parsing it.
+    /// Admit an immutable bounded source snapshot before parsing it.
     ///
     /// # Errors
-    /// Rejects invalid identities, oversized snapshots and mismatched SHA-256.
+    /// Rejects invalid layout identifiers and oversized snapshots.
     pub fn new(
         bytes: &'source [u8],
         identity: &'source SourceIdentity,
@@ -124,9 +124,6 @@ impl<'source> VerifiedSource<'source> {
             .map_err(|_error| ImportError::InvalidSourceIdentity)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit.get() {
             return Err(ImportError::TooLarge);
-        }
-        if ContentHash::calculate(bytes) != identity.digest {
-            return Err(ImportError::IncorrectSource);
         }
         Ok(Self { bytes, identity })
     }
@@ -262,9 +259,8 @@ mod tests {
         ArchiveBudget::new(bound(1024), bound(4096), bound(8))
     }
 
-    fn identity(bytes: &[u8]) -> SourceIdentity {
+    fn identity() -> SourceIdentity {
         SourceIdentity {
-            digest: ContentHash::calculate(bytes),
             revision: String::from("fixture-1"),
             title: String::from("synthetic"),
         }
@@ -296,8 +292,8 @@ mod tests {
         bytes: &[u8],
         limits: ArchiveBudget,
     ) -> Result<Vec<DecodedMember>, ImportError> {
-        let expected = identity(bytes);
-        let source = VerifiedSource::new(bytes, &expected, bound(65_536))?;
+        let expected = identity();
+        let source = SourceSnapshot::new(bytes, &expected, bound(65_536))?;
         let mut members = Vec::new();
         source.visit_flat_zip(limits, |name, payload| {
             members.push((name.to_owned(), payload.to_vec()));
@@ -332,28 +328,49 @@ mod tests {
     }
 
     #[test]
-    fn exact_source_identity_precedes_decoding() -> Result<(), ImportError> {
+    fn bounded_snapshot_admits_without_original_fingerprint()
+    -> Result<(), ImportError> {
         let bytes =
             make_zip(&[("tile.bin", b"tile", CompressionMethod::Stored)])?;
-        let expected = identity(&bytes);
+        let expected = identity();
         let mut invalid = expected.clone();
         invalid.title = String::from("Invalid title");
         require(matches!(
-            VerifiedSource::new(&bytes, &invalid, bound(65_536)),
+            SourceSnapshot::new(&bytes, &invalid, bound(65_536)),
             Err(ImportError::InvalidSourceIdentity),
         ))?;
         require(
-            VerifiedSource::new(&bytes, &expected, bound(65_536))
+            SourceSnapshot::new(&bytes, &expected, bound(65_536))
                 .is_ok_and(|source| source.identity() == &expected),
         )?;
+        let different =
+            make_zip(&[("tile.bin", b"new!", CompressionMethod::Stored)])?;
+        require(
+            inspect(&different, budget())?
+                == vec![(String::from("tile.bin"), b"new!".to_vec())],
+        )?;
         require(matches!(
-            VerifiedSource::new(&bytes, &identity(b"wrong"), bound(65_536)),
-            Err(ImportError::IncorrectSource),
-        ))?;
-        require(matches!(
-            VerifiedSource::new(&bytes, &expected, bound(1)),
+            SourceSnapshot::new(&bytes, &expected, bound(1)),
             Err(ImportError::TooLarge),
         ))
+    }
+
+    #[test]
+    fn mame_layout_rejects_missing_and_incorrectly_sized_lanes()
+    -> Result<(), ImportError> {
+        let machine = mame::Machine::select("simpsons", "world-4p-set-1")?;
+        let expected = machine.identity();
+        for name in ["unrelated.bin", "072-b07.18h"] {
+            let bytes =
+                make_zip(&[(name, b"short", CompressionMethod::Stored)])?;
+            let source = SourceSnapshot::new(&bytes, &expected, bound(65_536))?;
+            require(
+                machine
+                    .visit_layout(&source, budget(), |_name, _payload| Ok(()))
+                    == Err(ImportError::UnsupportedMember),
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -435,8 +452,8 @@ mod tests {
             ("first.bin", b"1234", CompressionMethod::Stored),
             ("second.bin", b"5678", CompressionMethod::Stored),
         ])?;
-        let expected = identity(&bytes);
-        let source = VerifiedSource::new(&bytes, &expected, bound(65_536))?;
+        let expected = identity();
+        let source = SourceSnapshot::new(&bytes, &expected, bound(65_536))?;
         for limits in [
             ArchiveBudget::new(bound(8), bound(16), bound(1)),
             ArchiveBudget::new(bound(3), bound(16), bound(8)),
@@ -460,8 +477,8 @@ mod tests {
             CompressionMethod::Stored,
         )])?;
         replace_first(&mut bytes, b"unique-payload", b"unique-payloae")?;
-        let expected = identity(&bytes);
-        let source = VerifiedSource::new(&bytes, &expected, bound(65_536))?;
+        let expected = identity();
+        let source = SourceSnapshot::new(&bytes, &expected, bound(65_536))?;
         let mut called = false;
         let result = source.visit_flat_zip(budget(), |_name, _payload| {
             called = true;
@@ -486,8 +503,8 @@ mod tests {
                 total_bytes: bound(4096),
             },
         };
-        let expected = identity(&bytes);
-        let source = VerifiedSource::new(&bytes, &expected, bound(65_536))?;
+        let expected = identity();
+        let source = SourceSnapshot::new(&bytes, &expected, bound(65_536))?;
         let mut staged = 0usize;
         let manifest = convert_flat_zip(
             &source,
@@ -505,9 +522,9 @@ mod tests {
         )?;
         require(staged == 2 && manifest.records().len() == 2)?;
         replace_first(&mut bytes, b"second-payload", b"damagd-payload")?;
-        let damaged_identity = identity(&bytes);
+        let damaged_identity = identity();
         let damaged =
-            VerifiedSource::new(&bytes, &damaged_identity, bound(65_536))?;
+            SourceSnapshot::new(&bytes, &damaged_identity, bound(65_536))?;
         let result = convert_flat_zip(
             &damaged,
             limits,

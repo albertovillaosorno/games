@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Execute original code, infer palettes or implement title gameplay.
 // - Allows:
-//   - Inputs: Verified local source archive and explicit archive budget.
+//   - Inputs: Bounded local source archive and explicit archive budget.
 //   - Outputs: Immutable graphics region descriptors.
 //   - Side effects: None.
 // - Split-When:
@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Shared source mapping supports these layouts without title branches.
 // - Summary:
-//   - Describe reusable Konami graphics layouts and a pinned ROM set.
+//   - Describe reusable Konami graphics layouts and a supported ROM layout.
 // - Description:
 //   - Describe word-lane order and pixel bit offsets without executing ROMs.
 // - Usage:
@@ -49,7 +49,6 @@ pub(super) static SIMPSONS: Profile = Profile {
         records: NonZeroUsize::MIN.saturating_add(161 - 1),
         total_bytes: NonZeroU64::MIN.saturating_add(3_798_888 - 1),
     },
-    digest: "c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa",
     graphics: &[
         Region {
             key: "graphics/tiles",
