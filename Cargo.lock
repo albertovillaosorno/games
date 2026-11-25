@@ -291,6 +291,9 @@ name = "games-simpsons-arcade"
 version = "0.1.0"
 dependencies = [
  "games",
+ "games-assets",
+ "games-platform-graphics",
+ "games-platform-storage",
 ]
 
 [[package]]

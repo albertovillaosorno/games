@@ -31,6 +31,14 @@
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
+#[cfg(all(
+    feature = "native-preview",
+    target_os = "linux",
+    target_env = "gnu"
+))]
+/// Native prototype host for locally imported art.
+pub mod native;
+
 use std::time::Duration;
 
 use games::input::LogicalAction;
