@@ -15,7 +15,7 @@
 // - Allows:
 //   - Inputs: Scene limits, loaded layouts and requested draw commands.
 //   - Outputs: Checked remaining capacity or explicit admission failure.
-//   - Side effects: None.
+//   - Side effects: Retains admitted scene metadata in bounded memory.
 // - Split-When:
 //   - Another rendering resource requires independent budget admission.
 // - Merge-When:
@@ -33,6 +33,61 @@
 
 use crate::ir::frame::{FrameLayout, RenderError, validate_extent};
 use crate::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
+
+/// Scene-local atlas metadata and capacity, independent of native textures.
+#[derive(Debug)]
+pub(crate) struct SceneAdmission {
+    layouts: Vec<FrameLayout>,
+    limits: SceneLimits,
+    remaining_bytes: usize,
+}
+
+impl SceneAdmission {
+    /// Admit the complete ordered draw list against committed resources.
+    pub(crate) fn draws(
+        &self,
+        sprites: &[SpriteDraw],
+    ) -> Result<(), RenderError> {
+        admit_draws(self.limits, sprites, |id| self.layouts.get(id.0).copied())
+    }
+
+    /// Admit and reserve metadata before asking the adapter to allocate.
+    pub(crate) fn load<Upload>(
+        &mut self,
+        layout: FrameLayout,
+        pixel_bytes: usize,
+        upload: Upload,
+    ) -> Result<AtlasId, RenderError>
+    where
+        Upload: FnOnce(AtlasId) -> Result<(), RenderError>,
+    {
+        let remaining = admit_atlas(
+            self.limits,
+            AtlasUsage {
+                loaded: self.layouts.len(),
+                remaining_bytes: self.remaining_bytes,
+            },
+            layout,
+            pixel_bytes,
+        )?;
+        self.layouts
+            .try_reserve(1)
+            .map_err(|_error| RenderError::TooLarge)?;
+        let id = AtlasId(self.layouts.len());
+        upload(id)?;
+        self.layouts.push(layout);
+        self.remaining_bytes = remaining;
+        Ok(id)
+    }
+
+    pub(crate) const fn new(limits: SceneLimits) -> Self {
+        Self {
+            layouts: Vec::new(),
+            limits,
+            remaining_bytes: limits.atlas_bytes.get(),
+        }
+    }
+}
 
 /// Current atlas usage before admitting an additional resource.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

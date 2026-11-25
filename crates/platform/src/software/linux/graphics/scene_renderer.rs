@@ -53,36 +53,23 @@ use super::{
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend;
 use crate::ir::hardware::InputSample;
-use crate::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
-use crate::ir::security::scene::{AtlasUsage, admit_atlas, admit_draws};
-
-struct Atlas<'texture> {
-    layout: FrameLayout,
-    texture: Texture<'texture>,
-}
+use crate::ir::scene::{AtlasId, SpriteDraw, SpriteRect};
 
 struct Atlases<'texture, Context> {
     creator: &'texture TextureCreator<Context>,
-    entries: Vec<Atlas<'texture>>,
-    limits: SceneLimits,
-    remaining_bytes: usize,
+    entries: Vec<Texture<'texture>>,
 }
 
 impl<'texture, Context> Atlases<'texture, Context> {
     fn load(
         &mut self,
+        id: AtlasId,
         layout: FrameLayout,
         pixels: &[u8],
-    ) -> Result<AtlasId, RenderError> {
-        let remaining = admit_atlas(
-            self.limits,
-            AtlasUsage {
-                loaded: self.entries.len(),
-                remaining_bytes: self.remaining_bytes,
-            },
-            layout,
-            pixels.len(),
-        )?;
+    ) -> Result<(), RenderError> {
+        if id.0 != self.entries.len() {
+            return Err(RenderError::InvalidSprite);
+        }
         self.entries
             .try_reserve(1)
             .map_err(|_error| RenderError::TooLarge)?;
@@ -99,29 +86,22 @@ impl<'texture, Context> Atlases<'texture, Context> {
         texture
             .update(None, pixels, layout.pitch())
             .map_err(|error| RenderError::Backend(error.to_string()))?;
-        let id = AtlasId(self.entries.len());
-        self.entries.push(Atlas { layout, texture });
-        self.remaining_bytes = remaining;
-        Ok(id)
+        self.entries.push(texture);
+        Ok(())
     }
 
-    const fn new(
-        creator: &'texture TextureCreator<Context>,
-        limits: SceneLimits,
-    ) -> Self {
+    const fn new(creator: &'texture TextureCreator<Context>) -> Self {
         Self {
             creator,
             entries: Vec::new(),
-            limits,
-            remaining_bytes: limits.atlas_bytes.get(),
         }
     }
 
     fn validate(&self, sprites: &[SpriteDraw]) -> Result<(), RenderError> {
-        admit_draws(self.limits, sprites, |id| {
-            self.entries.get(id.0).map(|atlas| atlas.layout)
-        })?;
         for sprite in sprites {
+            if self.entries.get(sprite.atlas.0).is_none() {
+                return Err(RenderError::InvalidSprite);
+            }
             let _source = native_rectangle(sprite.source)?;
             let _destination = native_rectangle(sprite.destination)?;
         }
@@ -196,11 +176,10 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
     pub(super) fn new(
         creator: &'texture TextureCreator<Context>,
         layout: FrameLayout,
-        limits: SceneLimits,
         mode: PresentationMode,
     ) -> Result<Self, RenderError> {
         Ok(Self {
-            atlases: Atlases::new(creator, limits),
+            atlases: Atlases::new(creator),
             base: layout,
             layout,
             mode,
@@ -305,13 +284,14 @@ impl SceneBackend for LinuxScene<'_, '_> {
 
     /// Upload one tightly packed RGBA atlas for reuse in subsequent frames.
     /// # Errors
-    /// Rejects byte/count limit violations or failed native allocation.
+    /// Rejects an inconsistent atlas identity or native upload failure.
     fn load_atlas(
         &mut self,
+        id: AtlasId,
         layout: FrameLayout,
         pixels: &[u8],
-    ) -> Result<AtlasId, RenderError> {
-        self.textures.atlases.load(layout, pixels)
+    ) -> Result<(), RenderError> {
+        self.textures.atlases.load(id, layout, pixels)
     }
 
     fn poll_event(&mut self, wait_ms: u32) -> Option<InputSample> {
@@ -419,7 +399,7 @@ fn native_rectangle(rectangle: SpriteRect) -> Result<Rect, RenderError> {
 
 fn compose<Target>(
     canvas: &mut Canvas<Target>,
-    atlases: &[Atlas<'_>],
+    atlases: &[Texture<'_>],
     background: [u8; 3],
     sprites: &[SpriteDraw],
 ) -> Result<(), RenderError>
@@ -438,7 +418,7 @@ where
         if sprite.flip_horizontal || sprite.flip_vertical {
             canvas
                 .copy_ex(
-                    &atlas.texture,
+                    atlas,
                     source,
                     destination,
                     0.0,
@@ -449,7 +429,7 @@ where
                 .map_err(RenderError::Backend)?;
         } else {
             canvas
-                .copy(&atlas.texture, source, destination)
+                .copy(atlas, source, destination)
                 .map_err(RenderError::Backend)?;
         }
     }
@@ -482,9 +462,11 @@ mod tests {
     use sdl2::surface::{Surface, SurfaceContext};
 
     use super::{
-        Atlases, FrameLayout, RenderError, SceneLimits, SceneTextures,
-        SpriteDraw, SpriteRect,
+        Atlases, FrameLayout, RenderError, SceneTextures, SpriteDraw,
+        SpriteRect,
     };
+    use crate::ir::scene::{AtlasId, SceneLimits};
+    use crate::ir::security::scene::SceneAdmission;
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
     const BLUE: [u8; 4] = [0, 0, 255, 255];
@@ -507,13 +489,23 @@ mod tests {
             .map_err(RenderError::Backend)
     }
 
+    fn upload(
+        admission: &mut SceneAdmission,
+        atlases: &mut Atlases<'_, SurfaceContext<'_>>,
+        pixels: &[u8],
+    ) -> Result<AtlasId, RenderError> {
+        let layout = atlas_layout()?;
+        admission
+            .load(layout, pixels.len(), |id| atlases.load(id, layout, pixels))
+    }
+
     fn commands(
+        admission: &mut SceneAdmission,
         atlases: &mut Atlases<'_, SurfaceContext<'_>>,
     ) -> Result<[SpriteDraw; 2], RenderError> {
-        let first =
-            atlases.load(atlas_layout()?, [RED, GREEN].as_flattened())?;
-        let second = atlases
-            .load(atlas_layout()?, [TRANSPARENT, BLUE].as_flattened())?;
+        let first = upload(admission, atlases, [RED, GREEN].as_flattened())?;
+        let second =
+            upload(admission, atlases, [TRANSPARENT, BLUE].as_flattened())?;
         Ok([
             SpriteDraw {
                 atlas: first,
@@ -576,13 +568,10 @@ mod tests {
         let creator = canvas.texture_creator();
         let base = layout()?;
         let maximum = FrameLayout::new(nz(6), nz(2), budget(48))?;
-        let mut scene = SceneTextures::new(
-            &creator,
-            base,
-            limits(),
-            PresentationMode::Adaptive,
-        )?;
-        let [sprite, _overlay] = commands(&mut scene.atlases)?;
+        let mut scene =
+            SceneTextures::new(&creator, base, PresentationMode::Adaptive)?;
+        let mut admission = SceneAdmission::new(limits());
+        let [sprite, _overlay] = commands(&mut admission, &mut scene.atlases)?;
         let wide = Some(Dimensions::new(nz(12), nz(2)));
         require(scene.fit(wide, maximum)? == maximum, "width cap differs")?;
         let edge = SpriteDraw {
@@ -632,28 +621,30 @@ mod tests {
     {
         let canvas = canvas()?;
         let creator = canvas.texture_creator();
-        let mut atlases = Atlases::new(&creator, SceneLimits {
+        let mut atlases = Atlases::new(&creator);
+        let mut admission = SceneAdmission::new(SceneLimits {
             atlases: budget(3),
             ..limits()
         });
         require(
-            atlases.load(atlas_layout()?, &[])
+            upload(&mut admission, &mut atlases, &[])
                 == Err(RenderError::InvalidLength),
             "invalid upload accepted",
         )?;
-        let _commands = commands(&mut atlases)?;
+        let _commands = commands(&mut admission, &mut atlases)?;
         require(
-            atlases.load(atlas_layout()?, [RED, GREEN].as_flattened())
+            upload(&mut admission, &mut atlases, [RED, GREEN].as_flattened())
                 == Err(RenderError::TooLarge),
             "atlas byte limit exceeded",
         )?;
-        let mut limited = Atlases::new(&creator, SceneLimits {
+        let mut limited = Atlases::new(&creator);
+        let mut count = SceneAdmission::new(SceneLimits {
             atlas_bytes: budget(32),
             ..limits()
         });
-        let _loaded = commands(&mut limited)?;
+        let _loaded = commands(&mut count, &mut limited)?;
         require(
-            limited.load(atlas_layout()?, [RED, GREEN].as_flattened())
+            upload(&mut count, &mut limited, [RED, GREEN].as_flattened())
                 == Err(RenderError::TooLarge),
             "atlas count exceeded",
         )
@@ -666,10 +657,10 @@ mod tests {
         let mut scene = SceneTextures::new(
             &creator,
             layout()?,
-            limits(),
             PresentationMode::AspectFit,
         )?;
-        let [base, overlay] = commands(&mut scene.atlases)?;
+        let mut admission = SceneAdmission::new(limits());
+        let [base, overlay] = commands(&mut admission, &mut scene.atlases)?;
         require(
             scene.draw(&mut canvas, [0; 3], &[base, overlay])?.is_some(),
             "scene not drawn",
@@ -707,10 +698,10 @@ mod tests {
         let mut scene = SceneTextures::new(
             &creator,
             layout()?,
-            limits(),
             PresentationMode::AspectFit,
         )?;
-        let [base, overlay] = commands(&mut scene.atlases)?;
+        let mut admission = SceneAdmission::new(limits());
+        let [base, overlay] = commands(&mut admission, &mut scene.atlases)?;
         require(
             scene.draw(&mut canvas, [0; 3], &[base, overlay])?.is_some(),
             "scene not drawn",
@@ -721,14 +712,28 @@ mod tests {
             ..base
         };
         require(
-            scene.draw(&mut canvas, [0; 3], &[base, invalid])
-                == Err(RenderError::InvalidSprite),
+            admission.draws(&[base, invalid]).and_then(|()| {
+                scene.draw(&mut canvas, [0; 3], &[base, invalid])
+            }) == Err(RenderError::InvalidSprite),
             "invalid source accepted",
         )?;
+        let oversized = [base, base, overlay];
         require(
-            scene.draw(&mut canvas, [0; 3], &[base, base, overlay])
+            admission
+                .draws(&oversized)
+                .and_then(|()| scene.draw(&mut canvas, [0; 3], &oversized))
                 == Err(RenderError::TooLarge),
             "command limit exceeded",
+        )?;
+        let invalid_native = SpriteDraw {
+            destination: rect(i32::MAX, 0, 2, 1),
+            ..base
+        };
+        admission.draws(&[base, invalid_native])?;
+        require(
+            scene.draw(&mut canvas, [0; 3], &[base, invalid_native])
+                == Err(RenderError::InvalidSprite),
+            "native coordinate overflow accepted",
         )?;
         require(
             read(&canvas)? == result,

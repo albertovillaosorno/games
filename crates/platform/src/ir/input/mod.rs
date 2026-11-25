@@ -163,8 +163,8 @@ impl NativeInput {
     /// Admit one portable input sample through the owning device session.
     ///
     /// Discovery notifications and unknown controllers do not fabricate
-    /// attachment events. Touch observations older than an invalidated
-    /// geometry are rejected before routing.
+    /// attachment events. Touch requires a current presented geometry and
+    /// a timestamp at or after its observation before routing.
     #[must_use]
     pub fn translate(&mut self, event: &InputSample) -> Option<HostEvent> {
         if matches!(
@@ -193,14 +193,14 @@ impl Haptics for NativeInput {
 
 #[derive(Debug, Default)]
 struct TouchGeometry {
-    cutoff: Option<Duration>,
+    cutoff: Duration,
     layout: Option<PresentationLayout>,
 }
 
 impl TouchGeometry {
     fn accepts(&self, stamp: Option<Duration>) -> bool {
-        self.cutoff
-            .is_none_or(|cutoff| stamp.is_some_and(|elapsed| elapsed >= cutoff))
+        self.layout.is_some()
+            && stamp.is_some_and(|elapsed| elapsed >= self.cutoff)
     }
 
     fn observe(
@@ -213,9 +213,7 @@ impl TouchGeometry {
         }
         let invalidated = self.layout.is_some();
         self.layout = layout;
-        if invalidated || self.cutoff.is_some() {
-            self.cutoff = Some(elapsed);
-        }
+        self.cutoff = elapsed;
         invalidated
     }
 }
@@ -322,11 +320,18 @@ mod tests {
         )?;
         check(&session.translate(&sample(Some(clock))), &None)?;
         session.enable_touch();
+        check(&session.translate(&sample(Some(clock))), &None)?;
         let size = Dimensions::new(NonZeroU32::MIN, NonZeroU32::MIN);
         let geometry = PresentationMode::AspectFit.layout(size, size);
         check(&session.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
+        check(&session.translate(&sample(None)), &None)?;
+        check(
+            &session.translate(&sample(Some(Duration::from_millis(19)))),
+            &None,
+        )?;
         check(&session.translate(&sample(Some(clock))), &Some(contact))?;
         check(&session.synchronize_touch(|| Ok(None))?, &Some(clock))?;
+        check(&session.translate(&sample(Some(clock))), &None)?;
         check(
             &session.translate(&sample(Some(Duration::from_millis(19)))),
             &None,
@@ -349,13 +354,13 @@ mod tests {
         let mut geometry = TouchGeometry::default();
         let at = Duration::from_millis;
         for (layout, tick, cancelled, accepted) in [
-            (None, 1, false, [true; 4]),
-            (first, 2, false, [true; 4]),
-            (first, 3, false, [true; 4]),
+            (None, 1, false, [false; 4]),
+            (first, 2, false, [false, false, true, true]),
+            (first, 3, false, [false, false, true, true]),
             (second, 4, true, [false, false, true, true]),
             (second, 5, false, [false, false, true, true]),
-            (None, 6, true, [false, false, false, true]),
-            (None, 7, false, [false, false, false, true]),
+            (None, 6, true, [false; 4]),
+            (None, 7, false, [false; 4]),
             (first, 8, false, [false, false, false, true]),
         ] {
             assert_eq!(geometry.observe(layout, at(tick)), cancelled);

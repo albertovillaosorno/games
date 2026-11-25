@@ -39,7 +39,10 @@ use games::presentation::{DisplaySettings, PresentationLayout};
 
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::hardware::InputSample;
-use crate::ir::scene::{AtlasId, AtlasUpload, EventBatch, SpriteDraw};
+use crate::ir::scene::{
+    AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw,
+};
+use crate::ir::security::scene::SceneAdmission;
 
 /// Private, callback-scoped ordered rendering port.
 pub(crate) trait SceneBackend: Debug {
@@ -53,11 +56,14 @@ pub(crate) trait SceneBackend: Debug {
     ) -> Result<FrameLayout, RenderError>;
     fn last_presented_layout(&self) -> Option<PresentationLayout>;
     fn layout(&self) -> FrameLayout;
+    // Commit the supplied atlas identity only after a successful upload.
+    // An error must leave the previously admitted resources unchanged.
     fn load_atlas(
         &mut self,
+        id: AtlasId,
         layout: FrameLayout,
         pixels: &[u8],
-    ) -> Result<AtlasId, RenderError>;
+    ) -> Result<(), RenderError>;
     fn poll_event(&mut self, wait_ms: u32) -> Option<InputSample>;
     fn present(
         &mut self,
@@ -126,6 +132,7 @@ impl SceneView<'_> {
 
 /// Persistent ordered scene resources scoped to the window's callback.
 pub struct SceneSession<'session, 'backend> {
+    admission: SceneAdmission,
     backend: &'session mut (dyn SceneBackend + 'backend),
 }
 
@@ -214,10 +221,9 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         layout: FrameLayout,
         pixels: &[u8],
     ) -> Result<AtlasId, RenderError> {
-        if pixels.len() != layout.bytes() {
-            return Err(RenderError::InvalidLength);
-        }
-        self.backend.load_atlas(layout, pixels)
+        self.admission.load(layout, pixels.len(), |id| {
+            self.backend.load_atlas(id, layout, pixels)
+        })
     }
 
     /// Map surface-normalized touch to the actually presented scene.
@@ -232,8 +238,12 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
 
     pub(crate) fn new(
         backend: &'session mut (dyn SceneBackend + 'backend),
+        limits: SceneLimits,
     ) -> Self {
-        Self { backend }
+        Self {
+            admission: SceneAdmission::new(limits),
+            backend,
+        }
     }
 
     /// Present ordered sprite commands over the opaque background.
@@ -244,6 +254,7 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         background: [u8; 3],
         sprites: &[SpriteDraw],
     ) -> Result<bool, RenderError> {
+        self.admission.draws(sprites)?;
         self.backend.present(background, sprites)
     }
 
@@ -309,22 +320,27 @@ mod tests {
 
     use super::{
         AtlasId, DisplaySettings, EventBatch, FrameLayout, InputSample,
-        PresentationLayout, RenderError, SceneBackend, SceneSession,
-        SpriteDraw,
+        PresentationLayout, RenderError, SceneBackend, SceneLimits,
+        SceneSession, SpriteDraw,
     };
     use crate::ir::check;
     use crate::ir::hardware::{HostEvent, InputTransition};
+    use crate::ir::scene::SpriteRect;
 
     #[derive(Debug)]
     struct TestScene {
+        draws: usize,
         events: VecDeque<InputSample>,
+        fail_upload: bool,
         layout: FrameLayout,
+        uploads: Vec<AtlasId>,
         waits: Vec<u32>,
     }
 
     impl TestScene {
         fn new(count: u64) -> Result<Self, RenderError> {
             Ok(Self {
+                draws: 0,
                 events: (1..=count)
                     .map(|tick| {
                         InputSample::new(
@@ -334,11 +350,13 @@ mod tests {
                         )
                     })
                     .collect(),
+                fail_upload: false,
                 layout: FrameLayout::new(
                     NonZeroU32::MIN,
                     NonZeroU32::MIN,
                     NonZeroUsize::MAX,
                 )?,
+                uploads: Vec::new(),
                 waits: Vec::new(),
             })
         }
@@ -369,10 +387,16 @@ mod tests {
 
         fn load_atlas(
             &mut self,
+            id: AtlasId,
             _layout: FrameLayout,
             _pixels: &[u8],
-        ) -> Result<AtlasId, RenderError> {
-            Err(RenderError::Unsupported)
+        ) -> Result<(), RenderError> {
+            if self.fail_upload {
+                self.fail_upload = false;
+                return Err(RenderError::Unsupported);
+            }
+            self.uploads.push(id);
+            Ok(())
         }
 
         fn poll_event(&mut self, wait_ms: u32) -> Option<InputSample> {
@@ -385,6 +409,7 @@ mod tests {
             _background: [u8; 3],
             _sprites: &[SpriteDraw],
         ) -> Result<bool, RenderError> {
+            self.draws = self.draws.saturating_add(1);
             Ok(false)
         }
 
@@ -399,13 +424,76 @@ mod tests {
         }
     }
 
+    fn limits() -> SceneLimits {
+        SceneLimits {
+            atlas_bytes: NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN),
+            atlases: NonZeroUsize::MIN,
+            sprites: NonZeroUsize::MIN,
+        }
+    }
+
+    #[test]
+    fn atlas_and_draw_admission_precedes_dispatch() -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        backend.fail_upload = true;
+        let layout = backend.layout;
+        let mut scene = SceneSession::new(&mut backend, limits());
+        check(
+            &scene.load_atlas(layout, &[0; 3]),
+            &Err(RenderError::InvalidLength),
+        )?;
+        check(
+            &scene.load_atlas(layout, &[0; 4]),
+            &Err(RenderError::Unsupported),
+        )?;
+        let rectangle = SpriteRect {
+            x: 0,
+            y: 0,
+            width: NonZeroU32::MIN,
+            height: NonZeroU32::MIN,
+        };
+        let sprite = SpriteDraw {
+            atlas: AtlasId(0),
+            destination: rectangle,
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rectangle,
+        };
+        check(
+            &scene.present([0; 3], &[sprite]),
+            &Err(RenderError::InvalidSprite),
+        )?;
+        let id = scene.load_atlas(layout, &[0; 4])?;
+        check(&id, &AtlasId(0))?;
+        check(
+            &scene.load_atlas(layout, &[0; 4]),
+            &Err(RenderError::TooLarge),
+        )?;
+        check(
+            &scene.present([0; 3], &[sprite, sprite]),
+            &Err(RenderError::TooLarge),
+        )?;
+        let invalid = SpriteDraw {
+            source: SpriteRect { x: 1, ..rectangle },
+            ..sprite
+        };
+        check(
+            &scene.present([0; 3], &[invalid]),
+            &Err(RenderError::InvalidSprite),
+        )?;
+        check(&scene.present([0; 3], &[sprite]), &Ok(false))?;
+        check(&backend.uploads, &[AtlasId(0)])?;
+        check(&backend.draws, &1)?;
+        Ok(())
+    }
+
     #[test]
     fn bounded_batches_preserve_order_queue_tail_and_first_wait()
     -> Result<(), RenderError> {
         let mut backend = TestScene::new(5)?;
         let mut delivered = Vec::new();
         let budget = NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN);
-        let mut scene = SceneSession::new(&mut backend);
+        let mut scene = SceneSession::new(&mut backend, limits());
         for (expected, count) in [
             (EventBatch::Limited, 2),
             (EventBatch::Limited, 4),
@@ -435,7 +523,7 @@ mod tests {
     -> Result<(), RenderError> {
         let mut backend = TestScene::new(3)?;
         let budget = NonZeroUsize::new(3).unwrap_or(NonZeroUsize::MIN);
-        let mut scene = SceneSession::new(&mut backend);
+        let mut scene = SceneSession::new(&mut backend, limits());
         check(
             &scene.dispatch_events(budget, 0, |_, _| Ok(false))?,
             &EventBatch::Stopped,

@@ -69,7 +69,6 @@ pub(crate) trait WindowBackend: Debug {
     fn with_scene(
         &mut self,
         layout: FrameLayout,
-        limits: SceneLimits,
         run: &mut SceneRun<'_>,
     ) -> Result<(), RenderError>;
 }
@@ -183,8 +182,9 @@ impl NativeWindow {
         Run: FnOnce(&mut SceneSession<'_, '_>) -> Result<Output, RenderError>,
     {
         run_once(run, |once| {
-            self.backend.with_scene(layout, limits, &mut |backend| {
-                once.call(|callback| callback(&mut SceneSession::new(backend)))
+            self.backend.with_scene(layout, &mut |backend| {
+                let mut session = SceneSession::new(backend, limits);
+                once.call(|callback| callback(&mut session))
             })
         })
     }

@@ -60,7 +60,6 @@ use crate::ir::graphics::{
 };
 use crate::ir::hardware::InputSample;
 use crate::ir::input::InputPort;
-use crate::ir::scene::SceneLimits;
 
 // SDL_RENDERER_ACCELERATED in the public SDL2 renderer flags.
 const ACCELERATED_FLAG: u32 = 2;
@@ -148,12 +147,11 @@ impl WindowBackend for LinuxWindow {
     fn with_scene(
         &mut self,
         layout: FrameLayout,
-        limits: SceneLimits,
         run: &mut SceneRun<'_>,
     ) -> Result<(), RenderError> {
         let creator = self.canvas.texture_creator();
         let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
-        let textures = SceneTextures::new(&creator, layout, limits, self.mode)?;
+        let textures = SceneTextures::new(&creator, layout, self.mode)?;
         let mut backend = LinuxScene::new(
             &mut self.canvas,
             events,
@@ -411,17 +409,17 @@ mod tests {
     use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
     use games::timing::StepClock;
-    use sdl2::EventSubsystem;
     use sdl2::controller::{Axis, Button};
     use sdl2::event::Event;
     use sdl2::keyboard::{Mod, Scancode};
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
     use sdl2::video::FullscreenType;
+    use sdl2::{EventSubsystem, TimerSubsystem};
 
     use super::{
         FrameLayout, FramePresentation, LinuxWindow, RenderError,
-        WindowBackend as _, create_texture, draw_frame,
+        WindowBackend as _, create_texture, draw_frame, sample,
     };
     use crate::ir::graphics::FrameSession;
     use crate::ir::graphics::scene_renderer::SceneSession;
@@ -694,23 +692,20 @@ mod tests {
             )
         })?;
         let events = window.sdl.event().map_err(RenderError::Backend)?;
+        let timer = window.sdl.timer().map_err(RenderError::Backend)?;
         let window_id = window.canvas.window().id();
         let mut touch_input =
             InputStartup::new(window.input(budget(1))?)?.input;
         touch_input.enable_touch();
-        window.with_scene(
-            extent()?,
-            SceneLimits {
+        window.with_scene(extent()?, &mut |backend| {
+            let mut scene = SceneSession::new(backend, SceneLimits {
                 atlas_bytes: budget(16),
                 atlases: budget(1),
                 sprites: budget(2),
-            },
-            &mut |backend| {
-                let mut scene = SceneSession::new(backend);
-                verify_native_batches(&mut scene, &events, window_id)?;
-                verify_sprite_scene(&mut scene, &mut touch_input)
-            },
-        )?;
+            });
+            verify_native_batches(&mut scene, &events, window_id)?;
+            verify_sprite_scene(&mut scene, &mut touch_input, &timer, window_id)
+        })?;
         drop(window);
         require(renderer_name == expected_name, "renderer name changed")
     }
@@ -718,6 +713,8 @@ mod tests {
     fn verify_sprite_scene(
         scene: &mut SceneSession<'_, '_>,
         input: &mut NativeInput,
+        timer: &TimerSubsystem,
+        window_id: u32,
     ) -> Result<(), RenderError> {
         let center = TouchPoint { x: 32_768, y: 32_768 };
         require(
@@ -745,6 +742,14 @@ mod tests {
             source: rect,
         };
         require(scene.present([0; 3], &[sprite])?, "no sprite scene")?;
+        verify_rejected_draws(scene, sprite)?;
+        require(
+            input
+                .synchronize_touch(|| scene.visible_layout())?
+                .is_none(),
+            "initial presented geometry cancelled a contact",
+        )?;
+        verify_presented_touch(input, timer, window_id)?;
         verify_touch_redraw(scene, input, sprite)?;
         require(
             scene.present([0; 3], &[SpriteDraw {
@@ -752,6 +757,30 @@ mod tests {
                 ..sprite
             }])?,
             "second sprite scene not drawn",
+        )
+    }
+
+    fn verify_rejected_draws(
+        scene: &mut SceneSession<'_, '_>,
+        sprite: SpriteDraw,
+    ) -> Result<(), RenderError> {
+        let pixels = scene.readback()?;
+        let invalid = SpriteDraw {
+            source: SpriteRect { x: 1, ..sprite.source },
+            ..sprite
+        };
+        require(
+            scene.present([255; 3], &[sprite, invalid])
+                == Err(RenderError::InvalidSprite),
+            "invalid source was presented",
+        )?;
+        require(
+            scene.present([255; 3], &[sprite; 3]) == Err(RenderError::TooLarge),
+            "excessive commands were presented",
+        )?;
+        require(
+            scene.readback()? == pixels && scene.presentation_is_current()?,
+            "rejected draw changed the presented scene",
         )
     }
 
@@ -1031,9 +1060,30 @@ mod tests {
             "touch enabled by default",
         )?;
         input.enable_touch();
+        require(
+            input.translate(&window.sample(&down)?).is_none(),
+            "touch admitted before a presented geometry",
+        )
+    }
+
+    fn verify_presented_touch(
+        input: &mut NativeInput,
+        timer: &TimerSubsystem,
+        window_id: u32,
+    ) -> Result<(), RenderError> {
+        let down = Event::FingerDown {
+            timestamp: timer.ticks(),
+            touch_id: 3,
+            finger_id: 4,
+            x: 0.5,
+            y: 0.5,
+            dx: 0.0,
+            dy: 0.0,
+            pressure: 1.0,
+        };
         let id = ContactId { device: 3, finger: 4 };
         require(
-            input.translate(&window.sample(&down)?)
+            input.translate(&sample(&down, window_id, timer.ticks64()))
                 == Some(HostEvent::Input(InputEvent::Contact {
                     id,
                     phase: ContactPhase::Down(TouchPoint {
@@ -1044,7 +1094,7 @@ mod tests {
             "enabled native touch did not deliver contact",
         )?;
         let up = Event::FingerUp {
-            timestamp: 0,
+            timestamp: timer.ticks(),
             touch_id: 3,
             finger_id: 4,
             x: 0.5,
@@ -1054,7 +1104,7 @@ mod tests {
             pressure: 0.0,
         };
         require(
-            input.translate(&window.sample(&up)?)
+            input.translate(&sample(&up, window_id, timer.ticks64()))
                 == Some(HostEvent::Input(InputEvent::Contact {
                     id,
                     phase: ContactPhase::Up,

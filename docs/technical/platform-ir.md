@@ -49,8 +49,12 @@ crates/platform/src/
     graphics/
     input/
     audio/
+    lan/
+    measurement/
     storage/
+    importer/
     toolchain/
+    ui/
   software/
     linux/
     windows/
@@ -103,11 +107,12 @@ backend to satisfy the capability contract and pass conformance tests.
 
 ## Migration and verification
 
-Current Linux presentation, input, audio and storage implementations provide
-working adapter boundaries, but the complete title host still depends on
-Linux-specific types. Existing native paths remain transitional until their
-shared equivalents are implemented and exercised. Do not claim that renaming
-or wrapping these modules establishes portable runtime support.
+Linux presentation, input, audio and authenticated LAN expose portable
+handles over private backend ports. Shared measurement uses a process-local
+monotonic clock contract; bounded file snapshots and contributor toolchain
+requests also dispatch through the IR. Some storage and host operations remain
+transitional. Do not infer additional native support from a portable type or
+from successful compilation of the featureless core.
 
 Exercise typed contracts with deterministic in-memory adapters before adding
 new native backends. Verify event ordering, resource lifetime, capability
@@ -120,7 +125,11 @@ adapters. Every target must use the same portable contracts, not a
 separate game engine. No native Windows runtime is verified here.
 
 The [P1 isolation task](../todo/open/contracts/platform-ir.mdc) is the
-canonical migration and acceptance record. The initial validator inventory
-records 253 occurrences in 27 files; this is transitional debt, not
-permission to introduce further coupling. Full isolation requires zero
-remaining entries, stronger semantic checks and adapter conformance.
+canonical migration and acceptance record. The original validator inventory
+recorded 253 occurrences in 27 files. The migration baseline has been removed:
+the preflight rejects every detected occurrence outside its authorized
+adapter boundaries, including on cached validation runs. Its parsed checks
+are not complete semantic Rust name resolution or arbitrary macro expansion.
+The six portable core target checks do not establish native runtime
+conformance. See the contract gate task linked from the canonical roadmap
+for validation evidence and the remaining migration limits.
