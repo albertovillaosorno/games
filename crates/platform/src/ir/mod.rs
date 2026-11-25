@@ -37,6 +37,8 @@ pub mod audio;
 pub mod graphics;
 /// Portable physical-device bridge.
 pub mod hardware;
+/// Portable execution environment identification.
+pub mod identification;
 #[cfg(feature = "importer")]
 /// Shared bounded asset import capability.
 pub mod importer;

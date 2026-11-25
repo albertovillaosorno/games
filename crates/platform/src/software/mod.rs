@@ -96,6 +96,7 @@ mod unavailable_lan {
     }
 }
 
+use std::env::consts::{ARCH, OS};
 #[cfg(not(target_os = "linux"))]
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -118,6 +119,7 @@ use crate::ir::audio::{
 };
 use crate::ir::frame::RenderError;
 use crate::ir::graphics::{WindowFactory, WindowPort};
+use crate::ir::identification::IdentificationPort;
 use crate::ir::input::InputNames;
 use crate::ir::measurement::MeasurementSource;
 #[cfg(not(target_os = "linux"))]
@@ -218,6 +220,12 @@ impl InputNames for () {
 
     fn key_name(_key: KeyboardKey) -> &'static str {
         "UNKNOWN"
+    }
+}
+
+impl IdentificationPort for () {
+    fn execution_names() -> (&'static str, &'static str) {
+        (ARCH, OS)
     }
 }
 

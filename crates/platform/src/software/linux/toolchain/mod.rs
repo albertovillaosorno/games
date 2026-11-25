@@ -39,6 +39,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::ir::identification::{self, Architecture, OperatingSystem};
 use crate::ir::security::toolchain::CargoArguments;
 use crate::ir::toolchain::reference::ReferenceTool;
 use crate::ir::toolchain::{
@@ -49,7 +50,10 @@ impl ToolchainFactory for () {
     fn available(target: Target) -> bool {
         match target {
             Target::LinuxX86_64Gnu => {
-                cfg!(all(target_arch = "x86_64", target_env = "gnu"))
+                let identity = identification::execution();
+                identity.architecture == Architecture::X86_64
+                    && identity.system == OperatingSystem::Linux
+                    && cfg!(target_env = "gnu")
             },
             Target::AndroidArm64
             | Target::LinuxArm64Gnu
