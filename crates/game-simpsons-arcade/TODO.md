@@ -348,3 +348,12 @@ pixels, and subsequent captures after release were identical. The
 automated native gate also covers button remapping, focus loss and
 controller detach. Physical controllers and multi-device play remain
 unverified.
+
+Two independent native loopback diagnostics also suspended the host
+process without closing its socket. The controller timed out after
+approximately three seconds and the same identity rejoined after the
+host resumed. In the second diagnostic, the host's offline label
+changed 1,008 pixels confined to the reserved seat's HUD; rejoin
+restored the earlier frame exactly. Remote movement then changed
+19,539 world pixels. This is process suspension on one machine, not
+physical network-partition or multi-device acceptance.

@@ -383,3 +383,17 @@ identity can then rejoin. Fresh native-enabled validation passed in run
 required; the local credential catalogue remains version one. Physical
 network partitions, multi-device latency and remote world display remain
 unverified.
+
+Two independent native version-two loopback suspension diagnostics used
+the optimized executable, local original-derived art, separate P-256
+identities, and a private X11 display with software OpenGL. With the
+host process suspended but its socket open, the controller exited with
+a timeout; the observed intervals were 2,981 ms and 3,004 ms (the latter
+sampled at one-second intervals). After resuming the host, the same
+approved identity rejoined. In the second diagnostic, comparing
+960x672 captures showed exactly 1,008 changed pixels confined to the
+second station's HUD label when offline; rejoining restored the
+online frame pixel-for-pixel. Joining and moving that player changed
+19,539 pixels in the world. All disposable private keys were removed.
+This verifies native process-level liveness and visible status on one
+machine, not physical network interruption or multi-device latency.
