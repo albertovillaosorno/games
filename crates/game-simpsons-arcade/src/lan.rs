@@ -113,15 +113,22 @@ impl ClientLan {
         let reply = self.stream.poll_receive()?;
         self.observe_reply(reply.as_deref(), Instant::now())?;
         for _step in 0..POLL_BUDGET {
+            self.check_lease(Instant::now())?;
             if !self.stream.has_pending_send() && !self.queue_next()? {
                 break;
             }
-            let _progress = self.stream.poll_send()?;
+            self.poll_queued_send(Instant::now())?;
             if self.stream.has_pending_send() {
                 break;
             }
         }
         self.check_lease(Instant::now())
+    }
+
+    fn poll_queued_send(&mut self, observed_at: Instant) -> io::Result<()> {
+        self.check_lease(observed_at)?;
+        let _progress = self.stream.poll_send()?;
+        Ok(())
     }
 
     fn queue_next(&mut self) -> io::Result<bool> {
@@ -819,6 +826,55 @@ mod tests {
             )?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn expired_client_lease_rejects_queued_control_before_dispatch()
+    -> io::Result<()> {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let stream = connect(&mut host, &mut live, &credentials)?;
+        let timeout = Duration::from_secs(1);
+        let mut client = ClientLan::with_idle(stream, timeout);
+        let right = RemoteControl::new(Control::Right, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        client
+            .enqueue_batch(vec![right])
+            .map_err(|_rejected| ErrorKind::WouldBlock)?;
+        require(client.queue_next()?, "control queued without transport I/O")?;
+        let deadline = client
+            .last_received
+            .checked_add(timeout)
+            .ok_or(ErrorKind::InvalidInput)?;
+        require(
+            client
+                .poll_queued_send(deadline)
+                .is_err_and(|error| error.kind() == ErrorKind::TimedOut)
+                && client.stream.has_pending_send(),
+            "expired lease prevents dispatch of the queued control",
+        )?;
+        drop(client);
+        let disconnect_deadline = Instant::now()
+            .checked_add(TIMEOUT)
+            .ok_or(ErrorKind::TimedOut)?;
+        loop {
+            require(
+                host.poll(&mut live)?.is_none(),
+                "expired control never reaches host",
+            )?;
+            if live.pending_actions() == 1 {
+                break;
+            }
+            if Instant::now() >= disconnect_deadline {
+                return Err(ErrorKind::TimedOut.into());
+            }
+            thread::yield_now();
+        }
+        advance(&mut live)?;
+        require(
+            live.state().connected_remotes().get(1) == Some(&false),
+            "only the disconnect reaches the simulation",
+        )
     }
 
     #[test]

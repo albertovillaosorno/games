@@ -604,3 +604,11 @@ loopback: schema rejection, valid frames and replies, reserved slots,
 and same-identity rejoin. The Linux host has IPv6 loopback enabled;
 these tests do not establish scoped link-local or multi-device routing.
 Fresh validation passed in run 1795611541668604334-1069821.
+
+The native controller now checks its acknowledgement lease before each
+queued transport-send poll as well as before and after the bounded send
+batch. A deterministic exact-boundary test queues a control on a real
+mutual-TLS connection, rejects dispatch at lease expiry, and confirms
+that only the disconnect reaches the host simulation. This cannot retract
+bytes already submitted before expiry. Fresh validation passed in run
+1795611697974351999-1098018.
