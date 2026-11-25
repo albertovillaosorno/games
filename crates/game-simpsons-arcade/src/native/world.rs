@@ -249,8 +249,10 @@ pub(super) fn smoke(
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
-    let mut controls =
-        Controls::with_profiles(art.panel.is_some(), options.profiles)?;
+    let mut controls = Controls::with_profiles(
+        art.panel.is_some(),
+        &options.controls.profiles,
+    )?;
     smoke_press(&mut controls, &mut simulation, Control::Start)?;
     let _drawn = art.present(scene, simulation.state())?;
     let layout = scene.layout();

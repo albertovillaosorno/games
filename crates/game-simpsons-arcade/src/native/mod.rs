@@ -42,13 +42,13 @@ mod station_hud;
 mod touch;
 mod world;
 
+use std::env;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::time::{Duration, Instant};
-use std::{env, str};
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
@@ -448,7 +448,7 @@ impl Scene {
         reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
         let touch_enabled = options.touch_enabled;
-        let profiles = options.profiles;
+        let profiles = &options.controls.profiles;
         let [first, _, _, _] = &source.actors;
         let (mut background, original) =
             Art::load_with_pixels(scene, first, "scene/background")?;
@@ -695,11 +695,11 @@ impl<'source> Sources<'source> {
 
 #[derive(Clone, Copy, Debug)]
 struct PreviewOptions<'profiles> {
+    controls: &'profiles launch::ResolvedControls,
     display: DisplaySettings,
     hidden: bool,
     measure: bool,
     preferences: Option<&'profiles DisplayStore>,
-    profiles: &'profiles Profiles,
     touch_enabled: bool,
 }
 
@@ -794,7 +794,7 @@ impl<'preferences> Interactive<'preferences> {
         let mut simulation = fixed(hosted)?;
         let mut controls = Controls::with_reserved(
             options.touch_enabled,
-            options.profiles,
+            &options.controls.profiles,
             reserved,
         )?;
         for event in startup.attached {
@@ -1253,7 +1253,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         smoke,
         touch_enabled,
     } = launch::Launch::parse(args)?;
-    let profiles = load_profiles(controls.as_deref())?;
+    let resolved = controls.resolve()?;
     let listener = host.as_deref().map(lan::open_host).transpose()?;
     let catalogue = assets
         .poses
@@ -1273,11 +1273,11 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             window(
                 &source,
                 PreviewOptions {
+                    controls: &resolved,
                     display,
                     hidden: smoke,
                     measure,
                     preferences: preferences.as_ref(),
-                    profiles: &profiles,
                     touch_enabled,
                 },
                 listener,
@@ -1291,15 +1291,21 @@ fn load_profiles(selection: Option<&Path>) -> Result<Profiles, String> {
     let Some(path) = selection else {
         return Ok(DEFAULT_PROFILES);
     };
-    let limit = u64::try_from(MAX_PROFILE_BYTES)
+    DEFAULT_PROFILES.configured(ACTION_NAMES, &read_profile(path)?)
+}
+
+fn profile_limit() -> Result<NonZeroU64, String> {
+    u64::try_from(MAX_PROFILE_BYTES)
         .ok()
         .and_then(NonZeroU64::new)
-        .ok_or("invalid profile byte limit")?;
-    let bytes = snapshot(path, limit).map_err(|error| {
+        .ok_or_else(|| String::from("invalid profile byte limit"))
+}
+
+fn read_profile(path: &Path) -> Result<String, String> {
+    let bytes = snapshot(path, profile_limit()?).map_err(|error| {
         format!("control profile {}: {error:?}", path.display())
     })?;
-    let text = str::from_utf8(&bytes).map_err(|error| error.to_string())?;
-    DEFAULT_PROFILES.configured(ACTION_NAMES, text)
+    String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
 fn size(value: usize) -> Result<NonZeroUsize, RenderError> {
@@ -1353,8 +1359,10 @@ fn smoke_character_selection(
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
-    let mut controls =
-        Controls::with_profiles(options.touch_enabled, options.profiles)?;
+    let mut controls = Controls::with_profiles(
+        options.touch_enabled,
+        &options.controls.profiles,
+    )?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene.readback()?;
     smoke_press(&mut controls, &mut simulation, Control::Right)?;
@@ -1449,8 +1457,10 @@ fn smoke_settings(
         options.touch_enabled,
     );
     let mut simulation = live_with_session(false, session)?;
-    let mut controls =
-        Controls::with_profiles(options.touch_enabled, options.profiles)?;
+    let mut controls = Controls::with_profiles(
+        options.touch_enabled,
+        &options.controls.profiles,
+    )?;
     scene.apply_display_settings(session.effective_display())?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene.readback()?;
@@ -1941,7 +1951,9 @@ fn host_reservations(
     host: Option<&HostLan>,
 ) -> Result<[bool; 4], RenderError> {
     let reserved = host.map_or([false; 4], HostLan::reserved);
-    if options.touch_enabled && touch::reserved(options.profiles, reserved) {
+    if options.touch_enabled
+        && touch::reserved(&options.controls.profiles, reserved)
+    {
         return Err(failure("touch seat reserved for remote input"));
     }
     if let Some(listener) = host {
@@ -1978,7 +1990,7 @@ fn window(
         options.hidden,
     )?;
     window.apply_display_settings(options.display)?;
-    let layout = preview_layout(touch_enabled, options.profiles)?;
+    let layout = preview_layout(touch_enabled, &options.controls.profiles)?;
     let limits = scene_limits(source, options, reserved)?;
     let startup = window
         .input(size(reserved.into_iter().filter(|remote| !remote).count())?)?;
@@ -2000,11 +2012,11 @@ fn window(
                 world::smoke(scene, &mut art, bundle, options)?;
             }
             smoke_character_selection(scene, &mut art, options)?;
-            smoke_controller_selection(options.profiles)?;
+            smoke_controller_selection(&options.controls.profiles)?;
             if touch_enabled {
-                smoke_touch_selection(scene, options.profiles)?;
+                smoke_touch_selection(scene, &options.controls.profiles)?;
             }
-            smoke(scene, &mut art, touch_enabled, options.profiles)?;
+            smoke(scene, &mut art, touch_enabled, &options.controls.profiles)?;
             smoke_optional(scene, &mut art, touch_enabled, playback.as_mut())?;
             return smoke_peak_report();
         }
@@ -2015,6 +2027,7 @@ fn window(
         let cabinet =
             cabinet_with_scroll(source.enemy.is_some(), session, scroll_limit)?;
         let preview = Interactive::new(startup, options, &cabinet, host)?;
+        options.controls.persist().map_err(failure)?;
         preview.run(scene, &mut art, playback.as_mut())
     })
 }
@@ -2042,7 +2055,7 @@ fn scene_limits(
             3_407_872usize
                 .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
-                    touch::extra_bytes(options.profiles)
+                    touch::extra_bytes(&options.controls.profiles)
                 } else {
                     0
                 })

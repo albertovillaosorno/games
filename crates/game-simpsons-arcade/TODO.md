@@ -182,11 +182,12 @@ Menus temporarily use aspect-fit when Fill is selected for gameplay.
 Settings describes whether the selected world strip permits adaptive width.
 Changes apply immediately. To retain them across launches, create a
 dedicated private directory and pass `--settings DIR` after the display
-options and before `--controls`. Alternatively set `settings=DIR` in the
-launch catalogue; relative paths resolve from that file. An explicit
+options and before the control options. Alternatively set `settings=DIR`
+in the launch catalogue; relative paths resolve from that file. An explicit
 settings path overrides the catalogue. Saved display values override
 catalogue defaults, and explicit display or window flags override saved
-values. Only in-game changes are stored; smoke runs never write settings.
+values. Only in-game display changes are stored; smoke runs never write
+settings.
 The directory must exist and be trusted, and must not contain game-progress
 slots. The versioned settings payload is stored atomically in slot-0.gms.
 Malformed data or failed persistence is reported as an error. A saved
@@ -196,7 +197,14 @@ Fill preference is safely opened as aspect-fit when touch is enabled.
 
 After the display options, pass `--controls FILE`, or set the local
 launch catalogue's optional `controls=FILE` field. The explicit path
-overrides the catalogue selection. The bounded UTF-8 profile uses:
+overrides the catalogue selection. With a settings directory, an explicit
+profile is saved after successful native startup and takes precedence over
+the catalogue on future launches. Use `--reset-controls` instead of
+`--controls FILE` to persist the default bindings; reset requires a settings
+directory and is unavailable in smoke mode. The settings directory stores
+the profile separately from display settings in slot-1.gms. Smoke can
+select a profile without replacing saved controls. The bounded UTF-8
+profile uses:
 
 ```text
 version=1
@@ -230,7 +238,7 @@ must be smaller (including zero). Defaults remain 16000 to press
 and 10000 to release. Both the host and remote controller support
 these digital profiles; the remote controller uses station 1's
 profile. Proportional movement, an interactive remapping menu and
-automatic settings persistence remain open.
+remote-controller settings persistence remain open.
 
 For optional touch panels, select stations and swap button
 positions in the same profile, using the default action names as slots:

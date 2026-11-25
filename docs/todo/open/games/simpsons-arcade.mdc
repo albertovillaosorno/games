@@ -926,3 +926,12 @@ and 25-tick holds selected it and then returned to the descent pose
 before landing. Presentation now ends the middle pose on simulated
 release or tick 31, whichever occurs first. Exact input-to-pose
 latency and the intermediate hold trajectory remain approximate.
+
+Native control profiles now reuse the bounded atomic save envelope in the
+dedicated settings directory, independently of display settings. Explicit
+profile selection persists only after successful native startup. Saved
+bindings override the catalogue, and an explicit reset restores default
+bindings on later launches. Fresh workspace validation exercises relaunch
+precedence, malformed profiles, independent display preferences, and
+read-only smoke selection. Interactive remapping and physical-device
+acceptance remain open.

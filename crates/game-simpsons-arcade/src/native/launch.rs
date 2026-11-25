@@ -39,13 +39,19 @@ use std::{env, str, vec};
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
 use games_platform_storage::file::snapshot;
-use games_platform_storage::preferences::DisplayStore;
+use games_platform_storage::preferences::{ControlStore, DisplayStore};
 
+use super::{
+    ACTION_NAMES, DEFAULT_PROFILES, Profiles, profile_limit, read_profile,
+};
+
+const DEFAULT_PROFILE: &str = "version=1\n";
 const FILE_NAME: &str = "simpsons-arcade.local";
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke | --measure] [--touch] ",
-    "[--display MODE] [--window MODE] [--settings DIR] [--controls FILE] ",
+    "[--display MODE] [--window MODE] [--settings DIR] ",
+    "[--controls FILE | --reset-controls] ",
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA [--audio-mod SHA]] ",
@@ -198,12 +204,98 @@ impl Assets {
         let text = str::from_utf8(&bytes).map_err(|error| error.to_string())?;
         Self::catalogue(path, text)
     }
+
+    fn select(mut remaining: Arguments) -> Result<ConfiguredAssets, String> {
+        if flag(&mut remaining, "--config") {
+            let config = PathBuf::from(next(&mut remaining)?);
+            if remaining.next().is_some() {
+                return Err(String::from(USAGE));
+            }
+            Self::open(&config)
+        } else if remaining.peek().is_none() {
+            let executable = env::current_exe()
+                .map_err(|error| format!("executable path: {error}"))?;
+            Self::open(&sibling_catalogue(&executable)?)
+        } else {
+            Ok((
+                Self::explicit(remaining)?,
+                DisplaySettings::default(),
+                LocalPaths::default(),
+            ))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ControlSelection {
+    explicit: Option<PathBuf>,
+    fallback: Option<PathBuf>,
+    reset: bool,
+    smoke: bool,
+    store: Option<ControlStore>,
+}
+
+impl ControlSelection {
+    pub(super) fn resolve(self) -> Result<ResolvedControls, String> {
+        let Self {
+            explicit,
+            fallback,
+            reset,
+            smoke,
+            store,
+        } = self;
+        let update = reset || explicit.is_some();
+        let text = if reset {
+            DEFAULT_PROFILE.to_owned()
+        } else if let Some(path) = explicit {
+            read_profile(&path)?
+        } else if let Some(stored) = store
+            .as_ref()
+            .map(ControlStore::load)
+            .transpose()
+            .map_err(|error| format!("control preferences: {error:?}"))?
+            .flatten()
+        {
+            stored
+        } else if let Some(path) = fallback {
+            read_profile(&path)?
+        } else {
+            DEFAULT_PROFILE.to_owned()
+        };
+        let profiles = DEFAULT_PROFILES.configured(ACTION_NAMES, &text)?;
+        let pending = if update && !smoke {
+            store.map(|preferences| (preferences, text))
+        } else {
+            None
+        };
+        Ok(ResolvedControls { pending, profiles })
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedControls {
+    pending: Option<(ControlStore, String)>,
+    pub(super) profiles: Profiles,
+}
+
+impl ResolvedControls {
+    pub(super) fn persist(&self) -> Result<(), String> {
+        if let Some((store, text)) = &self.pending {
+            let receipt = store
+                .store(text)
+                .map_err(|error| format!("control preferences: {error:?}"))?;
+            receipt.durability.map_err(|error| {
+                format!("control preferences durability: {error:?}")
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 pub(super) struct Launch {
     pub(super) assets: Assets,
-    pub(super) controls: Option<PathBuf>,
+    pub(super) controls: ControlSelection,
     pub(super) display: DisplaySettings,
     pub(super) host: Option<PathBuf>,
     pub(super) measure: bool,
@@ -222,29 +314,21 @@ impl Launch {
         let window = optional_value(&mut remaining, "--window")?;
         let explicit_settings = optional_path(&mut remaining, "--settings")?;
         let explicit_controls = optional_path(&mut remaining, "--controls")?;
+        let reset_controls = flag(&mut remaining, "--reset-controls");
+        if reset_controls && (smoke || explicit_controls.is_some()) {
+            return Err(String::from(
+                "reset controls is exclusive with smoke and explicit controls",
+            ));
+        }
         let host = optional_path(&mut remaining, "--lan-host")?;
         if smoke && host.is_some() {
             return Err(String::from("smoke cannot open a LAN host"));
         }
-        let (assets, defaults, paths) = if flag(&mut remaining, "--config") {
-            let config = PathBuf::from(next(&mut remaining)?);
-            if remaining.next().is_some() {
-                return Err(String::from(USAGE));
-            }
-            Assets::open(&config)?
-        } else if remaining.peek().is_none() {
-            let executable = env::current_exe()
-                .map_err(|error| format!("executable path: {error}"))?;
-            Assets::open(&sibling_catalogue(&executable)?)?
-        } else {
-            (
-                Assets::explicit(remaining)?,
-                DisplaySettings::default(),
-                LocalPaths::default(),
-            )
-        };
-        let preferences = explicit_settings
-            .or(paths.settings)
+        let (assets, defaults, paths) = Assets::select(remaining)?;
+        let settings = explicit_settings.or(paths.settings);
+        let control_store =
+            open_control_store(settings.as_deref(), reset_controls)?;
+        let preferences = settings
             .as_deref()
             .map(DisplayStore::open)
             .transpose()
@@ -264,7 +348,13 @@ impl Launch {
 
         Ok(Self {
             assets,
-            controls: explicit_controls.or(paths.controls),
+            controls: ControlSelection {
+                explicit: explicit_controls,
+                fallback: paths.controls,
+                reset: reset_controls,
+                smoke,
+                store: control_store,
+            },
             display,
             host,
             measure,
@@ -273,6 +363,23 @@ impl Launch {
             touch_enabled,
         })
     }
+}
+
+fn open_control_store(
+    settings: Option<&Path>,
+    reset_controls: bool,
+) -> Result<Option<ControlStore>, String> {
+    if reset_controls && settings.is_none() {
+        return Err(String::from(
+            "reset controls requires a settings directory",
+        ));
+    }
+    settings
+        .map(|directory| {
+            ControlStore::open(directory, profile_limit()?)
+                .map_err(|error| format!("control store: {error:?}"))
+        })
+        .transpose()
 }
 
 fn resolve_display(
@@ -384,12 +491,72 @@ fn sibling_catalogue(executable: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::DirBuilderExt as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{fs, process};
+
     use games::presentation::WindowMode;
 
     use super::*;
 
+    const FALLBACK_PROFILE: &str = "version=1\nkey 1 right=Q\n";
+    const EXPLICIT_PROFILE: &str = "version=1\nkey 1 right=E\n";
     const DIGEST: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[derive(Debug)]
+    struct ProfileFixture(PathBuf);
+
+    impl ProfileFixture {
+        fn new() -> Result<Self, String> {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_nanos();
+            let path = env::temp_dir()
+                .join(format!("games-controls-{}-{timestamp}", process::id()));
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .map_err(|error| error.to_string())?;
+            let fixture = Self(path);
+            fixture.write(
+                "launch.local",
+                &format!("{}controls=fallback.txt\nsettings=.\n", catalogue()),
+            )?;
+            fixture.write("fallback.txt", FALLBACK_PROFILE)?;
+            fixture.write("explicit.txt", EXPLICIT_PROFILE)?;
+            Ok(fixture)
+        }
+
+        fn resolve(&self, flags: &[&str]) -> Result<ResolvedControls, String> {
+            let args = flags
+                .iter()
+                .map(OsString::from)
+                .chain([
+                    OsString::from("--config"),
+                    self.0.join("launch.local").into_os_string(),
+                ])
+                .collect();
+            Launch::parse(args)?.controls.resolve()
+        }
+
+        fn store(&self) -> Result<ControlStore, String> {
+            ControlStore::open(&self.0, profile_limit()?)
+                .map_err(|error| format!("{error:?}"))
+        }
+
+        fn write(&self, name: &str, text: &str) -> Result<(), String> {
+            fs::write(self.0.join(name), text)
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    impl Drop for ProfileFixture {
+        fn drop(&mut self) {
+            let _cleanup = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn catalogue() -> String {
         format!(
@@ -679,5 +846,85 @@ mod tests {
             resolve_display(defaults, Some(stored), [Some("fill"), None], true)
                 .is_err()
         );
+    }
+    #[test]
+    fn controls_precedence_and_reset_survive_relaunch() -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let expected = |text| DEFAULT_PROFILES.configured(ACTION_NAMES, text);
+        let store = fixture.store()?;
+        let stored = || store.load().map_err(|error| format!("{error:?}"));
+        if fixture.resolve(&[])?.profiles != expected(FALLBACK_PROFILE)? {
+            return Err("catalogue fallback not applied".into());
+        }
+        fixture.resolve(&[])?.persist()?;
+        if stored()?.is_some() {
+            return Err("catalogue fallback was unexpectedly persisted".into());
+        }
+
+        let explicit = fixture.0.join("explicit.txt");
+        let path = explicit.to_str().ok_or("invalid test path")?;
+        let resolved = fixture.resolve(&["--controls", path])?;
+        if resolved.profiles != expected(EXPLICIT_PROFILE)?
+            || stored()?.is_some()
+        {
+            return Err("explicit profile not selected without writing".into());
+        }
+        resolved.persist()?;
+        if stored()?.as_deref() != Some(EXPLICIT_PROFILE)
+            || fixture.resolve(&[])?.profiles != resolved.profiles
+        {
+            return Err("saved controls did not override catalogue".into());
+        }
+
+        let reset = fixture.resolve(&["--reset-controls"])?;
+        if reset.profiles != DEFAULT_PROFILES {
+            return Err("reset did not select default controls".into());
+        }
+        reset.persist()?;
+        if stored()?.as_deref() != Some(DEFAULT_PROFILE)
+            || fixture.resolve(&[])?.profiles != DEFAULT_PROFILES
+        {
+            return Err("reset did not survive relaunch".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn smoke_and_invalid_controls_cannot_replace_preferences()
+    -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let store = fixture.store()?;
+        let _receipt = store
+            .store(FALLBACK_PROFILE)
+            .map_err(|error| format!("{error:?}"))?;
+        let explicit = fixture.0.join("explicit.txt");
+        let path = explicit.to_str().ok_or("invalid test path")?;
+        let smoke = fixture.resolve(&["--smoke", "--controls", path])?;
+        if smoke.profiles
+            != DEFAULT_PROFILES.configured(ACTION_NAMES, EXPLICIT_PROFILE)?
+        {
+            return Err("smoke did not select explicit controls".into());
+        }
+        smoke.persist()?;
+        fixture.write("explicit.txt", "version=1\nkey 1 right=Z\n")?;
+        let invalid = ["--reset-controls", "parent", "m", "h", "b", "l"];
+        if fixture.resolve(&["--controls", path]).is_ok()
+            || fixture.resolve(&["--smoke", "--reset-controls"]).is_ok()
+            || fixture
+                .resolve(&["--controls", path, "--reset-controls"])
+                .is_ok()
+            || Launch::parse(invalid.map(OsString::from).into()).is_ok()
+        {
+            return Err("invalid control selection accepted".into());
+        }
+        if store
+            .load()
+            .map_err(|error| format!("{error:?}"))?
+            .as_deref()
+            != Some(FALLBACK_PROFILE)
+        {
+            return Err("invalid selection replaced saved controls".into());
+        }
+        Ok(())
     }
 }
