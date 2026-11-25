@@ -623,6 +623,13 @@ impl Slot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PairCommand {
+    Jump,
+    None,
+    Primary,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct PairState {
     idle_ticks: u8,
@@ -829,7 +836,7 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
-        let pair_jump = self.cooperation.filter_actions(&mut pending);
+        let pair_command = self.cooperation.filter_actions(&mut pending);
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
         {
@@ -838,7 +845,8 @@ impl Cabinet {
         self.advance_continue();
         if self.phase() == Phase::Playing {
             let layout = self.movement_layout();
-            self.cooperation.advance(&mut self.slots, layout, pair_jump);
+            self.cooperation
+                .advance(&mut self.slots, layout, pair_command);
             if let Some(encounter) = &mut self.encounter {
                 encounter.advance(
                     layout,
@@ -958,10 +966,10 @@ impl Cabinet {
         true
     }
 
-    /// Enable the observed Bart/Lisa paired secondary action.
+    /// Enable the observed Bart/Lisa paired button responses.
     ///
     /// Requires Bart/Lisa locomotion to be enabled. Ground points and
-    /// combat eligibility remain provisional during this action.
+    /// combat eligibility remain provisional during these actions.
     #[must_use]
     pub const fn with_bart_lisa_jump(mut self, enabled: bool) -> Self {
         let pair = &mut self.cooperation.bart_lisa;

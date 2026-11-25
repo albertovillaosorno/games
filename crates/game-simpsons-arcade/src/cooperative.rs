@@ -33,8 +33,8 @@
 //! Provisional cooperative locomotion for two observed character pairs.
 
 use super::{
-    Cooperation, Facing, Maneuver, PairState, PairSupport, PendingManeuver,
-    Player, Point, Recovery, Slot, StreetLayout,
+    Cooperation, Facing, Maneuver, PairCommand, PairState, PairSupport,
+    PendingManeuver, Player, Point, Recovery, Slot, StreetLayout,
 };
 
 const ADMISSION_TICKS: u8 = 38;
@@ -111,6 +111,8 @@ pub enum PairMotion {
         /// Zero-based action phase.
         tick: u8,
     },
+    /// One-frame grounded Bart/Lisa Primary response.
+    Primary,
     /// Repeating locomotion pose, possibly held after stopping.
     Walk {
         /// Zero-based phase within the pair's walking cycle.
@@ -127,7 +129,7 @@ impl PairMotion {
                 .get(usize::from(tick))
                 .copied()
                 .unwrap_or_default(),
-            Self::Idle { .. } | Self::Walk { .. } => 0,
+            Self::Idle { .. } | Self::Primary | Self::Walk { .. } => 0,
         }
     }
 }
@@ -171,18 +173,26 @@ impl PairState {
 
     fn advance(
         &mut self,
-        (pair, jump): (Pair, bool),
+        (pair, command): (Pair, PairCommand),
         (first, second): (&mut Slot, &mut Slot),
         layout: StreetLayout,
     ) {
         self.invalidate(first, second);
         if let Some(motion) = self.motion {
-            let direction = self.direction(first, second, jump);
-            if jump {
-                self.motion = Some(PairMotion::Jump { tick: 0 });
-                self.walking = false;
-            } else {
-                self.update_motion(pair, motion, direction);
+            let direction =
+                self.direction(first, second, command == PairCommand::Jump);
+            match command {
+                PairCommand::Jump => {
+                    self.motion = Some(PairMotion::Jump { tick: 0 });
+                    self.walking = false;
+                },
+                PairCommand::Primary if direction == (0, 0) => {
+                    self.motion = Some(PairMotion::Primary);
+                    self.walking = false;
+                },
+                PairCommand::Primary | PairCommand::None => {
+                    self.update_motion(pair, motion, direction);
+                },
             }
             translate(first, second, direction, layout);
         } else {
@@ -251,10 +261,14 @@ impl PairState {
                 PairMotion::Idle { tick } => PairMotion::Idle {
                     tick: tick.saturating_add(1).min(pair.idle_end()),
                 },
-                PairMotion::Walk { .. } if pair == Pair::BartLisa => {
+                PairMotion::Walk { .. } | PairMotion::Primary
+                    if pair == Pair::BartLisa =>
+                {
                     PairMotion::Idle { tick: pair.idle_end() }
                 },
-                PairMotion::Walk { .. } | PairMotion::Jump { .. } => motion,
+                PairMotion::Walk { .. }
+                | PairMotion::Jump { .. }
+                | PairMotion::Primary => motion,
             });
             self.walking = false;
         } else {
@@ -265,6 +279,7 @@ impl PairState {
                     .unwrap_or_default(),
                 PairMotion::Idle { .. }
                 | PairMotion::Jump { .. }
+                | PairMotion::Primary
                 | PairMotion::Walk { .. } => 0,
             };
             self.motion = Some(PairMotion::Walk { tick });
@@ -278,16 +293,16 @@ impl Cooperation {
         &mut self,
         slots: &mut [Slot; 4],
         layout: StreetLayout,
-        pair_jump: bool,
+        pair_command: PairCommand,
     ) {
         let [marge, homer, bart, lisa] = slots;
         self.marge_homer.advance(
-            (Pair::MargeHomer, false),
+            (Pair::MargeHomer, PairCommand::None),
             (marge, homer),
             layout,
         );
         self.bart_lisa.advance(
-            (Pair::BartLisa, pair_jump),
+            (Pair::BartLisa, pair_command),
             (bart, lisa),
             layout,
         );
@@ -324,29 +339,33 @@ impl Cooperation {
     pub(super) fn filter_actions(
         &self,
         pending: &mut [PendingManeuver; 4],
-    ) -> bool {
+    ) -> PairCommand {
         let pair = self.bart_lisa;
         if pair.support != PairSupport::Jump || pair.motion.is_none() {
-            return false;
+            return PairCommand::None;
         }
         let [_, _, bart, lisa] = pending;
-        if matches!(pair.motion, Some(PairMotion::Jump { .. })) {
-            *bart = PendingManeuver::default();
-            *lisa = PendingManeuver::default();
-            return false;
-        }
-        if [*bart, *lisa].into_iter().any(|action| {
-            action.chord
-                || action.candidate.is_some_and(|maneuver| {
-                    !matches!(maneuver, Maneuver::Jump(_))
-                })
-        }) {
-            return false;
-        }
-        let requested = bart.candidate.is_some() || lisa.candidate.is_some();
+        let actions = [bart.candidate, lisa.candidate];
         *bart = PendingManeuver::default();
         *lisa = PendingManeuver::default();
-        requested
+        if matches!(pair.motion, Some(PairMotion::Jump { .. })) {
+            return PairCommand::None;
+        }
+        if actions
+            .into_iter()
+            .any(|action| matches!(action, Some(Maneuver::Jump(_))))
+        {
+            // Secondary also wins a same-tick chord. The original's
+            // station-specific one-frame input offset is not modeled.
+            PairCommand::Jump
+        } else if actions
+            .into_iter()
+            .any(|action| matches!(action, Some(Maneuver::Attack { .. })))
+        {
+            PairCommand::Primary
+        } else {
+            PairCommand::None
+        }
     }
 
     pub(super) fn invalidate(&mut self, slots: &[Slot; 4]) {
@@ -694,6 +713,93 @@ mod tests {
         assert_eq!(state, baseline);
         assert_eq!(chord, baseline);
         assert!(state.pair_pose(Pair::BartLisa).is_some());
+    }
+
+    #[test]
+    fn combined_primary_preserves_stationary_pair_for_both_members() {
+        for player in Pair::BartLisa.members() {
+            check_grounded_primary(player);
+        }
+    }
+
+    fn check_grounded_primary(player: Player) {
+        let mut state = joined().with_bart_lisa_jump(true);
+        wait(&mut state, 12);
+        let stations = state.stations();
+        let idle = state.pair_pose(Pair::BartLisa);
+        state.input_step(52, &[change(player, Control::Primary, true)]);
+        assert_eq!(
+            state.pair_pose(Pair::BartLisa).map(|pose| pose.motion),
+            Some(PairMotion::Primary)
+        );
+        assert_eq!(state.stations(), stations);
+        wait(&mut state, 1);
+        assert_eq!(state.pair_pose(Pair::BartLisa), idle);
+        wait(&mut state, 30);
+        assert_eq!(state.pair_pose(Pair::BartLisa), idle);
+        assert_eq!(state.stations(), stations);
+        state.input_step(84, &[
+            change(player, Control::Primary, false),
+            change(player, Control::Primary, true),
+        ]);
+        assert_eq!(
+            state.pair_pose(Pair::BartLisa).map(|pose| pose.motion),
+            Some(PairMotion::Primary)
+        );
+    }
+
+    #[test]
+    fn combined_primary_does_not_interrupt_walking() {
+        let mut baseline = joined().with_bart_lisa_jump(true);
+        baseline.input_step(41, &[change(Player::Lisa, Control::Right, true)]);
+        wait(&mut baseline, 8);
+        for player in Pair::BartLisa.members() {
+            let mut state = baseline;
+            let mut control = baseline;
+            state.input_step(50, &[
+                change(player, Control::Primary, true),
+                change(player, Control::Primary, false),
+            ]);
+            control.input_step(50, &[]);
+            assert_eq!(state, control);
+            wait(&mut state, 24);
+            wait(&mut control, 24);
+            assert_eq!(state, control);
+        }
+    }
+
+    #[test]
+    fn combined_chords_match_secondary_with_or_without_movement() {
+        for player in Pair::BartLisa.members() {
+            check_combined_chord(player, false);
+            check_combined_chord(player, true);
+        }
+    }
+
+    fn check_combined_chord(player: Player, moving: bool) {
+        let mut baseline = joined().with_bart_lisa_jump(true);
+        if moving {
+            baseline.input_step(41, &[change(
+                Player::Lisa,
+                Control::Right,
+                true,
+            )]);
+        }
+        let mut chord = baseline;
+        baseline.input_step(42, &[
+            change(player, Control::Secondary, true),
+            change(player, Control::Secondary, false),
+        ]);
+        chord.input_step(42, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Secondary, true),
+            change(player, Control::Primary, false),
+            change(player, Control::Secondary, false),
+        ]);
+        assert_eq!(chord, baseline);
+        wait(&mut chord, 30);
+        wait(&mut baseline, 30);
+        assert_eq!(chord, baseline);
     }
 
     #[test]

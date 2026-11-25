@@ -130,8 +130,8 @@ are actor/duo and actor/bart-lisa. A complete pair catalogue enables
 that pair only. Nearby active members join after 38 neutral simulation
 ticks; either can move, with the first member taking priority for
 conflicting directions. Both stations retain their individual health,
-HUD and ground points. A solo attack, jump or hurt separates the pair
-unless the optional Bart/Lisa combined jump is enabled.
+HUD and ground points. Solo maneuvers separate pairs without combined
+responses; hurt always separates them.
 
 The optional `bart-lisa jump TICK SHA256` sequence requires the
 complete Bart/Lisa idle and walk catalogue plus jump poses at offsets
@@ -141,9 +141,13 @@ vertical action. It retains the pair, reaches a representative
 or chord edges from either member during flight are discarded, not
 buffered into landing. During the action
 Bart's direction takes priority; after landing only Lisa moves the
-pair until it separates. Missing jump poses preserve the earlier solo
-jump behavior. Ground positions, directional speed, combat eligibility,
-exact pivots and other cooperative actions remain provisional.
+pair until it separates. A grounded Primary displays one fixed tick of
+the combined landing pose when stationary and preserves the walking
+cycle when moving. A grounded chord starts the combined jump.
+Simultaneous edges select Secondary over Primary. Missing jump poses
+preserve the earlier solo maneuver behavior. No damage is inferred. Ground
+positions, directional speed, combat eligibility, exact pivots and other
+cooperative actions remain provisional.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated

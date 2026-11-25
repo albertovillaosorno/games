@@ -205,6 +205,8 @@ impl PoseArt {
         let (kind, tick) = match motion {
             PairMotion::Idle { tick } => (Kind::Idle, tick),
             PairMotion::Jump { tick } => (Kind::Jump, tick),
+            // The stationary Primary crop matches the landing payload.
+            PairMotion::Primary => (Kind::Jump, BART_LISA_JUMP_TICKS - 1),
             PairMotion::Walk { tick } => (Kind::Walk, tick),
         };
         select_entry(&self.entries, (Subject::Pair(pair), kind, tick)).copied()

@@ -1768,3 +1768,34 @@ render and audio gates passed (1795629397040474861-284808). The
 submissions met the 16.667 ms host-work budget; lifetime RSS peak
 was 133,767,168 bytes. Physical input and original damage acceptance
 remain open.
+
+The grounded Bart/Lisa controls distinguish Primary from a solo attack.
+In fresh isolated comparisons, a 30-frame stationary Primary hold
+changed only one of 56 complete object-DMA frames, whereas moving
+Primary matched all 56 neutral movement frames. After the paired jump,
+Bart and Lisa Primary each produced a one-frame response. A grounded
+same-station chord matched the complete Secondary control. A moving
+chord also retained horizontal translation during the combined jump.
+The exact left-facing stationary response crop, verified against all
+71,680 scene pixels, matches the already admitted landing payload.
+
+The combined-jump catalogue therefore also enables one grounded
+stationary Primary pose tick, with no new pose record or GPU atlas.
+Moving Primary preserves the existing walking phase and position.
+Grounded chords select the paired jump, and in-flight edges remain
+unbuffered. Same-tick multi-station requests collapse into one command
+with Secondary taking priority; the original one-frame seat sampling
+stagger is not simulated. No damage or precise hit eligibility is
+inferred. The older pair catalogue retains its solo maneuver behavior.
+Tests cover held and fresh edges from both members, moving Primary,
+chords with and without movement, and independence of other stations.
+
+Fresh native render/audio workspace validation passed in run
+1795629773333114564-344515. The 3,331,136-byte Linux build passed the
+192-pose adaptive 426-by-304 touch/dummy-audio smoke; readback verified
+one visible combined Primary tick followed by exact idle restoration.
+All 600 movement and 20 first-strike submissions met the 16.667 ms
+budget, with mean work of 60.509 and 57.749 microseconds respectively.
+Lifetime peak RSS was 134,217,728 bytes. The older 189-pose aspect-fit
+smoke also passed with no combined action. Physical play, exact
+cooperative hit rules and complete stage acceptance remain open.

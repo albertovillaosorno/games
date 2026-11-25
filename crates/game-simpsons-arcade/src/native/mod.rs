@@ -2171,6 +2171,7 @@ fn smoke_cooperation(
     smoke_cooperation_movement(scene, art, &mut cabinet, families)?;
     if art.poses.bart_lisa_jump() {
         smoke_cooperation_jump(scene, art, &mut cabinet)?;
+        smoke_cooperation_primary(scene, art, &mut cabinet)?;
     }
     writeln!(
         stdout().lock(),
@@ -2246,6 +2247,36 @@ fn smoke_cooperation_movement(
         return Err(failure("cooperative locomotion not visibly presented"));
     }
     Ok(())
+}
+
+fn smoke_cooperation_primary(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &mut Cabinet,
+) -> Result<(), RenderError> {
+    let still = scene.readback()?;
+    let actions = [true, false].map(|down| LogicalAction {
+        action: Action {
+            control: Control::Primary,
+            player: Player::Lisa,
+        },
+        down,
+    });
+    cabinet.input_step(79, &actions);
+    let _pressed = art.present(scene, cabinet)?;
+    if cabinet.pair_pose(Pair::BartLisa).map(|pose| pose.motion)
+        != Some(crate::PairMotion::Primary)
+        || still == scene.readback()?
+    {
+        return Err(failure("combined primary response not visible"));
+    }
+    cabinet.input_step(80, &[]);
+    let _released = art.present(scene, cabinet)?;
+    if still != scene.readback()? {
+        return Err(failure("combined primary did not restore idle art"));
+    }
+    writeln!(stdout().lock(), "Bart/Lisa combined Primary verified")
+        .map_err(failure)
 }
 
 fn smoke_optional(
