@@ -35,9 +35,9 @@ Measure useful throughput without degrading fidelity.
 
 ### TODO - Portable capability IR and platform isolation
 
-Eliminate existing platform coupling and enforce two independent owners:
-platform for OS input/output services, hardware for input device families
-and models only. Require the OS/device bridge in platform/src/ir/hardware/,
+Eliminate existing platform coupling through one platform crate: public
+capability IR, private OS software backends and independent physical device
+protocols. Require the OS/device bridge in platform/src/ir/hardware/,
 shared IR security and strict structural/dependency tests.
 
 See the [input device contract](docs/technical/input-device-ir.md).
@@ -80,7 +80,7 @@ Establish reproducible behaviour comparisons from lawful local references.
 
 ### TODO - Title onboarding
 
-Create title packages and their TODO.md files when implementation begins.
+Create title packages linked to their existing canonical task records.
 
 [TODO - Title onboarding](docs/todo/open/assets/onboarding.mdc)
 

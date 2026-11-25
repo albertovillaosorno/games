@@ -15,7 +15,7 @@ validation:
 
 ## Objective
 
-Create title packages and their TODO.md files when implementation begins.
+Create title packages linked to their existing canonical task records.
 
 ## Acceptance
 
@@ -38,7 +38,7 @@ Create title packages and their TODO.md files when implementation begins.
   simulation behaviour. Preserve original presentation as an option.
   Treat unsupported scenes as open work, with temporary aspect-fit fallback
   and documented limitations; do not count fallback as adaptive support.
-- Use `crates/game-<id>` or `crates/app-<id>` and inline behavioural tests.
+- Use `crates/games/<id>` or `crates/apps/<id>` and inline behavioural tests.
 - Reference the canonical task record rather than duplicating its contents.
 
 ## Evidence
