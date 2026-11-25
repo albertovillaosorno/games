@@ -161,6 +161,7 @@ impl TouchZone {
 #[derive(Clone, Debug)]
 pub struct TouchLayout {
     limit: NonZeroUsize,
+    region_limit: Option<NonZeroUsize>,
     regions: Vec<TouchZone>,
     zones: Vec<TouchZone>,
 }
@@ -174,21 +175,20 @@ impl TouchLayout {
     pub const fn new(zones: Vec<TouchZone>, limit: NonZeroUsize) -> Self {
         Self {
             limit,
+            region_limit: None,
             regions: Vec::new(),
             zones,
         }
     }
 
-    fn scope_at(&self, point: TouchPoint) -> ContactScope {
+    fn scope_at(&self, point: TouchPoint) -> Option<ContactScope> {
         if self.regions.is_empty() {
-            return ContactScope::Unrestricted;
+            return Some(ContactScope::Unrestricted);
         }
-        ContactScope::Region(
-            self.regions
-                .iter()
-                .find(|region| region.contains(point))
-                .map(|region| region.id),
-        )
+        self.regions
+            .iter()
+            .find(|region| region.contains(point))
+            .map(|region| ContactScope::Region(region.id))
     }
 
     /// Limit each contact to the region containing its initial press.
@@ -196,10 +196,18 @@ impl TouchLayout {
     /// The first containing region determines the scope for the entire
     /// contact lifetime. Equal region identifiers denote the same scope.
     /// Motion outside that scope releases the current action; returning
-    /// reactivates it. A press outside every region cannot activate any
-    /// zone until released. An empty region list leaves routing unrestricted.
+    /// reactivates it. A press outside every region is not admitted.
+    /// Each region independently admits at most the given contact limit;
+    /// contacts retain their initial region's slot until release.
+    /// The total layout limit still applies. An empty region list leaves
+    /// routing unrestricted.
     #[must_use]
-    pub fn with_regions(mut self, regions: Vec<TouchZone>) -> Self {
+    pub fn with_regions(
+        mut self,
+        regions: Vec<TouchZone>,
+        limit: NonZeroUsize,
+    ) -> Self {
+        self.region_limit = (!regions.is_empty()).then_some(limit);
         self.regions = regions;
         self
     }
@@ -218,8 +226,7 @@ impl TouchLayout {
         point: TouchPoint,
         scope: ContactScope,
     ) -> Option<u16> {
-        if scope == ContactScope::Region(None) || self.scope_at(point) != scope
-        {
+        if self.scope_at(point) != Some(scope) {
             return None;
         }
         self.zone_at(point)
@@ -234,7 +241,7 @@ pub(super) enum ContactUpdate {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ContactScope {
-    Region(Option<u16>),
+    Region(u16),
     Unrestricted,
 }
 
@@ -261,10 +268,21 @@ impl Contacts {
         if self.active.len() >= layout.limit.get() {
             return ContactUpdate::Ignored;
         }
+        let Some(scope) = layout.scope_at(point) else {
+            return ContactUpdate::Ignored;
+        };
+        if layout.region_limit.is_some_and(|limit| {
+            self.active
+                .values()
+                .filter(|value| **value == scope)
+                .count()
+                >= limit.get()
+        }) {
+            return ContactUpdate::Ignored;
+        }
         let Entry::Vacant(entry) = self.active.entry(contact) else {
             return ContactUpdate::Ignored;
         };
-        let scope = layout.scope_at(point);
         let _scope = entry.insert(scope);
         ContactUpdate::Zone(layout.zone_in_scope(point, scope))
     }
@@ -396,7 +414,10 @@ mod tests {
                 vec![zone(1, 0, 199), zone(2, 400, 699)],
                 NonZeroUsize::MIN,
             )
-            .with_regions(vec![zone(10, 0, 399), zone(20, 400, 799)]),
+            .with_regions(
+                vec![zone(10, 0, 399), zone(20, 400, 799)],
+                NonZeroUsize::MIN,
+            ),
         );
         let mut router = InputRouter::new(mapping);
         let input = |phase| event(1, 1, phase);
@@ -419,6 +440,48 @@ mod tests {
         assert_eq!(router.handle(input(ContactPhase::Down(RIGHT))), [action(
             "right", true
         )]);
+    }
+
+    #[test]
+    fn scoped_contact_capacity_is_independent_and_released_on_up() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_touch(1, "left");
+        mapping.bind_touch(2, "right");
+        mapping.set_touch_layout(
+            TouchLayout::new(
+                vec![zone(1, 0, 199), zone(2, 400, 699)],
+                NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN),
+            )
+            .with_regions(
+                vec![zone(10, 0, 399), zone(20, 400, 799)],
+                NonZeroUsize::MIN,
+            ),
+        );
+        let mut router = InputRouter::new(mapping);
+        let mut route = |finger, phase| router.handle(event(1, finger, phase));
+        for finger in 10..20 {
+            assert_eq!(route(finger, ContactPhase::Down(OUTSIDE)), []);
+            assert_eq!(route(finger, ContactPhase::Motion(Some(LEFT))), []);
+        }
+        for (finger, phase, expected) in [
+            (1, ContactPhase::Down(LEFT), Some(action("left", true))),
+            (2, ContactPhase::Down(LEFT), None),
+            (3, ContactPhase::Down(RIGHT), Some(action("right", true))),
+            (
+                1,
+                ContactPhase::Motion(Some(OUTSIDE)),
+                Some(action("left", false)),
+            ),
+            (4, ContactPhase::Down(LEFT), None),
+            (1, ContactPhase::Up, None),
+            (2, ContactPhase::Motion(Some(LEFT)), None),
+            (4, ContactPhase::Motion(Some(LEFT)), None),
+            (5, ContactPhase::Down(LEFT), Some(action("left", true))),
+            (3, ContactPhase::Up, Some(action("right", false))),
+            (5, ContactPhase::Up, Some(action("left", false))),
+        ] {
+            assert_eq!(route(finger, phase).as_slice(), expected.as_slice());
+        }
     }
 
     #[test]

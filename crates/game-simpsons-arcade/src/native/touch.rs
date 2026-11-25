@@ -301,7 +301,7 @@ pub(super) fn install(
             zones,
             size(count.saturating_mul(CONTACTS_PER_PANEL))?,
         )
-        .with_regions(regions),
+        .with_regions(regions, size(CONTACTS_PER_PANEL)?),
     );
     Ok(())
 }
@@ -704,6 +704,61 @@ mod tests {
             if router.handle(InputEvent::Contact { id, phase }).as_slice()
                 != expected.as_slice()
             {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn crowded_panel_cannot_consume_another_seats_contact_slots()
+    -> Result<(), RenderError> {
+        use super::super::ACTION_NAMES;
+        use crate::Control;
+
+        let profiles = DEFAULT_PROFILES
+            .configured(ACTION_NAMES, "version=1\ntouch-players=1,3")
+            .map_err(RenderError::Backend)?;
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, &profiles, PanelRole::Cabinet)?;
+        let mut router = InputRouter::new(mapping);
+        let first = center(Player::Marge, Control::Right, &profiles)?;
+        let second = center(Player::Bart, Control::Right, &profiles)?;
+        let blank = TouchPoint { x: 30_000, ..first };
+        let game = TouchPoint { y: 0, ..first };
+        let mut route = |finger, phase| {
+            router.handle(InputEvent::Contact {
+                id: ContactId { device: 1, finger },
+                phase,
+            })
+        };
+        for (finger, point) in (0..32)
+            .map(|finger| (finger, game))
+            .chain((32..40).map(|finger| (finger, blank)))
+        {
+            if !route(finger, ContactPhase::Down(point)).is_empty() {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        let edge = |player, down| {
+            Some(LogicalAction {
+                action: Action {
+                    control: Control::Right,
+                    player,
+                },
+                down,
+            })
+        };
+        for (finger, phase, expected) in [
+            (40, ContactPhase::Down(first), None),
+            (41, ContactPhase::Down(second), edge(Player::Bart, true)),
+            (32, ContactPhase::Up, None),
+            (40, ContactPhase::Motion(Some(first)), None),
+            (42, ContactPhase::Down(first), edge(Player::Marge, true)),
+            (42, ContactPhase::Up, edge(Player::Marge, false)),
+            (41, ContactPhase::Up, edge(Player::Bart, false)),
+        ] {
+            if route(finger, phase).as_slice() != expected.as_slice() {
                 return Err(RenderError::InvalidSprite);
             }
         }
