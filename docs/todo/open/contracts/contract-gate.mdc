@@ -28,4 +28,19 @@ Make the P1 contracts a required part of the existing validator.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+Partial evidence, 2026-11-24: the mandatory boundary gate uses Cargo's
+resolved workspace membership and targets. It rejects packages outside
+direct crate directories, excluded crates, orphan Rust source, separate
+integration test targets (including explicit targets outside tests/), and
+manifest symlinks. The root unsafe-code forbid, denied warnings and denied
+unfulfilled lint expectations cannot be weakened through the manifest.
+
+Synthetic positive and negative controls cover valid member layouts,
+misplaced members, missing package metadata, explicit integration targets
+and root lint weakening. The checks run without original media as part
+of the existing validation command. Fresh validation passed in run
+1795577195880786433-2782349 (91 workspace tests).
+
+Network, security and performance acceptance remain open. The integrated
+gate does not prove physical LAN interoperability, mod isolation, runtime
+performance or gameplay parity.

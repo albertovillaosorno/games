@@ -29,9 +29,11 @@
 // - Defaults:
 //   - Reject missing ownership, local lint overrides and reverse edges.
 //
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use serde_json::Value as JsonValue;
 use toml::Value;
 
 use crate::files;
@@ -173,13 +175,22 @@ fn source_layout(path: &Path) -> bool {
         && parts.next().is_some_and(|part| part.as_os_str() != "tests")
 }
 
-fn sources(root: &Path) -> Result<(), String> {
+fn sources(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
     for path in files::authored(root)? {
         if !source_layout(&path) {
             return Err(format!(
                 "Rust source outside crate: {}",
                 path.display()
             ));
+        }
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            let package = path.components().take(2).collect::<PathBuf>();
+            if !members.contains(&package.join("Cargo.toml")) {
+                return Err(format!(
+                    "Rust source outside workspace member: {}",
+                    path.display()
+                ));
+            }
         }
         if code_path(&path) {
             let content = fs::read_to_string(root.join(&path))
@@ -290,20 +301,107 @@ fn member(
     Ok(())
 }
 
+fn package_manifest(
+    root: &Path,
+    package: &JsonValue,
+) -> Result<PathBuf, String> {
+    let manifest = package
+        .get("manifest_path")
+        .and_then(JsonValue::as_str)
+        .ok_or("missing package manifest path")?;
+    let path = Path::new(manifest)
+        .strip_prefix(root)
+        .map_err(|error| format!("workspace member outside root: {error}"))?;
+    let directory = path.parent().ok_or("missing package directory")?;
+    if directory.parent() != Some(Path::new("crates"))
+        || directory.file_name().is_none()
+        || path.file_name().is_none_or(|name| name != "Cargo.toml")
+    {
+        return Err(format!(
+            "workspace member outside direct crates: {manifest}"
+        ));
+    }
+    let targets = package
+        .get("targets")
+        .and_then(JsonValue::as_array)
+        .ok_or("missing package targets")?;
+    for target in targets {
+        let kinds = target
+            .get("kind")
+            .and_then(JsonValue::as_array)
+            .ok_or("missing target kind")?;
+        if kinds.iter().any(|kind| kind.as_str() == Some("test")) {
+            return Err(format!(
+                "separate integration test target: {manifest}"
+            ));
+        }
+    }
+    Ok(path.to_path_buf())
+}
+
+fn metadata_members(
+    root: &Path,
+    metadata: &JsonValue,
+) -> Result<BTreeSet<PathBuf>, String> {
+    let ids = metadata
+        .get("workspace_members")
+        .and_then(JsonValue::as_array)
+        .ok_or("missing workspace members")?;
+    let mut remaining = ids
+        .iter()
+        .map(|id| id.as_str().ok_or("invalid workspace member ID"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if remaining.is_empty() || remaining.len() != ids.len() {
+        return Err(String::from("empty or duplicate workspace members"));
+    }
+    let packages = metadata
+        .get("packages")
+        .and_then(JsonValue::as_array)
+        .ok_or("missing workspace packages")?;
+    let mut manifests = BTreeSet::new();
+    for package in packages {
+        let id = package
+            .get("id")
+            .and_then(JsonValue::as_str)
+            .ok_or("missing package ID")?;
+        if !remaining.remove(id) {
+            return Err(format!("unexpected workspace package: {id}"));
+        }
+        if !manifests.insert(package_manifest(root, package)?) {
+            return Err(format!("duplicate workspace package path: {id}"));
+        }
+    }
+    if !remaining.is_empty() {
+        return Err(String::from("workspace package metadata incomplete"));
+    }
+    Ok(manifests)
+}
+
 fn workspace_lints(workspace: &toml::Table) -> Result<(), String> {
     let lints = workspace
         .get("lints")
         .and_then(Value::as_table)
         .ok_or("missing workspace lint policy")?;
-    for group in ["rust", "clippy"] {
-        if !lints.get(group).is_some_and(Value::is_table) {
-            return Err(format!("missing workspace {group} lints"));
+    let rust = lints
+        .get("rust")
+        .and_then(Value::as_table)
+        .ok_or("missing workspace rust lints")?;
+    if !lints.get("clippy").is_some_and(Value::is_table) {
+        return Err(String::from("missing workspace clippy lints"));
+    }
+    for (lint, required) in [
+        ("unsafe_code", "forbid"),
+        ("warnings", "deny"),
+        ("unfulfilled_lint_expectations", "deny"),
+    ] {
+        if rust.get(lint).and_then(Value::as_str) != Some(required) {
+            return Err(format!("workspace {lint} must be {required}"));
         }
     }
     Ok(())
 }
 
-fn manifests(root: &Path) -> Result<(), String> {
+fn manifests(root: &Path, members: &BTreeSet<PathBuf>) -> Result<(), String> {
     let root_manifest = Value::Table(
         fs::read_to_string(root.join("Cargo.toml"))
             .map_err(|error| error.to_string())?
@@ -333,6 +431,19 @@ fn manifests(root: &Path) -> Result<(), String> {
         let relative = manifest_path
             .strip_prefix(root)
             .map_err(|error| error.to_string())?;
+        if !members.contains(relative) {
+            return Err(format!(
+                "crate excluded from workspace: {}",
+                relative.display()
+            ));
+        }
+        if fs::symlink_metadata(&manifest_path)
+            .map_err(|error| error.to_string())?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(format!("symlink manifest: {}", relative.display()));
+        }
         let name = relative.to_string_lossy().replace('\\', "/");
         let member_role = role(&name)
             .ok_or_else(|| format!("unrecognised workspace member: {name}"))?;
@@ -354,19 +465,24 @@ fn manifests(root: &Path) -> Result<(), String> {
 /// # Errors
 ///
 /// Rejects missing source contracts, lint overrides and forbidden edges.
-pub fn validate(root: &Path) -> Result<(), String> {
-    sources(root)?;
-    manifests(root)
+pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
+    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    let members = metadata_members(&canonical, metadata)?;
+    sources(root, &members)?;
+    manifests(root, &members)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
 
+    use serde_json::{Value as JsonValue, json};
     use toml::Value;
 
     use super::{
-        Role, dependency, dependency_allowed, header, member, source_layout,
+        Role, dependency, dependency_allowed, header, member, metadata_members,
+        source_layout, workspace_lints,
     };
     use crate::fixtures::require;
 
@@ -535,5 +651,78 @@ mod tests {
             .is_err(),
             "direct versions bypass workspace inheritance",
         )
+    }
+
+    fn metadata_fixture(path: &str, target_kind: &str) -> JsonValue {
+        json!({
+            "workspace_members": ["member"],
+            "packages": [{
+                "id": "member",
+                "manifest_path": path,
+                "targets": [{"kind": [target_kind]}]
+            }]
+        })
+    }
+
+    #[test]
+    fn rejects_workspace_members_outside_the_direct_crates_layout() {
+        let root = Path::new("repo");
+        let valid = metadata_fixture("repo/crates/engine/Cargo.toml", "lib");
+        assert_eq!(
+            metadata_members(root, &valid),
+            Ok(BTreeSet::from([PathBuf::from("crates/engine/Cargo.toml")]))
+        );
+        for path in [
+            "other/crates/engine/Cargo.toml",
+            "repo/tools/example/Cargo.toml",
+            "repo/crates/engine/other/Cargo.toml",
+            "repo/crates/../Cargo.toml",
+        ] {
+            assert!(
+                metadata_members(root, &metadata_fixture(path, "lib")).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_separate_test_targets_and_incomplete_metadata() {
+        let root = Path::new("repo");
+        let integration =
+            metadata_fixture("repo/crates/engine/Cargo.toml", "test");
+        assert!(metadata_members(root, &integration).is_err());
+        let incomplete = json!({
+            "workspace_members": ["member"],
+            "packages": []
+        });
+        assert!(metadata_members(root, &incomplete).is_err());
+    }
+
+    #[test]
+    fn requires_absolute_workspace_safety_lints() -> Result<(), String> {
+        let source = include_str!("../../../Cargo.toml");
+        let workspace = |manifest: &str| {
+            let value = manifest
+                .parse::<toml::Table>()
+                .map_err(|error| error.to_string())?;
+            value
+                .get("workspace")
+                .and_then(Value::as_table)
+                .cloned()
+                .ok_or_else(|| String::from("missing fixture workspace"))
+        };
+        require(workspace_lints(&workspace(source)?).is_ok(), "root policy")?;
+        for (from, to) in [
+            ("unsafe_code = \"forbid\"", "unsafe_code = \"deny\""),
+            ("warnings = \"deny\"", "warnings = \"warn\""),
+            ("unfulfilled_lint_expectations = \"deny\"", ""),
+        ] {
+            let altered = source.replacen(from, to, 1);
+            require(altered != source, "fixture must change")?;
+            require(
+                workspace_lints(&workspace(&altered)?).is_err(),
+                "absolute lint policy cannot be weakened",
+            )?;
+        }
+        Ok(())
     }
 }

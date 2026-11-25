@@ -34,6 +34,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use serde_json::Value;
+
 use crate::todo::validate as validate_tasks;
 use crate::{boundaries, clones};
 
@@ -46,7 +48,7 @@ pub fn todo(root: &Path) -> Result<(), String> {
     validate_tasks(root)
 }
 
-fn manifest(root: &Path) -> Result<(), String> {
+fn manifest(root: &Path) -> Result<Value, String> {
     let source = fs::read_to_string(root.join("Cargo.toml"))
         .map_err(|error| error.to_string())?;
     let value = source
@@ -63,12 +65,9 @@ fn manifest(root: &Path) -> Result<(), String> {
     if !output.status.success() {
         return Err(String::from("Cargo metadata failed"));
     }
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+    let metadata: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| error.to_string())?;
-    if metadata.get("workspace_members").is_none() {
-        return Err(String::from("missing workspace members"));
-    }
-    Ok(())
+    Ok(metadata)
 }
 
 /// Validate workspace metadata and task records.
@@ -77,14 +76,14 @@ fn manifest(root: &Path) -> Result<(), String> {
 ///
 /// Returns diagnostics if a required check fails.
 pub fn validate(root: &Path) -> Result<(), String> {
-    manifest(root)?;
+    let metadata = manifest(root)?;
     if fs::read(root.join("LICENSE")).map_err(|error| error.to_string())?
         != fs::read(root.join("crates/engine/LICENSE"))
             .map_err(|error| error.to_string())?
     {
         return Err(String::from("engine licence differs from root licence"));
     }
-    boundaries::validate(root)?;
+    boundaries::validate(root, &metadata)?;
     clones::validate(root)?;
     todo(root)
 }
