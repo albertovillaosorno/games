@@ -2,7 +2,7 @@
 
 ## Current scope
 
-The engine has no third-party runtime dependencies. The native platform
+The engine uses SHA-2 for save integrity. The native platform
 adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport. No
 original game assets, original game code or candidate project source is
 incorporated or distributed by this repository. The development validator

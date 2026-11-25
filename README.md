@@ -74,8 +74,8 @@ tests and do not require an installed original game.
 The library also provides local-first multiplayer session rules, byte-bounded
 message/schema validation, archive-entry checks, integrity-checked save
 envelopes and constant-memory performance accounting. The native platform
-adapter provides mutually authenticated TLS 1.3 with bounded frames; real LAN
-verification and host-side identity enrolment remain pending. Archive
+adapter provides bounded mutual TLS 1.3 and explicit player enrolment.
+Physical LAN verification and credential provisioning remain pending. Archive
 extraction, sandboxing, graphics and playable titles remain open work.
 
 ## Catalogue

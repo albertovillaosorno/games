@@ -345,7 +345,7 @@ mod tests {
     pub(super) const TIMEOUT: Duration = Duration::from_secs(2);
 
     #[derive(Debug)]
-    struct TestCodec;
+    pub(super) struct TestCodec;
 
     impl MessageSchema for TestCodec {
         type Message = u8;

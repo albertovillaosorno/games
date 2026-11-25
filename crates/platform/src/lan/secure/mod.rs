@@ -29,6 +29,9 @@
 // - Defaults:
 //   - No anonymous peers, public root stores or session resumption.
 
+/// Host-side enrolment and session admission.
+pub mod host;
+
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -380,17 +383,17 @@ mod tests {
 
     const HOST: &str = "games.test";
 
-    type ConnectionPair =
+    pub(super) type ConnectionPair =
         (io::Result<SecureFrameStream>, io::Result<SecureFrameStream>);
 
-    struct Credentials {
-        client: ClientTls,
-        client_id: PeerFingerprint,
-        server: ServerTls,
-        server_id: PeerFingerprint,
+    pub(super) struct Credentials {
+        pub(super) client: ClientTls,
+        pub(super) client_id: PeerFingerprint,
+        pub(super) server: ServerTls,
+        pub(super) server_id: PeerFingerprint,
     }
 
-    fn authority() -> io::Result<CertifiedIssuer<'static, KeyPair>> {
+    pub(super) fn authority() -> io::Result<CertifiedIssuer<'static, KeyPair>> {
         let mut params = CertificateParams::default();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
@@ -406,7 +409,7 @@ mod tests {
         Ok(roots)
     }
 
-    fn credentials(
+    pub(super) fn credentials(
         host_ca: &CertifiedIssuer<'_, KeyPair>,
         client_ca: &CertifiedIssuer<'_, KeyPair>,
     ) -> io::Result<Credentials> {
@@ -446,7 +449,7 @@ mod tests {
         })
     }
 
-    fn pair(
+    pub(super) fn pair(
         listener: &SecureLanListener,
         settings: LanConfig,
         client: &ClientTls,

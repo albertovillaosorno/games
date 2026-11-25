@@ -50,3 +50,18 @@ Fresh validation passed in run 1795576645026554056-2660129.
 The tests provision temporary certificates; a real host must enrol trusted
 fingerprints and bind them to player slots before admitting any messages.
 No real multi-device LAN play or credential enrolment workflow is verified.
+
+The host adapter now composes the shared roster and TLS stream ownership.
+A locally configured, unique fingerprint-to-player mapping is bounded by
+session capacity. A CA-trusted but unenrolled peer cannot join; neither a
+duplicate connection nor a local controller can claim an enrolled identity.
+Transport loss reserves the slot, and only the same approved certificate
+can rejoin it. The host rejects mismatched frame limits and outbound
+connections, applies the title-specific schema before returning a message,
+and supports local controllers without any socket or account service.
+
+Physical multi-device LAN play, real credential provisioning and integration
+into a playable host remain open. The synchronous host adapter is intended
+for an I/O worker; a bounded pending-handshake scheduler is still needed.
+
+Fresh validation passed in run 1795576800190768628-2685436 (78 tests).
