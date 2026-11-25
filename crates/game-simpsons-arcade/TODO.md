@@ -132,6 +132,8 @@ with `enemy/approach` and `enemy/strike` records respectively. The
 first enemy approaches an active station, can be struck with Primary,
 and can damage grounded players. Jump evades a ground strike.
 The punch lasts 34 simulation ticks, dealing damage once at tick 14.
+A grounded player attack resolves its single hit at offset ten;
+this timing is observed for all four stations.
 The next approach tick re-evaluates whether a new punch can begin.
 A nonlethal light hit interrupts the current maneuver and prevents
 movement and action admission for 14 ticks (17 for Bart). Held

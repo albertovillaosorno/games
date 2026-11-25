@@ -1512,3 +1512,35 @@ the static approach sprite. All 600 movement and 60 combat host
 submissions met the 16.667 ms budget with the new catalogue; mean
 submission work was 63.304 and 49.270 microseconds respectively.
 Lifetime peak RSS was 146,796,544 bytes.
+
+Isolated single-primary controls against the first enemy establish
+the same attack-to-hit delay for all four characters. The Marge
+input at frame 2452 starts the attack object at 2456 and enemy
+defeat at 2466. Corresponding triples for Homer are 2320/2324/2334,
+Bart 2375/2379/2389 and Lisa 2343/2347/2357. Thus the prototype now
+resolves its ground strike once at offset ten, rather than five.
+A four-station fixed-step test checks the absence of earlier damage
+and the exact impact tick; the existing behind/depth miss tests
+also run through that tick. Aerial and special hit timing and exact
+range remain provisional.
+
+All four controls also show a one-hit first-enemy defeat, not a
+three-hit stagger. The common observed defeat pose changes occur at
+offsets 0, 7, 14, 21, 28, 34, 38, 44 and 48. The final pose blinks
+from offset 52 through 65, with disappearance at 66. The Marge
+control suggests 66 pixels of rightward knockback before the
+landing pose at offset 34. Ten pose crops, including the visible
+blink pose, passed exact scene verification and were retained in
+local canonical bundles only. The existing three-hit enemy health,
+stagger, and instant disappearance still require replacement by a
+separate defeat lifetime with bounded motion and rendering. The
+native continue test will need an independent undefeated enemy.
+Exact pivots, opposite-facing knockback and other enemy types
+remain unverified.
+
+Fresh workspace validation including native render and audio
+smoke passed in run 1795624636831166760-3975527. Adaptive native
+smoke passed with the 160-pose configuration. All 600 movement and
+60 combat host submissions met the 16.667 ms budget; mean
+submission work was 64.390 and 49.990 microseconds respectively.
+Lifetime peak RSS was 147,730,432 bytes.

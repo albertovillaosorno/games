@@ -34,7 +34,7 @@
 use super::{Facing, Maneuver, Point, Slot, StreetLayout};
 
 const ENEMY_HEALTH: u8 = 3;
-const PLAYER_STRIKE: u8 = 5;
+const PLAYER_STRIKE: u8 = 10;
 const ENEMY_STRIKE: u8 = 14;
 const ENEMY_DAMAGE: u8 = 3;
 /// Number of fixed-step ticks in the initial enemy punch.
@@ -249,10 +249,14 @@ mod tests {
     };
 
     fn pulse(control: Control) -> [LogicalAction<Action>; 2] {
-        let action = Action {
-            control,
-            player: Player::Marge,
-        };
+        pulse_for(Player::Marge, control)
+    }
+
+    fn pulse_for(
+        player: Player,
+        control: Control,
+    ) -> [LogicalAction<Action>; 2] {
+        let action = Action { control, player };
         [LogicalAction { action, down: true }, LogicalAction {
             action,
             down: false,
@@ -312,6 +316,38 @@ mod tests {
     }
 
     #[test]
+    fn all_station_ground_strikes_resolve_at_observed_offset() {
+        for player in Player::ALL {
+            let layout = StreetLayout::DOWNTOWN;
+            let Some(position) = layout.spawn.get(player.index()).copied()
+            else {
+                continue;
+            };
+            let result = Cabinet::with_encounter(layout, Point {
+                x: position.x.saturating_add(18),
+                y: position.y,
+            });
+            assert!(result.is_ok());
+            let Ok(mut cabinet) = result else {
+                return;
+            };
+            cabinet.input_step(2, &pulse_for(player, Control::Start));
+            cabinet.input_step(3, &pulse_for(player, Control::Primary));
+            for tick in 0..PLAYER_STRIKE {
+                assert_eq!(
+                    cabinet.enemy().map(|enemy| enemy.health),
+                    Some(ENEMY_HEALTH)
+                );
+                cabinet.input_step(u64::from(tick).saturating_add(4), &[]);
+            }
+            assert_eq!(
+                cabinet.enemy().map(|enemy| enemy.health),
+                Some(ENEMY_HEALTH.saturating_sub(1))
+            );
+        }
+    }
+
+    #[test]
     fn moving_ground_attack_retains_one_strike() {
         let result = playing(Point { x: 132, y: 190 });
         assert!(result.is_ok());
@@ -363,7 +399,7 @@ mod tests {
                 return;
             };
             cabinet.input_step(3, &pulse(Control::Primary));
-            for tick in 4..9 {
+            for tick in 4..14 {
                 cabinet.input_step(tick, &[]);
             }
             assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(3));
