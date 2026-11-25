@@ -234,3 +234,10 @@ connect. Final certificate admission also checks the remaining time.
 Loopback regressions verify that expired outbound attempts do not
 open sockets, successful TCP establishment preserves its deadline,
 and both TLS roles reject publication after negotiation expiry.
+
+The worker's loopback regression composes two independently enrolled TLS
+clients with a local controller. One client's incomplete frame does not
+prevent the other from delivering a validated action; the first can then
+complete its own frame. Disconnect and same-certificate rejoin preserve
+that player's identity without interrupting the other client. This is
+caller-driven scheduling evidence, not physical LAN or gameplay parity.

@@ -413,6 +413,7 @@ fn serve<Codec>(
 #[cfg(test)]
 mod tests {
     use std::net::TcpStream;
+    use std::num::NonZeroU8;
     use std::thread;
 
     use games::network::SessionError;
@@ -421,8 +422,12 @@ mod tests {
         LOOPBACK, TIMEOUT, TestCodec, config, poll_accept, require,
         session_config,
     };
-    use super::super::tests::{Credentials, authority, credentials};
-    use super::super::{SecureFrameStream, SecureLanListener, ServerName};
+    use super::super::tests::{
+        authority, client_credentials, credentials, send_unframed,
+    };
+    use super::super::{
+        ClientTls, LanConfig, SecureFrameStream, SecureLanListener, ServerName,
+    };
     use super::*;
 
     #[derive(Debug)]
@@ -469,14 +474,15 @@ mod tests {
     fn authenticate<Message>(
         worker: &HostWorker<Message>,
         listener: &SecureLanListener,
-        keys: &Credentials,
-        id: u64,
+        client: &ClientTls,
+        request: (u64, u64),
     ) -> io::Result<SecureFrameStream>
     where
         Message: Send + 'static,
     {
         let address = listener.local_addr()?;
         let settings = config()?;
+        let (id, peer) = request;
         let server_name =
             ServerName::try_from("games.test").map_err(io::Error::other)?;
         thread::scope(|scope| {
@@ -484,16 +490,18 @@ mod tests {
                 SecureFrameStream::connect(
                     address,
                     settings,
-                    &keys.client,
+                    client,
                     server_name,
                 )
             });
             let pending = poll_accept(|| listener.try_accept())?;
             submit(worker, id, HostOperation::Authenticate(Box::new(pending)))?;
-            require(
-                matches!(completion(worker, id)?, Ok(HostOutcome::Admitted(2))),
-                "verified identity admitted by worker",
-            )?;
+            let admitted = completion(worker, id)?;
+            let valid = match admitted {
+                Ok(HostOutcome::Admitted(actual)) => actual == peer,
+                _ => false,
+            };
+            require(valid, "verified identity admitted by worker")?;
             remote
                 .join()
                 .map_err(|_error| io::Error::other("client panicked"))?
@@ -519,6 +527,34 @@ mod tests {
                 result => Err(io::Error::other(format!("{result:?}"))),
             }
         })
+    }
+
+    fn poll_message(
+        worker: &HostWorker<u8>,
+        id: u64,
+        peer: u64,
+    ) -> io::Result<HostResult<u8>> {
+        poll_accept(|| {
+            submit(worker, id, HostOperation::PollReceive(peer))?;
+            Ok(match completion(worker, id)? {
+                Ok(HostOutcome::Pending) => None,
+                result => Some(result),
+            })
+        })
+    }
+
+    fn expect_message(
+        worker: &HostWorker<u8>,
+        request: (u64, u64),
+        expected: u8,
+    ) -> io::Result<()> {
+        let (id, peer) = request;
+        let result = poll_message(worker, id, peer)?;
+        require(
+            matches!(result, Ok(HostOutcome::Message { peer: actual, value })
+                if actual == peer && value == expected),
+            "independent authenticated input delivered",
+        )
     }
 
     #[test]
@@ -568,7 +604,8 @@ mod tests {
             HostSession::new(session_config(true), &[(keys.client_id, 2)])
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
         let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
-        let mut client = authenticate(&worker, &listener, &keys, 1)?;
+        let mut client =
+            authenticate(&worker, &listener, &keys.client, (1, 2))?;
         client.send(b"M\x05")?;
         submit(&worker, 2, HostOperation::Receive(2))?;
         require(
@@ -603,7 +640,7 @@ mod tests {
             matches!(completion(&worker, 5)?, Ok(HostOutcome::Applied)),
             "reserve disconnected slot",
         )?;
-        drop(authenticate(&worker, &listener, &keys, 6)?);
+        drop(authenticate(&worker, &listener, &keys.client, (6, 2))?);
         worker.shutdown()
     }
 
@@ -623,7 +660,8 @@ mod tests {
             GatedCodec { entered, release },
             NonZeroUsize::MIN,
         )?;
-        let mut client = authenticate(&worker, &listener, &keys, 1)?;
+        let mut client =
+            authenticate(&worker, &listener, &keys.client, (1, 2))?;
         client.send(b"M\x03")?;
         submit(&worker, 2, HostOperation::Receive(2))?;
         decoding.recv_timeout(TIMEOUT).map_err(io::Error::other)?;
@@ -723,7 +761,8 @@ mod tests {
             HostSession::new(session_config(true), &[(keys.client_id, 2)])
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
         let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
-        let mut client = authenticate(&worker, &listener, &keys, 1)?;
+        let mut client =
+            authenticate(&worker, &listener, &keys.client, (1, 2))?;
         submit(&worker, 2, HostOperation::QueueSend {
             peer: 2,
             bytes: b"message".to_vec(),
@@ -771,6 +810,56 @@ mod tests {
     }
 
     #[test]
+    fn independent_lan_peers_progress_and_rejoin() -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let (other, other_id) =
+            client_credentials(&issuer, &issuer, keys.server_id)?;
+        let mut limits = session_config(true);
+        limits.max_players =
+            NonZeroU8::new(3).ok_or(ErrorKind::InvalidInput)?;
+        let settings = LanConfig::new(limits, TIMEOUT)?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server.clone())?;
+        let session =
+            HostSession::new(limits, &[(keys.client_id, 2), (other_id, 3)])
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
+        let mut first = authenticate(&worker, &listener, &keys.client, (1, 2))?;
+        let mut second = authenticate(&worker, &listener, &other, (2, 3))?;
+        send_unframed(&mut first, b"\0\0\0\x02M")?;
+        submit(&worker, 3, HostOperation::PollReceive(2))?;
+        require(
+            matches!(completion(&worker, 3)?, Ok(HostOutcome::Pending)),
+            "first LAN peer cannot finish its incomplete frame",
+        )?;
+        submit(&worker, 4, HostOperation::JoinLocal(1))?;
+        require(
+            matches!(completion(&worker, 4)?, Ok(HostOutcome::Applied)),
+            "local controller joins despite incomplete remote input",
+        )?;
+        second.send(b"M\x08")?;
+        expect_message(&worker, (5, 3), 8)?;
+        send_unframed(&mut first, b"\x05")?;
+        expect_message(&worker, (6, 2), 5)?;
+        drop(first);
+        require(
+            matches!(
+                poll_message(&worker, 7, 2)?,
+                Err(OperationError::Host(HostError::Transport(_)))
+            ),
+            "lost peer reserves its authenticated slot",
+        )?;
+        let mut rejoined =
+            authenticate(&worker, &listener, &keys.client, (8, 2))?;
+        rejoined.send(b"M\x04")?;
+        second.send(b"M\x09")?;
+        expect_message(&worker, (9, 2), 4)?;
+        expect_message(&worker, (10, 3), 9)?;
+        worker.shutdown()
+    }
+
+    #[test]
     fn idle_peer_poll_allows_other_commands_and_future_messages()
     -> io::Result<()> {
         let issuer = authority()?;
@@ -781,7 +870,8 @@ mod tests {
             HostSession::new(session_config(true), &[(keys.client_id, 2)])
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
         let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
-        let mut client = authenticate(&worker, &listener, &keys, 1)?;
+        let mut client =
+            authenticate(&worker, &listener, &keys.client, (1, 2))?;
         submit(&worker, 2, HostOperation::PollReceive(2))?;
         require(
             matches!(completion(&worker, 2)?, Ok(HostOutcome::Pending)),

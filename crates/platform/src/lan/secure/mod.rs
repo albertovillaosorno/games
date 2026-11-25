@@ -799,7 +799,7 @@ mod tests {
         })
     }
 
-    fn send_unframed(
+    pub(super) fn send_unframed(
         client: &mut SecureFrameStream,
         bytes: &[u8],
     ) -> io::Result<()> {
