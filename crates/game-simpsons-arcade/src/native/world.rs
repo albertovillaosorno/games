@@ -23,7 +23,7 @@
 // - Summary:
 //   - Extend the opening street only by verified additional columns.
 // - Description:
-//   - Check the base interior exactly and retain the black margins.
+//   - Check the base interior exactly; retain margins only at base width.
 // - Usage:
 //   - Select the optional pinned strip in the local launch catalogue.
 // - Defaults:
@@ -63,6 +63,7 @@ pub(super) struct WorldArt {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct View {
+    // World coordinate mapped to the left edge of the rendered frame.
     pub(super) origin: i16,
     pub(super) width: u32,
 }
@@ -131,6 +132,9 @@ impl WorldArt {
             draws.push(original.draw(original.rect, false));
             return Ok(());
         }
+        if width > BASE_WIDTH {
+            return self.queue_wide(view, draws);
+        }
         if width < BASE_WIDTH {
             return Err(RenderError::InvalidDimensions);
         }
@@ -170,6 +174,34 @@ impl WorldArt {
                 x: i32::try_from(SIDE).map_err(failure)?,
                 y: i32::try_from(TOP).map_err(failure)?,
                 ..world.rect
+            },
+            false,
+        ));
+        Ok(())
+    }
+
+    fn queue_wide(
+        self,
+        view: View,
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        let columns = dimension(view.width)?;
+        let side = i32::try_from(SIDE).map_err(failure)?;
+        let strip = Art {
+            rect: SpriteRect {
+                width: columns,
+                x: i32::from(view.origin)
+                    .checked_sub(side)
+                    .ok_or(RenderError::InvalidDimensions)?,
+                ..self.art.rect
+            },
+            ..self.art
+        };
+        draws.push(strip.draw(
+            SpriteRect {
+                x: 0,
+                y: i32::try_from(TOP).map_err(failure)?,
+                ..strip.rect
             },
             false,
         ));
@@ -376,10 +408,7 @@ fn verify_extension(
     strip: &[u8],
 ) -> Result<(), RenderError> {
     let width = layout.width().get();
-    let extra = width
-        .checked_sub(BASE_WIDTH)
-        .ok_or(RenderError::InvalidDimensions)?;
-    if width > strip_width.saturating_add(SIDE * 2)
+    if !(BASE_WIDTH..=viewport_width(strip_width)).contains(&width)
         || actual.len() != layout.bytes()
     {
         return Err(RenderError::InvalidLength);
@@ -387,34 +416,46 @@ fn verify_extension(
     let stride = usize::try_from(width.saturating_mul(4)).map_err(failure)?;
     let strip_stride =
         usize::try_from(strip_width.saturating_mul(4)).map_err(failure)?;
-    let start = usize::try_from((BASE_WIDTH - SIDE) * 4).map_err(failure)?;
-    let end = usize::try_from(width.saturating_sub(SIDE).saturating_mul(4))
-        .map_err(failure)?;
-    let extra_start =
-        usize::try_from((BASE_WIDTH - SIDE * 2) * 4).map_err(failure)?;
-    let extra_end = extra_start.saturating_add(
-        usize::try_from(extra.saturating_mul(4)).map_err(failure)?,
-    );
     let top = usize::try_from(TOP).map_err(failure)?;
     let height = usize::try_from(HEIGHT).map_err(failure)?;
     if strip.len() != strip_stride.saturating_mul(height) {
         return Err(RenderError::InvalidLength);
     }
+    if width > BASE_WIDTH {
+        return verify_wide_extension(actual, stride, strip, strip_stride);
+    }
+    let end = usize::try_from((BASE_WIDTH - SIDE) * 4).map_err(failure)?;
+    for frame in actual.chunks_exact(stride).skip(top).take(height) {
+        let margin = frame.get(end..).ok_or(RenderError::InvalidLength)?;
+        if margin
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| *pixel != [0, 0, 0, 255])
+        {
+            return Err(failure("extended native world pixels differ"));
+        }
+    }
+    Ok(())
+}
+
+fn verify_wide_extension(
+    actual: &[u8],
+    stride: usize,
+    strip: &[u8],
+    strip_stride: usize,
+) -> Result<(), RenderError> {
+    let start = usize::try_from(BASE_WIDTH * 4).map_err(failure)?;
+    let top = usize::try_from(TOP).map_err(failure)?;
     for (frame, world) in actual
         .chunks_exact(stride)
         .skip(top)
-        .take(height)
         .zip(strip.chunks_exact(strip_stride))
     {
-        let margin = frame.get(end..).ok_or(RenderError::InvalidLength)?;
-        if frame.get(start..end) != world.get(extra_start..extra_end)
-            || margin
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|pixel| *pixel != [0, 0, 0, 255])
-        {
-            return Err(failure("extended native world pixels differ"));
+        if frame.get(start..stride) != world.get(start..stride) {
+            return Err(failure(
+                "wide scene did not display the actual strip edge",
+            ));
         }
     }
     Ok(())
@@ -430,8 +471,18 @@ fn verify_camera_rows(
         .map_err(failure)?;
     let strip_stride =
         usize::try_from(strip_width.saturating_mul(4)).map_err(failure)?;
-    let margin = usize::try_from(SIDE * 4).map_err(failure)?;
-    let start = usize::try_from(origin).map_err(failure)?.saturating_mul(4);
+    let wide = layout.width().get() > BASE_WIDTH;
+    let (margin, source) = if wide {
+        (
+            0,
+            origin
+                .checked_sub(i16::try_from(SIDE).map_err(failure)?)
+                .ok_or(RenderError::InvalidDimensions)?,
+        )
+    } else {
+        (usize::try_from(SIDE * 4).map_err(failure)?, origin)
+    };
+    let start = usize::try_from(source).map_err(failure)?.saturating_mul(4);
     let end =
         start.saturating_add(stride.saturating_sub(margin.saturating_mul(2)));
     let top = usize::try_from(TOP).map_err(failure)?;
@@ -451,7 +502,7 @@ fn verify_camera_rows(
 }
 
 fn viewport_width(strip_width: u32) -> u32 {
-    strip_width.saturating_add(SIDE * 2).min(MAX_VIEW_WIDTH)
+    strip_width.clamp(BASE_WIDTH, MAX_VIEW_WIDTH)
 }
 
 fn world_view(
@@ -464,9 +515,16 @@ fn world_view(
     {
         return Err(RenderError::InvalidDimensions);
     }
-    let remaining = strip_width.saturating_add(SIDE * 2).saturating_sub(width);
+    let (available, inset) = if width > BASE_WIDTH {
+        (strip_width, i16::try_from(SIDE).map_err(failure)?)
+    } else {
+        (strip_width.saturating_add(SIDE * 2), 0)
+    };
+    let remaining = available.saturating_sub(width);
     Ok(View {
-        origin: camera.min(i16::try_from(remaining).map_err(failure)?),
+        origin: camera
+            .min(i16::try_from(remaining).map_err(failure)?)
+            .saturating_add(inset),
         width,
     })
 }
@@ -478,21 +536,43 @@ mod tests {
     #[test]
     fn long_strip_keeps_the_viewport_bounded() {
         assert_eq!(viewport_width(732), 512);
-        assert_eq!(viewport_width(442), 474);
+        assert_eq!(viewport_width(442), 442);
+        assert_eq!(viewport_width(300), BASE_WIDTH);
         assert_eq!(
             world_view(732, 320, 444).map(|view| view.origin).ok(),
             Some(444)
         );
         assert_eq!(
             world_view(732, 512, 444).map(|view| view.origin).ok(),
-            Some(252)
+            Some(236)
         );
         assert_eq!(
             world_view(732, 512, 0).map(|view| view.origin).ok(),
-            Some(0)
+            Some(16)
         );
         assert!(world_view(732, 513, 444).is_err());
         assert!(world_view(732, 320, -1).is_err());
+    }
+
+    #[test]
+    fn wide_projection_uses_real_columns_at_each_edge()
+    -> Result<(), RenderError> {
+        let view = world_view(442, 400, 0)?;
+        if view.project(Point { x: 16, y: 190 }) != (Point { x: 0, y: 190 })
+            || view.project(Point { x: 415, y: 190 })
+                != (Point { x: 399, y: 190 })
+        {
+            return Err(failure("wide initial projection"));
+        }
+        let end = world_view(442, 400, 154)?;
+        if end.project(Point { x: 457, y: 190 }) != (Point { x: 399, y: 190 }) {
+            return Err(failure("wide end projection"));
+        }
+        let base = world_view(442, 320, 0)?;
+        if base.project(Point { x: 16, y: 190 }) != (Point { x: 16, y: 190 }) {
+            return Err(failure("base projection"));
+        }
+        Ok(())
     }
 
     #[test]
