@@ -951,6 +951,10 @@ mod tests {
                 axis: Axis::LeftX,
                 value: i16::MIN,
             },
+            Event::ControllerDeviceRemapped {
+                timestamp: 0,
+                which: u32::MAX,
+            },
         ] {
             require(
                 input.translate(&unknown).is_none(),

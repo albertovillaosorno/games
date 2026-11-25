@@ -74,6 +74,11 @@ pub enum InputEvent {
         /// Press, motion or release of the contact.
         phase: ContactPhase,
     },
+    /// A native controller mapping changed while its device stayed attached.
+    ControllerRemapped {
+        /// Stable identifier retaining its title-specific assignments.
+        device: u64,
+    },
     /// A controller disconnected and must release all held controls.
     Detached {
         /// Identifier of the disconnected controller.
@@ -331,6 +336,9 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                 self.transition(Source::Button(device, code), mapping, down)
             },
             InputEvent::Contact { id, phase } => self.contact(id, phase),
+            InputEvent::ControllerRemapped { device } => {
+                self.release_controller(device)
+            },
             InputEvent::Detached { device } => self.detach(device),
             InputEvent::FocusLost => self.focus_lost(),
             InputEvent::Key { code, down } => {
@@ -612,6 +620,53 @@ mod tests {
             (axis_event(2, 10), &[change("shared", true)]),
             (axis_event(2, -10), &[change("shared", false)]),
             (axis_event(2, -20), &[]),
+        ])
+    }
+
+    #[test]
+    fn native_remap_releases_only_its_sources_and_preserves_assignment()
+    -> Result<(), &'static str> {
+        let mut map = InputMapping::new();
+        map.bind_key(42, "move");
+        map.bind_button(0, "shared");
+        let mut router = InputRouter::new(map);
+        let axis = AxisBinding::new(None, Some("move"), 10, 5)
+            .ok_or("invalid assigned axis")?;
+        verify_steps(&mut router, &[
+            (InputEvent::Attached { device: 7 }, &[]),
+            (InputEvent::Attached { device: 8 }, &[]),
+        ])?;
+        if router.set_controller_controls(
+            7,
+            BTreeMap::from([(0, "attack")]),
+            BTreeMap::from([(u16::MAX, axis)]),
+        ) != Some(Vec::new())
+        {
+            return Err("controller assignment failed");
+        }
+        let button =
+            |device, down| InputEvent::Button { device, code: 0, down };
+        let key = |down| InputEvent::Key { code: 42, down };
+        let remap = |device| InputEvent::ControllerRemapped { device };
+        verify_steps(&mut router, &[
+            (axis_event(7, 10), &[change("move", true)]),
+            (key(true), &[]),
+            (button(7, true), &[change("attack", true)]),
+            (button(8, true), &[change("shared", true)]),
+            (remap(9), &[]),
+            (remap(7), &[change("attack", false)]),
+            (remap(7), &[]),
+            (button(7, false), &[]),
+            (key(false), &[change("move", false)]),
+            (button(8, false), &[change("shared", false)]),
+            (button(7, true), &[change("attack", true)]),
+            (axis_event(7, 10), &[change("move", true)]),
+            (InputEvent::Detached { device: 7 }, &[
+                change("move", false),
+                change("attack", false),
+            ]),
+            (remap(7), &[]),
+            (button(7, true), &[]),
         ])
     }
 

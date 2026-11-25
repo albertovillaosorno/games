@@ -623,3 +623,12 @@ exercised a synthetic stale addition and unknown removal without
 creating a phantom device. Fresh Xvfb render and dummy-audio validation
 passed in run 1795611954770808357-1249780. Physical controller hot-plug
 and events arriving during discovery remain unverified.
+
+Native controller mapping-change notifications now release held buttons
+and axes for that controller without detaching it or losing its title seat
+assignment. SDL's mapping refresh replaces bindings and resets its last
+axis matches without a complete release sequence. The shared router retains
+other physical sources of the same logical hold and accepts subsequent input
+through the assigned profile. Synthetic tests exercise unknown and repeated
+notifications, independent controllers, aggregated keyboard holds and later
+input on the same device. Physical controller remapping remains unverified.

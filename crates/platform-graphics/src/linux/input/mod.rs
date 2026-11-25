@@ -212,7 +212,7 @@ impl NativeInput {
     ///
     /// Add notifications are discovery hints, not stable device identities.
     /// Drain queued removals before enumerating current joystick indices.
-    /// Button and removal events use admitted stable instance identifiers.
+    /// Button, remap and removal events use admitted instance identifiers.
     /// Only devices within the explicit capacity may be opened.
     #[must_use]
     pub fn translate(&mut self, event: &Event) -> Option<HostEvent> {
@@ -233,7 +233,9 @@ impl NativeInput {
         }
         let routed = route(event, self.window);
         if let Some(HostEvent::Input(
-            InputEvent::Axis { device, .. } | InputEvent::Button { device, .. },
+            InputEvent::Axis { device, .. }
+            | InputEvent::Button { device, .. }
+            | InputEvent::ControllerRemapped { device },
         )) = routed
             && !self.controllers.contains_key(&device)
         {
@@ -343,6 +345,15 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
         return Some(HostEvent::Input(InputEvent::Key {
             code: key_code(code),
             down: false,
+        }));
+    }
+    route_controller(event)
+}
+
+fn route_controller(event: &Event) -> Option<HostEvent> {
+    if let Event::ControllerDeviceRemapped { which, .. } = *event {
+        return Some(HostEvent::Input(InputEvent::ControllerRemapped {
+            device: u64::from(which),
         }));
     }
     if let Event::ControllerAxisMotion { which, axis, value, .. } = *event {
@@ -604,6 +615,20 @@ mod tests {
                 device: u64::from(u32::MAX),
                 code: button_code(Button::DPadLeft),
                 down: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn native_remap_identifies_the_existing_controller() {
+        let remapped = Event::ControllerDeviceRemapped {
+            timestamp: 0,
+            which: u32::MAX,
+        };
+        assert_eq!(
+            route(&remapped, 1),
+            Some(HostEvent::Input(InputEvent::ControllerRemapped {
+                device: u64::from(u32::MAX),
             }))
         );
     }
