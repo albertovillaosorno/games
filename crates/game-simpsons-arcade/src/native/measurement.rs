@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Opt-in native gameplay submission and local input age measurements.
+//   - Opt-in gameplay submission and local and remote input age measurements.
 // - Must-Not:
 //   - Change tick assignment, rendering quality or gameplay.
 // - Allows:
@@ -21,9 +21,9 @@
 // - Merge-When:
 //   - Another native title duplicates this measurement policy.
 // - Summary:
-//   - Measures applied local input age, not physical display latency.
+//   - Measures executed input age, not physical display or network latency.
 // - Description:
-//   - Tracks one oldest event timestamp per pending nonempty input tick.
+//   - Tracks oldest local and remote timestamps per pending input tick.
 // - Usage:
 //   - Enable explicitly and observe successfully submitted gameplay frames.
 // - Defaults:
@@ -100,6 +100,8 @@ impl Segment {
                 "submission intervals {} samples; mean {:?}; ",
                 "max {:?}; p95 {:?}; budget {:?}; whole FPS {:?}; ",
                 "oldest applied local input age {} samples; mean {:?}; ",
+                "p95 {:?}; ",
+                "oldest applied remote decode age {} samples; mean {:?}; ",
                 "p95 {:?}; sampled RSS peak {:?} bytes"
             ),
             profile.width,
@@ -121,23 +123,33 @@ impl Segment {
             report.input_latency.samples(),
             report.input_latency.mean(),
             self.collector.input_percentile(95),
+            intervals.input_latency.samples(),
+            intervals.input_latency.mean(),
+            cadence.input_percentile(95),
             report.peak_resident_bytes,
         )
         .map_err(failure)
     }
 }
 
-/// Retains bounded input metadata only for successfully admitted actions.
-#[derive(Default)]
-pub(super) struct LiveMeasurement {
-    applied: Option<Duration>,
-    pending: BTreeMap<u64, Duration>,
-    segment: Option<Segment>,
+// Retain at most one timestamp per successfully admitted fixed tick.
+struct InputLedger<Timestamp> {
+    applied: Option<Timestamp>,
+    pending: BTreeMap<u64, Timestamp>,
 }
 
-impl LiveMeasurement {
+impl<Timestamp> Default for InputLedger<Timestamp> {
+    fn default() -> Self {
+        Self {
+            applied: None,
+            pending: BTreeMap::new(),
+        }
+    }
+}
+
+impl<Timestamp: Copy + Ord> InputLedger<Timestamp> {
     /// Keep the oldest observed timestamp per nonempty admitted batch.
-    pub(super) fn admit(&mut self, tick: u64, elapsed: Duration) {
+    fn admit(&mut self, tick: u64, elapsed: Timestamp) {
         let _stored = self
             .pending
             .entry(tick)
@@ -146,7 +158,7 @@ impl LiveMeasurement {
     }
 
     /// Retain the oldest applied event until a gameplay frame is submitted.
-    pub(super) fn advance(&mut self, next_tick: u64) {
+    fn advance(&mut self, next_tick: u64) {
         while self
             .pending
             .first_key_value()
@@ -159,12 +171,36 @@ impl LiveMeasurement {
             }
         }
     }
+}
+
+/// Retains bounded input metadata only for successfully admitted actions.
+#[derive(Default)]
+pub(super) struct LiveMeasurement {
+    local: InputLedger<Duration>,
+    remote: InputLedger<Instant>,
+    segment: Option<Segment>,
+}
+
+impl LiveMeasurement {
+    pub(super) fn admit(&mut self, tick: u64, elapsed: Duration) {
+        self.local.admit(tick, elapsed);
+    }
+
+    pub(super) fn admit_remote(&mut self, tick: u64, completed_at: Instant) {
+        self.remote.admit(tick, completed_at);
+    }
+
+    pub(super) fn advance(&mut self, next_tick: u64) {
+        self.local.advance(next_tick);
+        self.remote.advance(next_tick);
+    }
 
     pub(super) fn finish(&mut self) -> Result<(), RenderError> {
         if let Some(segment) = self.segment.take() {
             segment.report()?;
         }
-        self.applied = None;
+        self.local.applied = None;
+        self.remote.applied = None;
         Ok(())
     }
 
@@ -180,20 +216,17 @@ impl LiveMeasurement {
             width: sample.layout.design.width.get(),
         };
         let input_latency = self
+            .local
             .applied
             .take()
             .and_then(|received| sample.elapsed.checked_sub(received));
+        let remote_received = self.remote.applied.take();
         if self.segment.as_ref().is_some_and(|segment| {
             segment.layout != sample.layout || segment.display != sample.display
         }) {
             self.finish()?;
         }
-        if let Some(segment) = &mut self.segment {
-            segment
-                .cadence
-                .observe_frame(sample.completed, None, None)
-                .map_err(failure)?;
-        }
+        let first = self.segment.is_none();
         let segment = self.segment.get_or_insert_with(|| {
             Segment::new(
                 profile,
@@ -202,6 +235,19 @@ impl LiveMeasurement {
                 sample.completed,
             )
         });
+        if first {
+            if let Some(received) = remote_received {
+                segment
+                    .cadence
+                    .observe_input(received, sample.completed)
+                    .map_err(failure)?;
+            }
+        } else {
+            segment
+                .cadence
+                .observe_frame(sample.completed, remote_received, None)
+                .map_err(failure)?;
+        }
         let resident_bytes = segment
             .collector
             .report()
@@ -240,12 +286,12 @@ mod tests {
         measurement.admit(2, early);
         measurement.admit(4, later);
         measurement.advance(2);
-        assert_eq!(measurement.applied, None);
+        assert_eq!(measurement.local.applied, None);
         measurement.advance(3);
-        assert_eq!(measurement.applied, Some(early));
+        assert_eq!(measurement.local.applied, Some(early));
         measurement.advance(5);
-        assert_eq!(measurement.applied, Some(early));
-        assert_eq!(measurement.pending.len(), 0);
+        assert_eq!(measurement.local.applied, Some(early));
+        assert_eq!(measurement.local.pending.len(), 0);
     }
 
     #[test]
@@ -331,9 +377,87 @@ mod tests {
         measurement.admit(3, next);
         measurement.advance(2);
         assert_eq!(measurement.finish(), Ok(()));
-        assert_eq!(measurement.applied, None);
+        assert_eq!(measurement.local.applied, None);
         measurement.advance(4);
-        assert_eq!(measurement.applied, Some(next));
+        assert_eq!(measurement.local.applied, Some(next));
+    }
+
+    #[test]
+    fn remote_and_local_ages_are_independent_on_first_submission()
+    -> Result<(), RenderError> {
+        let mut measurement = LiveMeasurement::default();
+        let design = Dimensions::new(dimension(320)?, dimension(224)?);
+        let completed = Instant::now();
+        let decoded = completed
+            .checked_sub(Duration::from_millis(7))
+            .ok_or(RenderError::InvalidSprite)?;
+        let sample = FrameSample {
+            completed,
+            display: DisplaySettings::default(),
+            elapsed: Duration::from_millis(30),
+            layout: PresentationMode::AspectFit.layout(design, design),
+            work: Duration::from_millis(3),
+        };
+        measurement.admit(1, Duration::from_millis(20));
+        measurement.admit_remote(1, completed);
+        measurement.admit_remote(1, decoded);
+        measurement.advance(2);
+        measurement.observe(sample)?;
+        let segment = measurement
+            .segment
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?;
+        let remote = segment.cadence.collector().report();
+        if remote.frame_time.samples() != 0
+            || remote.input_latency.samples() != 1
+            || remote.input_latency.mean() != Some(Duration::from_millis(7))
+            || segment.collector.report().input_latency.mean()
+                != Some(Duration::from_millis(10))
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        measurement.observe(sample)?;
+        let following = measurement
+            .segment
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?;
+        let following_remote = following.cadence.collector().report();
+        if following_remote.frame_time.samples() != 1
+            || following_remote.input_latency.samples() != 1
+            || following.collector.report().input_latency.samples() != 1
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remote_age_survives_pending_ticks_but_not_suspension()
+    -> Result<(), RenderError> {
+        let mut measurement = LiveMeasurement::default();
+        let early = Instant::now();
+        let later = early
+            .checked_add(Duration::from_millis(1))
+            .ok_or(RenderError::InvalidSprite)?;
+        measurement.admit_remote(1, early);
+        measurement.admit_remote(3, later);
+        measurement.advance(1);
+        if measurement.remote.applied.is_some() {
+            return Err(RenderError::InvalidSprite);
+        }
+        measurement.advance(2);
+        if measurement.remote.applied != Some(early) {
+            return Err(RenderError::InvalidSprite);
+        }
+        measurement.finish()?;
+        if measurement.remote.applied.is_some() {
+            return Err(RenderError::InvalidSprite);
+        }
+        measurement.advance(4);
+        if measurement.remote.applied != Some(later) {
+            return Err(RenderError::InvalidSprite);
+        }
+        Ok(())
     }
 
     #[test]

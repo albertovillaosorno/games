@@ -378,3 +378,16 @@ samples averaging 11.167 ms and sampled peak RSS of 119,402,496 bytes.
 Before/after captures differed by 298,611 pixels. These rates describe
 host submissions under software rendering, not physical display refresh
 or measured GPU execution.
+
+Visible `--measure` sessions additionally report the oldest remote control
+age from authenticated host-worker decode completion through its executed
+fixed tick and successful gameplay submission. It is separate from the
+SDL-clock local input age, excludes lifecycle messages and heartbeats,
+and retains the original decode time if fixed-queue admission is delayed.
+Both ledgers keep at most one oldest timestamp per admitted tick and
+clear applied observations when gameplay is suspended. A segment's first
+frame can contribute remote age without a fabricated cadence interval;
+subsequent frames use the existing cadence meter's input distribution.
+Inline regressions verify independent local and remote ages, absence of
+repeated samples, pending-tick retention and suspension. These measures
+exclude client-side input, pre-decode network transit and scanout.

@@ -112,6 +112,23 @@ impl FrameMeter {
         Ok(())
     }
 
+    /// Record applied input age without fabricating a frame interval.
+    ///
+    /// Useful when the first successful presentation starts a new segment.
+    /// The preceding presentation timestamp remains unchanged.
+    ///
+    /// # Errors
+    /// Rejects reversed timestamps or aggregate overflow.
+    pub fn observe_input(
+        &mut self,
+        received: Instant,
+        completed: Instant,
+    ) -> Result<(), MeasurementError> {
+        self.collector
+            .observe_input(elapsed(received, completed)?)?;
+        Ok(())
+    }
+
     /// Record the actual distribution artifact size using file metadata.
     ///
     /// # Errors
@@ -255,6 +272,32 @@ mod tests {
         check(report.peak_resident_bytes, Some(1024))?;
         check(meter.collector().frames_per_second(), Some(50))?;
         Ok(())
+    }
+
+    #[test]
+    fn first_input_age_does_not_create_an_interval() -> io::Result<()> {
+        let started = Instant::now();
+        let completed = later(started, 15)?;
+        let mut meter = meter(completed);
+        check(meter.observe_input(started, completed), Ok(()))?;
+        check(
+            meter.observe_input(completed, started),
+            Err(MeasurementError::TimestampOrder),
+        )?;
+        check(meter.collector().report().frame_time.samples(), 0)?;
+        check(
+            meter.collector().report().input_latency.mean(),
+            Some(Duration::from_millis(15)),
+        )?;
+        check(
+            meter.observe_frame(later(completed, 5)?, None, None),
+            Ok(()),
+        )?;
+        check(
+            meter.collector().report().frame_time.mean(),
+            Some(Duration::from_millis(5)),
+        )?;
+        check(meter.collector().report().input_latency.samples(), 1)
     }
 
     #[test]

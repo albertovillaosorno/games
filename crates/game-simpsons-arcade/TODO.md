@@ -402,8 +402,10 @@ Gameplay reports are emitted when leaving play, changing logical or
 drawable extent, viewport or display settings, and closing the host.
 They include host work time through successful presentation, intervals
 between consecutive successful submissions, separate 60 Hz budgets,
-sampled RSS and the oldest applied local input age for frames with an
-observed event. The first submission of each gameplay segment starts the
-interval clock; it contributes no interval or FPS sample.
-They exclude menu-only and failed submissions, remote input latency,
-physical scanout and GPU-completion timing.
+sampled RSS and separate oldest applied local-input and remote-decode
+ages for frames with observed controls. Remote timing starts at successful
+authenticated host decoding and includes delayed admission and execution.
+The first submission of each gameplay segment starts the interval clock;
+it contributes no interval or FPS sample.
+They exclude menu-only and failed submissions, client-side input and
+network transit, physical scanout and GPU-completion timing.

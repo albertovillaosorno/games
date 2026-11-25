@@ -852,6 +852,17 @@ impl<'preferences> Interactive<'preferences> {
         Ok(batch)
     }
 
+    fn poll_host(&mut self) -> Result<(), RenderError> {
+        if let Some(host) = &mut self.host
+            && let Some(admitted) =
+                host.poll(&mut self.simulation).map_err(failure)?
+            && let Some(meter) = &mut self.measurement
+        {
+            meter.admit_remote(admitted.tick, admitted.completed_at);
+        }
+        Ok(())
+    }
+
     fn route_native(
         &mut self,
         event: InputEvent,
@@ -885,10 +896,7 @@ impl<'preferences> Interactive<'preferences> {
             if batch == EventBatch::Stopped {
                 break;
             }
-            if let Some(host) = &mut self.host {
-                let _admitted =
-                    host.poll(&mut self.simulation).map_err(failure)?;
-            }
+            self.poll_host()?;
             let elapsed = self.input.elapsed();
             let delta = elapsed.saturating_sub(self.previous);
             self.previous = elapsed;

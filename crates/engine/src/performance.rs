@@ -122,6 +122,12 @@ impl TimingHistogram {
         }
         None
     }
+
+    fn record(&mut self, duration: Duration) -> Result<(), PerformanceError> {
+        let bucket = self.bucket_mut(duration)?;
+        *bucket = bucket.checked_add(1).ok_or(PerformanceError::Overflow)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,10 +145,7 @@ impl Distributions {
         let frame_count =
             frame.checked_add(1).ok_or(PerformanceError::Overflow)?;
         if let Some(latency) = observation.input_latency {
-            let input = self.input.bucket_mut(latency)?;
-            let input_count =
-                input.checked_add(1).ok_or(PerformanceError::Overflow)?;
-            *input = input_count;
+            self.input.record(latency)?;
         }
         *frame = frame_count;
         Ok(())
@@ -336,6 +339,26 @@ impl PerformanceCollector {
             distributions.record(frame)?;
         }
         self.report = report;
+        Ok(())
+    }
+
+    /// Record an input age independently of a frame interval.
+    ///
+    /// A first presentation can have measured input but no prior frame.
+    /// This does not change frame counts, budgets or resource samples.
+    ///
+    /// # Errors
+    /// Rejects cumulative duration or sample-count overflow.
+    pub fn observe_input(
+        &mut self,
+        latency: Duration,
+    ) -> Result<(), PerformanceError> {
+        let mut summary = self.report.input_latency;
+        summary.record(latency)?;
+        if let Some(distributions) = &mut self.distributions {
+            distributions.input.record(latency)?;
+        }
+        self.report.input_latency = summary;
         Ok(())
     }
 
@@ -768,6 +791,34 @@ mod tests {
         assert_eq!(enabled.observe(zero), Ok(()));
         assert_eq!(enabled.frame_percentile(0), None);
         assert_eq!(enabled.frame_percentile(101), None);
+    }
+
+    #[test]
+    fn standalone_input_age_preserves_frame_statistics() {
+        let mut collector = PerformanceCollector::with_percentiles(
+            profile(),
+            NonZeroU64::new(16_666_667),
+        );
+        let latency = Duration::from_millis(7);
+        assert_eq!(collector.observe_input(latency), Ok(()));
+        let report = collector.report();
+        assert_eq!(report.frame_time.samples(), 0);
+        assert_eq!(report.frame_budget.map(|budget| budget.missed), Some(0));
+        assert_eq!(report.input_latency.samples(), 1);
+        assert_eq!(report.input_latency.mean(), Some(latency));
+        assert_eq!(collector.frames_per_second(), None);
+        assert_eq!(
+            collector.input_percentile(100),
+            Some(PercentileRange {
+                lower: latency,
+                upper: latency
+            })
+        );
+        assert_eq!(
+            collector.observe_input(Duration::MAX),
+            Err(PerformanceError::Overflow)
+        );
+        assert_eq!(collector.report(), report);
     }
 
     #[test]
