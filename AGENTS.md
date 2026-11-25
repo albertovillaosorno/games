@@ -64,6 +64,14 @@
 - Use deterministic simulation independent of rendering FPS. Provide
   responsive rendering, uncapped FPS where supported and native controls.
 - Share touch input and configure layouts per title.
+- Share persistent display and input settings across titles. Use a responsive
+  resizable viewport with aspect-preserving letterbox by default. Offer integer
+  pixel scaling, fill/crop and explicit stretch as selectable display modes.
+  Support windowed and fullscreen presentation; adapt HUD and touch layout.
+  Keep gameplay coordinates and timing independent of window dimensions.
+  Map pointer and touch coordinates through the actual presentation transform.
+  Allow keyboard, controller and touch remapping with per-player profiles,
+  sensible defaults and a reset option. Do not hardcode title-specific menus.
 - GPU acceleration by default where useful, including 2D. Use efficient
   CPU computation, parallelism and adaptive bounded memory caches.
 - Use the best resource for each workload; never maximise utilisation

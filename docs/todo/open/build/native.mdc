@@ -20,6 +20,10 @@ Produce portable Linux x86-64 executables with local asset discovery.
 
 - Do not link or bundle original game executables or libraries.
 - Verify startup, save paths, packaging and Linux gameplay smoke tests.
+- Verify shared persistent display and input settings in native gameplay:
+  resizable aspect-fit, integer scaling, fill/crop, stretch and fullscreen.
+- Verify resize, high-DPI and touch-coordinate mapping across display modes.
+- Verify remappable per-player keyboard, controller and touch profiles.
 
 ## Evidence
 
