@@ -140,7 +140,17 @@ HUD placement and independent touch overlays remain open. Settings
 can also be changed through the main or pause menu: Up/Down selects,
 Primary cycles display or toggles desktop fullscreen, and Back returns.
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
-Changes apply immediately but are not saved between launches.
+Changes apply immediately. To retain them across launches, create a
+dedicated private directory and pass `--settings DIR` after the display
+options and before `--controls`. Alternatively set `settings=DIR` in the
+launch catalogue; relative paths resolve from that file. An explicit
+settings path overrides the catalogue. Saved display values override
+catalogue defaults, and explicit display or window flags override saved
+values. Only in-game changes are stored; smoke runs never write settings.
+The directory must exist and be trusted, and must not contain game-progress
+slots. The versioned settings payload is stored atomically in slot-0.gms.
+Malformed data or failed persistence is reported as an error. A saved
+Fill preference is safely opened as aspect-fit when touch is enabled.
 
 ### Digital control profiles
 

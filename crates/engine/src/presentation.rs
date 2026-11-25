@@ -33,6 +33,7 @@
 
 use std::collections::BTreeMap;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::str;
 use std::time::Duration;
 
 /// An integer pixel rectangle fitted within a display surface.
@@ -319,6 +320,42 @@ impl DisplaySettings {
                 .unwrap_or(self.window),
         })
     }
+
+    /// Decode a complete version-one portable preferences payload.
+    ///
+    /// # Errors
+    /// Rejects invalid UTF-8, versions, modes and trailing fields.
+    pub fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+        let text = str::from_utf8(bytes)
+            .map_err(|_error| "invalid display preferences")?;
+        let mut fields = text.split('\n');
+        match (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) {
+            (
+                Some("display-v1"),
+                Some(presentation),
+                Some(window),
+                Some(""),
+                None,
+            ) => Self::default().configured(Some(presentation), Some(window)),
+            _ => Err("invalid display preferences"),
+        }
+    }
+
+    /// Encode preferences using stable mode names rather than enum ordinals.
+    #[must_use]
+    pub fn encode(self) -> String {
+        format!(
+            "display-v1\n{}\n{}\n",
+            self.presentation.as_str(),
+            self.window.as_str()
+        )
+    }
 }
 
 /// A policy for whether the host should cap rendering frequency.
@@ -454,7 +491,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        Dimensions, FramePacing, PresentationMode, TranslationCatalog, Viewport,
+        Dimensions, DisplaySettings, FramePacing, PresentationMode,
+        TranslationCatalog, Viewport, WindowMode,
     };
 
     fn nz(value: u32) -> NonZeroU32 {
@@ -601,5 +639,32 @@ mod tests {
             FramePacing::Capped(nz(u32::MAX)).interval(),
             Some(Duration::from_nanos(1)),
         );
+    }
+
+    #[test]
+    fn display_preferences_round_trip_every_mode() {
+        for presentation in PresentationMode::ALL {
+            for window in WindowMode::ALL {
+                let settings = DisplaySettings { presentation, window };
+                assert_eq!(
+                    DisplaySettings::decode(settings.encode().as_bytes()),
+                    Ok(settings)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn display_preferences_reject_incompatible_payloads() {
+        for bytes in [
+            b"display-v2\ninteger\nwindowed\n".as_slice(),
+            b"display-v1\nunknown\nwindowed\n",
+            b"display-v1\ninteger\nunknown\n",
+            b"display-v1\ninteger\nwindowed",
+            b"display-v1\ninteger\nwindowed\n\n",
+            b"\xff",
+        ] {
+            assert!(DisplaySettings::decode(bytes).is_err());
+        }
     }
 }

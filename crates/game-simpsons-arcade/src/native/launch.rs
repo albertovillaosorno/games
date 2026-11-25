@@ -39,12 +39,13 @@ use std::{env, str, vec};
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
 use games_platform_storage::file::snapshot;
+use games_platform_storage::preferences::DisplayStore;
 
 const FILE_NAME: &str = "simpsons-arcade.local";
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
     "usage: simpsons-arcade [--smoke] [--touch] ",
-    "[--display MODE] [--window MODE] [--controls FILE] ",
+    "[--display MODE] [--window MODE] [--settings DIR] [--controls FILE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -52,8 +53,14 @@ const USAGE: &str = concat!(
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
-type ConfiguredAssets = (Assets, DisplaySettings, Option<PathBuf>);
+type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
 type Fields<'text> = BTreeMap<&'text str, &'text str>;
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct LocalPaths {
+    controls: Option<PathBuf>,
+    settings: Option<PathBuf>,
+}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct Assets {
@@ -94,6 +101,7 @@ impl Assets {
         let audio = values.remove("audio").map(hash).transpose()?;
         let poses = values.remove("poses").map(|value| base.join(value));
         let controls = values.remove("controls").map(|value| base.join(value));
+        let settings = values.remove("settings").map(|value| base.join(value));
         let display = DisplaySettings::default()
             .configured(values.remove("display"), values.remove("window"))?;
         if !values.is_empty() {
@@ -108,7 +116,7 @@ impl Assets {
                 poses,
             },
             display,
-            controls,
+            LocalPaths { controls, settings },
         ))
     }
 
@@ -154,6 +162,7 @@ pub(super) struct Launch {
     pub(super) assets: Assets,
     pub(super) controls: Option<PathBuf>,
     pub(super) display: DisplaySettings,
+    pub(super) preferences: Option<DisplayStore>,
     pub(super) smoke: bool,
     pub(super) touch_enabled: bool,
 }
@@ -165,44 +174,83 @@ impl Launch {
         let touch_enabled = flag(&mut remaining, "--touch");
         let mode = optional_value(&mut remaining, "--display")?;
         let window = optional_value(&mut remaining, "--window")?;
+        let explicit_settings = if flag(&mut remaining, "--settings") {
+            Some(PathBuf::from(next(&mut remaining)?))
+        } else {
+            None
+        };
         let explicit_controls = if flag(&mut remaining, "--controls") {
             Some(PathBuf::from(next(&mut remaining)?))
         } else {
             None
         };
-        let (assets, defaults, configured_controls) =
-            if flag(&mut remaining, "--config") {
-                let config = PathBuf::from(next(&mut remaining)?);
-                if remaining.next().is_some() {
-                    return Err(String::from(USAGE));
-                }
-                Assets::open(&config)?
-            } else if remaining.peek().is_none() {
-                let executable = env::current_exe()
-                    .map_err(|error| format!("executable path: {error}"))?;
-                Assets::open(&sibling_catalogue(&executable)?)?
-            } else {
-                (
-                    Assets::explicit(remaining)?,
-                    DisplaySettings::default(),
-                    None,
-                )
-            };
-        let display =
-            defaults.configured(mode.as_deref(), window.as_deref())?;
-        if touch_enabled && display.presentation == PresentationMode::Fill {
-            return Err(String::from(
-                "fill can crop touch controls; choose another display mode",
-            ));
-        }
+        let (assets, defaults, paths) = if flag(&mut remaining, "--config") {
+            let config = PathBuf::from(next(&mut remaining)?);
+            if remaining.next().is_some() {
+                return Err(String::from(USAGE));
+            }
+            Assets::open(&config)?
+        } else if remaining.peek().is_none() {
+            let executable = env::current_exe()
+                .map_err(|error| format!("executable path: {error}"))?;
+            Assets::open(&sibling_catalogue(&executable)?)?
+        } else {
+            (
+                Assets::explicit(remaining)?,
+                DisplaySettings::default(),
+                LocalPaths::default(),
+            )
+        };
+        let preferences = explicit_settings
+            .or(paths.settings)
+            .as_deref()
+            .map(DisplayStore::open)
+            .transpose()
+            .map_err(|error| format!("display store: {error:?}"))?;
+        let stored = preferences
+            .as_ref()
+            .map(DisplayStore::load)
+            .transpose()
+            .map_err(|error| format!("display preferences: {error:?}"))?
+            .flatten();
+        let display = resolve_display(
+            defaults,
+            stored,
+            [mode.as_deref(), window.as_deref()],
+            touch_enabled,
+        )?;
+
         Ok(Self {
             assets,
-            controls: explicit_controls.or(configured_controls),
+            controls: explicit_controls.or(paths.controls),
             display,
+            preferences,
             smoke,
             touch_enabled,
         })
     }
+}
+
+fn resolve_display(
+    defaults: DisplaySettings,
+    stored: Option<DisplaySettings>,
+    [mode, window]: [Option<&str>; 2],
+    touch_enabled: bool,
+) -> Result<DisplaySettings, String> {
+    let mut base = stored.unwrap_or(defaults);
+    if touch_enabled
+        && stored.is_some()
+        && base.presentation == PresentationMode::Fill
+    {
+        base.presentation = PresentationMode::AspectFit;
+    }
+    let display = base.configured(mode, window)?;
+    if touch_enabled && display.presentation == PresentationMode::Fill {
+        return Err(String::from(
+            "fill can crop touch controls; choose another display mode",
+        ));
+    }
+    Ok(display)
 }
 
 fn fields(text: &str) -> Result<Fields<'_>, String> {
@@ -291,11 +339,12 @@ mod tests {
     fn catalogue_anchors_paths_to_its_own_directory() -> Result<(), String> {
         let path = Path::new("/package/simpsons-arcade.local");
         let text = format!(
-            "{}poses=poses.txt\ncontrols=controls.txt\naudio={DIGEST}\n\
+            "{}poses=poses.txt\ncontrols=controls.txt\n\
+             settings=preferences\naudio={DIGEST}\n\
              enemy_approach={DIGEST}\nenemy_strike={DIGEST}\n",
             catalogue()
         );
-        let (assets, display, controls) = Assets::catalogue(path, &text)?;
+        let (assets, display, paths) = Assets::catalogue(path, &text)?;
         let expected = Assets {
             actors: [DIGEST, DIGEST, DIGEST, DIGEST].map(OsString::from),
             audio: Some(DIGEST.into()),
@@ -305,7 +354,8 @@ mod tests {
         };
         if assets != expected
             || display != DisplaySettings::default()
-            || controls != Some(PathBuf::from("/package/controls.txt"))
+            || paths.controls != Some(PathBuf::from("/package/controls.txt"))
+            || paths.settings != Some(PathBuf::from("/package/preferences"))
         {
             return Err(String::from("incorrect catalogue selection"));
         }
@@ -421,5 +471,57 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn preferences_precedence_preserves_each_explicit_override() {
+        let defaults = DisplaySettings {
+            presentation: PresentationMode::Integer,
+            window: WindowMode::Windowed,
+        };
+        let stored = DisplaySettings {
+            presentation: PresentationMode::Stretch,
+            window: WindowMode::Fullscreen,
+        };
+        assert_eq!(
+            resolve_display(defaults, Some(stored), [None, None], false),
+            Ok(stored)
+        );
+        assert_eq!(
+            resolve_display(
+                defaults,
+                Some(stored),
+                [Some("adaptive"), None],
+                false,
+            ),
+            Ok(DisplaySettings {
+                presentation: PresentationMode::Adaptive,
+                ..stored
+            })
+        );
+        assert_eq!(
+            resolve_display(defaults, None, [None, None], false),
+            Ok(defaults)
+        );
+    }
+
+    #[test]
+    fn stored_fill_can_open_touch_without_accepting_explicit_fill() {
+        let stored = DisplaySettings {
+            presentation: PresentationMode::Fill,
+            window: WindowMode::Fullscreen,
+        };
+        let defaults = DisplaySettings::default();
+        assert_eq!(
+            resolve_display(defaults, Some(stored), [None, None], true),
+            Ok(DisplaySettings {
+                presentation: PresentationMode::AspectFit,
+                ..stored
+            })
+        );
+        assert!(
+            resolve_display(defaults, Some(stored), [Some("fill"), None], true)
+                .is_err()
+        );
     }
 }

@@ -710,3 +710,24 @@ keyboard actions into Settings, observed changed logical pixels, switched
 to fullscreen and back, and returned to the main menu. It passed the
 600-frame movement workload with zero missed samples. Real devices,
 actual widescreen content and persistent display settings remain open.
+
+Display preferences can now persist in an explicitly selected private
+directory via the shared native atomic save envelope. A versioned engine
+payload covers every display/window combination. Catalogue-relative paths,
+CLI precedence, missing preferences and incompatible payloads are tested.
+Stored Fill falls back to aspect-fit on touch launch; temporary menu
+framing and smoke runs do not overwrite a saved value.
+
+A visible X11 diagnostic under isolated Xvfb used the signed Fedora
+xdotool package (extracted locally, not installed) to deliver native
+keyboard events. Enter joined Marge, Right changed the rendered street
+frame, Escape paused, and Down/Primary opened and edited Settings.
+The integer/windowed preference was atomically saved. The first scripted
+exit sequence selected the wrong menu entry and timed out; subsequent
+launches exited normally through the menu. A repeat nonblack capture
+showed the reopened settings panel pixel-identical to the saved panel;
+the preference file hash remained unchanged. The hidden combined smoke
+with an explicit stretch override also passed without modifying the
+saved file, with one missed movement frame sample. This verifies the
+visible native event and save path under Xvfb, not physical keyboard,
+controller, touch, audio or GPU hardware. Captures remain private.

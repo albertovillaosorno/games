@@ -72,6 +72,7 @@ use games_platform_graphics::linux::ui::PlateLayout;
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
+use games_platform_storage::preferences::DisplayStore;
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Participation, Phase, Player,
@@ -515,22 +516,25 @@ impl<'source> Sources<'source> {
 struct PreviewOptions<'profiles> {
     display: DisplaySettings,
     hidden: bool,
+    preferences: Option<&'profiles DisplayStore>,
     profiles: &'profiles Profiles,
     touch_enabled: bool,
 }
 
-struct Interactive {
+struct Interactive<'preferences> {
     applied: DisplaySettings,
     controls: Controls,
     input: NativeInput,
+    preferences: Option<&'preferences DisplayStore>,
     previous: Duration,
+    requested: DisplaySettings,
     simulation: LiveSimulation<Cabinet>,
 }
 
-impl Interactive {
+impl<'preferences> Interactive<'preferences> {
     fn new(
         startup: InputStartup,
-        options: PreviewOptions<'_>,
+        options: PreviewOptions<'preferences>,
         combat: bool,
     ) -> Result<Self, RenderError> {
         let session =
@@ -549,7 +553,9 @@ impl Interactive {
             applied: options.display,
             controls,
             input,
+            preferences: options.preferences,
             previous: Duration::ZERO,
+            requested: session.display(),
             simulation,
         })
     }
@@ -581,6 +587,11 @@ impl Interactive {
                 scene.apply_display_settings(desired)?;
                 self.applied = desired;
             }
+            let requested = cabinet.session().display();
+            if requested != self.requested {
+                save_display(self.preferences, requested)?;
+                self.requested = requested;
+            }
             if let Some(audio) = &mut playback {
                 audio.update(cabinet)?;
             }
@@ -591,6 +602,17 @@ impl Interactive {
 }
 
 type ControllerAxes = BTreeMap<u16, AxisBinding<Action>>;
+
+fn save_display(
+    store: Option<&DisplayStore>,
+    settings: DisplaySettings,
+) -> Result<(), RenderError> {
+    if let Some(preferences) = store {
+        let receipt = preferences.store(settings).map_err(failure)?;
+        receipt.durability.map_err(failure)?;
+    }
+    Ok(())
+}
 
 fn key_label(key: Scancode) -> &'static str {
     if key == Scancode::Return {
@@ -848,6 +870,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         assets,
         controls,
         display,
+        preferences,
         smoke,
         touch_enabled,
     } = launch::Launch::parse(args)?;
@@ -869,6 +892,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
             window(&source, PreviewOptions {
                 display,
                 hidden: smoke,
+                preferences: preferences.as_ref(),
                 profiles: &profiles,
                 touch_enabled,
             })

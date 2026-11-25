@@ -37,6 +37,9 @@ pub mod bundle;
 /// Bounded native regular-file snapshots.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod file;
+/// Atomic persistence for portable display preferences.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub mod preferences;
 
 /// Integrity-checked local save slots.
 #[cfg(any(target_os = "linux", target_os = "android"))]

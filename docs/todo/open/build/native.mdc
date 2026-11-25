@@ -107,3 +107,15 @@ or classic arcade mode. The existing title admission is obsolete.
 Actual physical native input and visible play must be checked separately
 from synthetic smoke. The first title passed the hidden display and touch
 profile matrix; real responsive HUD and camera expansion remain open.
+
+The title now composes shared display settings, free-play menu navigation
+and live native renderer transitions. An opt-in private settings directory
+uses the existing bounded atomic save storage with a versioned engine
+payload. A visible Xvfb launch accepted X11-injected keyboard input,
+joined a character, changed the rendered street frame, paused and changed
+display mode. A later launch showed a pixel-identical settings panel and
+exited through the menu; the saved file was unchanged. CLI overrides and
+hidden smoke runs leave stored values untouched until an in-game edit.
+This is virtual-display evidence, not actual hardware or cross-platform
+acceptance. Interactive input remapping, responsive world/HUD extension
+and physical input remain open.
