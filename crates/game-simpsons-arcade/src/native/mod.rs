@@ -47,8 +47,8 @@ use std::fmt::Debug;
 use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
-use std::str;
 use std::time::{Duration, Instant};
+use std::{env, str};
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{
@@ -64,6 +64,9 @@ use games::replay::{
 use games::session::LocalSession;
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
+use games_platform::performance::{
+    FrameMeter, peak_resident_bytes, resident_bytes,
+};
 use games_platform_graphics::linux::input::profile::{
     DigitalProfiles, MAX_PROFILE_BYTES,
 };
@@ -1051,6 +1054,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         };
         return controller::run(Path::new(path));
     }
+    let load_started = Instant::now();
     let launch::Launch {
         assets,
         controls,
@@ -1087,6 +1091,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                     touch_enabled,
                 },
                 listener,
+                load_started,
             )
         });
     result.map_err(|error| format!("{error:?}"))
@@ -1384,6 +1389,53 @@ fn smoke_jump(
     Ok(())
 }
 
+fn smoke_peak_report() -> Result<(), RenderError> {
+    let peak = peak_resident_bytes().map_or_else(
+        |_error| String::from("unobserved"),
+        |bytes| bytes.to_string(),
+    );
+    writeln!(
+        stdout().lock(),
+        "Whole-smoke lifetime peak RSS: {peak} bytes"
+    )
+    .map_err(failure)
+}
+
+fn smoke_startup_report(
+    scene: &SceneSession<'_, '_>,
+    renderer: &str,
+    started: Instant,
+) -> Result<(), RenderError> {
+    let completed = Instant::now();
+    let layout = scene.layout();
+    let profile = QualityProfile {
+        frame_pacing: FramePacing::Uncapped,
+        height: layout.height().get(),
+        optional_effects: false,
+        width: layout.width().get(),
+    };
+    let mut meter =
+        FrameMeter::new(PerformanceCollector::new(profile), completed);
+    meter.record_load(started, completed).map_err(failure)?;
+    if let Ok(path) = env::current_exe() {
+        let _result = meter.record_artifact(&path);
+    }
+    writeln!(
+        stdout().lock(),
+        concat!(
+            "Native startup: {}; {}x{} initial logical; config, asset and ",
+            "scene load {:?}; RSS {:?} bytes; executable {:?} bytes"
+        ),
+        renderer,
+        profile.width,
+        profile.height,
+        meter.collector().load_duration(),
+        resident_bytes().ok(),
+        meter.collector().binary_size(),
+    )
+    .map_err(failure)
+}
+
 fn smoke_movement_benchmark(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -1421,7 +1473,8 @@ fn smoke_movement_benchmark(
                 )?;
             }
         }
-        for _frame in 0..30u8 {
+        let rss = resident_bytes().ok();
+        for frame in 0..30u8 {
             let started = Instant::now();
             let _advanced =
                 simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -1430,7 +1483,11 @@ fn smoke_movement_benchmark(
                 .observe(FrameObservation {
                     frame_time: started.elapsed(),
                     input_latency: None,
-                    resident_bytes: None,
+                    resident_bytes: if frame == 0 {
+                        rss
+                    } else {
+                        None
+                    },
                 })
                 .map_err(failure)?;
         }
@@ -1453,13 +1510,14 @@ fn smoke_movement_report(
         stdout().lock(),
         concat!(
             "Four-player movement: {} frames; mean {:?}; ",
-            "max {:?}; p95 {:?}; budget {:?}"
+            "max {:?}; p95 {:?}; budget {:?}; sampled RSS peak {:?} bytes"
         ),
         report.frame_time.samples(),
         report.frame_time.mean(),
         report.frame_time.maximum(),
         collector.frame_percentile(95),
         report.frame_budget,
+        report.peak_resident_bytes,
     )
     .map_err(failure)
 }
@@ -1636,6 +1694,7 @@ fn window(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
     host: Option<HostLan>,
+    load_started: Instant,
 ) -> Result<(), RenderError> {
     let touch_enabled = options.touch_enabled;
     let reserved = host_reservations(options, host.as_ref())?;
@@ -1663,9 +1722,11 @@ fn window(
         .as_ref()
         .map(audio::Playback::open)
         .transpose()?;
+    let renderer = options.hidden.then(|| window.renderer_name());
     window.with_scene(layout, limits, |scene| {
         let mut art = Scene::load(scene, source, options, reserved)?;
-        if options.hidden {
+        if let Some(name) = renderer.as_deref() {
+            smoke_startup_report(scene, name, load_started)?;
             smoke_settings(scene, &mut art, options)?;
             if let Some(bundle) = &source.world {
                 world::smoke(scene, &mut art, bundle, options)?;
@@ -1676,12 +1737,8 @@ fn window(
                 smoke_touch_selection(scene, options.profiles)?;
             }
             smoke(scene, &mut art, touch_enabled, options.profiles)?;
-            return smoke_optional(
-                scene,
-                &mut art,
-                touch_enabled,
-                playback.as_mut(),
-            );
+            smoke_optional(scene, &mut art, touch_enabled, playback.as_mut())?;
+            return smoke_peak_report();
         }
         let scroll_limit =
             art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;

@@ -265,3 +265,32 @@ frames and three synthetic input-age samples:
 This measures a controlled one-player encounter, not complete gameplay.
 The input samples exclude the physical device and real event pump, and
 neither time measure establishes display latency or GPU execution time.
+
+The hidden title smoke now measures startup from launch parsing through
+verified scene construction, including local configuration, source
+admission, native renderer/input/audio setup and atlas upload. It excludes
+the first presentation and subsequent diagnostic warmup. It records the
+current executable size using the shared host meter, initial RSS, 20
+cycle-boundary RSS observations outside the movement frame timer, and
+the approximate process-lifetime high-water mark after all smoke checks.
+Missing native resource observations remain absent.
+
+Four optimized native trials with the same version-two catalogue,
+touch controls, Xvfb (1800x1200), software OpenGL and dummy audio:
+
+- Startup: 192.538–279.321 ms; initial 320x304 logical extent.
+- Initial RSS: 95,096,832–95,637,504 bytes.
+- Sampled movement RSS: 124,289,024–125,992,960 bytes; process-lifetime
+  peak RSS reported the same values for these four runs.
+- Executable: 3,130,512 bytes, not a distributable package.
+- Aspect-fit 320x304 movement mean: 1.266–1.300 ms; adaptive 400x304:
+  1.329–1.755 ms. Two of 2,400 movement frames exceeded 16.667 ms;
+  the largest interval was 25.277 ms in the first aspect-fit trial.
+- All 204 combat frames met the target; the maximum was 3.411 ms.
+  Each run verified the 80-column street camera and all smoke checks.
+
+The observed misses are retained rather than excluded as outliers.
+The adaptive diagnostic additionally verified 80 extension columns.
+These are host submission intervals under software rendering; the
+trials are not a physical GPU benchmark, VRAM measurement, full game
+loading benchmark or an isolated comparison with earlier runs.
