@@ -160,17 +160,32 @@ fn elapsed(
 /// missing, malformed or outside the supported byte range.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn resident_bytes() -> io::Result<u64> {
+    memory_bytes("VmRSS:")
+}
+
+/// Read the approximate kernel-reported lifetime resident high-water mark.
+///
+/// This includes startup, loading and any earlier process work; it is not
+/// a peak isolated to a benchmark interval. The kernel value is approximate.
+///
+/// # Errors
+/// Returns an error if procfs or its high-water mark is unavailable or invalid.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn peak_resident_bytes() -> io::Result<u64> {
+    memory_bytes("VmHWM:")
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn memory_bytes(prefix: &str) -> io::Result<u64> {
     let status = fs::read_to_string("/proc/self/status")?;
-    parse_resident_bytes(&status).ok_or_else(|| {
-        io::Error::new(ErrorKind::InvalidData, "invalid procfs VmRSS field")
+    parse_memory_bytes(&status, prefix).ok_or_else(|| {
+        io::Error::new(ErrorKind::InvalidData, "invalid procfs memory field")
     })
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn parse_resident_bytes(status: &str) -> Option<u64> {
-    let field = status
-        .lines()
-        .find_map(|line| line.strip_prefix("VmRSS:"))?;
+fn parse_memory_bytes(status: &str, prefix: &str) -> Option<u64> {
+    let field = status.lines().find_map(|line| line.strip_prefix(prefix))?;
     let mut words = field.split_ascii_whitespace();
     let kibibytes = words.next()?.parse::<u64>().ok()?;
     if words.next()? != "kB" || words.next().is_some() {
@@ -305,13 +320,13 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn parses_kernel_resident_size_without_guessing_units() -> io::Result<()> {
-        use super::parse_resident_bytes;
+        use super::parse_memory_bytes;
 
         check(
-            parse_resident_bytes("Name: games\nVmRSS:\t123 kB\n"),
+            parse_memory_bytes("Name: games\nVmRSS:\t123 kB\n", "VmRSS:"),
             Some(125_952),
         )?;
-        check(parse_resident_bytes("VmRSS: 0 kB"), Some(0))?;
+        check(parse_memory_bytes("VmRSS: 0 kB", "VmRSS:"), Some(0))?;
         for invalid in [
             "VmSize: 100 kB",
             "VmRSS: 100 MB",
@@ -319,8 +334,22 @@ mod tests {
             "VmRSS: -1 kB",
             "VmRSS: 18446744073709551615 kB",
         ] {
-            check(parse_resident_bytes(invalid), None)?;
+            check(parse_memory_bytes(invalid, "VmRSS:"), None)?;
         }
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn distinguishes_current_and_lifetime_residency() -> io::Result<()> {
+        use super::parse_memory_bytes;
+
+        let status = "VmRSS: 32 kB\nVmHWM: 80 kB\n";
+        check(parse_memory_bytes(status, "VmRSS:"), Some(32_768))?;
+        check(parse_memory_bytes(status, "VmHWM:"), Some(81_920))?;
+        check(parse_memory_bytes("VmRSS: 32 kB", "VmHWM:"), None)?;
+        check(parse_memory_bytes("VmHWM: 0 kB", "VmHWM:"), Some(0))?;
+        check(parse_memory_bytes("VmHWM: 4 MB", "VmHWM:"), None)?;
         Ok(())
     }
 
@@ -330,6 +359,9 @@ mod tests {
         let bytes = super::resident_bytes()?;
         check(bytes > 0, true)?;
         check(bytes.checked_rem(1024), Some(0))?;
+        let peak = super::peak_resident_bytes()?;
+        check(peak > 0, true)?;
+        check(peak.checked_rem(1024), Some(0))?;
         Ok(())
     }
 }

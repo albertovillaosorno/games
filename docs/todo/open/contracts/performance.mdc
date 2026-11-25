@@ -225,3 +225,19 @@ GNU time measured the process RSS and whole-process wall time separately
 from the game's frame collector. These two samples per catalogue do not
 establish a statistically significant speedup, isolated asset load time,
 physical GPU performance, display latency or release binary size.
+
+The native diagnostics additionally report the kernel's approximate
+process-lifetime resident high-water mark (VmHWM), separately from the
+maximum sampled VmRSS. Both probes share strict unit and overflow checks;
+missing or invalid kernel fields remain unobserved. Tests distinguish
+current, lifetime, zero and absent measurements, and exercise real procfs.
+
+Two release trials with 600 frames of the verified 1,024-draw 256x256
+atlas workload under Xvfb and software OpenGL had zero 60 Hz misses.
+Mean host completion intervals were 401,290–404,390 ns; sampled peak
+RSS was 168,910,848–169,263,104 bytes, and kernel VmHWM was
+166,948,864–168,476,672 bytes. The executable occupied 1,599,760 bytes.
+The lower lifetime readings demonstrate that these approximate kernel
+counters must not be treated as exact or interchangeable. VmHWM includes
+earlier process activity; neither probe measures VRAM or a precise
+benchmark-only memory peak.

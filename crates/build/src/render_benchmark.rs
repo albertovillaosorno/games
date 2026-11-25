@@ -40,7 +40,9 @@ use games::performance::{
     PercentileRange, PerformanceCollector, QualityProfile,
 };
 use games::presentation::FramePacing;
-use games_platform::performance::{FrameMeter, resident_bytes};
+use games_platform::performance::{
+    FrameMeter, peak_resident_bytes, resident_bytes,
+};
 use games_platform_graphics::linux::sprites::{SceneSession, SpriteDraw};
 use games_platform_graphics::linux::{FrameLayout, RenderError};
 
@@ -140,6 +142,7 @@ pub fn report(
     let fps = observed(collector.frames_per_second());
     let load = duration(collector.load_duration());
     let rss = observed(report.peak_resident_bytes);
+    let lifetime_peak = observed(peak_resident_bytes().ok());
     let bytes = observed(collector.binary_size());
     let misses = observed(report.frame_budget.map(|budget| budget.missed));
     let mut out = stdout().lock();
@@ -166,6 +169,12 @@ pub fn report(
         writeln!(
             out,
             "Sampled peak RSS bytes: {rss}, executable bytes: {bytes}",
+        )
+    })
+    .and_then(|()| {
+        writeln!(
+            out,
+            "Approximate process-lifetime peak RSS bytes: {lifetime_peak}",
         )
     })
     .and_then(|()| {
