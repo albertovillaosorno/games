@@ -558,3 +558,10 @@ single-thread native controller smoke sequence to respect SDL thread
 affinity even under parallel test execution. The platform smoke also
 checks disabled and enabled native translation of constructed finger
 events and the preserved contact identity on release.
+
+Client acknowledgement leases are checked before receiving, at the
+observation of a reply, and after bounded send polling. A reply observed
+at or after expiry cannot renew the lease, even if its frame is valid.
+A deterministic regression uses a real authenticated connection and
+explicit observation times to exercise missing, malformed, timely and
+exact-boundary acknowledgements without relying on scheduling delays.

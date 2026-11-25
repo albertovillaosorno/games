@@ -69,6 +69,13 @@ pub(crate) struct ClientLan {
 }
 
 impl ClientLan {
+    fn check_lease(&self, observed_at: Instant) -> io::Result<()> {
+        if observed_at.duration_since(self.last_received) >= self.idle_timeout {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        Ok(())
+    }
+
     // Admit the complete native transition batch or return it unchanged.
     pub(crate) fn enqueue_batch(
         &mut self,
@@ -85,17 +92,26 @@ impl ClientLan {
         Self::with_idle(stream, IDLE_TIMEOUT)
     }
 
-    pub(crate) fn poll(&mut self) -> io::Result<()> {
-        if self.last_received.elapsed() >= self.idle_timeout {
-            return Err(ErrorKind::TimedOut.into());
-        }
-        // Only the exact versioned host acknowledgement refreshes liveness.
-        if let Some(frame) = self.stream.poll_receive()? {
-            if frame.as_slice() != HOST_ACK {
+    fn observe_reply(
+        &mut self,
+        frame: Option<&[u8]>,
+        observed_at: Instant,
+    ) -> io::Result<()> {
+        self.check_lease(observed_at)?;
+        if let Some(bytes) = frame {
+            if bytes != HOST_ACK {
                 return Err(ErrorKind::InvalidData.into());
             }
-            self.last_received = Instant::now();
+            self.last_received = observed_at;
         }
+        Ok(())
+    }
+
+    pub(crate) fn poll(&mut self) -> io::Result<()> {
+        self.check_lease(Instant::now())?;
+        // Only a timely, exact versioned acknowledgement renews liveness.
+        let reply = self.stream.poll_receive()?;
+        self.observe_reply(reply.as_deref(), Instant::now())?;
         for _step in 0..POLL_BUDGET {
             if !self.stream.has_pending_send() && !self.queue_next()? {
                 break;
@@ -105,7 +121,7 @@ impl ClientLan {
                 break;
             }
         }
-        Ok(())
+        self.check_lease(Instant::now())
     }
 
     fn queue_next(&mut self) -> io::Result<bool> {
@@ -761,6 +777,46 @@ mod tests {
                 "heartbeats refresh the lease without simulation input",
             )?;
             thread::yield_now();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn only_timely_valid_acknowledgements_renew_client_lease() -> io::Result<()>
+    {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let stream = connect(&mut host, &mut live, &credentials)?;
+        let timeout = Duration::from_secs(1);
+        let mut client = ClientLan::with_idle(stream, timeout);
+        let original = client.last_received;
+        let timely = original
+            .checked_add(Duration::from_millis(999))
+            .ok_or(ErrorKind::InvalidInput)?;
+        client.observe_reply(None, timely)?;
+        let malformed = client.observe_reply(Some(&[0]), timely);
+        require(
+            malformed
+                .is_err_and(|error| error.kind() == ErrorKind::InvalidData)
+                && client.last_received == original,
+            "empty and malformed replies do not renew the lease",
+        )?;
+        client.observe_reply(Some(&HOST_ACK), timely)?;
+        require(client.last_received == timely, "valid reply renews lease")?;
+        let deadline =
+            timely.checked_add(timeout).ok_or(ErrorKind::InvalidInput)?;
+        for observed in [
+            deadline,
+            deadline
+                .checked_add(Duration::from_nanos(1))
+                .ok_or(ErrorKind::InvalidInput)?,
+        ] {
+            let late = client.observe_reply(Some(&HOST_ACK), observed);
+            require(
+                late.is_err_and(|error| error.kind() == ErrorKind::TimedOut)
+                    && client.last_received == timely,
+                "expired lease cannot be renewed by an acknowledgement",
+            )?;
         }
         Ok(())
     }
