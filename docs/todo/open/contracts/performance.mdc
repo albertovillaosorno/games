@@ -473,3 +473,17 @@ active graphics clients with nonzero process framebuffer usage of
 compares catalogue admission and ordinary movement/combat workloads,
 not isolated timing of aerial or special attacks, actual display FPS,
 GPU execution latency, or exact peak VRAM.
+
+At 510c40c, three interleaved runs per display policy used the same
+3,224,528-byte optimized executable and verified 88-pose catalogue
+with touch and the offscreen NVIDIA OpenGL ES backend. Integer mode
+verified a 320x304 scene with no added columns; adaptive verified
+400x304 with 80 added columns. Each run measured 600 movement and
+51 combat submissions; all 3,906 submissions met 16.667 ms. Integer
+movement means ranged from 104.955 to 109.693 microseconds and adaptive
+from 107.291 to 120.485 microseconds. The respective combat mean ranges
+were 78.877–94.201 and 83.444–87.595 microseconds. Lifetime peak RSS
+ranged from 89,735,168 to 89,812,992 bytes for integer and from
+89,989,120 to 90,243,072 bytes for adaptive. The worst observed movement
+submission was 3.746 ms. These are distinct logical scene configurations,
+not equal-workload GPU comparisons or physical display measurements.
