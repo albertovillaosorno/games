@@ -45,3 +45,20 @@ relevant pinned driver metadata was retrieved separately. Local input is
 verified; asset conversion, gameplay implementation and parity remain open.
 The Rust importer also verified all 14 members with exact configured limits
 and reported 7,209,088 decoded bytes without extraction or execution.
+
+The selected source adapter pins this archive as `world-4p-set-1`.
+Local read-only graphics conversion succeeded using:
+
+```sh
+cargo run --locked -p games-importer -- --simpsons-graphics \
+  .reference/games/simpsons-arcade/simpsons.zip simpsons-arcade \
+  world-4p-set-1 \
+  c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa \
+  3000000 1048576 7209088 14
+```
+
+The converter decoded 32,768 8-by-8 background tiles (2,097,152 bytes)
+and 32,768 16-by-16 sprite tiles (8,388,608 bytes) as palette indices.
+Synthetic fixtures cover hardware lane ordering and bit permutations.
+No original code or pixels were written to tracked storage. Palette
+selection, audio, asset publication and observable gameplay remain open.

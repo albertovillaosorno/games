@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Local read-only source verification command and bounded input loading.
+//   - Local read-only source verification and graphics conversion command.
 // - Must-Not:
 //   - Execute original files, publish assets or infer source revisions.
 // - Allows:
 //   - Inputs: Local archive path, expected identity and explicit limits.
-//   - Outputs: Verified source identity, member count and decoded size.
+//   - Outputs: Verified source identity, decoded sizes and graphics digests.
 //   - Side effects: Reads one local file and writes a summary to stdout.
 // - Split-When:
 //   - A separate host tool composes import and asset publication.
@@ -23,7 +23,7 @@
 // - Summary:
 //   - Verify a selected original archive without extracting its contents.
 // - Description:
-//   - Read a bounded immutable snapshot and report decoded member totals.
+//   - Read a bounded snapshot and report member totals or graphics digests.
 // - Usage:
 //   - cargo run --locked -p games-importer -- PATH TITLE REV SHA LIMITS
 // - Defaults:
@@ -38,12 +38,14 @@ use std::io::{Read, Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
-use games_assets::SourceIdentity;
 use games_assets::archive::ArchiveBudget;
-use games_importer::{ImportError, VerifiedSource};
+use games_assets::{ContentHash, SourceIdentity};
+use games_importer::{ImportError, VerifiedSource, simpsons};
 
-const USAGE: &str =
-    "usage: games-importer PATH TITLE REV SHA256 SOURCE ENTRY TOTAL COUNT";
+const USAGE: &str = concat!(
+    "usage: games-importer [--simpsons-graphics] PATH TITLE REV SHA256 ",
+    "SOURCE ENTRY TOTAL COUNT"
+);
 
 #[derive(Debug)]
 struct Arguments {
@@ -109,7 +111,14 @@ where
 }
 
 fn main() -> Result<(), String> {
-    let args = Arguments::parse(env::args_os().skip(1).collect())?;
+    let mut command = env::args_os().skip(1).peekable();
+    let graphics = command
+        .peek()
+        .is_some_and(|arg| arg == "--simpsons-graphics");
+    if graphics {
+        let _mode = command.next();
+    }
+    let args = Arguments::parse(command.collect())?;
     let file = File::open(&args.path).map_err(|error| error.to_string())?;
     let metadata = file.metadata().map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.len() > args.source_limit.get() {
@@ -118,6 +127,19 @@ fn main() -> Result<(), String> {
     let bytes = read_source(file, args.source_limit)?;
     let source = VerifiedSource::new(&bytes, &args.identity, args.source_limit)
         .map_err(|error| format!("source: {error:?}"))?;
+    if graphics {
+        let decoded = simpsons::decode_graphics(&source, args.archive)
+            .map_err(|error| format!("graphics: {error:?}"))?;
+        return writeln!(
+            stdout().lock(),
+            "Tiles: {} bytes ({})\nSprites: {} bytes ({})",
+            decoded.tiles.len(),
+            ContentHash::calculate(&decoded.tiles),
+            decoded.sprites.len(),
+            ContentHash::calculate(&decoded.sprites),
+        )
+        .map_err(|error| error.to_string());
+    }
     let mut count = 0u64;
     let mut total = 0u64;
     source

@@ -24,4 +24,19 @@ Establish reproducible behaviour comparisons from lawful local references.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+The verified Simpsons World four-player set 1 reference archive has 14
+members matching the pinned MAME driver definition at revision
+`cdcbdf509292257dcdaedc8d8452f79d89ff20d4`. Driver metadata specifies four
+independent player and coin inputs, a 320 by 224 visible raster, and a
+16,896,000 ns frame period (384 by 264 clocks at 6 MHz). The local source
+metadata also establishes two-lane tile and four-lane sprite word layouts.
+
+The shared importer implements explicit word interleaving and bit-offset
+indexed tile decoding; synthetic fixtures validate lane order, plane
+significance, row and column order, and rejection without partial output.
+The selected source adapter adds synthetic fixtures for the exact tile and
+sprite layouts, including the sprite nibble permutation.
+
+No reference executable is installed; the full MAME download timed out.
+No gameplay observations or parity are claimed. Reference files remain
+private under `.reference/`.
