@@ -39,4 +39,14 @@ staging errors. The staging sink is caller-owned and must discard all
 outputs on failure. The Linux adapter verifies the exact content-addressed
 payload set and stages the manifest in the same private directory. Native
 tests exercise bundle integrity and rejection of missing, extra and wrong
-content. Title-specific conversion and durable publication remain open.
+content. Title-specific conversion and publication integration remain open.
+
+GNU/Linux publication now synchronises each unique payload, the manifest
+and their staging directories before an atomic no-replace rename into a
+manifest-SHA-256-addressed sibling directory. The receipt distinguishes a
+successful rename with failed parent-directory sync from a durable
+publication. Synthetic tests verify persistence, exact manifest and payload
+bytes, and rejection of existing destinations (including a symlink).
+Fresh validation passed in run 1795578494631580142-2996234.
+Crash fault injection, runtime consumption and Android publication remain
+unverified. The publication parent and staging files must remain trusted.

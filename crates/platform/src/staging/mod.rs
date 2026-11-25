@@ -11,7 +11,7 @@
 // - Owns:
 //   - Private native staging of bounded archive and canonical asset data.
 // - Must-Not:
-//   - Parse source media, execute imported data or publish runtime assets.
+//   - Parse source media or execute imported data.
 // - Allows:
 //   - Inputs: Trusted parent, bounded streams, canonical payloads and
 //     manifests.
@@ -30,6 +30,8 @@
 // - Defaults:
 //   - Reject links, executables, collisions and partial imports.
 
+mod publication;
+
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::fs::{self, File};
@@ -47,6 +49,9 @@ use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{Mode, fstat, mkdirat};
 use nix::unistd::geteuid;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub use publication::PublishedBundle;
+pub use publication::StagedBundle;
 
 const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
@@ -179,6 +184,7 @@ struct OpenedDirectory<'directory> {
 
 #[derive(Debug)]
 struct PrivateDirectory {
+    cleanup: bool,
     path: PathBuf,
 }
 
@@ -198,7 +204,10 @@ impl PrivateDirectory {
             let name = format!(".games-import-{}-{sequence}", process::id());
             match mkdirat(parent_fd, name.as_str(), Mode::S_IRWXU) {
                 Ok(()) => {
-                    let temporary = Self { path: parent.join(&name) };
+                    let temporary = Self {
+                        cleanup: true,
+                        path: parent.join(&name),
+                    };
                     let root = openat(
                         parent_fd,
                         name.as_str(),
@@ -217,7 +226,9 @@ impl PrivateDirectory {
 
 impl Drop for PrivateDirectory {
     fn drop(&mut self) {
-        let _result = fs::remove_dir_all(&self.path);
+        if self.cleanup {
+            let _result = fs::remove_dir_all(&self.path);
+        }
     }
 }
 
@@ -375,7 +386,7 @@ impl CanonicalStaging {
         mut self,
         manifest: &AssetManifest,
         limits: ManifestLimits,
-    ) -> Result<StagedArchive, StagingError> {
+    ) -> Result<StagedBundle, StagingError> {
         if self.stage.failed {
             return Err(StagingError::Aborted);
         }
@@ -401,7 +412,8 @@ impl CanonicalStaging {
             },
             &mut bytes.as_slice(),
         )?;
-        self.stage.finish()
+        let digest = ContentHash::calculate(&bytes);
+        publication::finish(self.stage, digest, expected.keys())
     }
 
     /// Create a private canonical bundle transaction.
@@ -853,5 +865,66 @@ mod tests {
             Err(StagingError::Safety(ArchiveError::TooLarge))
         ))?;
         require(!path.exists())
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn publication_is_content_addressed_and_persistent()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(digest, b"tile")?;
+        let staged = stage.finish(&manifest, canonical_limits())?;
+        let temporary = staged.path().to_owned();
+        let encoded = manifest.encode(canonical_limits())?;
+        let manifest_digest = ContentHash::calculate(&encoded);
+        require(staged.digest() == manifest_digest)?;
+        let published = staged.publish()?;
+        require(published.durability.is_ok())?;
+        let expected = parent.path.join(format!("bundle-{manifest_digest}"));
+        require(published.path == expected)?;
+        require(!temporary.exists())?;
+        drop(published);
+        require(fs::read(expected.join("manifest.json"))? == encoded)?;
+        require(
+            fs::read(expected.join(format!("payloads/{digest}")))? == b"tile",
+        )
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn publication_never_replaces_an_existing_path() -> Result<(), StagingError>
+    {
+        let parent = fixture()?;
+        let outside = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        for is_link in [false, true] {
+            let mut stage =
+                CanonicalStaging::new(&parent.path, canonical_budget())?;
+            stage.write_payload(digest, b"tile")?;
+            let staged = stage.finish(&manifest, canonical_limits())?;
+            let temporary = staged.path().to_owned();
+            let destination =
+                parent.path.join(format!("bundle-{}", staged.digest()));
+            if is_link {
+                symlink(&outside.path, &destination)?;
+            } else {
+                fs::create_dir_all(&destination)?;
+            }
+            require(matches!(staged.publish(), Err(StagingError::Collision)))?;
+            require(!temporary.exists())?;
+            require(fs::read_dir(&destination)?.count() == 0)?;
+            if is_link {
+                require(fs::symlink_metadata(&destination)?.is_symlink())?;
+                fs::remove_file(&destination)?;
+            } else {
+                fs::remove_dir(&destination)?;
+            }
+        }
+        Ok(())
     }
 }
