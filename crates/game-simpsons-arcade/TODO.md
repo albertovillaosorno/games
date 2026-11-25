@@ -154,8 +154,11 @@ expiry to rejoin for free. If all stations expire, the main menu returns
 and the encounter resets. Pausing freezes movement, combat, maneuver
 timing, meter animation and recovery. Enemy actions, damage, respawn
 positions, recovery delays and stock-marker artwork remain provisional.
-Stage progression and the original
-game-over interlude are not implemented.
+With the verified extended street, reinforcements arrive from the right,
+left and right at camera travel 50, 82 and 154 respectively. They reuse
+the first enemy's provisional combat and pose rules. Each is admitted
+only once per run. Full stage progression and the original game-over
+interlude are not implemented.
 
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
 The hash identifies the verified canonical PCM sample catalogue. The
@@ -230,17 +233,20 @@ cargo run --locked -p games-build -- mame strip-publish simpsons \
   RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS
 ```
 
-The command verifies both complete scenes before stitching exactly
+The command verifies two to eight complete scenes before stitching exactly
 overlapping world interiors. The title verifies the strip against the
-selected base art. The currently verified strip supports up to 400
-logical columns (320 plus 80 additional pixels); wider surfaces use
-aspect-fit without stretching the world. The four station indicators
+selected base art. The latest verified strip supports up to 474
+logical columns (320 plus 154 additional pixels); wider surfaces use
+aspect-fit without stretching the world. Earlier strips still work. The four
+station indicators
 spread across the width, menus and touch panel center, and hit regions
 follow the panel. With a verified strip, the same fixed-step camera and
 movement bounds
 apply in every display mode. The provisional opening street advances
-rightward while retaining the active party and living enemy within the
-original-width play area. Full stage progression remains open.
+rightward while retaining the active party and living initial enemy
+within the original-width play area. Reinforcements enter beyond its
+edges and approach independently in world coordinates. Full stage
+progression remains open.
 Fill may crop the game HUD and is rejected with touch enabled.
 Settings
 can also be changed through the main or pause menu: Up/Down selects,

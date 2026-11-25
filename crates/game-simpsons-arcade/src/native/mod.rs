@@ -479,7 +479,7 @@ impl Scene {
                 .transpose()?,
             draws: Vec::with_capacity(
                 (if source.enemy.is_some() {
-                    36usize
+                    17usize.saturating_add(encounter::EXTRA_SPRITES)
                 } else {
                     17usize
                 })
@@ -504,7 +504,7 @@ impl Scene {
                 .as_ref()
                 .map(|bundle| shadow::ShadowArt::load(scene, bundle))
                 .transpose()?,
-            world: Vec::with_capacity(5),
+            world: Vec::with_capacity(world_capacity(source.enemy.is_some())),
             world_art,
         })
     }
@@ -527,31 +527,10 @@ impl Scene {
         }
         self.world.clear();
         self.queue_visible_stations(cabinet, view)?;
-        let projected_enemy = cabinet.enemy().map(|mut enemy| {
-            enemy.position = view.project(enemy.position);
-            enemy
-        });
-        if let (Some(combat), Some(enemy)) = (&self.combat, projected_enemy)
-            && cabinet.session().world_visible()
-            && enemy.visible()
-        {
-            self.world.push((
-                enemy.position.y,
-                combat.enemy_draw(enemy, self.poses.enemy(enemy.action))?,
-            ));
-        }
+        self.queue_enemy_sprites(cabinet, view)?;
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
-        if let (Some(combat), Some(enemy)) = (&self.combat, projected_enemy)
-            && cabinet.session().world_visible()
-            && enemy.health > 0
-        {
-            combat.enemy_health(
-                &mut self.draws,
-                enemy,
-                self.poses.enemy(enemy.action),
-            )?;
-        }
+        self.queue_enemy_meters(cabinet, view)?;
         self.menu.queue(
             cabinet.session(),
             (20i32.saturating_add(center), 16i32),
@@ -591,6 +570,46 @@ impl Scene {
             .map_or(Ok(world::View { origin: 0, width }), |art| {
                 art.view(width, cabinet.camera_origin())
             })
+    }
+
+    fn queue_enemy_meters(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+    ) -> Result<(), RenderError> {
+        if let Some(combat) = &self.combat
+            && cabinet.session().world_visible()
+        {
+            for mut enemy in cabinet.enemies().filter(|enemy| enemy.health > 0)
+            {
+                enemy.position = view.project(enemy.position);
+                combat.enemy_health(
+                    &mut self.draws,
+                    enemy,
+                    self.poses.enemy(enemy.action),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn queue_enemy_sprites(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+    ) -> Result<(), RenderError> {
+        if let Some(combat) = &self.combat
+            && cabinet.session().world_visible()
+        {
+            for mut enemy in cabinet.enemies().filter(|enemy| enemy.visible()) {
+                enemy.position = view.project(enemy.position);
+                self.world.push((
+                    enemy.position.y,
+                    combat.enemy_draw(enemy, self.poses.enemy(enemy.action))?,
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn queue_station(
@@ -1173,10 +1192,7 @@ fn cabinet_with_scroll(
     scroll_limit: u16,
 ) -> Result<Cabinet, RenderError> {
     let mut cabinet = if combat {
-        Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
-            x: 246,
-            y: 190,
-        })
+        Cabinet::with_opening_street()
     } else {
         Cabinet::new(StreetLayout::DOWNTOWN)
     }
@@ -2233,6 +2249,12 @@ fn scene_limits(
                 }),
         )?,
     })
+}
+
+fn world_capacity(combat: bool) -> usize {
+    Player::ALL.len().saturating_add(
+        usize::from(combat).saturating_mul(super::ENEMY_CAPACITY),
+    )
 }
 
 fn preview_layout(

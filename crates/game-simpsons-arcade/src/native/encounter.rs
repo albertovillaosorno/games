@@ -42,6 +42,7 @@ use games::performance::{
 };
 use games::presentation::FramePacing;
 use games::replay::LiveSimulation;
+use games::session::LocalSession;
 use games_platform_graphics::linux::input::{Scancode, key_code};
 use games_platform_graphics::linux::sprites::{
     SceneSession, SpriteDraw, SpriteRect,
@@ -50,12 +51,14 @@ use games_platform_graphics::linux::{FrameLayout, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
-    Art, Controls, Scene, dimension, failure, ground_position, live, size,
+    Art, Controls, Scene, dimension, failure, ground_position, live,
+    live_with_scroll, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Control, ENEMY_DEFEAT_TICKS, Enemy, EnemyAction,
-    Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PLAYER_HEALTH,
-    PLAYER_STOCKS, Participation, Phase, Player, Point, Station, TICK_INTERVAL,
+    CONTINUE_TICKS, Cabinet, Control, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
+    Enemy, EnemyAction, Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver,
+    PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase, Player, Point, Station,
+    TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -63,9 +66,9 @@ const MISSING: [u8; 4] = [128, 45, 53, 255];
 const PLAYER_FILLED: [u8; 4] = [255, 0, 255, 255];
 const PLAYER_MISSING: [u8; 4] = [33, 82, 189, 255];
 
-// One enemy and two enemy-meter draws, plus four station meters
-// and stock markers. Reserve the full active-player case.
-pub(super) const EXTRA_SPRITES: usize = 19;
+// Three draws per enemy, plus four station meters and stock markers.
+// Reserve the complete bounded encounter and active-player case.
+pub(super) const EXTRA_SPRITES: usize = 16 + ENEMY_CAPACITY * 3;
 
 #[derive(Debug)]
 pub(super) struct CombatArt {
@@ -340,7 +343,8 @@ pub(super) fn smoke(
         return Err(failure("defeated enemy continued to affect the scene"));
     }
     smoke_counterstrike(scene, art, touch_enabled)?;
-    smoke_expiry(scene, art, touch_enabled)
+    smoke_expiry(scene, art, touch_enabled)?;
+    smoke_reinforcements(scene, art, touch_enabled)
 }
 
 fn smoke_defeat(
@@ -410,6 +414,99 @@ fn smoke_four_player_encounter(
         return Err(failure("simultaneous four-player jump failed"));
     }
     Ok(())
+}
+
+fn smoke_reinforcements(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+) -> Result<(), RenderError> {
+    let limit = art
+        .world_art
+        .map_or(Ok(0), super::world::WorldArt::scroll_limit)?;
+    let target = limit.min(154);
+    let expected: usize = match target {
+        0..=49 => return Ok(()),
+        50..=81 => 1,
+        82..=153 => 2,
+        _ => 3,
+    };
+    let mut simulation =
+        live_with_scroll(true, LocalSession::default(), limit)?;
+    let mut controls = Controls::new(touch_enabled)?;
+    approach(&mut controls, &mut simulation)?;
+    pulse(&mut controls, &mut simulation, Scancode::Z)?;
+    advance(&mut simulation, u16::from(GROUND_ATTACK_RECOVERY_TICKS))?;
+    if simulation
+        .state()
+        .enemy()
+        .is_none_or(|enemy| enemy.health > 0)
+    {
+        return Err(failure("opening enemy was not defeated"));
+    }
+    key(&mut controls, &mut simulation, Scancode::Right, true)?;
+    for _ in 0..300u16 {
+        advance(&mut simulation, 1)?;
+        if simulation.state().camera_origin()
+            >= i16::try_from(target).map_err(failure)?
+        {
+            break;
+        }
+    }
+    key(&mut controls, &mut simulation, Scancode::Right, false)?;
+    if simulation.state().enemies().count() != expected.saturating_add(1usize) {
+        return Err(failure(
+            "street reinforcement admission did not match travel",
+        ));
+    }
+    verify_reinforcements(scene, art, &mut simulation, expected)
+}
+
+fn verify_reinforcements(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    expected: usize,
+) -> Result<(), RenderError> {
+    let mut seen = [false; ENEMY_CAPACITY - 1];
+    for _ in 0..40u8 {
+        let _presented = art.present(scene, simulation.state())?;
+        let pixels = scene.readback()?;
+        let view = art.presentation_view(scene, simulation.state())?;
+        let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
+        for (mut enemy, checked) in
+            simulation.state().enemies().skip(1).zip(&mut seen)
+        {
+            if *checked || enemy.health == 0 {
+                continue;
+            }
+            enemy.position = view.project(enemy.position);
+            let position = combat
+                .enemy_health_position(enemy, art.poses.enemy(enemy.action))?;
+            let right = i32::from(position.x).saturating_add(24);
+            if position.x >= 0
+                && right <= i32::try_from(view.width).map_err(failure)?
+            {
+                verify_bar(
+                    &pixels,
+                    (position, view.width),
+                    Meter::enemy(enemy.health),
+                    [FILLED, MISSING],
+                )?;
+                *checked = true;
+            }
+        }
+        if seen.iter().filter(|checked| **checked).count() == expected {
+            writeln!(
+                stdout().lock(),
+                "Reinforcements: {expected} meters verified"
+            )
+            .map_err(failure)?;
+            return Ok(());
+        }
+        advance(simulation, 4)?;
+    }
+    Err(failure("street reinforcement meters were not all visible"))
 }
 
 fn smoke_strikes(

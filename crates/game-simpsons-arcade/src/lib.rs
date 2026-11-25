@@ -68,6 +68,7 @@ pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
 
 /// Approximate twenty-second original continue opportunity in ticks.
 pub const CONTINUE_TICKS: u16 = 1200;
+const ENEMY_CAPACITY: usize = 4;
 const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;
@@ -620,6 +621,12 @@ impl Slot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Encounter {
+    enemies: [Option<Enemy>; ENEMY_CAPACITY],
+    progressive: bool,
+}
+
 /// Deterministic first-street title state, independent of the host platform.
 ///
 /// The prototype omits the original intro, full stage progression, collision
@@ -629,7 +636,7 @@ impl Slot {
 pub struct Cabinet {
     camera: i16,
     choices: [Player; 4],
-    enemy: Option<Enemy>,
+    encounter: Option<Encounter>,
     layout: StreetLayout,
     scroll_limit: i16,
     session: LocalSession,
@@ -652,7 +659,7 @@ impl Cabinet {
                 let x = slot.station.position.x;
                 (left.min(x), right.max(x))
             });
-        if let Some(enemy) = self.enemy.filter(|enemy| enemy.health > 0) {
+        if let Some(enemy) = self.enemy().filter(|enemy| enemy.health > 0) {
             left = left.min(enemy.position.x);
         }
         // Provisional rightward anchor, not an original collision rule.
@@ -667,7 +674,7 @@ impl Cabinet {
     }
 
     fn advance_continue(&mut self) {
-        if self.phase() != Phase::Playing || self.enemy.is_none() {
+        if self.phase() != Phase::Playing || self.encounter.is_none() {
             return;
         }
         for slot in &mut self.slots {
@@ -778,10 +785,18 @@ impl Cabinet {
         }
     }
 
-    /// Inspect the optional experimental enemy, including after defeat.
+    /// Inspect admitted enemies in stable arrival order, including defeat.
+    pub fn enemies(&self) -> impl Iterator<Item = Enemy> + '_ {
+        self.encounter.iter().flat_map(Encounter::enemies)
+    }
+
+    /// Inspect the initial experimental enemy, including after defeat.
     #[must_use]
     pub const fn enemy(&self) -> Option<Enemy> {
-        self.enemy
+        match self.encounter {
+            Some(encounter) => encounter.initial(),
+            None => None,
+        }
     }
 
     fn finish_tick(&mut self, pending: [PendingManeuver; 4]) {
@@ -799,13 +814,17 @@ impl Cabinet {
             for slot in &mut self.slots {
                 slot.move_tick(layout);
             }
-            if let Some(enemy) = &mut self.enemy
-                && (enemy.health == 0
-                    || self.slots.iter().any(|slot| slot.station.can_fight()))
-            {
-                enemy.advance(layout, &mut self.slots);
+            if let Some(encounter) = &mut self.encounter {
+                encounter.advance(
+                    layout,
+                    (self.layout, self.scroll_limit),
+                    &mut self.slots,
+                );
             }
             self.advance_camera();
+            if let Some(encounter) = &mut self.encounter {
+                encounter.admit(self.camera);
+            }
             self.record_attack_cues();
         }
     }
@@ -828,7 +847,7 @@ impl Cabinet {
         Ok(Self {
             camera: 0,
             choices: Player::ALL,
-            enemy: None,
+            encounter: None,
             layout,
             scroll_limit: 0,
             session: LocalSession::default(),
@@ -855,7 +874,9 @@ impl Cabinet {
 
     fn reset_world(&mut self) {
         self.camera = 0;
-        self.enemy = self.enemy.map(Enemy::restart);
+        if let Some(encounter) = &mut self.encounter {
+            encounter.restart();
+        }
         for slot in &mut self.slots {
             let held = slot.held;
             let cues = slot.station.attack_cues;
@@ -915,7 +936,19 @@ impl Cabinet {
         if !layout.contains(spawn) {
             return Err(LayoutError::SpawnOutside);
         }
-        cabinet.enemy = Some(Enemy::new(spawn));
+        cabinet.encounter = Some(Encounter::new(spawn, false));
+        Ok(cabinet)
+    }
+
+    /// Construct the provisional opening-street encounter and arrivals.
+    ///
+    /// Additional enemies are admitted only as verified world travel permits.
+    /// # Errors
+    /// Rejects an invalid starting layout.
+    pub fn with_opening_street() -> Result<Self, LayoutError> {
+        let mut cabinet = Self::new(StreetLayout::DOWNTOWN)?;
+        cabinet.encounter =
+            Some(Encounter::new(Point { x: 246, y: 190 }, true));
         Ok(cabinet)
     }
 
@@ -1004,7 +1037,7 @@ mod tests {
         result.unwrap_or_else(|_error| Cabinet {
             camera: 0,
             choices: Player::ALL,
-            enemy: None,
+            encounter: None,
             layout: StreetLayout::DOWNTOWN,
             scroll_limit: 0,
             session: LocalSession::default(),

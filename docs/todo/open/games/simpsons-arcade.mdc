@@ -1577,3 +1577,51 @@ three-strike benchmark. Physical display and complete stage parity
 remain open.
 Fresh validation with native renderer and audio smoke passed in run
 1795625113045148245-4035188.
+
+A fresh isolated Marge replay defeated the first enemy, waited for
+its disappearance, then held Right from device frame 2535. The two
+scrolling layers first advanced at frame 2579 and stopped at frame
+2655 after 154 columns. Three distinct enemy groups appeared at
+frames 2603, 2619 and 2655 (travel 50, 82 and 154). The first and
+third entered from the right, the second from the left. A control
+released Right at 2610, stopped at travel 68 and still had only the
+first reinforcement at frame 2850. A stationary prior control had no
+replacement before 2600. These observations support spatial gates,
+not a universal enemy script or complete stage progression.
+
+Four independently verified device/display scene pairs, 2529/2530,
+2599/2600, 2639/2640 and 2659/2660, stitched exactly into a 442-by-196
+opaque world interior. It preserves the base art and extends the
+verified camera limit from 80 to 154 columns. The current native
+renderer admits the resulting 474-column maximum logical scene
+without increasing the atlas limits or stretching the art.
+
+The bounded opening-street encounter now admits those three enemies
+once at the observed travel thresholds, in stable arrival order.
+The initial enemy retains the existing provisional camera constraint;
+reinforcements approach in world coordinates from approximate
+out-of-view spawn anchors. They share the first enemy's provisional
+attack, defeat and optional pose rules. Ground strikes resolve all
+eligible targets before same-tick enemy counterstrikes; aerial and
+special strikes still have a one-hit budget. Fixed-step tests verify
+exact admission thresholds, a full input-driven traversal, concurrent
+strike resolution, no readmission after defeat, pause and reset.
+Native rendering depth-sorts all visible actors and reserves the
+complete four-enemy/four-station draw budget without extra atlases.
+The single-enemy constructor remains available for isolated tests.
+Original targeting, individual attack variants, collision pivots,
+wave-completion gating, multi-target strike behaviour and later stage
+progression remain unverified. No original assets are tracked.
+
+Fresh workspace validation with native render and audio smoke passed
+in run 1795625783586237329-4102252. The 3,305,392-byte Linux build
+passed offscreen NVIDIA OpenGL ES smoke with the 170-pose catalogue
+in adaptive 426-by-304 touch and aspect-fit 320-by-224 configurations.
+Both reached camera travel 154 and verified all three reinforcement
+meters through GPU readback. The adaptive run also verified 106
+extra columns. The 600 movement and 20 first-enemy strike submissions
+met the 16.667 ms budget, averaging 124.648 and 95.078 microseconds
+respectively in adaptive mode; lifetime peak RSS was 92,602,368 bytes.
+These timing samples do not represent worst-case reinforcement combat.
+The older 80-column strip also passed a separate smoke with the first
+reinforcement only. Physical hardware acceptance remains open.

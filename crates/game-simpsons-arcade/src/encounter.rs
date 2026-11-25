@@ -9,11 +9,11 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - First-street enemy approach, strike and defeat rules.
+//   - First-street enemy admission, approach, strike and defeat rules.
 // - Must-Not:
 //   - Render, interpret original media or perform host I/O.
 // - Allows:
-//   - Inputs: Fixed-step station state and walkable bounds.
+//   - Inputs: Fixed-step station state, camera and walkable bounds.
 //   - Outputs: Enemy state and deterministic station damage.
 //   - Side effects: In-memory gameplay transitions only.
 // - Split-When:
@@ -21,17 +21,19 @@
 // - Merge-When:
 //   - Another title-local module duplicates encounter hit resolution.
 // - Summary:
-//   - One independently authored, provisional combat encounter.
+//   - Independently authored, bounded provisional street encounters.
 // - Description:
-//   - Resolves strikes once at defined ticks and respects facing and depth.
+//   - Admits enemies at observed travel gates; resolves individual strikes.
 // - Usage:
-//   - Opt in through Cabinet::with_encounter for the initial street.
+//   - Opt in through Cabinet::with_opening_street or with_encounter.
 // - Defaults:
-//   - One approaching enemy; no original combat parity claim.
+//   - At most four enemies; no original combat parity claim.
 
 //! Provisional fixed-step encounter for the first street.
 
-use super::{Facing, Maneuver, Point, Slot, StreetLayout};
+use super::{
+    ENEMY_CAPACITY, Encounter, Facing, Maneuver, Point, Slot, StreetLayout,
+};
 
 const ENEMY_HEALTH: u8 = 1;
 const PLAYER_STRIKE: u8 = 10;
@@ -45,6 +47,103 @@ pub const ENEMY_WALK_TICKS: u8 = 48;
 pub const ENEMY_DEFEAT_TICKS: u8 = 66;
 const DEFEAT_KNOCKBACK_TICKS: u8 = 33;
 const DEFEAT_BLINK_TICK: u8 = 52;
+
+// First observed sprite-group admissions during rightward travel.
+// Anchors are approximate; the observed arrivals start outside the view.
+const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
+    (50, Point { x: 334, y: 176 }),
+    (82, Point { x: -18, y: 208 }),
+    (154, Point { x: 334, y: 192 }),
+];
+
+impl Encounter {
+    pub(super) fn admit(&mut self, camera: i16) {
+        if !self.progressive {
+            return;
+        }
+        let [_, remaining @ ..] = &mut self.enemies;
+        for (entry, (trigger, anchor)) in
+            remaining.iter_mut().zip(REINFORCEMENTS)
+        {
+            if entry.is_some() || camera < trigger {
+                continue;
+            }
+            let mut enemy = Enemy::new(Point {
+                x: anchor.x.saturating_add(trigger),
+                y: anchor.y,
+            });
+            if anchor.x < 0 {
+                enemy.facing = Facing::Right;
+            }
+            *entry = Some(enemy);
+        }
+    }
+
+    pub(super) fn advance(
+        &mut self,
+        view: StreetLayout,
+        (base, scroll_limit): (StreetLayout, i16),
+        slots: &mut [Slot; 4],
+    ) {
+        let street = StreetLayout {
+            max: Point {
+                x: base.max.x.saturating_add(scroll_limit).saturating_add(46),
+                ..base.max
+            },
+            min: Point {
+                x: base.min.x.saturating_sub(50),
+                ..base.min
+            },
+            ..base
+        };
+        // Resolve admitted player strikes before any same-tick counterstrike
+        // can change a station's maneuver. Ground strikes may hit multiple
+        // targets; aerial and special strikes retain their one-hit budget.
+        let hits = self.enemies.each_mut().map(|entry| {
+            entry.as_mut().is_some_and(|enemy| {
+                enemy.health > 0 && enemy.receive_strikes(slots)
+            })
+        });
+        for ((index, entry), hit) in
+            self.enemies.iter_mut().enumerate().zip(hits)
+        {
+            let bounds = if index == 0 {
+                view
+            } else {
+                street
+            };
+            if let Some(enemy) = entry
+                && !hit
+                && (enemy.health == 0
+                    || slots.iter().any(|slot| slot.station.can_fight()))
+            {
+                enemy.advance(bounds, slots);
+            }
+        }
+    }
+
+    pub(super) fn enemies(&self) -> impl Iterator<Item = Enemy> + '_ {
+        self.enemies.iter().flatten().copied()
+    }
+
+    pub(super) const fn initial(self) -> Option<Enemy> {
+        let [initial, ..] = self.enemies;
+        initial
+    }
+
+    pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
+        Self {
+            enemies: [Some(Enemy::new(spawn)), None, None, None],
+            progressive,
+        }
+    }
+
+    pub(super) fn restart(&mut self) {
+        let [initial, remaining @ ..] = &mut self.enemies;
+        *initial = initial.map(Enemy::restart);
+        remaining.fill(None);
+    }
+}
 
 /// Observable enemy action in the experimental encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,7 +165,7 @@ pub enum EnemyAction {
     },
 }
 
-/// Read-only state of the initial enemy.
+/// Read-only state of an admitted enemy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Enemy {
     /// Current action, including the noninteractive defeat timeline.
@@ -77,7 +176,7 @@ pub struct Enemy {
     pub health: u8,
     /// Ground position, independent of art dimensions.
     pub position: Point,
-    /// Initial spawn position, used when all stations expire.
+    /// Initial spawn position for this enemy.
     pub spawn: Point,
 }
 
@@ -89,9 +188,6 @@ impl Enemy {
     ) {
         if self.health == 0 {
             self.advance_defeat(layout);
-            return;
-        }
-        if self.receive_strikes(slots) {
             return;
         }
         match self.action {
@@ -273,6 +369,8 @@ const fn step_toward(value: i16, target: i16) -> i16 {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use games::input::LogicalAction;
     use games::replay::InputStep as _;
 
@@ -295,6 +393,139 @@ mod tests {
             action,
             down: false,
         }]
+    }
+
+    #[test]
+    fn reinforcement_admission_is_monotonic_and_resets() {
+        let spawn = Point { x: 246, y: 190 };
+        let mut encounter = Encounter::new(spawn, true);
+        for (camera, count) in [
+            (0, 1),
+            (49, 1),
+            (50, 2),
+            (81, 2),
+            (82, 3),
+            (153, 3),
+            (154, 4),
+            (154, 4),
+            (0, 4),
+        ] {
+            encounter.admit(camera);
+            assert_eq!(encounter.enemies().count(), count);
+        }
+        assert!(encounter.enemies().map(|enemy| enemy.spawn).eq([
+            spawn,
+            Point { x: 384, y: 176 },
+            Point { x: 64, y: 208 },
+            Point { x: 488, y: 192 },
+        ]));
+        assert_eq!(
+            encounter.enemies().nth(2).map(|enemy| enemy.facing),
+            Some(Facing::Right)
+        );
+        encounter.restart();
+        assert!(encounter.enemies().eq([Enemy::new(spawn)]));
+        encounter.admit(50);
+        assert_eq!(encounter.enemies().count(), 2);
+    }
+
+    #[test]
+    fn simultaneous_player_strike_survives_other_enemy_counterstrike() {
+        let result = Cabinet::with_opening_street();
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        cabinet.input_step(1, &pulse(Control::Primary));
+        for tick in 2..11 {
+            cabinet.input_step(tick, &[]);
+        }
+        let Some(encounter) = &mut cabinet.encounter else {
+            return;
+        };
+        encounter.admit(50);
+        let [initial, reinforcement, ..] = &mut encounter.enemies;
+        *initial = Some(Enemy {
+            action: EnemyAction::Attack { tick: 13 },
+            facing: Facing::Right,
+            ..Enemy::new(Point { x: 90, y: 190 })
+        });
+        *reinforcement = Some(Enemy::new(Point { x: 130, y: 190 }));
+        cabinet.input_step(11, &[]);
+        assert!(cabinet.enemies().map(|enemy| enemy.health).eq([1, 0]));
+        let [marge, ..] = cabinet.stations();
+        assert_eq!(marge.health, PLAYER_HEALTH.saturating_sub(ENEMY_DAMAGE));
+        let Some(outcome) = &mut cabinet.encounter else {
+            return;
+        };
+        outcome.admit(50);
+        assert_eq!(outcome.enemies().nth(1).map(|enemy| enemy.health), Some(0));
+    }
+
+    #[test]
+    fn single_encounter_never_admits_reinforcements() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, false);
+        encounter.admit(154);
+        assert_eq!(encounter.enemies().count(), 1);
+    }
+
+    #[test]
+    fn opening_street_admits_reinforcements_during_play() {
+        let result = Cabinet::with_opening_street()
+            .and_then(|cabinet| cabinet.with_scroll_limit(154));
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        let [press, release] = pulse(Control::Right);
+        cabinet.input_step(1, slice::from_ref(&press));
+        for tick in 2..40 {
+            let [marge, ..] = cabinet.stations();
+            if cabinet.enemy().is_some_and(|enemy| {
+                enemy.position.x.abs_diff(marge.position.x) <= 28
+            }) {
+                break;
+            }
+            cabinet.input_step(tick, &[]);
+        }
+        cabinet.input_step(40, &[release]);
+        cabinet.input_step(41, &pulse(Control::Primary));
+        for tick in 42..62 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(0));
+        cabinet.input_step(62, &[press]);
+        assert_opening_arrivals(&mut cabinet);
+    }
+
+    fn assert_opening_arrivals(cabinet: &mut Cabinet) {
+        for tick in 63..363 {
+            cabinet.input_step(tick, &[]);
+            let camera = cabinet.camera_origin();
+            let count = match camera {
+                0..=49 => 1,
+                50..=81 => 2,
+                82..=153 => 3,
+                _ => 4,
+            };
+            assert_eq!(cabinet.enemies().count(), count);
+            if camera == 154 {
+                break;
+            }
+        }
+        assert_eq!(cabinet.camera_origin(), 154);
+        let [_, release] = pulse(Control::Right);
+        cabinet.input_step(364, &[release]);
+        cabinet.input_step(365, &pulse(Control::Pause));
+        let frozen = *cabinet;
+        cabinet.input_step(366, &[]);
+        assert_eq!(*cabinet, frozen);
+        cabinet.reset_world();
+        assert_eq!(cabinet.camera_origin(), 0);
+        assert_eq!(cabinet.enemies().count(), 1);
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(1));
     }
 
     fn playing(spawn: Point) -> Result<Cabinet, LayoutError> {
