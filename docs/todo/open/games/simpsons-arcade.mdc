@@ -964,3 +964,27 @@ encounter and dummy audio also passed: all 600 movement frames and
 51 combat submissions met the 16.667 ms budget. These measurements
 establish selected stationary Marge behavior and not exact opaque-pixel
 pivots, moving or interrupted jumps, or complete game parity.
+
+Isolated Marge jump-attack captures at five, fifteen and thirty
+elapsed jump ticks yielded respectively 33, 21 and 24 attack
+frames and 66, 84 and 96 pixels of forward travel. Additional
+captures bracketed the transition between 61 and 66 pixels of
+initial elevation; attacking late in a short jump still selected
+the slower rate. The fixed-step model selects a 64-pixel threshold
+and reproduces the three complete measured height and distance
+traces with sixteenth-pixel arithmetic. Captures of Homer, Bart and
+Lisa also showed the four-pixel forward rate from the higher jump.
+
+Primary during an airborne jump now initiates an aerial attack;
+existing ground attacks remain uninterrupted by jump. The preview
+temporarily selects ground-attack art for the new maneuver. A
+single provisional encounter hit per flight uses the existing
+horizontal and depth ranges with a 64-pixel elevation limit.
+Direction locking, exact threshold, enemy reactions, hitboxes and
+other characters' complete trajectories are not established as
+original parity. Simultaneous buttons produced a separate stationary
+airborne attack in the original; that distinct maneuver remains open.
+
+Fresh workspace validation passed, including the complete three
+height traces, threshold samples, landing, independent station
+state, forward movement, and one-hit encounter behavior.

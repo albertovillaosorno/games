@@ -129,7 +129,7 @@ impl Enemy {
         if next == ENEMY_STRIKE {
             for slot in slots.iter_mut().filter(|slot| {
                 slot.station.can_fight()
-                    && !matches!(slot.station.maneuver, Maneuver::Jump(_))
+                    && !slot.station.maneuver.airborne()
                     && in_range(
                         self.position,
                         self.facing,
@@ -157,19 +157,20 @@ impl Enemy {
         }
     }
 
-    fn receive_strikes(&mut self, slots: &[Slot; 4]) -> bool {
+    fn receive_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
         let before = self.health;
         for slot in slots {
-            let station = slot.station;
+            let station = &mut slot.station;
             if station.can_fight()
-                && station.maneuver
-                    == (Maneuver::Attack { tick: PLAYER_STRIKE })
                 && in_range(
                     station.position,
                     station.facing,
                     self.position,
                     (32, 12),
                 )
+                && (station.maneuver
+                    == (Maneuver::Attack { tick: PLAYER_STRIKE })
+                    || station.maneuver.consume_air_strike())
             {
                 self.health = self.health.saturating_sub(1);
             }
@@ -284,6 +285,25 @@ mod tests {
             cabinet.input_step(tick, &[]);
         }
         assert_eq!(cabinet.enemy(), defeated);
+        assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
+    }
+
+    #[test]
+    fn aerial_attack_hits_only_once_per_flight() {
+        let result = playing(Point { x: 132, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(3, &pulse(Control::Secondary));
+        for tick in 4..8 {
+            cabinet.input_step(tick, &[]);
+        }
+        cabinet.input_step(8, &pulse(Control::Primary));
+        for tick in 9..30 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(2));
         assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
     }
 

@@ -141,11 +141,76 @@ impl JumpMotion {
     }
 }
 
-/// Current isolated player maneuver.
+/// A forward airborne attack, with height and velocity in sixteenths
+/// of a pixel. The forward rate is selected at the attack edge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AirAttackMotion {
+    fast: bool,
+    height: i16,
+    hit: bool,
+    tick: u8,
+    velocity: i16,
+}
+
+impl AirAttackMotion {
+    const fn advance(mut self) -> Option<Self> {
+        let gravity = if self.fast {
+            4
+        } else {
+            3
+        };
+        self.velocity = self.velocity.saturating_sub(gravity);
+        self.height = self.height.saturating_add(self.velocity);
+        self.tick = self.tick.saturating_add(1);
+        if self.height < 16 {
+            None
+        } else {
+            Some(self)
+        }
+    }
+
+    fn elevation(self) -> i16 {
+        self.height.checked_div(16).unwrap_or(0)
+    }
+
+    const fn start(jump: JumpMotion) -> Self {
+        let fast = jump.height >= 64 * QUARTERS_PER_PIXEL;
+        let velocity = if fast {
+            -22
+        } else {
+            34
+        };
+        Self {
+            fast,
+            height: jump.height.saturating_mul(4).saturating_add(velocity),
+            hit: false,
+            tick: 0,
+            velocity,
+        }
+    }
+
+    pub(super) const fn step(self) -> i16 {
+        if self.fast {
+            4
+        } else {
+            2
+        }
+    }
+
+    /// Number of displayed ticks since the attack began.
+    #[must_use]
+    pub const fn tick(self) -> u8 {
+        self.tick
+    }
+}
+
+/// Current player maneuver.
 ///
 /// Attack combinations, exact original pivots and hitboxes are not modeled.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Maneuver {
+    /// Station is performing a forward airborne attack.
+    AirAttack(AirAttackMotion),
     /// Station is attacking.
     Attack {
         /// Zero-based displayed pose tick.
@@ -160,6 +225,10 @@ pub enum Maneuver {
 impl Maneuver {
     pub(super) const fn advance(self, player: Player, jump_held: bool) -> Self {
         match self {
+            Self::AirAttack(motion) => match motion.advance() {
+                Some(next) => Self::AirAttack(next),
+                None => Self::Idle,
+            },
             Self::Attack { tick } => {
                 let duration = self.pose_duration(player);
                 let next = tick.saturating_add(1);
@@ -177,12 +246,32 @@ impl Maneuver {
         }
     }
 
+    pub(super) const fn air_attack(jump: JumpMotion) -> Self {
+        Self::AirAttack(AirAttackMotion::start(jump))
+    }
+
+    pub(super) const fn airborne(self) -> bool {
+        matches!(self, Self::Jump(_) | Self::AirAttack(_))
+    }
+
     pub(super) const fn attack_cue(self, player: Player) -> bool {
         let onset = match player {
             Player::Marge | Player::Bart => 4,
             Player::Homer | Player::Lisa => 5,
         };
         matches!(self, Self::Attack { tick } if tick == onset)
+    }
+
+    // The encounter is still provisional. Admit one aerial hit per flight.
+    pub(super) fn consume_air_strike(&mut self) -> bool {
+        if let Self::AirAttack(motion) = self
+            && !motion.hit
+            && motion.elevation() <= 64
+        {
+            motion.hit = true;
+            return true;
+        }
+        false
     }
 
     /// Approximate elevation above the ground anchor, in logical pixels.
@@ -193,6 +282,7 @@ impl Maneuver {
     pub fn elevation(self) -> i16 {
         match self {
             Self::Jump(motion) => motion.elevation(),
+            Self::AirAttack(motion) => motion.elevation(),
             Self::Attack { .. } | Self::Idle => 0,
         }
     }
@@ -208,6 +298,7 @@ impl Maneuver {
             Self::Attack { .. } => 17,
             Self::Idle => 0,
             Self::Jump(_) => SHORT_JUMP_TICKS,
+            Self::AirAttack(_) => 60,
         }
     }
 
@@ -234,6 +325,50 @@ mod tests {
         }
         assert_eq!(state, Maneuver::Idle);
         heights
+    }
+
+    fn air_trace(takeoff_ticks: u8) -> (Vec<i16>, i16) {
+        let mut state = Maneuver::jump();
+        for _ in 1..takeoff_ticks {
+            state = state.advance(Player::Marge, true);
+        }
+        let Maneuver::Jump(jump) = state else {
+            return (Vec::new(), 0);
+        };
+        state = Maneuver::air_attack(jump);
+        let mut heights = Vec::new();
+        let mut distance = 0i16;
+        for _ in 0u8..60 {
+            let Maneuver::AirAttack(motion) = state else {
+                break;
+            };
+            heights.push(state.elevation());
+            distance = distance.saturating_add(motion.step());
+            state = state.advance(Player::Marge, true);
+        }
+        assert_eq!(state, Maneuver::Idle);
+        (heights, distance)
+    }
+
+    #[test]
+    fn air_attack_matches_observed_height_and_displacement() {
+        let early = [
+            35, 37, 39, 41, 42, 43, 44, 45, 46, 46, 46, 46, 46, 46, 45, 45, 44,
+            43, 42, 40, 39, 37, 35, 33, 30, 28, 25, 22, 19, 15, 12, 8, 4,
+        ];
+        let late = [
+            81, 79, 77, 75, 73, 70, 67, 64, 61, 57, 53, 49, 45, 40, 35, 30, 25,
+            19, 13, 7, 1,
+        ];
+        let apex = [
+            107, 105, 103, 101, 99, 96, 93, 90, 87, 83, 79, 75, 71, 66, 61, 56,
+            51, 45, 39, 33, 27, 20, 13, 6,
+        ];
+        assert_eq!(air_trace(5), (early.to_vec(), 66));
+        assert_eq!(air_trace(15), (late.to_vec(), 84));
+        assert_eq!(air_trace(30), (apex.to_vec(), 96));
+        assert_eq!(air_trace(10).0.first(), Some(&63));
+        assert_eq!(air_trace(11).0.first(), Some(&64));
     }
 
     #[test]

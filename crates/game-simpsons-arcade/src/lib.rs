@@ -58,7 +58,7 @@ use games::input::LogicalAction;
 use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
 use games::session::{LocalSession, MenuInput, SessionEffect};
-pub use maneuver::{JumpMotion, Maneuver};
+pub use maneuver::{AirAttackMotion, JumpMotion, Maneuver};
 
 /// Fixed reference screen period: 384 by 264 clocks at 6 MHz.
 pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
@@ -252,6 +252,23 @@ struct Slot {
 }
 
 impl Slot {
+    fn advance_maneuver(&mut self, player: Player, queued: Option<Maneuver>) {
+        if self.station.can_fight()
+            && matches!(queued, Some(Maneuver::Attack { .. }))
+            && let Maneuver::Jump(jump) = self.station.maneuver
+        {
+            self.station.maneuver = Maneuver::air_attack(jump);
+            return;
+        }
+        self.station.maneuver = self
+            .station
+            .maneuver
+            .advance(player, self.held(Control::Secondary));
+        if let Some(maneuver) = queued {
+            self.begin_maneuver(maneuver);
+        }
+    }
+
     // Accumulate the observed approximate quarter-pixel horizontal rate.
     const fn attack_step(&mut self, horizontal: i16) -> i16 {
         let next = self.attack_quarters.saturating_add(horizontal.signum());
@@ -330,8 +347,10 @@ impl Slot {
         }
         let dx = axis(self.held(Control::Left), self.held(Control::Right));
         let dy = axis(self.held(Control::Up), self.held(Control::Down));
-        if !matches!(self.station.maneuver, Maneuver::Attack { tick: 1.. })
-            && dx != 0
+        if !matches!(
+            self.station.maneuver,
+            Maneuver::Attack { tick: 1.. } | Maneuver::AirAttack(_)
+        ) && dx != 0
         {
             self.station.facing = if dx < 0 {
                 Facing::Left
@@ -340,7 +359,14 @@ impl Slot {
             };
         }
         let (step_x, step_y) =
-            if matches!(self.station.maneuver, Maneuver::Attack { .. }) {
+            if let Maneuver::AirAttack(motion) = self.station.maneuver {
+                let forward = if self.station.facing == Facing::Left {
+                    -1
+                } else {
+                    1
+                };
+                (motion.step().saturating_mul(forward), 0)
+            } else if matches!(self.station.maneuver, Maneuver::Attack { .. }) {
                 (self.attack_step(dx), 0)
             } else {
                 self.attack_quarters = 0;
@@ -577,13 +603,7 @@ impl Cabinet {
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
         {
-            slot.station.maneuver = slot
-                .station
-                .maneuver
-                .advance(player, slot.held(Control::Secondary));
-            if let Some(maneuver) = queued {
-                slot.begin_maneuver(maneuver);
-            }
+            slot.advance_maneuver(player, queued);
         }
         self.advance_continue();
         if self.phase() == Phase::Playing {
@@ -1085,6 +1105,40 @@ mod tests {
         assert_eq!(turned.facing, Facing::Left);
         assert_eq!(turned.position.x, before.position.x.saturating_sub(2));
         assert_eq!(turned.position.y, before.position.y - 2);
+    }
+
+    #[test]
+    fn aerial_attack_locks_direction_and_lands_without_repetition() {
+        let mut state = four_playing();
+        let [before, other, ..] = state.stations();
+        state.input_step(3, &[change(Player::Marge, Control::Secondary, true)]);
+        for tick in 4..18 {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(18, &[change(Player::Marge, Control::Primary, true)]);
+        let [attack, ..] = state.stations();
+        assert_eq!(attack.maneuver.elevation(), 81);
+        assert_eq!(attack.position.x, before.position.x + 4);
+        state.input_step(19, &[change(Player::Marge, Control::Up, true)]);
+        for tick in 20..39 {
+            state.input_step(tick, &[]);
+        }
+        let [last, untouched, ..] = state.stations();
+        assert!(last.maneuver.airborne());
+        assert_eq!(last.position.x, before.position.x + 84);
+        assert_eq!(last.position.y, before.position.y);
+        assert_eq!(untouched, other);
+        assert_air_attack_landing(&mut state, last);
+    }
+
+    fn assert_air_attack_landing(state: &mut Cabinet, last: Station) {
+        state.input_step(39, &[change(Player::Marge, Control::Up, false)]);
+        let [landed, ..] = state.stations();
+        assert_eq!(landed.maneuver, Maneuver::Idle);
+        assert_eq!(landed.position, last.position);
+        state.input_step(40, &[]);
+        let [after, ..] = state.stations();
+        assert_eq!(after, landed);
     }
 
     #[test]

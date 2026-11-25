@@ -147,6 +147,7 @@ impl PoseArt {
     ) -> Option<Art> {
         let (kind, tick) = match station.maneuver {
             Maneuver::Attack { tick } => (Kind::Attack, tick),
+            Maneuver::AirAttack(motion) => (Kind::Attack, motion.tick()),
             Maneuver::Jump(motion) => {
                 return jump_entry(&self.entries, player, motion).copied();
             },
