@@ -23,4 +23,10 @@ Produce portable Linux x86-64 executables with local asset discovery.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+The selected-title release build produced an 835,768-byte dynamically
+linked x86-64 ELF executable on the development host. Its direct dynamic
+dependencies were SDL2, libgcc and libc; it does not use the original game
+executable or library. The hidden native four-player movement smoke passed
+with four verified local art bundles. This verifies local startup, not
+portable distribution, independent asset discovery, saves or complete
+gameplay. Those remain open.

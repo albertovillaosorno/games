@@ -23,10 +23,13 @@ Expose one build command accepting a title and optional target.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
-
 The host-side `games-build` crate selects the MAME source family, machine
 and revision for asset verification, conversion, publication and read-back.
 Its dependency on native storage excludes runtime TLS and game logic.
-Executable packaging, title selection and target-specific build output are
-not implemented yet.
+The `build TITLE [linux-x86-64]` command selects the authored title
+package, binary and native-preview feature; no unrelated workspace packages
+are requested. It invokes the host Cargo toolchain with the locked release
+profile and explicit GNU/Linux x86-64 target. Unknown titles, targets and
+additional arguments are rejected. The actual build and hidden native smoke
+succeeded for `simpsons-arcade`. Android and browser compilation, portable
+packaging and automatic asset discovery remain unimplemented.

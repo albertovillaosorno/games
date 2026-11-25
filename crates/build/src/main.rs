@@ -74,6 +74,9 @@ pub mod render_benchmark;
 /// Bounded native diagnostic rendering of selected imported graphics.
 pub mod render_check;
 
+/// Compile one admitted independently authored title.
+pub mod title_build;
+
 use std::env;
 use std::ffi::OsString;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -99,7 +102,8 @@ use games_importer::{ImportError, VerifiedSource};
 use games_platform_storage::file::snapshot;
 
 const USAGE: &str = concat!(
-    "usage: games-build zip verify PATH TITLE REV SHA256 ",
+    "usage: games-build build TITLE [linux-x86-64]\n",
+    "games-build zip verify PATH TITLE REV SHA256 ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
@@ -225,6 +229,7 @@ enum Command {
     AudioCheck(Machine, audio_check::Arguments),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     BackgroundCheck(Machine, reference_background::Arguments),
+    BuildTitle(title_build::Title),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Check(AssetSelection, PathBuf, ContentHash),
     Import(AssetSelection, Arguments),
@@ -265,6 +270,9 @@ impl Command {
         let format = args.next().ok_or_else(|| String::from(USAGE))?;
         let action = args.next().ok_or_else(|| String::from(USAGE))?;
         match (format.to_str(), action.to_str()) {
+            (Some("build"), Some(title)) => Ok(Self::BuildTitle(
+                title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
+            )),
             (Some("zip"), Some("verify")) => {
                 Ok(Self::Verify(Arguments::parse(args.collect())?))
             },
@@ -468,6 +476,7 @@ impl Command {
 
     fn run(self) -> Result<(), String> {
         match self {
+            Self::BuildTitle(title) => title.run(),
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::ArtPublish(machine, args) => args.run(machine),
             #[cfg(all(
@@ -695,6 +704,25 @@ fn report_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_build_command_requires_known_title_and_optional_target() {
+        let args = ["build", "simpsons-arcade", "linux-x86-64"];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::BuildTitle(title_build::Title::SimpsonsArcade))
+        ));
+        for invalid in [["build", "metal-slug", "linux-x86-64"], [
+            "build",
+            "simpsons-arcade",
+            "android-arm64",
+        ]] {
+            assert!(
+                Command::parse(invalid.into_iter().map(OsString::from))
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn bounded_reader_rejects_growing_or_oversized_sources() {

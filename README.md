@@ -74,9 +74,18 @@ reference test inputs. Logs are stored under
 Place lawfully obtained original files in `.reference/games/<id>/` using
 the task ID in TODO.md. Run `cargo download` to fetch upstream
 reference sources under `.reference/tools/`. These directories are local.
-The intended build command is `build <game>` (not implemented yet). Keep
-the engine modular, dependency versions centralised and game code limited to
-unique behaviour. All Rust code and development tools live under `crates/`.
+Build the available GNU/Linux x86-64 title preview with:
+
+```sh
+cargo run --locked -p games-build -- build simpsons-arcade
+```
+
+The optional target is `linux-x86-64`; other targets and unknown titles are
+rejected. This produces a release executable, not a portable distribution
+package or a game containing original assets. The title requires explicit
+local art bundles (see its TODO). Keep the engine modular, dependency
+versions centralised and game code limited to unique behaviour.
+All Rust code and development tools live under `crates/`.
 Keep behavioural tests inline in their source modules. Use one TODO.md per
 title once onboarded.
 
