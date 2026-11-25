@@ -31,9 +31,13 @@
 
 //! Optional reference-derived airborne ground shadow.
 
+use std::num::NonZeroU32;
+
 use games_assets::AssetFormat;
 use games_platform_graphics::linux::RenderError;
-use games_platform_graphics::linux::sprites::{SceneSession, SpriteDraw};
+use games_platform_graphics::linux::sprites::{
+    SceneSession, SpriteDraw, SpriteRect,
+};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{Art, Scene, failure};
@@ -115,25 +119,58 @@ pub(super) fn smoke(
     if !expected && with == without {
         return Ok(());
     }
-    if expected && darkens(&without, &with) {
-        return Ok(());
+    if expected {
+        let [marge, ..] = cabinet.stations();
+        let view = art.presentation_view(scene, cabinet)?;
+        let mask = art.shadow.as_ref().ok_or(RenderError::InvalidSprite)?;
+        let bounds = mask.draw(view.project(marge.position))?.destination;
+        if darkens(&without, &with, scene.layout().width(), bounds) {
+            return Ok(());
+        }
     }
     Err(failure("unexpected ground shadow in native readback"))
 }
 
-fn darkens(without: &[u8], with: &[u8]) -> bool {
-    if without.len() != with.len() {
+fn within(bounds: SpriteRect, index: usize, width: usize) -> bool {
+    let column = index
+        .checked_rem(width)
+        .and_then(|value| i32::try_from(value).ok());
+    let row = index
+        .checked_div(width)
+        .and_then(|value| i32::try_from(value).ok());
+    column.is_some_and(|position| {
+        (bounds.x..bounds.x.saturating_add_unsigned(bounds.width.get()))
+            .contains(&position)
+    }) && row.is_some_and(|position| {
+        (bounds.y..bounds.y.saturating_add_unsigned(bounds.height.get()))
+            .contains(&position)
+    })
+}
+
+fn darkens(
+    without: &[u8],
+    with: &[u8],
+    columns: NonZeroU32,
+    bounds: SpriteRect,
+) -> bool {
+    let Ok(stride) = usize::try_from(columns.get()) else {
+        return false;
+    };
+    if without.len() != with.len() || !without.len().is_multiple_of(4) {
         return false;
     }
     let mut changed = false;
-    for (prior, current) in without
+    for (index, (prior, current)) in without
         .as_chunks::<4>()
         .0
         .iter()
         .zip(with.as_chunks::<4>().0)
+        .enumerate()
     {
         for (before, after) in prior.iter().zip(current).take(3) {
-            if after > before {
+            if after > before
+                || (after < before && !within(bounds, index, stride))
+            {
                 return false;
             }
             changed |= after < before;
@@ -187,9 +224,33 @@ mod tests {
     }
 
     #[test]
-    fn readback_must_darken_without_brightening() {
-        assert!(darkens(&[100, 100, 100, 255], &[60, 60, 60, 255]));
-        assert!(!darkens(&[100, 100, 100, 255], &[100, 100, 100, 255]));
-        assert!(!darkens(&[100, 100, 100, 255], &[60, 101, 60, 255]));
+    fn readback_must_darken_only_within_ground_mask() {
+        let width = NonZeroU32::MIN.saturating_add(1);
+        let bounds = SpriteRect {
+            height: NonZeroU32::MIN,
+            width: NonZeroU32::MIN,
+            x: 1,
+            y: 0,
+        };
+        let before = [100, 100, 100, 255, 100, 100, 100, 255];
+        assert!(!darkens(&before, &before, width, bounds));
+        assert!(darkens(
+            &before,
+            &[100, 100, 100, 255, 60, 60, 60, 255],
+            width,
+            bounds
+        ));
+        assert!(!darkens(
+            &before,
+            &[99, 100, 100, 255, 60, 60, 60, 255],
+            width,
+            bounds
+        ));
+        assert!(!darkens(
+            &before,
+            &[100, 100, 100, 255, 60, 101, 60, 255],
+            width,
+            bounds
+        ));
     }
 }
