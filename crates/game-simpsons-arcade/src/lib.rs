@@ -211,6 +211,8 @@ pub enum LayoutError {
 /// A read-only view of an individual station.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Station {
+    /// Cumulative attack cues at the observed provisional onset tick.
+    pub attack_cues: u64,
     /// Remaining virtual credits.
     pub credits: u8,
     /// Current sprite facing.
@@ -327,6 +329,7 @@ impl Slot {
         Self {
             held: 0,
             station: Station {
+                attack_cues: 0,
                 credits: 0,
                 facing: Facing::Right,
                 health: 3,
@@ -419,6 +422,17 @@ impl Cabinet {
         self.phase
     }
 
+    fn record_attack_cues(&mut self) {
+        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
+            if slot.station.can_fight()
+                && slot.station.maneuver.attack_cue(player)
+            {
+                slot.station.attack_cues =
+                    slot.station.attack_cues.saturating_add(1);
+            }
+        }
+    }
+
     /// Inspect all four stations in cabinet order.
     #[must_use]
     pub fn stations(&self) -> [Station; 4] {
@@ -459,6 +473,7 @@ impl InputStep for Cabinet {
             if let Some(enemy) = &mut self.enemy {
                 enemy.advance(self.layout, &mut self.slots);
             }
+            self.record_attack_cues();
         }
     }
 }
@@ -655,6 +670,37 @@ mod tests {
         assert_eq!(attack_end.position, position);
         assert_eq!(attack_end.maneuver, Maneuver::Attack { tick: 16 });
         assert_eq!(still_airborne.maneuver, Maneuver::Jump { tick: 16 });
+    }
+
+    #[test]
+    fn attack_cues_are_station_local_and_do_not_repeat_on_hold() {
+        let mut state = four_playing();
+        assert_eq!(state.stations().map(|station| station.attack_cues), [0; 4]);
+        let attacks =
+            Player::ALL.map(|player| change(player, Control::Primary, true));
+        state.input_step(3, &attacks);
+        for tick in 4..7 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [0; 4]);
+        state.input_step(7, &[]);
+        assert_eq!(state.stations().map(|station| station.attack_cues), [
+            1, 0, 1, 0
+        ]);
+        state.input_step(8, &[]);
+        assert_eq!(state.stations().map(|station| station.attack_cues), [1; 4]);
+        for tick in 9..40 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [1; 4]);
+        state.input_step(40, &[change(Player::Marge, Control::Primary, false)]);
+        state.input_step(41, &pulse(Player::Marge, Control::Primary));
+        for tick in 42..46 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [
+            2, 1, 1, 1
+        ]);
     }
 
     #[test]

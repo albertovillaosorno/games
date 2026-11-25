@@ -72,3 +72,12 @@ and can damage grounded players. Jump evades a ground strike.
 Health indicators and enemy actions are independently authored
 prototype rules, not an original-game hitbox or health reconstruction.
 The optional encounter has no stage progression or continue handling.
+
+Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
+The hash identifies the verified canonical PCM sample catalogue. The
+preview selects four station-specific attack samples from that bundle,
+using fixed-step cues and the shared native mixer. Without this option
+it opens no audio device. Nominal pitch, gain, queue timing and voice
+admission are provisional; background music and other sound effects
+are not reproduced. The hidden smoke uses a paused device to verify
+nonzero queued audio and one cue per held attack.

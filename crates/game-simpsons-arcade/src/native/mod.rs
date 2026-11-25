@@ -31,6 +31,7 @@
 
 //! Native initial street preview using only verified canonical art.
 
+mod audio;
 mod encounter;
 mod poses;
 mod touch;
@@ -396,8 +397,15 @@ impl Scene {
     }
 }
 
+struct OptionalSources {
+    audio: Option<OsString>,
+    enemy: Option<[OsString; 2]>,
+    poses: poses::Catalogue,
+}
+
 struct Sources<'source> {
     actors: [CanonicalBundle; 4],
+    audio: Option<audio::Samples>,
     enemy: Option<[CanonicalBundle; 2]>,
     parent: &'source Path,
     poses: poses::Catalogue,
@@ -407,16 +415,22 @@ impl<'source> Sources<'source> {
     fn load(
         parent: &'source Path,
         actors: &[OsString; 4],
-        enemy: Option<&[OsString; 2]>,
-        poses: poses::Catalogue,
+        options: OptionalSources,
     ) -> Result<Self, RenderError> {
         Ok(Self {
             actors: open_bundles(parent, actors)?,
-            enemy: enemy
+            audio: options
+                .audio
+                .as_ref()
+                .map(|hash| audio::Samples::load(parent, hash))
+                .transpose()?,
+            enemy: options
+                .enemy
+                .as_ref()
                 .map(|hashes| open_bundles(parent, hashes))
                 .transpose()?,
             parent,
-            poses,
+            poses: options.poses,
         })
     }
 }
@@ -513,11 +527,6 @@ fn open_bundle(
     parent: &Path,
     digest: &OsString,
 ) -> Result<CanonicalBundle, RenderError> {
-    let hash: ContentHash = digest
-        .to_str()
-        .ok_or_else(|| failure("invalid hash"))?
-        .parse()
-        .map_err(failure)?;
     let limits = ManifestLimits {
         manifest_bytes: size(32_768)?,
         payload_bytes: NonZeroU64::new(1_048_576)
@@ -526,6 +535,19 @@ fn open_bundle(
         total_bytes: NonZeroU64::new(33_554_432)
             .ok_or(RenderError::TooLarge)?,
     };
+    open_selected_bundle(parent, digest, limits)
+}
+
+fn open_selected_bundle(
+    parent: &Path,
+    digest: &OsString,
+    limits: ManifestLimits,
+) -> Result<CanonicalBundle, RenderError> {
+    let hash: ContentHash = digest
+        .to_str()
+        .ok_or_else(|| failure("invalid hash"))?
+        .parse()
+        .map_err(failure)?;
     let bundle =
         CanonicalBundle::open(parent, hash, limits).map_err(failure)?;
     let source = bundle.manifest().source();
@@ -627,22 +649,32 @@ pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
     } else {
         None
     };
+    let audio = if args.first().is_some_and(|arg| arg == "--audio") {
+        if args.len() < 2 {
+            return Err(String::from("missing audio bundle hash"));
+        }
+        let _flag = args.remove(0);
+        Some(args.remove(0))
+    } else {
+        None
+    };
     let [directory, marge, homer, bart, lisa] = <[OsString; 5]>::try_from(args)
         .map_err(|_error| {
             String::from(concat!(
                 "usage: simpsons-arcade [--smoke] [--touch] ",
-                "[--poses FILE] [--enemy APPROACH_SHA STRIKE_SHA] PARENT ",
+                "[--poses FILE] [--enemy APPROACH_SHA STRIKE_SHA] ",
+                "[--audio SHA] PARENT ",
                 "MARGE_SHA HOMER_SHA BART_SHA LISA_SHA"
             ))
         })?;
     let parent = Path::new(&directory);
-    let result = Sources::load(
-        parent,
-        &[marge, homer, bart, lisa],
-        enemy.as_ref(),
-        catalogue,
-    )
-    .and_then(|source| window(&source, smoke, touch_enabled));
+    let result =
+        Sources::load(parent, &[marge, homer, bart, lisa], OptionalSources {
+            audio,
+            enemy,
+            poses: catalogue,
+        })
+        .and_then(|source| window(&source, smoke, touch_enabled));
     result.map_err(|error| format!("{error:?}"))
 }
 
@@ -868,15 +900,14 @@ fn window(
         })?,
         hidden,
     )?;
-    let height = if touch_enabled {
-        u32::from(touch::SCENE_HEIGHT)
-    } else {
-        224
-    };
-    let layout =
-        FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)?;
+    let layout = preview_layout(touch_enabled)?;
     let limits = scene_limits(source, touch_enabled)?;
     let startup = window.input(size(4)?)?;
+    let mut playback = source
+        .audio
+        .as_ref()
+        .map(audio::Playback::open)
+        .transpose()?;
     window.with_scene(layout, limits, |scene| {
         let mut art = Scene::load(scene, source, touch_enabled)?;
         if hidden {
@@ -884,7 +915,13 @@ fn window(
             if source.enemy.is_some() {
                 encounter::smoke(scene, &mut art, touch_enabled)?;
             }
+            if let Some(audio) = &mut playback {
+                audio.smoke()?;
+            }
             return Ok(());
+        }
+        if let Some(audio) = &playback {
+            audio.resume();
         }
         let mut simulation = live(source.enemy.is_some())?;
         let mut controls = Controls::new(touch_enabled)?;
@@ -901,6 +938,9 @@ fn window(
             let delta = elapsed.saturating_sub(previous);
             previous = elapsed;
             let _advanced = simulation.advance(delta).map_err(failure)?;
+            if let Some(audio) = &mut playback {
+                audio.update(simulation.state())?;
+            }
             let _drawn = art.present(scene, simulation.state())?;
         }
         Ok(())
@@ -937,4 +977,13 @@ fn scene_limits(
             9
         }))?,
     })
+}
+
+fn preview_layout(touch_enabled: bool) -> Result<FrameLayout, RenderError> {
+    let height = if touch_enabled {
+        u32::from(touch::SCENE_HEIGHT)
+    } else {
+        224
+    };
+    FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)
 }

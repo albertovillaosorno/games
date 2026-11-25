@@ -77,6 +77,14 @@ impl Maneuver {
         }
     }
 
+    pub(super) const fn attack_cue(self, player: Player) -> bool {
+        let onset = match player {
+            Player::Marge | Player::Bart => 4,
+            Player::Homer | Player::Lisa => 5,
+        };
+        matches!(self, Self::Attack { tick } if tick == onset)
+    }
+
     pub(super) const fn duration(self, player: Player) -> u8 {
         match self {
             Self::Attack { .. } if matches!(player, Player::Bart) => 18,

@@ -548,3 +548,26 @@ routing, 24-pixel health bar readback, defeat and stable post-defeat
 pixels. A separate counterstrike verified player damage and its
 indicator. Stage progression, original collision and combat rules,
 enemy animation, accurate pivots and continue handling remain open.
+
+Isolated original-machine attack observations with matched no-button
+controls identified four different K053260 PCM clips: catalogue entries
+4, 5, 6 and 7 for Marge, Homer, Bart and Lisa respectively. Marge and
+Homer received an isolated Primary press at frame 2405; Bart and Lisa
+required an earlier frame-2285 press to avoid an indistinguishable
+later interval. The observed clips first appeared in voice state four
+or five frames after the input, with some programmed a frame before
+playback. Repeating Marge's run reproduced both voice state and mixed
+WAV bytes. A Marge jump at the later interval did not produce a distinct
+voice or WAV change, so no jump cue is inferred from this evidence.
+
+The optional GNU/Linux `--audio SHA` loads the four verified mono PCM
+records from the bounded local sample catalogue. A cumulative cue per
+station is emitted at fixed attack tick four or five; held input does
+not repeat. The shared mixer and SDL queue provide stereo output with
+16 bounded voice slots, a 256-frame refill and at most 1024 queued
+frames. Nominal sample rates and conservative gains are independent
+prototype policies, not exact original pitch, panning or mixing.
+A combined hidden native smoke with SDL's dummy audio driver checks
+quiet entry, staggered station cues, simultaneous mixed audio, queue
+bounds and exhaustion without held-button repetition. Physical audio,
+background music, exact timing and all other sound events remain open.
