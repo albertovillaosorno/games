@@ -35,6 +35,7 @@ pub mod archive;
 
 use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::str::{FromStr, from_utf8};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -69,6 +70,30 @@ impl Display for ContentHash {
             write!(f, "{byte:02x}")?;
         }
         Ok(())
+    }
+}
+
+impl FromStr for ContentHash {
+    type Err = AssetError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 64
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            })
+        {
+            return Err(AssetError::InvalidIdentity);
+        }
+        let mut digest = [0; 32];
+        for (pair, byte) in
+            value.as_bytes().as_chunks::<2>().0.iter().zip(&mut digest)
+        {
+            let hex = from_utf8(pair)
+                .map_err(|_error| AssetError::InvalidIdentity)?;
+            *byte = u8::from_str_radix(hex, 16)
+                .map_err(|_error| AssetError::InvalidIdentity)?;
+        }
+        Ok(Self(digest))
     }
 }
 
@@ -175,7 +200,11 @@ pub struct SourceIdentity {
 }
 
 impl SourceIdentity {
-    fn validate(&self) -> Result<(), AssetError> {
+    /// Check canonical title and edition identifiers.
+    ///
+    /// # Errors
+    /// Rejects noncanonical identities.
+    pub fn validate(&self) -> Result<(), AssetError> {
         if !valid_slug(&self.title) || !valid_slug(&self.revision) {
             return Err(AssetError::InvalidIdentity);
         }
@@ -481,6 +510,23 @@ mod tests {
             AssetManifest::parse(document.as_bytes(), restrictive)
                 == Err(AssetError::TooLarge),
         )
+    }
+
+    #[test]
+    fn content_hash_parser_rejects_noncanonical_values() {
+        let digest = ContentHash::calculate(b"source");
+        let encoded = digest.to_string();
+        assert_eq!(encoded.parse::<ContentHash>(), Ok(digest));
+        for invalid in ["", "abc", encoded.to_uppercase().as_str()] {
+            assert_eq!(
+                invalid.parse::<ContentHash>(),
+                Err(AssetError::InvalidIdentity)
+            );
+        }
+        assert_eq!(
+            "z".repeat(64).parse::<ContentHash>(),
+            Err(AssetError::InvalidIdentity)
+        );
     }
 
     #[test]

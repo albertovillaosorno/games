@@ -30,5 +30,8 @@ opening the ZIP. The flat-file adapter admits stored and deflated entries
 through shared archive budgets, rejects duplicate and case-colliding names,
 unsafe paths, unsupported member types and inconsistent ZIP headers. It
 checks decoded length and CRC before each conversion callback. Six synthetic
-tests pass. Local source verification, canonical conversion and transactional
+tests pass. The read-only verification CLI also passed on the pinned
+Simpsons World set 1 input with exact source, member, total and count limits.
+It decoded 14 members and 7,209,088 bytes without extraction or execution.
+Canonical conversion and transactional
 publication remain open; callers must discard staged results on any failure.

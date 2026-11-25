@@ -106,7 +106,7 @@ AGENTS.md and the foundation contracts.
 
 ### TODO - The Simpsons Arcade Game
 
-original Konami arcade four-player edition, exact region/revision pending;
+Original Konami arcade four-player World set 1;
 preserve original four-player cooperative gameplay and pixel art.
 
 [TODO - The Simpsons Arcade Game](docs/todo/open/games/simpsons-arcade.mdc)

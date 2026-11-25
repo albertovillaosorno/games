@@ -52,6 +52,8 @@ pub enum ImportError {
     Collision,
     /// Source bytes do not match the exact expected identity.
     IncorrectSource,
+    /// The title or revision identifier is not canonical.
+    InvalidSourceIdentity,
     /// Archive headers, compressed bytes or checksum are invalid.
     InvalidZip,
     /// A source, allocation or archive budget was exceeded.
@@ -86,12 +88,15 @@ impl<'source> VerifiedSource<'source> {
     /// Verify an immutable bounded source snapshot before parsing it.
     ///
     /// # Errors
-    /// Rejects oversized snapshots and mismatched SHA-256.
+    /// Rejects invalid identities, oversized snapshots and mismatched SHA-256.
     pub fn new(
         bytes: &'source [u8],
         identity: &'source SourceIdentity,
         limit: NonZeroU64,
     ) -> Result<Self, ImportError> {
+        identity
+            .validate()
+            .map_err(|_error| ImportError::InvalidSourceIdentity)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit.get() {
             return Err(ImportError::TooLarge);
         }
@@ -303,6 +308,12 @@ mod tests {
         let bytes =
             make_zip(&[("tile.bin", b"tile", CompressionMethod::Stored)])?;
         let expected = identity(&bytes);
+        let mut invalid = expected.clone();
+        invalid.title = String::from("Invalid title");
+        require(matches!(
+            VerifiedSource::new(&bytes, &invalid, bound(65_536)),
+            Err(ImportError::InvalidSourceIdentity),
+        ))?;
         require(
             VerifiedSource::new(&bytes, &expected, bound(65_536))
                 .is_ok_and(|source| source.identity() == &expected),

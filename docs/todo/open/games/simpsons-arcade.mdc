@@ -43,3 +43,5 @@ Archive SHA-256:
 No original binaries were executed. The full MAME download timed out; the
 relevant pinned driver metadata was retrieved separately. Local input is
 verified; asset conversion, gameplay implementation and parity remain open.
+The Rust importer also verified all 14 members with exact configured limits
+and reported 7,209,088 decoded bytes without extraction or execution.
