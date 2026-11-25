@@ -51,6 +51,10 @@ pub use maneuver::Maneuver;
 /// Fixed reference screen period: 384 by 264 clocks at 6 MHz.
 pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
 
+/// Approximate twenty-second original continue opportunity in ticks.
+pub const CONTINUE_TICKS: u16 = 1200;
+const PLAYER_HEALTH: u8 = 3;
+
 /// Fixed cabinet positions for the original four-player edition.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Player {
@@ -142,6 +146,11 @@ pub enum Phase {
 pub enum Participation {
     /// Not playing.
     Absent,
+    /// Knocked out; a credit and a new Start edge can restore play.
+    Continuing {
+        /// Remaining countdown ticks.
+        ticks_left: u16,
+    },
     /// Station is active in the street.
     Playing,
     /// Station claimed in the selection screen.
@@ -238,6 +247,7 @@ impl Station {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Slot {
     held: u8,
+    spawn: Point,
     station: Station,
 }
 
@@ -281,6 +291,31 @@ impl Slot {
         if self.station.can_fight() && self.station.maneuver == Maneuver::Idle {
             self.station.maneuver = maneuver;
             self.station.walking_ticks = None;
+        }
+    }
+
+    const fn damage(&mut self) {
+        self.station.health = self.station.health.saturating_sub(1);
+        self.station.maneuver = Maneuver::Idle;
+        self.station.walking_ticks = None;
+        if self.station.health == 0 {
+            self.station.participation = Participation::Continuing {
+                ticks_left: CONTINUE_TICKS,
+            };
+        }
+    }
+
+    const fn expire_continue(&mut self) {
+        if let Participation::Continuing { ticks_left } =
+            self.station.participation
+        {
+            self.station.participation = if ticks_left <= 1 {
+                Participation::Absent
+            } else {
+                Participation::Continuing {
+                    ticks_left: ticks_left.saturating_sub(1),
+                }
+            };
         }
     }
 
@@ -328,11 +363,12 @@ impl Slot {
     const fn new(position: Point) -> Self {
         Self {
             held: 0,
+            spawn: position,
             station: Station {
                 attack_cues: 0,
                 credits: 0,
                 facing: Facing::Right,
-                health: 3,
+                health: PLAYER_HEALTH,
                 maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
@@ -343,11 +379,19 @@ impl Slot {
 
     fn start(&mut self, phase: Phase) {
         if self.station.credits == 0
-            || self.station.participation != Participation::Absent
+            || !matches!(
+                self.station.participation,
+                Participation::Absent | Participation::Continuing { .. }
+            )
         {
             return;
         }
         self.station.credits = self.station.credits.saturating_sub(1);
+        self.station.health = PLAYER_HEALTH;
+        self.station.position = self.spawn;
+        self.station.facing = Facing::Right;
+        self.station.maneuver = Maneuver::Idle;
+        self.station.walking_ticks = None;
         self.station.participation = if phase == Phase::Street {
             Participation::Playing
         } else {
@@ -358,8 +402,8 @@ impl Slot {
 
 /// Deterministic first-street title state, independent of the host platform.
 ///
-/// The prototype omits the original intro, camera, collision, scoring
-/// and continuing. Optional combat and maneuver timings are provisional.
+/// The prototype omits the original intro, camera, collision and scoring.
+/// Optional combat, continuing and maneuver timings are provisional.
 /// It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
@@ -377,6 +421,28 @@ impl Cabinet {
                 selected.station.participation = Participation::Playing;
             }
         }
+    }
+
+    fn advance_continue(&mut self) {
+        if self.phase != Phase::Street || self.enemy.is_none() {
+            return;
+        }
+        for slot in &mut self.slots {
+            slot.expire_continue();
+        }
+        if self
+            .slots
+            .iter()
+            .any(|slot| slot.station.participation != Participation::Absent)
+        {
+            return;
+        }
+        self.enemy = self.enemy.map(Enemy::restart);
+        self.phase = if self.slots.iter().any(|slot| slot.station.credits > 0) {
+            Phase::Selection
+        } else {
+            Phase::Attract
+        };
     }
 
     fn apply(&mut self, change: &LogicalAction<Action>) {
@@ -466,11 +532,14 @@ impl InputStep for Cabinet {
         for action in actions {
             self.apply(action);
         }
+        self.advance_continue();
         if self.phase == Phase::Street {
             for slot in &mut self.slots {
                 slot.move_tick(self.layout);
             }
-            if let Some(enemy) = &mut self.enemy {
+            if let Some(enemy) = &mut self.enemy
+                && self.slots.iter().any(|slot| slot.station.can_fight())
+            {
                 enemy.advance(self.layout, &mut self.slots);
             }
             self.record_attack_cues();

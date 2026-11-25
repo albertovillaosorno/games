@@ -40,7 +40,7 @@ use games_platform_graphics::linux::sprites::{
 };
 use games_platform_graphics::linux::{FrameLayout, RenderError};
 
-use super::{Action, Control, Player, dimension, size};
+use super::{Action, Control, Player, dimension, glyph, size};
 
 pub(super) const SCENE_HEIGHT: u16 = 304;
 const PANEL_HEIGHT: u16 = 80;
@@ -149,12 +149,7 @@ impl PanelButton {
         else {
             return false;
         };
-        if column >= 5 {
-            return false;
-        }
-        self.glyph
-            .get(usize::from(row))
-            .is_some_and(|bits| bits & (0b10000u8 >> column) != 0)
+        glyph::ink(&self.glyph, 5, column, row)
     }
 }
 

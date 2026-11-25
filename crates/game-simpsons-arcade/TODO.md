@@ -71,7 +71,10 @@ first enemy approaches an active station, can be struck with Primary,
 and can damage grounded players. Jump evades a ground strike.
 Health indicators and enemy actions are independently authored
 prototype rules, not an original-game hitbox or health reconstruction.
-The optional encounter has no stage progression or continue handling.
+The optional encounter supports a provisional 1200-tick continue window.
+Insert a coin and press Start before expiry to resume; coin alone changes
+the prompt and preserves the unused credit after expiry. Stage progression
+and the original game-over interlude are not implemented.
 
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
 The hash identifies the verified canonical PCM sample catalogue. The

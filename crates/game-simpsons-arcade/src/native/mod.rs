@@ -32,7 +32,9 @@
 //! Native initial street preview using only verified canonical art.
 
 mod audio;
+mod continue_hud;
 mod encounter;
+mod glyph;
 mod poses;
 mod touch;
 
@@ -364,6 +366,23 @@ impl Scene {
         station: Station,
         phase: Phase,
     ) -> Result<(), RenderError> {
+        if let (Some(combat), Participation::Continuing { ticks_left }) =
+            (&self.combat, station.participation)
+        {
+            self.draws.push(combat.continue_draw(
+                player,
+                station.credits > 0,
+                ticks_left,
+            )?);
+            return Ok(());
+        }
+        if let Some(combat) = &self.combat
+            && station.participation == Participation::Absent
+            && station.credits > 0
+        {
+            self.draws.push(combat.continue_draw(player, true, 0)?);
+            return Ok(());
+        }
         let actor = *self
             .actors
             .get(player.index())
@@ -952,7 +971,7 @@ fn scene_limits(
     touch_enabled: bool,
 ) -> Result<SceneLimits, RenderError> {
     let enemy_atlases = if source.enemy.is_some() {
-        3
+        4
     } else {
         0
     };

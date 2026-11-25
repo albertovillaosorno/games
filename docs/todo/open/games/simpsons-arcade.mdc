@@ -571,3 +571,21 @@ A combined hidden native smoke with SDL's dummy audio driver checks
 quiet entry, staggered station cues, simultaneous mixed audio, queue
 bounds and exhaustion without held-button repetition. Physical audio,
 background music, exact timing and all other sound events remain open.
+
+Matched idle, coin-only and coin-plus-Start original-machine observations
+establish the basic continue flow. Idle Marge displayed CONTINUE 20 at
+frame 4400, 10 at 5000 and 0 at 5600. A coin at frame 4650 changed the
+prompt to PRESS START without restoring the player. Repeating this run
+matched the earlier snapshots through frame 5400. The extended run
+matched the idle game-over snapshots from 5650 through 6000; the credit
+survived into the next selection prompt. Adding Start at frame 4700
+restored the player HUD by 4750 and active objects by 4800.
+
+The provisional encounter now enters a station-local continue window
+on knockout, counts down even with an unused credit, requires a fresh
+paid Start, and preserves unused credits when the last station expires.
+The native HUD uses independently drawn bitmap glyphs for CONTINUE and
+PRESS START. The 1200-tick window approximates the observed countdown;
+health restoration, respawn positions and expiry-to-selection behavior
+are prototype rules. Original life stock, game-over interlude, exact
+timing and complete multiplayer reference parity remain open.

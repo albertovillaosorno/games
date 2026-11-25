@@ -40,12 +40,14 @@ use games_platform_graphics::linux::sprites::{
 use games_platform_graphics::linux::{FrameLayout, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
+use super::continue_hud::ContinueArt;
 use super::{
     Art, Controls, Scene, dimension, failure, ground_position, indicator, live,
     size,
 };
 use crate::{
-    Cabinet, Enemy, EnemyAction, Facing, Player, Point, Station, TICK_INTERVAL,
+    Cabinet, Enemy, EnemyAction, Facing, Participation, Player, Point, Station,
+    TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -54,12 +56,22 @@ const MISSING: [u8; 4] = [128, 45, 53, 255];
 #[derive(Debug)]
 pub(super) struct CombatArt {
     approach: Art,
+    continue_hud: ContinueArt,
     filled: Art,
     missing: Art,
     strike: Art,
 }
 
 impl CombatArt {
+    pub(super) fn continue_draw(
+        &self,
+        player: Player,
+        paid: bool,
+        ticks_left: u16,
+    ) -> Result<SpriteDraw, RenderError> {
+        self.continue_hud.draw(player, paid, ticks_left)
+    }
+
     pub(super) fn enemy_draw(
         &self,
         enemy: Enemy,
@@ -150,6 +162,7 @@ impl CombatArt {
         };
         Ok(Self {
             approach,
+            continue_hud: ContinueArt::load(scene)?,
             filled,
             missing,
             strike,
@@ -288,7 +301,7 @@ fn smoke_counterstrike(
         let [marge, ..] = simulation.state().stations();
         verify_bar(&pixels, Point { x: 28, y: 25 }, marge.health)?;
         if marge.health == 2 {
-            return Ok(());
+            return smoke_continue(scene, art, &mut controls, &mut simulation);
         }
         advance(&mut simulation, 1)?;
     }
@@ -344,6 +357,74 @@ fn verify_bar(
         if *pixel != expected {
             return Err(failure("unexpected native health indicator pixels"));
         }
+    }
+    Ok(())
+}
+
+fn smoke_continue(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    for _ in 0..100u8 {
+        let [marge, ..] = simulation.state().stations();
+        if matches!(marge.participation, Participation::Continuing { .. }) {
+            break;
+        }
+        advance(simulation, 1)?;
+    }
+    let [knocked_out, ..] = simulation.state().stations();
+    if !matches!(knocked_out.participation, Participation::Continuing { .. }) {
+        return Err(failure("native encounter did not reach continue state"));
+    }
+    let _drawn = art.present(scene, simulation.state())?;
+    verify_prompt(scene, false)?;
+    pulse(controls, simulation, Scancode::Num5)?;
+    advance(simulation, 1)?;
+    let [unpaid, ..] = simulation.state().stations();
+    if unpaid.health != 0 {
+        return Err(failure("unpaid start restored native player"));
+    }
+    pulse(controls, simulation, Scancode::Num1)?;
+    advance(simulation, 1)?;
+    let [paid, ..] = simulation.state().stations();
+    if paid.credits != 1 || paid.health != 0 {
+        return Err(failure("native coin incorrectly restored player"));
+    }
+    let _paid_drawn = art.present(scene, simulation.state())?;
+    verify_prompt(scene, true)?;
+    pulse(controls, simulation, Scancode::Num5)?;
+    advance(simulation, 1)?;
+    let [continued, ..] = simulation.state().stations();
+    if continued.health != 3
+        || continued.credits != 0
+        || continued.participation != Participation::Playing
+    {
+        return Err(failure("native paid start did not continue player"));
+    }
+    let _continued_drawn = art.present(scene, simulation.state())?;
+    verify_bar(
+        &scene.readback().map_err(failure)?,
+        Point { x: 28, y: 25 },
+        3,
+    )
+}
+
+fn verify_prompt(
+    scene: &mut SceneSession<'_, '_>,
+    paid: bool,
+) -> Result<(), RenderError> {
+    let pixels = scene.readback().map_err(failure)?;
+    let row = health_row(&pixels, Point { x: 9, y: 3 })?;
+    let start = row.get(..4).ok_or(RenderError::InvalidLength)?;
+    let paid_start = row.get(48..52).ok_or(RenderError::InvalidLength)?;
+    let ink = [248, 228, 168, 255];
+    let background = [24, 22, 30, 255];
+    if (paid && (start != background || paid_start != ink))
+        || (!paid && start != ink)
+    {
+        return Err(failure("unexpected native continue prompt pixels"));
     }
     Ok(())
 }
