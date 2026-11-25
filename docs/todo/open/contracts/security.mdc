@@ -231,3 +231,10 @@ Synthetic tests cover a 9,001-byte member, subsequent smaller member
 reuse, and unchanged contents after an overflowing reservation request.
 The original Simpsons archive still admits 14 members and 7,209,088
 bytes. Fresh validation passed in run 1795606389885141764-59056.
+
+Conversion admission now validates the borrowed logical key, format and
+payload size using the shared record descriptor check before hashing
+payload bytes or allocating an owned key. The existing record validation
+uses the same check. A synthetic oversized-key case confirms rejection
+without staging and permanent transaction abort; the malformed format
+regression continues to exercise the same policy.

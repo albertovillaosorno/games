@@ -188,13 +188,24 @@ impl AssetRecord {
     /// # Errors
     /// Rejects invalid identities or incompatible representation sizes.
     pub fn validate(&self) -> Result<(), AssetError> {
-        if !valid_key(&self.key) {
+        Self::validate_descriptor(&self.key, self.format, self.size)
+    }
+
+    /// Check a borrowed descriptor before allocating a record or hashing.
+    ///
+    /// # Errors
+    /// Rejects invalid identities or incompatible representation sizes.
+    pub fn validate_descriptor(
+        key: &str,
+        format: AssetFormat,
+        size: u64,
+    ) -> Result<(), AssetError> {
+        if !valid_key(key) {
             return Err(AssetError::InvalidIdentity);
         }
-        if self
-            .format
+        if format
             .expected_size()?
-            .is_some_and(|size| size != self.size)
+            .is_some_and(|expected| expected != size)
         {
             return Err(AssetError::InvalidFormat);
         }

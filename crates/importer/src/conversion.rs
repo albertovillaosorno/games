@@ -97,20 +97,16 @@ where
             .remaining_bytes
             .checked_sub(size)
             .ok_or(AssetError::TooLarge)?;
+        AssetRecord::validate_descriptor(key, format, size)?;
         let digest = ContentHash::calculate(bytes);
-        let record = AssetRecord {
-            digest,
-            format,
-            key: key.to_owned(),
-            size,
-        };
-        record.validate()?;
         if self.digests.insert(digest) {
             (self.stage)(digest, bytes)?;
         }
-        let _old =
-            self.records
-                .insert(record.key, Payload { digest, format, size });
+        let _old = self.records.insert(key.to_owned(), Payload {
+            digest,
+            format,
+            size,
+        });
         self.remaining_bytes = remaining;
         Ok(())
     }
@@ -300,6 +296,25 @@ mod tests {
         assert_eq!(
             conversion.write("image", format, b"short"),
             Err(AssetError::InvalidFormat.into()),
+        );
+        assert_eq!(
+            conversion.write("valid", AssetFormat::Data, b"x"),
+            Err(ImportError::Aborted),
+        );
+        assert_eq!(conversion.finish(), Err(ImportError::Aborted));
+    }
+
+    #[test]
+    fn oversized_key_aborts_without_staging() {
+        let identity = source();
+        let key = "a".repeat(65_536);
+        let mut conversion =
+            Conversion::new(&identity, limits(), |_digest, _bytes| {
+                Err(ImportError::StageFailed)
+            });
+        assert_eq!(
+            conversion.write(&key, AssetFormat::Data, b"x"),
+            Err(AssetError::InvalidIdentity.into()),
         );
         assert_eq!(
             conversion.write("valid", AssetFormat::Data, b"x"),
