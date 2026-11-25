@@ -194,3 +194,33 @@ checkpoints without out-of-range palette banks; incomplete registers
 were rejected. This checks admissibility and bounded addressing, not
 independent tile-cell identities or pixel equivalence. Scroll state,
 individual sprite attributes and composited screen parity remain open.
+
+The MAME reference adapter now composes the three observed tile layers
+over the mixer backdrop for standard XY scroll only. It uses the profile's
+visible raster and layer alignment, wrapped coordinates, local vertical
+flip, transparent pen zero and back-to-front mixer order. Unsupported
+scroll modes and global reversal are rejected rather than guessed.
+
+```sh
+cargo run --locked -p games-build -- mame background-check simpsons \
+  world-4p-set-1 PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32
+```
+
+The same six checkpoints in both independent runs gave identical counts:
+
+| Original frame | Matching pixels | Different pixels |
+| -------------- | --------------: | ---------------: |
+| 120            | 71,680          | 0                |
+| 599            | 71,680          | 0                |
+| 660            | 71,387          | 293              |
+| 900            | 65,820          | 5,860            |
+| 1200           | 71,680          | 0                |
+| 1500           | 70,468          | 1,212            |
+
+The diagnostic compares the background-only reconstruction to the full
+original 320-by-224 screen, without rendering sprites or shadows.
+The differences are reported, not accepted as parity or attributed to
+sprites without independent evidence. Synthetic checks cover coordinate
+wrap, priority ordering, transparent pens and invalid observations.
+No source images are published. Gameplay, object decoding, unsupported
+scroll modes, full composited parity and platform acceptance remain open.

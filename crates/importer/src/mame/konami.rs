@@ -35,6 +35,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use games_assets::ManifestLimits;
 
+use super::background::Raster;
 use super::palette::{Palette, xbgr555_be};
 use super::priority::Wiring;
 use super::{Profile, Region};
@@ -68,6 +69,12 @@ pub(super) static SIMPSONS: Profile = Profile {
     palette: Palette {
         decode_word: xbgr555_be,
         entries: NonZeroUsize::MIN.saturating_add(2048 - 1),
+    },
+    raster: Raster {
+        height: 224,
+        layer_x: [96, 90, 90],
+        origin_y: 16,
+        width: 320,
     },
     revision: "world-4p-set-1",
     tile_code_mask: 0x7fff,

@@ -37,6 +37,9 @@ pub mod publication;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 /// Exact bounded comparison of private PCM reference recordings.
 pub mod reference_audio;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+/// Bounded background-reference comparison.
+pub mod reference_background;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only palette comparison against local observations.
 pub mod reference_palette;
@@ -89,6 +92,8 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
+    "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
     "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
     "\nLinux/Android: mame tilemap-check MACHINE REV RAM REGISTERS",
@@ -183,6 +188,8 @@ impl Arguments {
 #[derive(Debug)]
 enum Command {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    BackgroundCheck(Machine, reference_background::Arguments),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Check(Machine, PathBuf, ContentHash),
     Import(Machine, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -237,11 +244,13 @@ impl Command {
     where
         Args: Iterator<Item = OsString>,
     {
-        let machine = args.next().ok_or_else(|| String::from(USAGE))?;
-        let revision = args.next().ok_or_else(|| String::from(USAGE))?;
-        let selected = Machine::select(text(&machine)?, text(&revision)?)
-            .map_err(|error| format!("MAME profile: {error:?}"))?;
+        let selected = select_machine(&mut args)?;
         match action {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            "background-check" => Ok(Self::BackgroundCheck(
+                selected,
+                reference_background::Arguments::parse(args.collect())?,
+            )),
             "verify" => Ok(Self::Verify(Arguments::parse_mame(
                 selected,
                 args.collect(),
@@ -319,6 +328,8 @@ impl Command {
 
     fn run(self) -> Result<(), String> {
         match self {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::BackgroundCheck(machine, args) => args.run(machine),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::PaletteCheck(machine, raw, reference) => {
                 reference_palette::check(machine, &raw, &reference)
@@ -359,6 +370,16 @@ impl Command {
             },
         }
     }
+}
+
+fn select_machine<Args>(args: &mut Args) -> Result<Machine, String>
+where
+    Args: Iterator<Item = OsString>,
+{
+    let machine = args.next().ok_or_else(|| String::from(USAGE))?;
+    let revision = args.next().ok_or_else(|| String::from(USAGE))?;
+    Machine::select(text(&machine)?, text(&revision)?)
+        .map_err(|error| format!("MAME profile: {error:?}"))
 }
 
 fn text(value: &OsString) -> Result<&str, String> {

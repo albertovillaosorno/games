@@ -31,6 +31,8 @@
 
 //! Shared MAME ROM-set conversion, not an emulator or gameplay runtime.
 
+/// Observed background raster composition for supported tilemap modes.
+pub mod background;
 mod konami;
 mod palette;
 /// Observed video mixer assignment and priority order.
@@ -91,6 +93,7 @@ struct Profile {
     limits: ManifestLimits,
     machine: &'static str,
     palette: palette::Palette,
+    raster: background::Raster,
     revision: &'static str,
     tile_code_mask: u16,
     title: &'static str,
@@ -102,6 +105,12 @@ struct Profile {
 pub struct Machine(&'static Profile);
 
 impl Machine {
+    /// Fixed visible raster geometry and tile-layer alignment.
+    #[must_use]
+    pub const fn background_raster(self) -> background::Raster {
+        self.0.raster
+    }
+
     /// Convert every declared graphics region to a private canonical sink.
     ///
     /// # Errors

@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Decode bounded observed tile RAM and character bank addresses.
+//   - Decode observed tile RAM, character banks and standard XY scroll.
 // - Must-Not:
-//   - Execute game code, infer scrolling or claim screen composition.
+//   - Execute game code or claim screen composition.
 // - Allows:
 //   - Inputs: Exact tile RAM, bank/control registers and mixer state.
-//   - Outputs: Tile indices, palette banks and local flip attributes.
+//   - Outputs: Tile indices, palette banks, flip and scroll attributes.
 //   - Side effects: None.
 // - Split-When:
 //   - Another tile chip uses a different RAM organization.
@@ -35,6 +35,9 @@ use super::priority::VideoPriority;
 use crate::ImportError;
 
 const CELLS: usize = 2048;
+
+pub(super) type Offset = (usize, usize);
+type ScrollOffsets = [Offset; 3];
 
 /// Resolved local tile attributes, before scrolling and composition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +117,36 @@ impl<'source> TilemapSnapshot<'source> {
             mixer,
             ram,
         })
+    }
+
+    pub(super) const fn priority(self) -> VideoPriority {
+        self.mixer
+    }
+
+    fn scroll_page(self, page: usize) -> Result<Offset, ImportError> {
+        let ram = self.ram.get(page).ok_or(ImportError::UnsupportedMember)?;
+        let horizontal =
+            ram.get(512..514).ok_or(ImportError::UnsupportedMember)?;
+        let scroll_x = u16::from_le_bytes(
+            horizontal
+                .try_into()
+                .map_err(|_error| ImportError::UnsupportedMember)?,
+        );
+        let scroll_y = *ram.get(12).ok_or(ImportError::UnsupportedMember)?;
+        Ok((usize::from(scroll_x), usize::from(scroll_y)))
+    }
+
+    /// Read the fixed layer and two global XY scroll offsets.
+    /// # Errors
+    /// Rejects row/column scroll, unknown modes and global reversal.
+    pub(super) fn standard_scroll(
+        self,
+        control: u8,
+    ) -> Result<ScrollOffsets, ImportError> {
+        if control != 0 || self.global_flip() {
+            return Err(ImportError::UnsupportedMember);
+        }
+        Ok([(0, 0), self.scroll_page(3)?, self.scroll_page(7)?])
     }
 }
 
