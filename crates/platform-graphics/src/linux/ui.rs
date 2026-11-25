@@ -297,11 +297,43 @@ const fn rows(letter: u8) -> [u8; 5] {
         b'X' => [5, 5, 2, 5, 5],
         b'Y' => [5, 5, 2, 2, 2],
         b'Z' => [7, 1, 2, 4, 7],
-        b':' => [0, 2, 0, 2, 0],
-        b'-' => [0, 0, 7, 0, 0],
-        b'/' => [1, 1, 2, 4, 4],
-        b'>' => [4, 2, 1, 2, 4],
+        _ => symbol_rows(letter),
+    }
+}
+
+const fn symbol_rows(letter: u8) -> [u8; 5] {
+    match letter {
+        b'!' => [2, 2, 2, 0, 2],
+        b'"' => [5, 5, 0, 0, 0],
+        b'#' => [5, 7, 5, 7, 5],
+        b'$' => [2, 7, 6, 3, 2],
+        b'%' => [5, 1, 2, 4, 5],
+        b'&' => [2, 5, 2, 5, 3],
+        b'\'' => [2, 2, 0, 0, 0],
+        b'(' => [1, 2, 2, 2, 1],
+        b')' => [4, 2, 2, 2, 4],
+        b'*' => [0, 5, 2, 5, 0],
         b'+' => [0, 2, 7, 2, 0],
+        b',' => [0, 0, 0, 2, 4],
+        b'-' => [0, 0, 7, 0, 0],
+        b'.' => [0, 0, 0, 0, 2],
+        b'/' => [1, 1, 2, 4, 4],
+        b':' => [0, 2, 0, 2, 0],
+        b';' => [0, 2, 0, 2, 4],
+        b'<' => [1, 2, 4, 2, 1],
+        b'=' => [0, 7, 0, 7, 0],
+        b'>' => [4, 2, 1, 2, 4],
+        b'@' => [7, 5, 7, 4, 7],
+        b'[' => [3, 2, 2, 2, 3],
+        b'\\' => [4, 4, 2, 1, 1],
+        b']' => [6, 2, 2, 2, 6],
+        b'^' => [2, 5, 0, 0, 0],
+        b'_' => [0, 0, 0, 0, 7],
+        b'\x60' => [4, 2, 0, 0, 0],
+        b'{' => [1, 2, 6, 2, 1],
+        b'|' => [2, 2, 2, 2, 2],
+        b'}' => [4, 2, 3, 2, 4],
+        b'~' => [0, 0, 3, 6, 0],
         b' ' => [0; 5],
         _ => [7, 1, 2, 0, 2],
     }
@@ -309,6 +341,8 @@ const fn rows(letter: u8) -> [u8; 5] {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -318,6 +352,28 @@ mod tests {
         assert!(ink(&[0b101], 3, 2, 0));
         assert!(!ink(&[0b101], 3, 3, 0));
         assert!(!ink(&[0b101], 3, 0, 1));
+    }
+
+    #[test]
+    fn printable_punctuation_has_distinct_visible_glyphs() {
+        let mut seen = BTreeSet::new();
+        for symbol in (b'!'..=b'~').filter(u8::is_ascii_punctuation) {
+            let text = char::from(symbol).to_string();
+            let line = TextLine {
+                color: [255; 4],
+                scale: 1,
+                text: &text,
+                top: 0,
+            };
+            let pixels: Vec<_> = (0..5)
+                .flat_map(|row| {
+                    (0..3).map(move |column| line.pixel(column, row, 3))
+                })
+                .collect();
+            assert!(pixels.contains(&true), "{text} is blank");
+            assert!(seen.insert(pixels), "{text} duplicates punctuation");
+        }
+        assert_eq!(seen.len(), 32);
     }
 
     #[test]

@@ -683,3 +683,13 @@ intermediate invalid layout. Fresh workspace validation including native
 rendering, dummy audio and Android/WebAssembly core compilation passed in
 run 1795624043736867909-3870414. Physical touch and complete platform
 acceptance remain unverified.
+
+The shared native bitmap text renderer now distinguishes all 32 printable
+ASCII punctuation characters. Previously an admitted punctuation key such
+as a comma or semicolon could appear as a question mark in station join
+and remote-controller hints. An inline pixel-coverage regression verifies
+that every punctuation glyph is visible and distinct from the others.
+Existing letter and number glyphs and input bindings are unchanged.
+Fresh native rendering, audio and portable-core validation passed in run
+1795624563339384682-3955370. Non-ASCII key labels and physical device
+acceptance remain unverified.
