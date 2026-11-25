@@ -565,3 +565,12 @@ at or after expiry cannot renew the lease, even if its frame is valid.
 A deterministic regression uses a real authenticated connection and
 explicit observation times to exercise missing, malformed, timely and
 exact-boundary acknowledgements without relying on scheduling delays.
+
+The host input scheduler now carries its application lease through the
+bounded worker queue. A receive or reply cannot start on the worker at
+or after its lease expiry, even if submitted in time. A successful
+operation that observes expiry on return closes the channel instead of
+publishing success. This does not retract bytes already submitted to
+the transport. A real TLS regression queues an acknowledgement and then
+dispatches its poll with an expired lease, verifies that no frame is
+delivered, and reconnects the same approved identity for valid input.

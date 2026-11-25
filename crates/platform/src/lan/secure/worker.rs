@@ -167,16 +167,24 @@ pub struct RejectedRequest {
     pub request: HostRequest,
 }
 
+// The caller's application lease is distinct from the transport deadline.
+// Keep it attached while the request waits in the bounded worker queue.
+#[derive(Debug)]
+struct ScheduledRequest {
+    lease: Option<(u64, Instant)>,
+    request: HostRequest,
+}
+
 #[derive(Debug)]
 struct WorkerChannels<Message> {
-    incoming: Receiver<HostRequest>,
+    incoming: Receiver<ScheduledRequest>,
     outgoing: SyncSender<HostCompletion<Message>>,
     stopped: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
 struct Channels<Message> {
-    requests: SyncSender<HostRequest>,
+    requests: SyncSender<ScheduledRequest>,
     results: Receiver<HostCompletion<Message>>,
 }
 
@@ -270,6 +278,16 @@ impl<Message: Send + 'static> HostWorker<Message> {
         &self,
         request: HostRequest,
     ) -> Result<(), RejectedRequest> {
+        self.try_submit_leased(request, None)
+    }
+
+    // The pump supplies the current lease only for an active peer's
+    // receive or reply. An expired request must not reach its transport.
+    pub(super) fn try_submit_leased(
+        &self,
+        request: HostRequest,
+        lease: Option<(u64, Instant)>,
+    ) -> Result<(), RejectedRequest> {
         if let HostOperation::Send { bytes, .. }
         | HostOperation::QueueSend { bytes, .. } = &request.operation
             && bytes.len() > self.frame_budget
@@ -287,15 +305,15 @@ impl<Message: Send + 'static> HostWorker<Message> {
         };
         channels
             .requests
-            .try_send(request)
+            .try_send(ScheduledRequest { lease, request })
             .map_err(|error| match error {
                 TrySendError::Full(returned) => RejectedRequest {
                     reason: RejectionReason::Full,
-                    request: returned,
+                    request: returned.request,
                 },
                 TrySendError::Disconnected(returned) => RejectedRequest {
                     reason: RejectionReason::Closed,
-                    request: returned,
+                    request: returned.request,
                 },
             })
     }
@@ -392,6 +410,41 @@ where
     }
 }
 
+fn expired_peer(lease: Option<(u64, Instant)>) -> Option<u64> {
+    lease
+        .filter(|&(_peer, deadline)| Instant::now() >= deadline)
+        .map(|(peer, _deadline)| peer)
+}
+
+fn expire<Message>(
+    session: &mut HostSession,
+    peer: u64,
+) -> HostResult<Message> {
+    session.disconnect(peer)?;
+    Err(HostError::Transport(ErrorKind::TimedOut).into())
+}
+
+fn execute_scheduled<Codec>(
+    session: &mut HostSession,
+    codec: &Codec,
+    scheduled: ScheduledRequest,
+) -> HostResult<Codec::Message>
+where
+    Codec: MessageSchema,
+{
+    let ScheduledRequest { lease, request } = scheduled;
+    if let Some(peer) = expired_peer(lease) {
+        return expire(session, peer);
+    }
+    let result = execute(session, codec, request.operation);
+    if result.is_ok()
+        && let Some(peer) = expired_peer(lease)
+    {
+        return expire(session, peer);
+    }
+    result
+}
+
 fn serve<Codec>(
     mut session: HostSession,
     codec: &Codec,
@@ -399,14 +452,15 @@ fn serve<Codec>(
 ) where
     Codec: MessageSchema,
 {
-    while let Ok(request) = channels.incoming.recv() {
+    while let Ok(scheduled) = channels.incoming.recv() {
         if channels.stopped.load(Ordering::Acquire) {
             break;
         }
-        let result = execute(&mut session, codec, request.operation);
+        let id = scheduled.request.id;
+        let result = execute_scheduled(&mut session, codec, scheduled);
         let completion = HostCompletion {
             completed_at: Instant::now(),
-            id: request.id,
+            id,
             result,
         };
         if channels.outgoing.send(completion).is_err() {
@@ -811,6 +865,60 @@ mod tests {
             ),
             "completed frame releases its slot",
         )?;
+        worker.shutdown()
+    }
+
+    #[test]
+    fn expired_worker_reply_never_reaches_the_authenticated_peer()
+    -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, config()?, keys.server.clone())?;
+        let session =
+            HostSession::new(session_config(true), &[(keys.client_id, 2)])
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let worker = HostWorker::spawn(session, TestCodec, NonZeroUsize::MIN)?;
+        let mut client =
+            authenticate(&worker, &listener, &keys.client, (1, 2))?;
+        submit(&worker, 2, HostOperation::QueueSend {
+            peer: 2,
+            bytes: b"ACK".to_vec(),
+        })?;
+        require(
+            matches!(completion(&worker, 2)?, Ok(HostOutcome::Applied)),
+            "reply queued before lease expiry",
+        )?;
+        // Supply an already-expired dispatch lease, independent of test
+        // scheduling. The otherwise live transport must not write the ACK.
+        worker
+            .try_submit_leased(
+                HostRequest {
+                    id: 3,
+                    operation: HostOperation::PollSend(2),
+                },
+                Some((2, Instant::now())),
+            )
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        require(
+            matches!(
+                completion(&worker, 3)?,
+                Err(OperationError::Host(HostError::Transport(
+                    ErrorKind::TimedOut
+                )))
+            ),
+            "expired queued reply closes the host channel",
+        )?;
+        poll_accept(|| match client.poll_receive() {
+            Ok(None) => Ok(None),
+            Ok(Some(_bytes)) => Err(io::Error::other("stale ACK delivered")),
+            Err(_closed) => Ok(Some(())),
+        })?;
+        drop(client);
+        let mut rejoined =
+            authenticate(&worker, &listener, &keys.client, (4, 2))?;
+        rejoined.send(b"M\x08")?;
+        expect_message(&worker, (5, 2), 8)?;
         worker.shutdown()
     }
 

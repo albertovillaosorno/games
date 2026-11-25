@@ -485,8 +485,13 @@ impl<Message: Send + 'static> HostInputPump<Message> {
             | PollKind::Receive(..)
             | PollKind::Reply(..) => task,
         };
+        let lease = match kind {
+            PollKind::Receive(peer, deadline)
+            | PollKind::Reply(peer, deadline) => deadline.map(|at| (peer, at)),
+            PollKind::Authenticate | PollKind::Disconnect(..) => None,
+        };
         let request = HostRequest { id, operation };
-        match self.worker.try_submit(request) {
+        match self.worker.try_submit_leased(request, lease) {
             Ok(()) => {
                 let _prior = self.in_flight.insert(id, kind);
                 self.next_request = next;
