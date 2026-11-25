@@ -98,3 +98,17 @@ The packaged binary passed its configured offscreen OpenGL and dummy
 audio smoke with touch enabled, 600 movement and 60 combat frames and
 no missed frame budgets. These are local prototype checks, not portable
 release or physical-device acceptance.
+
+At c994c7c, the current package contained 88 files totalling 3,634,059
+bytes. Its 3,233,520-byte executable matched the independent SHA-256
+receipt, and the host resolved its direct dynamic libraries. From an
+unrelated working directory, launch without an adjacent catalogue was
+rejected. A separately supplied private adjacent catalogue then passed
+adaptive 400x304 NVIDIA offscreen OpenGL ES touch and dummy-audio
+smoke with the 134-pose catalogue, first with absolute asset paths and
+then with paths relative to the catalogue. Both runs met the 16.667 ms
+host-work budget for all 600 movement and 60 combat submissions. After
+removing the private catalogue, the original package file inventory,
+permissions and lengths matched. No original media, assets or local
+catalogue are distributed. Cross-host ABI and physical-device acceptance
+remain open.
