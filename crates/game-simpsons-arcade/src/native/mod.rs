@@ -1338,7 +1338,49 @@ fn smoke(
     if !art.poses.is_empty() {
         smoke_poses(scene, art, &mut controls, &mut simulation)?;
     }
+    smoke_air_attack(scene, art, &mut controls, &mut simulation)?;
     smoke_movement_benchmark(scene, art, &mut controls, &mut simulation)
+}
+
+fn smoke_air_attack(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let [before, ..] = simulation.state().stations();
+    smoke_jump_edge(controls, simulation, true)?;
+    for _ in 0..15u8 {
+        let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    }
+    let _jump = art.present(scene, simulation.state())?;
+    let pixels = scene.readback().map_err(failure)?;
+    smoke_press(controls, simulation, Control::Primary)?;
+    let [attack, ..] = simulation.state().stations();
+    if !matches!(
+        attack.maneuver,
+        Maneuver::AirAttack(motion) if motion.tick() == 0
+    ) || attack.position.x.abs_diff(before.position.x) != 4
+    {
+        return Err(failure("aerial attack did not advance"));
+    }
+    let _draw = art.present(scene, simulation.state())?;
+    if pixels == scene.readback().map_err(failure)? {
+        return Err(failure("aerial attack not visibly presented"));
+    }
+    smoke_jump_edge(controls, simulation, false)?;
+    for _ in 0..21u8 {
+        let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        let _cycle_draw = art.present(scene, simulation.state())?;
+    }
+    let [landed, ..] = simulation.state().stations();
+    if landed.maneuver != Maneuver::Idle
+        || landed.position.x.abs_diff(before.position.x) != 84
+        || landed.position.y != before.position.y
+    {
+        return Err(failure("aerial attack did not land at expected position"));
+    }
+    Ok(())
 }
 
 fn smoke_character_selection(

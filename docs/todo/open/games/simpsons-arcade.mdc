@@ -988,3 +988,23 @@ airborne attack in the original; that distinct maneuver remains open.
 Fresh workspace validation passed, including the complete three
 height traces, threshold samples, landing, independent station
 state, forward movement, and one-hit encounter behavior.
+
+Four additional isolated scene captures supplied thirteen distinct
+aerial attack poses: five for Marge, two each for Homer and Bart,
+and four for Lisa. All thirteen aligned scene comparisons passed
+exactly (71,680 pixels each) before local canonical publication.
+The optional air-attack catalogue requires all four tick-zero
+records and bounds offsets below 60; the 16 KiB byte cap remains,
+with the independent entry limit expanded from 64 to 96.
+Older catalogues continue to select provisional ground-attack
+art for the aerial maneuver. Crops retain approximate pivots.
+
+Both the combined 76-pose catalogue and the earlier 63-pose
+catalogue passed native offscreen touch-and-combat smoke, including
+the new airborne attack readback and measured 84-pixel landing
+displacement. The new catalogue's 600 movement and 51 combat
+submissions missed no 16.667 ms budget. The measured results are
+host submission timings, not physical presentation latency.
+Fresh workspace validation passed, including incomplete catalogue
+rejection and legacy versus aerial pose selection. Proprietary
+observations and canonical assets remain in ignored local storage.

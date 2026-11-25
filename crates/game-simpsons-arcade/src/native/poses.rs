@@ -45,10 +45,11 @@ use games_platform_storage::file::snapshot;
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
 use crate::JumpMotion;
 
-const MAX_POSES: usize = 64;
+const MAX_POSES: usize = 96;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
+    AirAttack,
     Attack,
     Jump,
     Lift,
@@ -58,6 +59,7 @@ enum Kind {
 impl Kind {
     const fn duration(self, player: Player) -> u8 {
         match self {
+            Self::AirAttack => 60,
             Self::Attack => Maneuver::Attack { tick: 0 }.pose_duration(player),
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
@@ -120,7 +122,7 @@ impl Catalogue {
                 .into_iter()
                 .all(|kind| entries.contains_key(&(player, kind, 0)))
         });
-        let complete_optional = [Kind::Lift, Kind::Walk]
+        let complete_optional = [Kind::AirAttack, Kind::Lift, Kind::Walk]
             .into_iter()
             .all(|kind| optional_complete(&entries, kind));
         if !complete || !complete_optional {
@@ -147,7 +149,10 @@ impl PoseArt {
     ) -> Option<Art> {
         let (kind, tick) = match station.maneuver {
             Maneuver::Attack { tick } => (Kind::Attack, tick),
-            Maneuver::AirAttack(motion) => (Kind::Attack, motion.tick()),
+            Maneuver::AirAttack(motion) => {
+                return air_attack_entry(&self.entries, player, motion.tick())
+                    .copied();
+            },
             Maneuver::Jump(motion) => {
                 return jump_entry(&self.entries, player, motion).copied();
             },
@@ -157,6 +162,15 @@ impl PoseArt {
         };
         select_entry(&self.entries, (player, kind, tick)).copied()
     }
+}
+
+fn air_attack_entry<Value>(
+    entries: &BTreeMap<Key, Value>,
+    player: Player,
+    tick: u8,
+) -> Option<&Value> {
+    select_entry(entries, (player, Kind::AirAttack, tick))
+        .or_else(|| select_entry(entries, (player, Kind::Attack, tick)))
 }
 
 fn optional_complete<Value>(
@@ -197,6 +211,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         _ => return Err(failure("unknown pose station")),
     };
     let kind = match action {
+        "air-attack" => Kind::AirAttack,
         "attack" => Kind::Attack,
         "jump" => Kind::Jump,
         "jump-lift" => Kind::Lift,
@@ -334,6 +349,60 @@ mod tests {
         } else {
             None
         }
+    }
+
+    #[test]
+    fn optional_aerial_poses_require_each_station_and_bound_ticks() {
+        let base = complete();
+        let air = format!(
+            "marge air-attack 0 {HASH}\n\
+             homer air-attack 0 {HASH}\n\
+             bart air-attack 0 {HASH}\n\
+             lisa air-attack 0 {HASH}\n"
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}marge air-attack 0 {HASH}"))
+                .is_err()
+        );
+        assert_eq!(
+            Catalogue::parse(&format!("{base}{air}"))
+                .map(|catalogue| catalogue.count())
+                .ok(),
+            Some(12)
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{air}lisa air-attack 59 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{air}lisa air-attack 60 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn aerial_pose_selection_prefers_its_sequence_and_preserves_legacy() {
+        let mut entries = BTreeMap::from([
+            ((Player::Marge, Kind::Attack, 0), "ground"),
+            ((Player::Marge, Kind::Attack, 3), "ground-late"),
+            ((Player::Lisa, Kind::AirAttack, 0), "other"),
+        ]);
+        assert_eq!(
+            air_attack_entry(&entries, Player::Marge, 2),
+            Some(&"ground")
+        );
+        assert_eq!(
+            air_attack_entry(&entries, Player::Marge, 4),
+            Some(&"ground-late")
+        );
+        let _prior = entries.insert((Player::Marge, Kind::AirAttack, 0), "air");
+        let _later =
+            entries.insert((Player::Marge, Kind::AirAttack, 4), "air-late");
+        assert_eq!(air_attack_entry(&entries, Player::Marge, 3), Some(&"air"));
+        assert_eq!(
+            air_attack_entry(&entries, Player::Marge, 31),
+            Some(&"air-late")
+        );
     }
 
     #[test]

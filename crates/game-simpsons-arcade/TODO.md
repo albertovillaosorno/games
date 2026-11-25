@@ -58,6 +58,9 @@ no vertical drift. Jump permits direction changes. The pose catalogue and
 combat encounter extend this preview. Hold Jump for a longer, higher
 flight; a short tap lasts 31 ticks and a full hold 58 ticks. The existing
 short-jump art is reused unless optional middle poses are supplied.
+Press Primary during Jump for a forward aerial attack. The initial height
+selects its speed; the attack lands automatically and can hit the
+experimental enemy once. Simultaneous buttons still use isolated actions.
 
 For original attack and jump poses, optionally pass
 `--poses FILE` after `--touch` (if used) and before PARENT. The local
@@ -67,12 +70,12 @@ UTF-8 catalogue has one whitespace-separated record per line:
 NAME ACTION TICK SHA256
 ```
 
-NAME is marge, homer, bart or lisa; ACTION is attack, jump, jump-lift or
-walk. TICK is
+NAME is marge, homer, bart or lisa; ACTION is attack, air-attack, jump,
+jump-lift or walk. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 64 poses and
+record or maneuver end. The catalogue is limited to 96 poses and
 16 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
@@ -80,6 +83,9 @@ pose for each of the four characters. When present, the preview retains
 the opening pose during sustained lift, selects the middle pose near
 the apex, and falls back to the original jump sequence for descent.
 The older catalogue format still works without these four records.
+An optional air-attack sequence has a tick-zero pose for every character
+and permits offsets through tick 59. Without it the ground-attack pose
+sequence is used as a provisional fallback.
 
 For the experimental first enemy, insert
 `--enemy APPROACH_SHA STRIKE_SHA` after `--poses FILE` (if used) and
