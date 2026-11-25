@@ -44,11 +44,17 @@ use games_platform_storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
 use crate::{
-    BART_LISA_JUMP_TICKS, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
+    BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
     ENEMY_WALK_TICKS, EnemyAction, JumpMotion, Pair, PairMotion, WalkMotion,
 };
 
 const MAX_POSES: usize = 200;
+const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
+const MARGE_HOMER_JUMP_PHASES: [u8; 29] = [
+    0, 0, 2, 2, 0, 0, 2, 2, 8, 8, 10, 10, 12, 12, 14, 14, 16, 16, 18, 18, 0, 0,
+    2, 2, 8, 8, 10, 10, 12,
+];
+const MARGE_HOMER_LANDED_PHASES: [u8; 8] = [12, 14, 16, 18, 0, 2, 8, 10];
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -180,12 +186,11 @@ pub(super) struct PoseArt {
 }
 
 impl PoseArt {
-    pub(super) fn bart_lisa_jump(&self) -> bool {
-        self.entries.contains_key(&(
-            Subject::Pair(Pair::BartLisa),
-            Kind::Jump,
-            0,
-        ))
+    pub(super) fn configure_pairs(&self, cabinet: &Cabinet) -> Cabinet {
+        Pair::ALL.into_iter().fold(
+            cabinet.with_cooperative_pairs(self.paired_families()),
+            |state, pair| state.with_pair_jump(pair, self.pair_jump(pair)),
+        )
     }
 
     pub(super) fn enemy(&self, action: EnemyAction) -> Option<Art> {
@@ -203,13 +208,25 @@ impl PoseArt {
 
     pub(super) fn pair(&self, pair: Pair, motion: PairMotion) -> Option<Art> {
         let (kind, tick) = match motion {
+            PairMotion::AfterJump { tick } => (
+                Kind::Jump,
+                *MARGE_HOMER_LANDED_PHASES.get(usize::from(tick >> 1u32))?,
+            ),
             PairMotion::Idle { tick } => (Kind::Idle, tick),
+            PairMotion::Jump { tick } if pair == Pair::MargeHomer => {
+                (Kind::Jump, *MARGE_HOMER_JUMP_PHASES.get(usize::from(tick))?)
+            },
             PairMotion::Jump { tick } => (Kind::Jump, tick),
             // The stationary Primary crop matches the landing payload.
             PairMotion::Primary => (Kind::Jump, BART_LISA_JUMP_TICKS - 1),
             PairMotion::Walk { tick } => (Kind::Walk, tick),
         };
         select_entry(&self.entries, (Subject::Pair(pair), kind, tick)).copied()
+    }
+
+    pub(super) fn pair_jump(&self, pair: Pair) -> bool {
+        self.entries
+            .contains_key(&(Subject::Pair(pair), Kind::Jump, 0))
     }
 
     pub(super) fn paired_families(&self) -> [bool; 2] {
@@ -350,11 +367,15 @@ fn jump_entry<Value>(
 fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
     Pair::ALL.into_iter().all(|pair| {
         let subject = Subject::Pair(pair);
+        let jump_keys: &[u8] = match pair {
+            Pair::BartLisa => &[0, 4, 28],
+            Pair::MargeHomer => &MARGE_HOMER_JUMP_KEYS,
+        };
         let jump_complete = !entries.keys().any(|(existing, kind, _)| {
             *existing == subject && *kind == Kind::Jump
-        }) || [0, 4, 28]
-            .into_iter()
-            .all(|tick| entries.contains_key(&(subject, Kind::Jump, tick)));
+        }) || jump_keys
+            .iter()
+            .all(|&tick| entries.contains_key(&(subject, Kind::Jump, tick)));
         jump_complete
             && (!entries.keys().any(|(existing, _, _)| *existing == subject)
                 || [Kind::Idle, Kind::Walk]
@@ -400,6 +421,11 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         (Subject::Pair(pair), Kind::Idle) => pair.idle_end().saturating_add(1),
         (Subject::Pair(pair), Kind::Walk) => pair.walk_duration(),
         (Subject::Pair(Pair::BartLisa), Kind::Jump) => BART_LISA_JUMP_TICKS,
+        (Subject::Pair(Pair::MargeHomer), Kind::Jump)
+            if MARGE_HOMER_JUMP_KEYS.contains(&tick) =>
+        {
+            BART_LISA_JUMP_TICKS
+        },
         (Subject::Pair(_), _) => {
             return Err(failure("unknown pair pose maneuver"));
         },
@@ -819,6 +845,45 @@ mod tests {
             Catalogue::parse(&format!("{pair}marge-homer jump 0 {HASH}"))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn marge_homer_jump_requires_every_reused_phase() {
+        let base = complete();
+        let pair = format!(
+            "{base}marge-homer idle 0 {HASH}\nmarge-homer walk 0 {HASH}\n"
+        );
+        for missing in MARGE_HOMER_JUMP_KEYS {
+            let partial = MARGE_HOMER_JUMP_KEYS
+                .into_iter()
+                .filter(|tick| *tick != missing)
+                .fold(String::new(), |mut text, tick| {
+                    use std::fmt::Write as _;
+                    assert!(
+                        writeln!(text, "marge-homer jump {tick} {HASH}")
+                            .is_ok()
+                    );
+                    text
+                });
+            assert!(Catalogue::parse(&format!("{pair}{partial}")).is_err());
+        }
+        let entries = MARGE_HOMER_JUMP_KEYS.into_iter().fold(
+            String::new(),
+            |mut text, tick| {
+                use std::fmt::Write as _;
+                assert!(
+                    writeln!(text, "marge-homer jump {tick} {HASH}").is_ok()
+                );
+                text
+            },
+        );
+        let full = format!("{pair}{entries}");
+        assert!(Catalogue::parse(&full).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{full}marge-homer jump 4 {HASH}"))
+                .is_err()
+        );
+        assert!(Catalogue::parse(&format!("{base}{entries}")).is_err());
     }
 
     #[test]

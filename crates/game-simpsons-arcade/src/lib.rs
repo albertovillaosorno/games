@@ -971,14 +971,8 @@ impl Cabinet {
     /// Requires Bart/Lisa locomotion to be enabled. Ground points and
     /// combat eligibility remain provisional during these actions.
     #[must_use]
-    pub const fn with_bart_lisa_jump(mut self, enabled: bool) -> Self {
-        let pair = &mut self.cooperation.bart_lisa;
-        pair.support = match (pair.support, enabled) {
-            (PairSupport::Disabled, _) => PairSupport::Disabled,
-            (_, true) => PairSupport::Jump,
-            (_, false) => PairSupport::Locomotion,
-        };
-        self
+    pub const fn with_bart_lisa_jump(self, enabled: bool) -> Self {
+        self.with_pair_jump(Pair::BartLisa, enabled)
     }
 
     /// Enable optional pair locomotion in cabinet pair order.
@@ -1017,6 +1011,24 @@ impl Cabinet {
         cabinet.encounter =
             Some(Encounter::new(Point { x: 246, y: 190 }, true));
         Ok(cabinet)
+    }
+
+    /// Enable the observed combined vertical action for one pair.
+    ///
+    /// Requires pair locomotion. Ground points and hit rules remain
+    /// provisional.
+    #[must_use]
+    pub const fn with_pair_jump(mut self, pair: Pair, enabled: bool) -> Self {
+        let state = match pair {
+            Pair::BartLisa => &mut self.cooperation.bart_lisa,
+            Pair::MargeHomer => &mut self.cooperation.marge_homer,
+        };
+        state.support = match (state.support, enabled) {
+            (PairSupport::Disabled, _) => PairSupport::Disabled,
+            (_, true) => PairSupport::Jump,
+            (_, false) => PairSupport::Locomotion,
+        };
+        self
     }
 
     /// Enable bounded rightward opening-street travel.

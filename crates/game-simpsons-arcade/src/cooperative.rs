@@ -41,11 +41,15 @@ const ADMISSION_TICKS: u8 = 38;
 const HORIZONTAL_PROXIMITY: u16 = 32;
 const DEPTH_PROXIMITY: u16 = 24;
 // Device-observed elevation relative to the combined idle pose.
-const JUMP_ELEVATIONS: [i16; 29] = [
+const BART_LISA_ELEVATIONS: [i16; 29] = [
     7, 14, 21, 28, 35, 40, 45, 50, 53, 56, 58, 59, 60, 59, 58, 57, 54, 51, 47,
     44, 40, 35, 31, 26, 21, 16, 10, 5, 0,
 ];
-/// Fixed duration of the observed Bart/Lisa paired secondary action.
+const MARGE_HOMER_ELEVATIONS: [i16; 29] = [
+    10, 17, 28, 35, 38, 43, 52, 57, 55, 58, 65, 66, 60, 59, 61, 60, 55, 52, 53,
+    50, 43, 38, 38, 33, 23, 18, 17, 12, 0,
+];
+/// Fixed duration of the observed paired secondary actions.
 pub const BART_LISA_JUMP_TICKS: u8 = 29;
 
 /// Character combinations with observed shared locomotion.
@@ -101,12 +105,17 @@ impl Pair {
 /// Current presentation phase of a joined pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PairMotion {
+    /// Marge/Homer ground pose following a combined vertical action.
+    AfterJump {
+        /// Zero-based post-landing locomotion phase.
+        tick: u8,
+    },
     /// Opening pose, clamped at the final still pose.
     Idle {
         /// Zero-based phase in the opening sequence.
         tick: u8,
     },
-    /// Bart/Lisa combined vertical action, including its landing pose.
+    /// Combined vertical action, including its landing pose.
     Jump {
         /// Zero-based action phase.
         tick: u8,
@@ -123,13 +132,19 @@ pub enum PairMotion {
 impl PairMotion {
     /// Vertical offset from the provisional shared ground point.
     #[must_use]
-    pub fn elevation(self) -> i16 {
+    pub fn elevation(self, pair: Pair) -> i16 {
         match self {
-            Self::Jump { tick } => JUMP_ELEVATIONS
-                .get(usize::from(tick))
-                .copied()
-                .unwrap_or_default(),
-            Self::Idle { .. } | Self::Primary | Self::Walk { .. } => 0,
+            Self::Jump { tick } => match pair {
+                Pair::BartLisa => &BART_LISA_ELEVATIONS,
+                Pair::MargeHomer => &MARGE_HOMER_ELEVATIONS,
+            }
+            .get(usize::from(tick))
+            .copied()
+            .unwrap_or_default(),
+            Self::AfterJump { .. }
+            | Self::Idle { .. }
+            | Self::Primary
+            | Self::Walk { .. } => 0,
         }
     }
 }
@@ -206,7 +221,10 @@ impl PairState {
         let next = tick.saturating_add(1);
         self.motion = Some(if next >= BART_LISA_JUMP_TICKS {
             self.second_controls = true;
-            PairMotion::Idle { tick: pair.idle_end() }
+            match pair {
+                Pair::MargeHomer => PairMotion::AfterJump { tick: 0 },
+                Pair::BartLisa => PairMotion::Idle { tick: pair.idle_end() },
+            }
         } else {
             PairMotion::Jump { tick: next }
         });
@@ -219,6 +237,39 @@ impl PairState {
             second.direction()
         } else {
             first.direction()
+        }
+    }
+
+    fn filter_actions(
+        self,
+        pair: Pair,
+        pending: [&mut PendingManeuver; 2],
+    ) -> PairCommand {
+        if self.support != PairSupport::Jump || self.motion.is_none() {
+            return PairCommand::None;
+        }
+        let actions = pending.each_ref().map(|action| action.candidate);
+        let airborne = matches!(self.motion, Some(PairMotion::Jump { .. }));
+        let jump = actions
+            .into_iter()
+            .any(|action| matches!(action, Some(Maneuver::Jump(_))));
+        if !airborne && !jump && pair == Pair::MargeHomer {
+            return PairCommand::None;
+        }
+        for action in pending {
+            *action = PendingManeuver::default();
+        }
+        if airborne {
+            PairCommand::None
+        } else if jump {
+            PairCommand::Jump
+        } else if actions
+            .into_iter()
+            .any(|action| matches!(action, Some(Maneuver::Attack { .. })))
+        {
+            PairCommand::Primary
+        } else {
+            PairCommand::None
         }
     }
 
@@ -266,18 +317,35 @@ impl PairState {
                 {
                     PairMotion::Idle { tick: pair.idle_end() }
                 },
-                PairMotion::Walk { .. }
+                PairMotion::AfterJump { .. }
+                | PairMotion::Walk { .. }
                 | PairMotion::Jump { .. }
                 | PairMotion::Primary => motion,
             });
             self.walking = false;
+        } else if pair == Pair::MargeHomer && self.second_controls {
+            let tick = match motion {
+                PairMotion::AfterJump { tick } if self.walking => {
+                    tick.saturating_add(1) & 15
+                },
+                PairMotion::AfterJump { tick } => {
+                    ((tick & !1).saturating_add(2)) & 15
+                },
+                PairMotion::Idle { .. }
+                | PairMotion::Jump { .. }
+                | PairMotion::Primary
+                | PairMotion::Walk { .. } => 2,
+            };
+            self.motion = Some(PairMotion::AfterJump { tick });
+            self.walking = true;
         } else {
             let tick = match motion {
                 PairMotion::Walk { tick } if self.walking => tick
                     .saturating_add(1)
                     .checked_rem(pair.walk_duration())
                     .unwrap_or_default(),
-                PairMotion::Idle { .. }
+                PairMotion::AfterJump { .. }
+                | PairMotion::Idle { .. }
                 | PairMotion::Jump { .. }
                 | PairMotion::Primary
                 | PairMotion::Walk { .. } => 0,
@@ -293,16 +361,17 @@ impl Cooperation {
         &mut self,
         slots: &mut [Slot; 4],
         layout: StreetLayout,
-        pair_command: PairCommand,
+        pair_commands: [PairCommand; 2],
     ) {
         let [marge, homer, bart, lisa] = slots;
+        let [marge_homer, bart_lisa] = pair_commands;
         self.marge_homer.advance(
-            (Pair::MargeHomer, PairCommand::None),
+            (Pair::MargeHomer, marge_homer),
             (marge, homer),
             layout,
         );
         self.bart_lisa.advance(
-            (Pair::BartLisa, pair_command),
+            (Pair::BartLisa, bart_lisa),
             (bart, lisa),
             layout,
         );
@@ -339,33 +408,13 @@ impl Cooperation {
     pub(super) fn filter_actions(
         &self,
         pending: &mut [PendingManeuver; 4],
-    ) -> PairCommand {
-        let pair = self.bart_lisa;
-        if pair.support != PairSupport::Jump || pair.motion.is_none() {
-            return PairCommand::None;
-        }
-        let [_, _, bart, lisa] = pending;
-        let actions = [bart.candidate, lisa.candidate];
-        *bart = PendingManeuver::default();
-        *lisa = PendingManeuver::default();
-        if matches!(pair.motion, Some(PairMotion::Jump { .. })) {
-            return PairCommand::None;
-        }
-        if actions
-            .into_iter()
-            .any(|action| matches!(action, Some(Maneuver::Jump(_))))
-        {
-            // Secondary also wins a same-tick chord. The original's
-            // station-specific one-frame input offset is not modeled.
-            PairCommand::Jump
-        } else if actions
-            .into_iter()
-            .any(|action| matches!(action, Some(Maneuver::Attack { .. })))
-        {
-            PairCommand::Primary
-        } else {
-            PairCommand::None
-        }
+    ) -> [PairCommand; 2] {
+        let [marge, homer, bart, lisa] = pending;
+        [
+            self.marge_homer
+                .filter_actions(Pair::MargeHomer, [marge, homer]),
+            self.bart_lisa.filter_actions(Pair::BartLisa, [bart, lisa]),
+        ]
     }
 
     pub(super) fn invalidate(&mut self, slots: &[Slot; 4]) {
@@ -660,7 +709,7 @@ mod tests {
             assert_eq!(
                 state
                     .pair_pose(Pair::BartLisa)
-                    .map(|pose| pose.motion.elevation()),
+                    .map(|pose| pose.motion.elevation(Pair::BartLisa)),
                 phases.get(elevation).copied()
             );
         }
@@ -713,6 +762,74 @@ mod tests {
         assert_eq!(state, baseline);
         assert_eq!(chord, baseline);
         assert!(state.pair_pose(Pair::BartLisa).is_some());
+    }
+
+    #[test]
+    fn marge_homer_combined_jump_retains_pair_and_transfers_control() {
+        for player in Pair::MargeHomer.members() {
+            check_marge_homer_jump(player);
+        }
+    }
+
+    fn check_marge_homer_jump(player: Player) {
+        let mut state = joined().with_pair_jump(Pair::MargeHomer, true);
+        let stations = state.stations();
+        state.input_step(41, &[
+            change(player, Control::Secondary, true),
+            change(player, Control::Secondary, false),
+        ]);
+        assert_eq!(
+            state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+            Some(PairMotion::Jump { tick: 0 })
+        );
+        wait(&mut state, 11);
+        assert_eq!(
+            state
+                .pair_pose(Pair::MargeHomer)
+                .map(|pose| pose.motion.elevation(Pair::MargeHomer)),
+            Some(66)
+        );
+        let mut control = state;
+        state.input_step(53, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Homer, Control::Secondary, true),
+            change(Player::Homer, Control::Secondary, false),
+        ]);
+        control.input_step(53, &[]);
+        assert_eq!(state, control);
+        wait(&mut state, 17);
+        assert_eq!(
+            state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+            Some(PairMotion::AfterJump { tick: 0 })
+        );
+        assert_eq!(state.stations(), stations);
+        check_marge_homer_landing(state);
+    }
+
+    fn check_marge_homer_landing(mut state: Cabinet) {
+        let stations = state.stations();
+        state.input_step(71, &[change(Player::Marge, Control::Left, true)]);
+        assert_eq!(state.stations(), stations);
+        state.input_step(72, &[change(Player::Homer, Control::Right, true)]);
+        assert_eq!(
+            state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+            Some(PairMotion::AfterJump { tick: 2 })
+        );
+        assert_ne!(state.stations(), stations);
+        wait(&mut state, 1);
+        assert_eq!(
+            state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+            Some(PairMotion::AfterJump { tick: 3 })
+        );
+        state.input_step(74, &[change(Player::Homer, Control::Right, false)]);
+        let stopped = state.stations();
+        wait(&mut state, 20);
+        assert_eq!(state.stations(), stopped);
+        assert_eq!(
+            state.pair_pose(Pair::MargeHomer).map(|pose| pose.motion),
+            Some(PairMotion::AfterJump { tick: 3 })
+        );
     }
 
     #[test]

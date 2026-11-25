@@ -1799,3 +1799,39 @@ budget, with mean work of 60.509 and 57.749 microseconds respectively.
 Lifetime peak RSS was 134,217,728 bytes. The older 189-pose aspect-fit
 smoke also passed with no combined action. Physical play, exact
 cooperative hit rules and complete stage acceptance remain open.
+
+Fresh isolated Marge/Homer controls with either member's Secondary
+reproduced the same 29-tick vertical actor sequence, with one frame
+of seat sampling stagger. Eight distinct left-facing actor crops
+passed exact reconstruction of all 71,680 scene pixels. The landing
+crop has the same actor payload as one of those eight phases. During
+flight, four independent Primary/Secondary edge controls matched
+the neutral complete object DMA over 32 frames; each member's
+horizontal input also produced translation. The observed post-flight
+Homer movement advances through the eight crops over a 16-tick cycle
+and holds its last pose on stopping. Marge-only movement does not
+translate the landed pair.
+
+The optional Marge/Homer jump catalogue requires all eight keys and
+reuses them for the flight, landing and subsequent walking cycle.
+The pair shares the existing jump admission and control arbitration
+mechanism, has its own representative elevation timeline (66 pixels
+at peak), and preserves individual ground points and health. The
+optional previously verified shadow mask is projected separately.
+Grounded Primary remains the earlier provisional solo action; the
+persistent second-Primary pose requires its own admission and timing
+evidence. Same-tick chord selection, movement timing, sprite pivots,
+damage eligibility and how initial control returns are provisional.
+The 200-pose private catalogue measures 16,231 bytes, within both
+existing bounds. No original assets or captures are tracked.
+
+Fresh native render/audio workspace validation passed in run
+1795630342415157783-568357. Native adaptive 426-by-304 touch and
+dummy-audio smoke with the 3,336,144-byte Linux executable verified
+both combined jumps, Bart/Lisa Primary, and Marge/Homer landing and
+post-landing movement readback. All 600 movement and 20 first-strike
+submissions met the 16.667 ms budget; mean work was 65.452 and
+212.736 microseconds respectively, with lifetime peak RSS of
+134,217,728 bytes. The previous 192-pose aspect-fit catalogue passed
+without the Marge/Homer jump. Physical play and full stage acceptance
+remain open.

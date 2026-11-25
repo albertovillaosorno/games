@@ -149,6 +149,20 @@ preserve the earlier solo maneuver behavior. No damage is inferred. Ground
 positions, directional speed, combat eligibility, exact pivots and other
 cooperative actions remain provisional.
 
+The optional `marge-homer jump TICK SHA256` sequence requires the
+complete Marge/Homer idle and walk catalogue and exactly the eight
+keys at offsets 0, 2, 8, 10, 12, 14, 16 and 18. These crops also
+serve the distinct 16-tick post-landing walking cycle. Either
+Secondary starts a 29-tick vertical action, reaching a representative
+66-pixel elevation. In-flight button edges are discarded; both members
+can steer, with first-member priority. After landing, only Homer moves
+the pair, and the last post-landing pose holds when motion stops. The
+optional shadow mask is drawn independently of elevation. Grounded
+Primary retains the provisional solo behavior pending the separate
+two-edge paired action. The combined catalogue now reaches the existing
+200-record limit. Exact pivots, hit eligibility, seat sampling and
+control restoration remain provisional.
+
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated
 `actor/shadow` mask from a verified local canonical bundle. Marge,

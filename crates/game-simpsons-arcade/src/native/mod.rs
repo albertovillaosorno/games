@@ -618,23 +618,34 @@ impl Scene {
         view: world::View,
     ) -> Result<(), RenderError> {
         for pair in Pair::ALL {
-            if let Some(joined) = cabinet.pair_pose(pair) {
-                let pose = self
-                    .poses
-                    .pair(pair, joined.motion)
-                    .ok_or(RenderError::InvalidSprite)?;
-                self.world.push((
-                    joined.position.y,
-                    pose.draw(
-                        ground_position(
-                            pose,
-                            view.project(joined.position),
-                            joined.motion.elevation(),
-                        )?,
-                        joined.facing == Facing::Right,
-                    ),
-                ));
+            let Some(joined) = cabinet.pair_pose(pair) else {
+                continue;
+            };
+            let pose = self
+                .poses
+                .pair(pair, joined.motion)
+                .ok_or(RenderError::InvalidSprite)?;
+            if let Some(shadow) = &self.shadow
+                && pair == Pair::MargeHomer
+                && matches!(
+                    joined.motion,
+                    crate::PairMotion::Jump { .. }
+                        | crate::PairMotion::AfterJump { .. }
+                )
+            {
+                self.draws.push(shadow.draw(view.project(joined.position))?);
             }
+            self.world.push((
+                joined.position.y,
+                pose.draw(
+                    ground_position(
+                        pose,
+                        view.project(joined.position),
+                        joined.motion.elevation(pair),
+                    )?,
+                    joined.facing == Facing::Right,
+                ),
+            ));
         }
         Ok(())
     }
@@ -2135,10 +2146,9 @@ fn smoke_cooperation(
     if families == 0 {
         return Ok(());
     }
-    let mut cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
-        .map_err(failure)?
-        .with_cooperative_pairs(enabled)
-        .with_bart_lisa_jump(art.poses.bart_lisa_jump());
+    let mut cabinet = art.poses.configure_pairs(
+        &Cabinet::new(StreetLayout::DOWNTOWN).map_err(failure)?,
+    );
     for player in Player::ALL {
         cabinet.input_step(0, &[
             LogicalAction {
@@ -2169,9 +2179,12 @@ fn smoke_cooperation(
         return Err(failure("cooperative actors not visibly combined"));
     }
     smoke_cooperation_movement(scene, art, &mut cabinet, families)?;
-    if art.poses.bart_lisa_jump() {
+    if art.poses.pair_jump(Pair::BartLisa) {
         smoke_cooperation_jump(scene, art, &mut cabinet)?;
         smoke_cooperation_primary(scene, art, &mut cabinet)?;
+    }
+    if art.poses.pair_jump(Pair::MargeHomer) {
+        smoke_marge_homer_jump(scene, art, &mut cabinet)?;
     }
     writeln!(
         stdout().lock(),
@@ -2279,6 +2292,67 @@ fn smoke_cooperation_primary(
         .map_err(failure)
 }
 
+fn smoke_marge_homer_jump(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &mut Cabinet,
+) -> Result<(), RenderError> {
+    let still = scene.readback()?;
+    let actions = [
+        (Player::Homer, Control::Right, false),
+        (Player::Lisa, Control::Right, false),
+        (Player::Marge, Control::Secondary, true),
+        (Player::Marge, Control::Secondary, false),
+    ]
+    .map(|(player, control, down)| LogicalAction {
+        action: Action { control, player },
+        down,
+    });
+    cabinet.input_step(81, &actions);
+    let _opening = art.present(scene, cabinet)?;
+    let opening = scene.readback()?;
+    if still == opening {
+        return Err(failure("Marge/Homer jump opening not visible"));
+    }
+    for tick in 82..93 {
+        cabinet.input_step(tick, &[]);
+    }
+    let _apex = art.present(scene, cabinet)?;
+    if opening == scene.readback()? {
+        return Err(failure("Marge/Homer jump elevation not visible"));
+    }
+    for tick in 93..111 {
+        cabinet.input_step(tick, &[]);
+    }
+    let _landed = art.present(scene, cabinet)?;
+    if cabinet.pair_pose(Pair::MargeHomer).map(|pose| pose.motion)
+        != Some(crate::PairMotion::AfterJump { tick: 0 })
+        || opening == scene.readback()?
+    {
+        return Err(failure("Marge/Homer landing not visible"));
+    }
+    let landed = scene.readback()?;
+    cabinet.input_step(111, &[LogicalAction {
+        action: Action {
+            control: Control::Left,
+            player: Player::Homer,
+        },
+        down: true,
+    }]);
+    let _walk = art.present(scene, cabinet)?;
+    if cabinet.pair_pose(Pair::MargeHomer).map(|pose| pose.motion)
+        != Some(crate::PairMotion::AfterJump { tick: 2 })
+        || landed == scene.readback()?
+    {
+        return Err(failure("Marge/Homer post-landing walk not visible"));
+    }
+    writeln!(
+        stdout().lock(),
+        "Marge/Homer combined jump and walk verified"
+    )
+    .map_err(failure)
+}
+
 fn smoke_optional(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -2373,10 +2447,11 @@ fn window(
             art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
         let session =
             LocalSession::with_display(options.display, touch_enabled);
-        let cabinet =
-            cabinet_with_scroll(source.enemy.is_some(), session, scroll_limit)?
-                .with_cooperative_pairs(art.poses.paired_families())
-                .with_bart_lisa_jump(art.poses.bart_lisa_jump());
+        let cabinet = art.poses.configure_pairs(&cabinet_with_scroll(
+            source.enemy.is_some(),
+            session,
+            scroll_limit,
+        )?);
         let preview = Interactive::new(startup, options, &cabinet, host)?;
         options.controls.persist().map_err(failure)?;
         preview.run(scene, &mut art, playback.as_mut())
