@@ -99,3 +99,9 @@ symlinks, hardlinks, FIFOs, untrusted permissions, unpublished-file cleanup
 and a renamed directory handle. Fresh validation passed in run
 1795587630637948131-8605. Actual power-loss recovery and Android storage
 remain untested; trusted ancestors and same-user processes are assumed.
+
+A synchronized two-publisher save test verifies that both writers can
+replace the same slot, that the final bytes decode as exactly one of
+the complete payloads, and that no staging files remain. Both directory
+durability receipts succeeded on the Linux test filesystem. This is
+last-publication-wins evidence, not a physical power-loss experiment.

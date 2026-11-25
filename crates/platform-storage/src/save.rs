@@ -237,8 +237,9 @@ fn slot_name(slot: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::sync::Barrier;
+    use std::{fs, thread};
 
     use nix::unistd::mkfifo;
 
@@ -249,6 +250,35 @@ mod tests {
         condition
             .then_some(())
             .ok_or(SaveError::Io(io::ErrorKind::InvalidData))
+    }
+
+    #[test]
+    fn concurrent_publishers_leave_one_complete_durable_envelope()
+    -> Result<(), SaveError> {
+        let root = TestRoot::new()?;
+        let maximum = NonZeroU64::new(4096).unwrap_or(NonZeroU64::MIN);
+        let store = SaveStore::open(&root.path, maximum)?;
+        let first = [0x12; 4096];
+        let second = [0x34; 4096];
+        require(store.store(0, b"previous")?.durability.is_ok())?;
+        let barrier = Barrier::new(2);
+        thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                let _ready = barrier.wait();
+                store.store(0, &first)
+            });
+            let _ready = barrier.wait();
+            let receipt = store.store(0, &second);
+            let other = writer
+                .join()
+                .map_err(|_error| SaveError::Io(io::ErrorKind::Other))??;
+            require(other.durability.is_ok() && receipt?.durability.is_ok())
+        })?;
+        let payload = store.load(0)?;
+        require(payload == first || payload == second)?;
+        let bytes = fs::read(root.path.join(slot_name(0)))?;
+        require(decode_save(&bytes, maximum)? == payload)?;
+        require(fs::read_dir(&root.path)?.count() == 1)
     }
 
     #[test]
