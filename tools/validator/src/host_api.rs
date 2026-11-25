@@ -108,6 +108,16 @@ fn io_value(member: &str) -> bool {
     )
 }
 
+fn compile_time_host_macro(member: &str) -> Option<&'static str> {
+    match member {
+        "env" | "option_env" => Some("compile-time environment macro"),
+        "include" | "include_bytes" | "include_str" => {
+            Some("compile-time file macro")
+        },
+        _ => None,
+    }
+}
+
 fn inspect_branch(tokens: &[TokenTree], scope: Scope, findings: &mut Findings) {
     let Some(head) = tokens.first() else {
         return;
@@ -128,6 +138,13 @@ fn inspect_branch(tokens: &[TokenTree], scope: Scope, findings: &mut Findings) {
     let Some(member) = name(head) else {
         return;
     };
+    if matches!(scope, Scope::Core | Scope::Standard)
+        && !(scope == Scope::Standard && member == "env")
+        && let Some(diagnostic) = compile_time_host_macro(&member)
+    {
+        let _previous = findings.insert(diagnostic);
+        return;
+    }
     match scope {
         Scope::Core => {
             let diagnostic = match member.as_str() {
@@ -203,6 +220,11 @@ fn inspect(stream: TokenStream, findings: &mut Findings) {
         let Some(suffix) = tokens.get(index..) else {
             continue;
         };
+        if punct(suffix.get(1), '!')
+            && let Some(diagnostic) = compile_time_host_macro(&word)
+        {
+            let _previous = findings.insert(diagnostic);
+        }
         match word.as_str() {
             "std" | "core" => {
                 let scope = if word == "std" {
@@ -268,6 +290,51 @@ mod tests {
             const NOTE: &str = r#"std::env::var("test")"#;
             fn measure() { let _ = std::time::Duration::ZERO; }
             "##,
+        )
+    }
+
+    #[test]
+    fn detects_compile_time_host_inputs() -> Result<(), String> {
+        for (source, expected) in [
+            (
+                r#"const SECRET: &str = env!("TOKEN");"#,
+                "compile-time environment macro",
+            ),
+            (
+                r#"const VALUE: Option<&str> = option_env!("TOKEN");"#,
+                "compile-time environment macro",
+            ),
+            (
+                r#"const BYTES: &[u8] = include_bytes!("asset.zip");"#,
+                "compile-time file macro",
+            ),
+            (
+                r#"macro_rules! m { () => { include_str!("private") } }"#,
+                "compile-time file macro",
+            ),
+            (
+                r#"::core::include!("generated.rs");"#,
+                "compile-time file macro",
+            ),
+            (
+                "use std::{include_bytes as bytes, include_str as text};",
+                "compile-time file macro",
+            ),
+            (
+                "pub use core::option_env as build_env;",
+                "compile-time environment macro",
+            ),
+        ] {
+            require(findings(source)?.contains(expected), expected)?;
+            require(validate(source).is_err(), "reject host input")?;
+        }
+        validate(
+            r#"
+            // include_str!("not code")
+            const LABEL: &str = "option_env!(not code)";
+            fn include_bytes() {}
+            fn env() {}
+            "#,
         )
     }
 

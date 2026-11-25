@@ -335,3 +335,13 @@ and x86-64, Android ARM64, and WebAssembly). Fresh native validation
 failures, strict Clippy, package verification and 75 Markdown files.
 Native runtime compatibility on other operating systems is not proven.
 Non-native publication, preference and save adapters remain incomplete.
+
+The portability preflight now detects compile-time environment access and
+file inclusion in portable engine, importer, IR and physical device source.
+Bare invocations, qualified calls, grouped imports and macro aliases are
+covered, while comments and literals remain neutral. Physical hardware host
+API findings enter the same early audit before cached validation can pass.
+This is a parsed-token policy, not arbitrary macro expansion or semantic
+Rust name resolution. Tool and title host API migration remains incomplete.
+The combined fresh gate 1795644803982258193-120270 passed 1,353 test
+executions, including the new fixtures in both feature configurations.

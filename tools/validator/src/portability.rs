@@ -191,7 +191,10 @@ fn manifest(source: &str, workspace: &toml::Table) -> Result<Counts, String> {
 
 fn source_counts(name: &str, source: &str) -> Result<Counts, String> {
     let mut counts = rust(source);
-    if neutral_ir(name) || host_independent(name) {
+    if neutral_ir(name)
+        || host_independent(name)
+        || name.starts_with("crates/platform/src/hardware/")
+    {
         for violation in host_api::findings(source)
             .map_err(|error| format!("{name}: {error}"))?
         {
@@ -448,6 +451,52 @@ mod tests {
             require(error.contains(diagnostic), diagnostic)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn portable_source_cannot_embed_host_files_or_environment()
+    -> Result<(), String> {
+        let root = directory("portable-compile-time-host")?;
+        let authored = [
+            "crates/engine/src/lib.rs",
+            "crates/importer/src/lib.rs",
+            "crates/platform/src/ir/example/mod.rs",
+            "crates/platform/src/hardware/example/mod.rs",
+            "crates/platform/src/software/linux/example/mod.rs",
+        ]
+        .map(PathBuf::from);
+        for relative in &authored {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().ok_or("fixture parent")?)
+                .map_err(|error| error.to_string())?;
+            fs::write(
+                path,
+                r#"
+                const SECRET: &str = env!("TOKEN");
+                const BYTES: &[u8] = include_bytes!("asset.zip");
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        let result = validate(&root, &authored, &toml::Table::new());
+        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let error = result.err().ok_or("accepted compile-time host inputs")?;
+        for relative in authored.iter().take(4) {
+            require(
+                error.contains(relative.to_string_lossy().as_ref()),
+                "missing portable path",
+            )?;
+        }
+        for diagnostic in [
+            "host:compile-time environment macro",
+            "host:compile-time file macro",
+        ] {
+            require(error.contains(diagnostic), diagnostic)?;
+        }
+        require(
+            !error.contains("software/linux/example"),
+            "software adapter remains the host boundary",
+        )
     }
 
     #[test]
