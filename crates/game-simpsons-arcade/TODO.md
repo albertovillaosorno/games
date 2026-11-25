@@ -46,3 +46,19 @@ The isolated attack and jump timings are now modeled. Jump visibly
 raises the idle actor art using an approximate elevation curve. Attack
 currently locks ground displacement; distinct pose art and actual
 enemy combat are not yet implemented. Held-jump variants are omitted.
+
+For original attack and jump poses, optionally pass
+`--poses FILE` after `--touch` (if used) and before PARENT. The local
+UTF-8 catalogue has one whitespace-separated record per line:
+
+```text
+NAME ACTION TICK SHA256
+```
+
+NAME is marge, homer, bart or lisa; ACTION is attack or jump. TICK is
+the zero-based fixed-step offset, and SHA256 identifies a canonical
+bundle containing that character's actor record. Every station/action
+pair requires tick zero. The most recent pose is held until the next
+record or maneuver end. The catalogue is limited to 64 poses and
+16 KiB. The original four-hash command still works without a catalogue.
+Pose crops retain approximate bottom-center pivots.

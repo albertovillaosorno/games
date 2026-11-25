@@ -495,3 +495,23 @@ combos, distinct attack art and exact jump pivots remain unimplemented.
 Fresh workspace validation passed (1795590514370710766-424353), and
 native touch smoke also verified changed jump pixels and a return to
 the original ground position.
+
+Full tile, palette and object captures of the isolated attacks and jumps
+were collected for all four stations. The first eight same-callback
+imports correctly failed strict pixel comparison. Aligning the preceding
+callback's device and tile state with the following screen and palette
+resolved all eight. In total 29 distinct selected pose crops were
+published locally through the existing exact-scene MAME art importer
+(21 attack and eight jump poses). The source assets and catalogue stay
+under the ignored reference directory.
+
+The native preview accepts a bounded optional local pose catalogue
+with named canonical bundle hashes and fixed-step offsets. All four
+attack and jump sequences require a tick-zero pose; invalid, duplicate
+or excessive records are rejected. A pose remains selected until the
+next offset, without crossing character or action boundaries. Original
+idle-only launches remain supported. Fresh validation passed
+(1795590776886035917-461020). The native touch-and-pose smoke rendered
+all four attacks concurrently and returned to byte-identical idle
+pixels. Original pose pivots, facing-specific variants, held jump,
+walking art and enemy interaction remain open.

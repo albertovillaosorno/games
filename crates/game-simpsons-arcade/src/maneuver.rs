@@ -57,11 +57,7 @@ impl Maneuver {
     pub(super) const fn advance(self, player: Player) -> Self {
         match self {
             Self::Attack { tick } => {
-                let duration = if matches!(player, Player::Bart) {
-                    18
-                } else {
-                    17
-                };
+                let duration = self.duration(player);
                 let next = tick.saturating_add(1);
                 if next < duration {
                     Self::Attack { tick: next }
@@ -72,12 +68,21 @@ impl Maneuver {
             Self::Idle => Self::Idle,
             Self::Jump { tick } => {
                 let next = tick.saturating_add(1);
-                if next < 31 {
+                if next < self.duration(player) {
                     Self::Jump { tick: next }
                 } else {
                     Self::Idle
                 }
             },
+        }
+    }
+
+    pub(super) const fn duration(self, player: Player) -> u8 {
+        match self {
+            Self::Attack { .. } if matches!(player, Player::Bart) => 18,
+            Self::Attack { .. } => 17,
+            Self::Idle => 0,
+            Self::Jump { .. } => 31,
         }
     }
 

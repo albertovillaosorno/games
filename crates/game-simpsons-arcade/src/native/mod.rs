@@ -31,6 +31,7 @@
 
 //! Native initial street preview using only verified canonical art.
 
+mod poses;
 mod touch;
 
 use std::collections::BTreeMap;
@@ -267,6 +268,7 @@ struct Scene {
     background: Art,
     draws: Vec<SpriteDraw>,
     panel: Option<SpriteDraw>,
+    poses: poses::PoseArt,
 }
 
 impl Scene {
@@ -274,6 +276,7 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         bundles: &[CanonicalBundle; 4],
         touch_enabled: bool,
+        pose_source: (&poses::Catalogue, &Path),
     ) -> Result<Self, RenderError> {
         let [first, _, _, _] = bundles;
         let mut background = Art::load(scene, first, "scene/background")?;
@@ -304,6 +307,7 @@ impl Scene {
             } else {
                 None
             },
+            poses: pose_source.0.load(pose_source.1, scene)?,
         })
     }
 
@@ -336,8 +340,12 @@ impl Scene {
             if station.participation == Participation::Playing
                 && cabinet.phase() == Phase::Street
             {
-                self.draws.push(actor.draw(
-                    actor_position(actor, station)?,
+                let pose = self
+                    .poses
+                    .select(player, station.maneuver)
+                    .unwrap_or(actor);
+                self.draws.push(pose.draw(
+                    actor_position(pose, station)?,
                     station.facing == Facing::Left,
                 ));
             }
@@ -515,10 +523,21 @@ pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
     if touch_enabled {
         let _flag = args.remove(0);
     }
+    let catalogue = if args.first().is_some_and(|arg| arg == "--poses") {
+        if args.len() < 2 {
+            return Err(String::from("missing pose catalogue path"));
+        }
+        let _flag = args.remove(0);
+        poses::Catalogue::open(Path::new(&args.remove(0)))
+            .map_err(|error| format!("{error:?}"))?
+    } else {
+        poses::Catalogue::default()
+    };
     let [directory, marge, homer, bart, lisa] = <[OsString; 5]>::try_from(args)
         .map_err(|_error| {
             String::from(concat!(
-                "usage: simpsons-arcade [--smoke] [--touch] PARENT ",
+                "usage: simpsons-arcade [--smoke] [--touch] ",
+                "[--poses FILE] PARENT ",
                 "MARGE_SHA HOMER_SHA BART_SHA LISA_SHA"
             ))
         })?;
@@ -530,7 +549,9 @@ pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
         .and_then(|bundles| {
             bundles.try_into().map_err(|_error| failure("bundle count"))
         })
-        .and_then(|bundles| window(&bundles, smoke, touch_enabled));
+        .and_then(|bundles| {
+            window(&bundles, smoke, touch_enabled, (&catalogue, parent))
+        });
     result.map_err(|error| format!("{error:?}"))
 }
 
@@ -589,7 +610,11 @@ fn smoke(
     if touch_enabled {
         smoke_touch_movement(scene, &mut controls, &mut simulation)?;
     }
-    smoke_jump(scene, art, &mut controls, &mut simulation)
+    smoke_jump(scene, art, &mut controls, &mut simulation)?;
+    if !art.poses.is_empty() {
+        smoke_poses(scene, art, &mut controls, &mut simulation)?;
+    }
+    Ok(())
 }
 
 fn smoke_jump(
@@ -629,6 +654,50 @@ fn smoke_jump(
     let [landed, ..] = simulation.state().stations();
     if landed.maneuver != Maneuver::Idle || landed.position != before.position {
         return Err(failure("jump did not return to ground"));
+    }
+    Ok(())
+}
+
+fn smoke_poses(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let _drawn = art.present(scene, simulation.state())?;
+    let idle = scene.readback().map_err(failure)?;
+    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+    for [_, _, primary, ..] in KEYBOARD {
+        for down in [true, false] {
+            controls.route(
+                InputEvent::Key {
+                    code: key_code(primary),
+                    down,
+                },
+                TICK_INTERVAL.saturating_mul(tick),
+                simulation,
+            )?;
+        }
+    }
+    let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    if simulation
+        .state()
+        .stations()
+        .iter()
+        .any(|station| station.maneuver != (Maneuver::Attack { tick: 0 }))
+    {
+        return Err(failure("four-player attack admission failed"));
+    }
+    let _attack = art.present(scene, simulation.state())?;
+    if idle == scene.readback().map_err(failure)? {
+        return Err(failure("attack poses not visibly presented"));
+    }
+    for _ in 0..18u8 {
+        let _cycle_step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        let _draw = art.present(scene, simulation.state())?;
+    }
+    if idle != scene.readback().map_err(failure)? {
+        return Err(failure("attack pose did not return to idle"));
     }
     Ok(())
 }
@@ -697,6 +766,7 @@ fn window(
     bundles: &[CanonicalBundle; 4],
     hidden: bool,
     touch_enabled: bool,
+    pose_source: (&poses::Catalogue, &Path),
 ) -> Result<(), RenderError> {
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",
@@ -716,12 +786,17 @@ fn window(
     let layout =
         FrameLayout::new(dimension(320)?, dimension(height)?, size(389_120)?)?;
     let limits = SceneLimits {
-        atlas_bytes: size(2_097_152)?,
-        atlases: size(if touch_enabled {
-            6
-        } else {
-            5
-        })?,
+        atlas_bytes: size(
+            2_097_152usize
+                .saturating_add(pose_source.0.count().saturating_mul(65_536)),
+        )?,
+        atlases: size(pose_source.0.count().saturating_add(
+            if touch_enabled {
+                6
+            } else {
+                5
+            },
+        ))?,
         sprites: size(if touch_enabled {
             10
         } else {
@@ -730,7 +805,7 @@ fn window(
     };
     let startup = window.input(size(4)?)?;
     window.with_scene(layout, limits, |scene| {
-        let mut art = Scene::load(scene, bundles, touch_enabled)?;
+        let mut art = Scene::load(scene, bundles, touch_enabled, pose_source)?;
         if hidden {
             return smoke(scene, &mut art, touch_enabled);
         }
