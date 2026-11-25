@@ -35,6 +35,8 @@ mod konami;
 mod palette;
 /// Observed video mixer assignment and priority order.
 pub mod priority;
+/// Observed local tile-cell addresses and attributes.
+pub mod tilemap;
 
 use std::iter::once;
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -90,6 +92,7 @@ struct Profile {
     machine: &'static str,
     palette: palette::Palette,
     revision: &'static str,
+    tile_code_mask: u16,
     title: &'static str,
     video: priority::Wiring,
 }
@@ -195,6 +198,23 @@ impl Machine {
             })
             .map(Self)
             .ok_or(ImportError::IncorrectSource)
+    }
+
+    /// Bind observed tile RAM and six bytes of character bank/control state.
+    /// # Errors
+    /// Rejects malformed RAM or control snapshots.
+    pub fn tilemap_snapshot<'source>(
+        self,
+        ram: &'source [u8],
+        controls: &[u8],
+        mixer: priority::VideoPriority,
+    ) -> Result<tilemap::TilemapSnapshot<'source>, ImportError> {
+        tilemap::TilemapSnapshot::new(
+            ram,
+            controls,
+            mixer,
+            self.0.tile_code_mask,
+        )
     }
 
     /// Check the selected source and exact graphics manifest shape.

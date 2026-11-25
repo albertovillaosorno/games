@@ -43,6 +43,9 @@ pub mod reference_palette;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only video mixer comparison against local observations.
 pub mod reference_priority;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Bounded local tile RAM admission diagnostic.
+pub mod reference_tilemap;
 #[cfg(all(
     feature = "native-preview",
     target_os = "linux",
@@ -88,6 +91,7 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
     "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
+    "\nLinux/Android: mame tilemap-check MACHINE REV RAM REGISTERS",
     "\n",
     "GNU/Linux (native-preview): mame render-check MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT",
@@ -193,6 +197,8 @@ enum Command {
         target_env = "gnu"
     ))]
     RenderCheck(Machine, render_check::Arguments),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    TilemapCheck(Machine, PathBuf, PathBuf),
     Verify(Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     WaveCompare(PathBuf, PathBuf, NonZeroU64),
@@ -241,7 +247,7 @@ impl Command {
                 args.collect(),
             )?)),
             #[cfg(any(target_os = "linux", target_os = "android"))]
-            "palette-check" | "priority-check" => {
+            "palette-check" | "priority-check" | "tilemap-check" => {
                 Self::parse_reference(action, selected, args.collect())
             },
             #[cfg(all(
@@ -304,6 +310,9 @@ impl Command {
             "priority-check" => {
                 Ok(Self::PriorityCheck(machine, raw.into(), reference.into()))
             },
+            "tilemap-check" => {
+                Ok(Self::TilemapCheck(machine, raw.into(), reference.into()))
+            },
             _ => Err(String::from(USAGE)),
         }
     }
@@ -317,6 +326,10 @@ impl Command {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::PriorityCheck(machine, raw, reference) => {
                 reference_priority::check(machine, &raw, &reference)
+            },
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::TilemapCheck(machine, raw, registers) => {
+                reference_tilemap::check(machine, &raw, &registers)
             },
             #[cfg(all(
                 feature = "native-preview",

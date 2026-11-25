@@ -180,3 +180,17 @@ registers were constant in this scenario, so other register values and
 tie ordering have synthetic coverage only. Tile bank contents changed;
 tile reconstruction, sprite object attributes, shadow/highlight effects
 and complete screen composition still require independent comparison.
+
+The selected machine now resolves all 2,048 row-major cells in each of
+the three captured tile layers from bounded RAM and bank/control state,
+including local vertical flip, global flip, wrapped graphics indices
+and per-cell palette banks. Synthetic tests cover a bank substitution,
+wrapped address, flip and malformed extents.
+
+The read-only diagnostic `mame tilemap-check` accepts the captured RAM
+and 22 register bytes (four character banks, address map, flip control,
+then 16 mixer registers). It resolved all 73,728 cells across twelve
+checkpoints without out-of-range palette banks; incomplete registers
+were rejected. This checks admissibility and bounded addressing, not
+independent tile-cell identities or pixel equivalence. Scroll state,
+individual sprite attributes and composited screen parity remain open.

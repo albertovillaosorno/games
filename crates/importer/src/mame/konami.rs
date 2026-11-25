@@ -70,6 +70,7 @@ pub(super) static SIMPSONS: Profile = Profile {
         entries: NonZeroUsize::MIN.saturating_add(2048 - 1),
     },
     revision: "world-4p-set-1",
+    tile_code_mask: 0x7fff,
     title: "simpsons-arcade",
     video: Wiring {
         backdrop: 0,
