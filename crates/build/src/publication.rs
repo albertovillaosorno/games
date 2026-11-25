@@ -30,8 +30,8 @@
 //   - Never overwrite and do not publish on conversion failure.
 
 use std::io::{Write as _, stdout};
-use std::num::NonZeroU64;
-use std::path::Path;
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::path::{Path, PathBuf};
 
 use games_assets::archive::ArchiveBudget;
 use games_assets::{AssetManifest, ContentHash, ManifestLimits};
@@ -39,7 +39,58 @@ use games_importer::conversion::ConversionLimits;
 use games_importer::mame::AssetSelection;
 use games_importer::{ImportError, SourceSnapshot};
 use games_platform_storage::bundle::CanonicalBundle;
+use games_platform_storage::file::snapshot;
 use games_platform_storage::staging::{CanonicalStaging, StagedBundle};
+
+/// Explicit authoring selection for one existing passive-media slot.
+#[derive(Debug)]
+pub(crate) struct MediaReplacement {
+    pub(crate) base: ContentHash,
+    pub(crate) key: String,
+    pub(crate) limits: ManifestLimits,
+    pub(crate) parent: PathBuf,
+    pub(crate) raw: PathBuf,
+}
+
+impl MediaReplacement {
+    pub(crate) fn run(self) -> Result<(), String> {
+        let bundle =
+            CanonicalBundle::open(&self.parent, self.base, self.limits)
+                .map_err(|error| format!("base bundle: {error:?}"))?;
+        let base = bundle.manifest();
+        let original = base
+            .record(&self.key)
+            .ok_or_else(|| String::from("unknown base slot"))?;
+        base.validate_media_replacement(&[&self.key], original)
+            .map_err(|error| format!("replacement slot: {error:?}"))?;
+        let size = NonZeroU64::new(original.size)
+            .ok_or_else(|| String::from("empty media slot"))?;
+        let bytes = snapshot(&self.raw, size)
+            .map_err(|error| format!("replacement input: {error:?}"))?;
+        if u64::try_from(bytes.len()).ok() != Some(size.get()) {
+            return Err(String::from("replacement byte length mismatch"));
+        }
+        let mut record = original.clone();
+        record.digest = ContentHash::calculate(&bytes);
+        let digest = record.digest;
+        let limits = ManifestLimits {
+            manifest_bytes: self.limits.manifest_bytes,
+            payload_bytes: size,
+            records: NonZeroUsize::MIN,
+            total_bytes: size,
+        };
+        let manifest =
+            AssetManifest::new(base.source().clone(), vec![record], limits)
+                .map_err(|error| format!("replacement manifest: {error:?}"))?;
+        let mut stage =
+            CanonicalStaging::new(&self.parent, staging_budget(limits)?)
+                .map_err(|error| format!("stage: {error:?}"))?;
+        stage
+            .write_payload(digest, &bytes)
+            .map_err(|error| format!("stage: {error:?}"))?;
+        finish(stage, &manifest, limits)
+    }
+}
 
 /// Independently verify a published asset bundle.
 ///
@@ -193,9 +244,127 @@ pub fn upgrade(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Debug;
+    use std::num::NonZeroU32;
+    use std::{env, fs};
+
+    use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
     use games_importer::mame::Machine;
+    use games_platform_storage::staging::AuthoredStaging;
 
     use super::*;
+
+    fn failure<E>(error: E) -> String
+    where
+        E: Debug,
+    {
+        format!("{error:?}")
+    }
+
+    fn publish_base(
+        parent: &Path,
+        limits: ManifestLimits,
+    ) -> Result<CanonicalBundle, String> {
+        let source = SourceIdentity {
+            revision: String::from("fixture"),
+            title: String::from("synthetic"),
+        };
+        let image = AssetRecord {
+            digest: ContentHash::calculate(b"abcd"),
+            format: AssetFormat::Rgba8 {
+                height: NonZeroU32::MIN,
+                width: NonZeroU32::MIN,
+            },
+            key: String::from("image/hero"),
+            size: 4,
+        };
+        let data = AssetRecord {
+            digest: ContentHash::calculate(b"rule"),
+            format: AssetFormat::Data,
+            key: String::from("rules"),
+            size: 4,
+        };
+        let manifest = AssetManifest::new(
+            source,
+            vec![image.clone(), data.clone()],
+            limits,
+        )
+        .map_err(failure)?;
+        let mut stage = CanonicalStaging::new(parent, staging_budget(limits)?)
+            .map_err(failure)?;
+        stage
+            .write_payload(image.digest, b"abcd")
+            .map_err(failure)?;
+        stage.write_payload(data.digest, b"rule").map_err(failure)?;
+        let staged = stage.finish(&manifest, limits).map_err(failure)?;
+        let base = staged.digest();
+        staged
+            .publish()
+            .map_err(failure)?
+            .durability
+            .map_err(failure)?;
+        CanonicalBundle::open(parent, base, limits).map_err(failure)
+    }
+
+    #[test]
+    fn media_authoring_requires_exact_passive_slots() -> Result<(), String> {
+        let directory = env::current_dir().map_err(failure)?;
+        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let parent = root.path();
+        let machine =
+            Machine::select("simpsons", "world-4p-set-1").map_err(failure)?;
+        let limits = AssetSelection::Graphics(machine).limits();
+        let original = publish_base(parent, limits)?;
+        let base = original.digest();
+        let manifest = original.manifest();
+        let raw = parent.join("authored.raw");
+        let select = |key: &str| MediaReplacement {
+            base,
+            key: key.to_owned(),
+            limits,
+            parent: parent.to_path_buf(),
+            raw: raw.clone(),
+        };
+        for (key, bytes) in [
+            ("image/hero", b"x".as_slice()),
+            ("image/hero", b"abcde".as_slice()),
+            ("rules", b"rgba".as_slice()),
+            ("unknown", b"rgba".as_slice()),
+        ] {
+            fs::write(&raw, bytes).map_err(failure)?;
+            if select(key).run().is_ok() {
+                return Err(String::from("invalid replacement accepted"));
+            }
+        }
+        fs::write(&raw, b"rgba").map_err(failure)?;
+        select("image/hero").run()?;
+        let image = manifest
+            .record("image/hero")
+            .ok_or_else(|| String::from("missing image fixture"))?;
+        let replacement = AssetManifest::new(
+            manifest.source().clone(),
+            vec![AssetRecord {
+                digest: ContentHash::calculate(b"rgba"),
+                ..image.clone()
+            }],
+            limits,
+        )
+        .map_err(failure)?;
+        let digest = ContentHash::calculate(
+            &replacement.encode(limits).map_err(failure)?,
+        );
+        let published =
+            CanonicalBundle::open(parent, digest, limits).map_err(failure)?;
+        if published.manifest() != &replacement
+            || published.read_payload("image/hero").map_err(failure)? != b"rgba"
+            || original.read_payload("image/hero").map_err(failure)? != b"abcd"
+            || original.read_payload("rules").map_err(failure)? != b"rule"
+            || select("image/hero").run().is_ok()
+        {
+            return Err(String::from("replacement publication mismatch"));
+        }
+        Ok(())
+    }
 
     #[test]
     fn staging_budget_rejects_overflow() -> Result<(), ImportError> {

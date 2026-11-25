@@ -158,6 +158,25 @@ The four numeric limits bound metadata, per-payload and total logical bytes,
 and record count. This command verifies the pinned canonical bundle and writes
 a new version-two sibling; it never replaces or removes the old bundle.
 Keep the original bundle until its consumers use the new canonical address.
+
+Author one passive-media replacement from a pinned base descriptor:
+
+```text
+bundle replace-media PARENT BASE_SHA256 KEY RAW MANIFEST_BYTES \
+  PAYLOAD_BYTES TOTAL_BYTES COUNT
+```
+
+Supply exact canonical RGBA8 pixels or signed 16-bit little-endian PCM,
+not a compressed media container. The command admits the base manifest
+within the explicit limits, preserves the slot format and length, and
+publishes a separate one-record bundle without changing the base. Titles
+still decide which media slots may be replaced. For the Simpsons preview,
+select `audio_mod=MOD_SHA` alongside `audio=BASE_SHA` in the local catalogue,
+or use `--audio BASE_SHA --audio-mod MOD_SHA`. Only the four attack clips
+`audio/sample-0004` through `audio/sample-0007` are accepted. For example,
+slot `audio/sample-0004` needs 8,335 mono frames (16,670 bytes) at the
+canonical 10 kHz rate. No executable or game-data replacement is permitted.
+
 The selected Simpsons bundle is verified locally. Its observed palette RAM
 and mixer assignments match independent reference values; bounded tilemap
 admission and exact PCM reference comparison also pass. The optional GNU/Linux

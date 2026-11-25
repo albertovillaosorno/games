@@ -297,3 +297,15 @@ rejects any unapproved record and corrupted replacement reads do not
 fall back to the original. The catalogue and explicit CLI reject a
 replacement without a base. Synthetic native fixtures exercise a
 selective override, unchanged other clips and invalid keys or lengths.
+
+The GNU/Linux host tool now authors a separate one-record passive-media
+bundle from an explicit pinned base descriptor and exact canonical bytes.
+It preserves source identity and layout, rejects unknown slots, declarative
+rules, incompatible byte lengths and existing destinations, and leaves the
+base untouched. The title retains its independent allowlist; authoring a
+bundle does not grant permission to install it. Synthetic publication and
+read-back passed fresh validation in run 1795608319014917227-411834.
+A local synthetic 16,670-byte PCM replacement was authored for attack
+slot 0004 against the verified Simpsons audio catalogue, then admitted
+by the native X11/llvmpipe and SDL dummy-audio smoke. The 600 movement
+and 51 strike frames completed; this is not physical audio or GPU evidence.

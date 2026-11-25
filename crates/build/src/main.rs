@@ -112,6 +112,8 @@ const USAGE: &str = concat!(
     "GNU/Linux: games-build package TITLE OUTPUT\n",
     "GNU/Linux: games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
+    "GNU/Linux: games-build bundle replace-media PARENT BASE_SHA256 KEY ",
+    "RAW MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build zip verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
@@ -256,6 +258,8 @@ enum Command {
         target_env = "gnu"
     ))]
     RenderCheck(Machine, render_check::Arguments),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    ReplaceMedia(publication::MediaReplacement),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     SampleCheck(Machine, PathBuf, NonZeroU64, Arguments),
     #[cfg(all(
@@ -299,6 +303,10 @@ impl Command {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             (Some("bundle"), Some("upgrade")) => {
                 Self::parse_upgrade(args.collect())
+            },
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            (Some("bundle"), Some("replace-media")) => {
+                Self::parse_replace_media(args.collect())
             },
             (Some("zip"), Some("verify")) => {
                 Ok(Self::Verify(None, Arguments::parse(args.collect())?))
@@ -501,6 +509,20 @@ impl Command {
         }
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn parse_replace_media(args: Vec<OsString>) -> Result<Self, String> {
+        let [parent, digest, key, raw, metadata, payload, total, count] =
+            <[OsString; 8]>::try_from(args)
+                .map_err(|_args| String::from(USAGE))?;
+        Ok(Self::ReplaceMedia(publication::MediaReplacement {
+            base: parse_manifest_digest(&digest)?,
+            key: text(&key)?.to_owned(),
+            limits: parse_manifest_limits([metadata, payload, total, count])?,
+            parent: parent.into(),
+            raw: raw.into(),
+        }))
+    }
+
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn parse_sample<Args>(
         machine: Machine,
@@ -524,20 +546,11 @@ impl Command {
         let [parent, raw_digest, metadata, payload, total, count] =
             <[OsString; 6]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
-        let digest = text(&raw_digest)?
-            .parse()
-            .map_err(|_error| String::from("invalid manifest hash"))?;
-        let size_limit = |argument: &OsString| {
-            text(argument)?.parse::<NonZeroUsize>().map_err(|_error| {
-                String::from("invalid metadata or record limit")
-            })
-        };
-        Ok(Self::Upgrade(parent.into(), digest, ManifestLimits {
-            manifest_bytes: size_limit(&metadata)?,
-            payload_bytes: parse_limit(&payload)?,
-            records: size_limit(&count)?,
-            total_bytes: parse_limit(&total)?,
-        }))
+        Ok(Self::Upgrade(
+            parent.into(),
+            parse_manifest_digest(&raw_digest)?,
+            parse_manifest_limits([metadata, payload, total, count])?,
+        ))
     }
 
     fn run(self) -> Result<(), String> {
@@ -605,6 +618,8 @@ impl Command {
             Self::Upgrade(parent, digest, limits) => {
                 publication::upgrade(&parent, digest, limits)
             },
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::ReplaceMedia(replacement) => replacement.run(),
             Self::Verify(machine, args) => {
                 with_source(&args, |source, archive| {
                     verify_archive(source, archive, machine)
@@ -644,6 +659,30 @@ fn text(value: &OsString) -> Result<&str, String> {
     value
         .to_str()
         .ok_or_else(|| String::from("expected UTF-8 argument"))
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn parse_manifest_digest(value: &OsString) -> Result<ContentHash, String> {
+    text(value)?
+        .parse()
+        .map_err(|_error| String::from("invalid manifest hash"))
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn parse_manifest_limits(
+    [metadata, payload, total, count]: [OsString; 4],
+) -> Result<ManifestLimits, String> {
+    let size_limit = |argument: &OsString| {
+        text(argument)?
+            .parse::<NonZeroUsize>()
+            .map_err(|_error| String::from("invalid metadata or record limit"))
+    };
+    Ok(ManifestLimits {
+        manifest_bytes: size_limit(&metadata)?,
+        payload_bytes: parse_limit(&payload)?,
+        records: size_limit(&count)?,
+        total_bytes: parse_limit(&total)?,
+    })
 }
 
 fn parse_limit(value: &OsString) -> Result<NonZeroU64, String> {
@@ -879,6 +918,42 @@ mod tests {
         );
         invalid = args;
         invalid[7] = "0";
+        assert!(
+            Command::parse(invalid.into_iter().map(OsString::from)).is_err()
+        );
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn media_replacement_requires_explicit_slot_and_limits() {
+        let digest = "1".repeat(64);
+        let args = [
+            "bundle",
+            "replace-media",
+            "output",
+            &digest,
+            "audio/sample",
+            "raw.pcm",
+            "4096",
+            "16",
+            "64",
+            "4",
+        ];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::ReplaceMedia(_))
+        ));
+        assert!(
+            Command::parse(args.into_iter().take(9).map(OsString::from))
+                .is_err()
+        );
+        let mut invalid = args;
+        invalid[3] = "wrong";
+        assert!(
+            Command::parse(invalid.into_iter().map(OsString::from)).is_err()
+        );
+        invalid = args;
+        invalid[8] = "0";
         assert!(
             Command::parse(invalid.into_iter().map(OsString::from)).is_err()
         );
