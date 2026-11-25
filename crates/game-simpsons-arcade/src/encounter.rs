@@ -27,7 +27,7 @@
 // - Usage:
 //   - Opt in through Cabinet::with_opening_street or with_encounter.
 // - Defaults:
-//   - At most four enemies; no original combat parity claim.
+//   - At most five enemies; no original combat parity claim.
 
 //! Provisional fixed-step encounter for the first street.
 
@@ -57,11 +57,13 @@ const RESTRAINT_DAMAGE_INTERVAL: u8 = 48;
 
 // First observed sprite-group admissions during rightward travel.
 // Anchors are approximate; the observed arrivals start outside the view.
-const OPENING_COMBAT_LIMIT: i16 = 154;
+const RESTRAINT_THRESHOLD: i16 = 154;
+const OPENING_COMBAT_LIMIT: i16 = 210;
 const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (50, Point { x: 334, y: 176 }),
     (82, Point { x: -18, y: 208 }),
-    (OPENING_COMBAT_LIMIT, Point { x: 334, y: 192 }),
+    (RESTRAINT_THRESHOLD, Point { x: 334, y: 192 }),
+    (OPENING_COMBAT_LIMIT, Point { x: 334, y: 208 }),
 ];
 
 impl Encounter {
@@ -131,7 +133,7 @@ impl Encounter {
                     && !was_held
                     && index != 0
                     && view.max.x
-                        >= base.max.x.saturating_add(OPENING_COMBAT_LIMIT);
+                        >= base.max.x.saturating_add(RESTRAINT_THRESHOLD);
                 enemy.advance(bounds, slots, (restraint, restraint_edge));
             }
         }
@@ -156,7 +158,7 @@ impl Encounter {
 
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
         Self {
-            enemies: [Some(Enemy::new(spawn)), None, None, None],
+            enemies: [Some(Enemy::new(spawn)), None, None, None, None],
             marge_restraint: false,
             progressive,
         }
@@ -605,8 +607,10 @@ mod tests {
             (82, 3),
             (153, 3),
             (154, 4),
-            (154, 4),
-            (0, 4),
+            (209, 4),
+            (210, 5),
+            (210, 5),
+            (0, 5),
         ] {
             encounter.admit(camera);
             assert_eq!(encounter.enemies().count(), count);
@@ -616,6 +620,7 @@ mod tests {
             Point { x: 384, y: 176 },
             Point { x: 64, y: 208 },
             Point { x: 488, y: 192 },
+            Point { x: 544, y: 208 },
         ]));
         assert_eq!(
             encounter.enemies().nth(2).map(|enemy| enemy.facing),
@@ -707,20 +712,21 @@ mod tests {
                 0..=49 => 1,
                 50..=81 => 2,
                 82..=153 => 3,
-                _ => 4,
+                154..=209 => 4,
+                _ => 5,
             };
             assert_eq!(cabinet.enemies().count(), count);
-            if camera == 154 {
+            if camera == 210 {
                 break;
             }
         }
-        assert_eq!(cabinet.camera_origin(), 154);
+        assert_eq!(cabinet.camera_origin(), 210);
     }
 
     fn assert_combat_travel_bound(cabinet: &mut Cabinet) {
         for tick in 363..403 {
             cabinet.input_step(tick, &[]);
-            assert_eq!(cabinet.camera_origin(), 154);
+            assert_eq!(cabinet.camera_origin(), 210);
         }
         let [_, release] = pulse(Control::Right);
         cabinet.input_step(403, &[release]);
@@ -745,7 +751,7 @@ mod tests {
         let position = marge.station.position;
         if let Some(encounter) = &mut cabinet.encounter {
             encounter.admit(154);
-            let [initial, first, second, third] = &mut encounter.enemies;
+            let [initial, first, second, third, ..] = &mut encounter.enemies;
             for enemy in [initial, second, third].into_iter().flatten() {
                 enemy.health = 0;
                 enemy.action = EnemyAction::Defeat { tick: ENEMY_DEFEAT_TICKS };
@@ -928,7 +934,7 @@ mod tests {
     #[test]
     fn opening_street_can_reach_restraint_through_play() {
         let result = Cabinet::with_opening_street()
-            .and_then(|cabinet| cabinet.with_scroll_limit(444))
+            .and_then(|cabinet| cabinet.with_scroll_limit(154))
             .map(|cabinet| cabinet.with_marge_restraint(true));
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {

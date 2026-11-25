@@ -432,12 +432,14 @@ fn smoke_reinforcements(
     let limit = art
         .world_art
         .map_or(Ok(0), super::world::WorldArt::scroll_limit)?;
-    let target = limit.min(154);
+    let target = limit.min(210);
+    let target_origin = i16::try_from(target).map_err(failure)?;
     let expected: usize = match target {
         0..=49 => return Ok(()),
         50..=81 => 1,
         82..=153 => 2,
-        _ => 3,
+        154..=209 => 3,
+        _ => 4,
     };
     let mut simulation =
         live_with_scroll(true, LocalSession::default(), limit)?;
@@ -455,14 +457,14 @@ fn smoke_reinforcements(
     key(&mut controls, &mut simulation, Scancode::Right, true)?;
     for _ in 0..300u16 {
         advance(&mut simulation, 1)?;
-        if simulation.state().camera_origin()
-            >= i16::try_from(target).map_err(failure)?
-        {
+        if simulation.state().camera_origin() == target_origin {
             break;
         }
     }
     key(&mut controls, &mut simulation, Scancode::Right, false)?;
-    if simulation.state().enemies().count() != expected.saturating_add(1usize) {
+    if simulation.state().camera_origin() != target_origin
+        || simulation.state().enemies().count() != expected.saturating_add(1)
+    {
         return Err(failure(
             "street reinforcement admission did not match travel",
         ));

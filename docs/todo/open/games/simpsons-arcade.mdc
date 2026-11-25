@@ -2024,3 +2024,32 @@ which nearby enemy contributed each hit. Exact restraint damage
 cadence and depletion timing remain open; the representative fixed
 cadence is unchanged. Both raw observations and derived transition
 lists remain in the private reference directory.
+
+A release-after-2993 Primary control and the repeated-Primary control
+matched all 60 paired object and tile captures at frames 2960 through
+3019. Both first crossed the previous 154-column bound at frame 3016,
+while enemy groups remained visible. With no subsequent attack edges,
+the camera reached 210 and stopped; the restraint marker appeared at
+frame 3063. A distinct lower-right enemy group first appeared at
+travel 210 in both controls (frames 3058 and 3186 respectively).
+Its sprite codes and positions at admission matched. These observations
+support the next spatial arrival, not a universal wave-clear rule.
+
+The provisional encounter now admits a fourth reinforcement at 210
+with an approximate lower-lane spawn, extending bounded combat by 56
+columns when the imported art permits it. The existing restraint
+threshold stays at 154. The fixed five-enemy bound also covers the
+native world and sprite budgets without new atlases. Tests verify
+monotonic admission, no re-admission, input-driven traversal to 210,
+the cap, reset and the shorter restraint configuration.
+
+Fresh workspace render/audio validation passed in run
+1795632532257800337-1040707. The 3,364,832-byte native build passed
+adaptive 426-by-304 touch smoke with the 444-column strip and four
+reinforcement meters verified by GPU readback. The aspect-fit short
+154-column strip verified three meters; the long recovery catalogue
+verified four meters, both cooperative families and restraint escape.
+The adaptive run missed no 16.667 ms host budgets across 600 movement
+and 20 strike submissions, with lifetime peak RSS of 100,802,560
+bytes. Exact later enemy movement, damage, stage gates and physical
+input parity remain open.
