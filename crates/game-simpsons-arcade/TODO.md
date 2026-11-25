@@ -278,3 +278,56 @@ Use matching host and controller builds. An idle controller sends a
 heartbeat every 500 ms. The host disconnects a peer after three seconds
 without a valid decoded message and releases its held controls on the
 next eligible simulation tick. Re-launch to rejoin if the lease expires.
+
+#### Manual credential preparation
+
+On each participating machine, use a new empty private directory with
+`umask 077`. The following OpenSSL example issues a separate root and
+leaf for one endpoint. On the host set `role=serverAuth`; on each
+controller set `role=clientAuth`. Use the exact name configured in the
+catalogues for the host; `games.test` is an example, not a service.
+
+```sh
+umask 077
+role=serverAuth
+name=games.test
+openssl req -new -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -nodes -subj "/CN=Local game root" -days 30 \
+  -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -keyout ca-key.pem -out ca.pem
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+  -nodes -subj "/CN=$name" -keyout leaf-key.pem -out leaf.csr
+printf 'basicConstraints=critical,CA:FALSE\n' > leaf.ext
+printf 'keyUsage=critical,digitalSignature\n' >> leaf.ext
+printf 'extendedKeyUsage=%s\n' "$role" >> leaf.ext
+if [ "$role" = serverAuth ]; then
+  printf 'subjectAltName=DNS:%s\n' "$name" >> leaf.ext
+fi
+openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca-key.pem \
+  -CAcreateserial -days 30 -extfile leaf.ext -out leaf.pem
+openssl x509 -in ca.pem -outform DER -out root.der
+openssl x509 -in leaf.pem -outform DER -out leaf.der
+openssl pkcs8 -topk8 -nocrypt -in leaf-key.pem -outform DER \
+  -out key.der
+chmod 600 key.der
+```
+
+Keep the CA signing key and leaf private keys local and protected.
+Use an IP subject alternative name instead of a DNS entry if the
+catalogue name is an IP address. Exchange only `root.der` and
+`leaf.der` with approved participants over a trusted channel. Compare
+the SHA-256 fingerprints of received public DER files independently
+before configuring them; do not trust a certificate merely because it
+was received over the network. For example:
+
+```sh
+sha256sum root.der leaf.der
+```
+
+Name the received public files as shown in the catalogues above. Point
+each catalogue's own `root`, `leaf` and `key` fields at its own local
+DER files. Do not reuse a participant's root or private key for another
+seat. Replace expired credentials and explicitly update the corresponding
+approved public files. This is manual local administration, not an
+in-game certificate issuance or discovery service.

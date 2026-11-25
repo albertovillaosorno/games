@@ -330,3 +330,25 @@ verified held movement stopped, and rejoined with the same certificate.
 Fresh joint validation passed in run 1795603408838445579-3134552.
 Physical network interruption and multi-device latency remain unverified;
 host polling and queue backpressure can delay processing the expiry.
+
+A two-process native loopback diagnostic exercised the release binary
+at 29d457d using a private X11 display, SDL software OpenGL, and the
+locally imported world and pose bundles. Independently issued P-256
+roots and role-specific leaves were generated with OpenSSL, then
+admitted through the existing bounded DER catalogues. Native keyboard
+events started the host's local player and joined the reserved second
+seat from the controller window. Right and Left changed the host's
+actor pixels; consecutive 960x672 host captures were pixel-identical
+after release and after terminating the controller with a held key.
+A fresh controller process using the same approved credentials moved
+the remote station again. No game assets were loaded by the controller.
+This demonstrates the actual native event and transport path on one
+machine, not physical multi-device play or a remote world renderer.
+
+A second native diagnostic executed the documented manual credential
+recipe on both endpoints. The controller rejected a different host
+leaf signed by the same trusted root and separately rejected a local
+private key with group/other read permissions. Restoring the exact
+approved leaf and owner-only mode admitted the controller. These tests
+used disposable local identities; all generated private key files
+were removed after the runs.
