@@ -46,8 +46,8 @@ use super::{
     size,
 };
 use crate::{
-    Cabinet, Enemy, EnemyAction, Facing, Participation, Player, Point, Station,
-    TICK_INTERVAL,
+    CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing, Participation, Phase,
+    Player, Point, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -217,7 +217,7 @@ fn pulse(
 
 fn advance(
     simulation: &mut LiveSimulation<Cabinet>,
-    ticks: u8,
+    ticks: u16,
 ) -> Result<(), RenderError> {
     for _ in 0..ticks {
         let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -284,7 +284,8 @@ pub(super) fn smoke(
     if final_pixels != scene.readback().map_err(failure)? {
         return Err(failure("defeated enemy continued to affect the scene"));
     }
-    smoke_counterstrike(scene, art, touch_enabled)
+    smoke_counterstrike(scene, art, touch_enabled)?;
+    smoke_expiry(scene, art, touch_enabled)
 }
 
 fn smoke_counterstrike(
@@ -367,17 +368,7 @@ fn smoke_continue(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    for _ in 0..100u8 {
-        let [marge, ..] = simulation.state().stations();
-        if matches!(marge.participation, Participation::Continuing { .. }) {
-            break;
-        }
-        advance(simulation, 1)?;
-    }
-    let [knocked_out, ..] = simulation.state().stations();
-    if !matches!(knocked_out.participation, Participation::Continuing { .. }) {
-        return Err(failure("native encounter did not reach continue state"));
-    }
+    wait_for_continue(simulation)?;
     let _drawn = art.present(scene, simulation.state())?;
     verify_prompt(scene, false)?;
     pulse(controls, simulation, Scancode::Num5)?;
@@ -427,4 +418,74 @@ fn verify_prompt(
         return Err(failure("unexpected native continue prompt pixels"));
     }
     Ok(())
+}
+
+fn wait_for_continue(
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    for _ in 0..100u8 {
+        let [marge, ..] = simulation.state().stations();
+        if matches!(marge.participation, Participation::Continuing { .. }) {
+            return Ok(());
+        }
+        advance(simulation, 1)?;
+    }
+    Err(failure("native encounter did not reach continue state"))
+}
+
+fn smoke_expiry(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+) -> Result<(), RenderError> {
+    let mut simulation = live(true)?;
+    let mut controls = Controls::new(touch_enabled)?;
+    approach(&mut controls, &mut simulation)?;
+    wait_for_continue(&mut simulation)?;
+    let _initial = art.present(scene, simulation.state())?;
+    verify_prompt(scene, false)?;
+    let before = scene.readback().map_err(failure)?;
+    advance(&mut simulation, 60)?;
+    let _counted = art.present(scene, simulation.state())?;
+    verify_prompt(scene, false)?;
+    if before == scene.readback().map_err(failure)? {
+        return Err(failure("native continue countdown did not change"));
+    }
+    pulse(&mut controls, &mut simulation, Scancode::Num1)?;
+    advance(&mut simulation, CONTINUE_TICKS.saturating_sub(60))?;
+    let [expired, ..] = simulation.state().stations();
+    if expired.participation != Participation::Absent
+        || expired.credits != 1
+        || simulation.state().phase() != Phase::Selection
+    {
+        return Err(failure("native paid timeout did not retain credit"));
+    }
+    let _expired_drawn = art.present(scene, simulation.state())?;
+    verify_prompt(scene, true)?;
+    restart_after_expiry(scene, art, &mut controls, &mut simulation)
+}
+
+fn restart_after_expiry(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    pulse(controls, simulation, Scancode::Num5)?;
+    advance(simulation, 1)?;
+    let [selected, ..] = simulation.state().stations();
+    if selected.participation != Participation::Selected
+        || selected.credits != 0
+    {
+        return Err(failure("native expired credit did not select station"));
+    }
+    pulse(controls, simulation, Scancode::Z)?;
+    advance(simulation, 1)?;
+    if simulation.state().phase() != Phase::Street {
+        return Err(failure("native restart did not enter street"));
+    }
+    let _restarted = art.present(scene, simulation.state())?;
+    let pixels = scene.readback().map_err(failure)?;
+    verify_bar(&pixels, Point { x: 28, y: 25 }, 3)?;
+    verify_enemy_health(art, simulation.state(), &pixels)
 }
