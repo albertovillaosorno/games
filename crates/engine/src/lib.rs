@@ -34,6 +34,8 @@
 //! slices.
 /// Bounded deterministic PCM playback and stereo mixing.
 pub mod audio;
+/// Portable host feedback capabilities.
+pub mod capability;
 /// Configurable keyboard, gamepad and touch mapping with hot-plug recovery.
 pub mod input;
 /// Offline-first local sessions and opt-in self-hosted LAN access policy.

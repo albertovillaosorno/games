@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 use toml::Value;
 
-use crate::{cargo_config, files};
+use crate::{cargo_config, files, portability};
 
 const HEADER_KEYS: &[&str] = &[
     "Owns:",
@@ -589,7 +589,8 @@ pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
     let authored = files::authored(root)?;
     let members = metadata_members(&canonical, metadata, &authored)?;
     sources(root, &members, &authored)?;
-    manifests(root, &members, &authored)
+    manifests(root, &members, &authored)?;
+    portability::validate(root, &authored)
 }
 
 #[cfg(test)]

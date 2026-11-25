@@ -46,9 +46,9 @@ const MIN_TOKENS: usize = 72;
 const MIN_STATEMENTS: usize = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Token {
+pub(crate) struct Token {
     line: usize,
-    text: String,
+    pub(crate) text: String,
 }
 
 #[derive(Debug)]
@@ -265,7 +265,7 @@ fn symbol_text(
     }
 }
 
-fn tokens(source: &str) -> Vec<Token> {
+pub(crate) fn tokens(source: &str) -> Vec<Token> {
     let mut result = Vec::new();
     let mut characters = source.chars().peekable();
     let mut line = 1usize;

@@ -136,3 +136,14 @@ returned a cache hit (1795612649722480864-1498117). The revised validator
 ran Clippy's SDL build and rejected the missing executable in run
 1795612733691369083-1525359. This does not fingerprint every system library
 or the contents of native compiler and pkg-config executables.
+
+The portability gate now uses the shared Rust lexer and parsed member
+manifests to detect OS target conditions, direct OS namespaces and known
+native backend dependencies outside platform crates. A static migration
+inventory records 253 existing occurrences across 27 files. New matching
+couplings above the per-path and per-rule ceilings fail validation.
+This is an incremental lexical policy, not a full semantic Rust analyzer.
+Remove the existing inventory as consumers migrate to neutral contracts;
+do not grow it or add new exceptions. Complete strict adapter-only
+isolation, dependency alias handling and cross-target conformance remain
+open. Inline tests cover neutral code, detection and migration ceilings.

@@ -1,0 +1,96 @@
+{
+  "crates/build/Cargo.toml": {
+    "target-table:cfg(all(target_os = \"linux\", target_env = \"gnu\"))": 1,
+    "target-table:cfg(any(target_os = \"linux\", target_os = \"android\"))": 1
+  },
+  "crates/build/src/audio_check.rs": {
+    "os:linux": 1
+  },
+  "crates/build/src/main.rs": {
+    "target:target_env:\"gnu\"": 52,
+    "target:target_os:\"android\"": 32,
+    "target:target_os:\"linux\"": 84
+  },
+  "crates/build/src/reference_background/mod.rs": {
+    "os:linux": 2
+  },
+  "crates/build/src/reference_background/sequence.rs": {
+    "os:linux": 1
+  },
+  "crates/build/src/render_benchmark.rs": {
+    "os:linux": 2
+  },
+  "crates/build/src/render_check.rs": {
+    "os:linux": 2
+  },
+  "crates/build/src/title_build.rs": {
+    "target:target_arch:\"x86_64\"": 1,
+    "target:target_env:\"gnu\"": 1,
+    "target:target_os:\"linux\"": 1
+  },
+  "crates/build/src/title_package/mod.rs": {
+    "os-api": 1,
+    "os:unix": 1
+  },
+  "crates/game-simpsons-arcade/Cargo.toml": {
+    "target-table:cfg(all(target_os = \"linux\", target_env = \"gnu\"))": 1
+  },
+  "crates/game-simpsons-arcade/src/lib.rs": {
+    "target:target_env:\"gnu\"": 2,
+    "target:target_os:\"linux\"": 2
+  },
+  "crates/game-simpsons-arcade/src/main.rs": {
+    "target:target_env:\"gnu\"": 4,
+    "target:target_os:\"linux\"": 4
+  },
+  "crates/game-simpsons-arcade/src/maneuver.rs": {
+    "target:target_env:\"gnu\"": 3,
+    "target:target_os:\"linux\"": 3
+  },
+  "crates/game-simpsons-arcade/src/native/audio.rs": {
+    "os:linux": 3
+  },
+  "crates/game-simpsons-arcade/src/native/controller.rs": {
+    "os:linux": 6
+  },
+  "crates/game-simpsons-arcade/src/native/encounter.rs": {
+    "os:linux": 3
+  },
+  "crates/game-simpsons-arcade/src/native/launch.rs": {
+    "os-api": 1,
+    "os:unix": 1
+  },
+  "crates/game-simpsons-arcade/src/native/measurement.rs": {
+    "os:linux": 1
+  },
+  "crates/game-simpsons-arcade/src/native/mod.rs": {
+    "os:linux": 9
+  },
+  "crates/game-simpsons-arcade/src/native/poses.rs": {
+    "os:linux": 2
+  },
+  "crates/game-simpsons-arcade/src/native/shadow.rs": {
+    "os:linux": 2
+  },
+  "crates/game-simpsons-arcade/src/native/station_hud.rs": {
+    "os:linux": 5
+  },
+  "crates/game-simpsons-arcade/src/native/touch.rs": {
+    "os:linux": 3
+  },
+  "crates/game-simpsons-arcade/src/native/world.rs": {
+    "os:linux": 2
+  },
+  "crates/validator/src/boundaries.rs": {
+    "os-api": 1,
+    "os:unix": 2
+  },
+  "crates/validator/src/files.rs": {
+    "os-api": 1,
+    "os:unix": 4
+  },
+  "crates/validator/src/hooks.rs": {
+    "os-api": 1,
+    "os:unix": 4
+  }
+}

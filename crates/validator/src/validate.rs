@@ -48,6 +48,8 @@ pub mod files;
 /// Isolated test fixture helpers.
 #[cfg(test)]
 pub mod fixtures;
+/// Platform isolation and migration guard.
+pub mod portability;
 /// Typed task validation.
 pub mod todo;
 
