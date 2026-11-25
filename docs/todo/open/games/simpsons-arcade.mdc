@@ -152,3 +152,9 @@ zero-based sample frame 589,806; a smaller file budget was rejected.
 The source captures remain private. This proves repeatability of
 observed mixed audio, not sound-chip decoding, title event mapping,
 sample extraction or audio parity of a remake.
+
+The same explicit background and sprite selections can be benchmarked
+with `mame render-bench` (append the measured frame count to the
+`render-check` arguments). Four optimized 600-frame trials passed the
+host 60 Hz submission budget; see the performance contract for the exact
+configuration and measurements. This does not establish gameplay FPS.

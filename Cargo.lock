@@ -230,8 +230,10 @@ dependencies = [
 name = "games-build"
 version = "0.1.0"
 dependencies = [
+ "games",
  "games-assets",
  "games-importer",
+ "games-platform",
  "games-platform-graphics",
  "games-platform-storage",
 ]

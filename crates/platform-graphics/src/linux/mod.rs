@@ -176,10 +176,10 @@ impl NativeWindow {
         Ok(Self { canvas, sdl })
     }
 
-    /// Name reported by the selected native rendering driver.
+    /// Owned name reported by the selected native rendering driver.
     #[must_use]
-    pub fn renderer_name(&self) -> &'static str {
-        self.canvas.info().name
+    pub fn renderer_name(&self) -> String {
+        self.canvas.info().name.to_owned()
     }
 
     /// Reuse one texture and event pump for the caller's presentation loop.
@@ -476,7 +476,9 @@ mod tests {
         }
         let mut window =
             NativeWindow::open("games native smoke", nz(64), nz(64), true)?;
-        require(!window.renderer_name().is_empty(), "missing renderer name")?;
+        let renderer_name = window.renderer_name();
+        require(!renderer_name.is_empty(), "missing renderer name")?;
+        let expected_name = renderer_name.clone();
         window.with_frame(extent()?, |frame| {
             let pixels = [RED, GREEN, BLUE, WHITE];
             require(frame.present(pixels.as_flattened())?, "no drawable")?;
@@ -520,6 +522,8 @@ mod tests {
                     "second sprite scene not drawn",
                 )
             },
-        )
+        )?;
+        drop(window);
+        require(renderer_name == expected_name, "renderer name changed")
     }
 }

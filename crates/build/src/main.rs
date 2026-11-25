@@ -45,6 +45,13 @@ pub mod reference_palette;
     target_os = "linux",
     target_env = "gnu"
 ))]
+/// Finite native graphics benchmark measurements.
+pub mod render_benchmark;
+#[cfg(all(
+    feature = "native-preview",
+    target_os = "linux",
+    target_env = "gnu"
+))]
 /// Bounded native diagnostic rendering of selected imported graphics.
 pub mod render_check;
 
@@ -80,6 +87,8 @@ const USAGE: &str = concat!(
     "\n",
     "GNU/Linux (native-preview): mame render-check MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT",
+    "\nGNU/Linux (native-preview): mame render-bench MACHINE REV ",
+    "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT FRAMES",
     "\n",
     "Linux/Android: wave compare LEFT RIGHT LIMIT"
 );
@@ -240,6 +249,15 @@ impl Command {
             "render-check" => Ok(Self::RenderCheck(
                 selected,
                 render_check::Arguments::parse(args.collect())?,
+            )),
+            #[cfg(all(
+                feature = "native-preview",
+                target_os = "linux",
+                target_env = "gnu"
+            ))]
+            "render-bench" => Ok(Self::RenderCheck(
+                selected,
+                render_check::Arguments::parse_benchmark(args.collect())?,
             )),
             "import" => Ok(Self::Import(
                 selected,

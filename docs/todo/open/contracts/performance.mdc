@@ -101,3 +101,25 @@ the CPU-packed atlas in two consecutive frames for each of two selections
 Readback is explicitly diagnostic and synchronises the renderer; it is
 not part of the ordinary presentation loop. Physical GPU utilisation,
 frame-time percentiles and peak resident/VRAM usage remain unmeasured.
+
+The native-preview `mame render-bench` command now reuses the same verified
+atlas and logical-target comparison, warms eight frames, and measures a
+bounded count of subsequent presentations without readback. It reports
+host completion intervals, a 60 Hz budget, load time, sampled process RSS
+and executable size. The renderer name is copied before SDL teardown.
+
+Two release-mode trials of 600 frames per scene on GNU/Linux x86-64,
+Xeon E5-2690 v3, Rust 1.100.0 and system SDL 2.32.74 (OpenGL):
+
+- 256x256, 1,024 draws: mean 389,705–389,926 ns, 2,564–2,566
+  submissions/s, max 5,570,542 ns, load 199,759,508–238,941,157 ns.
+- 512x512, 1,023 draws: mean 380,157–409,538 ns, 2,441–2,630
+  submissions/s, max 4,653,871 ns, load 294,700,846–324,528,021 ns.
+- All 2,400 measured frames met the 16,666,667 ns budget. Sampled RSS
+  ranged from 168,341,504 to 175,837,184 bytes across trials; the diagnostic
+  executable was 1,108,952 bytes (not a packaged game).
+
+This is a hidden, uncapped, static imported-asset workload, not a
+representative moving game scene. Submission throughput is not physical
+display FPS. Actual GPU utilisation, VRAM, input-to-photon latency,
+frame percentiles and true peak memory still need measurement.

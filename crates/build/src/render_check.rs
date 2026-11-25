@@ -36,7 +36,9 @@ use std::io::{Write as _, stdout};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
 
+use games::performance::PerformanceCollector;
 use games_assets::ContentHash;
 use games_assets::indexed::IndexedTiles;
 use games_assets::indexed::atlas::{AtlasTile, TileAtlasLayout};
@@ -48,15 +50,18 @@ use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
 
-use crate::{USAGE, reference_palette, text};
+use crate::render_benchmark::Schedule;
+use crate::{USAGE, reference_palette, render_benchmark, text};
 
 const ATLAS_BYTES: NonZeroUsize = NonZeroUsize::MIN.saturating_add(4_194_303);
+const MAX_BENCHMARK_FRAMES: u32 = 20_000;
 const MAX_SIDE: u32 = 1024;
 const MAX_TILES: u32 = 1024;
 
 /// Explicit local inputs and limits for a finite native render check.
 #[derive(Debug)]
 pub struct Arguments {
+    benchmark_frames: Option<NonZeroU32>,
     columns: NonZeroU32,
     count: NonZeroU32,
     digest: ContentHash,
@@ -86,6 +91,7 @@ impl Arguments {
             <[OsString; 9]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
         let result = Self {
+            benchmark_frames: None,
             columns: number(&columns)?,
             count: number(&count)?,
             digest: number(&digest)?,
@@ -98,6 +104,20 @@ impl Arguments {
         };
         let _end = result.end()?;
         Ok(result)
+    }
+
+    /// Parse an identical scene selection and a bounded frame count.
+    /// # Errors
+    /// Rejects invalid or excessive frame counts and scene selections.
+    pub fn parse_benchmark(mut args: Vec<OsString>) -> Result<Self, String> {
+        let frames: NonZeroU32 =
+            number(&args.pop().ok_or_else(|| String::from(USAGE))?)?;
+        if frames.get() > MAX_BENCHMARK_FRAMES {
+            return Err(String::from("benchmark frame count exceeds limit"));
+        }
+        let mut parsed = Self::parse(args)?;
+        parsed.benchmark_frames = Some(frames);
+        Ok(parsed)
     }
 
     fn prepare(
@@ -140,6 +160,7 @@ impl Arguments {
     /// # Errors
     /// Rejects invalid data, exceeded budgets or unequal logical pixels.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
+        let started = Instant::now();
         let bundle = CanonicalBundle::open(
             &self.parent,
             self.digest,
@@ -163,9 +184,17 @@ impl Arguments {
                 .map_err(|error| format!("palette RAM: {error:?}"))?;
         let colors = reference_palette::decode(machine, &raw)?;
         let atlas = self.prepare(&sheet, &colors)?;
-        let renderer = atlas
-            .verify(self.count)
+        let execution = atlas
+            .execute(self.count, self.benchmark_frames, started)
             .map_err(|error| format!("native renderer: {error:?}"))?;
+        if let Some(collector) = execution.performance {
+            return render_benchmark::report(
+                &collector,
+                &execution.renderer,
+                self.count,
+            );
+        }
+        let renderer = execution.renderer;
         writeln!(
             stdout().lock(),
             "Verified {} tiles, {} RGBA bytes, two frames ({renderer})",
@@ -174,6 +203,11 @@ impl Arguments {
         )
         .map_err(|error| error.to_string())
     }
+}
+
+struct Execution {
+    performance: Option<PerformanceCollector>,
+    renderer: String,
 }
 
 struct PreparedAtlas {
@@ -187,9 +221,7 @@ impl PreparedAtlas {
         scene: &mut SceneSession<'_, '_>,
         commands: &[SpriteDraw],
     ) -> Result<(), RenderError> {
-        if !scene.present([0; 3], commands)? {
-            return Err(RenderError::Backend(String::from("no drawable")));
-        }
+        present(scene, commands)?;
         let pixels = scene.readback()?;
         let matched = pixels.as_chunks::<4>().0.iter().zip(&self.pixels).all(
             |(actual, expected)| {
@@ -238,7 +270,12 @@ impl PreparedAtlas {
             .collect()
     }
 
-    fn verify(&self, count: NonZeroU32) -> Result<&'static str, RenderError> {
+    fn execute(
+        &self,
+        count: NonZeroU32,
+        benchmark_frames: Option<NonZeroU32>,
+        started: Instant,
+    ) -> Result<Execution, RenderError> {
         let layout = FrameLayout::new(
             self.layout.width(),
             self.layout.height(),
@@ -260,10 +297,20 @@ impl PreparedAtlas {
         window.with_scene(layout, limits, |scene| {
             let id = scene.load_atlas(layout, self.pixels.as_flattened())?;
             let commands = self.commands(id, count)?;
-            for _frame in 0u32..2 {
+            let loaded = Instant::now();
+            self.check_frame(scene, &commands)?;
+            let performance = if let Some(frames) = benchmark_frames {
+                Some(render_benchmark::measure(
+                    scene,
+                    &commands,
+                    layout,
+                    Schedule { frames, loaded, started },
+                )?)
+            } else {
                 self.check_frame(scene, &commands)?;
-            }
-            Ok(renderer)
+                None
+            };
+            Ok(Execution { performance, renderer })
         })
     }
 }
@@ -277,17 +324,23 @@ where
         .map_err(|_error| String::from("invalid render-check argument"))
 }
 
+pub(super) fn present(
+    scene: &mut SceneSession<'_, '_>,
+    commands: &[SpriteDraw],
+) -> Result<(), RenderError> {
+    if !scene.present([0; 3], commands)? {
+        return Err(RenderError::Backend(String::from("no drawable")));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use games_assets::{AssetFormat, AssetRecord};
 
     use super::*;
 
-    fn parse(
-        first: &str,
-        count: &str,
-        columns: &str,
-    ) -> Result<Arguments, String> {
+    fn args(first: &str, count: &str, columns: &str) -> Vec<OsString> {
         let args = [
             "parent",
             &"0".repeat(64),
@@ -299,7 +352,15 @@ mod tests {
             "0",
             "16",
         ];
-        Arguments::parse(args.map(OsString::from).to_vec())
+        args.map(OsString::from).to_vec()
+    }
+
+    fn parse(
+        first: &str,
+        count: &str,
+        columns: &str,
+    ) -> Result<Arguments, String> {
+        Arguments::parse(args(first, count, columns))
     }
 
     #[test]
@@ -338,6 +399,17 @@ mod tests {
             return Err(String::from("out-of-range selection accepted"));
         }
         Ok(())
+    }
+
+    #[test]
+    fn benchmark_checks_frame_budget() {
+        for (frames, valid) in
+            [("0", false), ("1", true), ("20000", true), ("20001", false)]
+        {
+            let mut values = args("0", "1", "1");
+            values.push(OsString::from(frames));
+            assert_eq!(Arguments::parse_benchmark(values).is_ok(), valid);
+        }
     }
 
     #[test]

@@ -10,7 +10,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-native-preview = ["dep:games-platform-graphics"]
+native-preview = [
+    "dep:games",
+    "dep:games-platform",
+    "dep:games-platform-graphics",
+]
 
 [dependencies]
 games-assets.workspace = true
@@ -20,6 +24,8 @@ games-importer.workspace = true
 games-platform-storage.workspace = true
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+games = { workspace = true, optional = true }
+games-platform = { workspace = true, optional = true }
 games-platform-graphics = { workspace = true, optional = true }
 
 [lints]
