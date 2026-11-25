@@ -1275,3 +1275,26 @@ Mean movement and combat submission work with the expanded catalogue
 was 65.173 and 53.995 microseconds, respectively; whole-smoke peak RSS
 was 123,777,024 bytes. These are host-specific offscreen measurements,
 not physical presentation or full original collision parity.
+
+Isolated original audio observations compared idle, held jump, ground
+attack, aerial attack and neutral simultaneous-button attack for each
+character. A fresh idle control matched its previous voice and PCM
+traces. Aerial and neutral special attacks use the same respective
+character clips, pitch, volume and pan as ground attacks. Aerial
+playback began four frames after admission in all four cases. Neutral
+special onset was four frames except one Homer observation at three;
+a one-frame shift of admission gave four-frame onset for all four.
+No distinct attack clip was observed during ordinary jumps.
+
+The preview retains the ground cue policy and schedules aerial and
+neutral special attack cues once at maneuver tick four through the
+existing character-specific mixer. Plain jumps and directional chords
+remain quiet. Fixed-step regressions cover station isolation, onset and
+held buttons; the native paused-device smoke additionally checks quiet
+takeoff, nonzero submission and complete drain. Fresh combined native
+rendering, audio and portable-core validation passed in run
+1795620836259257739-3531012. The optimized 3,232,104-byte preview passed
+adaptive offscreen OpenGL ES touch and dummy-audio smoke with the
+88-pose catalogue, with no missed host-work budget on 600 movement and
+60 combat submissions. Frame-level audio scheduling, physical audio,
+background music and other sound effects remain unverified.

@@ -1051,7 +1051,20 @@ mod tests {
         for tick in 4..34 {
             state.input_step(tick, &[]);
         }
-        assert_eq!(state.stations(), original);
+        let [
+            mut expected_marge,
+            mut expected_homer,
+            expected_bart,
+            expected_lisa,
+        ] = original;
+        expected_marge.attack_cues = 1;
+        expected_homer.attack_cues = 1;
+        assert_eq!(state.stations(), [
+            expected_marge,
+            expected_homer,
+            expected_bart,
+            expected_lisa
+        ]);
     }
 
     #[test]
@@ -1991,6 +2004,35 @@ mod tests {
         assert!(
             matches!(airborne.maneuver, Maneuver::Jump(j) if j.tick() == 16)
         );
+    }
+
+    #[test]
+    fn air_attack_cues_are_station_local_and_plain_jumps_are_silent() {
+        let mut state = four_playing();
+        let jumps =
+            Player::ALL.map(|player| change(player, Control::Secondary, true));
+        state.input_step(3, &jumps);
+        for tick in 4..18 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [0; 4]);
+        let attacks = [Player::Marge, Player::Bart]
+            .map(|player| change(player, Control::Primary, true));
+        state.input_step(18, &attacks);
+        for tick in 19..22 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [0; 4]);
+        state.input_step(22, &[]);
+        assert_eq!(state.stations().map(|station| station.attack_cues), [
+            1, 0, 1, 0
+        ]);
+        for tick in 23..83 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [
+            1, 0, 1, 0
+        ]);
     }
 
     #[test]

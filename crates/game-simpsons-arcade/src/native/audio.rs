@@ -237,6 +237,16 @@ impl<'samples> Playback<'samples> {
         self.update(simulation.state())?;
         self.verify_submission(4)?;
         self.smoke_pause(&mut simulation)?;
+        self.smoke_drain(&mut simulation)?;
+        self.smoke_reset(&mut simulation)?;
+        self.smoke_maneuver(false)?;
+        self.smoke_maneuver(true)
+    }
+
+    fn smoke_drain(
+        &mut self,
+        simulation: &mut LiveSimulation<Cabinet>,
+    ) -> Result<(), RenderError> {
         for _ in 0..60u8 {
             self.device.clear();
             let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -248,7 +258,33 @@ impl<'samples> Playback<'samples> {
         {
             return Err(failure("held attack repeated or audio did not drain"));
         }
-        self.smoke_reset(&mut simulation)
+        Ok(())
+    }
+
+    fn smoke_maneuver(&mut self, airborne: bool) -> Result<(), RenderError> {
+        let mut simulation = live(false)?;
+        let mut controls = Controls::new(false)?;
+        self.update(simulation.state())?;
+        smoke_join(&mut simulation, &mut controls)?;
+        smoke_hold(&mut controls, &mut simulation, Control::Secondary)?;
+        if airborne {
+            for _ in 0..15u8 {
+                let _step =
+                    simulation.advance(TICK_INTERVAL).map_err(failure)?;
+                self.update(simulation.state())?;
+            }
+            self.verify_quiet()?;
+        }
+        smoke_hold(&mut controls, &mut simulation, Control::Primary)?;
+        let _before = simulation
+            .advance(TICK_INTERVAL.saturating_mul(4))
+            .map_err(failure)?;
+        self.update(simulation.state())?;
+        self.verify_quiet()?;
+        let _cue = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        self.update(simulation.state())?;
+        self.verify_submission(4)?;
+        self.smoke_drain(&mut simulation)
     }
 
     fn smoke_pause(
@@ -342,6 +378,16 @@ impl<'samples> Playback<'samples> {
         self.fill()
     }
 
+    fn verify_quiet(&self) -> Result<(), RenderError> {
+        if self.cues != [0; 4]
+            || self.mixer.active() != 0
+            || self.device.queued_bytes() != 0
+        {
+            return Err(failure("audio played before an admitted cue"));
+        }
+        Ok(())
+    }
+
     fn verify_submission(&self, active: usize) -> Result<(), RenderError> {
         if self.mixer.active() != active
             || self.device.queued_bytes() != QUEUE_FRAMES.saturating_mul(4)
@@ -383,6 +429,34 @@ fn play<'samples>(
 fn smoke_entry() -> Result<LiveSimulation<Cabinet>, RenderError> {
     let mut simulation = live(false)?;
     let mut controls = Controls::new(false)?;
+    smoke_join(&mut simulation, &mut controls)?;
+    smoke_hold(&mut controls, &mut simulation, Control::Primary)?;
+    Ok(simulation)
+}
+
+fn smoke_hold(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    control: Control,
+) -> Result<(), RenderError> {
+    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+    for player in Player::ALL {
+        controls.route(
+            InputEvent::Key {
+                code: key_code(controls.key(player, control)?),
+                down: true,
+            },
+            TICK_INTERVAL.saturating_mul(tick),
+            simulation,
+        )?;
+    }
+    Ok(())
+}
+
+fn smoke_join(
+    simulation: &mut LiveSimulation<Cabinet>,
+    controls: &mut Controls,
+) -> Result<(), RenderError> {
     let entries = KEYBOARD.into_iter().map(|[_, start, ..]| start);
     for key in entries {
         for down in [true, false] {
@@ -392,22 +466,12 @@ fn smoke_entry() -> Result<LiveSimulation<Cabinet>, RenderError> {
                     down,
                 },
                 Duration::ZERO,
-                &mut simulation,
+                simulation,
             )?;
         }
     }
     let _entry = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-    for [_, _, primary, ..] in KEYBOARD {
-        controls.route(
-            InputEvent::Key {
-                code: key_code(primary),
-                down: true,
-            },
-            TICK_INTERVAL,
-            &mut simulation,
-        )?;
-    }
-    Ok(simulation)
+    Ok(())
 }
 
 #[cfg(test)]

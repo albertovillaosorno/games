@@ -289,11 +289,18 @@ impl Maneuver {
     }
 
     pub(super) const fn attack_cue(self, player: Player) -> bool {
-        let onset = match player {
-            Player::Marge | Player::Bart => 4,
-            Player::Homer | Player::Lisa => 5,
-        };
-        matches!(self, Self::Attack { tick } if tick == onset)
+        match self {
+            Self::AirAttack(motion) => motion.tick() == 4,
+            Self::Attack { tick } => {
+                let onset = match player {
+                    Player::Marge | Player::Bart => 4,
+                    Player::Homer | Player::Lisa => 5,
+                };
+                tick == onset
+            },
+            Self::Special { tick, .. } => tick == 4,
+            Self::Idle | Self::Jump(_) => false,
+        }
     }
 
     // The encounter is still provisional. Admit one aerial hit per flight.
@@ -397,6 +404,31 @@ mod tests {
         }
         assert_eq!(state, Maneuver::Idle);
         (heights, distance)
+    }
+
+    fn cue_ticks(mut maneuver: Maneuver, player: Player) -> Vec<u8> {
+        let cues = (0u8..60)
+            .filter(|_| {
+                let cue = maneuver.attack_cue(player);
+                maneuver = maneuver.advance(player, true);
+                cue
+            })
+            .collect();
+        assert_eq!(maneuver, Maneuver::Idle);
+        cues
+    }
+
+    #[test]
+    fn airborne_attack_cues_fire_once_and_plain_jumps_are_silent() {
+        for player in Player::ALL {
+            let jump = JumpMotion::start();
+            assert_eq!(cue_ticks(Maneuver::jump(), player), Vec::<u8>::new());
+            assert_eq!(cue_ticks(Maneuver::air_attack(jump), player), [4]);
+            assert_eq!(
+                cue_ticks(Maneuver::Special { hit: false, tick: 0 }, player),
+                [4]
+            );
+        }
     }
 
     #[test]

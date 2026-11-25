@@ -116,10 +116,13 @@ game-over interlude are not implemented.
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
 The hash identifies the verified canonical PCM sample catalogue. The
 preview selects four station-specific attack samples from that bundle,
-using fixed-step cues and the shared native mixer. Without this option
-it opens no audio device. Nominal pitch, gain, queue timing and voice
-admission are provisional; background music and other sound effects
-remain unimplemented.
+using fixed-step cues and the shared native mixer. Ground attacks keep
+the station-specific four- or five-tick onset. Aerial attacks and
+neutral simultaneous-button attacks emit the same clip at tick four.
+Ordinary jumps, including directional button chords, emit no attack
+cue. Without this option it opens no audio device. Nominal pitch, gain,
+queue timing and voice admission are provisional; background music and
+other sound effects remain unimplemented.
 
 Optionally insert `--audio-mod MOD_SHA` immediately after `--audio SHA`.
 The explicitly selected passive replacement bundle may replace only the
@@ -128,8 +131,9 @@ The base and replacement must have matching PCM layouts. A damaged or
 unapproved replacement is rejected, not silently ignored. See the root
 README for the bounded raw PCM and WAV authoring commands.
 The hidden smoke uses a paused device to verify
-nonzero queued audio and one cue per held attack. Pause suspends playback
-and Settings keeps it suspended; returning to the main menu clears audio.
+nonzero queued audio and one cue per held ground, aerial or special
+attack. Pause suspends playback and Settings keeps it suspended;
+returning to the main menu clears audio.
 
 ### Local launch catalogue
 
