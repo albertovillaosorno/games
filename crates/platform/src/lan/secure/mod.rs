@@ -38,14 +38,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
-use rustls::client::Resumption;
+use rustls::client::danger::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
+use rustls::client::{Resumption, WebPkiServerVerifier};
 use rustls::crypto::ring::default_provider;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::{NoServerSessionStorage, WebPkiClientVerifier};
 use rustls::version::TLS13;
 use rustls::{
-    ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig,
-    ServerConnection,
+    CertificateError, ClientConfig, ClientConnection, Connection,
+    DigitallySignedStruct, DistinguishedName, Error, RootCertStore,
+    ServerConfig, ServerConnection, SignatureScheme,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -83,12 +87,15 @@ impl PeerFingerprint {
     }
 }
 
-/// Client credentials and explicitly supplied trusted server roots.
+/// Client credentials, local trust roots and an explicitly approved host.
 #[derive(Clone, Debug)]
 pub struct ClientTls(Arc<ClientConfig>);
 
 impl ClientTls {
-    /// Configure mutual TLS with a client certificate and local trust roots.
+    /// Configure mutual TLS with local roots and an approved host fingerprint.
+    ///
+    /// Obtain the fingerprint through a trusted local enrolment process.
+    /// Changing the host leaf certificate requires explicit re-enrolment.
     ///
     /// # Errors
     ///
@@ -97,20 +104,93 @@ impl ClientTls {
         roots: RootCertStore,
         chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
+        expected_host: PeerFingerprint,
     ) -> io::Result<Self> {
         if roots.is_empty() {
             return Err(ErrorKind::InvalidInput.into());
         }
-        let mut config =
-            ClientConfig::builder_with_provider(Arc::new(default_provider()))
-                .with_protocol_versions(&[&TLS13])
-                .map_err(io::Error::other)?
-                .with_root_certificates(roots)
-                .with_client_auth_cert(chain, key)
-                .map_err(io::Error::other)?;
+        let provider = Arc::new(default_provider());
+        let verifier = WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::clone(&provider),
+        )
+        .build()
+        .map_err(io::Error::other)?;
+        let mut config = ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&TLS13])
+            .map_err(io::Error::other)?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinnedHost {
+                expected_host,
+                verifier,
+            }))
+            .with_client_auth_cert(chain, key)
+            .map_err(io::Error::other)?;
         config.alpn_protocols = vec![PROTOCOL.to_vec()];
         config.resumption = Resumption::disabled();
         Ok(Self(Arc::new(config)))
+    }
+}
+
+#[derive(Debug)]
+struct PinnedHost {
+    expected_host: PeerFingerprint,
+    verifier: Arc<WebPkiServerVerifier>,
+}
+
+impl ServerCertVerifier for PinnedHost {
+    fn requires_raw_public_keys(&self) -> bool {
+        self.verifier.requires_raw_public_keys()
+    }
+
+    fn root_hint_subjects(&self) -> Option<&[DistinguishedName]> {
+        self.verifier.root_hint_subjects()
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.verifier.supported_verify_schemes()
+    }
+
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        let verified = self.verifier.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        )?;
+        if PeerFingerprint::from_der(end_entity.as_ref()) != self.expected_host
+        {
+            return Err(Error::InvalidCertificate(
+                CertificateError::ApplicationVerificationFailure,
+            ));
+        }
+        Ok(verified)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        self.verifier.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        self.verifier.verify_tls13_signature(message, cert, dss)
     }
 }
 
@@ -470,6 +550,21 @@ mod tests {
             PrivatePkcs8KeyDer::from(host_key.serialize_der()).into(),
         )?;
 
+        let (client, client_id) =
+            client_credentials(host_ca, client_ca, server_id)?;
+        Ok(Credentials {
+            client,
+            client_id,
+            server,
+            server_id,
+        })
+    }
+
+    pub(super) fn client_credentials(
+        host_ca: &CertifiedIssuer<'_, KeyPair>,
+        client_ca: &CertifiedIssuer<'_, KeyPair>,
+        expected_host: PeerFingerprint,
+    ) -> io::Result<(ClientTls, PeerFingerprint)> {
         let mut client_params = CertificateParams::default();
         client_params.extended_key_usages =
             vec![ExtendedKeyUsagePurpose::ClientAuth];
@@ -482,13 +577,9 @@ mod tests {
             roots(host_ca)?,
             vec![client_cert.der().clone()],
             PrivatePkcs8KeyDer::from(client_key.serialize_der()).into(),
+            expected_host,
         )?;
-        Ok(Credentials {
-            client,
-            client_id,
-            server,
-            server_id,
-        })
+        Ok((client, client_id))
     }
 
     pub(super) fn pair(
@@ -573,7 +664,8 @@ mod tests {
         let issuer = authority()?;
         let outsider = authority()?;
         let keys = credentials(&issuer, &issuer)?;
-        let untrusted = credentials(&issuer, &outsider)?;
+        let (untrusted, _identity) =
+            client_credentials(&issuer, &outsider, keys.server_id)?;
         let mut limits = session_config(true);
         limits.max_players = NonZeroU8::MIN;
         let settings = LanConfig::new(limits, TIMEOUT)?;
@@ -586,7 +678,7 @@ mod tests {
             "wrong host name must not authenticate",
         )?;
         let (rejected_host, _remote) =
-            pair(&listener, settings, &untrusted.client, HOST)?;
+            pair(&listener, settings, &untrusted, HOST)?;
         require(
             rejected_host.is_err(),
             "untrusted client must not authenticate",
@@ -595,6 +687,36 @@ mod tests {
         require(
             approved.is_ok() && client.is_ok(),
             "failed permits released",
+        )
+    }
+
+    #[test]
+    fn client_requires_approved_leaf_as_well_as_valid_ca() -> io::Result<()> {
+        let issuer = authority()?;
+        let outsider = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let different_host = credentials(&issuer, &issuer)?;
+        let (untrusted_ca, _identity) =
+            client_credentials(&outsider, &issuer, keys.server_id)?;
+        let settings = config()?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
+        let (wrong_leaf_host, wrong_leaf_client) =
+            pair(&listener, settings, &different_host.client, HOST)?;
+        require(
+            wrong_leaf_host.is_err() && wrong_leaf_client.is_err(),
+            "valid CA and name cannot replace approved leaf",
+        )?;
+        let (wrong_ca_host, wrong_ca_client) =
+            pair(&listener, settings, &untrusted_ca, HOST)?;
+        require(
+            wrong_ca_host.is_err() && wrong_ca_client.is_err(),
+            "pin cannot replace CA verification",
+        )?;
+        let (host, client) = pair(&listener, settings, &keys.client, HOST)?;
+        require(
+            host.is_ok() && client.is_ok(),
+            "approved host and CA authenticate",
         )
     }
 

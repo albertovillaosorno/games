@@ -235,7 +235,9 @@ mod tests {
     use super::super::super::tests::{
         LOOPBACK, TestCodec, config, require, session_config,
     };
-    use super::super::tests::{authority, credentials, pair};
+    use super::super::tests::{
+        authority, client_credentials, credentials, pair,
+    };
     use super::super::{PeerFingerprint, SecureLanListener};
     use super::{HostError, HostSession};
 
@@ -273,7 +275,8 @@ mod tests {
     fn only_enrolled_inbound_peers_can_occupy_slots() -> io::Result<()> {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
-        let outsider = credentials(&issuer, &issuer)?;
+        let (outsider, _identity) =
+            client_credentials(&issuer, &issuer, keys.server_id)?;
         let settings = config()?;
         let listener =
             SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
@@ -287,7 +290,7 @@ mod tests {
             "local cannot claim enrolled identity",
         )?;
         let (unapproved, unapproved_client) =
-            pair(&listener, settings, &outsider.client, "games.test")?;
+            pair(&listener, settings, &outsider, "games.test")?;
         require(
             host.admit(unapproved?) == Err(HostError::Unenrolled),
             "trusted CA alone is not enrolment",

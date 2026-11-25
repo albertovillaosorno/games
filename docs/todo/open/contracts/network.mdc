@@ -71,3 +71,11 @@ player count. The permit is released on drop or handshake completion/failure.
 A handshake uses the original accepted-socket deadline even after queueing.
 Tests cover saturation, capacity recovery and rejection after queue expiry.
 Fresh validation passed in run 1795576898196627474-2708567 (80 tests).
+
+The client additionally requires a locally approved host leaf SHA-256
+fingerprint during TLS authentication. Standard WebPKI certificate-chain,
+name, validity and handshake-signature verification still apply. A different
+leaf signed by the same trusted CA is rejected, as is a pinned leaf without
+a trusted chain. Certificate rotation requires explicit local re-enrolment;
+no production credential provisioning interface is claimed yet.
+Fresh validation passed in run 1795577894972235875-2911264 (109 tests).
