@@ -69,8 +69,22 @@ pub fn measure(
     layout: FrameLayout,
     schedule: Schedule,
 ) -> Result<PerformanceCollector, RenderError> {
+    measure_workload(layout, schedule, || present(scene, commands))
+}
+
+/// Measure any prepared workload with the same native host timing policy.
+/// # Errors
+/// Rejects failed workload steps, timing overflow or artifact failure.
+pub fn measure_workload<Draw>(
+    layout: FrameLayout,
+    schedule: Schedule,
+    mut draw: Draw,
+) -> Result<PerformanceCollector, RenderError>
+where
+    Draw: FnMut() -> Result<(), RenderError>,
+{
     for _frame in 0..WARMUP_FRAMES {
-        present(scene, commands)?;
+        draw()?;
     }
     let profile = QualityProfile {
         frame_pacing: FramePacing::Uncapped,
@@ -82,7 +96,7 @@ pub fn measure(
         PerformanceCollector::with_percentiles(profile, Some(SIXTY_HZ_NS));
     let mut meter = FrameMeter::new(collector, Instant::now());
     for frame in 1..=schedule.frames.get() {
-        present(scene, commands)?;
+        draw()?;
         let completed = Instant::now();
         let rss = if frame == 1
             || frame.is_multiple_of(60)
@@ -113,7 +127,7 @@ pub fn measure(
 pub fn report(
     collector: &PerformanceCollector,
     renderer: &str,
-    tiles: NonZeroU32,
+    workload: &str,
 ) -> Result<(), String> {
     let profile = collector.profile();
     let report = collector.report();
@@ -131,7 +145,7 @@ pub fn report(
     let mut out = stdout().lock();
     writeln!(
         out,
-        "Host submission: {renderer}, {}x{} logical, {tiles} sprites, uncapped",
+        "Host submission: {renderer}, {}x{} logical, {workload}, uncapped",
         profile.width, profile.height,
     )
     .and_then(|()| {

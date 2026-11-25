@@ -31,6 +31,10 @@
 
 //! Host-side comparison of original background and complete screen pixels.
 
+#[cfg(feature = "native-preview")]
+/// Bounded changing-scene reconstruction and presentation benchmark.
+pub mod sequence;
+
 use std::ffi::OsString;
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
@@ -86,16 +90,17 @@ impl Arguments {
         machine: Machine,
         bundle: &CanonicalBundle,
     ) -> Result<(), String> {
-        let pens = self.reconstruct(machine, bundle)?;
-        let raw =
-            snapshot(&self.palette, reference_palette::byte_limit(machine, 2)?)
-                .map_err(|error| format!("palette RAM: {error:?}"))?;
-        let colors = reference_palette::decode(machine, &raw)?;
-        let frame = read(&self.frame, pens.len().saturating_mul(4))?;
-        let matched = count_matches(&pens, &colors, &frame)?;
+        let payloads = GraphicsPayloads::load(bundle, self.sprites.is_some())?;
+        let assets = payloads.bind(bundle)?;
+        let (observation, frame) = Observation::load(self, machine)?;
+        let mut pens =
+            vec![Pixel::default(); machine.background_raster().pixels()];
+        observation.reconstruct(machine, &assets, &mut pens)?;
+        let colors = &observation.colors;
+        let matched = count_matches(&pens, colors, &frame)?;
         #[cfg(feature = "native-preview")]
         if self.native {
-            native_check(machine.background_raster(), &pens, &colors)?;
+            native_check(machine.background_raster(), &pens, colors)?;
         }
         let label = if self.sprites.is_some() {
             "Scene"
@@ -109,28 +114,6 @@ impl Arguments {
             pens.len().saturating_sub(matched),
         )
         .map_err(|error| error.to_string())
-    }
-
-    fn overlay(
-        machine: Machine,
-        bundle: &CanonicalBundle,
-        observation: (&SpritePaths, VideoPriority),
-        pens: &mut [Pixel],
-    ) -> Result<(), String> {
-        let (paths, mixer) = observation;
-        let ram = read(&paths.ram, RAM_BYTES)?;
-        let controls = read(&paths.controls, 44)?;
-        let state = machine
-            .sprite_snapshot(&ram, &controls, mixer)
-            .map_err(|error| format!("sprite state: {error:?}"))?;
-        let key = "graphics/sprites";
-        let bytes = bundle
-            .read_payload(key)
-            .map_err(|error| format!("sprites: {error:?}"))?;
-        let tiles = indexed(bundle, key, &bytes)?;
-        state
-            .overlay(machine.background_raster(), &tiles, pens)
-            .map_err(|error| format!("sprite overlay: {error:?}"))
     }
 
     /// Parse exact bundle and observation arguments.
@@ -193,49 +176,6 @@ impl Arguments {
         Ok(parsed)
     }
 
-    fn reconstruct(
-        &self,
-        machine: Machine,
-        bundle: &CanonicalBundle,
-    ) -> Result<Vec<Pixel>, String> {
-        let ram = read(&self.ram, 24_576)?;
-        let registers = read(&self.registers, 22)?;
-        let scroll = read(&self.scroll, 1)?;
-        let [control] = scroll.as_slice() else {
-            return Err(String::from("invalid scroll control"));
-        };
-        let (controls, mixer_raw) = registers
-            .split_first_chunk::<6>()
-            .ok_or_else(|| String::from("missing controls"))?;
-        let mixer = machine
-            .decode_video_priority(mixer_raw)
-            .map_err(|error| format!("mixer: {error:?}"))?;
-        let state = machine
-            .tilemap_snapshot(&ram, controls, mixer)
-            .map_err(|error| format!("tile state: {error:?}"))?;
-        let key = "graphics/tiles";
-        let bytes = bundle
-            .read_payload(key)
-            .map_err(|error| format!("tiles: {error:?}"))?;
-        let tiles = indexed(bundle, key, &bytes)?;
-        let raster = machine.background_raster();
-        let mut pens = vec![Pixel::default(); raster.pixels()];
-        raster
-            .compose(
-                Background {
-                    state,
-                    scroll_control: *control,
-                    tiles: &tiles,
-                },
-                &mut pens,
-            )
-            .map_err(|error| format!("background: {error:?}"))?;
-        if let Some(paths) = &self.sprites {
-            Self::overlay(machine, bundle, (paths, mixer), &mut pens)?;
-        }
-        Ok(pens)
-    }
-
     /// Compare a reconstructed observation with a full original frame.
     /// # Errors
     /// Rejects invalid inputs or unavailable assets, not pixel differences.
@@ -250,6 +190,163 @@ impl Arguments {
             .validate_manifest(bundle.manifest())
             .map_err(|error| format!("profile manifest: {error:?}"))?;
         self.compare(machine, &bundle)
+    }
+}
+
+#[derive(Debug)]
+struct GraphicsPayloads {
+    sprites: Option<Vec<u8>>,
+    tiles: Vec<u8>,
+}
+
+impl GraphicsPayloads {
+    fn bind<'payload>(
+        &'payload self,
+        bundle: &CanonicalBundle,
+    ) -> Result<SceneAssets<'payload>, String> {
+        let sprites = self
+            .sprites
+            .as_deref()
+            .map(|bytes| indexed(bundle, "graphics/sprites", bytes))
+            .transpose()?;
+        Ok(SceneAssets {
+            sprites,
+            tiles: indexed(bundle, "graphics/tiles", &self.tiles)?,
+        })
+    }
+
+    fn load(
+        bundle: &CanonicalBundle,
+        with_sprites: bool,
+    ) -> Result<Self, String> {
+        let read_key = |key| {
+            bundle
+                .read_payload(key)
+                .map_err(|error| format!("graphics payload: {error:?}"))
+        };
+        Ok(Self {
+            sprites: with_sprites
+                .then(|| read_key("graphics/sprites"))
+                .transpose()?,
+            tiles: read_key("graphics/tiles")?,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Observation {
+    colors: reference_palette::Colors,
+    ram: Vec<u8>,
+    registers: Vec<u8>,
+    scroll: u8,
+    sprites: Option<SpriteObservation>,
+}
+
+type LoadedObservation = (Observation, Vec<u8>);
+
+impl Observation {
+    fn load(
+        paths: &Arguments,
+        machine: Machine,
+    ) -> Result<LoadedObservation, String> {
+        let scroll = read(&paths.scroll, 1)?;
+        let [control] = scroll.as_slice() else {
+            return Err(String::from("invalid scroll control"));
+        };
+        let raw = snapshot(
+            &paths.palette,
+            reference_palette::byte_limit(machine, 2)?,
+        )
+        .map_err(|error| format!("palette RAM: {error:?}"))?;
+        let observation = Self {
+            colors: reference_palette::decode(machine, &raw)?,
+            ram: read(&paths.ram, 24_576)?,
+            registers: read(&paths.registers, 22)?,
+            scroll: *control,
+            sprites: paths
+                .sprites
+                .as_ref()
+                .map(SpriteObservation::load)
+                .transpose()?,
+        };
+        let frame = read(
+            &paths.frame,
+            machine.background_raster().pixels().saturating_mul(4),
+        )?;
+        Ok((observation, frame))
+    }
+
+    fn reconstruct(
+        &self,
+        machine: Machine,
+        assets: &SceneAssets<'_>,
+        pens: &mut [Pixel],
+    ) -> Result<(), String> {
+        let (controls, mixer_raw) = self
+            .registers
+            .split_first_chunk::<6>()
+            .ok_or_else(|| String::from("missing controls"))?;
+        let mixer = machine
+            .decode_video_priority(mixer_raw)
+            .map_err(|error| format!("mixer: {error:?}"))?;
+        let state = machine
+            .tilemap_snapshot(&self.ram, controls, mixer)
+            .map_err(|error| format!("tile state: {error:?}"))?;
+        machine
+            .background_raster()
+            .compose(
+                Background {
+                    state,
+                    scroll_control: self.scroll,
+                    tiles: &assets.tiles,
+                },
+                pens,
+            )
+            .map_err(|error| format!("background: {error:?}"))?;
+        if let Some(sprites) = &self.sprites {
+            let tiles = assets
+                .sprites
+                .as_ref()
+                .ok_or_else(|| String::from("missing sprite tiles"))?;
+            sprites.overlay(machine, (tiles, mixer), pens)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct SceneAssets<'payload> {
+    sprites: Option<IndexedTiles<'payload>>,
+    tiles: IndexedTiles<'payload>,
+}
+
+#[derive(Debug)]
+struct SpriteObservation {
+    controls: Vec<u8>,
+    ram: Vec<u8>,
+}
+
+impl SpriteObservation {
+    fn load(paths: &SpritePaths) -> Result<Self, String> {
+        Ok(Self {
+            controls: read(&paths.controls, 44)?,
+            ram: read(&paths.ram, RAM_BYTES)?,
+        })
+    }
+
+    fn overlay(
+        &self,
+        machine: Machine,
+        context: (&IndexedTiles<'_>, VideoPriority),
+        pens: &mut [Pixel],
+    ) -> Result<(), String> {
+        let (tiles, mixer) = context;
+        let state = machine
+            .sprite_snapshot(&self.ram, &self.controls, mixer)
+            .map_err(|error| format!("sprite state: {error:?}"))?;
+        state
+            .overlay(machine.background_raster(), tiles, pens)
+            .map_err(|error| format!("sprite overlay: {error:?}"))
     }
 }
 

@@ -110,6 +110,9 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "GNU/Linux: mame scene-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
+    "GNU/Linux (native-preview): mame scene-sequence-bench MACHINE REV ",
+    "PARENT SHA256 REPEATS RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS ",
+    "CONTROLS [MORE SCENES...]\n",
     "GNU/Linux (native-preview): mame scene-render-check MACHINE REV ",
     "PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "Linux/Android: mame sample-check MACHINE REV OBSERVATIONS LIMIT ",
@@ -237,6 +240,12 @@ enum Command {
     RenderCheck(Machine, render_check::Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     SampleCheck(Machine, PathBuf, NonZeroU64, Arguments),
+    #[cfg(all(
+        feature = "native-preview",
+        target_os = "linux",
+        target_env = "gnu"
+    ))]
+    SceneSequence(Machine, reference_background::sequence::Sequence),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     TilemapCheck(Machine, PathBuf, PathBuf),
     Verify(Arguments),
@@ -331,11 +340,12 @@ impl Command {
             target_os = "linux",
             target_env = "gnu"
         ))]
-        if action == "audio-render-check" {
-            return Ok(Self::AudioCheck(
+        if matches!(action, "audio-render-check" | "scene-sequence-bench") {
+            return Self::parse_native_workload(
+                action,
                 selected,
-                audio_check::Arguments::parse(args.collect())?,
-            ));
+                args.collect(),
+            );
         }
         match action {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -378,6 +388,29 @@ impl Command {
                 render_check::Arguments::parse_benchmark(args.collect())?,
             )),
             _ => Self::parse_assets(action, selected, args),
+        }
+    }
+
+    #[cfg(all(
+        feature = "native-preview",
+        target_os = "linux",
+        target_env = "gnu"
+    ))]
+    fn parse_native_workload(
+        action: &str,
+        machine: Machine,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        match action {
+            "audio-render-check" => Ok(Self::AudioCheck(
+                machine,
+                audio_check::Arguments::parse(args)?,
+            )),
+            "scene-sequence-bench" => Ok(Self::SceneSequence(
+                machine,
+                reference_background::sequence::Sequence::parse(&args)?,
+            )),
+            _ => Err(String::from(USAGE)),
         }
     }
 
@@ -432,6 +465,12 @@ impl Command {
                 target_env = "gnu"
             ))]
             Self::AudioCheck(machine, args) => args.run(machine),
+            #[cfg(all(
+                feature = "native-preview",
+                target_os = "linux",
+                target_env = "gnu"
+            ))]
+            Self::SceneSequence(machine, args) => args.run(machine),
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::BackgroundCheck(machine, args) => args.run(machine),
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -464,6 +503,12 @@ impl Command {
             Self::SampleCheck(machine, raw, limit, args) => {
                 report_samples(machine, &raw, limit, &args)
             },
+            command => command.run_assets(),
+        }
+    }
+
+    fn run_assets(self) -> Result<(), String> {
+        match self {
             Self::Verify(args) => with_source(&args, verify_archive),
             Self::Import(selection, args) => {
                 with_source(&args, |source, archive| {
@@ -480,6 +525,7 @@ impl Command {
             Self::Check(selection, parent, digest) => {
                 publication::check(selection, &parent, digest)
             },
+            _ => Err(String::from(USAGE)),
         }
     }
 }

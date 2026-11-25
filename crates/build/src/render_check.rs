@@ -191,7 +191,7 @@ impl Arguments {
             return render_benchmark::report(
                 &collector,
                 &execution.renderer,
-                self.count,
+                &format!("{} sprites", self.count),
             );
         }
         let renderer = execution.renderer;

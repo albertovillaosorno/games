@@ -144,3 +144,28 @@ scene yielded:
 These are host completion intervals; input ages, physical display latency
 and GPU/VRAM use were not measured. The static workload is not a game.
 The shared tests passed in fresh run 1795584639072641475-3814930.
+
+The native-preview command `mame scene-sequence-bench` requires 2–64
+explicit aligned observation groups and bounded repetitions (at most
+20,000 measured frames). It checks every original screen pixel before
+admission and rejects both static and mismatched corpora. It shares the
+existing scene reconstruction and timing collector, retains verified tile
+and sprite payloads once, and reconstructs each measured frame into reused
+buffers for a persistent native streaming texture.
+
+Two release trials cycled 31 aligned 320x224 Simpsons observations 20
+times each after warmup (620 measured frames per trial). Every scene
+matched all 71,680 pixels before measurement. Linux SDL OpenGL, uncapped:
+
+- Mean: 3,002,352–3,018,901 ns; 331–333 submissions/s.
+- p50: 2,883,584–3,145,727 ns; p95: 3,145,728–3,407,871 ns.
+- p99: 3,407,872–3,670,015 ns; maximum: 10,441,837 ns.
+- No misses in either trial against the 60 Hz target.
+- Load: 412,745,728–544,226,856 ns; sampled peak RSS:
+  170,344,448–171,089,920 bytes; executable: 1,278,952 bytes.
+
+Timed work includes CPU reconstruction and native submission, not
+repeated archive I/O or reference readback. A separate single-scene
+native readback matched all pixels; duplicate and misaligned corpora
+were rejected. These observations are not live gameplay, display FPS,
+physical input latency, GPU timing or VRAM measurements.
