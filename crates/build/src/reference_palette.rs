@@ -38,6 +38,8 @@ use std::path::Path;
 use games_importer::mame::Machine;
 use games_platform_storage::file::snapshot;
 
+pub(super) type Colors = Vec<[u8; 4]>;
+
 /// Compare a bounded raw palette snapshot with an observed pen dump.
 /// # Errors
 /// Rejects unsafe files, incorrect extents or mismatching palette entries.
@@ -55,7 +57,7 @@ pub fn check(
         .map_err(|error| error.to_string())
 }
 
-fn byte_limit(
+pub(super) fn byte_limit(
     machine: Machine,
     bytes_per_entry: u64,
 ) -> Result<NonZeroU64, String> {
@@ -76,14 +78,7 @@ fn compare(
     if !remainder.is_empty() || words.len() != entries {
         return Err(String::from("incorrect palette reference length"));
     }
-    let mut colors = Vec::new();
-    colors
-        .try_reserve_exact(entries)
-        .map_err(|_error| String::from("palette allocation failed"))?;
-    colors.resize(entries, [0; 4]);
-    machine
-        .decode_palette(raw, &mut colors)
-        .map_err(|error| format!("palette decode: {error:?}"))?;
+    let colors = decode(machine, raw)?;
     for (pen, (color, [blue, green, red, alpha])) in
         colors.into_iter().zip(words.iter().copied()).enumerate()
     {
@@ -92,6 +87,19 @@ fn compare(
         }
     }
     Ok(entries)
+}
+
+pub(super) fn decode(machine: Machine, raw: &[u8]) -> Result<Colors, String> {
+    let entries = machine.palette_entries().get();
+    let mut colors = Vec::new();
+    colors
+        .try_reserve_exact(entries)
+        .map_err(|_error| String::from("palette allocation failed"))?;
+    colors.resize(entries, [0; 4]);
+    machine
+        .decode_palette(raw, &mut colors)
+        .map_err(|error| format!("palette decode: {error:?}"))?;
+    Ok(colors)
 }
 
 #[cfg(test)]

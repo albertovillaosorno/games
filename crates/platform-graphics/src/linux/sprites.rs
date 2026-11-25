@@ -253,6 +253,28 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
             target: create_target(creator, layout)?,
         })
     }
+
+    fn readback<Target>(
+        &mut self,
+        canvas: &mut Canvas<Target>,
+    ) -> Result<Vec<u8>, RenderError>
+    where
+        Target: RenderTarget,
+    {
+        let mut result = Err(RenderError::InvalidLength);
+        canvas
+            .with_texture_canvas(&mut self.target, |logical| {
+                result = logical
+                    .read_pixels(None, PixelFormatEnum::RGBA32)
+                    .map_err(RenderError::Backend);
+            })
+            .map_err(|error| RenderError::Backend(error.to_string()))?;
+        let pixels = result?;
+        if pixels.len() != self.layout.bytes() {
+            return Err(RenderError::InvalidLength);
+        }
+        Ok(pixels)
+    }
 }
 
 /// A logical render target, persistent atlases and a native event pump.
@@ -314,6 +336,18 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
             self.canvas.present();
         }
         Ok(drawn)
+    }
+
+    /// Read the current logical scene as RGBA bytes.
+    ///
+    /// Call only immediately after successful presentation. This diagnostic
+    /// allocates one bounded frame and synchronises the renderer; do not use
+    /// per frame.
+    ///
+    /// # Errors
+    /// Rejects failed native readback or an unexpected byte extent.
+    pub fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
+        self.textures.readback(self.canvas)
     }
 }
 
@@ -511,6 +545,10 @@ mod tests {
             "scene not drawn",
         )?;
         let expected = [GREEN, GREEN, BLUE, RED, GREEN, GREEN, RED, RED];
+        require(
+            scene.readback(&mut canvas)? == expected.as_flattened(),
+            "logical target pixels differ",
+        )?;
         require(
             read(&canvas)? == expected.as_flattened(),
             "sprite pixels differ",

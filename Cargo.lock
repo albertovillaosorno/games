@@ -232,6 +232,7 @@ version = "0.1.0"
 dependencies = [
  "games-assets",
  "games-importer",
+ "games-platform-graphics",
  "games-platform-storage",
 ]
 

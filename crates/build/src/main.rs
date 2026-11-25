@@ -37,6 +37,13 @@ pub mod publication;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only palette comparison against local observations.
 pub mod reference_palette;
+#[cfg(all(
+    feature = "native-preview",
+    target_os = "linux",
+    target_env = "gnu"
+))]
+/// Bounded native diagnostic rendering of selected imported graphics.
+pub mod render_check;
 
 use std::env;
 use std::ffi::OsString;
@@ -66,7 +73,10 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
-    "Linux/Android: mame palette-check MACHINE REV RAW ARGB32"
+    "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
+    "\n",
+    "GNU/Linux (native-preview): mame render-check MACHINE REV ",
+    "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT"
 );
 
 #[derive(Debug)]
@@ -157,6 +167,12 @@ enum Command {
     PaletteCheck(Machine, PathBuf, PathBuf),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Publish(Machine, PathBuf, Arguments),
+    #[cfg(all(
+        feature = "native-preview",
+        target_os = "linux",
+        target_env = "gnu"
+    ))]
+    RenderCheck(Machine, render_check::Arguments),
     Verify(Arguments),
 }
 
@@ -198,6 +214,15 @@ impl Command {
                         .map_err(|_args| String::from(USAGE))?;
                 Ok(Self::PaletteCheck(selected, raw.into(), reference.into()))
             },
+            #[cfg(all(
+                feature = "native-preview",
+                target_os = "linux",
+                target_env = "gnu"
+            ))]
+            "render-check" => Ok(Self::RenderCheck(
+                selected,
+                render_check::Arguments::parse(args.collect())?,
+            )),
             "import" => Ok(Self::Import(
                 selected,
                 Arguments::parse_mame(selected, args.collect())?,
@@ -231,6 +256,12 @@ impl Command {
             Self::PaletteCheck(machine, raw, reference) => {
                 reference_palette::check(machine, &raw, &reference)
             },
+            #[cfg(all(
+                feature = "native-preview",
+                target_os = "linux",
+                target_env = "gnu"
+            ))]
+            Self::RenderCheck(machine, args) => args.run(machine),
             Self::Verify(args) => with_source(&args, verify_archive),
             Self::Import(machine, args) => {
                 with_source(&args, |source, archive| {

@@ -9,12 +9,18 @@ description = "Host-side asset import and game build composition"
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+native-preview = ["dep:games-platform-graphics"]
+
 [dependencies]
 games-assets.workspace = true
 games-importer.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 games-platform-storage.workspace = true
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+games-platform-graphics = { workspace = true, optional = true }
 
 [lints]
 workspace = true

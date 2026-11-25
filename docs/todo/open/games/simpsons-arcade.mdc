@@ -121,3 +121,21 @@ entry comparisons). The raw data and capture bridges remain private.
 This verifies ordinary palette-word conversion, not dynamic pen
 assignment, tile or sprite priorities, transparency, shadow/highlight
 behavior or a remake frame. Those remain open.
+
+The optional GNU/Linux native render diagnostic consumes verified indexed
+bundle payloads and the explicit palette slice from a private snapshot:
+
+```sh
+cargo run --locked -p games-build --features native-preview -- \
+  mame render-check simpsons world-4p-set-1 PARENT SHA256 \
+  graphics/tiles RAW 8192 1024 32 0 16
+```
+
+SDL reported the OpenGL accelerated renderer. The diagnostic compared
+all logical RGBA bytes with the CPU-packed atlas after two presentations
+using a persistent atlas texture. Both 1,024 background tiles
+(262,144 RGBA bytes per frame) and 1,023 sprite tiles
+(1,048,576 RGBA bytes per frame, including transparent padding) passed.
+Invalid source and palette ranges were rejected. This is an end-to-end
+asset presentation check with explicitly chosen palette slices, not a
+comparison against original screen composition or playable gameplay.

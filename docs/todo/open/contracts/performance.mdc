@@ -93,3 +93,11 @@ changing the displayed pixels. Both rendering paths passed the explicitly
 enabled native accelerated-window smoke in fresh validation run
 1795582523569847945-3501164. No physical GPU timing, actual VRAM usage or
 game-scene throughput is claimed.
+
+An opt-in native diagnostic now uses the bounded persistent atlas path
+with actual locally imported data. Exact logical RGBA readback matched
+the CPU-packed atlas in two consecutive frames for each of two selections
+(1,024 background tiles and 1,023 sprite tiles) on SDL OpenGL.
+Readback is explicitly diagnostic and synchronises the renderer; it is
+not part of the ordinary presentation loop. Physical GPU utilisation,
+frame-time percentiles and peak resident/VRAM usage remain unmeasured.
