@@ -31,7 +31,7 @@
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::ffi::OsStr;
-use std::fs::{self, File};
+use std::fs;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, OwnedFd};
@@ -43,9 +43,9 @@ use games_assets::ContentHash;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use games_assets::archive::validate_path;
 use nix::fcntl::openat;
-use nix::sys::stat::{FileStat, Mode};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use nix::sys::stat::{fchmod, fstat};
+use nix::sys::stat::fchmod;
+use nix::sys::stat::{FileStat, Mode, fstat};
 use nix::unistd::fsync;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use nix::{
@@ -53,17 +53,14 @@ use nix::{
     fcntl::{RenameFlags, renameat2},
 };
 
-use super::{ArchiveStaging, PayloadStamps, StagedArchive, StagingError};
+use super::{ArchiveStaging, Directory, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use super::{Directory, PrivateDirectory, staging_path};
+use super::{PrivateDirectory, staging_path};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::bundle::bundle_name;
-use crate::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use crate::file::same_inode;
 use crate::file::{
-    DIRECTORY_FLAGS, FileReadError, sync_regular, trusted_directory,
-    verify_staged_regular,
+    DIRECTORY_FLAGS, FileReadError, same_inode, sync_regular,
+    trusted_directory_stat, verify_staged_regular,
 };
 
 /// A complete canonical bundle that has not yet been published.
@@ -74,10 +71,6 @@ use crate::file::{
 pub struct StagedBundle {
     archive: StagedArchive,
     digest: ContentHash,
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    manifest: FileStat,
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    payloads: PayloadStamps,
 }
 
 impl StagedBundle {
@@ -102,15 +95,9 @@ impl StagedBundle {
     /// post-rename directory sync failure is reported in the receipt instead.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     pub fn publish(mut self) -> Result<PublishedBundle, StagingError> {
-        self.archive.0.verify_location()?;
-        check_files(
-            &self.archive.0.root,
-            &self.manifest,
-            &self.payloads,
-            false,
-        )?;
+        self.archive.verify()?;
         let name = bundle_name(self.digest);
-        publish_directory(&mut self.archive.0, OsStr::new(&name))
+        publish_directory(&mut self.archive.temporary, OsStr::new(&name))
     }
 }
 
@@ -178,9 +165,8 @@ impl AuthoredStaging {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        self.temporary.verify_location()?;
-        check_authored_tree(&self.registry, &self.temporary.root, true)?;
-        check_authored_tree(&self.registry, &self.temporary.root, false)?;
+        self.temporary.verify_tree(&self.registry, true)?;
+        self.temporary.verify_tree(&self.registry, false)?;
         publish_directory(&mut self.temporary, name)
     }
 
@@ -224,20 +210,32 @@ impl AuthoredStaging {
             } else {
                 Mode::empty()
             };
-        let (mut file, node) = directory.create_file(parent, leaf, mode)?;
+        let (mut file, node) = directory.create_file(parent, leaf)?;
         file.write_all(bytes)?;
         fchmod(&file, mode)?;
-        node.stamp = Some(Box::new(fstat(&file)?));
-        Ok(())
+        node.record_file(
+            &file,
+            u64::try_from(bytes.len())
+                .map_err(|_error| StagingError::ChangedStorage)?,
+        )
     }
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn check_authored_tree(
+// Verify the exact observed tree without rehashing or loading file contents.
+// Directories are pinned and checked once at each descent; regular files
+// must still have the metadata observed when their bounded writers finished.
+pub(super) fn check_tree(
     directory: &Directory,
     fd: &OwnedFd,
+    expected: Option<&FileStat>,
     sync: bool,
 ) -> Result<(), StagingError> {
+    let current = fstat(fd)?;
+    if !trusted_directory_stat(&current)
+        || expected.is_some_and(|stamp| !same_inode(stamp, &current))
+    {
+        return Err(StagingError::ChangedStorage);
+    }
     check_entry_count(fd, directory.children.len())?;
     let check = if sync {
         sync_regular
@@ -250,10 +248,7 @@ fn check_authored_tree(
         if let Some(child) = &node.directory {
             let child_fd =
                 openat(fd, node.name.as_str(), DIRECTORY_FLAGS, Mode::empty())?;
-            if !same_inode(stamp, &fstat(&child_fd)?) {
-                return Err(StagingError::ChangedStorage);
-            }
-            check_authored_tree(child, &child_fd, sync)?;
+            check_tree(child, &child_fd, Some(stamp), sync)?;
         } else {
             check(fd, &node.name, stamp).map_err(sync_error)?;
         }
@@ -267,67 +262,17 @@ fn check_authored_tree(
 pub(super) fn finish(
     stage: ArchiveStaging,
     digest: ContentHash,
-    manifest: &FileStat,
-    payloads: PayloadStamps,
 ) -> Result<StagedBundle, StagingError> {
-    stage.temporary.verify_location()?;
-    check_files(&stage.temporary.root, manifest, &payloads, true)?;
     Ok(StagedBundle {
-        archive: stage.finish()?,
+        archive: stage.finish_with(true)?,
         digest,
-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
-        manifest: *manifest,
-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
-        payloads,
     })
-}
-
-// Check the exact file set through the pinned directories, and require every
-// file to retain the metadata observed when its writer completed.
-fn check_files(
-    root: &OwnedFd,
-    manifest: &FileStat,
-    payloads: &PayloadStamps,
-    sync: bool,
-) -> Result<(), StagingError> {
-    let check = if sync {
-        sync_regular
-    } else {
-        verify_staged_regular
-    };
-    check_entry_count(
-        root,
-        if payloads.is_empty() {
-            1
-        } else {
-            2
-        },
-    )?;
-    if !payloads.is_empty() {
-        let directory =
-            openat(root, PAYLOADS_DIRECTORY, DIRECTORY_FLAGS, Mode::empty())?;
-        check_entry_count(&directory, payloads.len())?;
-        for (hash, stamp) in payloads {
-            check(&directory, &hash.to_string(), stamp).map_err(sync_error)?;
-        }
-        if sync {
-            File::from(directory).sync_all()?;
-        }
-    }
-    check(root, MANIFEST_NAME, manifest).map_err(sync_error)?;
-    if sync {
-        fsync(root)?;
-    }
-    Ok(())
 }
 
 fn check_entry_count(
     directory: &OwnedFd,
     expected: usize,
 ) -> Result<(), StagingError> {
-    if !trusted_directory(directory)? {
-        return Err(StagingError::ChangedStorage);
-    }
     let path = format!("/proc/self/fd/{}", directory.as_raw_fd());
     let mut remaining = expected;
     for result in fs::read_dir(path)? {

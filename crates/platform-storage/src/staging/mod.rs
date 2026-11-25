@@ -55,7 +55,9 @@ pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
 use super::bundle::{
     BundleError, CanonicalBundle, MANIFEST_NAME, PAYLOADS_DIRECTORY,
 };
-use super::file::{DIRECTORY_FLAGS, same_inode, trusted_directory};
+use super::file::{
+    DIRECTORY_FLAGS, same_inode, trusted_directory, trusted_directory_stat,
+};
 const MAX_DEPTH: usize = 64;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -122,9 +124,23 @@ struct Directory {
 struct Node {
     directory: Option<Directory>,
     name: String,
-    // Directory identity for subsequent descent; authored files also
-    // retain their completed write metadata for publication.
+    // Directory identity or completed file metadata for verification.
     stamp: Option<Box<FileStat>>,
+}
+
+impl Node {
+    fn record_file(
+        &mut self,
+        file: &File,
+        size: u64,
+    ) -> Result<(), StagingError> {
+        let stamp = fstat(file)?;
+        if u64::try_from(stamp.st_size).ok() != Some(size) {
+            return Err(StagingError::ChangedStorage);
+        }
+        self.stamp = Some(Box::new(stamp));
+        Ok(())
+    }
 }
 
 type CreatedFile<'directory> = (File, &'directory mut Node);
@@ -143,7 +159,6 @@ impl Directory {
         &mut self,
         parent: &OwnedFd,
         name: &str,
-        mode: Mode,
     ) -> Result<CreatedFile<'_>, StagingError> {
         let Entry::Vacant(entry) =
             self.children.entry(name.to_ascii_lowercase())
@@ -158,7 +173,7 @@ impl Directory {
                 | OFlag::O_EXCL
                 | OFlag::O_NOFOLLOW
                 | OFlag::O_CLOEXEC,
-            mode,
+            Mode::S_IRUSR | Mode::S_IWUSR,
         )?;
         let node = entry.insert(Node {
             directory: None,
@@ -221,7 +236,7 @@ impl Directory {
         }
         let fd = openat(parent, name, DIRECTORY_FLAGS, Mode::empty())?;
         let current = fstat(&fd)?;
-        if !trusted_directory(&fd)?
+        if !trusted_directory_stat(&current)
             || node
                 .stamp
                 .as_deref()
@@ -315,6 +330,16 @@ impl PrivateDirectory {
         }
         Ok(())
     }
+
+    fn verify_tree(
+        &self,
+        registry: &Directory,
+        sync: bool,
+    ) -> Result<(), StagingError> {
+        self.verify_location()?;
+        publication::check_tree(registry, &self.root, None, sync)?;
+        self.verify_location()
+    }
 }
 
 impl Drop for PrivateDirectory {
@@ -355,11 +380,18 @@ impl ArchiveStaging {
     /// # Errors
     /// Rejects an aborted transaction and discards its partial output.
     pub fn finish(self) -> Result<StagedArchive, StagingError> {
+        self.finish_with(false)
+    }
+
+    fn finish_with(self, sync: bool) -> Result<StagedArchive, StagingError> {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        self.temporary.verify_location()?;
-        Ok(StagedArchive(self.temporary))
+        self.temporary.verify_tree(&self.registry, sync)?;
+        Ok(StagedArchive {
+            registry: self.registry,
+            temporary: self.temporary,
+        })
     }
 
     /// Create a private temporary directory under a trusted parent.
@@ -381,37 +413,20 @@ impl ArchiveStaging {
         })
     }
 
-    fn record_entry<Source>(
-        &mut self,
-        metadata: StagingEntry<'_>,
-        input: &mut Source,
-    ) -> Result<Option<FileStat>, StagingError>
-    where
-        Source: Read,
-    {
-        if self.failed {
-            return Err(StagingError::Aborted);
-        }
-        let result = self.write_member(metadata, input);
-        self.failed = result.is_err();
-        result
-    }
-
     fn record_file(
         &mut self,
         path: &str,
         size: u64,
         bytes: &mut &[u8],
-    ) -> Result<FileStat, StagingError> {
-        self.record_entry(
+    ) -> Result<(), StagingError> {
+        self.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
                 path,
                 size,
             },
             bytes,
-        )?
-        .ok_or(StagingError::ChangedStorage)
+        )
     }
 
     /// Validate one declared member and stream its exact payload into staging.
@@ -430,14 +445,19 @@ impl ArchiveStaging {
     where
         Source: Read,
     {
-        self.record_entry(metadata, input).map(|_stat| ())
+        if self.failed {
+            return Err(StagingError::Aborted);
+        }
+        let result = self.write_member(metadata, input);
+        self.failed = result.is_err();
+        result
     }
 
     fn write_member<Source>(
         &mut self,
         metadata: StagingEntry<'_>,
         input: &mut Source,
-    ) -> Result<Option<FileStat>, StagingError>
+    ) -> Result<(), StagingError>
     where
         Source: Read,
     {
@@ -458,16 +478,12 @@ impl ArchiveStaging {
                     leaf,
                     DirectoryAdmission::Explicit,
                 )?;
-                Ok(None)
+                Ok(())
             },
             EntryKind::File => {
-                let (mut output, _node) = directory.create_file(
-                    parent,
-                    leaf,
-                    Mode::S_IRUSR | Mode::S_IWUSR,
-                )?;
+                let (mut output, node) = directory.create_file(parent, leaf)?;
                 copy_bounded(input, &mut output, entry)?;
-                Ok(Some(fstat(&output)?))
+                node.record_file(&output, size)
             },
             EntryKind::Hardlink | EntryKind::Other | EntryKind::Symlink => {
                 Err(ArchiveError::LinkOrSpecial.into())
@@ -477,7 +493,6 @@ impl ArchiveStaging {
 }
 
 type PayloadSizes = BTreeMap<ContentHash, u64>;
-type PayloadStamps = BTreeMap<ContentHash, FileStat>;
 
 /// A private canonical bundle, built from content-addressed payloads.
 ///
@@ -485,7 +500,7 @@ type PayloadStamps = BTreeMap<ContentHash, FileStat>;
 /// The archive budget includes the manifest file and payload directory.
 #[derive(Debug)]
 pub struct CanonicalStaging {
-    payloads: PayloadStamps,
+    payloads: PayloadSizes,
     stage: ArchiveStaging,
 }
 
@@ -542,22 +557,15 @@ impl CanonicalStaging {
         mut bytes: &[u8],
         expected: &PayloadSizes,
     ) -> Result<StagedBundle, StagingError> {
-        if expected.len() != self.payloads.len()
-            || expected.iter().any(|(hash, size)| {
-                self.payloads
-                    .get(hash)
-                    .and_then(|stat| u64::try_from(stat.st_size).ok())
-                    != Some(*size)
-            })
-        {
+        if expected != &self.payloads {
             return Err(AssetError::PayloadMismatch.into());
         }
         let size = manifest_size(bytes)?;
         let mut budget = self.stage.budget;
         let _entry = budget.admit(MANIFEST_NAME, EntryKind::File, size)?;
         let digest = ContentHash::calculate(bytes);
-        let stamp = self.stage.record_file(MANIFEST_NAME, size, &mut bytes)?;
-        publication::finish(self.stage, digest, &stamp, self.payloads)
+        self.stage.record_file(MANIFEST_NAME, size, &mut bytes)?;
+        publication::finish(self.stage, digest)
     }
 
     /// Create a private canonical bundle transaction.
@@ -607,21 +615,32 @@ impl CanonicalStaging {
             self.stage.failed = true;
             return Err(AssetError::PayloadMismatch.into());
         }
-        let stamp = self.stage.record_file(&path, size, &mut bytes)?;
-        let _previous = self.payloads.insert(digest, stamp);
+        self.stage.record_file(&path, size, &mut bytes)?;
+        let _previous = self.payloads.insert(digest, size);
         Ok(())
     }
 }
 
 /// A verified staging directory with best-effort cleanup on drop.
 #[derive(Debug)]
-pub struct StagedArchive(PrivateDirectory);
+pub struct StagedArchive {
+    registry: Directory,
+    temporary: PrivateDirectory,
+}
 
 impl StagedArchive {
     /// Access the completed staging directory for subsequent conversion.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.0.path
+        &self.temporary.path
+    }
+
+    /// Recheck the exact staged tree before subsequent trusted use.
+    ///
+    /// # Errors
+    /// Rejects observed storage changes or filesystem errors.
+    pub fn verify(&self) -> Result<(), StagingError> {
+        self.temporary.verify_tree(&self.registry, false)
     }
 }
 
@@ -953,6 +972,66 @@ mod tests {
         require(fs::metadata(root.join("sprites/villain.bin"))?.len() == 0)?;
         drop(completed);
         require(!root.exists())
+    }
+
+    #[test]
+    fn archive_completion_rejects_nested_tree_changes()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        for alteration in ["file", "extra", "empty-directory"] {
+            let mut stage = ArchiveStaging::new(&parent.path, budget(8))?;
+            stage.write_entry(
+                member("sprites/hero.bin", EntryKind::File, 4),
+                &mut b"hero".as_slice(),
+            )?;
+            stage.write_entry(
+                member("sprites/empty", EntryKind::Directory, 0),
+                &mut io::empty(),
+            )?;
+            let path = stage.temporary.path.clone();
+            let original = parent.path.join("original");
+            match alteration {
+                "file" => {
+                    let target = path.join("sprites/hero.bin");
+                    fs::write(&target, b"evil")?;
+                    File::open(&target)?
+                        .set_times(FileTimes::new().set_modified(UNIX_EPOCH))?;
+                },
+                "extra" => {
+                    fs::write(path.join("sprites/extra"), b"unlisted")?;
+                },
+                "empty-directory" => {
+                    let target = path.join("sprites/empty");
+                    fs::rename(&target, &original)?;
+                    fs::create_dir_all(target)?;
+                },
+                _ => return Err(StagingError::UnsupportedPath),
+            }
+            require(matches!(
+                stage.finish(),
+                Err(StagingError::ChangedStorage)
+            ))?;
+            require(!path.exists())?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn completed_archive_can_recheck_before_conversion()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let mut stage = ArchiveStaging::new(&parent.path, budget(8))?;
+        stage.write_entry(
+            member("empty/nested", EntryKind::Directory, 0),
+            &mut io::empty(),
+        )?;
+        let complete = stage.finish()?;
+        complete.verify()?;
+        let path = complete.path().to_owned();
+        fs::write(path.join("empty/nested/unlisted"), b"extra")?;
+        require(complete.verify() == Err(StagingError::ChangedStorage))?;
+        drop(complete);
+        require(!path.exists())
     }
 
     #[test]

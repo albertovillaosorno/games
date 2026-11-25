@@ -396,3 +396,15 @@ payload inventory to the storage adapter. Synthetic regressions exercise
 conflicting sizes, early rejection before a later malformed descriptor,
 both manifest versions and legitimate alias budget exhaustion. Fresh
 workspace validation passed in run 1795612954386762456-1554938.
+
+Generic archive completion, canonical bundle completion and authored
+publication now share one descriptor-relative exact-tree check. The
+registry retains each file's observed length and metadata and each
+directory's identity; generic completion rejects changed or unlisted
+entries, including substituted empty directories. A completed archive
+can recheck the same tree before use. Canonical manifest accounting
+retains logical payload sizes without maintaining a second metadata
+inventory. Executable package files become executable only after their
+bytes are written. Fresh validation passed in run
+1795618770839674777-3065299. This still relies on the trusted parent and
+does not isolate concurrent same-user writers.

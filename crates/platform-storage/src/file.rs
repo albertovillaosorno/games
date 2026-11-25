@@ -232,8 +232,13 @@ fn file_size(stat: &FileStat) -> Result<u64, FileReadError> {
 }
 
 pub(crate) fn trusted_directory(fd: impl AsFd) -> nix::Result<bool> {
-    let stat = fstat(fd)?;
-    Ok(stat.st_mode & 0o022 == 0 && stat.st_uid == geteuid().as_raw())
+    Ok(trusted_directory_stat(&fstat(fd)?))
+}
+
+pub(crate) fn trusted_directory_stat(stat: &FileStat) -> bool {
+    stat.st_mode & SFlag::S_IFMT.bits() == SFlag::S_IFDIR.bits()
+        && stat.st_mode & 0o022 == 0
+        && stat.st_uid == geteuid().as_raw()
 }
 
 // A zero-link inode can be the complete previous file after an atomic rename.

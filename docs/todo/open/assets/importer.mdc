@@ -144,3 +144,12 @@ aggregate-size admission. Tests reject undersized budgets before staging
 and preserve acceptance at exact limits. Encoded manifest size is still
 checked at completion by the canonical transaction, whose private sink
 must be discarded after any error.
+
+The unified staged-tree check preserved all three locally verified
+conversion results: Simpsons graphics (10,485,760 bytes), Simpsons
+audio (161 unique payloads, 3,798,888 bytes), and Metal Slug graphics
+(33,816,576 bytes). Fresh optimized imports, pinned read-back and
+byte-for-byte comparisons matched the existing canonical bundles.
+Repeated graphics publication failed with a collision; subsequent
+read-back remained unchanged. All output stayed under ignored local
+reference directories, with no surviving temporary staging directory.
