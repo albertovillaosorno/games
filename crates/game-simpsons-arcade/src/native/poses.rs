@@ -48,7 +48,8 @@ use crate::{
     ENEMY_WALK_TICKS, EnemyAction, JumpMotion, Pair, PairMotion, WalkMotion,
 };
 
-const MAX_POSES: usize = 200;
+const MAX_POSES: usize = 208;
+const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
 const MARGE_HOMER_JUMP_PHASES: [u8; 29] = [
     0, 0, 2, 2, 0, 0, 2, 2, 8, 8, 10, 10, 12, 12, 14, 14, 16, 16, 18, 18, 0, 0,
@@ -66,6 +67,7 @@ enum Kind {
     Idle,
     Jump,
     Lift,
+    Restraint,
     Special,
     Walk,
     WalkUp,
@@ -79,7 +81,7 @@ impl Kind {
                 Maneuver::Attack { moving: false, tick: 0 }
                     .pose_duration(player)
             },
-            Self::Defeat | Self::Idle => 0,
+            Self::Defeat | Self::Idle | Self::Restraint => 0,
             Self::Hurt => Maneuver::Hurt { tick: 0 }.pose_duration(player),
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
@@ -124,6 +126,7 @@ impl Catalogue {
                     .ok_or(RenderError::InvalidSprite)?,
                 (Subject::Enemy, Kind::Walk) => &"enemy/approach",
                 (Subject::Enemy, Kind::Defeat) => &"enemy/defeat",
+                (Subject::Enemy, Kind::Restraint) => &"actor/interaction",
                 (Subject::Enemy, _) => &"enemy/strike",
                 (Subject::Pair(Pair::MargeHomer), _) => &"actor/duo",
                 (Subject::Pair(Pair::BartLisa), _) => &"actor/bart-lisa",
@@ -138,7 +141,7 @@ impl Catalogue {
     }
 
     pub(super) fn open(path: &Path) -> Result<Self, RenderError> {
-        let bytes = snapshot(path, NonZeroU64::MIN.saturating_add(16_383))
+        let bytes = snapshot(path, NonZeroU64::MIN.saturating_add(17_407))
             .map_err(failure)?;
         Self::parse(from_utf8(&bytes).map_err(failure)?)
     }
@@ -172,6 +175,7 @@ impl Catalogue {
         if !complete
             || !complete_optional
             || !enemy_complete(&entries)
+            || !restraint_complete(&entries)
             || !pair_complete(&entries)
         {
             return Err(failure("missing tick-zero pose"));
@@ -186,9 +190,11 @@ pub(super) struct PoseArt {
 }
 
 impl PoseArt {
-    pub(super) fn configure_pairs(&self, cabinet: &Cabinet) -> Cabinet {
+    pub(super) fn configure_cabinet(&self, cabinet: &Cabinet) -> Cabinet {
         Pair::ALL.into_iter().fold(
-            cabinet.with_cooperative_pairs(self.paired_families()),
+            cabinet
+                .with_cooperative_pairs(self.paired_families())
+                .with_marge_restraint(self.restraint_enabled()),
             |state, pair| state.with_pair_jump(pair, self.pair_jump(pair)),
         )
     }
@@ -198,6 +204,10 @@ impl PoseArt {
             EnemyAction::Approach { tick } => (Kind::Walk, tick),
             EnemyAction::Attack { tick } => (Kind::Attack, tick),
             EnemyAction::Defeat { tick } => (Kind::Defeat, tick),
+            EnemyAction::Repelled { tick } => (Kind::Defeat, tick.min(51)),
+            EnemyAction::Restrain(motion) => {
+                (Kind::Restraint, motion.pose_tick())
+            },
         };
         select_entry(&self.entries, (Subject::Enemy, kind, tick)).copied()
     }
@@ -240,6 +250,11 @@ impl PoseArt {
         self.entries.append(&mut enemy.entries);
     }
 
+    pub(super) fn restraint_enabled(&self) -> bool {
+        self.entries
+            .contains_key(&(Subject::Enemy, Kind::Restraint, 0))
+    }
+
     pub(super) fn select(
         &self,
         player: Player,
@@ -267,6 +282,7 @@ impl PoseArt {
             Maneuver::Jump(motion) => {
                 jump_entry(&self.entries, player, motion).copied()
             },
+            Maneuver::Restrained => None,
             Maneuver::Idle => {
                 walking_entry(&self.entries, player, station.walking?).copied()
             },
@@ -348,6 +364,14 @@ fn enemy_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
         })
 }
 
+fn restraint_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
+    !entries.keys().any(|(subject, kind, _)| {
+        *subject == Subject::Enemy && *kind == Kind::Restraint
+    }) || RESTRAINT_KEYS.into_iter().all(|tick| {
+        entries.contains_key(&(Subject::Enemy, Kind::Restraint, tick))
+    })
+}
+
 fn jump_entry<Value>(
     entries: &BTreeMap<Key, Value>,
     player: Player,
@@ -407,6 +431,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         "idle" => Kind::Idle,
         "jump" => Kind::Jump,
         "jump-lift" => Kind::Lift,
+        "restraint" => Kind::Restraint,
         "special" => Kind::Special,
         "walk" => Kind::Walk,
         "walk-up" => Kind::WalkUp,
@@ -418,6 +443,9 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         (Subject::Enemy, Kind::Attack) => ENEMY_ATTACK_TICKS,
         (Subject::Enemy, Kind::Defeat) => ENEMY_DEFEAT_TICKS,
         (Subject::Enemy, Kind::Walk) => ENEMY_WALK_TICKS,
+        (Subject::Enemy, Kind::Restraint) if RESTRAINT_KEYS.contains(&tick) => {
+            46
+        },
         (Subject::Pair(pair), Kind::Idle) => pair.idle_end().saturating_add(1),
         (Subject::Pair(pair), Kind::Walk) => pair.walk_duration(),
         (Subject::Pair(Pair::BartLisa), Kind::Jump) => BART_LISA_JUMP_TICKS,
@@ -891,7 +919,7 @@ mod tests {
         let extra: String = ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
-                (0u8..48).map(move |tick| {
+                (0u8..50).map(move |tick| {
                     format!("{name} air-attack {tick} {HASH}\n")
                 })
             })
@@ -902,7 +930,7 @@ mod tests {
             Some(MAX_POSES)
         );
         assert!(
-            Catalogue::parse(&format!("{text}marge air-attack 48 {HASH}\n"))
+            Catalogue::parse(&format!("{text}marge air-attack 50 {HASH}\n"))
                 .is_err()
         );
     }
@@ -941,6 +969,32 @@ mod tests {
         assert_eq!(
             select_entry(&entries, station_key(Player::Bart, Kind::Attack, 16)),
             None
+        );
+    }
+
+    #[test]
+    fn restraint_catalogue_requires_all_observed_phases() {
+        use std::fmt::Write as _;
+
+        let base = complete();
+        let mut full = base.clone();
+        for tick in RESTRAINT_KEYS {
+            assert!(
+                Catalogue::parse(&format!(
+                    "{base}enemy restraint {tick} {HASH}"
+                ))
+                .is_err()
+            );
+            assert!(writeln!(full, "enemy restraint {tick} {HASH}").is_ok());
+        }
+        assert!(Catalogue::parse(&full).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{full}enemy restraint 8 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{full}marge restraint 0 {HASH}"))
+                .is_err()
         );
     }
 

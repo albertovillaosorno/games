@@ -580,8 +580,10 @@ impl Scene {
         if let Some(combat) = &self.combat
             && cabinet.session().world_visible()
         {
-            for mut enemy in cabinet.enemies().filter(|enemy| enemy.health > 0)
-            {
+            for mut enemy in cabinet.enemies().filter(|enemy| {
+                enemy.health > 0
+                    && !matches!(enemy.action, crate::EnemyAction::Restrain(_))
+            }) {
                 enemy.position = view.project(enemy.position);
                 combat.enemy_health(
                     &mut self.draws,
@@ -721,7 +723,8 @@ impl Scene {
                 .get(character.index())
                 .ok_or(RenderError::InvalidSprite)?;
             let paired =
-                cabinet.pair_pose(Pair::for_player(character)).is_some();
+                cabinet.pair_pose(Pair::for_player(character)).is_some()
+                    || station.maneuver == Maneuver::Restrained;
             self.queue_station((character, seat), (station, paired), view)?;
         }
         self.queue_pairs(cabinet, view)
@@ -2146,7 +2149,7 @@ fn smoke_cooperation(
     if families == 0 {
         return Ok(());
     }
-    let mut cabinet = art.poses.configure_pairs(
+    let mut cabinet = art.poses.configure_cabinet(
         &Cabinet::new(StreetLayout::DOWNTOWN).map_err(failure)?,
     );
     for player in Player::ALL {
@@ -2483,7 +2486,7 @@ fn window(
             art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
         let session =
             LocalSession::with_display(options.display, touch_enabled);
-        let cabinet = art.poses.configure_pairs(&cabinet_with_scroll(
+        let cabinet = art.poses.configure_cabinet(&cabinet_with_scroll(
             source.enemy.is_some(),
             session,
             scroll_limit,

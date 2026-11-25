@@ -57,7 +57,7 @@ use std::time::Duration;
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
-    EnemyAction,
+    EnemyAction, RestraintMotion,
 };
 use games::input::LogicalAction;
 use games::replay::InputStep;
@@ -303,6 +303,7 @@ impl Recovery {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct PendingManeuver {
+    button_edges: u8,
     candidate: Option<Maneuver>,
     chord: bool,
 }
@@ -510,6 +511,7 @@ impl Slot {
             Maneuver::Attack { tick: 2.., .. } => (self.attack_step(dx), 0),
             Maneuver::Special { .. }
             | Maneuver::Attack { .. }
+            | Maneuver::Restrained
             | Maneuver::Hurt { .. } => (0, 0),
             // Original drift continues through offset 18, then stops.
             Maneuver::Idle
@@ -531,7 +533,7 @@ impl Slot {
         let facing_locked = match self.station.maneuver {
             Maneuver::Attack { tick, .. } => tick > 0,
             Maneuver::AirAttack(air) => air.tick() > 0,
-            Maneuver::Hurt { .. } => true,
+            Maneuver::Hurt { .. } | Maneuver::Restrained => true,
             Maneuver::Idle => !self.action_recovery.allows_turn(),
             Maneuver::Jump(_) | Maneuver::Special { .. } => false,
         };
@@ -656,6 +658,7 @@ enum PairSupport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Encounter {
     enemies: [Option<Enemy>; ENEMY_CAPACITY],
+    marge_restraint: bool,
     progressive: bool,
 }
 
@@ -755,7 +758,11 @@ impl Cabinet {
             Control::Start => MenuInput::Start,
             Control::Pause => MenuInput::Pause,
             Control::Primary | Control::Secondary if playing => {
-                if slot.station.can_fight() {
+                if !slot.station.can_fight() {
+                    return;
+                }
+                queued.button_edges |= control.mask();
+                if slot.station.maneuver != Maneuver::Restrained {
                     queue_maneuver(queued, slot, control);
                 }
                 return;
@@ -836,6 +843,8 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
+        let [marge, ..] = pending;
+        let restraint_edge = marge.button_edges.is_power_of_two();
         let pair_command = self.cooperation.filter_actions(&mut pending);
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
@@ -851,7 +860,7 @@ impl Cabinet {
                 encounter.advance(
                     layout,
                     (self.layout, self.scroll_limit),
-                    &mut self.slots,
+                    (&mut self.slots, restraint_edge),
                 );
             }
             self.cooperation.invalidate(&self.slots);
@@ -999,6 +1008,18 @@ impl Cabinet {
         }
         cabinet.encounter = Some(Encounter::new(spawn, false));
         Ok(cabinet)
+    }
+
+    /// Opt into the provisional Marge restraint for the opening street.
+    ///
+    /// The single-player, right-facing contact rule is experimental.
+    /// A host should enable it only with the complete combined pose set.
+    #[must_use]
+    pub const fn with_marge_restraint(mut self, enabled: bool) -> Self {
+        if let Some(encounter) = &mut self.encounter {
+            encounter.marge_restraint = enabled && encounter.progressive;
+        }
+        self
     }
 
     /// Construct the provisional opening-street encounter and arrivals.

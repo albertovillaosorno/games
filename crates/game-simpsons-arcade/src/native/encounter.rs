@@ -51,8 +51,8 @@ use games_platform_graphics::linux::{FrameLayout, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
-    Art, Controls, Scene, dimension, failure, ground_position, live,
-    live_with_scroll, size,
+    Art, Controls, Scene, cabinet_with_scroll, dimension, failure, fixed,
+    ground_position, live, live_with_scroll, size,
 };
 use crate::{
     CONTINUE_TICKS, Cabinet, Control, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
@@ -95,7 +95,8 @@ impl CombatArt {
         // The selected reference observations face left.
         Ok(pose.draw(
             ground_position(pose, enemy.position, 0)?,
-            enemy.facing == Facing::Right,
+            enemy.facing == Facing::Right
+                && !matches!(enemy.action, EnemyAction::Restrain(_)),
         ))
     }
 
@@ -344,7 +345,8 @@ pub(super) fn smoke(
     }
     smoke_counterstrike(scene, art, touch_enabled)?;
     smoke_expiry(scene, art, touch_enabled)?;
-    smoke_reinforcements(scene, art, touch_enabled)
+    smoke_reinforcements(scene, art, touch_enabled)?;
+    smoke_restraint(scene, art, touch_enabled)
 }
 
 fn smoke_defeat(
@@ -460,6 +462,110 @@ fn smoke_reinforcements(
         ));
     }
     verify_reinforcements(scene, art, &mut simulation, expected)
+}
+
+fn smoke_restraint(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+) -> Result<(), RenderError> {
+    let limit = art
+        .world_art
+        .map_or(Ok(0), super::world::WorldArt::scroll_limit)?;
+    if !art.poses.restraint_enabled() || limit < 154 {
+        return Ok(());
+    }
+    let cabinet = cabinet_with_scroll(true, LocalSession::default(), limit)?
+        .with_marge_restraint(true);
+    let mut simulation = fixed(cabinet)?;
+    let mut controls = Controls::new(touch_enabled)?;
+    approach(&mut controls, &mut simulation)?;
+    pulse(&mut controls, &mut simulation, Scancode::Z)?;
+    advance(&mut simulation, u16::from(GROUND_ATTACK_RECOVERY_TICKS))?;
+    key(&mut controls, &mut simulation, Scancode::Right, true)?;
+    for _ in 0..450u16 {
+        advance(&mut simulation, 1)?;
+        if restrained(simulation.state()) {
+            break;
+        }
+    }
+    key(&mut controls, &mut simulation, Scancode::Right, false)?;
+    verify_restraint_art(scene, art, simulation.state())?;
+    for edge in 0..12u8 {
+        let button = if edge.is_multiple_of(2) {
+            Scancode::Z
+        } else {
+            Scancode::X
+        };
+        pulse(&mut controls, &mut simulation, button)?;
+        advance(&mut simulation, 1)?;
+        if !restrained(simulation.state()) {
+            return Err(failure("restraint released before twelve edges"));
+        }
+    }
+    advance(&mut simulation, 3)?;
+    if !restrained(simulation.state()) {
+        return Err(failure("restraint release delay was shortened"));
+    }
+    advance(&mut simulation, 1)?;
+    if restrained(simulation.state())
+        || !simulation.state().enemies().any(|enemy| {
+            enemy.health > 0
+                && matches!(enemy.action, EnemyAction::Repelled { .. })
+        })
+    {
+        return Err(failure(
+            "restraint did not release into nonlethal recovery",
+        ));
+    }
+    let _presented = art.present(scene, simulation.state())?;
+    let _pixels = scene.readback()?;
+    writeln!(
+        stdout().lock(),
+        "Restraint: combined art and escape verified"
+    )
+    .map_err(failure)
+}
+
+fn restrained(cabinet: &Cabinet) -> bool {
+    let [marge, ..] = cabinet.stations();
+    marge.maneuver == Maneuver::Restrained
+}
+
+fn verify_restraint_art(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    let captor = cabinet
+        .enemies()
+        .find(|enemy| matches!(enemy.action, EnemyAction::Restrain(_)))
+        .ok_or_else(|| failure("restraint was not reached through play"))?;
+    let pose = art
+        .poses
+        .enemy(captor.action)
+        .ok_or(RenderError::InvalidSprite)?;
+    let _presented = art.present(scene, cabinet)?;
+    let pixels = scene.readback()?;
+    if art.world.len()
+        != cabinet.enemies().filter(|enemy| enemy.visible()).count()
+        || art
+            .world
+            .iter()
+            .filter(|(_, draw)| draw.atlas == pose.atlas)
+            .count()
+            != 1
+    {
+        return Err(failure("restraint did not replace both actor sprites"));
+    }
+    let saved = art.poses.take_enemy();
+    let fallback = art.present(scene, cabinet);
+    art.poses.restore_enemy(saved);
+    let _fallback_presented = fallback?;
+    if pixels == scene.readback()? {
+        return Err(failure("combined restraint art was not visible"));
+    }
+    Ok(())
 }
 
 fn verify_reinforcements(

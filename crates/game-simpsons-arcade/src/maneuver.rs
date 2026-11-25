@@ -243,6 +243,8 @@ pub enum Maneuver {
     Idle,
     /// Station is airborne.
     Jump(JumpMotion),
+    /// Station is held by an active enemy; normal maneuvers are suspended.
+    Restrained,
     /// Station is performing a stationary simultaneous-button attack.
     Special {
         /// Whether the provisional encounter strike has been consumed.
@@ -281,6 +283,7 @@ impl Maneuver {
                 Some(next) => Self::Jump(next),
                 None => Self::Idle,
             },
+            Self::Restrained => Self::Restrained,
             Self::Special { hit, tick } => {
                 let next = tick.saturating_add(1);
                 if next < self.pose_duration(player) {
@@ -314,7 +317,10 @@ impl Maneuver {
                 tick == onset
             },
             Self::Special { tick, .. } => tick == 4,
-            Self::Hurt { .. } | Self::Idle | Self::Jump(_) => false,
+            Self::Hurt { .. }
+            | Self::Idle
+            | Self::Jump(_)
+            | Self::Restrained => false,
         }
     }
 
@@ -345,7 +351,10 @@ impl Maneuver {
         match self {
             Self::Jump(motion) => motion.elevation(),
             Self::AirAttack(motion) => motion.elevation(),
-            Self::Attack { .. } | Self::Hurt { .. } | Self::Idle => 0,
+            Self::Attack { .. }
+            | Self::Hurt { .. }
+            | Self::Idle
+            | Self::Restrained => 0,
             Self::Special { tick, .. } => {
                 let elapsed = i16::from(tick).saturating_add(1);
                 elapsed
@@ -368,7 +377,7 @@ impl Maneuver {
             Self::Attack { .. } => 17,
             Self::Hurt { .. } if matches!(player, Player::Bart) => 17,
             Self::Hurt { .. } => 14,
-            Self::Idle => 0,
+            Self::Idle | Self::Restrained => 0,
             Self::Jump(_) => SHORT_JUMP_TICKS,
             Self::AirAttack(_) => 60,
             Self::Special { .. } => 30,

@@ -1893,3 +1893,40 @@ either station, followed by resumed movement. All 600 movement and
 66.974 and 220.892 microseconds respectively, and lifetime peak RSS
 was 134,541,312 bytes. These observations do not establish original
 damage, physical controls, full stage progression or gameplay parity.
+
+Controlled opening-street Marge runs resolve the restrained interaction.
+Eleven spaced individual button presses did not end it; twelve ended it
+four frames after the final press. Alternating buttons and staggered
+presses while the other button remained held also worked; simultaneous
+presses did not. A centered replay reproduced the opening combined
+actor payload exactly and the twelve-edge release. Passive restraint
+ended at frame 3009 as the last health columns began disappearing,
+not at an established independent timeout. The first repeated damage
+occurred 25 ticks after admission; later intervals varied. The six
+combined pose crops passed complete 71,680-pixel scene comparisons.
+Only local canonical bundles contain the extracted art.
+
+The opt-in prototype admits restraint at the full opening-street
+travel limit for a grounded, right-facing solo Marge. Its fixed-step
+interaction counts individual rising button edges, discards same-tick
+chords, freezes station movement, releases after twelve edges plus four
+ticks, and preserves the existing stock recovery on depletion. Pause
+freezes the interaction. A successful escape repels the living enemy;
+collision ranges, subsequent damage cadence, release motion and the
+reused defeat art are provisional. The six exact restraint catalogue
+keys replace both world sprites with one combined pose. The bounded
+catalogue limit rises to 208 records and 17 KiB; old catalogues retain
+the prior encounter. Other characters, multiplayer interactions,
+precise knockback poses and full stage progression remain open.
+
+Fresh render/audio workspace validation passed in run
+1795631650069923389-903158. Native adaptive 426-by-304 touch/dummy-audio
+smoke using the 3,359,120-byte Linux executable and 206-pose catalogue
+reached restraint through ordinary play. Readback distinguished the
+combined actor from the fallback, confirmed one world draw instead of
+two, and verified twelve single-button edges plus four release ticks.
+The old 200-pose catalogue passed without restraint. All 600 movement
+and 20 strike submissions met the 16.667 ms budget in the new run;
+mean work was 69.801 and 224.995 microseconds respectively, and lifetime
+peak RSS was 134,844,416 bytes. These are synthetic host measurements,
+not physical input acceptance or complete reference parity.

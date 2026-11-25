@@ -86,8 +86,8 @@ air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 200 poses and
-16 KiB. The original four-hash command still works without a catalogue.
+record or maneuver end. The catalogue is limited to 208 poses and
+17 KiB. The original four-hash command still works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
 pose for each of the four characters. When present, the preview retains
@@ -209,6 +209,19 @@ left and right at camera travel 50, 82 and 154 respectively. They reuse
 the first enemy's provisional combat and pose rules. Each is admitted
 only once per run. Full stage progression and the original game-over
 interlude are not implemented.
+
+An optional `enemy restraint TICK SHA256` sequence requires exactly the
+six offsets 0, 7, 14, 20, 27 and 45, each containing an
+`actor/interaction` record. With this sequence and full opening-street
+travel, an approaching reinforcement can restrain a grounded solo Marge
+facing right. The combined art replaces both world sprites. Twelve
+distinct single-button press ticks release her after four further ticks;
+same-tick chords do not count, held directions do not move her, and
+pause freezes the interaction. Damage and contact admission remain
+provisional; depletion releases her into the existing stock recovery.
+A successful escape repels the living enemy using provisional motion
+and existing defeat art. Other characters, multiplayer restraint
+and exact release poses remain open. Older catalogues omit this behavior.
 
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.
 The hash identifies the verified canonical PCM sample catalogue. The

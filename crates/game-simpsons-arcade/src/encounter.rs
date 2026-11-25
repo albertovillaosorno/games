@@ -47,6 +47,10 @@ pub const ENEMY_WALK_TICKS: u8 = 48;
 pub const ENEMY_DEFEAT_TICKS: u8 = 66;
 const DEFEAT_KNOCKBACK_TICKS: u8 = 33;
 const DEFEAT_BLINK_TICK: u8 = 52;
+const RESTRAINT_EDGES: u8 = 12;
+const RESTRAINT_RELEASE_TICKS: u8 = 4;
+const RESTRAINT_FIRST_DAMAGE: u8 = 25;
+const RESTRAINT_DAMAGE_INTERVAL: u8 = 48;
 
 // First observed sprite-group admissions during rightward travel.
 // Anchors are approximate; the observed arrivals start outside the view.
@@ -84,7 +88,7 @@ impl Encounter {
         &mut self,
         view: StreetLayout,
         (base, scroll_limit): (StreetLayout, i16),
-        slots: &mut [Slot; 4],
+        (slots, restraint_edge): (&mut [Slot; 4], bool),
     ) {
         let street = StreetLayout {
             max: Point {
@@ -100,10 +104,12 @@ impl Encounter {
         // Resolve admitted player strikes before any same-tick counterstrike
         // can change a station's maneuver. Ground strikes may hit multiple
         // targets; aerial and special strikes retain their one-hit budget.
+        let [marge, ..] = *slots;
+        let was_held = marge.station.maneuver == Maneuver::Restrained;
         let hits = self.enemies.each_mut().map(|entry| {
-            entry.as_mut().is_some_and(|enemy| {
-                enemy.health > 0 && enemy.receive_strikes(slots)
-            })
+            entry
+                .as_mut()
+                .is_some_and(|enemy| enemy.resolve_strikes(slots))
         });
         for ((index, entry), hit) in
             self.enemies.iter_mut().enumerate().zip(hits)
@@ -118,7 +124,12 @@ impl Encounter {
                 && (enemy.health == 0
                     || slots.iter().any(|slot| slot.station.can_fight()))
             {
-                enemy.advance(bounds, slots);
+                let restraint = self.marge_restraint
+                    && !was_held
+                    && index != 0
+                    && view.max.x
+                        >= base.max.x.saturating_add(OPENING_COMBAT_LIMIT);
+                enemy.advance(bounds, slots, (restraint, restraint_edge));
             }
         }
     }
@@ -143,6 +154,7 @@ impl Encounter {
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
         Self {
             enemies: [Some(Enemy::new(spawn)), None, None, None],
+            marge_restraint: false,
             progressive,
         }
     }
@@ -172,6 +184,61 @@ pub enum EnemyAction {
         /// Zero-based defeat tick, capped at disappearance.
         tick: u8,
     },
+    /// Recovering from a successful player escape, with health retained.
+    Repelled {
+        /// Zero-based knockback and recovery tick.
+        tick: u8,
+    },
+    /// Holding Marge in the optional reinforcement encounter.
+    Restrain(RestraintMotion),
+}
+
+/// Fixed-step restraint timeline for the observed Marge interaction.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RestraintMotion {
+    age: u8,
+    progress: u8,
+}
+
+impl RestraintMotion {
+    const fn advance(&mut self, edge: bool) -> bool {
+        self.age = if self.age == 80 {
+            33
+        } else {
+            self.age.saturating_add(1)
+        };
+        if self.progress >= RESTRAINT_EDGES || edge {
+            self.progress = self.progress.saturating_add(1);
+        }
+        self.progress >= RESTRAINT_EDGES.saturating_add(RESTRAINT_RELEASE_TICKS)
+    }
+
+    // The first repeated hit was observed at offset 25. Later hits
+    // varied between trials/intervals; use a representative cadence.
+    const fn damage_due(self) -> bool {
+        self.age >= RESTRAINT_FIRST_DAMAGE
+            && self
+                .age
+                .saturating_sub(RESTRAINT_FIRST_DAMAGE)
+                .is_multiple_of(RESTRAINT_DAMAGE_INTERVAL)
+    }
+
+    /// Display phase in the six locally observed combined pose keys.
+    #[must_use]
+    pub const fn pose_tick(self) -> u8 {
+        match self.age {
+            0..=6 => 0,
+            7..=13 => 7,
+            14..=19 | 26 => 14,
+            20..=25 => 20,
+            27..=32 => 27,
+            age => match age.saturating_sub(33).checked_rem(24) {
+                Some(0..=5) => 20,
+                Some(12..=17) => 45,
+                _ => 14,
+            },
+        }
+    }
 }
 
 /// Read-only state of an admitted enemy.
@@ -194,6 +261,7 @@ impl Enemy {
         &mut self,
         layout: StreetLayout,
         slots: &mut [Slot; 4],
+        (restraint, restraint_edge): (bool, bool),
     ) {
         if self.health == 0 {
             self.advance_defeat(layout);
@@ -201,12 +269,18 @@ impl Enemy {
         }
         match self.action {
             EnemyAction::Approach { tick } => {
-                self.approach(layout, slots, tick);
+                self.approach_or_restrain(layout, slots, (tick, restraint));
             },
             EnemyAction::Attack { tick } => {
                 self.attack(tick, slots);
             },
             EnemyAction::Defeat { .. } => {},
+            EnemyAction::Repelled { tick } => {
+                self.advance_repelled(layout, tick);
+            },
+            EnemyAction::Restrain(motion) => {
+                self.advance_restraint(slots, motion, restraint_edge);
+            },
         }
     }
 
@@ -218,21 +292,50 @@ impl Enemy {
             return;
         }
         let next = tick.saturating_add(1);
-        if next <= DEFEAT_KNOCKBACK_TICKS {
-            let displacement = match self.facing {
-                Facing::Left => 2,
-                Facing::Right => -2,
-            };
-            self.position.x = self
-                .position
-                .x
-                .saturating_add(displacement)
-                .clamp(layout.min.x, layout.max.x);
-        }
+        self.knockback(layout, next);
         self.action = EnemyAction::Defeat { tick: next };
     }
 
-    fn approach(&mut self, layout: StreetLayout, slots: &[Slot; 4], tick: u8) {
+    fn advance_repelled(&mut self, layout: StreetLayout, tick: u8) {
+        let next = tick.saturating_add(1);
+        self.knockback(layout, next);
+        self.action = if next >= ENEMY_DEFEAT_TICKS {
+            EnemyAction::Approach { tick: 0 }
+        } else {
+            EnemyAction::Repelled { tick: next }
+        };
+    }
+
+    fn advance_restraint(
+        &mut self,
+        slots: &mut [Slot; 4],
+        mut motion: RestraintMotion,
+        edge: bool,
+    ) {
+        let [marge, ..] = slots;
+        if marge.station.maneuver != Maneuver::Restrained
+            || !marge.station.can_fight()
+        {
+            self.action = EnemyAction::Approach { tick: 0 };
+            return;
+        }
+        let escaped = motion.advance(edge);
+        if motion.damage_due() && !restrain_damage(marge) {
+            self.action = EnemyAction::Approach { tick: 0 };
+        } else if escaped {
+            release_marge(slots);
+            self.action = EnemyAction::Repelled { tick: 0 };
+        } else {
+            self.action = EnemyAction::Restrain(motion);
+        }
+    }
+
+    fn approach(
+        &mut self,
+        layout: StreetLayout,
+        slots: &[Slot; 4],
+        (tick, restraint): (u8, bool),
+    ) {
         let Some(target) = slots
             .iter()
             .filter(|slot| slot.station.can_fight())
@@ -246,7 +349,12 @@ impl Enemy {
         } else {
             Facing::Right
         };
-        if in_range(self.position, self.facing, target, (18, 8)) {
+        let strike_range = if restraint {
+            (4, 4)
+        } else {
+            (18, 8)
+        };
+        if in_range(self.position, self.facing, target, strike_range) {
             self.action = EnemyAction::Attack { tick: 0 };
             return;
         }
@@ -266,12 +374,45 @@ impl Enemy {
         }
     }
 
+    fn approach_or_restrain(
+        &mut self,
+        layout: StreetLayout,
+        slots: &mut [Slot; 4],
+        (tick, enabled): (u8, bool),
+    ) {
+        let [marge, ..] = *slots;
+        let candidate = enabled
+            && marge.station.can_fight()
+            && marge.station.maneuver == Maneuver::Idle
+            && marge.station.facing == Facing::Right
+            && slots.iter().filter(|slot| slot.station.can_fight()).count()
+                == 1;
+        let facing = if marge.station.position.x < self.position.x {
+            Facing::Left
+        } else {
+            Facing::Right
+        };
+        if candidate
+            && in_range(self.position, facing, marge.station.position, (4, 4))
+        {
+            self.facing = facing;
+            self.position = marge.station.position;
+            let [held_slot, ..] = slots;
+            if restrain_damage(held_slot) {
+                self.action = EnemyAction::Restrain(RestraintMotion::default());
+            }
+            return;
+        }
+        self.approach(layout, slots, (tick, candidate));
+    }
+
     fn attack(&mut self, tick: u8, slots: &mut [Slot; 4]) {
         let next = tick.saturating_add(1);
         if next == ENEMY_STRIKE {
             for slot in slots.iter_mut().filter(|slot| {
                 slot.station.can_fight()
                     && !slot.station.maneuver.airborne()
+                    && slot.station.maneuver != Maneuver::Restrained
                     && in_range(
                         self.position,
                         self.facing,
@@ -287,6 +428,20 @@ impl Enemy {
         } else {
             EnemyAction::Attack { tick: next }
         };
+    }
+
+    fn knockback(&mut self, layout: StreetLayout, tick: u8) {
+        if tick <= DEFEAT_KNOCKBACK_TICKS {
+            let displacement = match self.facing {
+                Facing::Left => 2,
+                Facing::Right => -2,
+            };
+            self.position.x = self
+                .position
+                .x
+                .saturating_add(displacement)
+                .clamp(layout.min.x, layout.max.x);
+        }
     }
 
     pub(super) const fn new(position: Point) -> Self {
@@ -327,6 +482,15 @@ impl Enemy {
         false
     }
 
+    fn resolve_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
+        let held = matches!(self.action, EnemyAction::Restrain(_));
+        let hit = self.health > 0 && self.receive_strikes(slots);
+        if held && hit {
+            release_marge(slots);
+        }
+        hit
+    }
+
     pub(super) const fn restart(self) -> Self {
         Self::new(self.spawn)
     }
@@ -339,10 +503,28 @@ impl Enemy {
                 tick < DEFEAT_BLINK_TICK
                     || (tick < ENEMY_DEFEAT_TICKS && !tick.is_multiple_of(2))
             },
-            EnemyAction::Approach { .. } | EnemyAction::Attack { .. } => {
-                self.health > 0
-            },
+            EnemyAction::Approach { .. }
+            | EnemyAction::Attack { .. }
+            | EnemyAction::Repelled { .. }
+            | EnemyAction::Restrain(_) => self.health > 0,
         }
+    }
+}
+
+fn release_marge(slots: &mut [Slot; 4]) {
+    let [marge, ..] = slots;
+    if marge.station.maneuver == Maneuver::Restrained {
+        marge.station.maneuver = Maneuver::Idle;
+    }
+}
+
+const fn restrain_damage(marge: &mut Slot) -> bool {
+    marge.damage(ENEMY_DAMAGE);
+    if marge.station.can_fight() {
+        marge.station.maneuver = Maneuver::Restrained;
+        true
+    } else {
+        false
     }
 }
 
@@ -543,6 +725,214 @@ mod tests {
         assert_eq!(cabinet.camera_origin(), 0);
         assert_eq!(cabinet.enemies().count(), 1);
         assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(1));
+    }
+
+    fn restraint_fixture(enabled: bool) -> Result<Cabinet, LayoutError> {
+        let mut cabinet = Cabinet::with_opening_street()?
+            .with_scroll_limit(154)?
+            .with_marge_restraint(enabled);
+        cabinet.input_step(0, &pulse(Control::Start));
+        cabinet.camera = 154;
+        let [marge, ..] = &mut cabinet.slots;
+        marge.restore_position(154);
+        let position = marge.station.position;
+        if let Some(encounter) = &mut cabinet.encounter {
+            encounter.admit(154);
+            let [initial, first, second, third] = &mut encounter.enemies;
+            for enemy in [initial, second, third].into_iter().flatten() {
+                enemy.health = 0;
+                enemy.action = EnemyAction::Defeat { tick: ENEMY_DEFEAT_TICKS };
+            }
+            *first = Some(Enemy::new(Point {
+                x: position.x.saturating_add(4),
+                ..position
+            }));
+        }
+        cabinet.input_step(1, &[]);
+        Ok(cabinet)
+    }
+
+    fn held(cabinet: &Cabinet) -> bool {
+        let [marge, ..] = cabinet.stations();
+        marge.maneuver == Maneuver::Restrained
+            && cabinet
+                .enemies()
+                .any(|enemy| matches!(enemy.action, EnemyAction::Restrain(_)))
+    }
+
+    #[test]
+    fn restraint_escape_requires_twelve_individual_edge_ticks() {
+        let result = restraint_fixture(true);
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        assert!(held(&cabinet));
+        let [initial, ..] = cabinet.stations();
+        assert_eq!(initial.health, PLAYER_HEALTH - ENEMY_DAMAGE);
+        let [direction, release] = pulse(Control::Left);
+        cabinet.input_step(2, &[direction]);
+        for tick in 3..15 {
+            // Two pulses in one tick are a chord, even if neither is held
+            // when the fixed step begins.
+            let [primary_down, primary_up] = pulse(Control::Primary);
+            let [secondary_down, secondary_up] = pulse(Control::Secondary);
+            cabinet.input_step(tick, &[
+                primary_down,
+                primary_up,
+                secondary_down,
+                secondary_up,
+            ]);
+        }
+        assert!(held(&cabinet));
+        assert_restraint_escape(&mut cabinet, initial, release);
+    }
+
+    fn assert_restraint_escape(
+        cabinet: &mut Cabinet,
+        initial: crate::Station,
+        release: LogicalAction<Action>,
+    ) {
+        for (tick, control) in (15..26)
+            .zip([Control::Secondary, Control::Primary].into_iter().cycle())
+        {
+            cabinet.input_step(tick, &pulse(control));
+        }
+        assert!(held(cabinet));
+        cabinet.input_step(26, &pulse(Control::Secondary));
+        for tick in 27..30 {
+            cabinet.input_step(tick, &[]);
+            assert!(held(cabinet));
+        }
+        cabinet.input_step(30, &[release]);
+        let [escaped, ..] = cabinet.stations();
+        assert_eq!(escaped.maneuver, Maneuver::Idle);
+        assert_eq!(escaped.position, initial.position);
+        assert_eq!(escaped.facing, initial.facing);
+        assert_eq!(escaped.attack_cues, initial.attack_cues);
+        assert!(cabinet.enemies().any(|enemy| {
+            enemy.health > 0
+                && enemy.action == EnemyAction::Repelled { tick: 0 }
+        }));
+    }
+
+    #[test]
+    fn restraint_accepts_staggered_edges_and_preserves_pause() {
+        let result = restraint_fixture(true);
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let [press, release] = pulse(Control::Primary);
+        cabinet.input_step(2, slice::from_ref(&press));
+        for tick in 3..20 {
+            cabinet.input_step(tick, slice::from_ref(&press));
+        }
+        for tick in 20..30 {
+            cabinet.input_step(tick, &pulse(Control::Secondary));
+        }
+        assert!(held(&cabinet));
+        cabinet.input_step(30, &pulse(Control::Pause));
+        let frozen = cabinet;
+        for tick in 31..40 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet, frozen);
+        cabinet.input_step(40, &pulse(Control::Pause));
+        cabinet.input_step(41, &pulse(Control::Secondary));
+        for tick in 42..45 {
+            cabinet.input_step(tick, &[]);
+            assert!(held(&cabinet));
+        }
+        cabinet.input_step(45, &[release]);
+        assert!(!held(&cabinet));
+    }
+
+    #[test]
+    fn restraint_depletion_releases_station_and_preserves_stock_recovery() {
+        let result = restraint_fixture(true);
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let [slot, ..] = &mut cabinet.slots;
+        slot.station.health = ENEMY_DAMAGE;
+        for tick in 2..26 {
+            cabinet.input_step(tick, &[]);
+            assert!(held(&cabinet));
+        }
+        cabinet.input_step(26, &[]);
+        assert_restraint_depleted(&mut cabinet);
+    }
+
+    fn assert_restraint_depleted(cabinet: &mut Cabinet) {
+        let [marge, ..] = cabinet.stations();
+        assert_eq!(marge.health, 0);
+        assert_eq!(marge.stocks, PLAYER_STOCKS - 1);
+        assert!(matches!(
+            marge.participation,
+            Participation::Recovering { .. }
+        ));
+        assert_eq!(marge.maneuver, Maneuver::Idle);
+        assert!(!held(cabinet));
+        assert!(cabinet.enemies().all(|enemy| {
+            !matches!(enemy.action, EnemyAction::Restrain(_))
+        }));
+        cabinet.reset_world();
+        assert!(!held(cabinet));
+    }
+
+    #[test]
+    fn legacy_encounter_keeps_the_standard_punch_at_restraint_contact() {
+        let result = restraint_fixture(false);
+        assert!(result.is_ok());
+        let Ok(cabinet) = result else {
+            return;
+        };
+        assert!(!held(&cabinet));
+        assert!(
+            cabinet.enemies().any(|enemy| {
+                enemy.action == EnemyAction::Attack { tick: 0 }
+            })
+        );
+    }
+
+    #[test]
+    fn opening_street_can_reach_restraint_through_play() {
+        let result = Cabinet::with_opening_street()
+            .and_then(|cabinet| cabinet.with_scroll_limit(444))
+            .map(|cabinet| cabinet.with_marge_restraint(true));
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        let [press, release] = pulse(Control::Right);
+        cabinet.input_step(1, slice::from_ref(&press));
+        for tick in 2..40 {
+            let [marge, ..] = cabinet.stations();
+            if cabinet.enemy().is_some_and(|enemy| {
+                enemy.position.x.abs_diff(marge.position.x) <= 28
+            }) {
+                break;
+            }
+            cabinet.input_step(tick, &[]);
+        }
+        cabinet.input_step(40, &[release]);
+        cabinet.input_step(41, &pulse(Control::Primary));
+        for tick in 42..62 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(0));
+        cabinet.input_step(62, slice::from_ref(&press));
+        for tick in 63..500 {
+            cabinet.input_step(tick, &[]);
+            if held(&cabinet) {
+                break;
+            }
+        }
+        assert_eq!(cabinet.camera_origin(), 154);
+        assert!(held(&cabinet));
     }
 
     fn playing(spawn: Point) -> Result<Cabinet, LayoutError> {
@@ -1104,7 +1494,7 @@ mod tests {
         }
         let [waiting, ..] = cabinet.stations();
         assert_eq!(waiting.participation, Participation::Continuing {
-            ticks_left: 1,
+            ticks_left: 1
         });
         cabinet.input_step(1201, &pulse(Control::Start));
         let [continued, ..] = cabinet.stations();
