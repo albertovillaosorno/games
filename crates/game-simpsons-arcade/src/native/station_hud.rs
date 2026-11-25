@@ -33,8 +33,8 @@
 
 use games_platform_graphics::frame::RenderError;
 use games_platform_graphics::linux::sprites::SceneSession;
-use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::scene::SpriteDraw;
+use games_platform_graphics::ui::{PlateLayout, TextAtlas, TextLine};
 
 use super::{Profiles, failure, key_label, size};
 use crate::{CONTINUE_TICKS, Participation, Player};

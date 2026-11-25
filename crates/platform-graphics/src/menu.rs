@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native presentation of shared local session menu choices.
+//   - Portable presentation of shared local session menu choices.
 // - Must-Not:
 //   - Own title admission, gameplay, input mapping or persistent settings.
 // - Allows:
@@ -19,9 +19,9 @@
 // - Split-When:
 //   - Settings menus require independent dynamic layout or editing.
 // - Merge-When:
-//   - A native adapter duplicates shared menu presentation.
+//   - Another module duplicates shared menu presentation.
 // - Summary:
-//   - Render modern free-play and pause menus through one native adapter.
+//   - Render modern free-play and pause menus through one shared contract.
 // - Description:
 //   - Pre-rasterize backgrounds and rows so navigation adds no per-frame
 //     uploads or allocations.
@@ -30,7 +30,7 @@
 // - Defaults:
 //   - Opaque neutral plate, warm highlight and compact readable lettering.
 
-//! Native presentation of shared session menu state.
+//! Portable presentation of shared session menu state.
 
 use std::num::NonZeroUsize;
 
@@ -38,10 +38,9 @@ use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 use games::session::{LocalSession, MenuItem, SessionPhase};
 
-use super::sprites::SceneSession;
-use super::ui::{PlateLayout, TextAtlas, TextLine};
 use crate::frame::RenderError;
-use crate::scene::SpriteDraw;
+use crate::scene::{AtlasUpload, SpriteDraw};
+use crate::ui::{PlateLayout, TextAtlas, TextLine};
 
 const PHASES: [SessionPhase; 3] = [
     SessionPhase::MainMenu,
@@ -142,7 +141,7 @@ impl Row {
     }
 }
 
-/// Native menu backgrounds and compact rows shared across all selections.
+/// Portable menu backgrounds and compact rows shared across all selections.
 #[derive(Clone, Copy, Debug)]
 pub struct MenuArt {
     panels: TextAtlas,
@@ -154,11 +153,14 @@ impl MenuArt {
     ///
     /// # Errors
     /// Rejects clipped text, invalid dimensions or excessive bytes.
-    pub fn load(
-        scene: &mut SceneSession<'_, '_>,
+    pub fn load<Upload>(
+        scene: &mut Upload,
         spec: PlateLayout,
         content: MenuContent<'_>,
-    ) -> Result<Self, RenderError> {
+    ) -> Result<Self, RenderError>
+    where
+        Upload: AtlasUpload,
+    {
         let panel_bytes = usize::from(spec.width)
             .saturating_mul(usize::from(spec.height))
             .saturating_mul(PHASES.len())
@@ -298,7 +300,31 @@ fn row_plate(width: u16, label: &str, selected: bool) -> Vec<TextLine<'_>> {
 
 #[cfg(test)]
 mod tests {
+    use games::session::{MenuInput, SessionEffect};
+
     use super::*;
+    use crate::frame::FrameLayout;
+    use crate::scene::AtlasId;
+
+    #[derive(Debug, Default)]
+    struct Capture {
+        layouts: Vec<FrameLayout>,
+    }
+
+    impl AtlasUpload for Capture {
+        fn upload_atlas(
+            &mut self,
+            layout: FrameLayout,
+            pixels: &[u8],
+        ) -> Result<AtlasId, RenderError> {
+            if layout.bytes() != pixels.len() {
+                return Err(RenderError::InvalidLength);
+            }
+            let id = AtlasId(self.layouts.len());
+            self.layouts.push(layout);
+            Ok(id)
+        }
+    }
 
     #[test]
     fn every_phase_choice_has_both_row_variants_for_all_display_modes() {
@@ -353,5 +379,66 @@ mod tests {
                 .label(),
             "VOLUME: 50%"
         );
+    }
+
+    #[test]
+    fn menu_uploads_once_and_selection_changes_only_sprite_commands() {
+        let mut capture = Capture::default();
+        let loaded = MenuArt::load(
+            &mut capture,
+            PlateLayout {
+                background: [0, 0, 0, 255],
+                height: 176,
+                max_bytes: NonZeroUsize::new(1_000_000)
+                    .unwrap_or(NonZeroUsize::MIN),
+                width: 160,
+            },
+            MenuContent {
+                main_hints: &["START"],
+                pause_hints: &["RESUME"],
+                settings_hints: &["BACK"],
+                title: "TEST",
+            },
+        );
+        assert!(loaded.is_ok());
+        let Ok(art) = loaded else {
+            return;
+        };
+        assert_eq!(capture.layouts.len(), 2);
+        verify_menu_commands(art);
+        assert_eq!(capture.layouts.len(), 2);
+    }
+
+    fn verify_menu_commands(art: MenuArt) {
+        let mut session =
+            LocalSession::with_display(DisplaySettings::default(), false);
+        let origin = (4i32, 7i32);
+        let mut initial = Vec::new();
+        assert_eq!(art.queue(session, origin, &mut initial), Ok(()));
+        assert_eq!(initial.len(), session.items().len().saturating_add(1));
+        assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        let mut moved = Vec::new();
+        assert_eq!(art.queue(session, origin, &mut moved), Ok(()));
+        assert_eq!(initial.first(), moved.first());
+        assert_ne!(initial.get(1), moved.get(1));
+        assert_ne!(initial.get(2), moved.get(2));
+        assert_eq!(initial.get(3..), moved.get(3..));
+        verify_play_pause(art, session, &initial);
+    }
+
+    fn verify_play_pause(
+        art: MenuArt,
+        mut session: LocalSession,
+        initial: &[SpriteDraw],
+    ) {
+        let origin = (4i32, 7i32);
+        assert_eq!(session.input(MenuInput::Start), SessionEffect::Join);
+        let mut moved = Vec::new();
+        assert_eq!(art.queue(session, origin, &mut moved), Ok(()));
+        assert_eq!(moved.len(), 0);
+        assert_eq!(session.input(MenuInput::Pause), SessionEffect::None);
+        assert_eq!(art.queue(session, origin, &mut moved), Ok(()));
+        assert_eq!(moved.len(), session.items().len().saturating_add(1));
+        assert_ne!(initial.first(), moved.first());
     }
 }

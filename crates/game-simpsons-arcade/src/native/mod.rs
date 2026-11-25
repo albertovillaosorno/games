@@ -76,12 +76,12 @@ use games_platform_graphics::linux::NativeWindow;
 use games_platform_graphics::linux::input::{
     HostEvent, InputStartup, NativeInput, key_from_name, key_name,
 };
-use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::SceneSession;
-use games_platform_graphics::linux::ui::PlateLayout;
+use games_platform_graphics::menu::{MenuArt, MenuContent};
 use games_platform_graphics::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
 };
+use games_platform_graphics::ui::PlateLayout;
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
 use games_platform_storage::preferences::{DisplayStore, VolumeStore};

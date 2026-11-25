@@ -43,8 +43,8 @@ use games_platform_graphics::linux::input::{
     HostEvent, InputStartup, NativeInput,
 };
 use games_platform_graphics::linux::sprites::SceneSession;
-use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::scene::{EventBatch, SceneLimits, SpriteDraw};
+use games_platform_graphics::ui::{PlateLayout, TextAtlas, TextLine};
 
 use super::launch::ControllerLaunch;
 use super::{

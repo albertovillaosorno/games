@@ -41,13 +41,13 @@
     "os:linux": 1
   },
   "crates/game-simpsons-arcade/src/native/controller.rs": {
-    "os:linux": 4
+    "os:linux": 3
   },
   "crates/game-simpsons-arcade/src/native/encounter.rs": {
     "os:linux": 1
   },
   "crates/game-simpsons-arcade/src/native/mod.rs": {
-    "os:linux": 5
+    "os:linux": 3
   },
   "crates/game-simpsons-arcade/src/native/poses.rs": {
     "os:linux": 1
@@ -56,10 +56,10 @@
     "os:linux": 1
   },
   "crates/game-simpsons-arcade/src/native/station_hud.rs": {
-    "os:linux": 3
+    "os:linux": 2
   },
   "crates/game-simpsons-arcade/src/native/touch.rs": {
-    "os:linux": 2
+    "os:linux": 1
   },
   "crates/game-simpsons-arcade/src/native/world.rs": {
     "os:linux": 1

@@ -33,6 +33,8 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use crate::frame::{FrameLayout, RenderError};
+
 /// An atlas identifier scoped to a scene session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AtlasId(pub(crate) usize);
@@ -87,4 +89,17 @@ pub struct SpriteDraw {
     pub flip_vertical: bool,
     /// Source rectangle entirely within the atlas.
     pub source: SpriteRect,
+}
+
+/// Port for uploading a bounded RGBA atlas into a single scene.
+pub trait AtlasUpload {
+    /// Admit an atlas and return its scene-local identifier.
+    ///
+    /// # Errors
+    /// Rejects invalid data, exhausted capacity or backend allocation failure.
+    fn upload_atlas(
+        &mut self,
+        layout: FrameLayout,
+        pixels: &[u8],
+    ) -> Result<AtlasId, RenderError>;
 }

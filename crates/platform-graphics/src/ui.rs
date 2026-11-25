@@ -15,13 +15,13 @@
 // - Allows:
 //   - Inputs: Bitmap rows and bounded text plate descriptors.
 //   - Outputs: Pixel coverage and ordered static text sprites.
-//   - Side effects: Bounded texture allocation on explicit admission.
+//   - Side effects: Bounded atlas upload through an explicit port.
 // - Split-When:
 //   - Independent font shaping or dynamic layout is introduced.
 // - Merge-When:
 //   - Another platform helper duplicates text atlas generation.
 // - Summary:
-//   - Share native compact UI bitmap and text atlas rendering.
+//   - Share portable compact UI bitmap and text atlas rendering.
 // - Description:
 //   - Reads in-width bits; creates centered static text plates.
 // - Usage:
@@ -33,9 +33,8 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use super::sprites::SceneSession;
 use crate::frame::{FrameLayout, RenderError};
-use crate::scene::{AtlasId, SpriteDraw, SpriteRect};
+use crate::scene::{AtlasId, AtlasUpload, SpriteDraw, SpriteRect};
 
 type Rasterized = (FrameLayout, Vec<u8>);
 
@@ -132,7 +131,7 @@ impl TextLine<'_> {
     }
 }
 
-/// Static text plates sharing a single GPU atlas and bounded allocation.
+/// Static text plates sharing a single scene atlas and bounded allocation.
 #[derive(Clone, Copy, Debug)]
 pub struct TextAtlas {
     atlas: AtlasId,
@@ -184,14 +183,17 @@ impl TextAtlas {
     /// # Errors
     /// Rejects empty plates, clipped text, overflowing dimensions and
     /// allocations exceeding the supplied byte budget.
-    pub fn load(
-        scene: &mut SceneSession<'_, '_>,
+    pub fn load<Upload>(
+        scene: &mut Upload,
         spec: PlateLayout,
         plates: &[Vec<TextLine<'_>>],
-    ) -> Result<Self, RenderError> {
+    ) -> Result<Self, RenderError>
+    where
+        Upload: AtlasUpload,
+    {
         let (layout, pixels) = rasterize(spec, plates)?;
         Ok(Self {
-            atlas: scene.load_atlas(layout, &pixels)?,
+            atlas: scene.upload_atlas(layout, &pixels)?,
             count: plates.len(),
             height: dimension(u32::from(spec.height))?,
             width: dimension(u32::from(spec.width))?,

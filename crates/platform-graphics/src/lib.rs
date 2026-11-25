@@ -40,3 +40,9 @@ pub mod linux;
 
 /// Backend-independent scene command values.
 pub mod scene;
+
+/// Backend-independent presentation for shared free-play session menus.
+pub mod menu;
+
+/// Portable bounded bitmap text and static UI atlas preparation.
+pub mod ui;

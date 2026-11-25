@@ -9,8 +9,10 @@ description = "Native graphics presentation for the shared game engine"
 keywords.workspace = true
 categories.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[dependencies]
 games.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
 sdl2.workspace = true
 
 [lints]

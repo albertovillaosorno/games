@@ -52,7 +52,9 @@ use super::{
     apply_window_mode, copy_to_viewport, drawable_viewport, validate_dimensions,
 };
 use crate::frame::{FrameLayout, RenderError};
-use crate::scene::{AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect};
+use crate::scene::{
+    AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
+};
 
 struct Atlas<'texture> {
     layout: FrameLayout,
@@ -445,6 +447,16 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(self
             .last_presented
             .filter(|layout| Some(*layout) == current))
+    }
+}
+
+impl AtlasUpload for SceneSession<'_, '_> {
+    fn upload_atlas(
+        &mut self,
+        layout: FrameLayout,
+        pixels: &[u8],
+    ) -> Result<AtlasId, RenderError> {
+        self.load_atlas(layout, pixels)
     }
 }
 
