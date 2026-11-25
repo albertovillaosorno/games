@@ -849,3 +849,14 @@ heartbeat frames and an idle lease, without generating simulation input.
 Loopback evidence verifies that a silent client loses its held direction
 even when its local socket is still open, and its identity can rejoin.
 Physical network interruption and real-device latency remain unverified.
+
+Native menu hints now describe admitted launch capabilities. Settings
+reports adaptive street extension only when a verified world strip is
+available, otherwise it describes aspect-fit fallback. Hosted main menus
+explain that a local station starts the world and remote stations join
+while playing. A synthetic test checks both hint variants. Release-mode
+Xvfb software-renderer and dummy-audio touch smoke runs with and without
+the verified strip passed, with zero missed 16.666667 ms budget samples
+across each 600-frame movement workload. The strip run verified the
+400-column logical scene and 80-column camera travel. These runs do not
+establish physical display or remote-device acceptance.

@@ -162,6 +162,7 @@ Independent simultaneous touch overlays remain open. Settings
 can also be changed through the main or pause menu: Up/Down selects,
 Primary cycles display or toggles desktop fullscreen, and Back returns.
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
+Settings describes whether the selected world strip permits adaptive width.
 Changes apply immediately. To retain them across launches, create a
 dedicated private directory and pass `--settings DIR` after the display
 options and before `--controls`. Alternatively set `settings=DIR` in the
@@ -243,7 +244,8 @@ Seat reservations use the numbered `peer1` through `peer4` field pairs.
 Reserve one to three seats; local keyboards and controllers skip them.
 Touch is rejected when its configured seat is remote. The host starts
 the world and controls menus and Pause. A verified client can join an
-assigned seat once the world is playing. The host screen is authoritative;
+assigned seat once the world is playing. The main menu distinguishes local
+Start from remote joining. The host screen is authoritative;
 the client protocol carries control transitions, not a replicated world.
 No LAN listener opens without the explicit flag, and hidden smoke cannot
 open one.

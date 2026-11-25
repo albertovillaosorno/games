@@ -455,7 +455,11 @@ impl Scene {
                 17
             }),
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
-            menu: load_menu(scene)?,
+            menu: load_menu(
+                scene,
+                world_art.is_some(),
+                reserved.contains(&true),
+            )?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles)?)
             } else {
@@ -898,7 +902,37 @@ fn key_label(key: Scancode) -> &'static str {
     }
 }
 
-fn load_menu(scene: &mut SceneSession<'_, '_>) -> Result<MenuArt, RenderError> {
+const fn adaptive_hint(world_available: bool) -> &'static str {
+    if world_available {
+        "ADAPTIVE EXTENDS STREET WHEN IT FITS"
+    } else {
+        "NO WORLD STRIP - ADAPTIVE ASPECT FIT"
+    }
+}
+
+const fn main_menu_hints(hosted: bool) -> &'static [&'static str] {
+    if hosted {
+        &[
+            "LOCAL LEFT/RIGHT CHOOSE CHARACTER",
+            "LOCAL START OPENS HOSTED GAME",
+            "REMOTE START JOINS DURING PLAY",
+            "UP/DOWN SELECT - PRIMARY CONFIRM",
+        ]
+    } else {
+        &[
+            "LEFT/RIGHT CHOOSE YOUR CHARACTER",
+            "PRESS YOUR START KEY TO JOIN",
+            "GAMEPAD / TOUCH: START TO JOIN",
+            "UP/DOWN SELECT - PRIMARY CONFIRM",
+        ]
+    }
+}
+
+fn load_menu(
+    scene: &mut SceneSession<'_, '_>,
+    world_available: bool,
+    hosted: bool,
+) -> Result<MenuArt, RenderError> {
     MenuArt::load(
         scene,
         PlateLayout {
@@ -908,19 +942,14 @@ fn load_menu(scene: &mut SceneSession<'_, '_>) -> Result<MenuArt, RenderError> {
             width: 280,
         },
         MenuContent {
-            main_hints: &[
-                "LEFT/RIGHT CHOOSE YOUR CHARACTER",
-                "PRESS YOUR START KEY TO JOIN",
-                "GAMEPAD / TOUCH: START TO JOIN",
-                "UP/DOWN SELECT - PRIMARY CONFIRM",
-            ],
+            main_hints: main_menu_hints(hosted),
             pause_hints: &[
                 "PAUSE OR START TO RESUME",
                 "UP/DOWN SELECT - PRIMARY CONFIRM",
             ],
             settings_hints: &[
                 "PRIMARY CHANGES THE SELECTED VALUE",
-                "ADAPTIVE CURRENTLY USES ASPECT FIT",
+                adaptive_hint(world_available),
                 "PAUSE OR START RETURNS TO MENU",
             ],
             title: "THE SIMPSONS ARCADE",
@@ -2037,6 +2066,28 @@ mod tests {
             return Err(failure("rejected release left movement held"));
         }
         Ok(())
+    }
+
+    #[test]
+    fn menu_hints_follow_actual_launch_capabilities() {
+        use super::{adaptive_hint, main_menu_hints};
+
+        assert!(adaptive_hint(true).contains("EXTENDS STREET"));
+        assert!(adaptive_hint(false).contains("ASPECT FIT"));
+        assert!(
+            main_menu_hints(true).contains(&"LOCAL START OPENS HOSTED GAME")
+        );
+        assert!(
+            main_menu_hints(true).contains(&"REMOTE START JOINS DURING PLAY")
+        );
+        assert!(
+            main_menu_hints(false).contains(&"PRESS YOUR START KEY TO JOIN")
+        );
+        assert!(
+            !main_menu_hints(false)
+                .iter()
+                .any(|hint| hint.contains("REMOTE"))
+        );
     }
 
     #[test]
