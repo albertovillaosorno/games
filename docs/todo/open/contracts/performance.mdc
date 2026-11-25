@@ -364,3 +364,17 @@ frame. Synthetic tests distinguish 3 ms of work from 10 and 20 ms
 submission intervals, verify the corresponding 66 FPS and single
 interval miss, and check resets across resizing and pausing. These
 are host-observed submissions, not display scanout or GPU completions.
+
+The optimized interactive aspect-fit diagnostic at c215846 used the same
+version-two catalogue, private Xvfb/software OpenGL, dummy audio and
+four-seat X11 keyboard workload. Three consecutive drawable segments
+(960x672, 1200x672, 960x672) recorded 265, 1,656 and 1,007 submitted
+frames, respectively, and exactly one fewer interval per segment. The
+rounded-down submission rates were 857, 768 and 831 FPS; respective mean
+intervals were 1.166, 1.301 and 1.202 ms. Neither work nor cadence missed
+the 16.667 ms target in any segment. The middle segment recorded a
+16.266 ms maximum interval, mean work of 1.302 ms, 30 local-input age
+samples averaging 11.167 ms and sampled peak RSS of 119,402,496 bytes.
+Before/after captures differed by 298,611 pixels. These rates describe
+host submissions under software rendering, not physical display refresh
+or measured GPU execution.
