@@ -9,13 +9,27 @@ description = "Native platform adapters for the shared game engine"
 keywords.workspace = true
 categories.workspace = true
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[dependencies]
 games.workspace = true
-rustls.workspace = true
-sha2.workspace = true
+games-assets.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustls = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sdl2.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rcgen.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+nix.workspace = true
+zeroize.workspace = true
+
+[features]
+secure-lan = ["dep:rustls", "dep:sha2"]
+test-fixtures = []
 
 [lints]
 workspace = true

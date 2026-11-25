@@ -35,3 +35,20 @@ The project has no onboarded titles yet. Title-specific specialisations are
 therefore deferred until genuine differences can be demonstrated; no original
 game parity is claimed. Cross-consumer regression tests protect the public
 shared scheduler as its contract evolves.
+
+On 2026-11-25, the first playable title supplied reusable geometry:
+sprite rectangles and centered placement moved to games::presentation,
+with the IR re-exporting the single shared type. Simpsons ground-shadow
+placement uses the engine method. Its normalized touch boundary mapping
+moved to games::input::touch, including rejection of invalid extents.
+Deterministic tests cover extreme dimensions and ordered touch boundaries
+across representative and maximum extents. All 512 scoped engine,
+platform and Simpsons all-feature tests passed. This is scoped evidence,
+not completion of the ongoing platform migration.
+
+Viewport expansion and evenly distributed HUD anchors are now shared
+engine presentation functions. Simpsons retains its own design width and
+seat count, while both center and station offsets use the engine math.
+Regression cases cover contraction, odd expansion, invalid slot indices,
+single-seat centering and maximum u32 extents. The scoped engine,
+platform and title run passed 513 tests before the feature-isolation work.

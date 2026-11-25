@@ -86,7 +86,7 @@ admission and exact PCM reference comparison also pass. The optional GNU/Linux
 `native-preview` feature provides `mame render-check` for selected imported
 tiles and `mame render-bench` for measured host submission intervals.
 These diagnostics establish asset access, not gameplay or screen parity.
-See the [title TODO](../../crates/game-simpsons-arcade/TODO.md) and
+See the [title TODO](../../docs/todo/open/games/simpsons-arcade.mdc) and
 the performance contract in [TODO.md](../../TODO.md) for reproducible
 commands, observations and limitations. Other MAME profiles and platform
 publication remain open.

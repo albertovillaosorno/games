@@ -29,7 +29,7 @@
 .env
 .env.*
 !.env.example
-/crates/game-*/assets/
-/crates/game-*/saves/
-/crates/app-*/assets/
-/crates/app-*/saves/
+/crates/games/*/assets/
+/crates/games/*/saves/
+/crates/apps/*/assets/
+/crates/apps/*/saves/

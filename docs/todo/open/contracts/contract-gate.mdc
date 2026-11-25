@@ -26,6 +26,39 @@ Make the P1 contracts a required part of the existing validator.
 
 - Run positive and negative tests without requiring original media.
 - Fail closed on verified contract violations.
+- Enforce the single platform integration crate and its canonical
+  src/ir, src/software and src/hardware trees. The prior two-crate
+  integration design is superseded. Require only directory modules
+  within the IR, with mod.rs roots. Reject new split integration crates,
+  misplaced source, public concrete backends and backend re-exports.
+- Require the IR as the only public integration surface. Outside it,
+  consumers must not contain OS, architecture, vendor or model-specific
+  runtime branches, native SDKs, handles or direct backend references,
+  including aliases, grouped imports, globs and macro paths. Ordinary
+  source-media format metadata is not a runtime device backend.
+- Hardware device-family code must never access OS or host APIs, select
+  an OS or architecture, import software modules or perform host I/O.
+  Test pure device report parsing and encoding through the IR hardware
+  bridge. Place XInput and missing lawful native transport or driver
+  implementations in software, never in physical device profiles.
+- Require an IR-first capability contract with typed inputs, outputs,
+  errors, resource budgets and conformance tests before backend work.
+  Centralise machine, OS, architecture and device identification in
+  typed IR descriptors populated by software; select capabilities in
+  the integration layer, not in games or tools.
+- Require common request and result admission in ir/security; neither
+  software nor hardware may bypass shared guardrails. Retain native
+  security and performance invariants only in their owning software
+  adapter. Fail explicitly for unsupported or unavailable capabilities.
+- Require ARM64 (AArch64) and x86-64 by default. Run portable compilation
+  checks for both on supported OS targets and deterministic conformance
+  fixtures on both where execution is available. Reject pointer-width,
+  alignment, endianness, native ABI and instruction-set assumptions in
+  portable code. Use fixed-width wire values and checked conversions.
+- Remove exact legacy allowances to zero and reject their reintroduction.
+  Keep structural, host-API, dependency and target tests mandatory.
+  Verify real devices and backends separately from core compilation.
+  See [unified integration architecture](../../../technical/architecture.md).
 
 ## Evidence
 
@@ -148,3 +181,95 @@ Remove the existing inventory as consumers migrate to neutral contracts;
 do not grow it or add new exceptions. Complete strict adapter-only
 isolation, dependency alias handling and cross-target conformance remain
 open. Inline tests cover neutral code, detection and migration ceilings.
+
+Unified integration audit, 2026-11-25: the current migration still exposes
+31 direct references to the legacy Linux, LAN and performance platform
+modules in 17 consumer files. The last committed portability inventory
+contains 209 occurrences in 23 files; these counts overlap and are not
+additive. The in-progress tree retains two split integration crates and
+three public legacy platform modules. The full gate failed before
+compilation in run 1795638508634700213-2276729 because the canonical
+IR hardware bridge module is absent. This is a real structural blocker,
+not a failed core portability check.
+
+The new unified IR guard has three isolated passing tests for host-free
+physical device protocols, rejection of direct software/hardware consumer
+imports and comment handling. Integration into the mandatory validator
+is pending coordination with the concurrent validator migration. Core
+library checks passed for games, assets, importer and the Simpsons title
+on AArch64 Linux, x86-64 Linux, AArch64 Windows GNU LLVM and x86-64 Windows
+GNU, without native preview features. These results establish only
+compile-time portability of those libraries, not native runtime, driver,
+physical device or complete game support.
+
+An additional strict-layout audit in the validator reports all final-layout
+violations in deterministic sorted order, independently of transitional
+exceptions. Three isolated Rust tests passed for a complete layout,
+loose IR files and split owners, and missing security/transport modules.
+A live inventory snapshot during the current migration reported 29
+structural findings: four loose IR root files, one loose platform root
+file, three missing module roots and 21 files outside the canonical
+integration directories. This count is a snapshot, not an additional
+count of the portability inventory. Require an empty strict audit at
+P1 completion and integrate its tests into the mandatory validator.
+
+The reorganised workspace has eight members, including root tools and
+nested title crates. Direct dependency identities are unique at workspace
+level. Member declarations may add optional features but cannot override
+versions, aliases or sources. All member lints inherit the root policy.
+Target dependency tables are forbidden except in the platform manifest;
+the title and build manifest target tables were removed. Tests exercise
+duplicate aliases, forbidden local dependency declarations and target
+table rejection. The existing source-level platform predicates are still
+migration debt; no cross-platform runtime claim follows from this change.
+
+The structural gate now rejects ambiguous native and host directories
+in titles and integration sources, plus audio, input and sprites.rs
+under software graphics backends. Simpsons uses runtime composition;
+Linux has separate audio, input and graphics implementations, with
+scene_renderer.rs owning scene rendering. Input still consumes a concrete
+SceneSession; replace that dependency with a narrow neutral event and
+presentation context rather than merely relocating source files.
+
+The roadmap gate admits only the exact root TODO.md and rejects duplicate
+case-insensitive filenames in the authored inventory, including untracked
+files. Canonical title task records remain under docs/todo. Positive and
+negative fixtures cover root admission and nested roadmap rejection.
+The scoped validator and hook test run passed 71 tests. A direct local
+link audit of 74 documentation files found no missing destinations.
+
+Additional deterministic regression cases reject mixed-case ambiguous
+folders, audio/input/sprite paths hidden inside graphics subdirectories,
+missing directory module roots, platform crate-root aliases and public
+exports outside the IR. A filesystem fixture invokes the real task gate
+and rejects a nested untracked TODO.md. Input now observes a neutral
+presentation layout instead of importing SceneSession. Concrete renderer
+and audio/input identifier checks prevent the known dependency patterns
+from returning; graphics-to-input window composition remains transitional.
+The validator and hook tests passed 75 executions; scoped strict Clippy
+passed. These lexical checks supplement compiler privacy and dependency
+checks; they are not a complete semantic proof. Fresh full validation
+1795639734455316835-2714851 still fails on transitive dependency versions.
+No full runtime or cross-platform acceptance is inferred.
+
+IR-first rendering admission now rejects known GPU vendor and graphics
+API identifiers in authored title, app and engine Rust sources. Positive
+and negative fixtures cover neutral preferences, direct vendor imports,
+vendor-specific branching and comments. The validator and hook suite
+passed 76 tests and scoped strict Clippy passed. This is a lexical
+regression guard, not exhaustive semantic vendor dependency analysis.
+
+Authenticated LAN is now an opt-in platform feature used by the runtime
+preview and not by asset build. The actual build graph is checked for
+unwanted TLS dependencies, with positive and negative fixtures. Strict
+Clippy checks the default workspace and every member's independent
+all-feature graph; aggregate all-feature workspace compilation and tests
+remain required. No lint levels or security providers were changed.
+The independent asset build graph passes without the conflicting TLS
+transitive versions; the TLS runtime remains covered separately.
+
+Fresh mandatory validation passed in run 1795640960249074968-3023027:
+1,301 test executions, zero failures, all eight independent feature-graph
+Clippy checks, default workspace Clippy, aggregate compilation and tests,
+engine packaging and 75 Markdown documents. This verifies the current
+checkpoint, not completed P1 migration or universal device support.

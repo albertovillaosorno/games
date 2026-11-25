@@ -62,10 +62,13 @@ dependency licence texts and an executable identity receipt. It requires
 compatible system libraries, excludes all game assets and is not yet a
 portable release. Supply a trusted output parent that already exists.
 The title requires explicit local art bundles; see the
-[title TODO](../../crates/game-simpsons-arcade/TODO.md).
+[title TODO](../../docs/todo/open/games/simpsons-arcade.mdc).
 Keep the engine modular, dependency versions centralised and game code
 limited to unique behaviour.
-All Rust code and development tools live under `crates/`.
+Runtime and title crates live under `crates/`; contributor tools live
+under `tools/`. Titles use `crates/games/<id>/`. Keep all title acceptance
+and evidence in the canonical task under docs/todo; only the root
+TODO.md is a roadmap index.
 Keep behavioural tests inline in their source modules. Use one TODO.md per
 title once onboarded.
 
@@ -75,3 +78,24 @@ Informal language and blunt criticism are fine; harassment, malicious changes
 and unauthorised proprietary material are not. Additional platforms are
 community-driven. Keep documentation lean, with technical reference material
 in this directory and title-specific evidence in the existing task records.
+
+## Locked dependency references
+
+Run `cargo download dependencies` to fetch and materialise the exact locked
+external dependency sources under `.reference/tools/dependencies/sources/`.
+Cargo verifies and extracts its registry packages. The downloader does
+not modify Cargo source configuration or add vendored sources to Git.
+The default download command also includes these dependency references.
+Direct dependency declarations and lint policy remain in the root
+workspace manifest; member manifests inherit them.
+
+## Feature isolation
+
+Secure LAN is an explicit platform capability, enabled by the title's
+runtime preview but absent from the asset build deliverable. The validation
+gate checks the actual build dependency graph, the default workspace
+Clippy configuration and all targets of every workspace member with all
+its features enabled independently. Aggregate all-feature workspace
+compilation and tests remain mandatory. This avoids linking unrelated
+runtime TLS dependencies into import tools merely through workspace-wide
+Cargo feature unification, without disabling any compiler or Clippy lint.

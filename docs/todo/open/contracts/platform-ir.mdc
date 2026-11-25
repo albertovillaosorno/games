@@ -60,6 +60,22 @@ without per-title ports. Use the typed capability IR described in
   Implement missing adapters via the build roadmap. Record any unavailable
   toolchains or physical hardware; do not claim untested compatibility.
 
+- Use one platform crate: directory-only IR, `software/<actual-os>` and
+  `hardware/<device-family>`. Reject host and native directory names.
+  Games and apps must not have generic native or host directories.
+  Separate OS audio and input implementations from graphics; name the
+  ordered atlas/scene renderer by its responsibility.
+  Hardware never accesses OS APIs or software modules; XInput belongs
+  to Windows software. No split integration crates.
+- Reject target dependency tables outside the platform manifest,
+  including dev and build dependencies. Declare each direct package
+  exactly once in the workspace, inheriting dependency and lint policy.
+- Identify OS, architecture and device capabilities centrally through
+  typed IR descriptors. Require ARM64 and x86-64 portability.
+- Keep shared security admission mandatory before and after dispatch.
+  Extend the IR and tests before writing any new backend. Implement
+  missing lawful transport in the actual OS backend where feasible.
+
 ## Evidence
 
 Commit 569801d introduced the first haptic capability contract and a
@@ -148,3 +164,51 @@ target predicates and one target dependency table from the baseline.
 Fresh validation 1795637347765536328-1840915 passed with the expanded
 Android ARM64, WebAssembly and Windows GNU x86-64 core library checks.
 No native device or packaged runtime support is established.
+
+Shared text plate rasterization and session menu composition no longer
+depend on the Linux scene session. A bounded atlas-upload port admits
+precomputed RGBA plates, while menu navigation produces portable sprite
+commands without additional atlas allocation. A fake upload adapter tests
+main-menu selection, playing and pause transitions; the existing glyph,
+extent and budget regressions remain. Five Linux-specific title imports
+were removed. These modules are transitional pending consolidation into
+the hardware IR; no new backend implementation is claimed.
+
+The validator now requires the exact remaining migration inventory:
+removed occurrences must be removed from the baseline, while newly
+introduced coupling still fails. The owning platform and hardware IR
+directories receive neutral host-API and platform-reference checks rather
+than inheriting an adapter exemption. Semantic dependency analysis and
+complete directory enforcement remain open.
+
+The platform toolchain service replaces the ambiguous host directory;
+native service implementations belong to actual OS directories. The
+structural gate rejects both generic host and native directories. The
+selected service facades are transitional: neutral public types and
+complete target implementations are still required.
+
+The title composition directory is now runtime rather than native. Linux
+software separates audio playback, input admission and scene rendering;
+consumers use the corresponding IR interfaces. The mandatory directory
+policy rejects generic host/native title directories and audio/input
+implementations under graphics, including the former sprites.rs path.
+All 448 scoped platform, title and build tests passed with all features;
+71 validator and hook tests passed in the same migration checkpoint.
+The combined gate still fails the multiple-crate-versions lint for
+getrandom and windows-sys. Keep that lint and TLS safeguards intact.
+Complete neutral window/input context, clocks, process/file operations
+and transport contracts before declaring title portability complete.
+
+Shared clock observations, LAN admission and incremental framing, bounded
+file sizes, preference payloads, haptic admission and Cargo argument
+requests now have host-independent implementations and inline tests.
+Native adapters reuse them rather than duplicate the admission rules.
+Input observes the presented geometry through an injected query, without
+depending on the concrete scene renderer. The query remains lazy when
+touch is disabled; the title and integration smoke callers were updated.
+
+Fresh gate 1795639499413764708-2641100 passed workspace contracts, width,
+history, formatting and platform Clippy before games-build rejected the
+duplicate getrandom and windows-sys versions. Zip 9.8.2 and ring 0.17.14
+require incompatible versions. Resolve that graph before committing;
+keep authenticated LAN, all-feature coverage and the lint intact.

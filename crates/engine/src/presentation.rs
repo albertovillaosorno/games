@@ -49,6 +49,38 @@ pub struct Viewport {
     pub y: u32,
 }
 
+/// A nonempty integer rectangle in atlas or logical scene pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpriteRect {
+    /// Rectangle height.
+    pub height: NonZeroU32,
+    /// Rectangle width.
+    pub width: NonZeroU32,
+    /// Horizontal origin.
+    pub x: i32,
+    /// Vertical origin.
+    pub y: i32,
+}
+
+impl SpriteRect {
+    /// Position the rectangle around a logical center, preserving its size.
+    ///
+    /// Odd dimensions use the lower integer half. Coordinates saturate
+    /// rather than overflow at the representable scene boundaries.
+    #[must_use]
+    pub fn centered_at(self, horizontal: i32, vertical: i32) -> Self {
+        Self {
+            x: horizontal.saturating_sub(
+                i32::try_from(self.width.get() >> 1u32).unwrap_or(i32::MAX),
+            ),
+            y: vertical.saturating_sub(
+                i32::try_from(self.height.get() >> 1u32).unwrap_or(i32::MAX),
+            ),
+            ..self
+        }
+    }
+}
+
 /// How a logical frame occupies the available physical surface.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PresentationMode {
@@ -485,18 +517,102 @@ impl TranslationCatalog {
     }
 }
 
+/// Center an unchanged design in an expanded logical viewport.
+#[must_use]
+pub const fn centered_expansion(design: u32, viewport: u32) -> u32 {
+    viewport.saturating_sub(design) >> 1
+}
+
+/// Distribute extra viewport space across evenly spaced anchor slots.
+///
+/// A single slot is centered. Multiple slots preserve both outer anchors.
+/// Returns None for an index outside the nonempty anchor set.
+#[must_use]
+pub fn expanded_anchor(
+    design: u32,
+    viewport: u32,
+    index: u32,
+    count: NonZeroU32,
+) -> Option<u32> {
+    if index >= count.get() {
+        return None;
+    }
+    if count.get() == 1 {
+        return Some(centered_expansion(design, viewport));
+    }
+    let extra = u64::from(viewport.saturating_sub(design));
+    let span = u64::from(count.get().saturating_sub(1));
+    let offset = extra.checked_mul(u64::from(index))?.checked_div(span)?;
+    u32::try_from(offset).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
     use std::time::Duration;
 
     use super::{
-        Dimensions, DisplaySettings, FramePacing, PresentationMode,
-        TranslationCatalog, Viewport, WindowMode,
+        Dimensions, DisplaySettings, FramePacing, PresentationMode, SpriteRect,
+        TranslationCatalog, Viewport, WindowMode, centered_expansion,
+        expanded_anchor,
     };
 
     fn nz(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+    }
+
+    #[test]
+    fn expansion_preserves_outer_anchors_without_overflow() {
+        for (index, expected) in [0, 14, 28, 42].into_iter().enumerate() {
+            let slot = u32::try_from(index).unwrap_or(u32::MAX);
+            assert_eq!(expanded_anchor(320, 362, slot, nz(4)), Some(expected));
+            assert_eq!(expanded_anchor(320, 300, slot, nz(4)), Some(0));
+        }
+        assert_eq!(expanded_anchor(320, 363, 0, nz(1)), Some(21));
+        assert_eq!(expanded_anchor(320, 363, 4, nz(4)), None);
+        assert_eq!(centered_expansion(320, 300), 0u32);
+        assert_eq!(
+            expanded_anchor(
+                0,
+                u32::MAX,
+                u32::MAX.saturating_sub(1),
+                nz(u32::MAX)
+            ),
+            Some(u32::MAX),
+        );
+    }
+
+    #[test]
+    fn sprite_centering_preserves_extent_and_saturates() {
+        let rectangle = SpriteRect {
+            height: nz(5),
+            width: nz(8),
+            x: 9,
+            y: 10,
+        };
+        assert_eq!(
+            rectangle.centered_at(100, 50),
+            SpriteRect {
+                x: 96,
+                y: 48,
+                ..rectangle
+            },
+            "centering retains dimensions and floors odd half extents",
+        );
+        assert_eq!(
+            rectangle.centered_at(i32::MIN, i32::MIN),
+            SpriteRect {
+                x: i32::MIN,
+                y: i32::MIN,
+                ..rectangle
+            },
+            "extreme negative coordinates never wrap",
+        );
+        let largest = SpriteRect {
+            width: nz(u32::MAX),
+            ..rectangle
+        };
+        assert_eq!(largest.centered_at(i32::MAX, 0).x, 0i32);
     }
 
     #[test]

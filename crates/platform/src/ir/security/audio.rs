@@ -1,0 +1,259 @@
+// Copyright:
+//   - Copyright © 2026 Alberto Villa Osorno.
+// SPDX-License-Identifier:
+//   - Apache-2.0
+// Confidential:
+//   - false
+// License-File:
+//   - LICENSE
+//
+// Boundary-Contract:
+// - Owns:
+//   - Bounded PCM playback and device-name admission.
+// - Must-Not:
+//   - Resample, mix, interpret original sound hardware or advance game time.
+// - Allows:
+//   - Inputs: Explicit playback configuration and complete PCM frames.
+//   - Outputs: Queue occupancy, admission and playback control.
+//   - Side effects: None.
+// - Split-When:
+//   - Additional PCM formats require independent admission policies.
+// - Merge-When:
+//   - Another adapter duplicates bounded native audio submission.
+// - Summary:
+//   - Exact-format portable PCM admission with explicit backpressure.
+// - Description:
+//   - Checks capacity before decoding or submitting a frame range.
+// - Usage:
+//   - Check explicit PCM requirements before device access.
+// - Defaults:
+//   - Reject invalid formats and unbounded requests.
+
+//! Shared audio security admission before backend access.
+
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::ops::Range;
+
+use games_assets::pcm::PcmSamples;
+
+use crate::ir::audio::{PlaybackError, PlaybackSpec};
+
+const MAX_DEVICE_NAME: usize = 512;
+/// Maximum number of admitted playback devices.
+pub const MAX_DEVICES: u32 = 64;
+
+/// Validated PCM queue geometry and admission policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueueLayout {
+    channels: usize,
+    frequency: i32,
+    max_bytes: u32,
+    spec: PlaybackSpec,
+}
+
+impl QueueLayout {
+    /// Admit complete interleaved samples within remaining queue capacity.
+    /// # Errors
+    /// Rejects partial frames or exceeded queue limits.
+    pub fn admit(
+        self,
+        samples: usize,
+        queued_bytes: u32,
+    ) -> Result<(), PlaybackError> {
+        if samples == 0 || !samples.is_multiple_of(self.channels) {
+            return Err(PlaybackError::InvalidFrames);
+        }
+        let bytes = u32::try_from(samples)
+            .ok()
+            .and_then(|count| count.checked_mul(2))
+            .ok_or(PlaybackError::Capacity)?;
+        if bytes > self.max_bytes.saturating_sub(queued_bytes) {
+            return Err(PlaybackError::Capacity);
+        }
+        Ok(())
+    }
+
+    /// Checked signed sample rate for the backend request.
+    #[must_use]
+    pub const fn frequency(self) -> i32 {
+        self.frequency
+    }
+
+    /// Validate the requested playback format and capacity.
+    /// # Errors
+    /// Rejects unrepresentable rates and invalid queue budgets.
+    pub fn new(spec: PlaybackSpec) -> Result<Self, PlaybackError> {
+        if !spec.buffer_frames.is_power_of_two()
+            || u32::from(spec.buffer_frames.get())
+                > spec.max_queued_frames.get()
+        {
+            return Err(PlaybackError::InvalidSpec);
+        }
+        let frequency = i32::try_from(spec.sample_rate.get())
+            .map_err(|_error| PlaybackError::InvalidSpec)?;
+        let max_bytes = spec
+            .max_queued_frames
+            .get()
+            .checked_mul(NonZeroU32::from(spec.channels).get())
+            .and_then(|count| count.checked_mul(2))
+            .ok_or(PlaybackError::InvalidSpec)?;
+        Ok(Self {
+            channels: NonZeroUsize::from(spec.channels).get(),
+            frequency,
+            max_bytes,
+            spec,
+        })
+    }
+
+    /// Resolve a verified PCM frame range to interleaved sample indices.
+    /// # Errors
+    /// Rejects format mismatches and out-of-bounds frame ranges.
+    pub fn pcm_range(
+        self,
+        pcm: &PcmSamples<'_>,
+        start: u64,
+        frames: NonZeroU32,
+    ) -> Result<Range<usize>, PlaybackError> {
+        if pcm.channels() != self.spec.channels
+            || pcm.sample_rate() != self.spec.sample_rate
+        {
+            return Err(PlaybackError::FormatMismatch);
+        }
+        let end = start
+            .checked_add(NonZeroU64::from(frames).get())
+            .filter(|end| *end <= pcm.frames().get())
+            .ok_or(PlaybackError::InvalidFrames)?;
+        let first = usize::try_from(start)
+            .ok()
+            .and_then(|value| value.checked_mul(self.channels))
+            .ok_or(PlaybackError::InvalidFrames)?;
+        let last = usize::try_from(end)
+            .ok()
+            .and_then(|value| value.checked_mul(self.channels))
+            .ok_or(PlaybackError::InvalidFrames)?;
+        Ok(first..last)
+    }
+}
+
+/// Whether a device name is bounded, nonempty and free of NUL bytes.
+#[must_use]
+pub fn valid_device(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_DEVICE_NAME
+        && !name.as_bytes().contains(&0)
+}
+
+/// Admit an enumerated device name.
+/// # Errors
+/// Rejects invalid device names.
+pub fn validate_device_name(name: String) -> Result<String, PlaybackError> {
+    if !valid_device(&name) {
+        return Err(PlaybackError::InvalidDevice);
+    }
+    Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::{NonZeroU8, NonZeroU16};
+
+    use super::*;
+    use crate::ir::audio::fixtures::{configuration, pcm};
+    #[test]
+    fn checks_device_extent_and_budget() {
+        let spec = configuration();
+        assert_eq!(
+            QueueLayout::new(PlaybackSpec {
+                max_queued_frames: NonZeroU32::MAX,
+                ..spec
+            }),
+            Err(PlaybackError::InvalidSpec)
+        );
+        assert_eq!(
+            QueueLayout::new(PlaybackSpec {
+                sample_rate: NonZeroU32::MAX,
+                ..spec
+            }),
+            Err(PlaybackError::InvalidSpec)
+        );
+        assert_eq!(
+            QueueLayout::new(PlaybackSpec {
+                buffer_frames: NonZeroU16::new(3).unwrap_or(NonZeroU16::MIN),
+                ..spec
+            }),
+            Err(PlaybackError::InvalidSpec)
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_frames_and_software_queue_overflow() {
+        let checked = QueueLayout::new(configuration());
+        assert!(checked.is_ok());
+        let Ok(layout) = checked else {
+            return;
+        };
+        assert_eq!(layout.admit(0, 0), Err(PlaybackError::InvalidFrames));
+        assert_eq!(layout.admit(1, 0), Err(PlaybackError::InvalidFrames));
+        assert_eq!(layout.admit(6, 0), Ok(()));
+        assert_eq!(layout.admit(4, 4), Ok(()));
+        assert_eq!(layout.admit(4, 5), Err(PlaybackError::Capacity));
+        assert_eq!(layout.admit(2, u32::MAX), Err(PlaybackError::Capacity));
+    }
+
+    #[test]
+    fn validates_canonical_pcm_ranges_and_formats() {
+        let inputs = QueueLayout::new(configuration())
+            .and_then(|layout| pcm().map(|audio| (layout, audio)));
+        assert!(inputs.is_ok());
+        let Ok((layout, audio)) = inputs else {
+            return;
+        };
+        let frames = NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN);
+        let result = layout.pcm_range(&audio, 1, frames);
+        assert!(result.is_ok());
+        let Ok(range) = result else {
+            return;
+        };
+        assert_eq!(range, 2..6);
+        assert_eq!(
+            audio
+                .samples()
+                .skip(range.start)
+                .take(range.len())
+                .collect::<Vec<_>>(),
+            [1, -1, 0, 2]
+        );
+        assert_eq!(
+            layout.pcm_range(&audio, 2, frames),
+            Err(PlaybackError::InvalidFrames)
+        );
+        assert_eq!(
+            layout.pcm_range(&audio, u64::MAX, frames),
+            Err(PlaybackError::InvalidFrames)
+        );
+        let incompatible = QueueLayout::new(PlaybackSpec {
+            channels: NonZeroU8::MIN,
+            ..configuration()
+        });
+        assert!(incompatible.is_ok());
+        let Ok(wrong) = incompatible else {
+            return;
+        };
+        assert_eq!(
+            wrong.pcm_range(&audio, 0, frames),
+            Err(PlaybackError::FormatMismatch)
+        );
+    }
+
+    #[test]
+    fn device_names_are_bounded_and_nonempty() {
+        for name in ["", "bad\0name", &"a".repeat(513)] {
+            assert!(!valid_device(name));
+            assert_eq!(
+                validate_device_name(name.to_owned()),
+                Err(PlaybackError::InvalidDevice)
+            );
+        }
+        assert!(valid_device("default"));
+    }
+}

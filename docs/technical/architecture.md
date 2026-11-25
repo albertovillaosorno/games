@@ -21,6 +21,89 @@
   automatic asset import. No original game binaries, extracted assets or leaked
   source are distributed. Original game code is not a runtime dependency.
 
+## Extraction before reuse
+
+When a later game needs behaviour implemented in an earlier title, search
+the engine, IR and all previous titles first. Move genuinely reusable
+mechanisms to their owning shared module, migrate the existing consumer,
+and use that same implementation in the new game. Verify both consumers.
+For example, portable sprite placement and touch geometry belong in the
+engine; scene submission and physical device access belong to platform IR;
+character-specific animation and reference assets belong to the title.
+Request windows, audio and rendering through neutral capability contracts.
+GPU selection is a platform preference, not a game-specific driver path.
+
+## Unified integration architecture
+
+The final integration owner is the single `crates/platform` crate. Its
+canonical structure is `src/ir/`, `src/software/` and `src/hardware/`.
+Only the IR is a public integration interface. Software and hardware
+implementation modules are private; target selection and composition are
+centralised. The former separate hardware crate design is superseded.
+
+- IR owns portable commands, events, inputs, outputs, capability discovery,
+  errors and common behaviour for OS and physical-device interaction.
+  Extend and test the IR before implementing any concrete backend.
+- Software owns OS-specific services and the physical transport to devices.
+  Select an OS backend centrally, for example software/linux,
+  software/windows or software/macos. Place host SDKs, native handles,
+  driver access, target conditions and native performance work there.
+- Hardware owns pure device-family and model-specific protocol translation.
+  Examples include hardware/playstation/four.rs,
+  hardware/nintendo/pro_one.rs, hardware/xbox, hardware/keyboard,
+  hardware/mouse and hardware/logitech. It never accesses the operating
+  system, native SDKs, host services or software implementation modules.
+  XInput is a software/windows API, not a physical controller family.
+- The IR hardware bridge owns neutral device discovery, transport requests,
+  capability negotiation, controller/keyboard/pointer actions, sensors,
+  wheels, feedback, connection lifetime and error semantics. Software
+  performs host I/O; hardware interprets and encodes bounded device data.
+- Identification is a shared service: software observes the machine and
+  attached devices, the IR admits typed OS, architecture and device
+  descriptors and selects compatible capabilities. Consumers use
+  capabilities, not OS, vendor or model branches. Keep one registry;
+  split identification into its own crate only if genuinely necessary.
+- Centralise mandatory admission in ir/security: validate request and
+  response shapes, device reports, resource budgets, permissions and
+  lifetime constraints before and after dispatch. Preserve native-only
+  invariants in software; never duplicate or bypass shared checks.
+- Implement missing device transport or drivers in the appropriate
+  software adapter where lawful, safe and technically feasible. Do not
+  bypass platform permissions, invent device support or silently report
+  success. Unsupported capabilities remain explicit and testable.
+- AArch64 and x86-64 are mandatory for all portable code. Use explicit
+  numeric widths, checked conversions, explicit wire endianness and
+  architecture-independent serialization. No native ABI, pointer-size,
+  alignment, instruction-set or OS assumptions outside software.
+  Verify compilation and deterministic behaviour on both architectures;
+  other targets are optional and must not weaken these requirements.
+- Mandatory validator tests cover directory ownership, private backends,
+  IR-only public imports, host API isolation, OS/vendor references,
+  dependency direction and architecture portability. Reject new split
+  integration crates and reduce legacy allowances to zero. Cover negative
+  fixtures as well as accepted neutral code. Verify actual target and
+  device conformance before claiming platform support.
+
+## Capability ownership and naming
+
+Title runtime composition coordinates gameplay, presentation and IR requests.
+It does not implement native device, operating-system or graphics APIs.
+Software backends own separate audio, input and graphics capabilities.
+Rendering a scene is the responsibility of graphics/scene_renderer.rs;
+audio playback and input acquisition are not graphics responsibilities.
+Use the actual capability name, not an ambiguous native or host directory.
+Shared window and device lifetime may be coordinated through explicit
+contracts rather than hidden coupling between implementations.
+
+Only the root TODO.md indexes the roadmap. Every title records its
+requirements, progress, verification and blockers in its canonical
+docs/todo task record. Do not add another TODO.md inside a crate, tool
+or documentation directory.
+
+The canonical migration remains the
+[P1 platform task](../todo/open/contracts/platform-ir.mdc).
+No new title work may bypass that prerequisite.
+
 ## Shared engine and platform contracts
 
 The Rust library now has fixed-step scheduling and scripted-input replay,

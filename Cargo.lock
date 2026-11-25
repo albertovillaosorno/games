@@ -234,10 +234,6 @@ dependencies = [
  "games-assets",
  "games-importer",
  "games-platform",
- "games-platform-audio",
- "games-platform-graphics",
- "games-platform-host",
- "games-platform-storage",
  "serde",
  "serde_json",
 ]
@@ -259,38 +255,12 @@ name = "games-platform"
 version = "0.1.0"
 dependencies = [
  "games",
- "rcgen",
- "rustls",
- "sha2",
-]
-
-[[package]]
-name = "games-platform-audio"
-version = "0.1.0"
-dependencies = [
- "games-assets",
- "sdl2",
-]
-
-[[package]]
-name = "games-platform-graphics"
-version = "0.1.0"
-dependencies = [
- "games",
- "sdl2",
-]
-
-[[package]]
-name = "games-platform-host"
-version = "0.1.0"
-
-[[package]]
-name = "games-platform-storage"
-version = "0.1.0"
-dependencies = [
- "games",
  "games-assets",
  "nix",
+ "rcgen",
+ "rustls",
+ "sdl2",
+ "sha2",
  "zeroize",
 ]
 
@@ -301,11 +271,7 @@ dependencies = [
  "games",
  "games-assets",
  "games-platform",
- "games-platform-audio",
- "games-platform-graphics",
- "games-platform-storage",
  "rcgen",
- "rustls",
 ]
 
 [[package]]

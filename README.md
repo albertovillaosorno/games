@@ -29,9 +29,6 @@ completed release acceptance.
 
 ## Getting started
 
-The Simpsons Arcade Game has an experimental native preview. See the
-[title instructions](crates/game-simpsons-arcade/TODO.md) to run it.
-
 From the repository root:
 
 ```sh

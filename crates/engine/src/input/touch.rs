@@ -315,6 +315,20 @@ impl Contacts {
     }
 }
 
+/// Map a pixel boundary to the first inclusive normalized coordinate.
+///
+/// Rounds upward so adjacent pixel-defined regions do not overlap. Zero
+/// extents and boundaries outside the design surface are rejected.
+#[must_use]
+pub fn normalized_boundary(pixel: u16, extent: u16) -> Option<u16> {
+    if pixel > extent {
+        return None;
+    }
+    let denominator = NonZeroU32::new(u32::from(extent))?;
+    let numerator = u32::from(pixel).checked_mul(u32::from(u16::MAX))?;
+    u16::try_from(numerator.div_ceil(denominator.get())).ok()
+}
+
 fn project_axis(
     point: u16,
     offset: u32,
@@ -356,7 +370,10 @@ fn source_axis(
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use super::{ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone};
+    use super::{
+        ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone,
+        normalized_boundary,
+    };
     use crate::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use crate::presentation::{Dimensions, PresentationMode, Viewport};
 
@@ -402,6 +419,26 @@ mod tests {
         down: bool,
     ) -> LogicalAction<&'static str> {
         LogicalAction { action, down }
+    }
+
+    #[test]
+    fn pixel_boundaries_cover_touch_space_without_overlapping() {
+        assert_eq!(normalized_boundary(0, 0), None);
+        assert_eq!(normalized_boundary(8, 7), None);
+        for extent in [1, 7, 320, 544, u16::MAX] {
+            assert_eq!(normalized_boundary(0, extent), Some(0));
+            assert_eq!(normalized_boundary(extent, extent), Some(u16::MAX));
+            assert!(
+                (1..=extent).all(|pixel| {
+                    let prior = pixel.saturating_sub(1);
+                    let before = normalized_boundary(prior, extent);
+                    let after = normalized_boundary(pixel, extent);
+                    before.zip(after).is_some_and(|(left, right)| left < right)
+                }),
+                "valid boundaries must be strictly ordered"
+            );
+        }
+        assert_eq!(normalized_boundary(1, 2), Some(32_768));
     }
 
     #[test]

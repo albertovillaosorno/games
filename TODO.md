@@ -35,8 +35,12 @@ Measure useful throughput without degrading fidelity.
 
 ### TODO - Portable capability IR and platform isolation
 
-Eliminate all existing platform coupling and enforce adapter-only host
-access throughout the workspace.
+Eliminate existing platform coupling and enforce two independent owners:
+platform for OS input/output services, hardware for input device families
+and models only. Require the OS/device bridge in platform/src/ir/hardware/,
+shared IR security and strict structural/dependency tests.
+
+See the [input device contract](docs/technical/input-device-ir.md).
 
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Portable capability IR and platform isolation](docs/todo/open/contracts/platform-ir.mdc)

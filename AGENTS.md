@@ -22,8 +22,8 @@
 - Keep the root README concise: purpose, goals, platform status, entry
   points and catalogue. Put implementation details, commands, limits and
   technical design under docs/technical; keep title evidence in tasks.
-- Keep one TODO.md per title after onboarding; link to the canonical record.
-  No additional planning bureaucracy.
+- Keep the canonical title task under docs/todo; do not duplicate it
+  with a second title roadmap. No additional planning bureaucracy.
 - Keep every authored text line within 80 characters. Direct task links
   may use the narrow MarkdownLint exception used by Malbolge.
 - Use Rust for project code, tools and validation. Python is forbidden.
@@ -43,6 +43,19 @@
   regression coverage; never copy a previous title's implementation.
   Record the reviewed titles and reuse decisions in existing task evidence.
   Recheck reuse before completing each title; avoid speculative abstractions.
+- Before implementing any new capability in any title, search the engine,
+  IR and every existing game/app for equivalent mechanisms. If the only
+  implementation is inside an older title, move it into the correct
+  shared owner, migrate the older title and use that same implementation
+  in the new title. Do not copy and later promise to deduplicate.
+  Run the existing consumers' regression tests and the new consumer's
+  tests; retain title-specific rules, art and tuning in the title.
+  This applies to sprites, animation, menus, camera, audio, input,
+  physics, networking, rendering, storage and all other shared behaviour.
+- Request capabilities through the IR, never a concrete OS or SDK. A game
+  asks for audio, a window, a renderer or a GPU preference. Device
+  discovery, driver selection, admission and explicit fallback belong to
+  the platform; no vendor-specific rendering logic in game code.
 - Keep game logic independent of operating systems and original media
   formats. Platform adapters own OS access; importers own source formats.
 - Enforce portable typed capability IR across all titles and tools. Only
@@ -56,6 +69,30 @@
   portability baseline to zero; never increase it or weaken validation.
   A new OS or backend must extend shared support, not fork title code.
   Test portable contracts with fake adapters and real supported targets.
+- Use exactly one integration crate, `crates/platform`. Its only public
+  integration API is `src/ir/`. All capabilities have directories with
+  mod.rs roots, including security, hardware and identification. Software
+  implementations belong under `src/software/<actual-os>/`, physical
+  protocols under `src/hardware/<device-family>/`. No generic host or
+  native directories. Names describe real responsibilities, e.g. toolchain.
+  Title composition belongs in descriptive runtime modules, not generic
+  native or host directories. Keep audio, input and graphics as distinct
+  software capabilities; graphics owns scene rendering, not audio/input
+  implementations. Physical protocols never access OS APIs or software
+  modules. XInput is
+  a Windows software API, not a device family.
+- IR first: define neutral typed requests, results, errors, capabilities
+  and conformance tests before implementing a backend. Share security
+  admission before and after dispatch; keep native-only invariants in
+  the OS implementation. Identify the system, architecture and devices
+  through neutral descriptors. Consumers never branch by OS or vendor.
+  Missing lawful device transport belongs in the OS adapter; unsupported
+  capabilities remain explicit. ARM64 and x86-64 portability is mandatory.
+  Reject native handles, pointer-width, alignment, endianness and ABI
+  assumptions in portable code. Verify both architectures.
+- Select backends centrally and keep implementation modules private.
+  Enforce these rules with positive and negative validator tests.
+  Remove exact migration debt without expanding the baseline.
 - Organise importers by source format and hardware family, not by title.
   Arcade ROM sets use a shared MAME adapter under the importer crate.
   Share ROM admission, region assembly, chip layouts and asset conversion.
@@ -66,13 +103,25 @@
   Verify supported profiles individually; do not assume universal compatibility.
 - No reverse dependencies from shared crates to games, apps or tools.
   No title-to-title dependencies. Use a single Cargo workspace.
-- All authored Rust code lives under `crates/`, including tools and titles.
-  Use crate directories named `game-<id>` or `app-<id>` for new titles.
+- Runtime Rust lives under `crates/`, titles under `crates/games/<id>/`
+  or `crates/apps/<id>/`, and contributor tools under `tools/<id>/`.
 - Keep tests inline in their corresponding Rust source file using
   `#[cfg(test)] mod tests`. Shared test fixtures may live in the owning crate.
-  No root tests or tools directory and no mirrored test-path attributes.
+  No separate integration test trees or mirrored test-path attributes.
+- Only the root TODO.md is allowed. Keep title tasks and acceptance in
+  the canonical docs/todo records, never a second roadmap in a crate.
+- Keep optional runtime capabilities out of unrelated tool dependency
+  graphs. Validate strict Clippy for the default workspace and each
+  workspace member's independent all-feature graph; also run aggregate
+  workspace tests and compilation with all features. Do not disable a
+  lint or omit any member. Asset build must never activate secure LAN.
 - All dependency versions and lints are owned by the root manifest.
-  Member manifests inherit metadata, dependencies and lints.
+  Member manifests inherit metadata, dependencies and lints. Each direct
+  dependency has one canonical workspace declaration; reject aliases that
+  duplicate package identities and member-local versions or sources.
+  Only platform may declare target-specific dependency tables. All other
+  manifests inherit neutral dependencies, never select a system or ABI.
+  Use `cargo download dependencies` to retrieve locked source references.
 - Every authored source file has a Boundary-Contract: ownership,
   forbidden responsibilities, inputs, outputs, effects, split and merge
   conditions, summary, description, usage and defaults.
@@ -129,7 +178,8 @@
 - Offline single-player, portable saves, user-hosted multiplayer,
   no required commercial backend or monetisation. Use secure defaults.
 - Primary target Linux x86-64; Android ARM64 and Web are intended.
-  Windows is planned through shared adapters. Do not claim untested support.
+  Windows and macOS are planned through shared adapters. Do not claim
+  untested support.
 
 ## Local inputs and tools
 

@@ -31,9 +31,9 @@
 
 //! Platform adapters for the shared game engine.
 
-/// Explicitly enabled native TLS framing on local network addresses.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod lan;
-/// Native presentation timing and explicit resource measurements.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod performance;
+mod hardware;
+/// Portable platform and device capability interface.
+pub mod ir;
+mod software;
+
+use software as selected;
