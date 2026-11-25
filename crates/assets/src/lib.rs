@@ -837,6 +837,39 @@ mod tests {
     }
 
     #[test]
+    fn canonical_comparison_rejects_equivalent_noncanonical_bytes()
+    -> Result<(), AssetError> {
+        let manifest = AssetManifest::new(
+            source(),
+            vec![record("asset", b"bytes")],
+            limits(),
+        )?;
+        let bytes = manifest.encode(limits())?;
+        let mut exact = limits();
+        exact.manifest_bytes =
+            NonZeroUsize::new(bytes.len()).ok_or(AssetError::TooLarge)?;
+        require(AssetManifest::parse_canonical(&bytes, exact)? == manifest)?;
+        let document = String::from_utf8(bytes)
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        for equivalent in [
+            format!(" {document}"),
+            format!("{document} "),
+            document.replace("\"asset\"", "\"\\u0061sset\""),
+            document.replace("\"version\":2", "\"version\" : 2"),
+        ] {
+            require(
+                AssetManifest::parse(equivalent.as_bytes(), limits())?
+                    == manifest,
+            )?;
+            require(
+                AssetManifest::parse_canonical(equivalent.as_bytes(), limits())
+                    == Err(AssetError::InvalidEncoding),
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn content_hash_parser_rejects_noncanonical_values() {
         let digest = ContentHash::calculate(b"source");
         let encoded = digest.to_string();

@@ -256,3 +256,13 @@ canonical in-memory encoder while retaining corruption, oversize and
 concurrent publication coverage. This removes the extra payload-sized
 allocation during native save publication, not the allocation required
 by the caller to produce its payload.
+
+Canonical manifest admission now compares the serializer's output directly
+with the borrowed input bytes while counting every emitted byte against the
+same size budget. Legacy version-one canonical comparison follows the same
+path. New manifest construction counts encoded bytes without retaining a
+second document; only explicit encoding allocates an output buffer.
+Synthetic tests accept canonical bytes at their exact limit and reject
+semantically equivalent whitespace and escaped-key representations, while
+noncanonical parsing remains available for version two. This bounds extra
+output storage, not the decoded record and source identity allocations.

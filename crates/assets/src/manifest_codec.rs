@@ -68,25 +68,57 @@ struct LegacyDocument<'input> {
 }
 
 #[derive(Debug)]
-struct BoundedBytes {
-    bytes: Vec<u8>,
-    exceeded: bool,
-    maximum: usize,
+enum Output<'input> {
+    Collect(Vec<u8>),
+    Validate {
+        expected: Option<&'input [u8]>,
+        matches: bool,
+    },
 }
 
-impl BoundedBytes {
+#[derive(Debug)]
+struct BoundedBytes<'input> {
+    exceeded: bool,
+    maximum: usize,
+    output: Output<'input>,
+    written: usize,
+}
+
+impl BoundedBytes<'_> {
     fn budget_error(&mut self) -> io::Error {
         self.exceeded = true;
         io::ErrorKind::OutOfMemory.into()
     }
 
-    fn reserve(&mut self, additional: usize) -> io::Result<()> {
-        reserve_bounded(&mut self.bytes, additional, self.maximum)
-            .ok_or_else(|| self.budget_error())
+    fn reserve(&mut self, additional: usize) -> io::Result<usize> {
+        let end = self
+            .written
+            .checked_add(additional)
+            .filter(|end| *end <= self.maximum)
+            .ok_or_else(|| self.budget_error())?;
+        if let Output::Collect(bytes) = &mut self.output
+            && reserve_bounded(bytes, additional, self.maximum).is_none()
+        {
+            return Err(self.budget_error());
+        }
+        Ok(end)
+    }
+
+    fn serialize(
+        &mut self,
+        document: &impl Serialize,
+    ) -> Result<(), AssetError> {
+        serde_json::to_writer(&mut *self, document).map_err(|_error| {
+            if self.exceeded {
+                AssetError::TooLarge
+            } else {
+                AssetError::InvalidEncoding
+            }
+        })
     }
 }
 
-impl fmt::Write for BoundedBytes {
+impl fmt::Write for BoundedBytes<'_> {
     fn write_char(&mut self, c: char) -> fmt::Result {
         self.write_str(c.encode_utf8(&mut [0; 4]))
     }
@@ -100,7 +132,7 @@ impl fmt::Write for BoundedBytes {
     }
 }
 
-impl io::Write for BoundedBytes {
+impl io::Write for BoundedBytes<'_> {
     fn by_ref(&mut self) -> &mut Self {
         self
     }
@@ -115,8 +147,16 @@ impl io::Write for BoundedBytes {
     }
 
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.reserve(buf.len())?;
-        self.bytes.extend_from_slice(buf);
+        let end = self.reserve(buf.len())?;
+        match &mut self.output {
+            Output::Collect(bytes) => bytes.extend_from_slice(buf),
+            Output::Validate { expected, matches } => {
+                if let Some(input) = expected {
+                    *matches &= input.get(self.written..end) == Some(buf);
+                }
+            },
+        }
+        self.written = end;
         Ok(())
     }
 
@@ -138,9 +178,9 @@ impl io::Write for BoundedBytes {
             .iter()
             .try_fold(0usize, |total, buf| total.checked_add(buf.len()))
             .ok_or_else(|| self.budget_error())?;
-        self.reserve(length)?;
+        let _end = self.reserve(length)?;
         for buf in bufs {
-            self.bytes.extend_from_slice(buf);
+            self.write_all(buf)?;
         }
         Ok(length)
     }
@@ -177,7 +217,8 @@ impl AssetManifest {
             source,
             version: VERSION,
         });
-        let _encoded = manifest.encode(limits)?;
+        manifest.validate(limits)?;
+        validate_encoding(&manifest.0, limits.manifest_bytes, None)?;
         Ok(manifest)
     }
 
@@ -322,8 +363,8 @@ fn decode(
         source,
         version: VERSION,
     };
-    if canonical && encode(&manifest, limits.manifest_bytes)? != bytes {
-        return Err(AssetError::InvalidEncoding);
+    if canonical {
+        validate_encoding(&manifest, limits.manifest_bytes, Some(bytes))?;
     }
     Ok(manifest)
 }
@@ -346,9 +387,7 @@ fn decode_legacy(
         source: legacy_source,
         version: 1,
     };
-    if encode(&legacy, limits.manifest_bytes)? != bytes {
-        return Err(AssetError::InvalidEncoding);
-    }
+    validate_encoding(&legacy, limits.manifest_bytes, Some(bytes))?;
     let source = SourceIdentity {
         revision: legacy.source.revision,
         title: legacy.source.title,
@@ -428,16 +467,35 @@ fn encode(
     maximum: NonZeroUsize,
 ) -> Result<Vec<u8>, AssetError> {
     let mut output = BoundedBytes {
-        bytes: Vec::new(),
         exceeded: false,
         maximum: maximum.get(),
+        output: Output::Collect(Vec::new()),
+        written: 0,
     };
-    serde_json::to_writer(&mut output, document).map_err(|_error| {
-        if output.exceeded {
-            AssetError::TooLarge
-        } else {
-            AssetError::InvalidEncoding
-        }
-    })?;
-    Ok(output.bytes)
+    output.serialize(document)?;
+    match output.output {
+        Output::Collect(bytes) => Ok(bytes),
+        Output::Validate { .. } => Err(AssetError::InvalidEncoding),
+    }
+}
+
+/// Check the serialized size and optionally compare exact canonical bytes.
+fn validate_encoding(
+    document: &impl Serialize,
+    maximum: NonZeroUsize,
+    expected: Option<&[u8]>,
+) -> Result<(), AssetError> {
+    let mut output = BoundedBytes {
+        exceeded: false,
+        maximum: maximum.get(),
+        output: Output::Validate { expected, matches: true },
+        written: 0,
+    };
+    output.serialize(document)?;
+    if let Output::Validate { matches: true, .. } = output.output
+        && expected.is_none_or(|bytes| bytes.len() == output.written)
+    {
+        return Ok(());
+    }
+    Err(AssetError::InvalidEncoding)
 }
