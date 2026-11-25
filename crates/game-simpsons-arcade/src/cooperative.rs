@@ -33,8 +33,8 @@
 //! Provisional cooperative locomotion for two observed character pairs.
 
 use super::{
-    Cooperation, Facing, Maneuver, PairCommand, PairState, PairSupport,
-    PendingManeuver, Player, Point, Recovery, Slot, StreetLayout,
+    Cooperation, Facing, Maneuver, PairCommand, PairDriver, PairState,
+    PairSupport, PendingManeuver, Player, Point, Recovery, Slot, StreetLayout,
 };
 
 const ADMISSION_TICKS: u8 = 38;
@@ -194,14 +194,18 @@ impl PairState {
     ) {
         self.invalidate(first, second);
         if let Some(motion) = self.motion {
-            let direction =
-                self.direction(first, second, command == PairCommand::Jump);
+            let airborne = command == PairCommand::Jump
+                || matches!(motion, PairMotion::Jump { .. });
+            if !airborne {
+                self.claim_driver(first, second, command);
+            }
+            let direction = self.direction(first, second, airborne);
             match command {
                 PairCommand::Jump => {
                     self.motion = Some(PairMotion::Jump { tick: 0 });
                     self.walking = false;
                 },
-                PairCommand::Primary { presses } if direction == (0, 0) => {
+                PairCommand::Primary { presses, .. } if direction == (0, 0) => {
                     self.advance_primary(pair, motion, presses);
                 },
                 PairCommand::Primary { .. } | PairCommand::None => {
@@ -219,7 +223,11 @@ impl PairState {
     const fn advance_jump(&mut self, pair: Pair, tick: u8) {
         let next = tick.saturating_add(1);
         self.motion = Some(if next >= BART_LISA_JUMP_TICKS {
-            self.second_controls = true;
+            // Jump-only admission without a prior ground driver remains
+            // provisional; retain the existing second-member fallback.
+            if self.driver.is_none() {
+                self.driver = Some(PairDriver::Second);
+            }
             match pair {
                 Pair::MargeHomer => PairMotion::AfterJump { tick: 0 },
                 Pair::BartLisa => PairMotion::Idle { tick: pair.idle_end() },
@@ -257,13 +265,43 @@ impl PairState {
         self.walking = false;
     }
 
-    fn direction(self, first: &Slot, second: &Slot, jump: bool) -> (i16, i16) {
-        let airborne =
-            jump || matches!(self.motion, Some(PairMotion::Jump { .. }));
-        if (self.second_controls && !airborne) || first.direction() == (0, 0) {
-            second.direction()
-        } else {
-            first.direction()
+    fn claim_driver(
+        &mut self,
+        first: &Slot,
+        second: &Slot,
+        command: PairCommand,
+    ) {
+        if self.driver.is_some() {
+            return;
+        }
+        if first.direction() != (0, 0)
+            || matches!(command, PairCommand::Primary { first: true, .. })
+        {
+            self.driver = Some(PairDriver::First);
+        } else if second.direction() != (0, 0)
+            || matches!(command, PairCommand::Primary { .. })
+        {
+            self.driver = Some(PairDriver::Second);
+        }
+    }
+
+    fn direction(
+        self,
+        first: &Slot,
+        second: &Slot,
+        airborne: bool,
+    ) -> (i16, i16) {
+        if airborne {
+            return if first.direction() == (0, 0) {
+                second.direction()
+            } else {
+                first.direction()
+            };
+        }
+        match self.driver {
+            Some(PairDriver::First) => first.direction(),
+            Some(PairDriver::Second) => second.direction(),
+            None => (0, 0),
         }
     }
 
@@ -284,16 +322,13 @@ impl PairState {
         } else if jump {
             PairCommand::Jump
         } else {
-            let presses = actions.into_iter().fold(0u8, |count, action| {
-                count.saturating_add(u8::from(matches!(
-                    action,
-                    Some(Maneuver::Attack { .. })
-                )))
-            });
+            let [first, second] = actions
+                .map(|action| matches!(action, Some(Maneuver::Attack { .. })));
+            let presses = u8::from(first).saturating_add(u8::from(second));
             if presses == 0 {
                 PairCommand::None
             } else {
-                PairCommand::Primary { presses }
+                PairCommand::Primary { first, presses }
             }
         }
     }
@@ -316,9 +351,9 @@ impl PairState {
     }
 
     const fn reset(&mut self) {
+        self.driver = None;
         self.idle_ticks = 0;
         self.motion = None;
-        self.second_controls = false;
         self.walking = false;
     }
 
@@ -348,20 +383,13 @@ impl PairState {
                 | PairMotion::Primary => motion,
             });
             self.walking = false;
-        } else if pair == Pair::MargeHomer && self.second_controls {
-            let tick = match motion {
-                PairMotion::AfterJump { tick } if self.walking => {
-                    tick.saturating_add(1) & 15
-                },
-                PairMotion::AfterJump { tick } => {
-                    ((tick & !1).saturating_add(2)) & 15
-                },
-                PairMotion::Idle { .. }
-                | PairMotion::Jump { .. }
-                | PairMotion::Primary
-                | PairMotion::Walk { .. } => 2,
+        } else if let PairMotion::AfterJump { tick } = motion {
+            let next = if self.walking {
+                tick.saturating_add(1) & 15
+            } else {
+                ((tick & !1).saturating_add(2)) & 15
             };
-            self.motion = Some(PairMotion::AfterJump { tick });
+            self.motion = Some(PairMotion::AfterJump { tick: next });
             self.walking = true;
         } else {
             let tick = match motion {
@@ -411,9 +439,9 @@ impl Cooperation {
         let [marge_homer, bart_lisa] = enabled;
         Self {
             bart_lisa: PairState {
+                driver: None,
                 idle_ticks: 0,
                 motion: None,
-                second_controls: false,
                 support: if bart_lisa {
                     PairSupport::Locomotion
                 } else {
@@ -422,9 +450,9 @@ impl Cooperation {
                 walking: false,
             },
             marge_homer: PairState {
+                driver: None,
                 idle_ticks: 0,
                 motion: None,
-                second_controls: false,
                 support: if marge_homer {
                     PairSupport::Locomotion
                 } else {
@@ -627,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn either_member_moves_and_first_member_resolves_conflicts() {
+    fn earlier_direction_owner_retains_control_during_conflicts() {
         let mut state = joined();
         let [marge, homer, bart, lisa] = state.stations();
         state.input_step(41, &[
@@ -660,22 +688,151 @@ mod tests {
         let [moved_marge, moved_homer, moved_bart, moved_lisa] = moved;
         assert_eq!(state.stations().map(|station| station.position), [
             Point {
-                y: moved_marge.y.saturating_sub(2),
+                x: moved_marge.x.saturating_add(2),
                 ..moved_marge
             },
             Point {
-                y: moved_homer.y.saturating_sub(2),
+                x: moved_homer.x.saturating_add(2),
                 ..moved_homer
             },
             Point {
-                x: moved_bart.x.saturating_sub(2),
+                y: moved_bart.y.saturating_add(2),
                 ..moved_bart
             },
             Point {
-                x: moved_lisa.x.saturating_sub(2),
+                y: moved_lisa.y.saturating_add(2),
                 ..moved_lisa
             },
         ]);
+        let stopped = state.stations();
+        state.input_step(43, &[
+            change(Player::Homer, Control::Right, false),
+            change(Player::Lisa, Control::Down, false),
+        ]);
+        wait(&mut state, 40);
+        assert_eq!(state.stations(), stopped);
+    }
+
+    fn verify_direction_owner(
+        mut state: Cabinet,
+        owner: Player,
+        other: Player,
+    ) {
+        let stopped = state.stations();
+        state.input_step(81, &[change(other, Control::Right, true)]);
+        wait(&mut state, 4);
+        assert_eq!(state.stations(), stopped);
+        state.input_step(86, &[change(owner, Control::Right, true)]);
+        assert_ne!(state.stations(), stopped);
+        let moved = state.stations();
+        state.input_step(87, &[change(owner, Control::Right, false)]);
+        wait(&mut state, 4);
+        assert_eq!(state.stations(), moved);
+    }
+
+    #[test]
+    fn simultaneous_initial_directions_choose_first_member() {
+        for pair in Pair::ALL {
+            let [first, second] = pair.members();
+            let mut state = joined();
+            state.input_step(41, &[
+                change(first, Control::Right, true),
+                change(second, Control::Left, true),
+            ]);
+            assert_eq!(
+                state.pair_pose(pair).map(|pose| pose.facing),
+                Some(Facing::Right)
+            );
+            state.input_step(42, &[
+                change(first, Control::Right, false),
+                change(second, Control::Left, false),
+            ]);
+            verify_direction_owner(state, first, second);
+        }
+    }
+
+    #[test]
+    fn initial_primary_selects_ground_driver_for_either_member() {
+        for pair in Pair::ALL {
+            let [first, second] = pair.members();
+            for (owner, other) in [(first, second), (second, first)] {
+                let mut state = joined().with_pair_jump(pair, true);
+                primary(&mut state, owner);
+                wait(&mut state, 15);
+                primary(&mut state, other);
+                verify_direction_owner(state, owner, other);
+            }
+        }
+    }
+
+    #[test]
+    fn initial_conflicting_button_and_direction_choose_first_member() {
+        for pair in Pair::ALL {
+            let [first, second] = pair.members();
+            let mut state = joined().with_pair_jump(pair, true);
+            let stopped = state.stations();
+            state.input_step(41, &[
+                change(second, Control::Right, true),
+                change(first, Control::Primary, true),
+                change(first, Control::Primary, false),
+            ]);
+            assert_eq!(state.stations(), stopped);
+            state.input_step(42, &[change(second, Control::Right, false)]);
+            verify_direction_owner(state, first, second);
+            let mut reverse = joined().with_pair_jump(pair, true);
+            reverse.input_step(41, &[
+                change(first, Control::Right, true),
+                change(second, Control::Primary, true),
+                change(second, Control::Primary, false),
+            ]);
+            assert_ne!(reverse.stations(), stopped);
+            reverse.input_step(42, &[change(first, Control::Right, false)]);
+            verify_direction_owner(reverse, first, second);
+        }
+    }
+
+    #[test]
+    fn pair_jump_preserves_ground_driver_and_allows_airborne_partner() {
+        for pair in Pair::ALL {
+            let [first, second] = pair.members();
+            for (owner, other) in [(first, second), (second, first)] {
+                check_driver_across_jump(pair, owner, other);
+            }
+        }
+    }
+
+    fn check_driver_across_jump(pair: Pair, owner: Player, other: Player) {
+        let mut state = joined().with_pair_jump(pair, true);
+        state.input_step(41, &[change(owner, Control::Right, true)]);
+        state.input_step(42, &[change(owner, Control::Right, false)]);
+        state.input_step(43, &[
+            change(other, Control::Secondary, true),
+            change(other, Control::Secondary, false),
+        ]);
+        let opening = state.stations();
+        state.input_step(44, &[change(other, Control::Right, true)]);
+        assert_ne!(state.stations(), opening);
+        state.input_step(45, &[change(other, Control::Right, false)]);
+        wait(&mut state, 27);
+        assert!(state.pair_pose(pair).is_some());
+        verify_direction_owner(state, owner, other);
+    }
+
+    #[test]
+    fn separation_allows_a_new_ground_driver() {
+        for pair in Pair::ALL {
+            let [first, second] = pair.members();
+            let mut state = joined();
+            state.input_step(41, &[change(first, Control::Right, true)]);
+            state.input_step(42, &[change(first, Control::Right, false)]);
+            primary(&mut state, first);
+            assert_eq!(state.pair_pose(pair), None);
+            wait(&mut state, 100);
+            assert!(state.pair_pose(pair).is_some());
+            state.input_step(143, &[change(second, Control::Right, true)]);
+            state.input_step(144, &[change(second, Control::Right, false)]);
+            verify_direction_owner(state, second, first);
+        }
     }
 
     #[test]
@@ -897,6 +1054,29 @@ mod tests {
     }
 
     #[test]
+    fn observed_paired_actions_emit_no_solo_attack_cues() {
+        for pair in Pair::ALL {
+            let mut state = joined().with_pair_jump(pair, true);
+            for player in pair.members() {
+                primary(&mut state, player);
+                wait(&mut state, 8);
+                primary(&mut state, player);
+                wait(&mut state, 8);
+                state.input_step(0, &[
+                    change(player, Control::Secondary, true),
+                    change(player, Control::Secondary, false),
+                ]);
+                wait(&mut state, 29);
+            }
+            assert_eq!(
+                state.stations().map(|station| station.attack_cues),
+                [0; 4]
+            );
+            assert!(state.pair_pose(pair).is_some());
+        }
+    }
+
+    #[test]
     fn marge_homer_primary_advances_held_walk_without_translation() {
         let mut state = joined().with_pair_jump(Pair::MargeHomer, true);
         state.input_step(41, &[change(Player::Homer, Control::Right, true)]);
@@ -1084,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_jump_changes_grounded_direction_priority() {
+    fn jump_without_prior_driver_uses_provisional_second_member() {
         let mut state = joined().with_bart_lisa_jump(true);
         let [_, _, before, _] = state.stations();
         state.input_step(41, &[

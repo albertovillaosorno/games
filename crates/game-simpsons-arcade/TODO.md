@@ -128,8 +128,9 @@ sequences, each beginning at tick zero. Idle permits offsets through 13
 and 9 respectively; walking through 31 and 23. Their bundle actor keys
 are actor/duo and actor/bart-lisa. A complete pair catalogue enables
 that pair only. Nearby active members join after 38 neutral simulation
-ticks; either can move, with the first member taking priority for
-conflicting directions. Both stations retain their individual health,
+ticks; the member initiating movement retains directional control
+until separation. Initial simultaneous input favors the first member.
+Both stations retain their individual health,
 HUD and ground points. Solo maneuvers separate pairs without combined
 responses; hurt always separates them.
 
@@ -139,9 +140,11 @@ complete Bart/Lisa idle and walk catalogue plus jump poses at offsets
 vertical action. It retains the pair, reaches a representative
 60-pixel elevation and returns to the ground. New Primary, Secondary
 or chord edges from either member during flight are discarded, not
-buffered into landing. During the action
-Bart's direction takes priority; after landing only Lisa moves the
-pair until it separates. A grounded Primary displays one fixed tick of
+buffered into landing. During the action either member can steer,
+with Bart taking priority for held conflicts; after landing the
+established ground driver resumes control. An initial grounded
+Primary can also select that driver. A grounded Primary displays one
+fixed tick of
 the combined landing pose when stationary and preserves the walking
 cycle when moving. A grounded chord starts the combined jump.
 Simultaneous edges select Secondary over Primary. Missing jump poses
@@ -155,8 +158,9 @@ keys at offsets 0, 2, 8, 10, 12, 14, 16 and 18. These crops also
 serve the distinct 16-tick post-landing walking cycle. Either
 Secondary starts a 29-tick vertical action, reaching a representative
 66-pixel elevation. In-flight button edges are discarded; both members
-can steer, with first-member priority. After landing, only Homer moves
-the pair, and the last post-landing pose holds when motion stops. The
+can steer, with first-member priority. After landing the established
+ground driver resumes control, and the last post-landing pose holds
+when motion stops. The
 optional shadow mask is drawn independently of elevation.
 With this complete jump sequence enabled, grounded Primary from either
 member advances the held walking pose phase without moving the pair.
@@ -166,8 +170,10 @@ locomotion; a chord selects Secondary. Neither behavior adds damage.
 The phase advancement reuses existing pose records; the combined
 catalogue remains within its 200-record and 16 KiB limits. Without
 the jump sequence, Primary retains the earlier solo behavior.
-Exact pivots, hit eligibility, seat sampling and initial movement
-control restoration remain provisional.
+Neither sampled paired action produced an isolated PCM cue.
+Jump-only admission without a prior ground driver retains the
+provisional second-member fallback. Exact pivots, hit eligibility,
+seat sampling and airborne horizontal persistence remain open.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated

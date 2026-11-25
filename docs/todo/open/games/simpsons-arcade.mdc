@@ -1930,3 +1930,35 @@ and 20 strike submissions met the 16.667 ms budget in the new run;
 mean work was 69.801 and 224.995 microseconds respectively, and lifetime
 peak RSS was 134,844,416 bytes. These are synthetic host measurements,
 not physical input acceptance or complete reference parity.
+
+Follow-up paired input controls show persistent grounded direction
+ownership rather than per-tick priority. Both families admit either
+member's initial direction or Primary. After release and a neutral
+interval, only the initiating member can translate the pair. A
+partner's later Primary does not transfer ownership. Opposing initial
+directions and simultaneous initial Primary edges favored the first
+member in the Marge/Homer controls; cross-member Primary and
+direction at the same initial callback likewise favored that member.
+A combined Secondary from either member retains the established
+ground driver across landing, including when the driver is Marge or
+Bart. Airborne steering remains independent of that ownership. The
+simulation selects the first active ground member on initial input
+and retains the driver until separation. When no ground driver
+preceded the combined jump, the existing provisional second-member
+fallback is retained; original admission in that case is unresolved.
+
+Separate airborne movement controls also show a retained horizontal
+stride after release, reversal on a subsequent direction, and no
+retained depth stride. Opposing sticks favor the first member while
+held; the later sampled second-member input can reverse the stride
+at release. This precise airborne persistence and seat-sampling
+behavior is not implemented by the ground-ownership change.
+
+Twelve paired action audio controls covered either member's
+Secondary, one Primary and two separated Primary edges. Each
+43-second, 244,320-byte voice log and 8,256,048-byte mixed WAV
+matched its no-button control exactly. The object-DMA traces
+independently confirmed both combined jumps and visible responses
+to double Primary in both families. The preview retains its
+no-solo-cue policy for these actions, with a fixed-step regression.
+These controls do not establish broader audio or combat parity.

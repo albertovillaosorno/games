@@ -629,14 +629,20 @@ impl Slot {
 enum PairCommand {
     Jump,
     None,
-    Primary { presses: u8 },
+    Primary { first: bool, presses: u8 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PairDriver {
+    First,
+    Second,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct PairState {
+    driver: Option<PairDriver>,
     idle_ticks: u8,
     motion: Option<PairMotion>,
-    second_controls: bool,
     support: PairSupport,
     walking: bool,
 }
