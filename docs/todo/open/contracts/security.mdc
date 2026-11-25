@@ -191,3 +191,19 @@ the unrelated sentinel. Renamed staging data can require manual cleanup.
 This detects observed location changes; trusted ancestors and same-user
 writers are still required, and the checks are not an atomic defence
 against a concurrent same-user directory swap.
+
+Flat ZIP admission now uses the existing library's lazy central-directory
+reader before constructing an indexed archive. The raw entry count is
+checked before decoding individual descriptors, including duplicate names.
+The bounded metadata pass verifies each local header and reserves declared
+sizes; the subsequent indexed reader must agree on directory start and
+member count and pass its full overlap and unlisted-local-header checks.
+Synthetic fixtures reject excessive raw counts even when later metadata
+is corrupt or duplicate names would collapse in an index. A fixture with
+an admitted central directory but an unlisted local member confirms that
+the subsequent indexed check remains required. The supplied Simpsons ZIP
+still admits all 14 members and 7,209,088 decoded bytes.
+The exact ZIP 9.8.2 pin follows the upstream unstable API contract.
+This improves early admission, not a universal heap bound: individual
+metadata fields and ambiguous malformed footer candidates remain subject
+to the source byte limit and upstream parser allocation behavior.

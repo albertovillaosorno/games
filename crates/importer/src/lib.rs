@@ -41,7 +41,7 @@ pub mod mame;
 pub mod wave;
 
 use std::collections::BTreeSet;
-use std::io::{Cursor, Read, Seek};
+use std::io::{Cursor, Read};
 use std::num::NonZeroU64;
 use std::str;
 
@@ -51,6 +51,7 @@ use games_assets::archive::{
 use games_assets::{AssetError, SourceIdentity};
 use zip::CompressionMethod;
 use zip::read::{ArchiveOffset, Config, ZipArchive, ZipFileEntry};
+use zip::unstable::read::ZipIterable;
 
 /// A source admission or conversion failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,27 +152,25 @@ impl<'source> SourceSnapshot<'source> {
         let config = Config {
             archive_offset: ArchiveOffset::Known(0),
         };
+        let admitted = admit_members(self.bytes, config, budget)?;
         let mut archive =
             ZipArchive::with_config(config, Cursor::new(self.bytes))
                 .map_err(|_error| ImportError::InvalidZip)?;
-        if archive.is_empty() {
-            return Err(ImportError::InvalidZip);
-        }
-        if u64::try_from(archive.len()).unwrap_or(u64::MAX)
-            > budget.remaining_entries()
-        {
-            return Err(ArchiveError::TooLarge.into());
-        }
-
         if archive.has_duplicate_names() {
             return Err(ImportError::Collision);
+        }
+        if archive.central_directory_start() != admitted.directory_start
+            || archive.len() != admitted.reservations.len()
+        {
+            return Err(ImportError::InvalidZip);
         }
         archive
             .validate_header_consistency()
             .map_err(|_error| ImportError::InvalidZip)?;
-        let reservations = admit_members(&archive, budget)?;
         let mut payload = Vec::new();
-        for (index, reservation) in reservations.into_iter().enumerate() {
+        for (index, reservation) in
+            admitted.reservations.into_iter().enumerate()
+        {
             let mut entry = archive
                 .by_index(index)
                 .map_err(|_error| ImportError::InvalidZip)?;
@@ -184,23 +183,39 @@ impl<'source> SourceSnapshot<'source> {
     }
 }
 
-// Admit every member before opening any decompressor or conversion sink.
-fn admit_members<R>(
-    archive: &ZipArchive<R>,
+#[derive(Debug)]
+struct AdmittedMembers {
+    directory_start: u64,
+    reservations: Vec<EntryBudget>,
+}
+
+// Admit metadata incrementally before constructing the indexed archive.
+fn admit_members(
+    bytes: &[u8],
+    config: Config,
     mut budget: ArchiveBudget,
-) -> Result<Vec<EntryBudget>, ImportError>
-where
-    R: Read + Seek,
-{
+) -> Result<AdmittedMembers, ImportError> {
+    let mut archive = ZipIterable::try_new(Cursor::new(bytes), config)
+        .map_err(|_error| ImportError::InvalidZip)?
+        .enforce_header_consistency(true);
+    let count = archive.len();
+    if count == 0 {
+        return Err(ImportError::InvalidZip);
+    }
+    if u64::try_from(count).unwrap_or(u64::MAX) > budget.remaining_entries() {
+        return Err(ArchiveError::TooLarge.into());
+    }
+    let mut directory_start = None;
     let mut names = BTreeSet::new();
     let mut reservations = Vec::new();
     reservations
-        .try_reserve_exact(archive.len())
+        .try_reserve_exact(count)
         .map_err(|_error| ImportError::TooLarge)?;
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index_data(index)
-            .map_err(|_error| ImportError::InvalidZip)?;
+    for result in archive.files().map_err(|_error| ImportError::InvalidZip)? {
+        let entry = result.map_err(|_error| ImportError::InvalidZip)?;
+        if directory_start.is_none() {
+            directory_start = Some(entry.central_header_start());
+        }
         let name = admit_member(&entry)?;
         let reservation = budget.admit(name, EntryKind::File, entry.size())?;
         if !names.insert(name.to_ascii_lowercase()) {
@@ -208,7 +223,10 @@ where
         }
         reservations.push(reservation);
     }
-    Ok(reservations)
+    Ok(AdmittedMembers {
+        directory_start: directory_start.ok_or(ImportError::InvalidZip)?,
+        reservations,
+    })
 }
 
 fn admit_member<'entry>(
@@ -495,6 +513,82 @@ mod tests {
             require(result == Err(ArchiveError::TooLarge.into()) && !called)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn excessive_directory_count_precedes_malformed_metadata()
+    -> Result<(), ImportError> {
+        let mut bytes = make_zip(&[
+            ("first.bin", b"first", CompressionMethod::Stored),
+            ("second.bin", b"second", CompressionMethod::Stored),
+        ])?;
+        let position = bytes
+            .windows(4)
+            .rposition(|window| window == b"PK\x01\x02")
+            .ok_or(ImportError::InvalidZip)?;
+        let suffix =
+            bytes.get_mut(position..).ok_or(ImportError::InvalidZip)?;
+        replace_first(suffix, b"PK\x01\x02", b"PK\x00\x02")?;
+        let one_entry = ArchiveBudget::new(bound(1024), bound(4096), bound(1));
+        require(
+            inspect(&bytes, one_entry) == Err(ArchiveError::TooLarge.into()),
+        )?;
+        require(inspect(&bytes, budget()) == Err(ImportError::InvalidZip))
+    }
+
+    #[test]
+    fn raw_directory_count_includes_duplicate_names() -> Result<(), ImportError>
+    {
+        let mut bytes = make_zip(&[
+            ("One.bin", b"one", CompressionMethod::Stored),
+            ("one.bin", b"two", CompressionMethod::Stored),
+        ])?;
+        replace_first(&mut bytes, b"One.bin", b"one.bin")?;
+        replace_first(&mut bytes, b"One.bin", b"one.bin")?;
+        let one_entry = ArchiveBudget::new(bound(1024), bound(4096), bound(1));
+        require(
+            inspect(&bytes, one_entry) == Err(ArchiveError::TooLarge.into()),
+        )?;
+        require(inspect(&bytes, budget()) == Err(ImportError::Collision))
+    }
+
+    #[test]
+    fn admitted_directory_cannot_hide_an_unlisted_local_header()
+    -> Result<(), ImportError> {
+        let bytes = make_zip(&[
+            ("first.bin", b"first", CompressionMethod::Stored),
+            ("second.bin", b"second", CompressionMethod::Stored),
+        ])?;
+        let archive = ZipArchive::new(Cursor::new(&bytes))
+            .map_err(|_error| ImportError::InvalidZip)?;
+        let directory = archive.central_directory_start();
+        let hidden = archive
+            .by_index_data(1)
+            .map_err(|_error| ImportError::InvalidZip)?
+            .central_header_start();
+        let size = hidden
+            .checked_sub(directory)
+            .ok_or(ImportError::InvalidZip)?;
+        let offset = usize::try_from(hidden)
+            .map_err(|_error| ImportError::InvalidZip)?;
+        let mut damaged =
+            bytes.get(..offset).ok_or(ImportError::InvalidZip)?.to_vec();
+        // Keep both local members but only the first central directory entry.
+        damaged.extend_from_slice(b"PK\x05\x06");
+        damaged.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0]);
+        damaged.extend_from_slice(
+            &u32::try_from(size)
+                .map_err(|_error| ImportError::InvalidZip)?
+                .to_le_bytes(),
+        );
+        damaged.extend_from_slice(
+            &u32::try_from(directory)
+                .map_err(|_error| ImportError::InvalidZip)?
+                .to_le_bytes(),
+        );
+        damaged.extend_from_slice(&[0, 0]);
+        let one_entry = ArchiveBudget::new(bound(1024), bound(4096), bound(1));
+        require(inspect(&damaged, one_entry) == Err(ImportError::InvalidZip))
     }
 
     #[test]

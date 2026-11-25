@@ -52,7 +52,8 @@ path = "crates/platform-storage"
 version = "0.1.0"
 
 [workspace.dependencies.zip]
-version = "9.8.2"
+# Exact pin required by the upstream unstable iterable reader API.
+version = "=9.8.2"
 default-features = false
 features = ["deflate-flate2-zlib-rs"]
 

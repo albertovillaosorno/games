@@ -29,8 +29,11 @@ Inspected Craft Libraries snapshot
 The upstream offers MIT or Apache-2.0. Its archive convenience layer
 loads decoded entries into memory and does not expose Unix file modes.
 The newer upstream ZIP backend provides header
-consistency checks. Its iterable reader is private; the public indexed
-archive API detects duplicates, overlap and mismatched headers. ZIP 9.8.2
+consistency checks. The indexed archive API detects
+duplicates, overlap and mismatched headers. The iterable reader is exposed
+through an explicitly unstable API; the workspace now pins ZIP exactly to
+9.8.2 to use it for incremental metadata and raw entry-count admission.
+The indexed archive retains the global consistency checks. ZIP 9.8.2
 is adopted with only stored and pure-Rust Deflate support. No Craft source
 was incorporated. Native staging uses Nix
 instead of Rustix and tempfile to avoid duplicate dependency versions.
