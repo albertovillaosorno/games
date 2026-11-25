@@ -32,3 +32,19 @@ duplicate keys, unsupported versions and malformed metadata.
 The first original archive is pinned in the Simpsons task. Synthetic
 importer conversion exercises canonical descriptors and manifests. Runtime
 consumption and target compatibility still require evidence.
+
+The canonical format also defines indexed tiles with an explicit tile
+count, width and height, and one byte per palette index. The selected
+Simpsons converter emits two validated indexed-tile assets. These data
+are not yet rendered, and palette interpretation remains title-specific.
+
+The native bundle reader pins the exact canonical manifest bytes by
+SHA-256, validates metadata limits and reads only declared logical keys
+from descriptor-relative storage. Every payload is size- and hash-checked
+on demand. Synthetic tests reject changed content, oversized files,
+noncanonical manifests, unsafe links, special files and writable-by-others
+storage. The writer and reader share storage naming and trust checks.
+Fresh validation passed in run 1795578729856852353-3030117 (147 tests).
+A trusted caller must supply the expected manifest digest; this is not
+an authenticity or same-user sandbox guarantee. Android device and browser
+consumption remain unverified.

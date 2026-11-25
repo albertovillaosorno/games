@@ -42,11 +42,12 @@ use nix::sys::stat::Mode;
 use nix::{
     errno::Errno,
     fcntl::{RenameFlags, open, renameat2},
-    sys::stat::fstat,
-    unistd::geteuid,
 };
 
-use super::{ArchiveStaging, DIRECTORY_FLAGS, StagedArchive, StagingError};
+use super::{ArchiveStaging, StagedArchive, StagingError};
+use crate::bundle::{DIRECTORY_FLAGS, MANIFEST_NAME, PAYLOADS_DIRECTORY};
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::bundle::{bundle_name, trusted_directory};
 
 /// A complete canonical bundle that has not yet been published.
 ///
@@ -83,11 +84,10 @@ impl StagedBundle {
         let parent = path.parent().ok_or(StagingError::UnsupportedPath)?;
         let source = path.file_name().ok_or(StagingError::UnsupportedPath)?;
         let fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
-        let stat = fstat(&fd)?;
-        if stat.st_mode & 0o022 != 0 || stat.st_uid != geteuid().as_raw() {
+        if !trusted_directory(&fd)? {
             return Err(StagingError::UntrustedParent);
         }
-        let name = format!("bundle-{}", self.digest);
+        let name = bundle_name(self.digest);
         let destination = parent.join(&name);
         match renameat2(
             &fd,
@@ -128,14 +128,18 @@ pub(super) fn finish<'digest>(
 ) -> Result<StagedBundle, StagingError> {
     let mut hashes = payloads.peekable();
     if hashes.peek().is_some() {
-        let directory =
-            openat(&stage.root, "payloads", DIRECTORY_FLAGS, Mode::empty())?;
+        let directory = openat(
+            &stage.root,
+            PAYLOADS_DIRECTORY,
+            DIRECTORY_FLAGS,
+            Mode::empty(),
+        )?;
         for hash in hashes {
             sync_file(&directory, &hash.to_string())?;
         }
         File::from(directory).sync_all()?;
     }
-    sync_file(&stage.root, "manifest.json")?;
+    sync_file(&stage.root, MANIFEST_NAME)?;
     let root = openat(&stage.root, ".", DIRECTORY_FLAGS, Mode::empty())?;
     File::from(root).sync_all()?;
     Ok(StagedBundle {

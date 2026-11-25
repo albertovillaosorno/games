@@ -47,16 +47,14 @@ use games_assets::archive::{
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
-use nix::sys::stat::{Mode, fstat, mkdirat};
-use nix::unistd::geteuid;
+use nix::sys::stat::{Mode, mkdirat};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub use publication::PublishedBundle;
 pub use publication::StagedBundle;
 
-const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
-    .union(OFlag::O_DIRECTORY)
-    .union(OFlag::O_NOFOLLOW)
-    .union(OFlag::O_CLOEXEC);
+use super::bundle::{
+    DIRECTORY_FLAGS, MANIFEST_NAME, PAYLOADS_DIRECTORY, trusted_directory,
+};
 const MAX_DEPTH: usize = 64;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -281,8 +279,7 @@ impl ArchiveStaging {
         budget: ArchiveBudget,
     ) -> Result<Self, StagingError> {
         let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
-        let stat = fstat(&parent_fd)?;
-        if stat.st_mode & 0o022 != 0 || stat.st_uid != geteuid().as_raw() {
+        if !trusted_directory(&parent_fd)? {
             return Err(StagingError::UntrustedParent);
         }
         let absolute_parent = fs::canonicalize(parent)?;
@@ -406,7 +403,7 @@ impl CanonicalStaging {
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
-                path: "manifest.json",
+                path: MANIFEST_NAME,
                 size: u64::try_from(bytes.len())
                     .map_err(|_error| AssetError::TooLarge)?,
             },
@@ -454,7 +451,7 @@ impl CanonicalStaging {
             self.stage.failed = true;
             return Err(AssetError::TooLarge.into());
         };
-        let path = format!("payloads/{digest}");
+        let path = format!("{PAYLOADS_DIRECTORY}/{digest}");
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
@@ -507,13 +504,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::num::{NonZeroU64, NonZeroUsize};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
 
     use super::*;
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    use crate::bundle::CanonicalBundle;
+    use crate::bundle::TestRoot;
 
     fn budget(entries: u64) -> ArchiveBudget {
         ArchiveBudget::new(
@@ -523,12 +522,8 @@ mod tests {
         )
     }
 
-    fn fixture() -> Result<PrivateDirectory, StagingError> {
-        let parent = env::temp_dir();
-        let parent_fd = open(&parent, DIRECTORY_FLAGS, Mode::empty())?;
-        let CreatedDirectory { temporary, root: _root } =
-            PrivateDirectory::create(&parent, &parent_fd)?;
-        Ok(temporary)
+    fn fixture() -> Result<TestRoot, StagingError> {
+        Ok(TestRoot::new()?)
     }
 
     const fn member(
@@ -889,6 +884,18 @@ mod tests {
         require(!temporary.exists())?;
         drop(published);
         require(fs::read(expected.join("manifest.json"))? == encoded)?;
+        let reader = CanonicalBundle::open(
+            &parent.path,
+            manifest_digest,
+            canonical_limits(),
+        )
+        .map_err(|_error| StagingError::Asset(AssetError::PayloadMismatch))?;
+        require(reader.manifest() == &manifest)?;
+        require(
+            reader
+                .read_payload("tile")
+                .is_ok_and(|bytes| bytes == b"tile"),
+        )?;
         require(
             fs::read(expected.join(format!("payloads/{digest}")))? == b"tile",
         )
