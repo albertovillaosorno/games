@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded, deterministic PCM voice playback and stereo mixing.
+//   - Bounded, deterministic PCM timing, voice playback and stereo mixing.
 // - Must-Not:
 //   - Open native devices, decode source media or schedule title events.
 // - Allows:
@@ -31,7 +31,8 @@
 
 //! Deterministic PCM playback independently of presentation and device rate.
 
-use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize};
+use std::time::Duration;
 
 /// Interleaved source sample layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,15 +124,59 @@ impl StereoGain {
     };
 }
 
-/// Playback admission failures.
+/// Audio timing and playback admission failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AudioError {
     /// Unable to allocate the requested bounded voice storage.
     Allocation,
+    /// The requested audio frame count exceeds the representable range.
+    FrameOverflow,
     /// Empty or incomplete source frames.
     InvalidClip,
     /// No free voice slot; existing playback remains unchanged.
     VoicesFull,
+}
+
+/// Convert explicit elapsed simulation time to complete audio frames.
+///
+/// Fractional frames carry forward exactly, so an identical elapsed
+/// duration yields the same total regardless of its partition. The clock
+/// never queries wall time, allocates storage or submits device audio.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameClock {
+    rate: NonZeroU32,
+    remainder: u32,
+}
+
+impl FrameClock {
+    /// Count complete frames for elapsed time, retaining the fraction.
+    ///
+    /// # Errors
+    /// Rejects an unrepresentable frame count without changing the clock.
+    pub fn advance(&mut self, elapsed: Duration) -> Result<u64, AudioError> {
+        let denominator = 1_000_000_000u128;
+        let scaled = elapsed
+            .as_nanos()
+            .checked_mul(NonZeroU128::from(self.rate).get())
+            .and_then(|count| count.checked_add(u128::from(self.remainder)))
+            .ok_or(AudioError::FrameOverflow)?;
+        let frames = scaled
+            .checked_div(denominator)
+            .and_then(|count| u64::try_from(count).ok())
+            .ok_or(AudioError::FrameOverflow)?;
+        let remainder = scaled
+            .checked_rem(denominator)
+            .and_then(|count| u32::try_from(count).ok())
+            .ok_or(AudioError::FrameOverflow)?;
+        self.remainder = remainder;
+        Ok(frames)
+    }
+
+    /// Start counting at the given nonzero output sample rate.
+    #[must_use]
+    pub const fn new(rate: NonZeroU32) -> Self {
+        Self { rate, remainder: 0 }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -294,6 +339,39 @@ fn mix_frame(voices: &mut [Option<Voice<'_>>], rate: u64) -> [i16; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_clock_preserves_tick_fraction() -> Result<(), AudioError> {
+        let interval = Duration::from_micros(16_896);
+        let mut partitioned = FrameClock::new(rate(48_000));
+        let mut whole = partitioned;
+        for _ in 0u8..124u8 {
+            if partitioned.advance(interval)? != 811 {
+                return Err(AudioError::FrameOverflow);
+            }
+        }
+        (partitioned.advance(interval)? == 812
+            && whole.advance(interval.saturating_mul(125))? == 101_376
+            && whole == partitioned
+            && partitioned.advance(Duration::ZERO)? == 0
+            && partitioned.advance(interval)? == 811)
+            .then_some(())
+            .ok_or(AudioError::FrameOverflow)
+    }
+
+    #[test]
+    fn frame_clock_overflow_preserves_fraction() -> Result<(), AudioError> {
+        let mut clock = FrameClock::new(rate(2));
+        let first = clock.advance(Duration::from_millis(250))?;
+        let before = clock;
+        (first == 0
+            && clock.advance(Duration::MAX) == Err(AudioError::FrameOverflow)
+            && clock == before
+            && clock.advance(Duration::from_millis(250))? == 1
+            && FrameClock::new(rate(1)).advance(Duration::MAX)? == u64::MAX)
+            .then_some(())
+            .ok_or(AudioError::FrameOverflow)
+    }
 
     fn rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)

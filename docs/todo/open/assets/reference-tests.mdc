@@ -75,3 +75,11 @@ and equivalent action delivery under different frame partitions. No
 physical input latency, gameplay parity or actual device timing is
 established; the SDL timestamps have millisecond granularity. A title
 host must decide explicitly how to handle delayed or rejected releases.
+
+The shared audio frame clock maps explicitly supplied elapsed simulation
+intervals to complete PCM output frames with exact fractional carry. At
+48 kHz, 125 intervals of 16,896 microseconds yield 101,376 frames: 124
+intervals of 811 frames and one of 812. Tests compare that partition with
+one combined duration, verify zero-duration behavior, and check that a
+rejected overflow does not discard fractional time. No native device
+clock, output latency, original event timing or audio parity is implied.
