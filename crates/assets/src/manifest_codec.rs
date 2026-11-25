@@ -29,6 +29,7 @@
 // - Defaults:
 //   - No unbounded record or output buffer growth.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::{fmt, io};
 
@@ -249,6 +250,18 @@ impl AssetManifest {
         decode(bytes, limits, true).map(Self)
     }
 
+    /// Return the distinct content identities and their exact payload sizes.
+    ///
+    /// Multiple logical records may share content only when their declared
+    /// sizes agree. Each still consumes its own logical admission budget.
+    #[must_use]
+    pub fn payload_sizes(&self) -> BTreeMap<ContentHash, u64> {
+        self.records()
+            .iter()
+            .map(|record| (record.digest, record.size))
+            .collect()
+    }
+
     /// Return an exact logical-key match in the validated sorted manifest.
     #[must_use]
     pub fn record(&self, key: &str) -> Option<&AssetRecord> {
@@ -280,9 +293,9 @@ impl AssetManifest {
             return Err(AssetError::TooLarge);
         }
         let mut previous = None;
-        let mut remaining = limits.total_bytes.get();
+        let mut admission = RecordAdmission::new(limits);
         for record in &self.0.records {
-            admit_record(record, previous, &mut remaining, limits)?;
+            admission.admit(record, previous)?;
             previous = Some(record.key.as_str());
         }
         Ok(())
@@ -332,6 +345,48 @@ impl AssetManifest {
     ) -> Result<(), AssetError> {
         self.validate_media_replacement(allowed_keys, replacement)?;
         replacement.verify(payload)
+    }
+}
+
+struct RecordAdmission {
+    limits: ManifestLimits,
+    remaining: u64,
+    sizes: BTreeMap<ContentHash, u64>,
+}
+
+impl RecordAdmission {
+    fn admit(
+        &mut self,
+        record: &AssetRecord,
+        previous: Option<&str>,
+    ) -> Result<(), AssetError> {
+        record.validate()?;
+        if previous.is_some_and(|key| key >= record.key.as_str()) {
+            return Err(AssetError::InvalidOrder);
+        }
+        if record.size > self.limits.payload_bytes.get() {
+            return Err(AssetError::TooLarge);
+        }
+        self.remaining = self
+            .remaining
+            .checked_sub(record.size)
+            .ok_or(AssetError::TooLarge)?;
+        if self
+            .sizes
+            .insert(record.digest, record.size)
+            .is_some_and(|size| size != record.size)
+        {
+            return Err(AssetError::PayloadMismatch);
+        }
+        Ok(())
+    }
+
+    const fn new(limits: ManifestLimits) -> Self {
+        Self {
+            limits,
+            remaining: limits.total_bytes.get(),
+            sizes: BTreeMap::new(),
+        }
     }
 }
 
@@ -399,25 +454,6 @@ fn decode_legacy(
     })
 }
 
-fn admit_record(
-    record: &AssetRecord,
-    previous: Option<&str>,
-    remaining: &mut u64,
-    limits: ManifestLimits,
-) -> Result<(), AssetError> {
-    record.validate()?;
-    if previous.is_some_and(|key| key >= record.key.as_str()) {
-        return Err(AssetError::InvalidOrder);
-    }
-    if record.size > limits.payload_bytes.get() {
-        return Err(AssetError::TooLarge);
-    }
-    *remaining = remaining
-        .checked_sub(record.size)
-        .ok_or(AssetError::TooLarge)?;
-    Ok(())
-}
-
 fn decode_records(
     raw: &RawValue,
     limits: ManifestLimits,
@@ -429,7 +465,7 @@ fn decode_records(
         .ok_or(AssetError::InvalidEncoding)?
         .trim_start();
     let mut records: Vec<AssetRecord> = Vec::new();
-    let mut payload_remaining = limits.total_bytes.get();
+    let mut admission = RecordAdmission::new(limits);
     while !remaining.is_empty() {
         reserve_bounded(&mut records, 1, limits.records.get())
             .ok_or(AssetError::TooLarge)?;
@@ -439,11 +475,9 @@ fn decode_records(
             .next()
             .ok_or(AssetError::InvalidEncoding)?
             .map_err(|_error| AssetError::InvalidEncoding)?;
-        admit_record(
+        admission.admit(
             &record,
             records.last().map(|previous| previous.key.as_str()),
-            &mut payload_remaining,
-            limits,
         )?;
         records.push(record);
         let rest = remaining

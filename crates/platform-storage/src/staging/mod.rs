@@ -460,7 +460,7 @@ impl CanonicalStaging {
     ) -> Result<StagedBundle, StagingError> {
         let manifest = source.manifest();
         let bytes = manifest.encode(limits)?;
-        let expected = manifest_payloads(manifest)?;
+        let expected = manifest.payload_sizes();
         admit_copy(budget, &bytes, &expected)?;
         let mut stage = Self::new(parent, budget)?;
         for record in manifest.records() {
@@ -486,7 +486,7 @@ impl CanonicalStaging {
             return Err(StagingError::Aborted);
         }
         let bytes = manifest.encode(limits)?;
-        let expected = manifest_payloads(manifest)?;
+        let expected = manifest.payload_sizes();
         self.finish_encoded(&bytes, &expected)
     }
 
@@ -604,21 +604,6 @@ fn admit_payload(
             .finish()?;
     }
     Ok(())
-}
-
-fn manifest_payloads(
-    manifest: &AssetManifest,
-) -> Result<PayloadSizes, AssetError> {
-    let mut expected = BTreeMap::new();
-    for record in manifest.records() {
-        if expected
-            .insert(record.digest, record.size)
-            .is_some_and(|size| size != record.size)
-        {
-            return Err(AssetError::PayloadMismatch);
-        }
-    }
-    Ok(expected)
 }
 
 fn manifest_size(bytes: &[u8]) -> Result<u64, AssetError> {

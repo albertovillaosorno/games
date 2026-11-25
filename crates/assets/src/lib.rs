@@ -278,7 +278,7 @@ pub enum AssetError {
     InvalidIdentity,
     /// Duplicate or out-of-order logical asset identities.
     InvalidOrder,
-    /// Actual canonical payload differs from the manifest.
+    /// Canonical payload bytes or declared lengths disagree with identity.
     PayloadMismatch,
     /// A metadata, count or payload budget was exceeded.
     TooLarge,
@@ -412,6 +412,78 @@ mod tests {
         entry.verify(b"sprites")?;
         require(entry.verify(b"wrongxx") == Err(AssetError::PayloadMismatch))?;
         require(entry.verify(b"sprite") == Err(AssetError::PayloadMismatch))
+    }
+
+    #[test]
+    fn shared_payloads_use_one_size_but_count_all_logical_records()
+    -> Result<(), AssetError> {
+        let first = record("first", b"tile");
+        let second = AssetRecord {
+            key: String::from("second"),
+            ..first
+        };
+        let items = vec![first.clone(), second];
+        let manifest = AssetManifest::new(source(), items.clone(), limits())?;
+        let sizes = manifest.payload_sizes();
+        require(sizes.len() == 1 && sizes.get(&first.digest) == Some(&4))?;
+        let encoded = manifest.encode(limits())?;
+        require(
+            AssetManifest::parse_canonical(&encoded, limits())? == manifest,
+        )?;
+        let mut restrictive = limits();
+        restrictive.total_bytes =
+            NonZeroU64::new(7).ok_or(AssetError::TooLarge)?;
+        require(
+            AssetManifest::new(source(), items, restrictive)
+                == Err(AssetError::TooLarge),
+        )?;
+        require(
+            AssetManifest::parse(&encoded, restrictive)
+                == Err(AssetError::TooLarge),
+        )
+    }
+
+    #[test]
+    fn conflicting_content_lengths_are_rejected_before_later_records()
+    -> Result<(), AssetError> {
+        let first = record("first", b"tile");
+        let second = AssetRecord {
+            key: String::from("second"),
+            size: 3,
+            ..first
+        };
+        let records = vec![first, second, record("third", b"x")];
+        require(
+            AssetManifest::new(source(), records.clone(), limits())
+                == Err(AssetError::PayloadMismatch),
+        )?;
+        let document = serde_json::to_string(&ManifestDocument {
+            records,
+            source: source(),
+            version: VERSION,
+        })
+        .map_err(|_error| AssetError::InvalidEncoding)?;
+        require(
+            AssetManifest::parse_canonical(document.as_bytes(), limits())
+                == Err(AssetError::PayloadMismatch),
+        )?;
+        let malformed = document.replace("\"key\":\"third\"", "\"key\":false");
+        require(
+            AssetManifest::parse(malformed.as_bytes(), limits())
+                == Err(AssetError::PayloadMismatch),
+        )?;
+        let digest = serde_json::to_string(&ContentHash::from_bytes([7; 32]))
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let legacy = document
+            .replace(
+                "\"source\":{",
+                &format!("\"source\":{{\"digest\":{digest},"),
+            )
+            .replace("\"version\":2", "\"version\":1");
+        require(
+            AssetManifest::parse_canonical(legacy.as_bytes(), limits())
+                == Err(AssetError::PayloadMismatch),
+        )
     }
 
     #[test]

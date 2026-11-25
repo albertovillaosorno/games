@@ -386,3 +386,13 @@ both the pre-sync and post-sync checks compare the still-named private
 inode against that observation. A same-length in-place modification
 with an observable timestamp change must leave the previous valid slot
 intact. This is not a lock against concurrent hostile same-user writes.
+
+Canonical manifest admission now enforces a single declared byte length
+per SHA-256 identity while decoding each record, in both supported
+versions. Constructor admission uses the same check. Legitimate logical
+aliases still consume their individual logical budgets and share one
+physical payload in staging; the validated manifest supplies the distinct
+payload inventory to the storage adapter. Synthetic regressions exercise
+conflicting sizes, early rejection before a later malformed descriptor,
+both manifest versions and legitimate alias budget exhaustion. Fresh
+workspace validation passed in run 1795612954386762456-1554938.
