@@ -91,8 +91,14 @@
   Support windowed and fullscreen presentation; adapt HUD and touch layout.
   Keep gameplay coordinates and timing independent of window dimensions.
   Map pointer and touch coordinates through the actual presentation transform.
-  Allow keyboard, controller and touch remapping with per-player profiles,
-  sensible defaults and a reset option. Do not hardcode title-specific menus.
+  Allow keyboard, mouse, controller and touch remapping with persistent
+  per-player profiles, sensible defaults and a reset option. Default to one
+  local player; for action games use WASD, Space to jump, and left mouse
+  button for primary attack where applicable. Additional players join
+  explicitly with independent, nonconflicting controls. Escape toggles
+  the single local pause menu; do not require separate pause keys per
+  keyboard seat. Keep control instructions and join bindings in menus,
+  not over active gameplay. Do not hardcode title-specific menus.
 - GPU acceleration by default where useful, including 2D. Use efficient
   CPU computation, parallelism and adaptive bounded memory caches.
 - Use the best resource for each workload; never maximise utilisation

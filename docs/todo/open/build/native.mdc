@@ -26,7 +26,14 @@ Produce portable Linux x86-64 executables with local asset discovery.
 - Verify adaptive height-fit rendering with real additional scene content,
   uniform scale and safe camera bounds. Manually adapt unsupported scenes;
   temporary aspect-fit fallback does not satisfy adaptive acceptance.
-- Verify remappable per-player keyboard, controller and touch profiles.
+- Verify remappable per-player keyboard, mouse, controller and touch
+  profiles, persistent settings and reset. Test single-player-first
+  WASD/Space/left-click defaults, explicit extra-seat admission and
+  one shared Escape keyboard pause control.
+- Verify audible physical output and report selected audio device and
+  volume controls. Dummy audio smoke does not satisfy audible acceptance.
+- Verify adaptive wide scene and gameplay HUD on the owner's maximized
+  desktop; keep control hints in pause/settings rather than gameplay.
 
 ## Evidence
 

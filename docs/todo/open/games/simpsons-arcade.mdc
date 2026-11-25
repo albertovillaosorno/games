@@ -28,6 +28,25 @@ preserve original four-player cooperative gameplay and pixel art.
   controller and touch input; hidden synthetic smoke is supplementary.
 - Complete real adaptive widescreen scene extension and responsive HUD
   and touch placement. Keep per-player control settings and defaults.
+- Default to one local player with WASD movement, Space jump and left
+  mouse button attack. Additional seats join explicitly using independent
+  bindings. Support configurable keyboard, mouse, gamepad and touch
+  controls, persistent profiles and reset in the shared settings menu.
+- Escape is the single keyboard pause/resume control for the local game.
+  Remove per-seat keyboard pause requirements. Show join and control
+  instructions in the pause/settings menus, not in the gameplay HUD.
+  Retain health, lives and essential gameplay status without prompts.
+- Admit entering enemies just outside or at the actual visible camera
+  edges, including adaptive viewports, rather than visibly popping into
+  the interior. Preserve reference spawn conditions and world bounds.
+- Remove avoidable black side borders in supported wide scenes by using
+  real additional scene content and precise uniform viewport geometry.
+  Verify the owner's maximized desktop aspect ratio, resize and fullscreen.
+  Keep safe aspect-fit fallback only where genuine extension is unavailable.
+- Verify actual audible playback on the host, not only dummy audio and
+  submission counters. Diagnose device selection, gain and queue delivery;
+  expose persistent master, effects and music settings where supported.
+  Reconstruct the original music and other missing cues separately.
 
 - Use only a selected lawful original edition and locally imported assets.
 - Reuse shared engine mechanisms and extend them where necessary.
@@ -2053,3 +2072,13 @@ The adaptive run missed no 16.667 ms host budgets across 600 movement
 and 20 strike submissions, with lifetime peak RSS of 100,802,560
 bytes. Exact later enemy movement, damage, stage gates and physical
 input parity remain open.
+
+Owner visible playtest (2026-11-25, approximately 13:07 CST): the maximized
+native window showed three joined characters, enemy sprites, scrolling
+street art and status meters. Black side borders remained, unused station
+join/control labels occupied the upper HUD, and the owner reported no
+audible sound. The owner requests edge-entry enemies, single-player-first
+modern keyboard/mouse controls and one Escape pause control. These are
+open acceptance requirements, not completed capabilities. The host default
+audio sink was HDMI, unmuted, at 16 percent volume; this is a diagnostic
+observation, not a proven cause of the missing sound.
