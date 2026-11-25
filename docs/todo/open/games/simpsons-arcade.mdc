@@ -788,3 +788,18 @@ Two earlier visible attempts timed out because the SDL video backend
 was not explicitly X11. Current support is a bounded 42-column opening
 street extension, not scrolling stage progression, complete widescreen
 coverage or physical display/touch/controller acceptance.
+
+A longer fresh-state network-isolated MAME observation held Bart's Right
+input through device frame 2410. The earlier device frame 2290 and
+screen frame 2291 reproduced byte-for-byte. At device frames 2290,
+2310 and 2330 both moving layers advanced from 422 to 462 to 502,
+then remained at 502 despite continued input. The three independently
+verified scenes published an exactly overlapping 368-by-196 world
+interior, extending the opening logical viewport to 400 columns.
+Both 400-by-224 and 400-by-304 native readbacks matched all 15,680
+additional world pixels, and both 600-frame workloads missed zero
+samples. A visible X11 window resized to 1194-by-672 reproduced all
+234-by-588 scaled extension pixels (398-by-224 logical viewport) and
+exited through its menu. This covers the opening street at approximately
+16:9 without changing simulation bounds or proving stage progression.
+The observed scroll limit and later street geometry remain open.

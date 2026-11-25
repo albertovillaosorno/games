@@ -148,8 +148,8 @@ cargo run --locked -p games-build -- mame strip-publish simpsons \
 
 The command verifies both complete scenes before stitching exactly
 overlapping world interiors. The title verifies the strip against the
-selected base art. The currently verified strip supports up to 362
-logical columns (320 plus 42 additional pixels); wider surfaces use
+selected base art. The currently verified strip supports up to 400
+logical columns (320 plus 80 additional pixels); wider surfaces use
 aspect-fit without stretching the world. The four station indicators
 spread across the width, menus and touch panel center, and hit regions
 follow the panel. Movement bounds and stage progression remain unchanged.
