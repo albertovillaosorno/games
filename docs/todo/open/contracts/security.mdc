@@ -327,3 +327,9 @@ at an image slot. Fresh validation passed in run
 1795608679689389454-473508. A 16,714-byte synthetic WAV produced the
 expected 16,670-byte canonical replacement and passed the same native
 600-frame movement and 51-frame combat smoke with dummy audio.
+
+Additional WAV authoring regressions verify that valid stereo and shorter
+PCM layouts are rejected against the pinned mono slot, oversized trailing
+bytes publish nothing, and equivalent raw and WAV samples address the same
+canonical bundle without overwriting it. Fresh validation passed in run
+1795608899161480984-501879.

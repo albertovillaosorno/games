@@ -307,6 +307,13 @@ mod tests {
 
     use super::*;
 
+    const WAVE: [u8; 48] = [
+        b'R', b'I', b'F', b'F', 40, 0, 0, 0, b'W', b'A', b'V', b'E', b'f',
+        b'm', b't', b' ', 16, 0, 0, 0, 1, 0, 1, 0, 16, 39, 0, 0, 32, 78, 0, 0,
+        2, 0, 16, 0, b'd', b'a', b't', b'a', 4, 0, 0, 0, b'P', b'C', b'M',
+        b'!',
+    ];
+
     fn failure<E>(error: E) -> String
     where
         E: Debug,
@@ -440,12 +447,6 @@ mod tests {
 
     #[test]
     fn wave_authoring_requires_exact_pcm_layout() -> Result<(), String> {
-        const WAVE: [u8; 48] = [
-            b'R', b'I', b'F', b'F', 40, 0, 0, 0, b'W', b'A', b'V', b'E', b'f',
-            b'm', b't', b' ', 16, 0, 0, 0, 1, 0, 1, 0, 16, 39, 0, 0, 32, 78, 0,
-            0, 2, 0, 16, 0, b'd', b'a', b't', b'a', 4, 0, 0, 0, b'P', b'C',
-            b'M', b'!',
-        ];
         let directory = env::current_dir().map_err(failure)?;
         let root = AuthoredStaging::new(&directory).map_err(failure)?;
         let parent = root.path();
@@ -494,6 +495,67 @@ mod tests {
             || original.read_payload("audio/tone").map_err(failure)? != b"tone"
         {
             return Err(String::from("WAV publication mismatch"));
+        }
+        fs::write(&source, b"PCM!").map_err(failure)?;
+        let raw = MediaReplacement {
+            encoding: MediaEncoding::Raw,
+            ..select("audio/tone")
+        };
+        if !matches!(raw.run(), Err(error) if error == "publish: Collision") {
+            return Err(String::from("equivalent raw bundle overwritten"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_wave_layouts_publish_nothing() -> Result<(), String> {
+        let directory = env::current_dir().map_err(failure)?;
+        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let parent = root.path();
+        let limits = fixture_limits();
+        let original = publish_base(parent, limits)?;
+        let source = parent.join("authored.wav");
+        fs::write(&source, WAVE).map_err(failure)?;
+        let entries = fs::read_dir(parent).map_err(failure)?.count();
+        let mut stereo = WAVE;
+        stereo
+            .get_mut(22..24)
+            .ok_or("fixture")?
+            .copy_from_slice(&[2, 0]);
+        stereo
+            .get_mut(28..34)
+            .ok_or("fixture")?
+            .copy_from_slice(&[64, 156, 0, 0, 4, 0]);
+        let mut short = WAVE.get(..46).ok_or("fixture")?.to_vec();
+        short
+            .get_mut(4..8)
+            .ok_or("fixture")?
+            .copy_from_slice(&38u32.to_le_bytes());
+        short
+            .get_mut(40..44)
+            .ok_or("fixture")?
+            .copy_from_slice(&2u32.to_le_bytes());
+        for valid in [stereo.as_slice(), short.as_slice()] {
+            let _wave =
+                WavePcm::new(valid, NonZeroU64::MAX).map_err(failure)?;
+        }
+        let mut extra = WAVE.to_vec();
+        extra.push(0);
+        for bytes in [stereo.as_slice(), short.as_slice(), extra.as_slice()] {
+            fs::write(&source, bytes).map_err(failure)?;
+            let replacement = MediaReplacement {
+                base: original.digest(),
+                encoding: MediaEncoding::Wave,
+                key: String::from("audio/tone"),
+                limits,
+                parent: parent.to_path_buf(),
+                source: source.clone(),
+            };
+            if replacement.run().is_ok()
+                || fs::read_dir(parent).map_err(failure)?.count() != entries
+            {
+                return Err(String::from("invalid WAV published output"));
+            }
         }
         Ok(())
     }
