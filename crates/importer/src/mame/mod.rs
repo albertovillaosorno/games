@@ -55,7 +55,9 @@ use games_assets::{
     AssetFormat, AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
 
-use crate::conversion::{ConversionLimits, convert_snapshot};
+use crate::conversion::{
+    ConversionLimits, convert_snapshot, preflight_payloads,
+};
 use crate::graphics::{TileLayout, allocated_bytes, interleave_words};
 use crate::{ImportError, SourceSnapshot};
 
@@ -159,6 +161,13 @@ impl Machine {
         if source.identity() != &self.identity() {
             return Err(ImportError::IncorrectSource);
         }
+        preflight_payloads(
+            limits.manifest,
+            self.0.graphics.iter().map(|region| {
+                let size = region.layout.output_len(region.source_bytes()?)?;
+                u64::try_from(size).map_err(|_error| ImportError::TooLarge)
+            }),
+        )?;
         convert_snapshot(source, limits.manifest, stage, |verified, output| {
             let mut collected: Vec<_> = self
                 .0
@@ -437,6 +446,44 @@ mod tests {
         assert!(Machine::select("simpsons", "world-4p-set-1").is_ok());
         assert!(Machine::select("simpsons", "unknown").is_err());
         assert!(Machine::select("unknown", "world-4p-set-1").is_err());
+    }
+
+    #[test]
+    fn graphics_budget_rejects_before_archive_decoding()
+    -> Result<(), ImportError> {
+        let machine = Machine::select("simpsons", "world-4p-set-1")?;
+        let identity = machine.identity();
+        let budget = NonZeroU64::new(32).unwrap_or(NonZeroU64::MIN);
+        let source = SourceSnapshot::new(b"not a ZIP", &identity, budget)?;
+        let expected = machine.graphics_limits();
+        let too_small = [
+            ManifestLimits {
+                payload_bytes: NonZeroU64::MIN,
+                ..expected
+            },
+            ManifestLimits {
+                total_bytes: NonZeroU64::MIN,
+                ..expected
+            },
+            ManifestLimits {
+                records: NonZeroUsize::MIN,
+                ..expected
+            },
+        ];
+        for manifest in too_small {
+            let limits = ConversionLimits {
+                archive: ArchiveBudget::new(budget, budget, budget),
+                manifest,
+            };
+            let result =
+                machine.convert_graphics(&source, limits, |_digest, _bytes| {
+                    Err(ImportError::StageFailed)
+                });
+            if result != Err(games_assets::AssetError::TooLarge.into()) {
+                return Err(ImportError::StageFailed);
+            }
+        }
+        Ok(())
     }
 
     #[test]

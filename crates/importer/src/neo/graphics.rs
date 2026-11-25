@@ -33,11 +33,12 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use games_assets::archive::ArchiveBudget;
 use games_assets::{
-    AssetError, AssetFormat, AssetManifest, ContentHash, ManifestLimits,
-    SourceIdentity,
+    AssetFormat, AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
 
-use crate::conversion::{Conversion, ConversionLimits, convert_snapshot};
+use crate::conversion::{
+    Conversion, ConversionLimits, convert_snapshot, preflight_payloads,
+};
 use crate::graphics::TileLayout;
 use crate::{ImportError, SourceSnapshot};
 
@@ -115,13 +116,13 @@ impl CartridgeGraphics {
         Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
     {
         self.validate_source(source, limits.archive)?;
-        let expected = self.limits();
-        if limits.manifest.payload_bytes < expected.payload_bytes
-            || limits.manifest.total_bytes < expected.total_bytes
-            || limits.manifest.records < expected.records
-        {
-            return Err(AssetError::TooLarge.into());
-        }
+        preflight_payloads(
+            limits.manifest,
+            self.0.graphics.iter().map(|region| {
+                let size = region.layout.output_len(region.bytes)?;
+                u64::try_from(size).map_err(|_error| ImportError::TooLarge)
+            }),
+        )?;
         convert_snapshot(source, limits.manifest, stage, |verified, output| {
             verified.visit_neo(limits.archive, |name, payload| {
                 self.convert_region(name, payload, output)
@@ -248,6 +249,8 @@ const fn sprite_layout() -> TileLayout<'static> {
 
 #[cfg(test)]
 mod tests {
+    use games_assets::AssetError;
+
     use super::*;
 
     static FIXTURE: Profile = Profile {

@@ -205,6 +205,23 @@ where
     })
 }
 
+/// Admit known logical payload sizes before decoding or staging.
+/// The manifest byte limit is checked against its actual encoding.
+pub(crate) fn preflight_payloads(
+    limits: ManifestLimits,
+    sizes: impl Iterator<Item = Result<u64, ImportError>>,
+) -> Result<(), ImportError> {
+    let mut remaining = limits.total_bytes.get();
+    for (index, result) in sizes.enumerate() {
+        let size = result?;
+        if index >= limits.records.get() || size > limits.payload_bytes.get() {
+            return Err(AssetError::TooLarge.into());
+        }
+        remaining = remaining.checked_sub(size).ok_or(AssetError::TooLarge)?;
+    }
+    Ok(())
+}
+
 /// Assemble assets from a bounded source, including multi-member decoders.
 /// The private sink must be discarded if conversion or completion fails.
 /// # Errors
@@ -251,6 +268,25 @@ mod tests {
             payload_bytes: NonZeroU64::new(8).unwrap_or(NonZeroU64::MIN),
             records: NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN),
             total_bytes: NonZeroU64::new(12).unwrap_or(NonZeroU64::MIN),
+        }
+    }
+
+    #[test]
+    fn preflight_checks_each_independent_payload_budget() {
+        type Case = (&'static [u64], bool);
+        let cases: [Case; 5] = [
+            (&[8, 4], true),
+            (&[9], false),
+            (&[8, 5], false),
+            (&[1, 1, 1, 1, 1], false),
+            (&[4, 4, 4], true),
+        ];
+        for (sizes, admitted) in cases {
+            assert_eq!(
+                preflight_payloads(limits(), sizes.iter().copied().map(Ok))
+                    .is_ok(),
+                admitted,
+            );
         }
     }
 

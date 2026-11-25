@@ -37,7 +37,7 @@ use games_assets::{AssetFormat, AssetManifest, ContentHash, ManifestLimits};
 
 use super::{Clip, Encoding, SampleRom};
 use crate::ImportError;
-use crate::conversion::Conversion;
+use crate::conversion::{Conversion, preflight_payloads};
 
 const HEADER_BYTES: usize = 32;
 
@@ -82,6 +82,12 @@ impl<'source> Catalogue<'source> {
     where
         Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
     {
+        preflight_payloads(
+            limits,
+            self.headers
+                .iter()
+                .map(|header| Entry::parse(header)?.size()),
+        )?;
         for (index, header) in self.headers.iter().enumerate() {
             let entry = Entry::parse(header)?;
             let bytes = self
@@ -93,11 +99,7 @@ impl<'source> Catalogue<'source> {
                 encoding: entry.encoding,
             };
             let frames = entry.frames()?;
-            let size =
-                frames.get().checked_mul(2).ok_or(ImportError::TooLarge)?;
-            if size > limits.payload_bytes.get() {
-                return Err(ImportError::TooLarge);
-            }
+            let size = entry.size()?;
             let mut payload = Vec::new();
             payload
                 .try_reserve_exact(
@@ -179,6 +181,13 @@ impl Entry {
             start,
         })
     }
+
+    fn size(self) -> Result<u64, ImportError> {
+        self.frames()?
+            .get()
+            .checked_mul(2)
+            .ok_or(ImportError::TooLarge)
+    }
 }
 
 pub(in crate::mame) fn convert<Stage>(
@@ -233,6 +242,26 @@ mod tests {
         bytes
     }
 
+    fn reject_short_budget(
+        source: &SourceSnapshot<'_>,
+        rom: &SampleRom,
+        limits: ManifestLimits,
+    ) -> Result<(), ImportError> {
+        let short = ManifestLimits {
+            total_bytes: NonZeroU64::MIN.saturating_add(10),
+            ..limits
+        };
+        let rejected = convert_snapshot(
+            source,
+            short,
+            |_digest, _payload| Err(ImportError::StageFailed),
+            |_verified, output| convert(rom, limits, short, output),
+        );
+        (rejected == Err(games_assets::AssetError::TooLarge.into()))
+            .then_some(())
+            .ok_or(ImportError::StageFailed)
+    }
+
     #[test]
     fn canonical_conversion_preserves_amplitude_rate_and_order()
     -> Result<(), ImportError> {
@@ -255,6 +284,7 @@ mod tests {
             total_bytes: NonZeroU64::MIN.saturating_add(11),
         };
         let rom = SampleRom { bytes };
+        reject_short_budget(&source, &rom, limits)?;
         let mut payloads = Vec::new();
         let manifest = convert_snapshot(
             &source,
