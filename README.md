@@ -85,10 +85,10 @@ envelopes and constant-memory performance accounting. The native platform
 adapter provides bounded mutual TLS 1.3 and explicit player enrolment.
 On Linux, descriptor-relative archive staging enforces private files,
 no-overwrite creation, exact payload lengths and collision rejection. Physical
-LAN verification and credential provisioning remain pending. Mod sandboxing,
-GPU scene composition and playable titles remain open. The Linux graphics
-adapter presents bounded RGBA frames through one reusable accelerated
-texture, nearest-neighbor scaling and aspect-preserving letterboxing.
+LAN verification and credential provisioning remain pending. Mod sandboxing and
+playable titles remain open. The Linux graphics adapter presents bounded
+RGBA frames and ordered sprite scenes using persistent accelerated textures,
+nearest-neighbor scaling and aspect-preserving letterboxing.
 The shared asset crate defines deterministic versioned manifests, SHA-256
 content identities and checked RGBA8, PCM16 and indexed-tile descriptors.
 The importer validates a pinned immutable ZIP source and checks each flat
@@ -114,8 +114,15 @@ bound source bytes, individual decoded members, total bytes and member count.
 Create a trusted, private output parent inside the ignored reference directory
 before publication. `zip verify PATH TITLE REV SHA256 SOURCE ENTRY TOTAL COUNT`
 remains available for explicit generic flat ZIP admission. The selected
-Simpsons bundle is verified locally; palette, audio, runtime rendering, other
-MAME profiles and other platform publication remain open.
+Simpsons bundle is verified locally. Its observed palette RAM and mixer
+assignments match independent reference values; bounded tilemap admission
+and exact PCM reference comparison also pass. The optional GNU/Linux
+`native-preview` feature provides `mame render-check` for selected imported
+tiles and `mame render-bench` for measured host submission intervals.
+These diagnostics establish asset access, not gameplay or screen parity.
+See the title and performance TODO records for reproducible commands,
+observations and limitations. Other MAME profiles and other platform
+publication remain open.
 
 ## Catalogue
 
