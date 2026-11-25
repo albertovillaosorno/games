@@ -94,6 +94,14 @@ preview selects four station-specific attack samples from that bundle,
 using fixed-step cues and the shared native mixer. Without this option
 it opens no audio device. Nominal pitch, gain, queue timing and voice
 admission are provisional; background music and other sound effects
+remain unimplemented.
+
+Optionally insert `--audio-mod MOD_SHA` immediately after `--audio SHA`.
+The explicitly selected passive replacement bundle may replace only the
+four attack slots, `audio/sample-0004` through `audio/sample-0007`.
+The base and replacement must have matching PCM layouts. A damaged or
+unapproved replacement is rejected, not silently ignored. See the root
+README for the bounded raw PCM and WAV authoring commands.
 The hidden smoke uses a paused device to verify
 nonzero queued audio and one cue per held attack. Pause suspends playback
 and Settings keeps it suspended; returning to the main menu clears audio.
@@ -114,10 +122,11 @@ lisa=LISA_SHA
 ```
 
 Replace the placeholders with locally verified manifest digests. Optional
-fields are `poses`, `audio`, `world`, and the pair `enemy_approach` and
-`enemy_strike`. The pose field names a catalogue file; the other optional
-fields name manifest digests. Relative paths resolve from the launch
-catalogue directory, not the working directory. Without explicit asset
+asset fields are `poses`, `audio`, `audio_mod`, `world`, and the pair
+`enemy_approach` and `enemy_strike`. The pose field names a catalogue
+file; the other asset fields name manifest digests. The `audio_mod`
+field requires `audio`. Relative paths resolve from the launch catalogue
+directory, not the working directory. Without explicit asset
 arguments, the executable reads its adjacent catalogue. It does not scan
 for original media, and bundle identity and source checks still apply.
 The catalogue is trusted local configuration, not authenticated metadata,
