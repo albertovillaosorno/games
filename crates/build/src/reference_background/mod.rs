@@ -52,6 +52,7 @@ use games_importer::mame::background::Raster;
 use games_importer::mame::background::{Background, Pixel};
 use games_importer::mame::objects::RAM_BYTES;
 use games_importer::mame::priority::VideoPriority;
+use games_importer::mame::tilemap::TilemapSnapshot;
 #[cfg(feature = "native-preview")]
 use games_platform_graphics::linux::sprites::{
     SceneLimits, SpriteDraw, SpriteRect,
@@ -245,6 +246,7 @@ struct Observation {
 }
 
 type LoadedObservation = (Observation, Vec<u8>);
+type TileState<'source> = (TilemapSnapshot<'source>, VideoPriority);
 
 impl Observation {
     fn load(
@@ -284,16 +286,7 @@ impl Observation {
         assets: &SceneAssets<'_>,
         pens: &mut [Pixel],
     ) -> Result<(), String> {
-        let (controls, mixer_raw) = self
-            .registers
-            .split_first_chunk::<6>()
-            .ok_or_else(|| String::from("missing controls"))?;
-        let mixer = machine
-            .decode_video_priority(mixer_raw)
-            .map_err(|error| format!("mixer: {error:?}"))?;
-        let state = machine
-            .tilemap_snapshot(&self.ram, controls, mixer)
-            .map_err(|error| format!("tile state: {error:?}"))?;
+        let (state, mixer) = self.tile_state(machine)?;
         machine
             .background_raster()
             .compose(
@@ -313,6 +306,32 @@ impl Observation {
             sprites.overlay(machine, (tiles, mixer), pens)?;
         }
         Ok(())
+    }
+
+    fn rightward_shift(
+        &self,
+        next: &Self,
+        machine: Machine,
+    ) -> Result<usize, String> {
+        let (state, _) = self.tile_state(machine)?;
+        let (next_state, _) = next.tile_state(machine)?;
+        state
+            .rightward_shift(next_state, self.scroll, next.scroll)
+            .map_err(|error| format!("camera shift: {error:?}"))
+    }
+
+    fn tile_state(&self, machine: Machine) -> Result<TileState<'_>, String> {
+        let (controls, mixer_raw) = self
+            .registers
+            .split_first_chunk::<6>()
+            .ok_or_else(|| String::from("missing controls"))?;
+        let mixer = machine
+            .decode_video_priority(mixer_raw)
+            .map_err(|error| format!("mixer: {error:?}"))?;
+        let state = machine
+            .tilemap_snapshot(&self.ram, controls, mixer)
+            .map_err(|error| format!("tile state: {error:?}"))?;
+        Ok((state, mixer))
     }
 }
 

@@ -117,6 +117,9 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame check|audio-check MACHINE REV PARENT MANIFEST_SHA256\n",
     "GNU/Linux: mame art-publish MACHINE REV OUTPUT PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS KEY:INDEX,...\n",
+    "GNU/Linux: mame strip-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "TOP SIDE RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS ",
+    "[MORE SCENES...]\n",
     "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "GNU/Linux: mame scene-check MACHINE REV PARENT SHA256 ",
@@ -262,6 +265,8 @@ enum Command {
         target_env = "gnu"
     ))]
     SceneSequence(Machine, reference_background::sequence::Sequence),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    StripPublish(Machine, reference_background::art::Strip),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     TilemapCheck(Machine, PathBuf, PathBuf),
     Verify(Arguments),
@@ -308,6 +313,25 @@ impl Command {
                 Self::parse_mame(operation, args)
             },
             _ => Err(String::from(USAGE)),
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn parse_art(
+        action: &str,
+        machine: Machine,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        if action == "strip-publish" {
+            Ok(Self::StripPublish(
+                machine,
+                reference_background::art::Strip::parse(&args)?,
+            ))
+        } else {
+            Ok(Self::ArtPublish(
+                machine,
+                reference_background::art::Art::parse(args)?,
+            ))
         }
     }
 
@@ -378,10 +402,9 @@ impl Command {
         }
         match action {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
-            "art-publish" => Ok(Self::ArtPublish(
-                selected,
-                reference_background::art::Art::parse(args.collect())?,
-            )),
+            "art-publish" | "strip-publish" => {
+                Self::parse_art(action, selected, args.collect())
+            },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "background-check" | "scene-check" | "scene-render-check" => {
                 Ok(Self::BackgroundCheck(
@@ -500,6 +523,8 @@ impl Command {
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::ArtPublish(machine, args) => args.run(machine),
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::StripPublish(machine, args) => args.run(machine),
             #[cfg(all(
                 feature = "native-preview",
                 target_os = "linux",

@@ -752,3 +752,16 @@ mixer storage. A shared mixer test verifies silence and slot reuse after
 clearing. The native dummy-device smoke verifies pause, resume, and
 discard on reset with previously submitted audio, in addition to the
 existing held-attack checks. Actual audio hardware remains unverified.
+
+The MAME importer can publish a continuous world background from two to
+eight independently verified scenes. It requires equal positive
+horizontal movement of both scrolling tile layers, unchanged vertical
+offsets and exact RGBA overlap. Only explicitly excluded HUD rows and
+verified opaque-black side margins are removed; differing overlap
+rejects publication. Two Bart walking observations at device frames 2290
+and 2311 (display frames 2291 and 2312) each reconstructed all 71,680
+original pixels. Removing the top 28 HUD rows and 16 black pixels from
+each side allowed a 42-pixel extension of the 288-pixel world interior.
+The resulting 330-by-196 strip exactly matches the current Marge
+background over all 56,448 base interior pixels. The local bundle is
+available for adaptive rendering; no original assets are tracked.

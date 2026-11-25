@@ -123,6 +123,36 @@ impl<'source> TilemapSnapshot<'source> {
         self.mixer
     }
 
+    /// Determine a shared positive horizontal scroll advance between samples.
+    ///
+    /// The fixed HUD layer is excluded. Both moving layers must advance by
+    /// the same amount (less than 256 pixels) modulo the 512-pixel width, with
+    /// unchanged
+    /// vertical offsets. The caller must independently verify scene overlap.
+    /// # Errors
+    /// Rejects unsupported scrolling, no advance or inconsistent motion.
+    pub fn rightward_shift(
+        self,
+        next: Self,
+        control: u8,
+        next_control: u8,
+    ) -> Result<usize, ImportError> {
+        let [_, first, second] = self.standard_scroll(control)?;
+        let [_, next_first, next_second] =
+            next.standard_scroll(next_control)?;
+        let advance = next_first.0.wrapping_sub(first.0) & 511;
+        let other = next_second.0.wrapping_sub(second.0) & 511;
+        if advance == 0
+            || advance >= 256
+            || advance != other
+            || first.1 != next_first.1
+            || second.1 != next_second.1
+        {
+            return Err(ImportError::UnsupportedMember);
+        }
+        Ok(advance)
+    }
+
     fn scroll_page(self, page: usize) -> Result<Offset, ImportError> {
         let ram = self.ram.get(page).ok_or(ImportError::UnsupportedMember)?;
         let horizontal =
@@ -154,6 +184,43 @@ impl<'source> TilemapSnapshot<'source> {
 mod tests {
     use super::*;
     use crate::mame::Machine;
+
+    #[test]
+    fn camera_shift_requires_matching_rightward_scroll()
+    -> Result<(), ImportError> {
+        let machine = Machine::select("simpsons", "world-4p-set-1")?;
+        let mixer = machine.decode_video_priority(&[0; 16])?;
+        let fixture = |first: u16, second: u16, vertical: u8| {
+            let mut ram = vec![0u8; CELLS * 12];
+            for (page, x) in [(3usize, first), (7, second)] {
+                let base = page.saturating_mul(CELLS);
+                let start = base.saturating_add(512);
+                let end = start.saturating_add(2);
+                ram.get_mut(start..end)?.copy_from_slice(&x.to_le_bytes());
+                *ram.get_mut(base.saturating_add(12))? = vertical;
+            }
+            Some(ram)
+        };
+        let source =
+            fixture(500, 500, 3).ok_or(ImportError::UnsupportedMember)?;
+        let start = machine.tilemap_snapshot(&source, &[0; 6], mixer)?;
+        for (first, second, y, control, expected) in [
+            (12, 12, 3, 0, Ok(24)),
+            (12, 13, 3, 0, Err(ImportError::UnsupportedMember)),
+            (12, 12, 4, 0, Err(ImportError::UnsupportedMember)),
+            (500, 500, 3, 0, Err(ImportError::UnsupportedMember)),
+            (499, 499, 3, 0, Err(ImportError::UnsupportedMember)),
+            (12, 12, 3, 1, Err(ImportError::UnsupportedMember)),
+        ] {
+            let ram = fixture(first, second, y)
+                .ok_or(ImportError::UnsupportedMember)?;
+            let next = machine.tilemap_snapshot(&ram, &[0; 6], mixer)?;
+            if start.rightward_shift(next, 0, control) != expected {
+                return Err(ImportError::UnsupportedMember);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn resolves_bank_palette_wrap_and_flip() -> Result<(), ImportError> {

@@ -145,25 +145,115 @@ impl Art {
     /// # Errors
     /// Rejects differences from the observed frame and any invalid art.
     pub fn run(&self, machine: Machine) -> Result<(), String> {
-        let bundle = CanonicalBundle::open(
-            &self.scene.parent,
-            self.scene.digest,
-            machine.graphics_limits(),
-        )
-        .map_err(|error| format!("graphics bundle: {error:?}"))?;
-        machine
-            .validate_manifest(bundle.manifest())
-            .map_err(|error| format!("profile manifest: {error:?}"))?;
+        let bundle = graphics_bundle(&self.scene, machine)?;
         let payloads = GraphicsPayloads::load(&bundle, true)?;
         let assets = payloads.bind(&bundle)?;
-        let (mut observation, frame) = Observation::load(&self.scene, machine)?;
         let mut pens =
             vec![Pixel::default(); machine.background_raster().pixels()];
-        observation.reconstruct(machine, &assets, &mut pens)?;
-        if count_matches(&pens, &observation.colors, &frame)? != pens.len() {
-            return Err(String::from("reference scene does not match exactly"));
-        }
+        let mut observation =
+            verified_scene(&self.scene, machine, &assets, &mut pens)?;
         self.publish((machine, &assets), &mut observation, &bundle)
+    }
+}
+
+/// Bounded adjacent scene observations for a continuous background strip.
+#[derive(Debug)]
+pub struct Strip {
+    output: PathBuf,
+    scenes: Vec<Arguments>,
+    side: usize,
+    top: usize,
+}
+
+impl Strip {
+    /// Parse output, bundle, HUD rows, black side margins and scene groups.
+    /// # Errors
+    /// Rejects invalid margins or incomplete/excessive observations.
+    pub fn parse(args: &[OsString]) -> Result<Self, String> {
+        let (header, paths) = args
+            .split_first_chunk::<5>()
+            .ok_or_else(|| String::from(USAGE))?;
+        let [output, parent, digest, top_arg, side_arg] = header;
+        let top = text(top_arg)?
+            .parse::<usize>()
+            .map_err(|_error| String::from("invalid top exclusion"))?;
+        let side = text(side_arg)?
+            .parse::<usize>()
+            .map_err(|_error| String::from("invalid side exclusion"))?;
+        let (groups, remainder) = paths.as_chunks::<7>();
+        if !remainder.is_empty() || !(2..=8).contains(&groups.len()) {
+            return Err(String::from("expected 2 to 8 complete scenes"));
+        }
+        let scenes = groups
+            .iter()
+            .map(|group| {
+                Arguments::parse_scene(
+                    [parent.clone(), digest.clone()]
+                        .into_iter()
+                        .chain(group.iter().cloned())
+                        .collect(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            output: output.into(),
+            scenes,
+            side,
+            top,
+        })
+    }
+
+    /// Verify every visible scene and combine exact overlapping backgrounds.
+    /// # Errors
+    /// Rejects inconsistent scroll, differing overlap or invalid assets.
+    pub fn run(&self, machine: Machine) -> Result<(), String> {
+        let first = self.scenes.first().ok_or_else(|| String::from(USAGE))?;
+        let bundle = graphics_bundle(first, machine)?;
+        let payloads = GraphicsPayloads::load(&bundle, true)?;
+        let assets = payloads.bind(&bundle)?;
+        let raster = machine.background_raster();
+        let mut pens = vec![Pixel::default(); raster.pixels()];
+        let mut previous: Option<Observation> = None;
+        let mut strip: Option<Image> = None;
+        for paths in &self.scenes {
+            let mut observation =
+                verified_scene(paths, machine, &assets, &mut pens)?;
+            let _objects = observation.sprites.take();
+            observation.reconstruct(machine, &assets, &mut pens)?;
+            let image = Image::from_pens(
+                &pens,
+                raster.extent(),
+                &observation.colors,
+                false,
+            )?
+            .without_top(self.top)?
+            .without_sides(self.side)?;
+            strip = Some(match (strip, &previous) {
+                (Some(left), Some(prior)) => {
+                    let shift = prior.rightward_shift(&observation, machine)?;
+                    left.join_right(&image, shift)?
+                },
+                (None, None) => image,
+                _ => return Err(String::from("incomplete strip state")),
+            });
+            previous = Some(observation);
+        }
+        let completed = strip.ok_or_else(|| String::from("empty strip"))?;
+        let limits = limits()?;
+        let mut stage = CanonicalStaging::new(
+            &self.output,
+            publication::staging_budget(limits)?,
+        )
+        .map_err(|error| format!("stage: {error:?}"))?;
+        let mut records = Vec::new();
+        completed.stage("scene/world-background", &mut records, &mut stage)?;
+        let manifest = AssetManifest::new(
+            bundle.manifest().source().clone(),
+            records,
+            limits,
+        )
+        .map_err(|error| format!("manifest: {error:?}"))?;
+        publication::finish(stage, &manifest, limits)
     }
 }
 
@@ -241,6 +331,52 @@ impl Image {
         Ok(Self { height, pixels, width })
     }
 
+    fn join_right(self, right: &Self, shift: usize) -> Result<Self, String> {
+        let invalid = || String::from("invalid background overlap");
+        if self.height != right.height
+            || right.width > self.width
+            || shift == 0
+            || shift >= right.width
+        {
+            return Err(invalid());
+        }
+        let overlap = right.width.saturating_sub(shift);
+        let width = self.width.checked_add(shift).ok_or_else(invalid)?;
+        let pixels = width.checked_mul(self.height).ok_or_else(invalid)?;
+        let bytes = pixels.checked_mul(4).ok_or_else(invalid)?;
+        let limit = limits()?.payload_bytes.get();
+        if u64::try_from(bytes).map_or(true, |len| len > limit) {
+            return Err(String::from("background strip exceeds byte budget"));
+        }
+        let mut combined = Vec::new();
+        combined
+            .try_reserve_exact(pixels)
+            .map_err(|_error| String::from("strip allocation failed"))?;
+        for (left_row, right_row) in self
+            .pixels
+            .chunks_exact(self.width)
+            .zip(right.pixels.chunks_exact(right.width))
+        {
+            let tail = left_row.get(self.width.saturating_sub(overlap)..);
+            let head = right_row.get(..overlap);
+            if tail != head || tail.is_none() {
+                return Err(String::from("background overlap differs"));
+            }
+            combined.extend_from_slice(left_row);
+            combined.extend_from_slice(
+                right_row.get(overlap..).ok_or_else(invalid)?,
+            );
+        }
+        if combined.len() != pixels {
+            return Err(invalid());
+        }
+        Ok(Self {
+            height: self.height,
+            pixels: combined,
+            width,
+        })
+    }
+
     fn stage(
         self,
         key: &str,
@@ -272,6 +408,62 @@ impl Image {
         });
         Ok(())
     }
+
+    fn without_sides(self, side: usize) -> Result<Self, String> {
+        if side == 0 {
+            return Ok(self);
+        }
+        let invalid = || String::from("invalid side exclusion");
+        let end = self.width.checked_sub(side).ok_or_else(invalid)?;
+        let width = end
+            .checked_sub(side)
+            .filter(|w| *w > 0)
+            .ok_or_else(invalid)?;
+        let mut pixels = Vec::new();
+        for row in self.pixels.chunks_exact(self.width) {
+            let left = row.get(..side).ok_or_else(invalid)?;
+            let right = row.get(end..).ok_or_else(invalid)?;
+            if left
+                .iter()
+                .chain(right)
+                .any(|pixel| *pixel != [0, 0, 0, 255])
+            {
+                return Err(String::from("side margins are not opaque black"));
+            }
+            pixels.extend_from_slice(row.get(side..end).ok_or_else(invalid)?);
+        }
+        Ok(Self {
+            height: self.height,
+            pixels,
+            width,
+        })
+    }
+
+    fn without_top(mut self, top: usize) -> Result<Self, String> {
+        if top >= self.height {
+            return Err(String::from("top exclusion removes entire scene"));
+        }
+        let skip = top.saturating_mul(self.width);
+        drop(self.pixels.drain(..skip));
+        self.height = self.height.saturating_sub(top);
+        Ok(self)
+    }
+}
+
+fn graphics_bundle(
+    paths: &Arguments,
+    machine: Machine,
+) -> Result<CanonicalBundle, String> {
+    let bundle = CanonicalBundle::open(
+        &paths.parent,
+        paths.digest,
+        machine.graphics_limits(),
+    )
+    .map_err(|error| format!("graphics bundle: {error:?}"))?;
+    machine
+        .validate_manifest(bundle.manifest())
+        .map_err(|error| format!("profile manifest: {error:?}"))?;
+    Ok(bundle)
 }
 
 fn isolate(
@@ -357,9 +549,76 @@ fn select(ram: &[u8], indices: &BTreeSet<usize>) -> Result<Vec<u8>, String> {
     Ok(selected)
 }
 
+fn verified_scene(
+    paths: &Arguments,
+    machine: Machine,
+    assets: &SceneAssets<'_>,
+    pens: &mut [Pixel],
+) -> Result<Observation, String> {
+    let (observation, frame) = Observation::load(paths, machine)?;
+    observation.reconstruct(machine, assets, pens)?;
+    if count_matches(pens, &observation.colors, &frame)? != pens.len() {
+        return Err(String::from("reference scene does not match exactly"));
+    }
+    Ok(observation)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_requires_exact_overlap_and_retains_unique_pixels()
+    -> Result<(), String> {
+        let image = |pixels: &[u8], width, height| Image {
+            height,
+            pixels: pixels.iter().map(|&value| [value, 0, 0, 255]).collect(),
+            width,
+        };
+        let left = || image(&[0, 1, 2, 3, 4, 5, 6, 7, 8], 3, 3);
+        let right = || image(&[9, 9, 9, 4, 5, 9, 7, 8, 10], 3, 3);
+        let result = left()
+            .without_top(1)?
+            .join_right(&right().without_top(1)?, 1)?;
+        let expected = image(&[3, 4, 5, 9, 6, 7, 8, 10], 4, 2);
+        if (result.width, result.height) != (4, 2)
+            || result.pixels != expected.pixels
+            || left().join_right(&right(), 1).is_ok()
+            || left().join_right(&right(), 0).is_ok()
+            || left().join_right(&right(), 3).is_ok()
+            || left().without_top(3).is_ok()
+        {
+            return Err(String::from("invalid strip overlap behavior"));
+        }
+        let next = image(&[5, 9, 11, 8, 10, 12], 3, 2);
+        let extended = result.join_right(&next, 1)?;
+        let final_expected = image(&[3, 4, 5, 9, 11, 6, 7, 8, 10, 12], 5, 2);
+        if extended.pixels != final_expected.pixels {
+            return Err(String::from("multi-scene overlap differs"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn strip_excludes_only_opaque_black_side_margins() -> Result<(), String> {
+        let image = |edge| Image {
+            height: 1,
+            pixels: vec![edge, [1, 2, 3, 255], [0, 0, 0, 255]],
+            width: 3,
+        };
+        let black = [0, 0, 0, 255];
+        let inner = image(black).without_sides(1)?;
+        if (inner.width, inner.height) != (1, 1)
+            || inner.pixels != [[1, 2, 3, 255]]
+            || image([0, 0, 0, 0]).without_sides(1).is_ok()
+            || image([1, 0, 0, 255]).without_sides(1).is_ok()
+            || image(black).without_sides(2).is_ok()
+            || image(black).without_sides(usize::MAX).is_ok()
+        {
+            return Err(String::from("invalid side margin behavior"));
+        }
+        Ok(())
+    }
 
     #[test]
     fn selects_only_active_named_objects() -> Result<(), String> {
