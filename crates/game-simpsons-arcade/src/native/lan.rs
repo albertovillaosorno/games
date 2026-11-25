@@ -93,12 +93,12 @@ impl LocalFiles {
         let leaf = certificate(&self.public.leaf)?;
         let key = snapshot_secret(&self.key, MAX_KEY)
             .map_err(|error| format!("private key admission: {error:?}"))?;
-        let private = PrivateKeyDer::try_from(key)
+        let private = PrivateKeyDer::try_from(key.as_slice())
             .map_err(|_error| String::from("invalid DER private key"))?;
-        match name {
-            Some(server) => LocalIdentity::host(server, &root, &leaf, private),
-            None => LocalIdentity::client(&root, &leaf, private),
-        }
+        name.map_or_else(
+            || LocalIdentity::client(&root, &leaf, &private),
+            |server| LocalIdentity::host(server, &root, &leaf, &private),
+        )
         .map_err(|error| format!("local identity: {error}"))
     }
 

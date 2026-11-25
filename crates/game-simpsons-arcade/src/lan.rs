@@ -324,9 +324,9 @@ mod tests {
             leaf.signed_by(&key, &root).map_err(io::Error::other)?;
         let private = PrivatePkcs8KeyDer::from(key.serialize_der()).into();
         if host {
-            LocalIdentity::host(HOST, root.der(), certificate.der(), private)
+            LocalIdentity::host(HOST, root.der(), certificate.der(), &private)
         } else {
-            LocalIdentity::client(root.der(), certificate.der(), private)
+            LocalIdentity::client(root.der(), certificate.der(), &private)
         }
     }
 

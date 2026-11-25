@@ -39,6 +39,7 @@ use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
 use nix::unistd::geteuid;
+use zeroize::Zeroizing;
 
 pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
@@ -72,6 +73,9 @@ impl From<io::Error> for FileReadError {
     }
 }
 
+/// Owned credential bytes with zeroizing drop and redacted debug output.
+pub type SecretSnapshot = Zeroizing<Vec<u8>>;
+
 /// Read a bounded snapshot of a user-selected regular file.
 ///
 /// A metadata-only descriptor pins the final component without opening a
@@ -98,8 +102,9 @@ pub fn snapshot(
 ///
 /// The same inode must remain an ordinary file owned by the effective user
 /// with no group or other permissions or additional hard links. Trusted
-/// ancestors and procfs are still required. The returned bytes are not
-/// automatically zeroized; callers own credential lifetime and parsing.
+/// ancestors and procfs are still required. The returned buffer is zeroized
+/// when dropped and redacted in debug output. Callers should borrow it while
+/// parsing rather than copy it.
 ///
 /// # Errors
 /// Rejects unsafe ownership, permissions, links, non-regular files,
@@ -107,9 +112,11 @@ pub fn snapshot(
 pub fn snapshot_secret(
     path: &Path,
     maximum: NonZeroU64,
-) -> Result<Vec<u8>, FileReadError> {
+) -> Result<SecretSnapshot, FileReadError> {
     let pinned = open(path, PIN_FLAGS, Mode::empty())?;
-    read_pinned(&pinned, maximum.get(), secret_regular)
+    let mut bytes = Zeroizing::new(Vec::new());
+    read_pinned_into(&pinned, maximum.get(), secret_regular, &mut bytes)?;
+    Ok(bytes)
 }
 
 fn read_pinned(
@@ -117,6 +124,17 @@ fn read_pinned(
     maximum: u64,
     admitted: fn(&FileStat) -> bool,
 ) -> Result<Vec<u8>, FileReadError> {
+    let mut bytes = Vec::new();
+    read_pinned_into(pinned, maximum, admitted, &mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_pinned_into(
+    pinned: &OwnedFd,
+    maximum: u64,
+    admitted: fn(&FileStat) -> bool,
+    bytes: &mut Vec<u8>,
+) -> Result<(), FileReadError> {
     let before = fstat(pinned)?;
     if !admitted(&before) {
         return Err(FileReadError::UnsafeFile);
@@ -135,7 +153,7 @@ fn read_pinned(
     if !admitted(&after) || !same_content_metadata(&before, &after) {
         return Err(FileReadError::UnsafeFile);
     }
-    read_consistent(File::from(fd), &after, maximum, admitted)
+    read_consistent(File::from(fd), &after, admitted, bytes)
 }
 
 // Ignore ctime and link count: atomic replacement can legitimately unlink
@@ -151,38 +169,33 @@ const fn same_content_metadata(before: &FileStat, after: &FileStat) -> bool {
 fn read_consistent(
     mut file: File,
     before: &FileStat,
-    maximum: u64,
     admitted: fn(&FileStat) -> bool,
-) -> Result<Vec<u8>, FileReadError> {
-    let bytes =
-        read_bounded_descriptor(&mut file, file_size(before)?, maximum)?;
+    bytes: &mut Vec<u8>,
+) -> Result<(), FileReadError> {
+    read_bounded_descriptor(&mut file, file_size(before)?, bytes)?;
     let after = fstat(&file)?;
     if !admitted(&after) || !same_content_metadata(before, &after) {
         return Err(FileReadError::UnsafeFile);
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn read_bounded_descriptor(
     file: &mut File,
     size: u64,
-    maximum: u64,
-) -> Result<Vec<u8>, FileReadError> {
-    if size > maximum {
-        return Err(FileReadError::TooLarge);
-    }
+    bytes: &mut Vec<u8>,
+) -> Result<(), FileReadError> {
     let length =
         usize::try_from(size).map_err(|_error| FileReadError::TooLarge)?;
-    let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
         .map_err(|_error| FileReadError::TooLarge)?;
     bytes.resize(length, 0);
-    file.read_exact(&mut bytes)?;
-    let mut extra = [0u8; 1];
-    match file.read_exact(&mut extra) {
+    file.read_exact(bytes)?;
+    let mut extra = Zeroizing::new([0u8; 1]);
+    match file.read_exact(&mut *extra) {
         Ok(()) => Err(FileReadError::TooLarge),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(bytes),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
         Err(error) => Err(error.into()),
     }
 }
@@ -303,7 +316,9 @@ mod tests {
             )?;
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        require(snapshot_secret(&path, limit)? == b"key")?;
+        let secret = snapshot_secret(&path, limit)?;
+        require(secret.as_slice() == b"key")?;
+        require(format!("{secret:?}") == "Zeroizing { .. }")?;
         require(
             snapshot_secret(&path, NonZeroU64::MIN)
                 == Err(FileReadError::TooLarge),
@@ -317,7 +332,7 @@ mod tests {
         require(
             snapshot_secret(&link, limit) == Err(FileReadError::UnsafeFile),
         )?;
-        require(snapshot_secret(&path, limit)? == b"key")
+        require(snapshot_secret(&path, limit)?.as_slice() == b"key")
     }
 
     #[test]
@@ -334,7 +349,7 @@ mod tests {
             FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1)),
         )?;
         require(
-            read_consistent(file, &before, 3, private_regular)
+            read_consistent(file, &before, private_regular, &mut Vec::new())
                 == Err(FileReadError::UnsafeFile),
         )?;
         require(
@@ -351,13 +366,17 @@ mod tests {
         let fd = open(&path, OFlag::O_RDONLY, Mode::empty())?;
         fs::write(&path, b"fives")?;
         require(
-            read_bounded_descriptor(&mut File::from(fd), 4, 4)
+            read_bounded_descriptor(&mut File::from(fd), 4, &mut Vec::new())
                 == Err(FileReadError::TooLarge),
         )?;
         let shortened = open(&path, OFlag::O_RDONLY, Mode::empty())?;
         fs::write(&path, b"x")?;
         require(matches!(
-            read_bounded_descriptor(&mut File::from(shortened), 5, 5),
+            read_bounded_descriptor(
+                &mut File::from(shortened),
+                5,
+                &mut Vec::new(),
+            ),
             Err(FileReadError::Io(io::ErrorKind::UnexpectedEof))
         ))
     }

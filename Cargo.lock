@@ -286,6 +286,7 @@ dependencies = [
  "games",
  "games-assets",
  "nix",
+ "zeroize",
 ]
 
 [[package]]

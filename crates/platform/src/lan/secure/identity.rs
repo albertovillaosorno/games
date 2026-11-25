@@ -41,6 +41,7 @@ use rustls::RootCertStore;
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::ServerCertVerifier as _;
 use rustls::crypto::ring::default_provider;
+use rustls::crypto::ring::sign::any_supported_type;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::WebPkiClientVerifier;
 use rustls::sign::CertifiedKey;
@@ -122,12 +123,14 @@ impl Debug for LocalIdentity {
 impl LocalIdentity {
     /// Import a distinct client key and currently valid client-auth leaf.
     ///
+    /// The encoded key is borrowed; callers own its memory lifetime.
+    ///
     /// # Errors
     /// Rejects malformed, oversized, mismatched or untrusted credentials.
     pub fn client(
         root_der: &[u8],
         leaf_der: &[u8],
-        key: PrivateKeyDer<'static>,
+        key: &PrivateKeyDer<'_>,
     ) -> io::Result<Self> {
         let identity = Self::import(Role::Client, root_der, leaf_der, key)?;
         let verifier = WebPkiClientVerifier::builder_with_provider(
@@ -166,6 +169,8 @@ impl LocalIdentity {
 
     /// Import a host key and currently valid leaf for the given DNS or IP name.
     ///
+    /// The encoded key is borrowed; callers own its memory lifetime.
+    ///
     /// # Errors
     /// Rejects malformed, oversized, mismatched or untrusted credentials,
     /// including certificates issued for a different server name.
@@ -173,7 +178,7 @@ impl LocalIdentity {
         name: &str,
         root_der: &[u8],
         leaf_der: &[u8],
-        key: PrivateKeyDer<'static>,
+        key: &PrivateKeyDer<'_>,
     ) -> io::Result<Self> {
         let identity = Self::import(Role::Host, root_der, leaf_der, key)?;
         let server_name =
@@ -203,7 +208,7 @@ impl LocalIdentity {
         role: Role,
         root_der: &[u8],
         leaf_der: &[u8],
-        key: PrivateKeyDer<'static>,
+        key: &PrivateKeyDer<'_>,
     ) -> io::Result<Self> {
         if key.secret_der().is_empty() || key.secret_der().len() > MAX_KEY_BYTES
         {
@@ -214,9 +219,8 @@ impl LocalIdentity {
             root_der,
             PeerFingerprint::from_der(leaf_der),
         )?;
-        let checked =
-            CertifiedKey::from_der(vec![leaf], key, &default_provider())
-                .map_err(io::Error::other)?;
+        let signer = any_supported_type(key).map_err(io::Error::other)?;
+        let checked = CertifiedKey::new(vec![leaf], signer);
         checked.keys_match().map_err(io::Error::other)?;
         Ok(Self {
             certified: Arc::new(checked),
@@ -313,18 +317,21 @@ mod tests {
             ExtendedKeyUsagePurpose::ClientAuth
         }];
         let cert = params.signed_by(&key, &root).map_err(io::Error::other)?;
+        let encoded = key.serialize_der();
+        let private = PrivateKeyDer::try_from(encoded.as_slice())
+            .map_err(io::Error::other)?;
         if host {
             LocalIdentity::host(
                 HOST,
                 root.der().as_ref(),
                 cert.der().as_ref(),
-                der(&key),
+                &private,
             )
         } else {
             LocalIdentity::client(
                 root.der().as_ref(),
                 cert.der().as_ref(),
-                der(&key),
+                &private,
             )
         }
     }
@@ -375,7 +382,7 @@ mod tests {
         assert!(PublicIdentity::from_der(b"invalid", pin).is_err());
         assert!(PublicIdentity::from_der(&[0; 4097], pin).is_err());
         let oversized_key = PrivatePkcs8KeyDer::from(vec![0; 8193]).into();
-        assert!(LocalIdentity::client(&[], &[], oversized_key).is_err());
+        assert!(LocalIdentity::client(&[], &[], &oversized_key).is_err());
     }
 
     #[test]
@@ -415,7 +422,8 @@ mod tests {
         let root_der = root.der().as_ref();
         let leaf_der = cert.der().as_ref();
         require(
-            LocalIdentity::host(HOST, root_der, leaf_der, der(&wrong)).is_err(),
+            LocalIdentity::host(HOST, root_der, leaf_der, &der(&wrong))
+                .is_err(),
             "mismatched private key accepted",
         )?;
         require(
@@ -423,18 +431,18 @@ mod tests {
                 HOST,
                 other.der().as_ref(),
                 leaf_der,
-                der(&key),
+                &der(&key),
             )
             .is_err(),
             "untrusted root accepted",
         )?;
         require(
-            LocalIdentity::host("wrong.test", root_der, leaf_der, der(&key))
+            LocalIdentity::host("wrong.test", root_der, leaf_der, &der(&key))
                 .is_err(),
             "wrong server name accepted",
         )?;
         require(
-            LocalIdentity::client(root_der, leaf_der, der(&key)).is_err(),
+            LocalIdentity::client(root_der, leaf_der, &der(&key)).is_err(),
             "server-only leaf accepted for client authentication",
         )
     }
@@ -452,7 +460,7 @@ mod tests {
             LocalIdentity::client(
                 root.der().as_ref(),
                 cert.der().as_ref(),
-                der(&key),
+                &der(&key),
             )
             .is_err(),
             "expired client certificate accepted",

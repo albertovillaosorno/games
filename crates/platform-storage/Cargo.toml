@@ -12,6 +12,7 @@ categories.workspace = true
 games.workspace = true
 games-assets.workspace = true
 nix.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
