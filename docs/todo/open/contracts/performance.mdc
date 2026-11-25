@@ -58,3 +58,13 @@ covers both extreme controller identifiers, shared logical actions and
 stable release order. Fresh validation passed in run
 1795577450698187130-2832751 (95 workspace tests). No benchmark speedup is
 claimed from this algorithmic change alone.
+
+The native platform meter connects monotonic host completion timestamps
+to the shared collector and rejects reversed intervals without changing
+the previous timestamp. Load intervals and actual artifact byte sizes are
+measured separately. Linux procfs resident-memory sampling is explicit
+and reports invalid or unavailable data rather than a fabricated value.
+Tests include the real test executable and Linux process resident size.
+The native tests passed in fresh run 1795577633179381736-2865763.
+Host completion age is not a physical display or GPU latency measurement.
+Android procfs availability and actual game workloads remain unverified.
