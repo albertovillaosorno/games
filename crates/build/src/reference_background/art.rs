@@ -320,8 +320,8 @@ impl Image {
         let pixels = pens
             .iter()
             .map(|pen| {
-                if transparent && pen.pen() == TRANSPARENT {
-                    Some([0; 4])
+                if transparent {
+                    pen.isolated_rgba(colors, TRANSPARENT)
                 } else {
                     pen.rgba(colors)
                 }

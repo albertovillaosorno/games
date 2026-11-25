@@ -66,6 +66,27 @@ impl Pixel {
         }
     }
 
+    /// Resolve isolated artwork against a transparent sentinel pen.
+    ///
+    /// A shadow on that pen becomes a black alpha mask rather than
+    /// disappearing. Native alpha blending approximates the reference
+    /// palette's three-fifths channel attenuation.
+    #[must_use]
+    pub fn isolated_rgba(
+        self,
+        palette: &[[u8; 4]],
+        transparent: u16,
+    ) -> Option<[u8; 4]> {
+        if self.pen == transparent {
+            return Some(if self.shadow {
+                [0, 0, 0, 102]
+            } else {
+                [0; 4]
+            });
+        }
+        self.rgba(palette)
+    }
+
     /// Unmodified palette index, before any shadow.
     #[must_use]
     pub const fn pen(self) -> u16 {
@@ -248,6 +269,28 @@ mod tests {
 
     use super::*;
     use crate::mame::Machine;
+
+    #[test]
+    fn isolated_shadow_retains_transparency_and_palette_attenuation() {
+        let transparent = Pixel::from_pen(u16::MAX);
+        let shadow = Pixel {
+            shadow: true,
+            ..transparent
+        };
+        let palette = [[250, 100, 50, 255]];
+        assert_eq!(transparent.isolated_rgba(&palette, u16::MAX), Some([0; 4]));
+        assert_eq!(
+            shadow.isolated_rgba(&palette, u16::MAX),
+            Some([0, 0, 0, 102])
+        );
+        assert_eq!(shadow.rgba(&palette), None);
+        let opaque = Pixel::from_pen(0);
+        assert_eq!(opaque.isolated_rgba(&palette, u16::MAX), Some(palette[0]));
+        assert_eq!(
+            Pixel { shadow: true, ..opaque }.isolated_rgba(&palette, u16::MAX),
+            Some([150, 60, 30, 255])
+        );
+    }
 
     fn sheet(pixels: &[u8]) -> Result<IndexedTiles<'_>, ImportError> {
         let side = NonZeroU32::new(8).ok_or(ImportError::UnsupportedMember)?;
