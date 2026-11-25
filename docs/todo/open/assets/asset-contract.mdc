@@ -98,3 +98,12 @@ and pinned manifest address; the obsolete source fingerprint is discarded
 from the decoded model and never emitted in newly published manifests.
 Synthetic tests cover exact legacy decoding, address preservation,
 rejection of obsolete fields in version two and tampered payloads.
+
+The GNU/Linux bundle upgrade command repackages a pinned legacy bundle
+under its normalized version-two manifest address, checking each distinct
+payload before staging. Existing bundles are never removed or replaced.
+A local 258,720-byte background-art bundle was upgraded; the new manifest
+contains only title and layout provenance, and its records and payload bytes
+match the previous bundle. Repeated publication and attempts to upgrade
+already-current metadata were rejected. Synthetic tests exercise duplicate
+payload deduplication, source preservation and corrupted payload rejection.

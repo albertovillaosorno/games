@@ -146,10 +146,21 @@ remains available for explicit generic flat ZIP admission. Neither command
 establishes authenticity of original media. New version-two manifests record
 only the selected title and layout; canonical payload and manifest hashes
 remain required. Existing canonical version-one bundles remain readable at
-their original addresses without propagating source fingerprints. The selected
-Simpsons bundle is verified locally. Its observed palette RAM and mixer
-assignments match independent reference values; bounded tilemap admission
-and exact PCM reference comparison also pass. The optional GNU/Linux
+their original addresses without propagating source fingerprints.
+On GNU/Linux, republish legacy canonical bundles with
+
+```text
+bundle upgrade PARENT MANIFEST_SHA256 MANIFEST_BYTES PAYLOAD_BYTES \
+  TOTAL_BYTES COUNT
+```
+
+The four numeric limits bound metadata, per-payload and total logical bytes,
+and record count. This command verifies the pinned canonical bundle and writes
+a new version-two sibling; it never replaces or removes the old bundle.
+Keep the original bundle until its consumers use the new canonical address.
+The selected Simpsons bundle is verified locally. Its observed palette RAM
+and mixer assignments match independent reference values; bounded tilemap
+admission and exact PCM reference comparison also pass. The optional GNU/Linux
 `native-preview` feature provides `mame render-check` for selected imported
 tiles and `mame render-bench` for measured host submission intervals.
 These diagnostics establish asset access, not gameplay or screen parity.

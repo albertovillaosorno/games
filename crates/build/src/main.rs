@@ -89,10 +89,14 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use std::num::NonZeroUsize;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use games_assets::ManifestLimits;
 use games_assets::archive::ArchiveBudget;
 use games_assets::{AssetManifest, ContentHash, SourceIdentity};
 use games_importer::conversion::ConversionLimits;
@@ -106,6 +110,8 @@ use games_platform_storage::file::snapshot;
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
     "GNU/Linux: games-build package TITLE OUTPUT\n",
+    "GNU/Linux: games-build bundle upgrade PARENT MANIFEST_SHA256 ",
+    "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build zip verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
@@ -262,6 +268,8 @@ enum Command {
     StripPublish(Machine, reference_background::art::Strip),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     TilemapCheck(Machine, PathBuf, PathBuf),
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    Upgrade(PathBuf, ContentHash, ManifestLimits),
     Verify(Option<Machine>, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     WaveCompare(PathBuf, PathBuf, NonZeroU64),
@@ -287,6 +295,10 @@ impl Command {
                     title_build::Title::parse(title, &[])?,
                     output.into(),
                 ))
+            },
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            (Some("bundle"), Some("upgrade")) => {
+                Self::parse_upgrade(args.collect())
             },
             (Some("zip"), Some("verify")) => {
                 Ok(Self::Verify(None, Arguments::parse(args.collect())?))
@@ -507,6 +519,27 @@ impl Command {
         ))
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn parse_upgrade(args: Vec<OsString>) -> Result<Self, String> {
+        let [parent, raw_digest, metadata, payload, total, count] =
+            <[OsString; 6]>::try_from(args)
+                .map_err(|_args| String::from(USAGE))?;
+        let digest = text(&raw_digest)?
+            .parse()
+            .map_err(|_error| String::from("invalid manifest hash"))?;
+        let size_limit = |argument: &OsString| {
+            text(argument)?.parse::<NonZeroUsize>().map_err(|_error| {
+                String::from("invalid metadata or record limit")
+            })
+        };
+        Ok(Self::Upgrade(parent.into(), digest, ManifestLimits {
+            manifest_bytes: size_limit(&metadata)?,
+            payload_bytes: parse_limit(&payload)?,
+            records: size_limit(&count)?,
+            total_bytes: parse_limit(&total)?,
+        }))
+    }
+
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
@@ -568,6 +601,10 @@ impl Command {
 
     fn run_assets(self) -> Result<(), String> {
         match self {
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            Self::Upgrade(parent, digest, limits) => {
+                publication::upgrade(&parent, digest, limits)
+            },
             Self::Verify(machine, args) => {
                 with_source(&args, |source, archive| {
                     verify_archive(source, archive, machine)
@@ -818,6 +855,33 @@ mod tests {
         }
         assert!(Arguments::parse(args.to_vec()).is_err());
         assert!(Arguments::parse(Vec::new()).is_err());
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn bundle_upgrade_requires_pinned_address_and_all_limits() {
+        let digest = "1".repeat(64);
+        let args = [
+            "bundle", "upgrade", "output", &digest, "4096", "16", "64", "4",
+        ];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::Upgrade(_, _, _))
+        ));
+        assert!(
+            Command::parse(args.into_iter().take(7).map(OsString::from))
+                .is_err()
+        );
+        let mut invalid = args;
+        invalid[3] = "wrong";
+        assert!(
+            Command::parse(invalid.into_iter().map(OsString::from)).is_err()
+        );
+        invalid = args;
+        invalid[7] = "0";
+        assert!(
+            Command::parse(invalid.into_iter().map(OsString::from)).is_err()
+        );
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]

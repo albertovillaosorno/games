@@ -52,7 +52,9 @@ pub use publication::StagedBundle;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
 
-use super::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
+use super::bundle::{
+    BundleError, CanonicalBundle, MANIFEST_NAME, PAYLOADS_DIRECTORY,
+};
 use super::file::{DIRECTORY_FLAGS, trusted_directory};
 const MAX_DEPTH: usize = 64;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -64,6 +66,8 @@ pub enum StagingError {
     Aborted,
     /// Canonical manifest or payload validation failed.
     Asset(AssetError),
+    /// A pinned source canonical bundle failed verification.
+    Bundle(BundleError),
     /// A duplicate path, case collision or file/directory conflict.
     Collision,
     /// The filesystem or decoded stream failed.
@@ -79,6 +83,12 @@ pub enum StagingError {
 impl From<AssetError> for StagingError {
     fn from(error: AssetError) -> Self {
         Self::Asset(error)
+    }
+}
+
+impl From<BundleError> for StagingError {
+    fn from(error: BundleError) -> Self {
+        Self::Bundle(error)
     }
 }
 
@@ -378,6 +388,37 @@ pub struct CanonicalStaging {
 }
 
 impl CanonicalStaging {
+    /// Copy a pinned bundle into a new complete canonical staging transaction.
+    ///
+    /// Each distinct payload is verified before copying. Shared payloads
+    /// occupy one staged file; all declared lengths must agree. A legacy
+    /// manifest is encoded using the current fingerprint-free source metadata.
+    /// The source bundle is never modified.
+    ///
+    /// # Errors
+    /// Rejects unsafe, corrupted or oversized input and any staging failure.
+    pub fn copy_bundle(
+        parent: &Path,
+        budget: ArchiveBudget,
+        source: &CanonicalBundle,
+        limits: ManifestLimits,
+    ) -> Result<StagedBundle, StagingError> {
+        drop(source.manifest().encode(limits)?);
+        let mut stage = Self::new(parent, budget)?;
+        for record in source.manifest().records() {
+            match stage.payloads.get(&record.digest) {
+                Some(size) if *size != record.size => {
+                    return Err(AssetError::PayloadMismatch.into());
+                },
+                Some(_) => continue,
+                None => {},
+            }
+            let bytes = source.read_payload(&record.key)?;
+            stage.write_payload(record.digest, &bytes)?;
+        }
+        stage.finish(source.manifest(), limits)
+    }
+
     /// Finish a bundle only if every staged payload is declared and present.
     ///
     /// # Errors
@@ -513,8 +554,6 @@ mod tests {
     use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
 
     use super::*;
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    use crate::bundle::CanonicalBundle;
     use crate::bundle::TestRoot;
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -920,6 +959,104 @@ mod tests {
         require(
             fs::read(expected.join(format!("payloads/{digest}")))? == b"tile",
         )
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn copy_legacy_bundle_deduplicates_and_preserves_source()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let encoded = manifest.encode(canonical_limits())?;
+        let text = String::from_utf8(encoded.clone())
+            .map_err(|_error| AssetError::InvalidEncoding)?;
+        let fingerprint = ["0"; 32].join(",");
+        let legacy = text
+            .replace(
+                "\"source\":{",
+                &format!("\"source\":{{\"digest\":[{fingerprint}],"),
+            )
+            .replace("\"version\":2", "\"version\":1");
+        let legacy_digest = ContentHash::calculate(legacy.as_bytes());
+        let legacy_path = parent.path.join(format!("bundle-{legacy_digest}"));
+        let payloads = legacy_path.join(PAYLOADS_DIRECTORY);
+        fs::create_dir_all(&payloads)?;
+        fs::write(legacy_path.join(MANIFEST_NAME), legacy.as_bytes())?;
+        fs::write(payloads.join(digest.to_string()), b"tile")?;
+        let source = CanonicalBundle::open(
+            &parent.path,
+            legacy_digest,
+            canonical_limits(),
+        )?;
+        let staged = CanonicalStaging::copy_bundle(
+            &parent.path,
+            canonical_budget(),
+            &source,
+            canonical_limits(),
+        )?;
+        let current_digest = ContentHash::calculate(&encoded);
+        require(staged.digest() == current_digest)?;
+        let published = staged.publish()?;
+        require(published.durability.is_ok())?;
+        require(fs::read(published.path.join(MANIFEST_NAME))? == encoded)?;
+        require(
+            fs::read_dir(published.path.join(PAYLOADS_DIRECTORY))?.count() == 1,
+        )?;
+        require(
+            fs::read(legacy_path.join(MANIFEST_NAME))? == legacy.as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn copy_bundle_rejects_corruption_without_partial_output()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(digest, b"tile")?;
+        let staged = stage.finish(&manifest, canonical_limits())?;
+        let address = staged.digest();
+        let published = staged.publish()?;
+        require(published.durability.is_ok())?;
+        let source =
+            CanonicalBundle::open(&parent.path, address, canonical_limits())?;
+        fs::write(
+            published
+                .path
+                .join(PAYLOADS_DIRECTORY)
+                .join(digest.to_string()),
+            b"evil",
+        )?;
+        let stricter = ManifestLimits {
+            payload_bytes: NonZeroU64::MIN,
+            ..canonical_limits()
+        };
+        require(matches!(
+            CanonicalStaging::copy_bundle(
+                &parent.path,
+                canonical_budget(),
+                &source,
+                stricter,
+            ),
+            Err(StagingError::Asset(AssetError::TooLarge))
+        ))?;
+        require(matches!(
+            CanonicalStaging::copy_bundle(
+                &parent.path,
+                canonical_budget(),
+                &source,
+                canonical_limits(),
+            ),
+            Err(StagingError::Bundle(BundleError::Asset(
+                AssetError::PayloadMismatch
+            )))
+        ))?;
+        require(fs::read_dir(&parent.path)?.count() == 1)
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]

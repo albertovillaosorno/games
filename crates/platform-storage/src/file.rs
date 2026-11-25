@@ -25,7 +25,7 @@
 // - Description:
 //   - Reject special files and bound allocation using the pinned descriptor.
 // - Usage:
-//   - Read one snapshot before verifying a trusted source identity.
+//   - Read one snapshot before bounded source-format decoding.
 // - Defaults:
 //   - No final symlinks, no device access, no unchecked allocation.
 
@@ -78,7 +78,7 @@ impl From<io::Error> for FileReadError {
 /// device or following a symlink. A readable descriptor is obtained through
 /// the trusted kernel procfs and its identity is rechecked. Ancestors and
 /// procfs must be trusted; the snapshot does not authenticate its contents.
-/// Verify a trusted content hash before interpreting externally supplied bytes.
+/// Treat externally supplied bytes as untrusted and validate their structure.
 ///
 /// # Errors
 /// Rejects non-regular files, final symlinks, unavailable procfs, oversized

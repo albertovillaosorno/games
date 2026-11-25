@@ -39,7 +39,7 @@ use games_importer::conversion::ConversionLimits;
 use games_importer::mame::AssetSelection;
 use games_importer::{ImportError, SourceSnapshot};
 use games_platform_storage::bundle::CanonicalBundle;
-use games_platform_storage::staging::CanonicalStaging;
+use games_platform_storage::staging::{CanonicalStaging, StagedBundle};
 
 /// Independently verify a published asset bundle.
 ///
@@ -113,6 +113,13 @@ pub fn finish(
     let staged = stage
         .finish(converted, manifest)
         .map_err(|error| format!("complete: {error:?}"))?;
+    publish_staged(staged, converted)
+}
+
+fn publish_staged(
+    staged: StagedBundle,
+    converted: &AssetManifest,
+) -> Result<(), String> {
     let digest = staged.digest();
     let receipt = staged
         .publish()
@@ -152,6 +159,36 @@ pub(crate) fn staging_budget(
         .and_then(NonZeroU64::new)
         .ok_or_else(overflow)?;
     Ok(ArchiveBudget::new(max_entry, total, count))
+}
+
+/// Republish a pinned legacy canonical bundle with current metadata.
+///
+/// # Errors
+/// Rejects already-current metadata, corruption, limits or publication errors.
+pub fn upgrade(
+    parent: &Path,
+    digest: ContentHash,
+    limits: ManifestLimits,
+) -> Result<(), String> {
+    let source = CanonicalBundle::open(parent, digest, limits)
+        .map_err(|error| format!("bundle: {error:?}"))?;
+    let manifest = source.manifest();
+    let encoded = manifest
+        .encode(limits)
+        .map_err(|error| format!("manifest: {error:?}"))?;
+    if ContentHash::calculate(&encoded) == digest {
+        return Err(String::from(
+            "bundle already uses current manifest metadata",
+        ));
+    }
+    let staged = CanonicalStaging::copy_bundle(
+        parent,
+        staging_budget(limits)?,
+        &source,
+        limits,
+    )
+    .map_err(|error| format!("copy bundle: {error:?}"))?;
+    publish_staged(staged, manifest)
 }
 
 #[cfg(test)]
