@@ -318,3 +318,27 @@ menu-driven exit. The revised active game still rendered uncapped.
 These are single paired software-rendered process observations, not
 physical GPU utilisation or input-to-photon measurements. The fresh
 workspace validation passed in run 1795605886548083151-4173262.
+
+The optional native `--measure` launch flag instruments visible gameplay
+without changing the fixed tick or presentation policy. It times host
+loop work through successful submission, samples RSS every 120 drawn
+frames, and records one oldest applied local SDL event age per frame.
+Only nonempty admitted action batches enter the timing ledger; rejected
+batches retain their original timestamp through retry. Execution of
+their actual target tick makes them eligible for a subsequent successful
+gameplay submission. Remote input, physical scanout and GPU completion
+are not measured. Pausing or changing logical extent or display settings
+separates reports; skipped submissions do not create frame samples.
+
+A visible Xvfb/software-OpenGL run with the verified local version-two
+art and four-seat X11 keyboard workload submitted 1,918 aspect-fit
+320x224 frames: mean host work 1.19 ms, one miss of 16.67 ms, 35
+applied-input age samples with mean 10.6 ms, and sampled peak RSS
+118,550,528 bytes. A second run resized the adaptive window and recorded
+three separate 320x224, 400x224 and 320x224 segments (254, 1,551 and
+1,028 submitted frames respectively), with no 16.67 ms misses.
+The 400x224 segment averaged 1.40 ms host work and 10.47 ms age for
+30 applied-input samples. Both runs produced visibly different
+before/after captures and exited through the keyboard-driven menu.
+The figures describe these local software-rendered sessions, not
+physical hardware, display latency or end-to-end LAN latency.

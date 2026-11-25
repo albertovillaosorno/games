@@ -385,3 +385,13 @@ changed 1,008 pixels confined to the reserved seat's HUD; rejoin
 restored the earlier frame exactly. Remote movement then changed
 19,539 world pixels. This is process suspension on one machine, not
 physical network-partition or multi-device acceptance.
+
+For an opt-in visible native performance report, use `--measure` before
+`--touch`, `--display` or the asset selection instead of `--smoke`.
+Startup reports the renderer, load interval, RSS and executable size.
+Gameplay reports are emitted when leaving play, changing logical extent
+or display settings, and closing the host. They include host work time
+through successful presentation, a 60 Hz budget, sampled RSS and the
+oldest applied local input age for frames with an observed event.
+They exclude menu-only and failed submissions, remote input latency,
+physical scanout and GPU-completion timing.

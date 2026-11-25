@@ -36,6 +36,7 @@ mod controller;
 mod encounter;
 mod lan;
 mod launch;
+mod measurement;
 mod poses;
 mod station_hud;
 mod touch;
@@ -56,7 +57,7 @@ use games::performance::{
 };
 use games::presentation::{DisplaySettings, FramePacing, WindowMode};
 use games::replay::{
-    EnqueueResult, InputStep, LiveInputLimits, LiveSimulation, QueueRejection,
+    InputStep, LiveInputLimits, LiveSimulation, QueueRejection, RejectedInput,
 };
 use games::session::LocalSession;
 use games::timing::StepClock;
@@ -304,6 +305,7 @@ impl Controls {
         let actions: Vec<_> =
             self.actions(event)?.into_iter().map(Into::into).collect();
         enqueue_local(live, elapsed, actions)
+            .map(|_tick| ())
             .map_err(|rejected| failure(rejected.reason))
     }
 
@@ -681,6 +683,7 @@ impl<'source> Sources<'source> {
 struct PreviewOptions<'profiles> {
     display: DisplaySettings,
     hidden: bool,
+    measure: bool,
     preferences: Option<&'profiles DisplayStore>,
     profiles: &'profiles Profiles,
     touch_enabled: bool,
@@ -697,13 +700,23 @@ struct NativeBatch {
 }
 
 impl NativeBatch {
-    fn submit(self, live: &mut LiveSimulation<HostedCabinet>) -> Option<Self> {
-        enqueue_local(live, self.elapsed, self.actions)
-            .err()
-            .map(|rejected| Self {
+    fn submit(
+        self,
+        live: &mut LiveSimulation<HostedCabinet>,
+        measurement: Option<&mut measurement::LiveMeasurement>,
+    ) -> Option<Self> {
+        match enqueue_local(live, self.elapsed, self.actions) {
+            Ok(admitted) => {
+                if let (Some(tick), Some(meter)) = (admitted, measurement) {
+                    meter.admit(tick, self.elapsed);
+                }
+                None
+            },
+            Err(rejected) => Some(Self {
                 actions: rejected.actions,
                 elapsed: self.elapsed,
-            })
+            }),
+        }
     }
 }
 
@@ -713,6 +726,7 @@ struct Interactive<'preferences> {
     deferred: Option<NativeBatch>,
     host: Option<HostLan>,
     input: NativeInput,
+    measurement: Option<measurement::LiveMeasurement>,
     preferences: Option<&'preferences DisplayStore>,
     previous: Duration,
     requested: DisplaySettings,
@@ -720,6 +734,40 @@ struct Interactive<'preferences> {
 }
 
 impl<'preferences> Interactive<'preferences> {
+    fn advance_measurement(
+        &mut self,
+        next_tick: u64,
+    ) -> Result<(), RenderError> {
+        if let Some(meter) = &mut self.measurement {
+            meter.advance(next_tick);
+            if self.simulation.state().state().phase() != Phase::Playing {
+                meter.finish()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn measure_presented(
+        &mut self,
+        drawn: bool,
+        started: Option<Instant>,
+        layout: FrameLayout,
+    ) -> Result<(), RenderError> {
+        if drawn
+            && self.simulation.state().state().phase() == Phase::Playing
+            && let (Some(meter), Some(beginning)) =
+                (&mut self.measurement, started)
+        {
+            meter.observe(measurement::FrameSample {
+                display: self.applied,
+                elapsed: self.input.elapsed(),
+                layout,
+                work: beginning.elapsed(),
+            })?;
+        }
+        Ok(())
+    }
+
     fn new(
         startup: InputStartup,
         options: PreviewOptions<'preferences>,
@@ -748,6 +796,9 @@ impl<'preferences> Interactive<'preferences> {
             deferred: None,
             host,
             input,
+            measurement: options
+                .measure
+                .then(measurement::LiveMeasurement::default),
             preferences: options.preferences,
             previous: Duration::ZERO,
             requested: cabinet.session().display(),
@@ -761,7 +812,8 @@ impl<'preferences> Interactive<'preferences> {
         wait_ms: u32,
     ) -> Result<EventBatch, RenderError> {
         if let Some(pending) = self.deferred.take() {
-            self.deferred = pending.submit(&mut self.simulation);
+            self.deferred =
+                pending.submit(&mut self.simulation, self.measurement.as_mut());
             if self.deferred.is_some() {
                 return Ok(EventBatch::Empty);
             }
@@ -809,8 +861,8 @@ impl<'preferences> Interactive<'preferences> {
             .into_iter()
             .map(Into::into)
             .collect();
-        self.deferred =
-            NativeBatch { actions, elapsed }.submit(&mut self.simulation);
+        self.deferred = NativeBatch { actions, elapsed }
+            .submit(&mut self.simulation, self.measurement.as_mut());
         Ok(self.deferred.is_none())
     }
 
@@ -825,6 +877,7 @@ impl<'preferences> Interactive<'preferences> {
         }
         let mut presented = None;
         while self.simulation.state().state().phase() != Phase::Exited {
+            let started = self.measurement.as_ref().map(|_| Instant::now());
             let wait_ms = presentation_wait(self.simulation.state());
             let batch = self.poll(scene, wait_ms)?;
             if batch == EventBatch::Stopped {
@@ -836,7 +889,8 @@ impl<'preferences> Interactive<'preferences> {
             let elapsed = self.input.elapsed();
             let delta = elapsed.saturating_sub(self.previous);
             self.previous = elapsed;
-            let _advanced = self.simulation.advance(delta).map_err(failure)?;
+            let advanced = self.simulation.advance(delta).map_err(failure)?;
+            self.advance_measurement(advanced.next_tick)?;
             let hosted = self.simulation.state();
             let cabinet = hosted.state();
             art.hud.update_connections(hosted.connected_remotes());
@@ -857,29 +911,37 @@ impl<'preferences> Interactive<'preferences> {
                 let drawn = art.present(scene, cabinet)?;
                 presented = (drawn && cabinet.phase() != Phase::Playing)
                     .then_some(*hosted);
+                self.measure_presented(drawn, started, scene.layout())?;
             }
+        }
+        if let Some(measurement) = &mut self.measurement {
+            measurement.finish()?;
         }
         Ok(())
     }
 }
 
+type LocalAdmission<Input> = Result<Option<u64>, RejectedInput<Input>>;
+
 fn enqueue_local<Simulation>(
     live: &mut LiveSimulation<Simulation>,
     elapsed: Duration,
     actions: Vec<Simulation::Input>,
-) -> EnqueueResult<Simulation::Input>
+) -> LocalAdmission<Simulation::Input>
 where
     Simulation: InputStep,
 {
     if actions.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    match live.enqueue_at(elapsed, actions) {
-        Err(rejected) if rejected.reason == QueueRejection::Late => {
-            live.enqueue(live.next_tick(), rejected.actions)
-        },
-        result => result,
-    }
+    let Some(tick) = live.tick_at(elapsed) else {
+        return Err(RejectedInput {
+            actions,
+            reason: QueueRejection::Future,
+        });
+    };
+    let target = tick.max(live.next_tick());
+    live.enqueue(target, actions).map(|()| Some(target))
 }
 
 fn frame_due(
@@ -1163,6 +1225,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         controls,
         display,
         host,
+        measure,
         preferences,
         smoke,
         touch_enabled,
@@ -1189,6 +1252,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
                 PreviewOptions {
                     display,
                     hidden: smoke,
+                    measure,
                     preferences: preferences.as_ref(),
                     profiles: &profiles,
                     touch_enabled,
@@ -1517,7 +1581,7 @@ fn smoke_peak_report() -> Result<(), RenderError> {
     .map_err(failure)
 }
 
-fn smoke_startup_report(
+fn startup_report(
     scene: &SceneSession<'_, '_>,
     renderer: &str,
     started: Instant,
@@ -1857,11 +1921,14 @@ fn window(
         .as_ref()
         .map(audio::Playback::open)
         .transpose()?;
-    let renderer = options.hidden.then(|| window.renderer_name());
+    let renderer =
+        (options.hidden || options.measure).then(|| window.renderer_name());
     window.with_scene(layout, limits, |scene| {
         let mut art = Scene::load(scene, source, options, reserved)?;
         if let Some(name) = renderer.as_deref() {
-            smoke_startup_report(scene, name, load_started)?;
+            startup_report(scene, name, load_started)?;
+        }
+        if options.hidden {
             smoke_settings(scene, &mut art, options)?;
             if let Some(bundle) = &source.world {
                 world::smoke(scene, &mut art, bundle, options)?;
@@ -2047,14 +2114,12 @@ mod tests {
     -> Result<(), RenderError> {
         let mut host = limited_host()?;
         let pending = native_batch(Control::Start, true, 3)
-            .submit(&mut host)
-            .ok_or_else(|| {
-            failure("future batch was admitted too early")
-        })?;
+            .submit(&mut host, None)
+            .ok_or_else(|| failure("future batch was admitted too early"))?;
         let _catchup = host
             .advance(TICK_INTERVAL.saturating_mul(2))
             .map_err(failure)?;
-        if pending.submit(&mut host).is_some() {
+        if pending.submit(&mut host, None).is_some() {
             return Err(failure("batch rejected within future window"));
         }
         let _before_event = host.advance(TICK_INTERVAL).map_err(failure)?;
@@ -2074,7 +2139,7 @@ mod tests {
         let mut host = limited_host()?;
         for (control, tick) in [(Control::Start, 0), (Control::Right, 1)] {
             if native_batch(control, true, tick)
-                .submit(&mut host)
+                .submit(&mut host, None)
                 .is_some()
             {
                 return Err(failure("initial native input rejected"));
@@ -2082,17 +2147,17 @@ mod tests {
             let _step = host.advance(TICK_INTERVAL).map_err(failure)?;
         }
         if native_batch(Control::Start, false, 2)
-            .submit(&mut host)
+            .submit(&mut host, None)
             .is_some()
         {
             return Err(failure("could not fill live queue"));
         }
         let pending = native_batch(Control::Right, false, 2)
-            .submit(&mut host)
+            .submit(&mut host, None)
             .ok_or_else(|| failure("full live queue accepted release"))?;
         let _full_tick = host.advance(TICK_INTERVAL).map_err(failure)?;
         let [before, ..] = host.state().state().stations();
-        if pending.submit(&mut host).is_some() {
+        if pending.submit(&mut host, None).is_some() {
             return Err(failure("late release was not readmitted"));
         }
         let _released_ticks = host

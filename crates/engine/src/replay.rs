@@ -281,6 +281,15 @@ impl<Simulation: InputStep> LiveSimulation<Simulation> {
     pub const fn state(&self) -> &Simulation {
         &self.state
     }
+
+    /// Map an elapsed timestamp to its original fixed tick.
+    ///
+    /// A late tick is returned unchanged; the host may explicitly retarget
+    /// a late event to the next unexecuted tick before admission.
+    #[must_use]
+    pub fn tick_at(&self, elapsed: Duration) -> Option<u64> {
+        self.clock.tick_at(elapsed)
+    }
 }
 
 /// Failure to match a sequence of reference observations after fixed ticks.
@@ -803,6 +812,19 @@ mod tests {
         assert!(live.advance(Duration::from_millis(9)).is_ok());
         assert_eq!(live.state().0, [(0, vec![Action::Shoot])]);
         assert_eq!(live.pending_actions(), 0);
+    }
+
+    #[test]
+    fn live_tick_lookup_preserves_original_tick_even_after_execution() {
+        let Some(clock) = live_clock() else {
+            return;
+        };
+        let mut live =
+            LiveSimulation::new(OrderedState::default(), clock, limits(3, 2));
+        assert!(live.advance(Duration::from_millis(30)).is_ok());
+        assert_eq!(live.tick_at(Duration::from_millis(9)), Some(0));
+        assert_eq!(live.tick_at(Duration::from_millis(10)), Some(1));
+        assert_eq!(live.tick_at(Duration::MAX), None);
     }
 
     #[test]

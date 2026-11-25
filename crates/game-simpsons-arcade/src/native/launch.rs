@@ -44,7 +44,7 @@ use games_platform_storage::preferences::DisplayStore;
 const FILE_NAME: &str = "simpsons-arcade.local";
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
 const USAGE: &str = concat!(
-    "usage: simpsons-arcade [--smoke] [--touch] ",
+    "usage: simpsons-arcade [--smoke | --measure] [--touch] ",
     "[--display MODE] [--window MODE] [--settings DIR] [--controls FILE] ",
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
@@ -206,6 +206,7 @@ pub(super) struct Launch {
     pub(super) controls: Option<PathBuf>,
     pub(super) display: DisplaySettings,
     pub(super) host: Option<PathBuf>,
+    pub(super) measure: bool,
     pub(super) preferences: Option<DisplayStore>,
     pub(super) smoke: bool,
     pub(super) touch_enabled: bool,
@@ -215,6 +216,7 @@ impl Launch {
     pub(super) fn parse(args: Vec<OsString>) -> Result<Self, String> {
         let mut remaining = args.into_iter().peekable();
         let smoke = flag(&mut remaining, "--smoke");
+        let measure = measurement_flag(&mut remaining, smoke)?;
         let touch_enabled = flag(&mut remaining, "--touch");
         let mode = optional_value(&mut remaining, "--display")?;
         let window = optional_value(&mut remaining, "--window")?;
@@ -265,6 +267,7 @@ impl Launch {
             controls: explicit_controls.or(paths.controls),
             display,
             host,
+            measure,
             preferences,
             smoke,
             touch_enabled,
@@ -324,6 +327,14 @@ fn hash(text: &str) -> Result<OsString, String> {
         .parse()
         .map_err(|error| format!("launch hash: {error:?}"))?;
     Ok(text.into())
+}
+
+fn measurement_flag(args: &mut Arguments, smoke: bool) -> Result<bool, String> {
+    let measure = flag(args, "--measure");
+    if smoke && measure {
+        return Err(String::from("smoke and live measurement are exclusive"));
+    }
+    Ok(measure)
 }
 
 fn next(args: &mut Arguments) -> Result<OsString, String> {
@@ -554,6 +565,22 @@ mod tests {
             {
                 return Err(String::from("invalid display setting accepted"));
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn live_measurement_is_explicit_and_not_a_smoke_mode() -> Result<(), String>
+    {
+        let args = ["--measure", "parent", "m", "h", "b", "l"];
+        let launch = Launch::parse(args.map(OsString::from).into())?;
+        if !launch.measure || launch.smoke {
+            return Err(String::from("live measurement flag lost"));
+        }
+        let conflicting =
+            ["--smoke", "--measure", "parent", "m", "h", "b", "l"];
+        if Launch::parse(conflicting.map(OsString::from).into()).is_ok() {
+            return Err(String::from("conflicting measurement flags accepted"));
         }
         Ok(())
     }
