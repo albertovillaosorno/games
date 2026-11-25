@@ -134,3 +134,13 @@ Synthetic tests exercise nibble order, sprite bit and half order, exact
 region and output budgets, deterministic manifests and identity rejection.
 Live palette matching, original scene comparison, audio conversion and
 title gameplay remain open.
+
+Complete logical payload budgets are now preflighted by graphics layout
+and, for audio, by the admitted sample catalogue before any canonical
+payload is decoded or staged. MAME graphics reject insufficient output
+budgets before archive extraction; NEO graphics use the same policy.
+Preflight and actual writes share per-record, individual-size and
+aggregate-size admission. Tests reject undersized budgets before staging
+and preserve acceptance at exact limits. Encoded manifest size is still
+checked at completion by the canonical transaction, whose private sink
+must be discarded after any error.

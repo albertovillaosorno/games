@@ -88,15 +88,12 @@ where
         }
         let size = u64::try_from(bytes.len())
             .map_err(|_error| AssetError::TooLarge)?;
-        if self.records.len() >= self.limits.records.get()
-            || size > self.limits.payload_bytes.get()
-        {
-            return Err(AssetError::TooLarge.into());
-        }
-        let remaining = self
-            .remaining_bytes
-            .checked_sub(size)
-            .ok_or(AssetError::TooLarge)?;
+        let remaining = admit_payload_size(
+            self.limits,
+            self.records.len(),
+            self.remaining_bytes,
+            size,
+        )?;
         AssetRecord::validate_descriptor(key, format, size)?;
         let digest = ContentHash::calculate(bytes);
         if self.digests.insert(digest) {
@@ -205,6 +202,18 @@ where
     })
 }
 
+fn admit_payload_size(
+    limits: ManifestLimits,
+    index: usize,
+    remaining: u64,
+    size: u64,
+) -> Result<u64, AssetError> {
+    if index >= limits.records.get() || size > limits.payload_bytes.get() {
+        return Err(AssetError::TooLarge);
+    }
+    remaining.checked_sub(size).ok_or(AssetError::TooLarge)
+}
+
 /// Admit known logical payload sizes before decoding or staging.
 /// The manifest byte limit is checked against its actual encoding.
 pub(crate) fn preflight_payloads(
@@ -213,11 +222,7 @@ pub(crate) fn preflight_payloads(
 ) -> Result<(), ImportError> {
     let mut remaining = limits.total_bytes.get();
     for (index, result) in sizes.enumerate() {
-        let size = result?;
-        if index >= limits.records.get() || size > limits.payload_bytes.get() {
-            return Err(AssetError::TooLarge.into());
-        }
-        remaining = remaining.checked_sub(size).ok_or(AssetError::TooLarge)?;
+        remaining = admit_payload_size(limits, index, remaining, result?)?;
     }
     Ok(())
 }
