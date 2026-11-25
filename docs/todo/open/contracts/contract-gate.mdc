@@ -72,3 +72,13 @@ instead of silently omitting them from validation. Removed paths and
 ordinary ignored local media remain valid. Isolated Git fixtures cover
 each case; fresh validation passed in
 1795587450021173745-4186488.
+
+The cache now distinguishes absent and present environment variables,
+including an explicitly empty value. Either optional native audio or
+render smoke flag requires a fresh validation even when a prior ordinary
+pass has an identical source tree. Both flags also participate in the
+fingerprint so ordinary and native-enabled results remain distinct.
+Native device state can change without source edits; native results are
+not reused on a subsequent explicit smoke request. Isolated negative
+controls verify that each flag executes a deliberately failing check
+instead of reusing an ordinary cached success.

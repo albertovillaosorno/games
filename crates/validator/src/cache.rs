@@ -31,6 +31,7 @@
 //
 
 use std::env;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
@@ -41,6 +42,9 @@ use sha2::{Digest as _, Sha256};
 
 use crate::files::authored;
 
+const NATIVE_SMOKE_FLAGS: [&str; 2] =
+    ["GAMES_NATIVE_AUDIO_SMOKE", "GAMES_NATIVE_RENDER_SMOKE"];
+
 /// Function signature for a complete validation pass.
 pub type Check = fn(&Path, &mut File) -> Result<(), String>;
 type Fingerprint = fn(&Path) -> Result<Vec<u8>, String>;
@@ -48,6 +52,18 @@ type Fingerprint = fn(&Path) -> Result<Vec<u8>, String>;
 fn hash_value(hash: &mut Sha256, value: &[u8]) {
     hash.update(value.len().to_le_bytes());
     hash.update(value);
+}
+
+fn hash_environment(hash: &mut Sha256, key: &str, value: Option<&OsStr>) {
+    hash_value(hash, key.as_bytes());
+    hash_value(hash, &[u8::from(value.is_some())]);
+    if let Some(present) = value {
+        hash_value(hash, present.as_encoded_bytes());
+    }
+}
+
+fn native_smoke_requested(enabled: impl FnMut(&str) -> bool) -> bool {
+    NATIVE_SMOKE_FLAGS.into_iter().any(enabled)
 }
 
 fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
@@ -84,12 +100,11 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
         "CARGO_BUILD_TARGET",
         "CARGO_PROFILE_DEV_DEBUG",
         "CLIPPY_CONF_DIR",
-    ] {
-        hash_value(hash, key.as_bytes());
-        hash_value(
-            hash,
-            env::var_os(key).unwrap_or_default().as_encoded_bytes(),
-        );
+    ]
+    .into_iter()
+    .chain(NATIVE_SMOKE_FLAGS)
+    {
+        hash_environment(hash, key, env::var_os(key).as_deref());
     }
     Ok(())
 }
@@ -145,11 +160,15 @@ fn announce(message: &str) -> Result<(), String> {
 
 /// Serialize validation and reuse only successful unchanged results.
 ///
+/// Explicit native smoke tests always run fresh because display and audio
+/// devices can change independently of the source fingerprint.
+///
 /// # Errors
 ///
 /// Returns an error for failed checks, I/O or concurrent source changes.
 pub fn run(root: &Path, fresh: bool, check: Check) -> Result<(), String> {
-    run_with(root, fresh, check, fingerprint)
+    let native = native_smoke_requested(|key| env::var_os(key).is_some());
+    run_with(root, fresh || native, check, fingerprint)
 }
 
 fn run_with(
@@ -191,12 +210,17 @@ fn run_with(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::fs::{self, File};
     use std::io::Write as _;
     use std::path::Path;
     use std::thread;
 
-    use super::run_with;
+    use sha2::{Digest as _, Sha256};
+
+    use super::{
+        NATIVE_SMOKE_FLAGS, hash_environment, native_smoke_requested, run_with,
+    };
     use crate::fixtures::{directory, require};
 
     fn key(root: &Path) -> Result<Vec<u8>, String> {
@@ -254,6 +278,43 @@ mod tests {
         )?;
 
         fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn native_smoke_requests_cannot_reuse_ordinary_cache() -> Result<(), String>
+    {
+        let root = directory("native-cache")?;
+        fs::write(root.join("input"), b"unchanged")
+            .map_err(|error| error.to_string())?;
+        require(
+            !native_smoke_requested(|_flag| false),
+            "ordinary validation may reuse cache",
+        )?;
+        for flag in NATIVE_SMOKE_FLAGS {
+            run_with(&root, false, pass, key)?;
+            run_with(&root, false, fail, key)?;
+            let native = native_smoke_requested(|candidate| candidate == flag);
+            require(
+                run_with(&root, native, fail, key).is_err(),
+                "explicit native smoke must execute instead of reusing success",
+            )?;
+        }
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn environment_presence_and_value_change_the_fingerprint() {
+        let fingerprint = |value: Option<&OsStr>| {
+            let mut hash = Sha256::new();
+            hash_environment(&mut hash, "GAMES_NATIVE_RENDER_SMOKE", value);
+            hash.finalize()
+        };
+        let absent = fingerprint(None);
+        let empty = fingerprint(Some(OsStr::new("")));
+        let enabled = fingerprint(Some(OsStr::new("1")));
+        assert_ne!(absent, empty);
+        assert_ne!(empty, enabled);
+        assert_ne!(absent, enabled);
     }
 
     #[test]
