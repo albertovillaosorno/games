@@ -506,3 +506,25 @@ layouts against the general bit reader over multiple tiles. These are
 short sequential local host-process measurements, including file reads
 and hashing; they do not establish isolated decoder timing, runtime
 frame rates or performance on other hardware.
+
+At 7a01504, the normal package command emitted a 3,225,872-byte
+executable. Three interleaved offscreen OpenGL ES smoke runs per display
+policy used that packaged binary, the same 88-pose catalogue, touch,
+dummy audio and the configured NVIDIA EGL vendor on the RTX 4060
+(driver 620.70.06). All six runs verified the expected 320x304 integer
+or 400x304 adaptive extent and met the 16.667 ms host-work target
+across 3,960 submissions (600 movement and 60 combat per run).
+
+- Integer: movement means 99.005 to 100.455 microseconds, combat means
+  76.828 to 78.041 microseconds, lifetime peak RSS 89,780,224 to
+  90,021,888 bytes.
+- Adaptive: movement means 107.396 to 109.297 microseconds, combat means
+  82.930 to 85.873 microseconds, lifetime peak RSS 90,345,472 to
+  90,497,024 bytes.
+
+The largest movement submission was 3.617 ms rounded up; all startup
+samples were between 139.5 and 155.4 ms rounded outwards. The combat
+workload now spans 60 frames rather than the prior 51, so the results
+are not an identical-workload before/after benchmark. They measure host
+submission, not physical display latency, execution on the GPU, or
+actual VRAM use.
