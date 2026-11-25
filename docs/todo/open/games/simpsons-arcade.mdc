@@ -2139,3 +2139,14 @@ preceding profile run. These are individual software OpenGL samples,
 not a controlled physical performance comparison. The runs used dummy
 SDL audio and synthetic input; actual audibility and physical device
 acceptance remain open.
+
+Repeated smoke with the same optimized 3,416,904-byte binary returned
+whole-run RSS peaks of 158,564,352 bytes in 512-by-384 adaptive mode and
+157,069,312 bytes in 320-by-224 aspect-fit mode. Both verified the same
+movement, cooperative, reinforcement and restraint observations, with
+zero work-budget misses across 600 movement and 20 strike submissions.
+Two invalid custom profiles rejected unknown and duplicate keyboard
+bindings. The repeated samples indicate substantial variation in peak
+RSS; they do not establish a physical performance improvement. The
+visible remapping retry was inconclusive due to an X11 window-handle
+failure. No physical controller or audible audio acceptance is claimed.
