@@ -41,7 +41,7 @@ pub mod mame;
 pub mod wave;
 
 use std::collections::BTreeSet;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Seek};
 use std::num::NonZeroU64;
 use std::str;
 
@@ -50,7 +50,7 @@ use games_assets::archive::{
 };
 use games_assets::{AssetError, SourceIdentity};
 use zip::CompressionMethod;
-use zip::read::{ArchiveOffset, Config, ZipArchive};
+use zip::read::{ArchiveOffset, Config, ZipArchive, ZipFileEntry};
 
 /// A source admission or conversion failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,8 +131,9 @@ impl<'source> SourceSnapshot<'source> {
     /// Decode a flat ZIP source such as an arcade ROM set.
     ///
     /// Only ordinary ASCII-named files using stored or deflated compression
-    /// are accepted. One complete member is held at a time. The callback
-    /// receives it only after its size and CRC have been checked.
+    /// are accepted. All metadata and aggregate budgets are checked before
+    /// decoding any payload. One complete member is held at a time; the
+    /// callback receives it only after its size and CRC have been checked.
     /// Any callback or later member failure invalidates the entire import;
     /// the caller must stage outputs and publish only on success.
     ///
@@ -141,7 +142,7 @@ impl<'source> SourceSnapshot<'source> {
     /// and propagates conversion errors.
     pub fn visit_flat_zip<Visit>(
         &self,
-        mut budget: ArchiveBudget,
+        budget: ArchiveBudget,
         mut visit: Visit,
     ) -> Result<(), ImportError>
     where
@@ -168,45 +169,72 @@ impl<'source> SourceSnapshot<'source> {
         archive
             .validate_header_consistency()
             .map_err(|_error| ImportError::InvalidZip)?;
-        let mut names = BTreeSet::new();
+        let reservations = admit_members(&archive, budget)?;
         let mut payload = Vec::new();
-        for index in 0..archive.len() {
+        for (index, reservation) in reservations.into_iter().enumerate() {
             let mut entry = archive
                 .by_index(index)
                 .map_err(|_error| ImportError::InvalidZip)?;
-            if !entry.is_file()
-                || entry.encrypted()
-                || !matches!(
-                    entry.compression(),
-                    CompressionMethod::Stored | CompressionMethod::Deflated
-                )
-                || entry.unix_mode().is_some_and(|mode| {
-                    !matches!(mode & 0o170_000, 0 | 0o100_000)
-                        || mode & 0o111 != 0
-                })
-            {
-                return Err(ImportError::UnsupportedMember);
-            }
+            decode_member(&mut entry, reservation, &mut payload)?;
             let name = str::from_utf8(entry.name_raw())
                 .map_err(|_error| ImportError::UnsupportedMember)?;
-            if !name.is_ascii()
-                || name.contains('/')
-                || entry.name().map_err(|_error| ImportError::InvalidZip)?
-                    != name
-            {
-                return Err(ImportError::UnsupportedMember);
-            }
-            let owned_name = name.to_owned();
-            let reservation =
-                budget.admit(&owned_name, EntryKind::File, entry.size())?;
-            if !names.insert(owned_name.to_ascii_lowercase()) {
-                return Err(ImportError::Collision);
-            }
-            decode_member(&mut entry, reservation, &mut payload)?;
-            visit(&owned_name, &payload)?;
+            visit(name, &payload)?;
         }
         Ok(())
     }
+}
+
+// Admit every member before opening any decompressor or conversion sink.
+fn admit_members<R>(
+    archive: &ZipArchive<R>,
+    mut budget: ArchiveBudget,
+) -> Result<Vec<EntryBudget>, ImportError>
+where
+    R: Read + Seek,
+{
+    let mut names = BTreeSet::new();
+    let mut reservations = Vec::new();
+    reservations
+        .try_reserve_exact(archive.len())
+        .map_err(|_error| ImportError::TooLarge)?;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index_data(index)
+            .map_err(|_error| ImportError::InvalidZip)?;
+        let name = admit_member(&entry)?;
+        let reservation = budget.admit(name, EntryKind::File, entry.size())?;
+        if !names.insert(name.to_ascii_lowercase()) {
+            return Err(ImportError::Collision);
+        }
+        reservations.push(reservation);
+    }
+    Ok(reservations)
+}
+
+fn admit_member<'entry>(
+    entry: &'entry ZipFileEntry<'_>,
+) -> Result<&'entry str, ImportError> {
+    if !entry.is_file()
+        || entry.encrypted()
+        || !matches!(
+            entry.compression(),
+            CompressionMethod::Stored | CompressionMethod::Deflated
+        )
+        || entry.unix_mode().is_some_and(|mode| {
+            !matches!(mode & 0o170_000, 0 | 0o100_000) || mode & 0o111 != 0
+        })
+    {
+        return Err(ImportError::UnsupportedMember);
+    }
+    let name = str::from_utf8(entry.name_raw())
+        .map_err(|_error| ImportError::UnsupportedMember)?;
+    if !name.is_ascii()
+        || name.contains('/')
+        || entry.name().map_err(|_error| ImportError::InvalidZip)? != name
+    {
+        return Err(ImportError::UnsupportedMember);
+    }
+    Ok(name)
 }
 
 fn decode_member<R>(
@@ -457,6 +485,7 @@ mod tests {
         for limits in [
             ArchiveBudget::new(bound(8), bound(16), bound(1)),
             ArchiveBudget::new(bound(3), bound(16), bound(8)),
+            ArchiveBudget::new(bound(8), bound(7), bound(8)),
         ] {
             let mut called = false;
             let result = source.visit_flat_zip(limits, |_name, _bytes| {
@@ -465,8 +494,31 @@ mod tests {
             });
             require(result == Err(ArchiveError::TooLarge.into()) && !called)?;
         }
-        let limits = ArchiveBudget::new(bound(8), bound(7), bound(8));
-        require(inspect(&bytes, limits) == Err(ArchiveError::TooLarge.into()))
+        Ok(())
+    }
+
+    #[test]
+    fn late_metadata_failure_precedes_payload_decoding()
+    -> Result<(), ImportError> {
+        for (late_name, rejection) in [
+            ("loader.exe", ArchiveError::Executable.into()),
+            ("FIRST.BIN", ImportError::Collision),
+        ] {
+            let mut bytes = make_zip(&[
+                ("first.bin", b"unique-payload", CompressionMethod::Stored),
+                (late_name, b"later", CompressionMethod::Stored),
+            ])?;
+            replace_first(&mut bytes, b"unique-payload", b"unique-payloae")?;
+            let expected = identity();
+            let source = SourceSnapshot::new(&bytes, &expected, bound(65_536))?;
+            let mut called = false;
+            let result = source.visit_flat_zip(budget(), |_name, _payload| {
+                called = true;
+                Ok(())
+            });
+            require(result == Err(rejection) && !called)?;
+        }
+        Ok(())
     }
 
     #[test]

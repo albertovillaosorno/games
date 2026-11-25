@@ -145,3 +145,12 @@ user ownership, no group or other permission bits and no additional hard
 links. Synthetic checks reject public modes, symlinks, hard links and oversize
 credentials while accepting an owner-only file. Trusted ancestor and procfs
 assumptions remain; the caller owns parsing and credential memory lifetime.
+
+Flat ZIP imports now admit all member names, metadata and declared sizes
+against the aggregate budget before decoding the first payload. This uses
+read-only central metadata from the existing ZIP parser, retaining its full
+local-header consistency checks. Synthetic fixtures demonstrate that a late
+executable name, case collision or aggregate overflow prevents any callback;
+a deliberately corrupted first payload does not mask later unsafe metadata.
+The source byte limit still bounds the central-directory parser's input;
+its metadata allocation is not independently limited by the member count.
