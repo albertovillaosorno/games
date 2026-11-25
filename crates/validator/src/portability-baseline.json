@@ -23,11 +23,6 @@
   "crates/build/src/render_check.rs": {
     "os:linux": 2
   },
-  "crates/build/src/title_build.rs": {
-    "target:target_arch:\"x86_64\"": 1,
-    "target:target_env:\"gnu\"": 1,
-    "target:target_os:\"linux\"": 1
-  },
   "crates/game-simpsons-arcade/Cargo.toml": {
     "target-table:cfg(all(target_os = \"linux\", target_env = \"gnu\"))": 1
   },

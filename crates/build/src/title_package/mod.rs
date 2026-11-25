@@ -105,13 +105,14 @@ impl Prepared {
             return Err(String::from("expected an x86-64 ELF executable"));
         }
         let receipt = format!(
-            "Title: {}\nTarget: {NATIVE_TARGET}\nExecutable bytes: {}\n\
+            "Title: {}\nTarget: {}\nExecutable bytes: {}\n\
              Executable SHA-256: {}\n\
              Requires compatible GNU/Linux system libraries and SDL2.\n\
              No system libraries, original media or assets included.\n\
              Obtain and import lawful original assets locally.\n\
              This is a local prototype package, not a portable release.\n",
             title.binary(),
+            NATIVE_TARGET.triple(),
             bytes.len(),
             ContentHash::calculate(&bytes),
         );

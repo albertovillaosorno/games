@@ -20,6 +20,7 @@ native-preview = [
 [dependencies]
 games-assets.workspace = true
 games-importer.workspace = true
+games-platform-host.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 games-platform-storage.workspace = true

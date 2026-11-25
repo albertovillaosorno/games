@@ -48,6 +48,7 @@ fn adapter(path: &str) -> bool {
             "platform"
                 | "platform-audio"
                 | "platform-graphics"
+                | "platform-host"
                 | "platform-storage"
         )
     )

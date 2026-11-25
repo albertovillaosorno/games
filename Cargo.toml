@@ -8,6 +8,7 @@ members = [
     "crates/platform",
     "crates/platform-audio",
     "crates/platform-graphics",
+    "crates/platform-host",
     "crates/platform-storage",
     "crates/validator",
     "crates/download",
@@ -45,6 +46,10 @@ version = "0.1.0"
 
 [workspace.dependencies.games-platform-graphics]
 path = "crates/platform-graphics"
+version = "0.1.0"
+
+[workspace.dependencies.games-platform-host]
+path = "crates/platform-host"
 version = "0.1.0"
 
 [workspace.dependencies.games-platform-storage]

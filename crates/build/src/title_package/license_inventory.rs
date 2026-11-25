@@ -34,11 +34,10 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Deserialize;
 
-use crate::title_build::{NATIVE_TARGET, PREVIEW_FEATURE, Title};
+use crate::title_build::Title;
 
 const REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const SDL_VERSION: &str = "0.39.0";
@@ -95,29 +94,11 @@ impl Inventory {
             .join("crates")
             .join(format!("game-{}", title.binary()))
             .join("Cargo.toml");
-        let output = Command::new("cargo")
-            .current_dir(root)
-            .args([
-                "metadata",
-                "--locked",
-                "--format-version",
-                "1",
-                "--filter-platform",
-                NATIVE_TARGET,
-                "--features",
-                PREVIEW_FEATURE,
-                "--manifest-path",
-            ])
-            .arg(&manifest)
-            .output()
-            .map_err(|error| format!("Cargo metadata: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "Cargo metadata failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        let metadata: Metadata = serde_json::from_slice(&output.stdout)
+        let bytes = title
+            .request()?
+            .metadata(root, &manifest)
+            .map_err(|error| error.to_string())?;
+        let metadata: Metadata = serde_json::from_slice(&bytes)
             .map_err(|error| format!("Cargo metadata JSON: {error}"))?;
         metadata.inventory(root, &manifest)
     }

@@ -75,7 +75,7 @@ fn role(path: &str) -> Option<Role> {
             "engine" | "runtime" => Role::Runtime,
             "importer" => Role::Importer,
             "platform" | "platform-audio" | "platform-storage"
-            | "platform-graphics" => Role::Platform,
+            | "platform-graphics" | "platform-host" => Role::Platform,
             "validator" | "download" | "build" => Role::Tool,
             _ if name.starts_with("game-") || name.starts_with("app-") => {
                 Role::Title
@@ -646,6 +646,7 @@ mod tests {
     fn blocks_reverse_dependencies_and_mixed_adapters() {
         assert_eq!(role("crates/platform-graphics"), Some(Role::Platform));
         assert_eq!(role("crates/platform-audio"), Some(Role::Platform));
+        assert_eq!(role("crates/platform-host"), Some(Role::Platform));
         for (owner, target) in [
             (Role::Shared, Role::Tool),
             (Role::Shared, Role::Title),

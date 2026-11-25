@@ -96,3 +96,12 @@ A regression test verifies owner-only permissions, independent roots and
 cleanup without affecting another root. Four Unix API occurrences across
 two consumer files were removed from the migration baseline. The joint
 fresh workspace gate passed in run 1795636430293093179-1561568.
+
+The native title build and licence inventory now use the same typed Cargo
+request in the dependency-free host platform adapter. Host support,
+process execution and artifact lookup are owned by that adapter. The
+title registry still selects the authored package and feature. Tests
+reject option-like identifiers and verify target, feature and artifact
+path consistency. Three target condition occurrences were removed from
+the baseline. The joint fresh native gate passed in run
+1795636790890770112-1650625. No additional target toolchain is implemented.

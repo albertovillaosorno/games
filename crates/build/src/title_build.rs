@@ -34,10 +34,11 @@
 use std::ffi::OsString;
 use std::io::{Write as _, stdout};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-pub(crate) const NATIVE_TARGET: &str = "x86_64-unknown-linux-gnu";
-pub(crate) const PREVIEW_FEATURE: &str = "native-preview";
+use games_platform_host::{CargoTitle, Target};
+
+pub(crate) const NATIVE_TARGET: Target = Target::LinuxX86_64Gnu;
+const PREVIEW_FEATURE: &str = "native-preview";
 
 /// Buildable title in the current workspace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,52 +54,10 @@ impl Title {
         }
     }
 
-    const fn cargo_args(self) -> [&'static str; 11] {
-        let package = match self {
-            Self::SimpsonsArcade => "games-simpsons-arcade",
-        };
-        [
-            "build",
-            "--locked",
-            "--release",
-            "--target",
-            NATIVE_TARGET,
-            "--package",
-            package,
-            "--bin",
-            self.binary(),
-            "--features",
-            PREVIEW_FEATURE,
-        ]
-    }
-
     pub(crate) fn compile(self, root: &Path) -> Result<PathBuf, String> {
-        if !cfg!(all(
-            target_os = "linux",
-            target_arch = "x86_64",
-            target_env = "gnu"
-        )) {
-            return Err(String::from("requires an x86-64 GNU/Linux host"));
-        }
-        let target = root.join("target");
-        let status = Command::new("cargo")
-            .current_dir(root)
-            .args(self.cargo_args())
-            .arg("--target-dir")
-            .arg(&target)
-            .status()
-            .map_err(|error| format!("launch Cargo: {error}"))?;
-        if !status.success() {
-            return Err(format!("title compilation failed: {status}"));
-        }
-        let executable = target
-            .join(NATIVE_TARGET)
-            .join("release")
-            .join(self.binary());
-        if !executable.is_file() {
-            return Err(String::from("compiled title executable is missing"));
-        }
-        Ok(executable)
+        self.request()?
+            .compile(root)
+            .map_err(|error| error.to_string())
     }
 
     /// Admit a known title and the optional native target.
@@ -113,9 +72,17 @@ impl Title {
         };
         match args {
             [] => Ok(selected),
-            [target] if target == "linux-x86-64" => Ok(selected),
+            [target] if target == NATIVE_TARGET.name() => Ok(selected),
             _ => Err(String::from("expected optional target linux-x86-64")),
         }
+    }
+
+    pub(crate) fn request(self) -> Result<CargoTitle<'static>, String> {
+        let package = match self {
+            Self::SimpsonsArcade => "games-simpsons-arcade",
+        };
+        CargoTitle::new(package, self.binary(), PREVIEW_FEATURE, NATIVE_TARGET)
+            .map_err(|error| error.to_string())
     }
 
     /// Build the release executable using the selected host toolchain.

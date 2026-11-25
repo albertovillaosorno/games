@@ -236,6 +236,7 @@ dependencies = [
  "games-platform",
  "games-platform-audio",
  "games-platform-graphics",
+ "games-platform-host",
  "games-platform-storage",
  "serde",
  "serde_json",
@@ -278,6 +279,10 @@ dependencies = [
  "games",
  "sdl2",
 ]
+
+[[package]]
+name = "games-platform-host"
+version = "0.1.0"
 
 [[package]]
 name = "games-platform-storage"
