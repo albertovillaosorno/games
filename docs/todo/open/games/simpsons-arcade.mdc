@@ -1033,3 +1033,16 @@ passed with the combined 88-pose catalogue and the previous
 visible special presentation, and landing at the original
 position. Both runs missed no 16.667 ms submission budget
 across 600 movement and 51 combat frames.
+
+Isolated original Marge probes compared three-tick button pulses and
+both three- and sixty-tick jump holds. Jump-first attack offsets one,
+two and three reproduced all 96 sampled jump-only object-DMA frames;
+offsets four and five (short hold) changed the output. Attack-first
+one- and two-tick overlaps reproduced all 96 attack-only frames, not
+the simultaneous special. Separate sixty-tick jump controls for Homer,
+Bart and Lisa matched all 101 object-DMA frames at offset three and
+diverged at offset four. The shared fixed-step model now rejects early
+aerial attack edges through the first three input offsets without
+buffering a held attack. A new edge at offset four is accepted for each
+station. These observations bound initial input timing, not all airborne
+attack conditions or full original gameplay parity.

@@ -48,6 +48,11 @@ pub struct JumpMotion {
 }
 
 impl JumpMotion {
+    // A follow-up at input offset four sees three completed airborne ticks.
+    pub(super) const fn accepts_attack(self) -> bool {
+        self.tick >= 3
+    }
+
     const fn advance(mut self, held: bool) -> Option<Self> {
         if !held {
             self.release();

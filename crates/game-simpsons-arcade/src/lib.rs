@@ -256,6 +256,7 @@ impl Slot {
         if self.station.can_fight()
             && matches!(queued, Some(Maneuver::Attack { .. }))
             && let Maneuver::Jump(jump) = self.station.maneuver
+            && jump.accepts_attack()
         {
             self.station.maneuver = Maneuver::air_attack(jump);
             return;
@@ -1157,6 +1158,59 @@ mod tests {
         assert_eq!(turned.facing, Facing::Left);
         assert_eq!(turned.position.x, before.position.x.saturating_sub(2));
         assert_eq!(turned.position.y, before.position.y - 2);
+    }
+
+    #[test]
+    fn early_airborne_attack_edges_are_not_buffered() {
+        for player in Player::ALL {
+            for offset in 1..4 {
+                verify_early_airborne_attack(player, offset);
+            }
+        }
+    }
+
+    fn verify_early_airborne_attack(player: Player, offset: u64) {
+        let mut state = four_playing();
+        let before = station_for(&state, player);
+        state.input_step(3, &[change(player, Control::Secondary, true)]);
+        let input_tick = 3u64.saturating_add(offset);
+        for tick in 4..input_tick {
+            state.input_step(tick, &[]);
+        }
+        state.input_step(input_tick, &[change(player, Control::Primary, true)]);
+        for tick in input_tick.saturating_add(1)..9 {
+            state.input_step(tick, &[]);
+        }
+        let held = station_for(&state, player);
+        assert!(matches!(held.maneuver, Maneuver::Jump(j) if j.tick() == 5));
+        assert_eq!(held.position, before.position);
+        state.input_step(9, &[
+            change(player, Control::Primary, false),
+            change(player, Control::Primary, true),
+        ]);
+        assert_air_attack_started(before, station_for(&state, player));
+    }
+
+    #[test]
+    fn aerial_attack_is_accepted_at_four_tick_input_offset() {
+        for player in Player::ALL {
+            let mut state = four_playing();
+            let before = station_for(&state, player);
+            state.input_step(3, &[change(player, Control::Secondary, true)]);
+            for tick in 4..7 {
+                state.input_step(tick, &[]);
+            }
+            state.input_step(7, &pulse(player, Control::Primary));
+            assert_air_attack_started(before, station_for(&state, player));
+        }
+    }
+
+    fn assert_air_attack_started(before: Station, attack: Station) {
+        let maneuver = attack.maneuver;
+        assert!(
+            matches!(maneuver, Maneuver::AirAttack(air) if air.tick() == 0)
+        );
+        assert_eq!(attack.position.x.abs_diff(before.position.x), 2);
     }
 
     #[test]
