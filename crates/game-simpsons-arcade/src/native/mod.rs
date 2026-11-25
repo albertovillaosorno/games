@@ -35,6 +35,7 @@ mod audio;
 mod continue_hud;
 mod encounter;
 mod glyph;
+mod launch;
 mod poses;
 mod touch;
 
@@ -640,57 +641,23 @@ fn project_contact(
 ///
 /// # Errors
 /// Rejects invalid inputs, missing art, unsupported native device or input.
-pub fn run(mut args: Vec<OsString>) -> Result<(), String> {
-    let smoke = args.first().is_some_and(|arg| arg == "--smoke");
-    if smoke {
-        let _flag = args.remove(0);
-    }
-    let touch_enabled = args.first().is_some_and(|arg| arg == "--touch");
-    if touch_enabled {
-        let _flag = args.remove(0);
-    }
-    let catalogue = if args.first().is_some_and(|arg| arg == "--poses") {
-        if args.len() < 2 {
-            return Err(String::from("missing pose catalogue path"));
-        }
-        let _flag = args.remove(0);
-        poses::Catalogue::open(Path::new(&args.remove(0)))
-            .map_err(|error| format!("{error:?}"))?
-    } else {
-        poses::Catalogue::default()
-    };
-    let enemy = if args.first().is_some_and(|arg| arg == "--enemy") {
-        if args.len() < 3 {
-            return Err(String::from("missing enemy bundle hashes"));
-        }
-        let _flag = args.remove(0);
-        Some([args.remove(0), args.remove(0)])
-    } else {
-        None
-    };
-    let audio = if args.first().is_some_and(|arg| arg == "--audio") {
-        if args.len() < 2 {
-            return Err(String::from("missing audio bundle hash"));
-        }
-        let _flag = args.remove(0);
-        Some(args.remove(0))
-    } else {
-        None
-    };
-    let [directory, marge, homer, bart, lisa] = <[OsString; 5]>::try_from(args)
-        .map_err(|_error| {
-            String::from(concat!(
-                "usage: simpsons-arcade [--smoke] [--touch] ",
-                "[--poses FILE] [--enemy APPROACH_SHA STRIKE_SHA] ",
-                "[--audio SHA] PARENT ",
-                "MARGE_SHA HOMER_SHA BART_SHA LISA_SHA"
-            ))
-        })?;
-    let parent = Path::new(&directory);
+pub fn run(args: Vec<OsString>) -> Result<(), String> {
+    let launch::Launch {
+        assets,
+        smoke,
+        touch_enabled,
+    } = launch::Launch::parse(args)?;
+    let catalogue = assets
+        .poses
+        .as_deref()
+        .map(poses::Catalogue::open)
+        .transpose()
+        .map_err(|error| format!("{error:?}"))?
+        .unwrap_or_default();
     let result =
-        Sources::load(parent, &[marge, homer, bart, lisa], OptionalSources {
-            audio,
-            enemy,
+        Sources::load(&assets.directory, &assets.actors, OptionalSources {
+            audio: assets.audio,
+            enemy: assets.enemy,
             poses: catalogue,
         })
         .and_then(|source| window(&source, smoke, touch_enabled));

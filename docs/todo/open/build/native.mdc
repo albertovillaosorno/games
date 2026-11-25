@@ -46,3 +46,12 @@ directory, the hidden touch, pose, enemy and dummy-audio smoke passed
 using explicitly selected external bundles. The package remains local
 to the development host. Linux ABI portability, automatic local asset
 discovery, save paths and complete gameplay remain open.
+
+The native launch catalogue now resolves explicitly pinned local asset
+identities from an executable-adjacent file or `--config FILE`. Paths
+are relative to the catalogue. Both forms passed the complete hidden
+native smoke from an unrelated working directory using a newly built
+package and external assets. Duplicate keys and a symlinked catalogue
+were rejected. The catalogue is a trusted local selection, not media
+scanning or an authenticity proof. Portable distribution and save
+paths remain open.

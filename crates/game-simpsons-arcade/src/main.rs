@@ -23,7 +23,7 @@
 // - Summary:
 //   - Launch the title's bounded native preview.
 // - Description:
-//   - No implicit source or asset discovery.
+//   - Optional executable-adjacent pinned local launch file; no media search.
 // - Usage:
 //   - Provide the local canonical art bundle identities.
 // - Defaults:

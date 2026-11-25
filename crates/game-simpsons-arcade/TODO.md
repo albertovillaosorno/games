@@ -84,3 +84,28 @@ it opens no audio device. Nominal pitch, gain, queue timing and voice
 admission are provisional; background music and other sound effects
 are not reproduced. The hidden smoke uses a paused device to verify
 nonzero queued audio and one cue per held attack.
+
+### Local launch catalogue
+
+Create `simpsons-arcade.local` beside the native executable, or pass
+`--config FILE` after `--smoke` and `--touch` (if used). The UTF-8
+catalogue is limited to 4 KiB and accepts one `key=value` per line:
+
+```text
+version=1
+parent=../bundles
+marge=MARGE_SHA
+homer=HOMER_SHA
+bart=BART_SHA
+lisa=LISA_SHA
+```
+
+Replace the placeholders with locally verified manifest digests. Optional
+fields are `poses`, `audio`, and the pair `enemy_approach` and
+`enemy_strike`. The pose field names a catalogue file; the other optional
+fields name manifest digests. Relative paths resolve from the launch
+catalogue directory, not the working directory. Without explicit asset
+arguments, the executable reads its adjacent catalogue. It does not scan
+for original media, and bundle identity and source checks still apply.
+The catalogue is trusted local configuration, not authenticated metadata,
+and is not included in the executable package.
