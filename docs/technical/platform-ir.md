@@ -51,6 +51,7 @@ crates/platform/src/
     audio/
     lan/
     measurement/
+    process/
     storage/
     importer/
     toolchain/
@@ -109,10 +110,13 @@ backend to satisfy the capability contract and pass conformance tests.
 
 Linux presentation, input, audio and authenticated LAN expose portable
 handles over private backend ports. Shared measurement uses a process-local
-monotonic clock contract; bounded file snapshots and contributor toolchain
-requests also dispatch through the IR. Some storage and host operations remain
-transitional. Do not infer additional native support from a portable type or
-from successful compilation of the featureless core.
+monotonic clock contract. Launch arguments and status output share a process
+port. Bounded snapshots, directory observations, saves, preferences, private
+staging and publication receipts use storage contracts. Contributor validation
+uses typed toolchain requests, environment observations and a private lease,
+log and cache-state port. Remaining contributor test fixtures and title host
+scheduling still require migration. Do not infer additional native support
+from a portable type or successful compilation of the featureless core.
 
 Exercise typed contracts with deterministic in-memory adapters before adding
 new native backends. Verify event ordering, resource lifetime, capability

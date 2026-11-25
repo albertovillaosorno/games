@@ -378,3 +378,22 @@ rendering and dummy audio passed in 1795649118946447489-319502; the
 corresponding signed toolchain and graphics commits passed their hooks.
 These synthetic and virtual-device checks do not establish physical
 hardware conformance or native execution on the other target platforms.
+
+Validation cache state now uses an exclusive lease and typed success marker
+through the toolchain IR. Bounded marker reads and atomic publication
+remain native; synthetic fixtures cover invalid marker lengths, linked
+state paths and concurrent validation. Commit aa39b47 shares the staged
+storage migration and passed fresh gate 1795649572277607920-390118.
+
+Authored source, license, task, manifest and fingerprint reads use admitted
+storage snapshots (16 MiB per file); commit messages and Cargo configuration
+snapshots have a 1 MiB limit. Path observation distinguishes regular files,
+directories, links and missing entries. Canonical resolution does not
+grant access. Directory inventories admit bounded single-component names,
+and task traversal allows 65,536 entries and 64 levels. Regressions cover
+invalid names, links, oversized reads and traversal exhaustion. The fresh
+gate 1795650057480711766-610584 passed 1,465 aggregate test executions and
+all six portable core targets. Commits fe50054 and f456414 passed their
+hooks. Direct filesystem and process operations in validator test fixtures
+still need migration; the native directory observation is not an atomic
+filesystem snapshot, and no new native target is established.
