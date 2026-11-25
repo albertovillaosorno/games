@@ -246,8 +246,9 @@ cargo run --locked -p games-build -- mame strip-publish simpsons \
 
 The command verifies two to eight complete scenes before stitching exactly
 overlapping world interiors. The title verifies the strip against the
-selected base art. The latest verified strip supports up to 474
-logical columns (320 plus 154 additional pixels); wider surfaces use
+selected base art. The latest verified strip spans 764
+world columns (320 plus 444 additional pixels). The logical viewport
+is bounded to 512 columns; wider surfaces use
 aspect-fit without stretching the world. Earlier strips still work. The four
 station indicators
 spread across the width, menus and touch panel center, and hit regions
@@ -256,7 +257,8 @@ movement bounds
 apply in every display mode. The provisional opening street advances
 rightward while retaining the active party and living initial enemy
 within the original-width play area. Reinforcements enter beyond its
-edges and approach independently in world coordinates. Full stage
+edges and approach independently in world coordinates. Art-only travel
+may reach 444 columns; opening combat is capped at 154. Full stage
 progression remains open.
 Fill may crop the game HUD and is rejected with touch enabled.
 Settings

@@ -2325,7 +2325,9 @@ fn scene_limits(
                 })
                 .saturating_add(count.saturating_mul(65_536))
                 .saturating_add(shadows.saturating_mul(shadow::MAX_BYTES))
-                .saturating_add(extension.saturating_mul(401_408)),
+                .saturating_add(extension.saturating_mul(
+                    usize::try_from(world::atlas_budget()).map_err(failure)?,
+                )),
         )?,
         atlases: size(
             count

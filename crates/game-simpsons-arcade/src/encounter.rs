@@ -50,10 +50,11 @@ const DEFEAT_BLINK_TICK: u8 = 52;
 
 // First observed sprite-group admissions during rightward travel.
 // Anchors are approximate; the observed arrivals start outside the view.
+const OPENING_COMBAT_LIMIT: i16 = 154;
 const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (50, Point { x: 334, y: 176 }),
     (82, Point { x: -18, y: 208 }),
-    (154, Point { x: 334, y: 192 }),
+    (OPENING_COMBAT_LIMIT, Point { x: 334, y: 192 }),
 ];
 
 impl Encounter {
@@ -129,6 +130,14 @@ impl Encounter {
     pub(super) const fn initial(self) -> Option<Enemy> {
         let [initial, ..] = self.enemies;
         initial
+    }
+
+    pub(super) fn limit_travel(&self, travel: i16) -> i16 {
+        if self.progressive {
+            travel.min(OPENING_COMBAT_LIMIT)
+        } else {
+            travel
+        }
     }
 
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
@@ -473,7 +482,7 @@ mod tests {
     #[test]
     fn opening_street_admits_reinforcements_during_play() {
         let result = Cabinet::with_opening_street()
-            .and_then(|cabinet| cabinet.with_scroll_limit(154));
+            .and_then(|cabinet| cabinet.with_scroll_limit(444));
         assert!(result.is_ok());
         let Ok(mut cabinet) = result else {
             return;
@@ -498,6 +507,7 @@ mod tests {
         assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(0));
         cabinet.input_step(62, &[press]);
         assert_opening_arrivals(&mut cabinet);
+        assert_combat_travel_bound(&mut cabinet);
     }
 
     fn assert_opening_arrivals(cabinet: &mut Cabinet) {
@@ -516,11 +526,18 @@ mod tests {
             }
         }
         assert_eq!(cabinet.camera_origin(), 154);
+    }
+
+    fn assert_combat_travel_bound(cabinet: &mut Cabinet) {
+        for tick in 363..403 {
+            cabinet.input_step(tick, &[]);
+            assert_eq!(cabinet.camera_origin(), 154);
+        }
         let [_, release] = pulse(Control::Right);
-        cabinet.input_step(364, &[release]);
-        cabinet.input_step(365, &pulse(Control::Pause));
+        cabinet.input_step(403, &[release]);
+        cabinet.input_step(404, &pulse(Control::Pause));
         let frozen = *cabinet;
-        cabinet.input_step(366, &[]);
+        cabinet.input_step(405, &[]);
         assert_eq!(*cabinet, frozen);
         cabinet.reset_world();
         assert_eq!(cabinet.camera_origin(), 0);

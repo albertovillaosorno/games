@@ -1665,3 +1665,26 @@ All 600 movement and 20 first-strike submissions in the adaptive run
 met the 16.667 ms budget; lifetime peak RSS was 92,467,200 bytes.
 This smoke is not physical multiplayer or original cooperative combat
 acceptance.
+
+Six further independently verified street scenes stitch into a
+732-by-196 world interior (573,888 RGBA bytes). A second set of six
+scenes reproduced the same strip exactly. A stationary combat control
+stopped at travel 154; repeated primary inputs and rightward movement
+reached 444. These observations verify later art, not the later combat
+script or its progression gates. The native renderer now admits strips
+up to 736 interior columns while keeping the viewport bounded to 512.
+The art-only camera reaches 444 columns; the progressive encounter
+caps its travel at the last implemented reinforcement gate, 154, even
+when supplied a longer strip. Fixed-step tests hold direction past the
+combat limit; native readback verifies the longer strip without changing
+its pixel scale. Older short strips remain supported.
+
+Fresh workspace validation with native render and audio gates passed
+in run 1795627058601867985-23488. The 3,314,344-byte native build
+passed adaptive 426-by-304 touch smoke with and without combat, and
+aspect-fit 320-by-224 combat smoke, all verifying 444 columns of art.
+Both combat smokes verified three reinforcement meters. The adaptive
+combat run had zero missed 16.667 ms budgets across 600 movement and
+20 first-strike submissions; lifetime peak RSS was 100,708,352 bytes.
+Later-wave progression, original interaction rules and full stage
+acceptance remain open.

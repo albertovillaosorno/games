@@ -989,6 +989,7 @@ impl Cabinet {
     /// Enable bounded rightward opening-street travel.
     ///
     /// The host supplies the extent of verified additional world art.
+    /// Progressive combat remains within its verified opening section.
     /// Rendering dimensions are not simulation inputs.
     /// # Errors
     /// Rejects travel outside the representable world coordinates.
@@ -996,8 +997,12 @@ impl Cabinet {
         mut self,
         travel: u16,
     ) -> Result<Self, LayoutError> {
-        let limit = i16::try_from(travel)
+        let requested = i16::try_from(travel)
             .map_err(|_error| LayoutError::ScrollOverflow)?;
+        let limit = self
+            .encounter
+            .as_ref()
+            .map_or(requested, |encounter| encounter.limit_travel(requested));
         if self.layout.max.x.checked_add(limit).is_none() || limit < self.camera
         {
             return Err(LayoutError::ScrollOverflow);
