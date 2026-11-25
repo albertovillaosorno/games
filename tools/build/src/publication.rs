@@ -145,32 +145,6 @@ impl MediaReplacement {
     }
 }
 
-/// Independently verify a published asset bundle.
-///
-/// # Errors
-/// Rejects unexpected identities, invalid assets or output failures.
-pub fn check(
-    selection: AssetSelection,
-    parent: &Path,
-    digest: ContentHash,
-) -> Result<(), String> {
-    let limits = selection.limits();
-    let bundle = CanonicalBundle::open(parent, digest, limits)
-        .map_err(|error| format!("bundle: {error:?}"))?;
-    let manifest = bundle.manifest();
-    selection
-        .validate_manifest(manifest)
-        .map_err(|error| format!("profile manifest: {error:?}"))?;
-    for record in manifest.records() {
-        drop(
-            bundle
-                .read_payload(&record.key)
-                .map_err(|error| format!("{}: {error:?}", record.key))?,
-        );
-    }
-    super::report_manifest(manifest, bundle.digest())
-}
-
 /// Convert and publish a bounded archive without replacing any output.
 ///
 /// # Errors

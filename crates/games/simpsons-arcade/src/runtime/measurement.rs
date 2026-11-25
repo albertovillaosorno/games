@@ -29,13 +29,12 @@
 // - Defaults:
 //   - No instrumentation in ordinary play.
 
-use std::collections::BTreeMap;
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 use games::performance::{
-    FrameObservation, PerformanceCollector, QualityProfile,
+    FrameObservation, InputLedger, PerformanceCollector, QualityProfile,
 };
 use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
 use games_platform::ir::frame::RenderError;
@@ -132,47 +131,6 @@ impl Segment {
     }
 }
 
-// Retain at most one timestamp per successfully admitted fixed tick.
-struct InputLedger<Timestamp> {
-    applied: Option<Timestamp>,
-    pending: BTreeMap<u64, Timestamp>,
-}
-
-impl<Timestamp> Default for InputLedger<Timestamp> {
-    fn default() -> Self {
-        Self {
-            applied: None,
-            pending: BTreeMap::new(),
-        }
-    }
-}
-
-impl<Timestamp: Copy + Ord> InputLedger<Timestamp> {
-    /// Keep the oldest observed timestamp per nonempty admitted batch.
-    fn admit(&mut self, tick: u64, elapsed: Timestamp) {
-        let _stored = self
-            .pending
-            .entry(tick)
-            .and_modify(|oldest| *oldest = (*oldest).min(elapsed))
-            .or_insert(elapsed);
-    }
-
-    /// Retain the oldest applied event until a gameplay frame is submitted.
-    fn advance(&mut self, next_tick: u64) {
-        while self
-            .pending
-            .first_key_value()
-            .is_some_and(|(&tick, _)| tick < next_tick)
-        {
-            if let Some((_, elapsed)) = self.pending.pop_first() {
-                self.applied = Some(
-                    self.applied.map_or(elapsed, |oldest| oldest.min(elapsed)),
-                );
-            }
-        }
-    }
-}
-
 /// Retains bounded input metadata only for successfully admitted actions.
 #[derive(Default)]
 pub(super) struct LiveMeasurement {
@@ -199,8 +157,8 @@ impl LiveMeasurement {
         if let Some(segment) = self.segment.take() {
             segment.report()?;
         }
-        self.local.applied = None;
-        self.remote.applied = None;
+        let _cleared = self.local.take_applied();
+        let _remote = self.remote.take_applied();
         Ok(())
     }
 
@@ -217,10 +175,9 @@ impl LiveMeasurement {
         };
         let input_latency = self
             .local
-            .applied
-            .take()
+            .take_applied()
             .and_then(|received| sample.elapsed.checked_sub(received));
-        let remote_received = self.remote.applied.take();
+        let remote_received = self.remote.take_applied();
         if self.segment.as_ref().is_some_and(|segment| {
             segment.layout != sample.layout || segment.display != sample.display
         }) {
@@ -286,12 +243,12 @@ mod tests {
         measurement.admit(2, early);
         measurement.admit(4, later);
         measurement.advance(2);
-        assert_eq!(measurement.local.applied, None);
+        assert_eq!(measurement.local.applied(), None);
         measurement.advance(3);
-        assert_eq!(measurement.local.applied, Some(early));
+        assert_eq!(measurement.local.applied(), Some(early));
         measurement.advance(5);
-        assert_eq!(measurement.local.applied, Some(early));
-        assert_eq!(measurement.local.pending.len(), 0);
+        assert_eq!(measurement.local.applied(), Some(early));
+        assert_eq!(measurement.local.pending_ticks(), 0);
     }
 
     #[test]
@@ -377,9 +334,9 @@ mod tests {
         measurement.admit(3, next);
         measurement.advance(2);
         assert_eq!(measurement.finish(), Ok(()));
-        assert_eq!(measurement.local.applied, None);
+        assert_eq!(measurement.local.applied(), None);
         measurement.advance(4);
-        assert_eq!(measurement.local.applied, Some(next));
+        assert_eq!(measurement.local.applied(), Some(next));
     }
 
     #[test]
@@ -442,19 +399,19 @@ mod tests {
         measurement.admit_remote(1, early);
         measurement.admit_remote(3, later);
         measurement.advance(1);
-        if measurement.remote.applied.is_some() {
+        if measurement.remote.applied().is_some() {
             return Err(RenderError::InvalidSprite);
         }
         measurement.advance(2);
-        if measurement.remote.applied != Some(early) {
+        if measurement.remote.applied() != Some(early) {
             return Err(RenderError::InvalidSprite);
         }
         measurement.finish()?;
-        if measurement.remote.applied.is_some() {
+        if measurement.remote.applied().is_some() {
             return Err(RenderError::InvalidSprite);
         }
         measurement.advance(4);
-        if measurement.remote.applied != Some(later) {
+        if measurement.remote.applied() != Some(later) {
             return Err(RenderError::InvalidSprite);
         }
         Ok(())

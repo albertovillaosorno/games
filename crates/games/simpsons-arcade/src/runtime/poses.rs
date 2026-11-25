@@ -37,6 +37,9 @@ use std::num::NonZeroU64;
 use std::path::Path;
 use std::str::from_utf8;
 
+use games::animation::{
+    cycle_tick, keyframe as select_entry, optional_track_complete,
+};
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
@@ -371,9 +374,7 @@ fn enemy_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
     [Kind::Attack, Kind::Defeat, Kind::Walk]
         .into_iter()
         .all(|kind| {
-            !entries.keys().any(|(subject, existing, _)| {
-                *subject == Subject::Enemy && *existing == kind
-            }) || entries.contains_key(&(Subject::Enemy, kind, 0))
+            optional_track_complete(entries, Subject::Enemy, kind, &[0])
         })
 }
 
@@ -382,11 +383,7 @@ fn interaction_complete<Value>(
     kind: Kind,
     keys: &[u8],
 ) -> bool {
-    !entries.keys().any(|(subject, existing, _)| {
-        *subject == Subject::Enemy && *existing == kind
-    }) || keys
-        .iter()
-        .all(|tick| entries.contains_key(&(Subject::Enemy, kind, *tick)))
+    optional_track_complete(entries, Subject::Enemy, kind, keys)
 }
 
 fn repelled_requires_restraint<Value>(entries: &BTreeMap<Key, Value>) -> bool {
@@ -429,11 +426,8 @@ fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
             Pair::BartLisa => &[0, 4, 28],
             Pair::MargeHomer => &MARGE_HOMER_JUMP_KEYS,
         };
-        let jump_complete = !entries.keys().any(|(existing, kind, _)| {
-            *existing == subject && *kind == Kind::Jump
-        }) || jump_keys
-            .iter()
-            .all(|&tick| entries.contains_key(&(subject, Kind::Jump, tick)));
+        let jump_complete =
+            optional_track_complete(entries, subject, Kind::Jump, jump_keys);
         jump_complete
             && (!entries.keys().any(|(existing, _, _)| *existing == subject)
                 || [Kind::Idle, Kind::Walk]
@@ -503,17 +497,6 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
     Ok(((subject, kind, tick), digest.parse().map_err(failure)?))
 }
 
-fn select_entry<Value>(
-    entries: &BTreeMap<Key, Value>,
-    key: Key,
-) -> Option<&Value> {
-    let (subject, kind, tick) = key;
-    entries
-        .range((subject, kind, 0)..=(subject, kind, tick))
-        .next_back()
-        .map(|(_, value)| value)
-}
-
 const fn walk_duration(player: Player) -> u8 {
     match player {
         Player::Marge => 42,
@@ -523,7 +506,7 @@ const fn walk_duration(player: Player) -> u8 {
 }
 
 fn walking_offset(player: Player, elapsed: u64) -> Option<u8> {
-    u8::try_from(elapsed.checked_rem(u64::from(walk_duration(player)))?).ok()
+    cycle_tick(elapsed, walk_duration(player))
 }
 
 #[cfg(test)]

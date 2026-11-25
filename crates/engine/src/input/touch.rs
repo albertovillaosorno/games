@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
-use crate::presentation::{PresentationLayout, Viewport};
+use crate::presentation::{PresentationLayout, Viewport, centered_expansion};
 
 /// A position in the normalized control surface, inclusive at both edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +47,24 @@ pub struct TouchPoint {
 }
 
 impl TouchPoint {
+    /// Map into a centered horizontal panel without changing vertical input.
+    /// Rejects points outside the panel and invalid surface dimensions.
+    #[must_use]
+    pub fn in_centered_panel(self, panel: u32, surface: u32) -> Option<Self> {
+        if panel == 0 || surface < panel {
+            return None;
+        }
+        let offset = u64::from(centered_expansion(panel, surface))
+            .checked_mul(u64::from(u16::MAX))?;
+        let scaled = u64::from(self.x).checked_mul(u64::from(surface))?;
+        let local =
+            scaled.checked_sub(offset)?.checked_div(u64::from(panel))?;
+        Some(Self {
+            x: u16::try_from(local).ok()?,
+            ..self
+        })
+    }
+
     /// Project a contact through the rendered source and destination.
     ///
     /// Rejects letterbox space and invalid rectangles. Cropped content
@@ -91,6 +109,25 @@ impl TouchPoint {
                 viewport.height,
                 surface_height,
             )?,
+        })
+    }
+
+    /// Project panel-normalized input onto its centered full-width surface.
+    /// Rounds upward to preserve inclusive pixel-defined region boundaries.
+    #[must_use]
+    pub fn on_centered_panel(self, panel: u32, surface: u32) -> Option<Self> {
+        if panel == 0 || surface < panel {
+            return None;
+        }
+        let offset = u64::from(centered_expansion(panel, surface))
+            .checked_mul(u64::from(u16::MAX))?;
+        let scaled = u64::from(self.x)
+            .checked_mul(u64::from(panel))?
+            .checked_add(offset)?;
+        let horizontal = scaled.div_ceil(u64::from(surface));
+        Some(Self {
+            x: u16::try_from(horizontal).ok()?,
+            ..self
         })
     }
 
@@ -419,6 +456,23 @@ mod tests {
         down: bool,
     ) -> LogicalAction<&'static str> {
         LogicalAction { action, down }
+    }
+
+    #[test]
+    fn centered_panel_round_trip_preserves_control_regions() {
+        let point = TouchPoint { x: 32_768, y: 123 };
+        for surface in [320, 321, 362, 512] {
+            let projected = point.on_centered_panel(320, surface);
+            let local = projected
+                .and_then(|position| position.in_centered_panel(320, surface));
+            assert!(local.is_some_and(|value| {
+                value.x.abs_diff(point.x) <= 2 && value.y == point.y
+            }));
+        }
+        assert_eq!(point.in_centered_panel(0, 320), None);
+        assert_eq!(point.on_centered_panel(320, 319), None);
+        assert_eq!(TouchPoint { x: 0, y: 0 }.in_centered_panel(320, 512), None);
+        assert_eq!(point.on_centered_panel(320, 320), Some(point));
     }
 
     #[test]

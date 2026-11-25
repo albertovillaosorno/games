@@ -405,6 +405,8 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
+    use games_platform::ir::storage::fixtures as platform_fixtures;
+
     use super::{
         check_commit, check_deleted, check_history_bytes, check_message_file,
         check_paths, check_worktree, root,
@@ -616,16 +618,12 @@ mod tests {
         fs::remove_dir_all(fixture).map_err(|error| error.to_string())
     }
 
-    #[cfg(unix)]
     fn executable(path: &Path, bytes: &[u8]) -> Result<(), String> {
-        use std::os::unix::fs::PermissionsExt as _;
-
         write(path, bytes)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        platform_fixtures::owner_executable(path)
             .map_err(|error| error.to_string())
     }
 
-    #[cfg(unix)]
     fn hook_dispatch(
         fixture: &Path,
         hook: &str,
@@ -652,9 +650,11 @@ mod tests {
         require(actual == expected, "hook delegate order or arguments")
     }
 
-    #[cfg(unix)]
     #[test]
     fn hooks_execute_delegates_and_fail_closed() -> Result<(), String> {
+        if !platform_fixtures::AVAILABLE {
+            return Err(String::from("native fixture capability unavailable"));
+        }
         let fixture = directory("hook-dispatch")?;
         executable(
             &fixture.join("git"),

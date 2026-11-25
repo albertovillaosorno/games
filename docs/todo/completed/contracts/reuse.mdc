@@ -52,3 +52,38 @@ seat count, while both center and station offsets use the engine math.
 Regression cases cover contraction, odd expansion, invalid slot indices,
 single-seat centering and maximum u32 extents. The scoped engine,
 platform and title run passed 513 tests before the feature-isolation work.
+
+Shared engine input latency bookkeeping now retains the oldest admitted
+input per pending tick and consumes applied timestamps once. Simpsons uses
+this same ledger for local and remote input measurement. Centered touch
+panel transforms moved to the engine with the original rounding policy;
+Simpsons supplies its own panel dimensions. New pure tests exercise both
+contracts and existing title regressions remain intact. Scoped engine and
+title all-feature tests passed 329 executions, and strict Clippy passed.
+
+The engine now owns sparse animation keyframe selection and cyclic tick
+calculation. Simpsons retains its own characters, tracks and durations,
+but consumes the shared animation implementation. Tests cover missing
+frames, track isolation, exact transitions and maximum elapsed ticks.
+
+Animation tracks now accept caller-selected ordered tick types, and cycle
+timing accepts integer durations convertible to and from the elapsed tick
+representation. Optional-track completeness is shared by Simpsons enemy
+and pair animation validation. Deterministic tests cover absent tracks,
+required keys, track isolation, durations above 255 and maximum u64 ticks.
+The engine passed 113 tests and strict Clippy; Simpsons passed all 223
+all-feature tests. Title-specific animation durations remain in the title.
+
+The shared presentation mechanism now owns left-aligned meter geometry,
+pixel rectangle membership, configurable solid RGBA mask admission and
+checked RGBA row slicing. Simpsons supplies its own colours, coordinates
+and health dimensions. Tests cover large extents, out-of-range pixels,
+overflowing row offsets and invalid masks. The engine and title passed
+115 and 223 scoped tests respectively.
+
+The shared engine now owns padded horizontal camera geometry through
+StripViewport. Each title selects its design width, maximum view width
+and inset; the engine checks arithmetic and clamps camera travel to the
+available strip. Regression cases cover the existing arcade dimensions,
+an independently configured 80,000-column view and overflow rejection.
+Scoped engine and Simpsons tests passed 116 and 223 executions.

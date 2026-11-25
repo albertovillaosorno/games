@@ -96,35 +96,21 @@ impl JumpMotion {
         self.horizontal
     }
 
-    // The observed sustained ascent retains its opening pose through
-    // the first eleven displayed ticks.
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
-    pub(super) const fn opening_pose(self) -> bool {
+    /// The sustained ascent retains its opening pose for eleven ticks.
+    #[must_use]
+    pub const fn opening_pose(self) -> bool {
         self.tick < 11 && !self.released_at(self.tick)
     }
 
-    // Bound selection to the existing short-jump catalogue.
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
-    pub(super) fn pose_tick(self) -> u8 {
+    /// Bound fallback selection to the existing short-jump catalogue.
+    #[must_use]
+    pub fn pose_tick(self) -> u8 {
         self.tick.min(SHORT_JUMP_TICKS.saturating_sub(1))
     }
 
-    // Retain the middle pose only through the sustained hold,
-    // ending at release or the observed apex transition.
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
-    pub(super) const fn raised_pose(self) -> bool {
+    /// Retain the raised pose until release or the observed apex.
+    #[must_use]
+    pub const fn raised_pose(self) -> bool {
         self.tick >= 11 && self.tick < 31 && !self.released_at(self.tick)
     }
 
@@ -525,6 +511,32 @@ mod tests {
             assert!(medium.iter().max() < long.iter().max());
             assert_eq!(tap.first(), Some(&7));
         }
+    }
+
+    #[test]
+    fn jump_pose_observations_are_independent_of_presentation() {
+        verify_pose_timeline(3, 0);
+        verify_pose_timeline(15, 16);
+        verify_pose_timeline(60, 31);
+    }
+
+    fn verify_pose_timeline(hold: u8, raised_end: u8) {
+        let mut state = Maneuver::jump();
+        for tick in 0u8..60 {
+            let Maneuver::Jump(motion) = state else {
+                break;
+            };
+            assert_eq!(motion.tick(), tick);
+            assert_eq!(motion.pose_tick(), tick.min(30));
+            assert_eq!(
+                motion.opening_pose(),
+                tick < 11 && tick < hold.saturating_add(1),
+            );
+            assert_eq!(motion.raised_pose(), (11..raised_end).contains(&tick));
+            let pressing = tick.saturating_add(1) < hold;
+            state = state.advance(Player::Marge, pressing);
+        }
+        assert_eq!(state, Maneuver::Idle);
     }
 
     #[test]

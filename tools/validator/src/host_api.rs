@@ -227,7 +227,8 @@ fn inspect(stream: TokenStream, findings: &mut Findings) {
     }
 }
 
-fn findings(source: &str) -> Result<Findings, String> {
+/// Enumerate every distinct forbidden host API family in parsed source.
+pub(crate) fn findings(source: &str) -> Result<Findings, String> {
     let stream: TokenStream = source
         .parse()
         .map_err(|error| format!("Rust token parsing: {error}"))?;

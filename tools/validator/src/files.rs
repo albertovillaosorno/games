@@ -236,8 +236,9 @@ pub fn validate(root: &Path) -> Result<(), String> {
 mod tests {
     use std::fs;
     use std::path::Path;
-    #[cfg(unix)]
     use std::process::Command;
+
+    use games_platform::ir::storage::fixtures as platform_fixtures;
 
     use super::{authored, authored_command, discover, line_width, python};
     use crate::fixtures::{directory, require};
@@ -329,7 +330,6 @@ mod tests {
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 
-    #[cfg(unix)]
     fn git(root: &Path, args: &[&str]) -> Result<(), String> {
         let output = Command::new("git")
             .current_dir(root)
@@ -339,11 +339,11 @@ mod tests {
         require(output.status.success(), "fixture Git command")
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejects_git_paths_hidden_from_file_discovery() -> Result<(), String> {
-        use std::os::unix::fs::symlink;
-
+        if !platform_fixtures::AVAILABLE {
+            return Err(String::from("native fixture capability unavailable"));
+        }
         let root = directory("inventory")?;
         git(&root, &["init", "--quiet"])?;
         fs::write(root.join(".gitignore"), b"/private/\n")
@@ -354,7 +354,8 @@ mod tests {
         require(authored(&root).is_ok(), "regular tracked source")?;
 
         let link = root.join("link.rs");
-        symlink("source.rs", &link).map_err(|error| error.to_string())?;
+        platform_fixtures::file_link(Path::new("source.rs"), &link)
+            .map_err(|error| error.to_string())?;
         require(authored(&root).is_err(), "untracked source symlink")?;
         git(&root, &["add", "link.rs"])?;
         require(authored(&root).is_err(), "staged source symlink")?;

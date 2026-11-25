@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - A bounded SDL2 playback queue and reusable PCM decoding storage.
+//   - An admitted SDL2 playback queue and device diagnostics.
 // - Must-Not:
 //   - Resample, mix, interpret original sound hardware or advance game time.
 // - Allows:
@@ -24,7 +24,7 @@
 // - Summary:
 //   - Exact-format native PCM playback with explicit backpressure.
 // - Description:
-//   - Checks capacity before decoding or submitting a frame range.
+//   - Opens admitted devices and verifies the obtained playback format.
 // - Usage:
 //   - Open a paused device, queue complete frames and explicitly resume.
 // - Defaults:
@@ -32,195 +32,119 @@
 //! Bounded SDL2 audio playback on Linux.
 
 use std::fmt::{self, Debug, Formatter};
-use std::num::NonZeroU32;
 
-use games_assets::pcm::PcmSamples;
 use sdl2::audio::{AudioFormat, AudioQueue, AudioSpecDesired};
 
-use crate::ir::audio::{AudioDevices, PlaybackError, PlaybackSpec};
-use crate::ir::security::audio::{
-    MAX_DEVICES, QueueLayout, valid_device, validate_device_name,
+use crate::ir::audio::{
+    AudioDevices, PlaybackBackend, PlaybackError, PlaybackPort,
 };
+use crate::ir::security::audio::{PlaybackRequest, admit_device_count};
 
-/// An exact-format native device, initially paused, with a bounded queue.
-///
-/// The reported queue size covers SDL's software queue, not samples
-/// already transferred to the device or system audio server.
-pub struct NativeAudio {
+/// Native device ownership; format and queue admission belong to the IR.
+struct AudioBackend {
     device: AudioQueue<i16>,
     driver: &'static str,
-    layout: QueueLayout,
     requested_device: Option<String>,
-    scratch: Vec<i16>,
 }
 
-impl Debug for NativeAudio {
+impl Debug for AudioBackend {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NativeAudio")
-            .field("layout", &self.layout)
-            .finish_non_exhaustive()
+        f.debug_struct("AudioBackend").finish_non_exhaustive()
     }
 }
 
-impl NativeAudio {
-    /// Discard pending software-queued frames without changing pause state.
-    pub fn clear(&self) {
+impl PlaybackBackend for AudioBackend {
+    fn clear(&self) {
         self.device.clear();
     }
 
-    /// Open the default device at the explicitly requested signed PCM format.
-    ///
-    /// # Errors
-    /// Rejects invalid configuration, unavailable devices or format changes.
-    pub fn open(spec: PlaybackSpec) -> Result<Self, PlaybackError> {
-        Self::open_on(spec, None)
-    }
-
-    /// Open an exact named device or the system default.
-    /// # Errors
-    /// Rejects malformed names, unavailable devices and format changes.
-    pub fn open_on(
-        spec: PlaybackSpec,
-        name: Option<&str>,
-    ) -> Result<Self, PlaybackError> {
-        if name.is_some_and(|value| !valid_device(value)) {
-            return Err(PlaybackError::InvalidDevice);
-        }
-        let layout = QueueLayout::new(spec)?;
-        let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
-        let audio = sdl.audio().map_err(PlaybackError::Backend)?;
-        let desired = AudioSpecDesired {
-            freq: Some(layout.frequency()),
-            channels: Some(spec.channels.get()),
-            samples: Some(spec.buffer_frames.get()),
-        };
-        let device = audio
-            .open_queue::<i16, _>(name, &desired)
-            .map_err(PlaybackError::Backend)?;
-        let obtained = device.spec();
-        if obtained.freq != layout.frequency()
-            || obtained.channels != spec.channels.get()
-            || obtained.format != AudioFormat::s16_sys()
-        {
-            return Err(PlaybackError::FormatMismatch);
-        }
-        device.pause();
-        Ok(Self {
-            device,
-            driver: audio.current_audio_driver(),
-            layout,
-            requested_device: name.map(str::to_owned),
-            scratch: Vec::new(),
-        })
-    }
-
-    /// Backend identifier and requested device name. None means the system
-    /// default, whose physical route may change outside this process.
-    #[must_use]
-    pub fn output(&self) -> (&str, Option<&str>) {
+    fn output(&self) -> (&str, Option<&str>) {
         (self.driver, self.requested_device.as_deref())
     }
 
-    /// Stop consuming software-queued frames.
-    pub fn pause(&self) {
+    fn pause(&self) {
         self.device.pause();
     }
 
-    /// Enumerate playback devices without opening or playing on them.
-    /// # Errors
-    /// Reports backend failure or enumeration beyond the bounded limit.
-    pub fn playback_devices() -> Result<AudioDevices, PlaybackError> {
-        let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
-        let audio = sdl.audio().map_err(PlaybackError::Backend)?;
-        let names = audio
-            .num_audio_playback_devices()
-            .map(|count| {
-                if count > MAX_DEVICES {
-                    return Err(PlaybackError::Capacity);
-                }
-                (0..count)
-                    .map(|index| {
-                        validate_device_name(
-                            audio
-                                .audio_playback_device_name(index)
-                                .map_err(PlaybackError::Backend)?,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()?;
-        Ok(AudioDevices {
-            driver: audio.current_audio_driver(),
-            names,
-        })
-    }
-
-    /// Decode and enqueue a verified canonical PCM frame range.
-    ///
-    /// No sample conversion other than little-endian decoding is performed.
-    /// Scratch storage is reused, and only the admitted range is decoded.
-    ///
-    /// # Errors
-    /// Rejects incompatible PCM, invalid ranges, capacity or backend failure.
-    pub fn queue_pcm(
-        &mut self,
-        pcm: &PcmSamples<'_>,
-        start: u64,
-        frames: NonZeroU32,
-    ) -> Result<(), PlaybackError> {
-        let range = self.layout.pcm_range(pcm, start, frames)?;
-        self.layout.admit(range.len(), self.device.size())?;
-        self.scratch.clear();
-        self.scratch
-            .try_reserve_exact(range.len())
-            .map_err(|_error| PlaybackError::Allocation)?;
-        self.scratch
-            .extend(pcm.samples().skip(range.start).take(range.len()));
-        self.device
-            .queue_audio(&self.scratch)
-            .map_err(PlaybackError::Backend)
-    }
-
-    /// Enqueue already mixed interleaved signed 16-bit sample frames.
-    ///
-    /// # Errors
-    /// Rejects empty or incomplete frames, capacity or backend failure.
-    pub fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError> {
-        self.layout.admit(samples.len(), self.device.size())?;
+    fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError> {
         self.device
             .queue_audio(samples)
             .map_err(PlaybackError::Backend)
     }
 
-    /// Number of sample bytes pending in the native software queue.
-    #[must_use]
-    pub fn queued_bytes(&self) -> u32 {
+    fn queued_bytes(&self) -> u32 {
         self.device.size()
     }
 
-    /// Begin consuming software-queued frames.
-    pub fn resume(&self) {
+    fn resume(&self) {
         self.device.resume();
     }
+}
+
+/// Open the already admitted request and verify the obtained format.
+pub(in crate::software) fn open_audio(
+    request: PlaybackRequest<'_>,
+) -> Result<PlaybackPort, PlaybackError> {
+    let layout = request.layout();
+    let name = request.name();
+    let spec = layout.spec();
+    let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
+    let audio = sdl.audio().map_err(PlaybackError::Backend)?;
+    let desired = AudioSpecDesired {
+        freq: Some(layout.frequency()),
+        channels: Some(spec.channels.get()),
+        samples: Some(spec.buffer_frames.get()),
+    };
+    let device = audio
+        .open_queue::<i16, _>(name, &desired)
+        .map_err(PlaybackError::Backend)?;
+    let obtained = device.spec();
+    if obtained.freq != layout.frequency()
+        || obtained.channels != spec.channels.get()
+        || obtained.format != AudioFormat::s16_sys()
+    {
+        return Err(PlaybackError::FormatMismatch);
+    }
+    device.pause();
+    Ok(Box::new(AudioBackend {
+        device,
+        driver: audio.current_audio_driver(),
+        requested_device: name.map(str::to_owned),
+    }))
+}
+
+/// Enumerate the native device names within the shared result budget.
+pub(in crate::software) fn devices() -> Result<AudioDevices, PlaybackError> {
+    let sdl = sdl2::init().map_err(PlaybackError::Backend)?;
+    let audio = sdl.audio().map_err(PlaybackError::Backend)?;
+    let names = audio
+        .num_audio_playback_devices()
+        .map(|count| {
+            admit_device_count(count)?;
+            (0..count)
+                .map(|index| {
+                    audio
+                        .audio_playback_device_name(index)
+                        .map_err(PlaybackError::Backend)
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    Ok(AudioDevices {
+        driver: audio.current_audio_driver(),
+        names,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::num::NonZeroU32;
 
     use super::super::NATIVE_SMOKE_LOCK;
     use super::*;
+    use crate::ir::audio::NativeAudio;
     use crate::ir::audio::fixtures::{configuration, pcm};
-    #[test]
-    fn rejects_invalid_explicit_device_names_before_opening() {
-        for name in ["", "bad\0name", &"a".repeat(513)] {
-            assert!(matches!(
-                NativeAudio::open_on(configuration(), Some(name)),
-                Err(PlaybackError::InvalidDevice)
-            ));
-        }
-    }
-
     fn require(condition: bool, reason: &str) -> Result<(), PlaybackError> {
         if condition {
             Ok(())

@@ -31,10 +31,14 @@
 
 //! Isolated native storage fixtures for workspace integration tests.
 
+use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
 use nix::unistd::mkdtemp;
+
+/// Whether the platform provides link and executable test fixtures.
+pub const AVAILABLE: bool = true;
 
 /// Unique private test directory, removed when its handle is dropped.
 #[derive(Debug)]
@@ -66,9 +70,22 @@ impl Drop for TestRoot {
     }
 }
 
+/// Create a file link for a disposable rejection test.
+/// # Errors
+/// Reports the host filesystem error.
+pub fn file_link(target: &Path, link: &Path) -> io::Result<()> {
+    symlink(target, link)
+}
+
+/// Mark an authored test script executable by its owner.
+/// # Errors
+/// Reports the host filesystem error.
+pub fn owner_executable(path: &Path) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
 
     use super::*;
 

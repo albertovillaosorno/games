@@ -32,7 +32,7 @@
 //! Accelerated SDL2 RGBA presentation for Linux hosts.
 
 /// Bounded GPU-resident sprite atlases and ordered scene composition.
-pub mod scene_renderer;
+mod scene_renderer;
 
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -41,6 +41,7 @@ use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
     Viewport, WindowMode,
 };
+#[cfg(test)]
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Rect, max_int_value};
@@ -49,37 +50,40 @@ use sdl2::render::{
     WindowCanvas,
 };
 use sdl2::video::FullscreenType;
-use sdl2::{EventPump, Sdl};
+use sdl2::{EventPump, Sdl, TimerSubsystem};
 
-use self::scene_renderer::{SceneSession, SceneTextures};
-use super::input::{InputStartup, NativeInput};
+use self::scene_renderer::{LinuxScene, SceneTextures};
+use super::input::{open_input, sample};
 use crate::ir::frame::{FrameLayout, RenderError};
+use crate::ir::graphics::{
+    FrameBackend, FrameRun, SceneRun, WindowBackend, WindowPort,
+};
+use crate::ir::hardware::InputSample;
+use crate::ir::input::InputPort;
 use crate::ir::scene::SceneLimits;
-/// Whether the selected host includes the graphics implementation.
-pub const AVAILABLE: bool = true;
 
 // SDL_RENDERER_ACCELERATED in the public SDL2 renderer flags.
 const ACCELERATED_FLAG: u32 = 2;
 
 /// A native window with an explicitly accelerated renderer.
-pub struct NativeWindow {
+struct LinuxWindow {
     canvas: WindowCanvas,
     mode: PresentationMode,
     sdl: Sdl,
 }
 
-impl Debug for NativeWindow {
+impl Debug for LinuxWindow {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NativeWindow").finish_non_exhaustive()
+        f.debug_struct("LinuxWindow").finish_non_exhaustive()
     }
 }
 
-impl NativeWindow {
+impl WindowBackend for LinuxWindow {
     /// Apply portable display settings before starting a render session.
     /// Fullscreen uses the desktop mode, not a resolution change.
     /// # Errors
     /// Reports a native window mode transition failure.
-    pub fn apply_display_settings(
+    fn apply_display_settings(
         &mut self,
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
@@ -95,13 +99,74 @@ impl NativeWindow {
     ///
     /// # Errors
     /// Reports unavailable controller enumeration or failed device opens.
-    pub fn input(
-        &self,
-        limit: NonZeroUsize,
-    ) -> Result<InputStartup, RenderError> {
-        NativeInput::open(&self.sdl, self.canvas.window(), limit)
+    fn input(&self, limit: NonZeroUsize) -> Result<InputPort, RenderError> {
+        open_input(&self.sdl, self.canvas.window(), limit)
     }
 
+    /// Owned name reported by the selected native rendering driver.
+    fn renderer_name(&self) -> String {
+        self.canvas.info().name.to_owned()
+    }
+
+    /// Select the presentation mode for subsequent frame and scene sessions.
+    /// Does not change the logical design dimensions.
+    fn set_presentation_mode(&mut self, mode: PresentationMode) {
+        self.mode = mode;
+    }
+
+    /// Reuse one texture and event pump for the caller's presentation loop.
+    ///
+    /// The texture never escapes its owning canvas, so a frame session
+    /// cannot accidentally present another renderer's texture.
+    ///
+    /// # Errors
+    /// Rejects unavailable textures, event pumps or callback errors.
+    fn with_frame(
+        &mut self,
+        layout: FrameLayout,
+        run: &mut FrameRun<'_>,
+    ) -> Result<(), RenderError> {
+        let creator = self.canvas.texture_creator();
+        let texture = create_texture(&creator, layout)?;
+        let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
+        let mut backend = LinuxFrame {
+            canvas: &mut self.canvas,
+            events,
+            presentation: FramePresentation { layout, mode: self.mode },
+            texture,
+            timer: self.sdl.timer().map_err(RenderError::Backend)?,
+        };
+        run(&mut backend)
+    }
+
+    /// Run an ordered sprite scene without uploading a complete CPU frame.
+    ///
+    /// The logical render target and bounded atlases belong to this window.
+    ///
+    /// # Errors
+    /// Rejects unavailable render targets, event pumps or callback errors.
+    fn with_scene(
+        &mut self,
+        layout: FrameLayout,
+        limits: SceneLimits,
+        run: &mut SceneRun<'_>,
+    ) -> Result<(), RenderError> {
+        let creator = self.canvas.texture_creator();
+        let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
+        let textures = SceneTextures::new(&creator, layout, limits, self.mode)?;
+        let mut backend = LinuxScene::new(
+            &mut self.canvas,
+            events,
+            textures,
+            self.sdl.timer().map_err(RenderError::Backend)?,
+        )?;
+        let result = run(&mut backend);
+        self.mode = backend.presentation_mode();
+        result
+    }
+}
+
+impl LinuxWindow {
     /// Open a resizable window without requesting vertical synchronization.
     ///
     /// A hidden window is useful for explicit native smoke tests. No
@@ -109,7 +174,7 @@ impl NativeWindow {
     ///
     /// # Errors
     /// Rejects invalid dimensions or unavailable native acceleration.
-    pub fn open(
+    fn open(
         title: &str,
         width: NonZeroU32,
         height: NonZeroU32,
@@ -142,93 +207,39 @@ impl NativeWindow {
             sdl,
         })
     }
+}
 
-    /// Owned name reported by the selected native rendering driver.
-    #[must_use]
-    pub fn renderer_name(&self) -> String {
-        self.canvas.info().name.to_owned()
-    }
-
-    /// Select the presentation mode for subsequent frame and scene sessions.
-    /// Does not change the logical design dimensions.
-    pub const fn set_presentation_mode(&mut self, mode: PresentationMode) {
-        self.mode = mode;
-    }
-
-    /// Reuse one texture and event pump for the caller's presentation loop.
-    ///
-    /// The texture never escapes its owning canvas, so a frame session
-    /// cannot accidentally present another renderer's texture.
-    ///
-    /// # Errors
-    /// Rejects unavailable textures, event pumps or callback errors.
-    pub fn with_frame<Output, Run>(
-        &mut self,
-        layout: FrameLayout,
-        run: Run,
-    ) -> Result<Output, RenderError>
-    where
-        Run: FnOnce(&mut FrameSession<'_, '_>) -> Result<Output, RenderError>,
-    {
-        let creator = self.canvas.texture_creator();
-        let texture = create_texture(&creator, layout)?;
-        let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
-        let mut session = FrameSession {
-            canvas: &mut self.canvas,
-            events,
-            presentation: FramePresentation { layout, mode: self.mode },
-            texture,
-        };
-        run(&mut session)
-    }
-
-    /// Run an ordered sprite scene without uploading a complete CPU frame.
-    ///
-    /// The logical render target and bounded atlases belong to this window.
-    ///
-    /// # Errors
-    /// Rejects unavailable render targets, event pumps or callback errors.
-    pub fn with_scene<Output, Run>(
-        &mut self,
-        layout: FrameLayout,
-        limits: SceneLimits,
-        run: Run,
-    ) -> Result<Output, RenderError>
-    where
-        Run: FnOnce(&mut SceneSession<'_, '_>) -> Result<Output, RenderError>,
-    {
-        let creator = self.canvas.texture_creator();
-        let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
-        let textures = SceneTextures::new(&creator, layout, limits, self.mode)?;
-        let mut session =
-            SceneSession::new(&mut self.canvas, events, textures)?;
-        let result = run(&mut session);
-        self.mode = session.presentation_mode();
-        result
+#[cfg(test)]
+impl LinuxWindow {
+    fn sample(&self, event: &Event) -> Result<InputSample, RenderError> {
+        let timer = self.sdl.timer().map_err(RenderError::Backend)?;
+        Ok(sample(event, self.canvas.window().id(), timer.ticks64()))
     }
 }
 
 /// A persistent frame texture and native event pump owned by one window.
-pub struct FrameSession<'canvas, 'texture> {
+struct LinuxFrame<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
     events: EventPump,
     presentation: FramePresentation,
     texture: Texture<'texture>,
+    timer: TimerSubsystem,
 }
 
-impl Debug for FrameSession<'_, '_> {
+impl Debug for LinuxFrame<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FrameSession")
+        f.debug_struct("LinuxFrame")
             .field("layout", &self.presentation.layout)
             .finish_non_exhaustive()
     }
 }
 
-impl FrameSession<'_, '_> {
-    /// Poll one native event for translation by the host input adapter.
-    #[must_use]
-    pub fn poll_event(&mut self) -> Option<Event> {
-        self.events.poll_event()
+impl FrameBackend for LinuxFrame<'_, '_> {
+    /// Poll one window-scoped portable input observation.
+    fn poll_event(&mut self) -> Option<InputSample> {
+        self.events.poll_event().map(|event| {
+            sample(&event, self.canvas.window().id(), self.timer.ticks64())
+        })
     }
 
     /// Upload and present a complete logical frame using nearest sampling.
@@ -238,7 +249,7 @@ impl FrameSession<'_, '_> {
     ///
     /// # Errors
     /// Rejects incorrect frame lengths or failed native operations.
-    pub fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
+    fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
         let drawn = draw_frame(
             self.canvas,
             &mut self.texture,
@@ -374,6 +385,15 @@ fn validate_dimensions(
     Ok(())
 }
 
+pub(in crate::software) fn open_window(
+    title: &str,
+    width: NonZeroU32,
+    height: NonZeroU32,
+    hidden: bool,
+) -> Result<WindowPort, RenderError> {
+    Ok(Box::new(LinuxWindow::open(title, width, height, hidden)?))
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -399,11 +419,15 @@ mod tests {
     use sdl2::surface::Surface;
     use sdl2::video::FullscreenType;
 
-    use super::super::input::{HostEvent, NativeInput};
-    use super::scene_renderer::SceneSession;
     use super::{
-        FrameLayout, FramePresentation, NativeWindow, RenderError,
-        create_texture, draw_frame,
+        FrameLayout, FramePresentation, LinuxWindow, RenderError,
+        WindowBackend as _, create_texture, draw_frame,
+    };
+    use crate::ir::graphics::FrameSession;
+    use crate::ir::graphics::scene_renderer::SceneSession;
+    use crate::ir::hardware::{InputSample, InputTransition};
+    use crate::ir::input::{
+        HostEvent, InputStartup, NativeInput, key_from_name,
     };
     use crate::ir::scene::{EventBatch, SceneLimits, SpriteDraw, SpriteRect};
 
@@ -450,7 +474,7 @@ mod tests {
 
     fn verify_routed_timestamp(
         adapter: &NativeInput,
-        native: &Event,
+        native: &InputSample,
         event: InputEvent,
     ) -> Result<(), RenderError> {
         let timestamp = adapter.event_elapsed(native).ok_or_else(|| {
@@ -648,7 +672,7 @@ mod tests {
             .lock()
             .map_err(|error| RenderError::Backend(error.to_string()))?;
         let mut window =
-            NativeWindow::open("games native smoke", nz(96), nz(48), true)?;
+            LinuxWindow::open("games native smoke", nz(96), nz(48), true)?;
         verify_native_input(&window)?;
         verify_window_mode(&mut window)?;
         window
@@ -659,7 +683,8 @@ mod tests {
         let renderer_name = window.renderer_name();
         require(!renderer_name.is_empty(), "missing renderer name")?;
         let expected_name = renderer_name.clone();
-        window.with_frame(extent()?, |frame| {
+        window.with_frame(extent()?, &mut |backend| {
+            let mut frame = FrameSession::new(backend, extent()?);
             let pixels = [RED, GREEN, BLUE, WHITE];
             require(frame.present(pixels.as_flattened())?, "no drawable")?;
             let replacement = [BLUE; 4];
@@ -670,7 +695,8 @@ mod tests {
         })?;
         let events = window.sdl.event().map_err(RenderError::Backend)?;
         let window_id = window.canvas.window().id();
-        let mut touch_input = window.input(budget(1))?.input;
+        let mut touch_input =
+            InputStartup::new(window.input(budget(1))?)?.input;
         touch_input.enable_touch();
         window.with_scene(
             extent()?,
@@ -679,9 +705,10 @@ mod tests {
                 atlases: budget(1),
                 sprites: budget(2),
             },
-            |scene| {
-                verify_native_batches(scene, &events, window_id)?;
-                verify_sprite_scene(scene, &mut touch_input)
+            &mut |backend| {
+                let mut scene = SceneSession::new(backend);
+                verify_native_batches(&mut scene, &events, window_id)?;
+                verify_sprite_scene(&mut scene, &mut touch_input)
             },
         )?;
         drop(window);
@@ -867,9 +894,7 @@ mod tests {
         )
     }
 
-    fn verify_window_mode(
-        window: &mut NativeWindow,
-    ) -> Result<(), RenderError> {
+    fn verify_window_mode(window: &mut LinuxWindow) -> Result<(), RenderError> {
         for (mode, expected) in [
             (WindowMode::Fullscreen, FullscreenType::Desktop),
             (WindowMode::Windowed, FullscreenType::Off),
@@ -886,13 +911,13 @@ mod tests {
         window.apply_display_settings(DisplaySettings::default())
     }
 
-    fn native_key(event: &Event, window_id: u32) -> Option<Scancode> {
-        if let Event::KeyDown {
-            window_id: id, scancode, ..
-        } = *event
-            && id == window_id
+    fn observed_key(event: &InputSample) -> Option<KeyboardKey> {
+        if let InputTransition::Event(HostEvent::Input(InputEvent::Key {
+            code,
+            down: true,
+        })) = event.transition()
         {
-            scancode
+            Some(KeyboardKey::from_code(code))
         } else {
             None
         }
@@ -903,8 +928,9 @@ mod tests {
         events: &EventSubsystem,
         window_id: u32,
     ) -> Result<(), RenderError> {
-        let expected = [Scancode::F22, Scancode::F23, Scancode::F24];
-        for code in expected {
+        let keys = [Scancode::F22, Scancode::F23, Scancode::F24];
+        let expected = keys.map(|key| key_from_name(key.name()));
+        for code in keys {
             events
                 .push_event(Event::KeyDown {
                     timestamp: 0,
@@ -923,7 +949,8 @@ mod tests {
                 scene.dispatch_events(budget(2), 0, |_scene, event| {
                     count = count.saturating_add(1);
                     observed.extend(
-                        native_key(event, window_id)
+                        observed_key(event)
+                            .map(Some)
                             .filter(|code| expected.contains(code)),
                     );
                     Ok(true)
@@ -940,8 +967,8 @@ mod tests {
         require(observed == expected, "queued native key order differs")
     }
 
-    fn verify_native_input(window: &NativeWindow) -> Result<(), RenderError> {
-        let mut startup = window.input(budget(4))?;
+    fn verify_native_input(window: &LinuxWindow) -> Result<(), RenderError> {
+        let mut startup = InputStartup::new(window.input(budget(4))?)?;
         require(startup.attached.len() <= 4, "controller limit exceeded")?;
         require(
             startup
@@ -954,8 +981,8 @@ mod tests {
             startup.input.discover_available()?.is_empty(),
             "repeated discovery attached an existing controller",
         )?;
-        verify_unknown_controller(&mut startup.input)?;
-        verify_touch_opt_in(&mut startup.input)?;
+        verify_unknown_controller(window, &mut startup.input)?;
+        verify_touch_opt_in(window, &mut startup.input)?;
         let event = Event::KeyDown {
             timestamp: 0,
             window_id: window.canvas.window().id(),
@@ -972,11 +999,12 @@ mod tests {
             down: true,
         };
         for native in pump.poll_iter().take(256) {
+            let sample = window.sample(&native)?;
             if let Some(HostEvent::Input(input)) =
-                startup.input.translate(&native)
+                startup.input.translate(&sample)
                 && input == expected
             {
-                return verify_routed_timestamp(&startup.input, &native, input);
+                return verify_routed_timestamp(&startup.input, &sample, input);
             }
         }
         Err(RenderError::Backend(String::from(
@@ -984,7 +1012,10 @@ mod tests {
         )))
     }
 
-    fn verify_touch_opt_in(input: &mut NativeInput) -> Result<(), RenderError> {
+    fn verify_touch_opt_in(
+        window: &LinuxWindow,
+        input: &mut NativeInput,
+    ) -> Result<(), RenderError> {
         let down = Event::FingerDown {
             timestamp: 0,
             touch_id: 3,
@@ -995,11 +1026,14 @@ mod tests {
             dy: 0.0,
             pressure: 1.0,
         };
-        require(input.translate(&down).is_none(), "touch enabled by default")?;
+        require(
+            input.translate(&window.sample(&down)?).is_none(),
+            "touch enabled by default",
+        )?;
         input.enable_touch();
         let id = ContactId { device: 3, finger: 4 };
         require(
-            input.translate(&down)
+            input.translate(&window.sample(&down)?)
                 == Some(HostEvent::Input(InputEvent::Contact {
                     id,
                     phase: ContactPhase::Down(TouchPoint {
@@ -1020,7 +1054,7 @@ mod tests {
             pressure: 0.0,
         };
         require(
-            input.translate(&up)
+            input.translate(&window.sample(&up)?)
                 == Some(HostEvent::Input(InputEvent::Contact {
                     id,
                     phase: ContactPhase::Up,
@@ -1030,6 +1064,7 @@ mod tests {
     }
 
     fn verify_unknown_controller(
+        window: &LinuxWindow,
         input: &mut NativeInput,
     ) -> Result<(), RenderError> {
         require(
@@ -1058,7 +1093,7 @@ mod tests {
             },
         ] {
             require(
-                input.translate(&unknown).is_none(),
+                input.translate(&window.sample(&unknown)?).is_none(),
                 "unknown controller produced an action",
             )?;
         }
@@ -1067,7 +1102,7 @@ mod tests {
             which: u32::MAX,
         };
         require(
-            input.translate(&stale_add).is_none(),
+            input.translate(&window.sample(&stale_add)?).is_none(),
             "device-added notification must not directly attach",
         )?;
         let removed = Event::ControllerDeviceRemoved {
@@ -1075,7 +1110,7 @@ mod tests {
             which: u32::MAX,
         };
         require(
-            input.translate(&removed).is_none(),
+            input.translate(&window.sample(&removed)?).is_none(),
             "unknown controller removal produced a detach",
         )?;
         require(

@@ -43,7 +43,6 @@ use games::input::physical::{
     ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
 };
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
-use games::presentation::PresentationLayout;
 use sdl2::controller::{Axis, Button, GameController};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::Scancode;
@@ -52,11 +51,12 @@ use sdl2::video::Window;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
 use crate::ir::frame::RenderError;
-pub use crate::ir::hardware::HostEvent;
+use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
+use crate::ir::input::{InputBackend, InputPort};
 use crate::ir::security::haptics::admit_feedback;
 
 /// Owns the opened native controllers for one host window.
-pub struct NativeInput {
+struct LinuxInput {
     controllers: BTreeMap<u64, GameController>,
     feedback_allowed: bool,
     limit: NonZeroUsize,
@@ -64,52 +64,12 @@ pub struct NativeInput {
     rediscover: bool,
     subsystem: GameControllerSubsystem,
     timer: TimerSubsystem,
-    touch_enabled: bool,
-    touch_geometry: TouchGeometry,
     window: u32,
 }
 
-#[derive(Debug, Default)]
-struct TouchGeometry {
-    cutoff: Option<Duration>,
-    layout: Option<PresentationLayout>,
-}
-
-impl TouchGeometry {
-    fn accepts(&self, stamp: Option<Duration>) -> bool {
-        self.cutoff
-            .is_none_or(|cutoff| stamp.is_some_and(|elapsed| elapsed >= cutoff))
-    }
-
-    fn observe(
-        &mut self,
-        layout: Option<PresentationLayout>,
-        elapsed: Duration,
-    ) -> bool {
-        if self.layout == layout {
-            return false;
-        }
-        let invalidated = self.layout.is_some();
-        self.layout = layout;
-        if invalidated || self.cutoff.is_some() {
-            self.cutoff = Some(elapsed);
-        }
-        invalidated
-    }
-}
-
-/// Input adapter and initial controller attachments for the shared router.
-#[derive(Debug)]
-pub struct InputStartup {
-    /// Initial attachment events, in discovery order.
-    pub attached: Vec<InputEvent>,
-    /// Adapter retaining the native controller handles.
-    pub input: NativeInput,
-}
-
-impl Debug for NativeInput {
+impl Debug for LinuxInput {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NativeInput")
+        f.debug_struct("LinuxInput")
             .field("controllers", &self.controllers.len())
             .field("limit", &self.limit)
             .field("window", &self.window)
@@ -117,7 +77,7 @@ impl Debug for NativeInput {
     }
 }
 
-impl NativeInput {
+impl InputBackend for LinuxInput {
     /// Discover controllers after a native poll returns no event.
     ///
     /// A device change in an earlier limited batch remains pending until the
@@ -125,9 +85,7 @@ impl NativeInput {
     /// unnecessary unless device availability may have changed.
     /// # Errors
     /// Reports failed controller enumeration or device open.
-    pub fn discover_after_drain(
-        &mut self,
-    ) -> Result<Vec<InputEvent>, RenderError> {
+    fn discover_after_drain(&mut self) -> Result<Vec<InputEvent>, RenderError> {
         if self.rediscover {
             self.discover_available()
         } else {
@@ -145,9 +103,7 @@ impl NativeInput {
     /// # Errors
     /// Reports failed enumeration or opening a still-available device. On
     /// failure, no new controllers or partial attachment batch are admitted.
-    pub fn discover_available(
-        &mut self,
-    ) -> Result<Vec<InputEvent>, RenderError> {
+    fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError> {
         if self.controllers.len() == self.limit.get() {
             self.rediscover = false;
             return Ok(Vec::new());
@@ -171,86 +127,15 @@ impl NativeInput {
     /// Time since the input session began, using SDL's millisecond clock.
     ///
     /// Use successive elapsed samples to advance a simulation clock.
-    #[must_use]
-    pub fn elapsed(&self) -> Duration {
+    fn elapsed(&self) -> Duration {
         Duration::from_millis(self.timer.ticks64().saturating_sub(self.origin))
     }
 
-    /// Enable touch events for a host that owns the only SDL window.
-    ///
-    /// SDL2 finger events do not expose a window ID through this adapter.
-    /// Coordinates are normalized over the entire surface, not the fitted
-    /// game viewport. Configure a shared title touch layout separately.
-    pub const fn enable_touch(&mut self) {
-        self.touch_enabled = true;
-    }
-
-    /// Map an SDL event's timestamp onto the input session's elapsed time.
-    ///
-    /// Events queued before startup belong to time zero. Poll frequently:
-    /// SDL timestamps are 32-bit milliseconds, so this reconstruction only
-    /// accepts stamps within the preceding half of that counter's range.
-    /// Returns None for a future or ambiguous timestamp.
-    #[must_use]
-    pub fn event_elapsed(&self, event: &Event) -> Option<Duration> {
-        event_elapsed(self.origin, self.timer.ticks64(), event.get_timestamp())
-    }
-
-    pub(super) fn open(
-        sdl: &Sdl,
-        window: &Window,
-        limit: NonZeroUsize,
-    ) -> Result<InputStartup, RenderError> {
-        let subsystem = sdl.game_controller().map_err(RenderError::Backend)?;
-        let timer = sdl.timer().map_err(RenderError::Backend)?;
-        let mut input = Self {
-            controllers: BTreeMap::new(),
-            feedback_allowed: window.has_input_focus()
-                && !window.is_minimized(),
-            limit,
-            origin: timer.ticks64(),
-            rediscover: false,
-            subsystem,
-            timer,
-            touch_enabled: false,
-            touch_geometry: TouchGeometry::default(),
-            window: window.id(),
-        };
-        let attached = input.discover_available()?;
-        Ok(InputStartup { attached, input })
-    }
-
-    fn stop_all_feedback(&mut self) {
-        for controller in self.controllers.values_mut() {
-            stop_feedback(controller);
+    fn event_elapsed(&self, event: &InputSample) -> Option<Duration> {
+        if !event.matches_window(u64::from(self.window)) {
+            return None;
         }
-    }
-
-    /// Reconcile touch with the presented layout before polling events.
-    ///
-    /// A changed or lost presented transform invalidates held contacts.
-    /// Route `TouchCancelled` at the returned elapsed time before later
-    /// native transitions.
-    /// Once invalidated, queued finger events older than the observation
-    /// are ignored rather than projected onto a different presentation.
-    /// # Errors
-    /// Reports a failed drawable query.
-    pub fn synchronize_touch<Observe>(
-        &mut self,
-        observe: Observe,
-    ) -> Result<Option<Duration>, RenderError>
-    where
-        Observe: FnOnce() -> Result<Option<PresentationLayout>, RenderError>,
-    {
-        if !self.touch_enabled {
-            return Ok(None);
-        }
-        let layout = observe()?;
-        let elapsed = self.elapsed();
-        Ok(self
-            .touch_geometry
-            .observe(layout, elapsed)
-            .then_some(elapsed))
+        event.elapsed_since(Duration::from_millis(self.origin))
     }
 
     /// Translate one polled native event, recording device changes.
@@ -259,43 +144,36 @@ impl NativeInput {
     /// Drain queued removals before enumerating current joystick indices.
     /// Button, remap and removal events use admitted instance identifiers.
     /// Only devices within the explicit capacity may be opened.
-    #[must_use]
-    pub fn translate(&mut self, event: &Event) -> Option<HostEvent> {
-        if matches!(event, Event::ControllerDeviceAdded { .. }) {
-            self.rediscover |= self.controllers.len() < self.limit.get();
+    fn translate(&mut self, event: &InputSample) -> Option<HostEvent> {
+        if !event.matches_window(u64::from(self.window)) {
             return None;
         }
-        if let Event::ControllerDeviceRemoved { which, .. } = *event {
-            let device = u64::from(which);
-            let removed = self.controllers.remove(&device);
-            self.rediscover |= self.controllers.len() < self.limit.get();
-            return removed.map(|mut controller| {
-                stop_feedback(&mut controller);
-                HostEvent::Input(InputEvent::Detached { device })
-            });
-        }
-        if self.touch_enabled && event.is_finger() {
-            if !self.touch_geometry.accepts(self.event_elapsed(event)) {
+        let routed = match event.transition() {
+            InputTransition::DiscoveryHint => {
+                self.rediscover |= self.controllers.len() < self.limit.get();
                 return None;
-            }
-            return route_contact(event);
-        }
-        let routed = route(event, self.window);
+            },
+            InputTransition::Disconnected(device) => {
+                let removed = self.controllers.remove(&device);
+                self.rediscover |= self.controllers.len() < self.limit.get();
+                return removed.map(|mut controller| {
+                    stop_feedback(&mut controller);
+                    HostEvent::Input(InputEvent::Detached { device })
+                });
+            },
+            InputTransition::FocusGained => {
+                self.feedback_allowed = true;
+                return None;
+            },
+            InputTransition::Ignored => return None,
+            InputTransition::Event(routed) => Some(routed),
+        };
         if matches!(
             routed,
             Some(HostEvent::Quit | HostEvent::Input(InputEvent::FocusLost))
         ) {
             self.feedback_allowed = false;
             self.stop_all_feedback();
-        } else if matches!(
-            event,
-            Event::Window {
-                window_id,
-                win_event: WindowEvent::FocusGained,
-                ..
-            } if *window_id == self.window
-        ) {
-            self.feedback_allowed = true;
         }
         if let Some(HostEvent::Input(
             InputEvent::Axis { device, .. }
@@ -310,13 +188,42 @@ impl NativeInput {
     }
 }
 
-impl Drop for NativeInput {
+impl LinuxInput {
+    fn open(
+        sdl: &Sdl,
+        window: &Window,
+        limit: NonZeroUsize,
+    ) -> Result<InputPort, RenderError> {
+        let subsystem = sdl.game_controller().map_err(RenderError::Backend)?;
+        let timer = sdl.timer().map_err(RenderError::Backend)?;
+        let input = Self {
+            controllers: BTreeMap::new(),
+            feedback_allowed: window.has_input_focus()
+                && !window.is_minimized(),
+            limit,
+            origin: timer.ticks64(),
+            rediscover: false,
+            subsystem,
+            timer,
+            window: window.id(),
+        };
+        Ok(Box::new(input))
+    }
+
+    fn stop_all_feedback(&mut self) {
+        for controller in self.controllers.values_mut() {
+            stop_feedback(controller);
+        }
+    }
+}
+
+impl Drop for LinuxInput {
     fn drop(&mut self) {
         self.stop_all_feedback();
     }
 }
 
-impl Haptics for NativeInput {
+impl Haptics for LinuxInput {
     fn submit(&mut self, command: HapticCommand) -> Result<(), HapticError> {
         let controller = self
             .controllers
@@ -467,13 +374,13 @@ fn event_elapsed(origin: u64, now: u64, stamp: u32) -> Option<Duration> {
 
 /// Resolve a legacy keyboard profile name at the native boundary.
 #[must_use]
-pub fn key_from_name(name: &str) -> Option<KeyboardKey> {
+pub(in crate::software) fn key_from_name(name: &str) -> Option<KeyboardKey> {
     Scancode::from_name(name).map(|key| KeyboardKey::from_code(key_code(key)))
 }
 
 /// Native presentation name for a translated physical key.
 #[must_use]
-pub fn key_name(key: KeyboardKey) -> &'static str {
+pub(in crate::software) fn key_name(key: KeyboardKey) -> &'static str {
     i32::try_from(key.code())
         .ok()
         .and_then(Scancode::from_i32)
@@ -561,6 +468,40 @@ fn normalized_point(horizontal: f32, vertical: f32) -> Option<TouchPoint> {
         x: normalized_coordinate(horizontal)?,
         y: normalized_coordinate(vertical)?,
     })
+}
+
+pub(super) fn sample(event: &Event, window: u32, now: u64) -> InputSample {
+    let transition = if matches!(event, Event::ControllerDeviceAdded { .. }) {
+        InputTransition::DiscoveryHint
+    } else if let Event::ControllerDeviceRemoved { which, .. } = *event {
+        InputTransition::Disconnected(u64::from(which))
+    } else if let Event::Window {
+        window_id,
+        win_event: WindowEvent::FocusGained,
+        ..
+    } = *event
+        && window_id == window
+    {
+        InputTransition::FocusGained
+    } else {
+        route_contact(event)
+            .or_else(|| route(event, window))
+            .map_or(InputTransition::Ignored, InputTransition::Event)
+    };
+    let scope = matches!(
+        event,
+        Event::Window { .. }
+            | Event::KeyDown { .. }
+            | Event::KeyUp { .. }
+            | Event::MouseButtonDown { .. }
+            | Event::MouseButtonUp { .. }
+    )
+    .then_some(u64::from(window));
+    InputSample::new(
+        event_elapsed(0, now, event.get_timestamp()),
+        transition,
+        scope,
+    )
 }
 
 fn route(event: &Event, window: u32) -> Option<HostEvent> {
@@ -714,10 +655,18 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
     }))
 }
 
+pub(super) fn open_input(
+    sdl: &Sdl,
+    window: &Window,
+    limit: NonZeroUsize,
+) -> Result<InputPort, RenderError> {
+    LinuxInput::open(sdl, window, limit)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
+    use std::num::{NonZeroU16, NonZeroUsize};
     use std::time::Duration;
 
     use games::capability::{HapticEffect, HapticError, HapticSupport};
@@ -726,15 +675,14 @@ mod tests {
     };
     use games::input::touch::{ContactId, ContactPhase, TouchPoint};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
-    use games::presentation::{Dimensions, PresentationMode};
     use sdl2::event::{Event, WindowEvent};
     use sdl2::keyboard::Mod;
     use sdl2::mouse::MouseButton;
 
     use super::{
-        Axis, Button, HostEvent, Scancode, TouchGeometry, admit_discovery,
-        axis_code, button_code, deliver_feedback, event_elapsed, key_from_name,
-        key_name, mouse_code, open_candidate, route, route_contact,
+        Axis, Button, HostEvent, Scancode, admit_discovery, axis_code,
+        button_code, deliver_feedback, event_elapsed, key_from_name, key_name,
+        mouse_code, open_candidate, route, route_contact,
     };
     use crate::ir::frame::RenderError;
 
@@ -908,33 +856,6 @@ mod tests {
             controllers,
             BTreeMap::from([(10, "old"), (20, "second"), (30, "first"),])
         );
-    }
-
-    #[test]
-    fn touch_geometry_cancels_once_and_rejects_stale_samples() {
-        let surface = Dimensions::new(
-            NonZeroU32::new(96).unwrap_or(NonZeroU32::MIN),
-            NonZeroU32::new(48).unwrap_or(NonZeroU32::MIN),
-        );
-        let design = Dimensions::new(NonZeroU32::MIN, NonZeroU32::MIN);
-        let first = Some(PresentationMode::AspectFit.layout(surface, design));
-        let second = Some(PresentationMode::Stretch.layout(surface, design));
-        let mut geometry = TouchGeometry::default();
-        let at = Duration::from_millis;
-        for (layout, tick, cancelled, accepted) in [
-            (None, 1, false, [true; 4]),
-            (first, 2, false, [true; 4]),
-            (first, 3, false, [true; 4]),
-            (second, 4, true, [false, false, true, true]),
-            (second, 5, false, [false, false, true, true]),
-            (None, 6, true, [false, false, false, true]),
-            (None, 7, false, [false, false, false, true]),
-            (first, 8, false, [false, false, false, true]),
-        ] {
-            assert_eq!(geometry.observe(layout, at(tick)), cancelled);
-            let stamps = [None, Some(at(1)), Some(at(4)), Some(at(8))];
-            assert_eq!(stamps.map(|stamp| geometry.accepts(stamp)), accepted);
-        }
     }
 
     #[test]

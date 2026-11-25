@@ -31,22 +31,22 @@
 
 //! Linux-kernel storage services and Linux SDL presentation.
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "interactive", target_os = "linux"))]
 pub(super) mod audio;
-#[cfg(target_os = "linux")]
-pub mod graphics;
-#[cfg(target_os = "linux")]
-pub mod input;
+#[cfg(all(feature = "interactive", target_os = "linux"))]
+pub(super) mod graphics;
+#[cfg(all(feature = "interactive", target_os = "linux"))]
+pub(super) mod input;
 #[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
 pub mod lan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod performance;
-pub mod storage;
+pub(super) mod storage;
 pub mod toolchain;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, feature = "interactive", target_os = "linux"))]
 use std::sync::Mutex;
 
 /// Serialize test initialization of SDL across native capabilities.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, feature = "interactive", target_os = "linux"))]
 static NATIVE_SMOKE_LOCK: Mutex<()> = Mutex::new(());

@@ -33,6 +33,7 @@
 
 use std::num::NonZeroU32;
 
+use games::presentation::solid_mask;
 use games_assets::AssetFormat;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
@@ -80,10 +81,7 @@ impl ShadowArt {
 }
 
 fn valid_mask(pixels: &[u8]) -> bool {
-    let (rgba, remainder) = pixels.as_chunks::<4>();
-    remainder.is_empty()
-        && rgba.contains(&[0, 0, 0, 102])
-        && rgba.iter().all(|pixel| matches!(pixel, [0, 0, 0, 0 | 102]))
+    solid_mask(pixels, [0; 4], [0, 0, 0, 102])
 }
 
 pub(super) const fn visible(player: Player, maneuver: Maneuver) -> bool {
@@ -128,17 +126,13 @@ pub(super) fn smoke(
 fn within(bounds: SpriteRect, index: usize, width: usize) -> bool {
     let column = index
         .checked_rem(width)
-        .and_then(|value| i32::try_from(value).ok());
+        .and_then(|value| u32::try_from(value).ok());
     let row = index
         .checked_div(width)
-        .and_then(|value| i32::try_from(value).ok());
-    column.is_some_and(|position| {
-        (bounds.x..bounds.x.saturating_add_unsigned(bounds.width.get()))
-            .contains(&position)
-    }) && row.is_some_and(|position| {
-        (bounds.y..bounds.y.saturating_add_unsigned(bounds.height.get()))
-            .contains(&position)
-    })
+        .and_then(|value| u32::try_from(value).ok());
+    column
+        .zip(row)
+        .is_some_and(|(x, y)| bounds.contains_pixel(x, y))
 }
 
 fn darkens(

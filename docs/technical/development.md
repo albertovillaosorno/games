@@ -69,8 +69,8 @@ Runtime and title crates live under `crates/`; contributor tools live
 under `tools/`. Titles use `crates/games/<id>/`. Keep all title acceptance
 and evidence in the canonical task under docs/todo; only the root
 TODO.md is a roadmap index.
-Keep behavioural tests inline in their source modules. Use one TODO.md per
-title once onboarded.
+Keep behavioural tests inline in their source modules. Use the canonical task
+record for each title; do not create a separate TODO.md.
 
 ## Contributions
 

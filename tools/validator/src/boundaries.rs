@@ -644,6 +644,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use games_platform::ir::storage::fixtures as platform_fixtures;
     use serde_json::{Value as JsonValue, json};
     use toml::Value;
 
@@ -1117,11 +1118,11 @@ serde_json = "1""#;
         fs::remove_dir_all(fixture).map_err(|error| error.to_string())
     }
 
-    #[cfg(unix)]
     #[test]
     fn repository_cargo_include_rejects_hidden_alias() -> Result<(), String> {
-        use std::os::unix::fs::symlink;
-
+        if !platform_fixtures::AVAILABLE {
+            return Err(String::from("native fixture capability unavailable"));
+        }
         let root = directory("cargo-include-alias")?;
         let config = root.join(".cargo");
         fs::create_dir_all(&config).map_err(|error| error.to_string())?;
@@ -1131,7 +1132,7 @@ serde_json = "1""#;
             .map_err(|error| error.to_string())?;
         fs::write(&actual, "[build]\njobs = 2")
             .map_err(|error| error.to_string())?;
-        symlink(&actual, config.join("alias.toml"))
+        platform_fixtures::file_link(&actual, &config.join("alias.toml"))
             .map_err(|error| error.to_string())?;
         let authored =
             [".cargo/actual.toml", ".cargo/config.toml"].map(PathBuf::from);

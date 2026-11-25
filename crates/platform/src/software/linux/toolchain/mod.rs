@@ -36,6 +36,7 @@ use std::process::Command;
 use std::{fmt, io};
 
 use crate::ir::security::toolchain::CargoArguments;
+pub use crate::ir::security::toolchain::{ToolVersion, ValidationTool};
 
 /// Target understood by the native Cargo adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,6 +224,34 @@ impl<'name> CargoTitle<'name> {
             Err(ToolchainError::UnsupportedHost)
         }
     }
+}
+
+/// Read the exact version of a known development tool.
+/// # Errors
+/// Returns a process or unsuccessful-exit error.
+pub fn probe_version(
+    root: &Path,
+    tool: ValidationTool,
+) -> Result<ToolVersion, ToolchainError> {
+    let (program, args) = tool.command();
+    let output = Command::new(program)
+        .current_dir(root)
+        .args(args)
+        .output()
+        .map_err(|source| ToolchainError::Io {
+            operation: program,
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(ToolchainError::Failed {
+            operation: program,
+            diagnostic: output.status.to_string(),
+        });
+    }
+    Ok(ToolVersion {
+        stderr: output.stderr,
+        stdout: output.stdout,
+    })
 }
 
 #[cfg(test)]

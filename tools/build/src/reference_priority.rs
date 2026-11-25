@@ -37,7 +37,7 @@ use std::path::Path;
 
 use games_importer::mame::Machine;
 use games_importer::mame::priority::VideoPriority;
-use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::snapshot;
 
 /// Compare observed palette bases and sorted layer priorities.
 /// # Errors

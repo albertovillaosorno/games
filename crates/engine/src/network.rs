@@ -46,7 +46,7 @@ pub enum PeerKind {
 /// Observable failures when the host rejects a session operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionError {
-    /// A supplied identity already has an active connection.
+    /// A supplied identity has an active or reserved slot.
     AlreadyConnected,
     /// The host does not accept LAN connections without explicit opt-in.
     LanDisabled,
@@ -216,7 +216,7 @@ impl Session {
         Ok(())
     }
 
-    /// Permanently release a disconnected player's reserved slot.
+    /// Permanently release an active or disconnected player's slot.
     ///
     /// # Errors
     ///
@@ -232,6 +232,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::num::{NonZeroU8, NonZeroUsize};
 
     use super::{
@@ -240,6 +241,20 @@ mod tests {
 
     #[derive(Debug)]
     struct SmallActionCodec;
+
+    #[derive(Debug, Default)]
+    struct ObservedCodec {
+        calls: Cell<u8>,
+    }
+
+    impl MessageSchema for ObservedCodec {
+        type Message = u8;
+
+        fn decode(&self, bytes: &[u8]) -> Option<Self::Message> {
+            self.calls.set(self.calls.get().saturating_add(1));
+            SmallActionCodec.decode(bytes)
+        }
+    }
 
     impl MessageSchema for SmallActionCodec {
         type Message = u8;
@@ -345,5 +360,83 @@ mod tests {
             session.decode(8, b"M\x04", &SmallActionCodec),
             Err(SessionError::UnknownPeer)
         );
+    }
+
+    #[test]
+    fn admission_rejections_do_not_invoke_the_schema() {
+        let mut session = Session::new(config(true));
+        let codec = ObservedCodec::default();
+        assert_eq!(session.join(10, PeerKind::Lan), Ok(()));
+        assert_eq!(
+            session.decode(11, b"M\x04", &codec),
+            Err(SessionError::UnknownPeer)
+        );
+        assert_eq!(
+            session.decode(10, b"123456789", &codec),
+            Err(SessionError::MessageTooLarge)
+        );
+        assert_eq!(session.disconnect(10), Ok(()));
+        assert_eq!(
+            session.decode(10, b"M\x04", &codec),
+            Err(SessionError::UnknownPeer)
+        );
+        assert_eq!(codec.calls.get(), 0);
+    }
+
+    #[test]
+    fn rejoined_peer_messages_reach_the_schema() {
+        let mut session = Session::new(config(true));
+        let codec = ObservedCodec::default();
+        assert_eq!(session.join(10, PeerKind::Lan), Ok(()));
+        assert_eq!(session.disconnect(10), Ok(()));
+        assert_eq!(session.reconnect(10, PeerKind::Lan), Ok(()));
+        assert_eq!(
+            session.decode(10, b"bad", &codec),
+            Err(SessionError::MalformedMessage)
+        );
+        assert_eq!(session.decode(10, b"M\x04", &codec), Ok(4));
+        assert_eq!(codec.calls.get(), 2);
+    }
+
+    fn reserved_lan_slot() -> Session {
+        let mut session = Session::new(config(true));
+        assert_eq!(session.join(10, PeerKind::Lan), Ok(()));
+        assert_eq!(session.join(11, PeerKind::Local), Ok(()));
+        assert_eq!(session.disconnect(10), Ok(()));
+        session
+    }
+
+    #[test]
+    fn rejected_transitions_preserve_the_reserved_slot() {
+        let mut session = reserved_lan_slot();
+        assert_eq!(
+            session.join(10, PeerKind::Lan),
+            Err(SessionError::AlreadyConnected)
+        );
+        assert_eq!(session.disconnect(10), Err(SessionError::UnknownPeer));
+        assert_eq!(
+            session.reconnect(10, PeerKind::Local),
+            Err(SessionError::WrongOrigin)
+        );
+        assert_eq!(
+            session.join(12, PeerKind::Local),
+            Err(SessionError::NoCapacity)
+        );
+        assert_eq!(session.accept(11, b"move"), Ok(()));
+        assert_eq!(session.reconnect(10, PeerKind::Lan), Ok(()));
+        assert_eq!(session.accept(10, b"move"), Ok(()));
+    }
+
+    #[test]
+    fn removing_a_reservation_releases_capacity() {
+        let mut session = reserved_lan_slot();
+        assert_eq!(session.remove(10), Ok(()));
+        assert_eq!(
+            session.reconnect(10, PeerKind::Lan),
+            Err(SessionError::UnknownPeer)
+        );
+        assert_eq!(session.join(12, PeerKind::Local), Ok(()));
+        assert_eq!(session.accept(12, b"move"), Ok(()));
+        assert_eq!(session.accept(11, b"move"), Ok(()));
     }
 }

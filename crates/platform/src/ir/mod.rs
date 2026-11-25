@@ -33,14 +33,23 @@
 
 /// Portable playback requests and outcomes.
 pub mod audio;
+/// Portable window and scene rendering.
+pub mod graphics;
 /// Portable physical-device bridge.
 pub mod hardware;
+/// Portable device input sessions.
+pub mod input;
 /// Clock-independent measurement.
 pub mod measurement;
 /// Mandatory shared host admission policies.
 pub mod security;
+/// Portable storage capabilities.
+pub mod storage;
 /// Bounded bitmap text, menu and scene preparation.
 pub mod ui;
+
+#[cfg(test)]
+use std::fmt::Debug;
 
 /// Shared RGBA layout and rendering failures.
 pub use security::frame;
@@ -48,6 +57,22 @@ pub use ui::{menu, scene};
 
 /// Selected service interfaces; concrete implementation paths stay
 /// private.
-pub use crate::selected::{
-    graphics, input, lan, performance, storage, toolchain,
-};
+pub use crate::selected::{lan, performance, toolchain};
+
+#[cfg(test)]
+pub(crate) fn check<T, U>(
+    actual: &T,
+    expected: &U,
+) -> Result<(), frame::RenderError>
+where
+    T: Debug + PartialEq<U>,
+    U: Debug,
+{
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(frame::RenderError::Backend(format!(
+            "expected {expected:?}, observed {actual:?}"
+        )))
+    }
+}

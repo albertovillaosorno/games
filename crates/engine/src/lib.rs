@@ -32,6 +32,8 @@
 
 //! Shared engine boundary. Capabilities are added with playable vertical
 //! slices.
+/// Deterministic sparse animation timelines and cycle timing.
+pub mod animation;
 /// Bounded deterministic PCM playback and stereo mixing.
 pub mod audio;
 /// Portable host feedback capabilities.

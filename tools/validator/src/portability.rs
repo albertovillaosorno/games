@@ -9,11 +9,11 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Platform isolation and portable-capability migration ceilings.
+//   - Strict platform isolation without per-file exceptions.
 // - Must-Not:
 //   - Implement platform access or interpret game rules.
 // - Allows:
-//   - Inputs: Authored Rust tokens, manifests and recorded migration debt.
+//   - Inputs: Authored Rust tokens and manifests.
 //   - Outputs: Contract diagnostics with affected file paths.
 //   - Side effects: Read-only repository access.
 // - Split-When:
@@ -23,11 +23,11 @@
 // - Summary:
 //   - Platform isolation enforcement.
 // - Description:
-//   - Rejects new target and concrete backend coupling outside adapters.
+//   - Rejects all target and concrete backend coupling outside adapters.
 // - Usage:
 //   - Invoked by cargo validate via the contract runner.
 // - Defaults:
-//   - Reject new coupling; existing exceptions must shrink to zero.
+//   - Any detected coupling is an error.
 //
 use std::collections::BTreeMap;
 use std::fs;
@@ -35,9 +35,7 @@ use std::path::{Path, PathBuf};
 
 use crate::boundaries::{dependency_tables, host_independent};
 use crate::clones::tokens;
-use crate::host_api;
-
-const LEGACY: &str = include_str!("portability-baseline.json");
+use crate::{files, host_api};
 
 type Counts = BTreeMap<String, usize>;
 type Inventory = BTreeMap<String, Counts>;
@@ -52,7 +50,6 @@ fn neutral_ir(path: &str) -> bool {
 
 fn adapter(path: &str) -> bool {
     path == "crates/platform/Cargo.toml"
-        || path == "crates/platform/src/lib.rs"
         || path.starts_with("crates/platform/src/software/")
 }
 
@@ -131,7 +128,9 @@ fn rust(source: &str) -> Counts {
                 .unwrap_or_default();
             record(&mut result, &format!("target:{word}:{value}"));
         }
-        if os(word) && matches!(prev, Some(":" | "(" | "," | "mod" | "use")) {
+        if os(word)
+            && matches!(prev, Some(":" | "(" | "," | "{" | "mod" | "use"))
+        {
             record(&mut result, &format!("os:{word}"));
         }
         if sdk(word) && matches!(next, Some(":" | ";")) {
@@ -190,6 +189,18 @@ fn manifest(source: &str, workspace: &toml::Table) -> Result<Counts, String> {
     Ok(result)
 }
 
+fn source_counts(name: &str, source: &str) -> Result<Counts, String> {
+    let mut counts = rust(source);
+    if neutral_ir(name) || host_independent(name) {
+        for violation in host_api::findings(source)
+            .map_err(|error| format!("{name}: {error}"))?
+        {
+            record(&mut counts, &format!("host:{violation}"));
+        }
+    }
+    Ok(counts)
+}
+
 fn inventory(
     root: &Path,
     authored: &[PathBuf],
@@ -200,7 +211,6 @@ fn inventory(
         let name = path.to_string_lossy().replace('\\', "/");
         if !(name.starts_with("crates/") || name.starts_with("tools/"))
             || adapter(&name)
-            || name == "tools/validator/src/portability.rs"
         {
             continue;
         }
@@ -213,11 +223,7 @@ fn inventory(
         let text = fs::read_to_string(root.join(path))
             .map_err(|error| error.to_string())?;
         let counts = if is_rust {
-            if neutral_ir(&name) || host_independent(&name) {
-                host_api::validate(&text)
-                    .map_err(|error| format!("{name}: {error}"))?;
-            }
-            rust(&text)
+            source_counts(&name, &text)?
         } else {
             manifest(&text, workspace)?
         };
@@ -228,66 +234,55 @@ fn inventory(
     Ok(found)
 }
 
-fn excess(found: &Inventory, legacy: &Inventory) -> Inventory {
-    let mut violations = Inventory::new();
-    for (path, counts) in found {
-        for (rule, count) in counts {
-            let ceiling = legacy
-                .get(path)
-                .and_then(|rules| rules.get(rule))
-                .copied()
-                .unwrap_or_default();
-            if *count > ceiling {
-                let _previous = violations
-                    .entry(path.clone())
-                    .or_default()
-                    .insert(rule.clone(), *count);
-            }
-        }
-    }
-    violations
-}
-
-fn compare(found: &Inventory, legacy: &Inventory) -> Result<(), String> {
-    let violations = excess(found, legacy);
-    if !violations.is_empty() {
-        let details = serde_json::to_string_pretty(&violations)
-            .map_err(|error| error.to_string())?;
-        return Err(format!(
-            "new platform coupling outside adapters:\n{details}"
-        ));
-    }
-    if found == legacy {
+fn reject_coupling(found: &Inventory) -> Result<(), String> {
+    if found.is_empty() {
         return Ok(());
     }
     let details = serde_json::to_string_pretty(found)
         .map_err(|error| error.to_string())?;
-    Err(format!(
-        "stale platform baseline; use the exact current inventory:\n{details}"
-    ))
+    Err(format!("platform coupling outside adapters:\n{details}"))
 }
 
-/// Require an exact inventory of remaining platform migration debt.
-///
+/// Reject every occurrence of platform coupling outside adapters.
 /// # Errors
-/// Reports unreadable sources, invalid or stale baseline, or new coupling.
+/// Reports unreadable sources, invalid manifests or any coupling.
 pub fn validate(
     root: &Path,
     authored: &[PathBuf],
     workspace: &toml::Table,
 ) -> Result<(), String> {
-    let legacy: Inventory =
-        serde_json::from_str(LEGACY).map_err(|error| error.to_string())?;
-    let found = inventory(root, authored, workspace)?;
-    compare(&found, &legacy)
+    reject_coupling(&inventory(root, authored, workspace)?)
+}
+
+/// Check the actual repository before any cached validation can pass.
+/// # Errors
+/// Rejects unreadable metadata, authored inventory or platform coupling.
+pub fn preflight(root: &Path) -> Result<(), String> {
+    let source = fs::read_to_string(root.join("Cargo.toml"))
+        .map_err(|error| error.to_string())?;
+    let document = source
+        .parse::<toml::Table>()
+        .map_err(|error| error.to_string())?;
+    let workspace = document
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("dependencies"))
+        .and_then(toml::Value::as_table)
+        .ok_or("missing workspace dependencies")?;
+    let authored = files::authored(root)?;
+    validate(root, &authored, workspace)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
     use super::{
-        Counts, Inventory, adapter, compare, excess, manifest, neutral_ir, rust,
+        Counts, Inventory, adapter, manifest, neutral_ir, reject_coupling,
+        rust, validate,
     };
-    use crate::fixtures::require;
+    use crate::fixtures::{directory, require};
 
     #[test]
     fn neutral_code_and_comments_are_admitted() {
@@ -377,40 +372,102 @@ mod tests {
     }
 
     #[test]
-    fn migration_reductions_must_update_baseline() -> Result<(), String> {
-        let prior = Inventory::from([(
-            "old.rs".to_owned(),
-            Counts::from([("os:linux".to_owned(), 2)]),
-        )]);
-        let current = Inventory::from([(
-            "old.rs".to_owned(),
-            Counts::from([("os:linux".to_owned(), 1)]),
-        )]);
-        require(compare(&prior, &prior).is_ok(), "equal inventory")?;
-        let stale = compare(&current, &prior);
+    fn real_inventory_rejects_previously_allowed_source() -> Result<(), String>
+    {
+        let root = directory("strict-portability")?;
+        let source = PathBuf::from("crates/games/example/src/lib.rs");
+        let path = root.join(&source);
+        fs::create_dir_all(path.parent().ok_or("missing fixture parent")?)
+            .map_err(|error| error.to_string())?;
+        fs::write(&path, "#[cfg(unix)] fn run() {}")
+            .map_err(|error| error.to_string())?;
+        let result = validate(&root, &[source], &toml::Table::new());
+        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
         require(
-            stale.is_err_and(|error| error.contains("stale platform baseline")),
-            "reject stale allowance",
-        )?;
-        require(compare(&current, &current).is_ok(), "admit reduction")?;
-        require(
-            compare(&Inventory::new(), &current).is_err(),
-            "remove obsolete entries",
-        )?;
-        require(compare(&prior, &current).is_err(), "reject reintroduction")
+            result.is_err_and(|error| error.contains("os:unix")),
+            "strict inventory must reject actual authored OS coupling",
+        )
     }
 
     #[test]
-    fn migration_ceiling_cannot_expand() {
-        let legacy = Inventory::from([(
-            "old.rs".to_owned(),
-            Counts::from([("os:linux".to_owned(), 1)]),
-        )]);
-        assert!(excess(&legacy, &legacy).is_empty());
-        let found = Inventory::from([(
-            "new.rs".to_owned(),
-            Counts::from([("os:linux".to_owned(), 1)]),
-        )]);
-        assert_eq!(excess(&found, &legacy), found);
+    fn linux_entrypoints_and_tools_never_receive_allowances()
+    -> Result<(), String> {
+        let root = directory("strict-entrypoints")?;
+        let authored = [
+            "crates/games/example/src/lib.rs",
+            "crates/games/example/src/main.rs",
+            "tools/build/src/main.rs",
+            "tools/validator/src/validate.rs",
+        ]
+        .map(PathBuf::from);
+        for relative in &authored {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().ok_or("fixture parent")?)
+                .map_err(|error| error.to_string())?;
+            let predicate = concat!(
+                "#[cfg(all(target_os = \"linux\",",
+                " target_env = \"gnu\"))] fn run() {}"
+            );
+            fs::write(path, predicate).map_err(|error| error.to_string())?;
+        }
+        let result = validate(&root, &authored, &toml::Table::new());
+        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let error = result.err().ok_or("accepted target coupling")?;
+        for path in authored {
+            require(
+                error.contains(path.to_string_lossy().as_ref()),
+                "missing path",
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn host_and_target_findings_are_reported_together() -> Result<(), String> {
+        let root = directory("complete-portability-inventory")?;
+        let paths = [
+            "crates/platform/src/ir/example/mod.rs",
+            "crates/platform/src/lib.rs",
+            "tools/build/src/main.rs",
+        ]
+        .map(PathBuf::from);
+        for (relative, source) in paths.iter().zip([
+            "use std::fs;",
+            "#[cfg(unix)] mod backend;",
+            "#[cfg(target_os = \"linux\")] fn run() {}",
+        ]) {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().ok_or("fixture parent")?)
+                .map_err(|error| error.to_string())?;
+            fs::write(path, source).map_err(|error| error.to_string())?;
+        }
+        let result = validate(&root, &paths, &toml::Table::new());
+        fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        let error = result.err().ok_or("accepted portability findings")?;
+        for diagnostic in ["host:std::fs", "os:unix", "target:target_os"] {
+            require(error.contains(diagnostic), diagnostic)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn zero_coupling_is_the_only_admitted_inventory() -> Result<(), String> {
+        require(
+            reject_coupling(&Inventory::new()).is_ok(),
+            "empty inventory",
+        )?;
+        for count in [1, 2, 100] {
+            let found = Inventory::from([(
+                "old.rs".to_owned(),
+                Counts::from([("os:linux".to_owned(), count)]),
+            )]);
+            require(
+                reject_coupling(&found).is_err_and(|error| {
+                    error.contains("old.rs") && error.contains("os:linux")
+                }),
+                "previously admitted coupling must also fail",
+            )?;
+        }
+        Ok(())
     }
 }

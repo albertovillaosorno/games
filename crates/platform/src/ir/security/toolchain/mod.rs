@@ -112,6 +112,47 @@ impl<'name> CargoArguments<'name> {
     }
 }
 
+/// Known contributor tools; no arbitrary executable is admitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ValidationTool {
+    /// Workspace package manager.
+    Cargo,
+    /// Rust lint driver.
+    Clippy,
+    /// Markdown policy checker.
+    Markdown,
+    /// Source inventory search.
+    Ripgrep,
+    /// Rust compiler identity.
+    Rustc,
+    /// Pinned nightly formatting driver.
+    Rustfmt,
+}
+
+/// Exact version output for validation fingerprints.
+#[derive(Debug)]
+pub struct ToolVersion {
+    /// Exact diagnostic stream.
+    pub stderr: Vec<u8>,
+    /// Exact ordinary output.
+    pub stdout: Vec<u8>,
+}
+
+impl ValidationTool {
+    /// Fixed command and arguments for the selected contributor tool.
+    #[must_use]
+    pub const fn command(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            Self::Cargo => ("cargo", &["-V"]),
+            Self::Clippy => ("cargo", &["clippy", "-V"]),
+            Self::Markdown => ("markdownlint-cli2", &["--version"]),
+            Self::Ripgrep => ("rg", &["--version"]),
+            Self::Rustc => ("rustc", &["-vV"]),
+            Self::Rustfmt => ("cargo", &["+nightly", "fmt", "--version"]),
+        }
+    }
+}
+
 fn identifier(value: &str) -> bool {
     value
         .as_bytes()
@@ -124,6 +165,12 @@ fn identifier(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn known_tool_requests_are_fixed() {
+        use super::ValidationTool;
+        assert_eq!(ValidationTool::Rustc.command(), ("rustc", &["-vV"][..]));
+        assert_eq!(ValidationTool::Cargo.command(), ("cargo", &["-V"][..]));
+    }
     use super::*;
 
     #[test]

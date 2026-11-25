@@ -21,6 +21,7 @@ workspace = true
 native-preview = [
     "dep:games-assets",
     "dep:games-platform",
+    "games-platform/interactive",
     "games-platform/secure-lan",
 ]
 

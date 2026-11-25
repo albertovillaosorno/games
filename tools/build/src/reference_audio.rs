@@ -37,7 +37,7 @@ use std::path::Path;
 
 use games_assets::AssetFormat;
 use games_importer::wave::WavePcm;
-use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::snapshot;
 
 /// Compare two bounded complete PCM16 reference recordings.
 /// # Errors

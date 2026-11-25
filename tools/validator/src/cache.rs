@@ -39,10 +39,11 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::time::SystemTime;
 
+use games_platform::ir::toolchain::{ValidationTool, probe_version};
 use sha2::{Digest as _, Sha256};
 
-use crate::cargo_config;
 use crate::files::authored;
+use crate::{cargo_config, portability};
 
 pub(crate) const PORTABLE_CORE_FLAG: &str = "GAMES_PORTABLE_CORE_CHECK";
 const FRESH_CHECK_FLAGS: [&str; 3] = [
@@ -158,22 +159,16 @@ fn hash_cargo_config_files(
 }
 
 fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
-    for (tool, args) in [
-        ("rustc", &["-vV"][..]),
-        ("cargo", &["-V"][..]),
-        ("cargo", &["clippy", "-V"][..]),
-        ("cargo", &["+nightly", "fmt", "--version"][..]),
-        ("markdownlint-cli2", &["--version"][..]),
-        ("rg", &["--version"][..]),
+    for tool in [
+        ValidationTool::Rustc,
+        ValidationTool::Cargo,
+        ValidationTool::Clippy,
+        ValidationTool::Rustfmt,
+        ValidationTool::Markdown,
+        ValidationTool::Ripgrep,
     ] {
-        let output = Command::new(tool)
-            .current_dir(root)
-            .args(args)
-            .output()
-            .map_err(|error| error.to_string())?;
-        if !output.status.success() {
-            return Err(format!("cannot identify {tool}"));
-        }
+        let output =
+            probe_version(root, tool).map_err(|error| error.to_string())?;
         hash_value(hash, &output.stdout);
         hash_value(hash, &output.stderr);
     }
@@ -203,6 +198,7 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
 }
 
 fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
+    portability::preflight(root)?;
     let mut hash = Sha256::new();
     tool_versions(root, &mut hash)?;
     let canonical = root.canonicalize().map_err(|error| error.to_string())?;
@@ -280,8 +276,17 @@ fn run_with(
         .open(&path)
         .map_err(|error| error.to_string())?;
     announce(&format!("Validation log: {}", path.display()))?;
-    let before = identify(root)?;
     let marker = root.join(".cache/validate/success");
+    let before = match identify(root) {
+        Ok(value) => value,
+        Err(error) => {
+            if marker.exists() {
+                fs::remove_file(&marker).map_err(|err| err.to_string())?;
+            }
+            writeln!(log, "FAILED: {error}").map_err(|err| err.to_string())?;
+            return Err(error);
+        },
+    };
     if !fresh && fs::read(&marker).is_ok_and(|key| key == before) {
         writeln!(log, "Cache hit").map_err(|error| error.to_string())?;
         return announce("Validation passed (cache hit).");
@@ -373,6 +378,34 @@ mod tests {
             "concurrent modification must not be cached",
         )?;
 
+        fs::remove_dir_all(root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn forbidden_source_invalidates_cached_success() -> Result<(), String> {
+        use super::fingerprint;
+
+        let root = directory("cache-portability")?;
+        let source = root.join("crates/games/example/src");
+        fs::create_dir_all(&source).map_err(|error| error.to_string())?;
+        fs::write(root.join(".gitignore"), "/.cache/\n/.temp/\n")
+            .map_err(|error| error.to_string())?;
+        fs::write(root.join("Cargo.toml"), "[workspace.dependencies]\n")
+            .map_err(|error| error.to_string())?;
+        fs::write(root.join("input"), b"previously admitted")
+            .map_err(|error| error.to_string())?;
+        run_with(&root, false, pass, key)?;
+        let marker = root.join(".cache/validate/success");
+        require(marker.exists(), "fixture must have a success marker")?;
+        fs::write(source.join("main.rs"), "#[cfg(unix)] fn run() {}")
+            .map_err(|error| error.to_string())?;
+        let result = run_with(&root, false, pass, fingerprint);
+        let diagnostic = result.err().unwrap_or_default();
+        require(
+            diagnostic.contains("os:unix"),
+            "portability must fail first",
+        )?;
+        require(!marker.exists(), "stale marker must be invalidated")?;
         fs::remove_dir_all(root).map_err(|error| error.to_string())
     }
 

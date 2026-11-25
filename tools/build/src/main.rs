@@ -30,74 +30,51 @@
 //   - Read-only verification and explicit opt-in to publication.
 
 //! Host-side original media verification and asset import.
-#[cfg(all(
-    feature = "native-preview",
-    target_os = "linux",
-    target_env = "gnu"
-))]
+#[cfg(feature = "native-preview")]
 /// Bounded canonical PCM consumption and native queue diagnostics.
 pub mod audio_check;
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-/// Native canonical bundle publication and verification.
+/// Independent portable canonical bundle verification.
+pub mod bundle_check;
+/// Native canonical bundle publication.
 pub mod publication;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Exact bounded comparison of private PCM reference recordings.
 pub mod reference_audio;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 /// Bounded background-reference comparison.
 pub mod reference_background;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Read-only CPU and device object buffer comparison.
 pub mod reference_objects;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only palette comparison against local observations.
 pub mod reference_palette;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only video mixer comparison against local observations.
 pub mod reference_priority;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded local tile RAM admission diagnostic.
 pub mod reference_tilemap;
-#[cfg(all(
-    feature = "native-preview",
-    target_os = "linux",
-    target_env = "gnu"
-))]
+#[cfg(feature = "native-preview")]
 /// Finite native graphics benchmark measurements.
 pub mod render_benchmark;
-#[cfg(all(
-    feature = "native-preview",
-    target_os = "linux",
-    target_env = "gnu"
-))]
+#[cfg(feature = "native-preview")]
 /// Bounded native diagnostic rendering of selected imported graphics.
 pub mod render_check;
 
 /// Compile one admitted independently authored title.
 pub mod title_build;
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 /// Package the selected authored native executable.
 pub mod title_package;
 
 use std::env;
 use std::ffi::OsString;
 use std::io::{Write as _, stdout};
-use std::num::NonZeroU64;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use std::num::NonZeroUsize;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::path::{Path, PathBuf};
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use games_assets::ManifestLimits;
 use games_assets::archive::ArchiveBudget;
-use games_assets::{AssetManifest, ContentHash, SourceIdentity};
+use games_assets::{
+    AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
+};
 use games_importer::conversion::ConversionLimits;
 use games_importer::mame::Machine;
-#[cfg(any(target_os = "linux", target_os = "android"))]
 use games_importer::mame::samples::compare_observations;
 use games_importer::neo::CartridgeGraphics;
 use games_importer::selection::AssetSelection;
@@ -106,54 +83,54 @@ use games_platform::ir::storage::snapshot;
 
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
-    "GNU/Linux: games-build package TITLE OUTPUT\n",
-    "GNU/Linux: games-build bundle upgrade PARENT MANIFEST_SHA256 ",
+    "games-build package TITLE OUTPUT\n",
+    "games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
-    "GNU/Linux: games-build bundle replace-media PARENT BASE_SHA256 KEY ",
+    "games-build bundle replace-media PARENT BASE_SHA256 KEY ",
     "RAW MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
-    "GNU/Linux: games-build bundle replace-wave PARENT BASE_SHA256 KEY ",
+    "games-build bundle replace-wave PARENT BASE_SHA256 KEY ",
     "WAV MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
-    "Linux/Android: games-build neo import TITLE REV PATH ",
+    "games-build neo import TITLE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: neo check TITLE REV PARENT MANIFEST_SHA256\n",
-    "Linux/Android: games-build zip|neo verify PATH TITLE REV ",
+    "neo publish TITLE REV PARENT PATH SOURCE ENTRY TOTAL COUNT\n",
+    "neo check TITLE REV PARENT MANIFEST_SHA256\n",
+    "games-build zip|neo verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "Linux/Android: games-build mame verify|import|audio-import ",
+    "games-build mame verify|import|audio-import ",
     "MACHINE REV PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: mame publish|audio-publish MACHINE REV PARENT PATH ",
+    "mame publish|audio-publish MACHINE REV PARENT PATH ",
     "SOURCE ENTRY TOTAL COUNT\n",
-    "GNU/Linux: mame check|audio-check MACHINE REV PARENT MANIFEST_SHA256\n",
-    "GNU/Linux: mame art-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "mame check|audio-check MACHINE REV PARENT MANIFEST_SHA256\n",
+    "mame art-publish MACHINE REV OUTPUT PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS KEY:INDEX,...\n",
-    "GNU/Linux: mame strip-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "mame strip-publish MACHINE REV OUTPUT PARENT SHA256 ",
     "TOP SIDE RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS ",
     "[MORE SCENES...]\n",
-    "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
+    "mame background-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
-    "GNU/Linux: mame scene-check MACHINE REV PARENT SHA256 ",
+    "mame scene-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
-    "GNU/Linux (native-preview): mame scene-sequence-bench MACHINE REV ",
+    "native-preview: mame scene-sequence-bench MACHINE REV ",
     "PARENT SHA256 REPEATS RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS ",
     "CONTROLS [MORE SCENES...]\n",
-    "GNU/Linux (native-preview): mame scene-render-check MACHINE REV ",
+    "native-preview: mame scene-render-check MACHINE REV ",
     "PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
-    "Linux/Android: mame sample-check MACHINE REV OBSERVATIONS LIMIT ",
+    "mame sample-check MACHINE REV OBSERVATIONS LIMIT ",
     "PATH SOURCE ENTRY TOTAL COUNT\n",
-    "Linux/Android: mame object-check MACHINE REV CPU DEVICE\n",
-    "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
-    "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
-    "\nLinux/Android: mame tilemap-check MACHINE REV RAM REGISTERS",
+    "mame object-check MACHINE REV CPU DEVICE\n",
+    "mame palette-check MACHINE REV RAW ARGB32",
+    "\nmame priority-check MACHINE REV RAW OBSERVED_LE32",
+    "\nmame tilemap-check MACHINE REV RAM REGISTERS",
     "\n",
-    "GNU/Linux (native-preview): mame audio-render-check MACHINE REV ",
+    "native-preview: mame audio-render-check MACHINE REV ",
     "PARENT SHA256 LEFT_KEY RIGHT_KEY FRAMES\n",
-    "GNU/Linux (native-preview): mame render-check MACHINE REV ",
+    "native-preview: mame render-check MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT",
-    "\nGNU/Linux (native-preview): mame render-bench MACHINE REV ",
+    "\nnative-preview: mame render-bench MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT FRAMES",
     "\n",
-    "Linux/Android: wave compare LEFT RIGHT LIMIT"
+    "wave compare LEFT RIGHT LIMIT"
 );
 
 #[derive(Debug)]
@@ -222,54 +199,28 @@ enum Verification {
 
 #[derive(Debug)]
 enum Command {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     ArtPublish(Machine, reference_background::art::Art),
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
+    #[cfg(feature = "native-preview")]
     AudioCheck(Machine, audio_check::Arguments),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     BackgroundCheck(Machine, reference_background::Arguments),
     BuildTitle(title_build::Title),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Check(AssetSelection, PathBuf, ContentHash),
     Import(AssetSelection, Arguments),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     ObjectCheck(Machine, PathBuf, PathBuf),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     PackageTitle(title_build::Title, PathBuf),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     PaletteCheck(Machine, PathBuf, PathBuf),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     PriorityCheck(Machine, PathBuf, PathBuf),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Publish(AssetSelection, PathBuf, Arguments),
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
+    #[cfg(feature = "native-preview")]
     RenderCheck(Machine, render_check::Arguments),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     ReplaceMedia(publication::MediaReplacement),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     SampleCheck(Machine, PathBuf, NonZeroU64, Arguments),
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
+    #[cfg(feature = "native-preview")]
     SceneSequence(Machine, reference_background::sequence::Sequence),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     StripPublish(Machine, reference_background::art::Strip),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     TilemapCheck(Machine, PathBuf, PathBuf),
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Upgrade(PathBuf, ContentHash, ManifestLimits),
     Verify(Verification, Arguments),
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     WaveCompare(PathBuf, PathBuf, NonZeroU64),
 }
 
@@ -284,7 +235,6 @@ impl Command {
             (Some("build"), Some(title)) => Ok(Self::BuildTitle(
                 title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
             )),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             (Some("package"), Some(title)) => {
                 let [output] =
                     <[OsString; 1]>::try_from(args.collect::<Vec<_>>())
@@ -294,18 +244,15 @@ impl Command {
                     output.into(),
                 ))
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             (Some("bundle"), Some("upgrade")) => {
                 Self::parse_upgrade(args.collect())
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             (Some("bundle"), Some("replace-media")) => {
                 Self::parse_replace_media(
                     args.collect(),
                     publication::MediaEncoding::Raw,
                 )
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             (Some("bundle"), Some("replace-wave")) => {
                 Self::parse_replace_media(
                     args.collect(),
@@ -315,7 +262,6 @@ impl Command {
             (Some(kind @ ("zip" | "neo")), Some("verify")) => {
                 Self::parse_verification(kind, args.collect())
             },
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             (Some("wave"), Some("compare")) => {
                 let [left, right, limit] =
                     <[OsString; 3]>::try_from(args.collect::<Vec<_>>())
@@ -334,7 +280,6 @@ impl Command {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn parse_art(
         action: &str,
         machine: Machine,
@@ -369,7 +314,6 @@ impl Command {
                     args.by_ref().collect(),
                 )?,
             )),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "publish" | "audio-publish" => {
                 let parent = args.next().ok_or_else(|| String::from(USAGE))?;
                 Ok(Self::Publish(
@@ -381,7 +325,6 @@ impl Command {
                     )?,
                 ))
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "check" | "audio-check" => {
                 Self::parse_check(selection, args.collect())
             },
@@ -389,7 +332,6 @@ impl Command {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn parse_check(
         selection: AssetSelection,
         args: Vec<OsString>,
@@ -407,11 +349,7 @@ impl Command {
         Args: Iterator<Item = OsString>,
     {
         let selected = select_machine(&mut args)?;
-        #[cfg(all(
-            feature = "native-preview",
-            target_os = "linux",
-            target_env = "gnu"
-        ))]
+        #[cfg(feature = "native-preview")]
         if matches!(action, "audio-render-check" | "scene-sequence-bench") {
             return Self::parse_native_workload(
                 action,
@@ -420,11 +358,9 @@ impl Command {
             );
         }
         match action {
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "art-publish" | "strip-publish" => {
                 Self::parse_art(action, selected, args.collect())
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             "background-check" | "scene-check" | "scene-render-check" => {
                 Ok(Self::BackgroundCheck(
                     selected,
@@ -434,31 +370,21 @@ impl Command {
                     )?,
                 ))
             },
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             "sample-check" => Self::parse_sample(selected, args),
             "verify" => Ok(Self::Verify(
                 Verification::Mame(selected),
                 Arguments::parse_profile(selected.identity(), args.collect())?,
             )),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             "object-check" | "palette-check" | "priority-check"
             | "tilemap-check" => {
                 Self::parse_reference(action, selected, args.collect())
             },
-            #[cfg(all(
-                feature = "native-preview",
-                target_os = "linux",
-                target_env = "gnu"
-            ))]
+            #[cfg(feature = "native-preview")]
             "render-check" => Ok(Self::RenderCheck(
                 selected,
                 render_check::Arguments::parse(args.collect())?,
             )),
-            #[cfg(all(
-                feature = "native-preview",
-                target_os = "linux",
-                target_env = "gnu"
-            ))]
+            #[cfg(feature = "native-preview")]
             "render-bench" => Ok(Self::RenderCheck(
                 selected,
                 render_check::Arguments::parse_benchmark(args.collect())?,
@@ -483,11 +409,7 @@ impl Command {
         Self::parse_assets(action, selection, args)
     }
 
-    #[cfg(all(
-        feature = "native-preview",
-        target_os = "linux",
-        target_env = "gnu"
-    ))]
+    #[cfg(feature = "native-preview")]
     fn parse_native_workload(
         action: &str,
         machine: Machine,
@@ -521,7 +443,6 @@ impl Command {
         Self::parse_assets(action, AssetSelection::Cartridge(profile), args)
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn parse_reference(
         action: &str,
         machine: Machine,
@@ -546,7 +467,6 @@ impl Command {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn parse_replace_media(
         args: Vec<OsString>,
         encoding: publication::MediaEncoding,
@@ -564,7 +484,6 @@ impl Command {
         }))
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn parse_sample<Args>(
         machine: Machine,
         mut args: Args,
@@ -582,7 +501,6 @@ impl Command {
         ))
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn parse_upgrade(args: Vec<OsString>) -> Result<Self, String> {
         let [parent, raw_digest, metadata, payload, total, count] =
             <[OsString; 6]>::try_from(args)
@@ -609,55 +527,33 @@ impl Command {
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::PackageTitle(title, output) => {
                 title_package::run(title, &output)
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::ArtPublish(machine, args) => args.run(machine),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::StripPublish(machine, args) => args.run(machine),
-            #[cfg(all(
-                feature = "native-preview",
-                target_os = "linux",
-                target_env = "gnu"
-            ))]
+            #[cfg(feature = "native-preview")]
             Self::AudioCheck(machine, args) => args.run(machine),
-            #[cfg(all(
-                feature = "native-preview",
-                target_os = "linux",
-                target_env = "gnu"
-            ))]
+            #[cfg(feature = "native-preview")]
             Self::SceneSequence(machine, args) => args.run(machine),
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::BackgroundCheck(machine, args) => args.run(machine),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::ObjectCheck(machine, cpu, device) => {
                 reference_objects::check(machine, &cpu, &device)
             },
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::PaletteCheck(machine, raw, reference) => {
                 reference_palette::check(machine, &raw, &reference)
             },
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::PriorityCheck(machine, raw, reference) => {
                 reference_priority::check(machine, &raw, &reference)
             },
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::TilemapCheck(machine, raw, registers) => {
                 reference_tilemap::check(machine, &raw, &registers)
             },
-            #[cfg(all(
-                feature = "native-preview",
-                target_os = "linux",
-                target_env = "gnu"
-            ))]
+            #[cfg(feature = "native-preview")]
             Self::RenderCheck(machine, args) => args.run(machine),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::WaveCompare(left, right, limit) => {
                 reference_audio::check(&left, &right, limit)
             },
-            #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::SampleCheck(machine, raw, limit, args) => {
                 report_samples(machine, &raw, limit, &args)
             },
@@ -667,11 +563,9 @@ impl Command {
 
     fn run_assets(self) -> Result<(), String> {
         match self {
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::Upgrade(parent, digest, limits) => {
                 publication::upgrade(&parent, digest, limits)
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::ReplaceMedia(replacement) => replacement.run(),
             Self::Verify(format, args) => {
                 with_source(&args, |source, archive| {
@@ -683,17 +577,29 @@ impl Command {
                     report_assets(selection, source, archive)
                 })
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::Publish(selection, parent, args) => {
                 with_source(&args, |source, archive| {
                     publication::publish(selection, &parent, source, archive)
                 })
             },
-            #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::Check(selection, parent, digest) => {
-                publication::check(selection, &parent, digest)
+                bundle_check::check(selection, &parent, digest)
             },
-            _ => Err(String::from(USAGE)),
+            #[cfg(feature = "native-preview")]
+            Self::AudioCheck(..)
+            | Self::RenderCheck(..)
+            | Self::SceneSequence(..) => Err(String::from(USAGE)),
+            Self::ArtPublish(..)
+            | Self::BackgroundCheck(..)
+            | Self::BuildTitle(..)
+            | Self::ObjectCheck(..)
+            | Self::PackageTitle(..)
+            | Self::PaletteCheck(..)
+            | Self::PriorityCheck(..)
+            | Self::SampleCheck(..)
+            | Self::StripPublish(..)
+            | Self::TilemapCheck(..)
+            | Self::WaveCompare(..) => Err(String::from(USAGE)),
         }
     }
 }
@@ -714,14 +620,12 @@ fn text(value: &OsString) -> Result<&str, String> {
         .ok_or_else(|| String::from("expected UTF-8 argument"))
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn parse_manifest_digest(value: &OsString) -> Result<ContentHash, String> {
     text(value)?
         .parse()
         .map_err(|_error| String::from("invalid manifest hash"))
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn parse_manifest_limits(
     [metadata, payload, total, count]: [OsString; 4],
 ) -> Result<ManifestLimits, String> {
@@ -793,7 +697,6 @@ fn verify_source(
     .map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
 fn report_samples(
     machine: Machine,
     raw: &Path,
@@ -882,7 +785,6 @@ mod tests {
         }
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn package_command_requires_admitted_title_and_output() {
         let args = ["package", "simpsons-arcade", "local-package"];
@@ -925,7 +827,6 @@ mod tests {
         assert!(Arguments::parse(Vec::new()).is_err());
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn bundle_upgrade_requires_pinned_address_and_all_limits() {
         let digest = "1".repeat(64);
@@ -952,7 +853,6 @@ mod tests {
         );
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn media_replacement_requires_explicit_slot_and_limits() {
         let digest = "1".repeat(64);
@@ -998,9 +898,8 @@ mod tests {
         );
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
-    fn publication_modes_require_explicit_output_and_identity() {
+    fn bundle_verification_requires_a_pinned_identity() {
         let args = ["mame", "check", "simpsons", "world-4p-set-1", "output"];
         assert!(Command::parse(args.into_iter().map(OsString::from)).is_err());
         let valid = args
@@ -1008,6 +907,10 @@ mod tests {
             .map(OsString::from)
             .chain([OsString::from("1".repeat(64))]);
         assert!(matches!(Command::parse(valid), Ok(Command::Check(_, _, _))));
+    }
+
+    #[test]
+    fn publication_requires_explicit_output_and_source() {
         let publish =
             ["mame", "publish", "simpsons", "world-4p-set-1", "output"];
         assert!(
@@ -1016,7 +919,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn palette_check_requires_profile_and_two_files() {
         let args = [
             "mame",

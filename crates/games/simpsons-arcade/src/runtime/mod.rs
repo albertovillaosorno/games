@@ -70,7 +70,7 @@ use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::NativeWindow;
-use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::graphics::scene_renderer::{SceneSession, SceneView};
 use games_platform::ir::input::{
     HostEvent, InputStartup, NativeInput, key_from_name, key_name,
 };
@@ -1450,7 +1450,7 @@ fn open_bundles<const COUNT: usize>(
 }
 
 fn project_contact(
-    scene: &SceneSession<'_, '_>,
+    scene: SceneView<'_>,
     event: InputEvent,
 ) -> Result<Option<InputEvent>, RenderError> {
     let InputEvent::Contact { id, phase } = event else {
@@ -1484,6 +1484,9 @@ fn project_contact(
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
     if matches!(args.as_slice(), [arg] if arg == "--list-audio-devices") {
         return audio::list_devices().map_err(|error| format!("{error:?}"));
+    }
+    if !NativeWindow::supported() {
+        return Err(format!("{:?}", RenderError::Unsupported));
     }
     if args.first().is_some_and(|arg| arg == "--lan-controller") {
         return controller::run(args);
@@ -2217,9 +2220,11 @@ fn smoke_touch(
         let point =
             smoke_touch_point(scene, player, control, &controls.profiles)?;
         for phase in [ContactPhase::Down(point), ContactPhase::Up] {
-            let event =
-                project_contact(scene, InputEvent::Contact { id, phase })?
-                    .ok_or_else(|| failure("touch smoke outside scene"))?;
+            let event = project_contact(scene.view(), InputEvent::Contact {
+                id,
+                phase,
+            })?
+            .ok_or_else(|| failure("touch smoke outside scene"))?;
             controls.route(event, Duration::ZERO, simulation)?;
         }
     }
@@ -2240,7 +2245,7 @@ fn smoke_touch_movement(
                 device: 1,
                 finger: i64::try_from(contacts.len()).map_err(failure)?,
             };
-            let event = project_contact(scene, InputEvent::Contact {
+            let event = project_contact(scene.view(), InputEvent::Contact {
                 id,
                 phase: ContactPhase::Down(smoke_touch_point(
                     scene, player, control, &profiles,

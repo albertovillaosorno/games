@@ -31,18 +31,10 @@
 
 //! Executable entry point for the native movement preview.
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::env::args_os;
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use games_simpsons_arcade::runtime;
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn main() -> Result<(), String> {
     runtime::run(args_os().skip(1).collect())
-}
-
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn main() -> Result<(), String> {
-    Err(String::from("native preview currently requires GNU/Linux"))
 }

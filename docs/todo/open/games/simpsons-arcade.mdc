@@ -2092,7 +2092,12 @@ seat prompts are hidden during play; continuing players retain their
 countdown. The master volume setting is independently persisted.
 SDL playback-device selection and startup diagnostics are implemented;
 dummy-device playback and real PipeWire enumeration were verified.
-Physical audibility and music remain open.
+Physical sound-effect audibility is now owner-confirmed (2026-11-25,
+15:46 CST): the maximized adaptive game is playable, with audible attack
+effects and no music. The owner's screenshot shows a filled horizontal
+view, visible character, street art and HUD. Preserve this playable
+checkpoint. Background music and other sound effects remain open; do not
+infer full audio or campaign parity from the playtest.
 
 The verified long strip contains 732 interior columns. Wider adaptive
 views now fill their logical width with actual street art, keeping

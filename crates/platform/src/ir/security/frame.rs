@@ -49,6 +49,8 @@ pub enum RenderError {
     InvalidSprite,
     /// The frame requires more bytes than permitted.
     TooLarge,
+    /// The selected platform has no implementation of this capability.
+    Unsupported,
 }
 
 /// A bounded, tightly packed logical RGBA8 frame.
@@ -82,9 +84,7 @@ impl FrameLayout {
         height: NonZeroU32,
         max_bytes: NonZeroUsize,
     ) -> Result<Self, RenderError> {
-        if width.get().max(height.get()) > MAX_RECTANGLE_EXTENT {
-            return Err(RenderError::InvalidDimensions);
-        }
+        validate_extent(width, height)?;
         let pitch = usize::try_from(width.get())
             .ok()
             .and_then(|pixels| pixels.checked_mul(4))
@@ -117,6 +117,21 @@ impl FrameLayout {
     #[must_use]
     pub const fn width(self) -> NonZeroU32 {
         self.width
+    }
+}
+
+/// Validate dimensions before opening a window or allocating a frame.
+///
+/// # Errors
+/// Rejects dimensions outside the portable signed rectangle range.
+pub fn validate_extent(
+    width: NonZeroU32,
+    height: NonZeroU32,
+) -> Result<(), RenderError> {
+    if width.get().max(height.get()) > MAX_RECTANGLE_EXTENT {
+        Err(RenderError::InvalidDimensions)
+    } else {
+        Ok(())
     }
 }
 

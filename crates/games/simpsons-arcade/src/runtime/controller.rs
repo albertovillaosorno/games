@@ -39,7 +39,7 @@ use games::input::InputEvent;
 use games::input::physical::ControllerAxis;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::NativeWindow;
-use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::graphics::scene_renderer::{SceneSession, SceneView};
 use games_platform::ir::input::{HostEvent, InputStartup, NativeInput};
 use games_platform::ir::scene::{EventBatch, SceneLimits, SpriteDraw};
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
@@ -267,7 +267,7 @@ fn controller_limits(
 }
 
 fn project_event(
-    scene: &SceneSession<'_, '_>,
+    scene: SceneView<'_>,
     event: Option<HostEvent>,
 ) -> Result<Option<HostEvent>, RenderError> {
     match event {
@@ -725,7 +725,7 @@ mod tests {
                 .surface_touch(logical)?
                 .ok_or(RenderError::InvalidDimensions)?;
             let id = ContactId { device: 1, finger: 1 };
-            let event = project_contact(scene, InputEvent::Contact {
+            let event = project_contact(scene.view(), InputEvent::Contact {
                 id,
                 phase: ContactPhase::Down(point),
             })?

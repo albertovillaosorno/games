@@ -36,11 +36,48 @@ use std::ops::Range;
 
 use games_assets::pcm::PcmSamples;
 
-use crate::ir::audio::{PlaybackError, PlaybackSpec};
+use crate::ir::audio::{AudioDevices, PlaybackError, PlaybackSpec};
 
 const MAX_DEVICE_NAME: usize = 512;
 /// Maximum number of admitted playback devices.
 pub const MAX_DEVICES: u32 = 64;
+
+/// Device open request whose name and layout have passed shared admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaybackRequest<'device> {
+    layout: QueueLayout,
+    name: Option<&'device str>,
+}
+
+impl<'device> PlaybackRequest<'device> {
+    /// Admitted queue geometry.
+    #[must_use]
+    pub const fn layout(self) -> QueueLayout {
+        self.layout
+    }
+
+    /// Explicit device name, or None for the system default.
+    #[must_use]
+    pub const fn name(self) -> Option<&'device str> {
+        self.name
+    }
+
+    /// Admit a device name and exact playback layout before dispatch.
+    /// # Errors
+    /// Rejects invalid names, formats or queue budgets.
+    pub fn new(
+        spec: PlaybackSpec,
+        name: Option<&'device str>,
+    ) -> Result<Self, PlaybackError> {
+        if name.is_some_and(|value| !valid_device(value)) {
+            return Err(PlaybackError::InvalidDevice);
+        }
+        Ok(Self {
+            layout: QueueLayout::new(spec)?,
+            name,
+        })
+    }
+}
 
 /// Validated PCM queue geometry and admission policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,6 +170,23 @@ impl QueueLayout {
             .ok_or(PlaybackError::InvalidFrames)?;
         Ok(first..last)
     }
+
+    /// Original playback request admitted by this layout.
+    #[must_use]
+    pub const fn spec(self) -> PlaybackSpec {
+        self.spec
+    }
+}
+
+/// Admit the number of enumerated devices before allocation.
+/// # Errors
+/// Rejects device counts beyond the shared enumeration budget.
+pub const fn admit_device_count(count: u32) -> Result<(), PlaybackError> {
+    if count > MAX_DEVICES {
+        Err(PlaybackError::Capacity)
+    } else {
+        Ok(())
+    }
 }
 
 /// Whether a device name is bounded, nonempty and free of NUL bytes.
@@ -143,14 +197,21 @@ pub fn valid_device(name: &str) -> bool {
         && !name.as_bytes().contains(&0)
 }
 
-/// Admit an enumerated device name.
+/// Admit a complete adapter enumeration before returning it to consumers.
 /// # Errors
-/// Rejects invalid device names.
-pub fn validate_device_name(name: String) -> Result<String, PlaybackError> {
-    if !valid_device(&name) {
-        return Err(PlaybackError::InvalidDevice);
+/// Rejects oversized inventories and invalid device names.
+pub fn validate_devices(
+    devices: AudioDevices,
+) -> Result<AudioDevices, PlaybackError> {
+    if let Some(names) = devices.names.as_ref() {
+        let count = u32::try_from(names.len())
+            .map_err(|_error| PlaybackError::Capacity)?;
+        admit_device_count(count)?;
+        if !names.iter().all(|name| valid_device(name)) {
+            return Err(PlaybackError::InvalidDevice);
+        }
     }
-    Ok(name)
+    Ok(devices)
 }
 
 #[cfg(test)]
@@ -249,11 +310,41 @@ mod tests {
     fn device_names_are_bounded_and_nonempty() {
         for name in ["", "bad\0name", &"a".repeat(513)] {
             assert!(!valid_device(name));
+        }
+        assert!(valid_device("default"));
+    }
+
+    #[test]
+    fn enumeration_admits_bounded_valid_names() {
+        assert_eq!(admit_device_count(MAX_DEVICES), Ok(()));
+        for names in
+            [None, Some(Vec::new()), Some(vec![String::from("default")])]
+        {
+            let devices = AudioDevices { driver: "fake", names };
+            assert_eq!(validate_devices(devices.clone()), Ok(devices));
+        }
+    }
+
+    #[test]
+    fn enumeration_rejects_malformed_or_oversized_results() {
+        assert_eq!(
+            admit_device_count(MAX_DEVICES.saturating_add(1)),
+            Err(PlaybackError::Capacity)
+        );
+        let oversized = AudioDevices {
+            driver: "fake",
+            names: Some(vec![String::from("default"); 65]),
+        };
+        assert_eq!(validate_devices(oversized), Err(PlaybackError::Capacity));
+        for name in ["", "bad\0name", &"a".repeat(513)] {
+            let devices = AudioDevices {
+                driver: "fake",
+                names: Some(vec![name.to_owned()]),
+            };
             assert_eq!(
-                validate_device_name(name.to_owned()),
+                validate_devices(devices),
                 Err(PlaybackError::InvalidDevice)
             );
         }
-        assert!(valid_device("default"));
     }
 }

@@ -25,9 +25,9 @@ without per-title ports. Use the typed capability IR described in
 
 ## Acceptance
 
-- Migrate every existing occurrence in the portability baseline to the
-  owning platform adapter or a neutral shared contract. Delete the baseline
-  once empty; never increase it, hide occurrences or weaken the gate.
+- Migrate every occurrence reported by the strict portability gate to the
+  owning platform adapter or a neutral shared contract. The former baseline
+  is removed; never restore allowances, hide matches or weaken the gate.
 - Centralise target selection and native SDK dependencies in explicitly
   owned adapter/composition directories. No OS, architecture, vendor or
   backend-specific branching or native handles in other authored code,
@@ -212,3 +212,29 @@ history, formatting and platform Clippy before games-build rejected the
 duplicate getrandom and windows-sys versions. Zip 9.8.2 and ring 0.17.14
 require incompatible versions. Resolve that graph before committing;
 keep authenticated LAN, all-feature coverage and the lint intact.
+
+The combined migration was committed at d827610 after the independent
+all-feature deliverable checks and aggregate workspace tests passed.
+The earlier dependency-graph failure is historical, not a current gate
+failure. Native runtime portability remains incomplete.
+
+Jump pose observations are now available without target or preview
+feature predicates. A renderer-independent regression exercises short,
+intermediate and sustained holds, the release transition and the bounded
+fallback catalogue index. The native pose consumer still uses the same
+calculations. Six target predicates were removed from the exact inventory;
+fresh validation passed in run 1795641155343405387-3165470. This is a
+portable simulation observation, not a new native backend.
+
+Window, frame, scene and input sessions now have portable public handles
+with private implementation ports. Event observations carry admitted
+physical transitions and monotonic durations rather than backend event
+objects. The scene loop owns its polling budget and first-poll wait;
+touch geometry admission is independent of the renderer. Shared scene
+security checks atlas byte and count capacity and all referenced sprite
+sources before native drawing. Host-free regressions cover bounded event
+order, stop/error queue preservation, callback cardinality, frame byte
+admission, window extent and stale touch geometry. Native smoke tests
+continue to exercise the actual adapter. Unsupported window hosts return
+an explicit failure. Fresh validation reached Clippy in run
+1795643763056479052-4059599, but the full gate has not yet passed.

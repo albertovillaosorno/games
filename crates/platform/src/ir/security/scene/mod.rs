@@ -1,0 +1,209 @@
+// Copyright:
+//   - Copyright © 2026 Alberto Villa Osorno.
+// SPDX-License-Identifier:
+//   - Apache-2.0
+// Confidential:
+//   - false
+// License-File:
+//   - LICENSE
+//
+// Boundary-Contract:
+// - Owns:
+//   - Portable atlas capacity and sprite source admission.
+// - Must-Not:
+//   - Allocate textures, select renderers or submit native commands.
+// - Allows:
+//   - Inputs: Scene limits, loaded layouts and requested draw commands.
+//   - Outputs: Checked remaining capacity or explicit admission failure.
+//   - Side effects: None.
+// - Split-When:
+//   - Another rendering resource requires independent budget admission.
+// - Merge-When:
+//   - Equivalent rendering security rules already exist.
+// - Summary:
+//   - Shared bounded ordered scene admission before native dispatch.
+// - Description:
+//   - Validates byte budgets, counts and all referenced atlas rectangles.
+// - Usage:
+//   - Commit capacity only after a successful native allocation and upload.
+// - Defaults:
+//   - Reject invalid data or exceeded resource budgets before drawing.
+
+//! Bounded scene resource and draw admission.
+
+use crate::ir::frame::{FrameLayout, RenderError, validate_extent};
+use crate::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
+
+/// Current atlas usage before admitting an additional resource.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AtlasUsage {
+    /// Number of resident atlases.
+    pub loaded: usize,
+    /// Unallocated bytes under the admitted atlas budget.
+    pub remaining_bytes: usize,
+}
+
+/// Admit one allocation and return the prospective remaining byte budget.
+///
+/// # Errors
+/// Rejects mismatched input size or exceeded count and byte limits.
+pub fn admit_atlas(
+    limits: SceneLimits,
+    usage: AtlasUsage,
+    layout: FrameLayout,
+    pixel_bytes: usize,
+) -> Result<usize, RenderError> {
+    if pixel_bytes != layout.bytes() {
+        return Err(RenderError::InvalidLength);
+    }
+    if usage.loaded >= limits.atlases.get() {
+        return Err(RenderError::TooLarge);
+    }
+    usage
+        .remaining_bytes
+        .min(limits.atlas_bytes.get())
+        .checked_sub(layout.bytes())
+        .ok_or(RenderError::TooLarge)
+}
+
+/// Admit the entire ordered draw list before modifying a rendered frame.
+///
+/// # Errors
+/// Rejects exceeded command limits, unknown atlases and invalid rectangles.
+pub fn admit_draws<Lookup>(
+    limits: SceneLimits,
+    sprites: &[SpriteDraw],
+    mut atlas_layout: Lookup,
+) -> Result<(), RenderError>
+where
+    Lookup: FnMut(AtlasId) -> Option<FrameLayout>,
+{
+    if sprites.len() > limits.sprites.get() {
+        return Err(RenderError::TooLarge);
+    }
+    for sprite in sprites {
+        let layout =
+            atlas_layout(sprite.atlas).ok_or(RenderError::InvalidSprite)?;
+        admit_source(sprite.source, layout)?;
+        validate_extent(sprite.destination.width, sprite.destination.height)?;
+    }
+    Ok(())
+}
+
+fn admit_source(
+    rectangle: SpriteRect,
+    layout: FrameLayout,
+) -> Result<(), RenderError> {
+    let left = u32::try_from(rectangle.x)
+        .map_err(|_error| RenderError::InvalidSprite)?;
+    let top = u32::try_from(rectangle.y)
+        .map_err(|_error| RenderError::InvalidSprite)?;
+    if left
+        .checked_add(rectangle.width.get())
+        .is_none_or(|right| right > layout.width().get())
+        || top
+            .checked_add(rectangle.height.get())
+            .is_none_or(|bottom| bottom > layout.height().get())
+    {
+        return Err(RenderError::InvalidSprite);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::{NonZeroU32, NonZeroUsize};
+
+    use super::{
+        AtlasId, AtlasUsage, FrameLayout, RenderError, SceneLimits, SpriteDraw,
+        SpriteRect, admit_atlas, admit_draws,
+    };
+    use crate::ir::check;
+
+    fn limits() -> SceneLimits {
+        SceneLimits {
+            atlas_bytes: NonZeroUsize::new(16).unwrap_or(NonZeroUsize::MIN),
+            atlases: NonZeroUsize::MIN,
+            sprites: NonZeroUsize::MIN,
+        }
+    }
+
+    fn layout() -> Result<FrameLayout, RenderError> {
+        FrameLayout::new(
+            NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            limits().atlas_bytes,
+        )
+    }
+
+    #[test]
+    fn allocation_admission_checks_length_count_and_bytes()
+    -> Result<(), RenderError> {
+        let layout = layout()?;
+        for (loaded, remaining, pixels, expected) in [
+            (0, 16, 15, Err(RenderError::InvalidLength)),
+            (1, 16, 16, Err(RenderError::TooLarge)),
+            (0, 15, 16, Err(RenderError::TooLarge)),
+            (0, 16, 16, Ok(0)),
+            (0, usize::MAX, 16, Ok(0)),
+        ] {
+            check(
+                &admit_atlas(
+                    limits(),
+                    AtlasUsage {
+                        loaded,
+                        remaining_bytes: remaining,
+                    },
+                    layout,
+                    pixels,
+                ),
+                &expected,
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn draw_admission_checks_every_reference_and_source_extent()
+    -> Result<(), RenderError> {
+        let layout = layout()?;
+        let rectangle = SpriteRect {
+            x: 0,
+            y: 0,
+            width: layout.width(),
+            height: layout.height(),
+        };
+        let sprite = SpriteDraw {
+            atlas: AtlasId(0),
+            destination: SpriteRect { x: -1, ..rectangle },
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rectangle,
+        };
+        let atlas = |id| (id == AtlasId(0)).then_some(layout);
+        check(&admit_draws(limits(), &[sprite], atlas), &Ok(()))?;
+        check(
+            &admit_draws(limits(), &[sprite, sprite], atlas),
+            &Err(RenderError::TooLarge),
+        )?;
+        for (atlas_id, x, y) in [
+            (AtlasId(1), 0i32, 0i32),
+            (AtlasId(0), -1i32, 0i32),
+            (AtlasId(0), 0i32, -1i32),
+            (AtlasId(0), 1i32, 0i32),
+            (AtlasId(0), 0i32, 1i32),
+            (AtlasId(0), i32::MAX, i32::MAX),
+        ] {
+            let bad = SpriteDraw {
+                atlas: atlas_id,
+                source: SpriteRect { x, y, ..rectangle },
+                ..sprite
+            };
+            check(
+                &admit_draws(limits(), &[bad], atlas),
+                &Err(RenderError::InvalidSprite),
+            )?;
+        }
+        Ok(())
+    }
+}

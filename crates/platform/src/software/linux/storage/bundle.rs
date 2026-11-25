@@ -33,38 +33,17 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 
-use games_assets::{
-    AssetError, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
-};
+use games_assets::{AssetError, AssetRecord, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{open, openat};
 use nix::sys::stat::Mode;
 
-use super::file::{
-    DIRECTORY_FLAGS, FileReadError, read_regular, trusted_directory,
-};
+use super::file::{DIRECTORY_FLAGS, read_regular, trusted_directory};
+use crate::ir::storage::bundle::PayloadSource;
+pub(super) use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
 
-pub(crate) const MANIFEST_NAME: &str = "manifest.json";
-pub(crate) const PAYLOADS_DIRECTORY: &str = "payloads";
-
-/// A canonical bundle could not be safely read.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BundleError {
-    /// Canonical metadata or payload integrity failed.
-    Asset(AssetError),
-    /// The host filesystem rejected an operation.
-    Io(io::ErrorKind),
-    /// The requested logical key is absent from the pinned manifest.
-    MissingKey,
-    /// A directory or file is untrusted, linked or not a regular file.
-    UnsafeStorage,
-}
-
-impl From<AssetError> for BundleError {
-    fn from(error: AssetError) -> Self {
-        Self::Asset(error)
-    }
-}
+pub(super) const MANIFEST_NAME: &str = "manifest.json";
+pub(super) const PAYLOADS_DIRECTORY: &str = "payloads";
 
 impl From<Errno> for BundleError {
     fn from(error: Errno) -> Self {
@@ -72,163 +51,48 @@ impl From<Errno> for BundleError {
     }
 }
 
-impl From<FileReadError> for BundleError {
-    fn from(error: FileReadError) -> Self {
-        match error {
-            FileReadError::Io(kind) => Self::Io(kind),
-            FileReadError::TooLarge => Self::Asset(AssetError::TooLarge),
-            FileReadError::UnsafeFile => Self::UnsafeStorage,
-        }
-    }
-}
-
-impl From<io::Error> for BundleError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error.kind())
-    }
-}
-
-/// Read-only handle to a canonical asset manifest and payload directory.
-///
-/// The caller supplies a trusted manifest digest, not one taken from
-/// untrusted metadata. A digest alone does not authenticate its origin.
-/// Host-controlled ancestors must remain trusted; payloads are individually
-/// opened through trusted kernel procfs after metadata-only pinning, then
-/// verified on demand, not assumed valid because their filenames match.
+/// The native payload directory remains pinned for the bundle lifetime.
 #[derive(Debug)]
-pub struct CanonicalBundle {
+struct DirectorySource(Option<OwnedFd>);
+
+impl PayloadSource for DirectorySource {
+    fn read(&self, record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
+        let directory = self.0.as_ref().ok_or(BundleError::MissingKey)?;
+        Ok(read_regular(
+            directory,
+            &record.digest.to_string(),
+            record.size,
+        )?)
+    }
+}
+
+pub(super) fn open_bundle(
+    parent: &Path,
     digest: ContentHash,
-    manifest: AssetManifest,
-    payloads: Option<OwnedFd>,
+    limits: ManifestLimits,
+) -> Result<CanonicalBundle, BundleError> {
+    let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
+    let root = open_directory(&parent_fd, &bundle_name(digest))?;
+    let bytes = read_regular(
+        &root,
+        MANIFEST_NAME,
+        u64::try_from(limits.manifest_bytes.get())
+            .map_err(|_error| AssetError::TooLarge)?,
+    )?;
+    let manifest = CanonicalBundle::admit_manifest(&bytes, digest, limits)?;
+    let payloads = if manifest.records().is_empty() {
+        None
+    } else {
+        Some(open_directory(&root, PAYLOADS_DIRECTORY)?)
+    };
+    Ok(CanonicalBundle::with_source(
+        digest,
+        manifest,
+        DirectorySource(payloads),
+    ))
 }
 
-impl CanonicalBundle {
-    /// The exact pinned manifest address, including for legacy bundles.
-    #[must_use]
-    pub const fn digest(&self) -> ContentHash {
-        self.digest
-    }
-
-    /// Access the validated metadata for title-specific interpretation.
-    #[must_use]
-    pub const fn manifest(&self) -> &AssetManifest {
-        &self.manifest
-    }
-
-    /// Open a manifest-addressed bundle beneath a trusted parent.
-    ///
-    /// # Errors
-    /// Rejects unsafe storage, oversized or noncanonical metadata and a
-    /// manifest whose bytes do not match the expected SHA-256 identity.
-    pub fn open(
-        parent: &Path,
-        digest: ContentHash,
-        limits: ManifestLimits,
-    ) -> Result<Self, BundleError> {
-        let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
-        let root = open_directory(&parent_fd, &bundle_name(digest))?;
-        let bytes = read_regular(
-            &root,
-            MANIFEST_NAME,
-            u64::try_from(limits.manifest_bytes.get())
-                .map_err(|_error| AssetError::TooLarge)?,
-        )?;
-        if ContentHash::calculate(&bytes) != digest {
-            return Err(AssetError::PayloadMismatch.into());
-        }
-        let manifest = AssetManifest::parse_canonical(&bytes, limits)?;
-        let payloads = if manifest.records().is_empty() {
-            None
-        } else {
-            Some(open_directory(&root, PAYLOADS_DIRECTORY)?)
-        };
-        Ok(Self {
-            digest,
-            manifest,
-            payloads,
-        })
-    }
-
-    /// Read the declared payload for one logical key and verify its bytes.
-    ///
-    /// # Errors
-    /// Rejects unknown keys, invalid storage, short or oversized files and
-    /// any mismatch against the pinned asset descriptor.
-    pub fn read_payload(&self, key: &str) -> Result<Vec<u8>, BundleError> {
-        let record =
-            self.manifest.record(key).ok_or(BundleError::MissingKey)?;
-        let directory =
-            self.payloads.as_ref().ok_or(BundleError::MissingKey)?;
-        let bytes =
-            read_regular(directory, &record.digest.to_string(), record.size)?;
-        record.verify(&bytes)?;
-        Ok(bytes)
-    }
-}
-
-/// An explicitly selected, read-only passive-media replacement bundle.
-///
-/// The caller must pin the exact base and replacement manifests. Each
-/// replacement must address an existing title-approved RGBA or PCM slot
-/// with the same format and dimensions. Unknown or unapproved records
-/// reject the entire overlay; corrupted payloads never silently fall back.
-#[derive(Debug)]
-pub struct MediaOverlay<'bundle> {
-    base: &'bundle CanonicalBundle,
-    replacement: &'bundle CanonicalBundle,
-}
-
-impl<'bundle> MediaOverlay<'bundle> {
-    fn bundle_for(&self, key: &str) -> &CanonicalBundle {
-        if self.replacement.manifest().record(key).is_some() {
-            self.replacement
-        } else {
-            self.base
-        }
-    }
-
-    /// Select a replacement after checking every declared descriptor.
-    ///
-    /// The allowlist must come from the trusted title, not either manifest.
-    /// Payload integrity is verified on each subsequent read.
-    ///
-    /// # Errors
-    /// Rejects another title, an unknown or unapproved slot, incompatible
-    /// media, and attempts to replace declarative game data.
-    pub fn new(
-        base: &'bundle CanonicalBundle,
-        replacement: &'bundle CanonicalBundle,
-        allowed_keys: &[&str],
-    ) -> Result<Self, BundleError> {
-        if base.manifest().source().title
-            != replacement.manifest().source().title
-        {
-            return Err(AssetError::InvalidIdentity.into());
-        }
-        for record in replacement.manifest().records() {
-            base.manifest()
-                .validate_media_replacement(allowed_keys, record)?;
-        }
-        Ok(Self { base, replacement })
-    }
-
-    /// Read the selected payload with its original bundle's integrity checks.
-    ///
-    /// # Errors
-    /// Rejects absent keys, invalid storage and corrupted replacement or base
-    /// content. A failed replacement read is never retried against the base.
-    pub fn read_payload(&self, key: &str) -> Result<Vec<u8>, BundleError> {
-        self.bundle_for(key).read_payload(key)
-    }
-
-    /// Return the effective descriptor for the selected payload, if present.
-    #[must_use]
-    pub fn record(&self, key: &str) -> Option<&AssetRecord> {
-        self.bundle_for(key).manifest().record(key)
-    }
-}
-
-pub(crate) fn bundle_name(digest: ContentHash) -> String {
+pub(super) fn bundle_name(digest: ContentHash) -> String {
     format!("bundle-{digest}")
 }
 
@@ -253,11 +117,12 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::PathBuf;
 
-    use games_assets::{AssetFormat, SourceIdentity};
+    use games_assets::{AssetFormat, AssetManifest, SourceIdentity};
     use nix::unistd::mkfifo;
 
     use super::super::fixtures::TestRoot;
     use super::*;
+    use crate::ir::storage::bundle::MediaOverlay;
 
     type FixturePayload<'data> = (AssetRecord, &'data [u8]);
 

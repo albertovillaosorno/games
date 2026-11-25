@@ -37,7 +37,7 @@ use std::path::Path;
 
 use games_importer::mame::Machine;
 use games_importer::mame::objects::RAM_BYTES;
-use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::snapshot;
 
 /// Compare observed CPU and device object buffers.
 /// # Errors

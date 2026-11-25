@@ -36,6 +36,17 @@
   Reuse first, extend second, implement once only if absent.
 - Extract shared mechanisms; express title-specific behaviour through
   parameters, composition, strategies and narrow adapters.
+- The engine adapts to the title, never the reverse. When an existing
+  shared mechanism cannot express a legitimate requirement, extend that
+  mechanism and migrate its consumers rather than bypassing or copying it.
+  Remove arbitrary capacities, fixed tick widths, player counts, geometry,
+  durations and other title-derived restrictions from shared mechanisms.
+  Use caller-selected types, parameters, policies and explicit budgets.
+  Never truncate, silently clamp or narrow valid title requirements merely
+  to satisfy an engine default. Preserve checked arithmetic, allocation
+  admission, security invariants and real platform limits; make resource
+  budgets explicit and adjustable within validated physical constraints.
+  Test both existing behaviour and the newly supported requirements.
 - Before beginning each new title, inspect ALL previously implemented games
   and apps, including unfinished ones, without exception. Review their code,
   tests and shared mechanisms for reuse. Extract genuinely reusable logic
@@ -65,10 +76,16 @@
   negotiation. Reuse existing types; do not create one universal VM.
   Cover input, haptics, graphics, presentation, audio, storage, network,
   timing and lifecycle. No native handles or OS branches leak into titles.
-  Resolve the P1 platform-ir task before new title work. Migrate the
-  portability baseline to zero; never increase it or weaken validation.
+  Resolve the P1 platform-ir task before new title work. The portability
+  gate rejects every detected occurrence; never use migration allowances.
   A new OS or backend must extend shared support, not fork title code.
   Test portable contracts with fake adapters and real supported targets.
+- Contributor tools, including validate, build and download, obey the
+  same IR-first boundary as titles. Move host process, storage, clock,
+  environment and toolchain access to the platform capability owner.
+  A development host may lack a capability; return a typed unsupported
+  error rather than disabling the architecture check or hiding a target
+  predicate. Tool-specific validation and asset logic stay in the tools.
 - Use exactly one integration crate, `crates/platform`. Its only public
   integration API is `src/ir/`. All capabilities have directories with
   mod.rs roots, including security, hardware and identification. Software
@@ -92,7 +109,7 @@
   assumptions in portable code. Verify both architectures.
 - Select backends centrally and keep implementation modules private.
   Enforce these rules with positive and negative validator tests.
-  Remove exact migration debt without expanding the baseline.
+  Reject every detected violation; no per-file migration allowances.
 - Organise importers by source format and hardware family, not by title.
   Arcade ROM sets use a shared MAME adapter under the importer crate.
   Share ROM admission, region assembly, chip layouts and asset conversion.

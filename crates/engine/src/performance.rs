@@ -31,6 +31,7 @@
 //
 //! Portable bounded aggregation for performance observations.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
@@ -428,6 +429,66 @@ pub enum PerformanceError {
     Overflow,
 }
 
+/// Tracks the oldest admitted input timestamp per pending simulation tick.
+/// Only executed ticks contribute to the next submitted-frame observation.
+#[derive(Debug)]
+pub struct InputLedger<Timestamp> {
+    applied: Option<Timestamp>,
+    pending: BTreeMap<u64, Timestamp>,
+}
+
+impl<Timestamp> Default for InputLedger<Timestamp> {
+    fn default() -> Self {
+        Self {
+            applied: None,
+            pending: BTreeMap::new(),
+        }
+    }
+}
+
+impl<Timestamp: Copy + Ord> InputLedger<Timestamp> {
+    /// Keep the oldest observed timestamp per nonempty admitted batch.
+    pub fn admit(&mut self, tick: u64, elapsed: Timestamp) {
+        let _stored = self
+            .pending
+            .entry(tick)
+            .and_modify(|oldest| *oldest = (*oldest).min(elapsed))
+            .or_insert(elapsed);
+    }
+
+    /// Retain the oldest applied event until a gameplay frame is submitted.
+    pub fn advance(&mut self, next_tick: u64) {
+        while self
+            .pending
+            .first_key_value()
+            .is_some_and(|(&tick, _)| tick < next_tick)
+        {
+            if let Some((_, elapsed)) = self.pending.pop_first() {
+                self.applied = Some(
+                    self.applied.map_or(elapsed, |oldest| oldest.min(elapsed)),
+                );
+            }
+        }
+    }
+
+    /// Return the oldest executed input not yet consumed.
+    #[must_use]
+    pub const fn applied(&self) -> Option<Timestamp> {
+        self.applied
+    }
+
+    /// Count pending ticks, not individual actions.
+    #[must_use]
+    pub fn pending_ticks(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Consume the oldest executed input once, leaving future ticks intact.
+    pub const fn take_applied(&mut self) -> Option<Timestamp> {
+        self.applied.take()
+    }
+}
+
 fn histogram_index(duration: Duration) -> Option<usize> {
     let nanos = duration.as_nanos();
     if nanos < 8 {
@@ -468,7 +529,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        FrameBudgetReport, FrameObservation, PercentileRange,
+        FrameBudgetReport, FrameObservation, InputLedger, PercentileRange,
         PerformanceCollector, PerformanceError, QualityProfile,
     };
     use crate::presentation::FramePacing;
@@ -480,6 +541,26 @@ mod tests {
             optional_effects: false,
             width: 1280,
         }
+    }
+
+    #[test]
+    fn input_ledger_preserves_oldest_executed_tick_and_consumes_once() {
+        let mut ledger = InputLedger::default();
+        ledger.admit(5, 50u64);
+        ledger.admit(2, 20);
+        ledger.admit(2, 10);
+        ledger.admit(3, 15);
+        assert_eq!(ledger.pending_ticks(), 3);
+        ledger.advance(2);
+        assert_eq!(ledger.applied(), None);
+        ledger.advance(4);
+        assert_eq!(ledger.applied(), Some(10));
+        assert_eq!(ledger.pending_ticks(), 1);
+        assert_eq!(ledger.take_applied(), Some(10));
+        assert_eq!(ledger.take_applied(), None);
+        ledger.advance(6);
+        assert_eq!(ledger.take_applied(), Some(50));
+        assert_eq!(ledger.pending_ticks(), 0);
     }
 
     #[test]

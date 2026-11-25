@@ -79,6 +79,67 @@ impl SpriteRect {
             ..self
         }
     }
+
+    /// Test a pixel using widened arithmetic, including negative origins.
+    #[must_use]
+    pub fn contains_pixel(self, horizontal: u32, vertical: u32) -> bool {
+        let local_x = i64::from(horizontal).saturating_sub(i64::from(self.x));
+        let local_y = i64::from(vertical).saturating_sub(i64::from(self.y));
+        (0..i64::from(self.width.get())).contains(&local_x)
+            && (0..i64::from(self.height.get())).contains(&local_y)
+    }
+
+    /// Select a left-aligned portion of this rectangle, without truncation.
+    /// Zero columns or a portion exceeding the extent have no rectangle.
+    #[must_use]
+    pub const fn left_columns(self, columns: u32) -> Option<Self> {
+        if columns > self.width.get() {
+            return None;
+        }
+        match NonZeroU32::new(columns) {
+            Some(width) => Some(Self { width, ..self }),
+            None => None,
+        }
+    }
+}
+
+/// Caller-selected horizontal camera geometry for a padded art strip.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StripViewport {
+    /// Width of the unexpanded design.
+    pub design_width: u32,
+    /// Maximum requested viewport width.
+    pub maximum_width: u32,
+    /// Art inset on either side of the strip.
+    pub side_inset: u32,
+}
+
+impl StripViewport {
+    /// Resolve a camera origin without crossing the available art bounds.
+    #[must_use]
+    pub fn origin(self, strip: u32, width: u32, camera: u32) -> Option<u32> {
+        let maximum = self.width(strip)?;
+        if !(self.design_width..=maximum).contains(&width) {
+            return None;
+        }
+        let (available, inset) = if width > self.design_width {
+            (strip, self.side_inset)
+        } else {
+            (strip.checked_add(self.side_inset.checked_mul(2)?)?, 0)
+        };
+        camera
+            .min(available.saturating_sub(width))
+            .checked_add(inset)
+    }
+
+    /// Fit the view to the supplied art and caller-selected width range.
+    #[must_use]
+    pub fn width(self, strip: u32) -> Option<u32> {
+        if self.design_width == 0 || self.maximum_width < self.design_width {
+            return None;
+        }
+        Some(strip.clamp(self.design_width, self.maximum_width))
+    }
 }
 
 /// How a logical frame occupies the available physical surface.
@@ -546,6 +607,46 @@ pub fn expanded_anchor(
     u32::try_from(offset).ok()
 }
 
+/// Return an exact RGBA row segment, with no wrapping into another row.
+/// Coordinates and lengths are caller-selected; arithmetic is checked.
+#[must_use]
+pub fn rgba_row(
+    pixels: &[u8],
+    width: u32,
+    origin: (u32, u32),
+    columns: u32,
+) -> Option<&[u8]> {
+    let (column, row) = origin;
+    if width == 0 || column.checked_add(columns)? > width {
+        return None;
+    }
+    let stride = u64::from(width);
+    let start = u64::from(row)
+        .checked_mul(stride)?
+        .checked_add(u64::from(column))?;
+    let end = start.checked_add(u64::from(columns))?;
+    let first = usize::try_from(start.checked_mul(4)?).ok()?;
+    let last = usize::try_from(end.checked_mul(4)?).ok()?;
+    pixels.get(first..last)
+}
+
+/// Verify a nonempty RGBA mask with a caller-selected visible colour.
+/// Every other pixel must match the supplied transparent colour.
+#[must_use]
+pub fn solid_mask(
+    pixels: &[u8],
+    transparent: [u8; 4],
+    visible: [u8; 4],
+) -> bool {
+    let (rgba, remainder) = pixels.as_chunks::<4>();
+    transparent != visible
+        && remainder.is_empty()
+        && rgba.contains(&visible)
+        && rgba
+            .iter()
+            .all(|pixel| *pixel == transparent || *pixel == visible)
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -553,12 +654,61 @@ mod tests {
 
     use super::{
         Dimensions, DisplaySettings, FramePacing, PresentationMode, SpriteRect,
-        TranslationCatalog, Viewport, WindowMode, centered_expansion,
-        expanded_anchor,
+        StripViewport, TranslationCatalog, Viewport, WindowMode,
+        centered_expansion, expanded_anchor, rgba_row, solid_mask,
     };
 
     fn nz(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+    }
+
+    #[test]
+    fn padded_strip_camera_is_configurable_and_checked() {
+        let policy = StripViewport {
+            design_width: 320,
+            maximum_width: 512,
+            side_inset: 16,
+        };
+        assert_eq!(policy.width(732), Some(512));
+        assert_eq!(policy.origin(732, 320, 444), Some(444));
+        assert_eq!(policy.origin(732, 512, 444), Some(236));
+        assert_eq!(policy.origin(732, 513, 444), None);
+        let larger = StripViewport {
+            design_width: 1024,
+            maximum_width: 100_000,
+            side_inset: 32,
+        };
+        assert_eq!(larger.origin(100_000, 80_000, 60_000), Some(20_032));
+        assert_eq!(larger.origin(u32::MAX, 1024, 0), None);
+    }
+
+    #[test]
+    fn configurable_pixel_geometry_and_masks_are_exact() {
+        let rectangle = SpriteRect {
+            height: nz(2),
+            width: nz(u32::MAX),
+            x: -1,
+            y: 0,
+        };
+        assert!(rectangle.contains_pixel(0, 1));
+        assert!(rectangle.contains_pixel(u32::MAX - 2, 1));
+        assert!(!rectangle.contains_pixel(u32::MAX - 1, 1));
+        assert!(!rectangle.contains_pixel(0, 2));
+        assert_eq!(rectangle.left_columns(0), None);
+        assert_eq!(
+            rectangle.left_columns(65_536).map(|rect| rect.width),
+            Some(nz(65_536))
+        );
+    }
+
+    #[test]
+    fn rgba_rows_and_configurable_masks_reject_invalid_input() {
+        let pixels = [1u8; 32];
+        assert_eq!(rgba_row(&pixels, 4, (1, 1), 2), Some(&pixels[20..28]));
+        assert_eq!(rgba_row(&pixels, 4, (3, 0), 2), None);
+        assert_eq!(rgba_row(&pixels, u32::MAX, (0, u32::MAX), 1), None);
+        assert!(solid_mask(&[1, 2, 3, 9], [0; 4], [1, 2, 3, 9]));
+        assert!(!solid_mask(&[0; 4], [0; 4], [1, 2, 3, 9]));
     }
 
     #[test]

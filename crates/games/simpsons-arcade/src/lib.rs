@@ -33,22 +33,14 @@
 
 mod cooperative;
 mod encounter;
-#[cfg(all(
-    feature = "native-preview",
-    target_os = "linux",
-    target_env = "gnu"
-))]
+#[cfg(feature = "native-preview")]
 /// Native authenticated host input for the local arcade screen.
 pub mod lan;
 mod maneuver;
 /// Host-authoritative remote input for the free-play cabinet.
 pub mod remote;
 
-#[cfg(all(
-    feature = "native-preview",
-    target_os = "linux",
-    target_env = "gnu"
-))]
+#[cfg(feature = "native-preview")]
 /// Title runtime composition using shared platform capabilities.
 pub mod runtime;
 use std::mem;
@@ -60,6 +52,7 @@ pub use encounter::{
     EnemyAction, RestraintMotion,
 };
 use games::input::LogicalAction;
+use games::presentation::StripViewport;
 use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
 use games::session::{LocalSession, MenuInput, SessionEffect};
@@ -73,6 +66,12 @@ pub const CONTINUE_TICKS: u16 = 1200;
 const BASE_WIDTH: u32 = 320;
 const MAX_VIEW_WIDTH: u32 = 512;
 const SIDE: u32 = 16;
+const STRIP_VIEWPORT: StripViewport = StripViewport {
+    design_width: BASE_WIDTH,
+    maximum_width: MAX_VIEW_WIDTH,
+    side_inset: SIDE,
+};
+
 const ENEMY_CAPACITY: usize = 7;
 const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
@@ -1139,23 +1138,17 @@ fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {
 
 /// Clamp the logical viewport to the available strip.
 fn viewport_width(strip_width: u32) -> u32 {
-    strip_width.clamp(BASE_WIDTH, MAX_VIEW_WIDTH)
+    STRIP_VIEWPORT.width(strip_width).unwrap_or(BASE_WIDTH)
 }
 
 /// World origin of a supported logical view.
 fn view_origin(strip_width: u32, width: u32, camera: i16) -> Option<i16> {
-    if !(BASE_WIDTH..=viewport_width(strip_width)).contains(&width)
-        || camera < 0
-    {
-        return None;
-    }
-    let (available, inset) = if width > BASE_WIDTH {
-        (strip_width, i16::try_from(SIDE).ok()?)
-    } else {
-        (strip_width.saturating_add(SIDE * 2), 0)
-    };
-    let remaining = i16::try_from(available.saturating_sub(width)).ok()?;
-    Some(camera.min(remaining).saturating_add(inset))
+    let origin = STRIP_VIEWPORT.origin(
+        strip_width,
+        width,
+        u32::try_from(camera).ok()?,
+    )?;
+    i16::try_from(origin).ok()
 }
 
 /// Verified strip interior width for additional camera travel.

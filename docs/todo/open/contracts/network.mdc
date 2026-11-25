@@ -693,3 +693,11 @@ Existing letter and number glyphs and input bindings are unchanged.
 Fresh native rendering, audio and portable-core validation passed in run
 1795624563339384682-3955370. Non-ASCII key labels and physical device
 acceptance remain unverified.
+
+Portable roster regressions verify that unknown, disconnected and oversized
+messages never enter the caller's schema. The same codec resumes processing
+after an authenticated rejoin. Rejected duplicate joins, disconnects and
+wrong-origin reconnects preserve reserved capacity and leave another local
+player active. Explicit removal releases that capacity for a new player.
+These tests exercise shared policy, not certificate or physical-device
+interoperability.

@@ -40,9 +40,7 @@ use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::ui;
 
-use super::{
-    Action, CONTROLS, Control, Player, Profiles, dimension, size, world,
-};
+use super::{Action, CONTROLS, Control, Player, Profiles, dimension, size};
 
 pub(super) const MAX_SCENE_HEIGHT: u16 = PANEL_TOP + PANEL_HEIGHT * 4;
 const MAX_PANEL_BYTES: usize = 409_600;
@@ -419,35 +417,12 @@ fn panel(
 }
 /// Convert full logical coordinates to the centered base-width panel.
 pub(super) fn to_panel(point: TouchPoint, width: u32) -> Option<TouchPoint> {
-    if width < u32::from(WIDTH) {
-        return None;
-    }
-    let maximum = u64::from(u16::MAX);
-    let offset =
-        u64::from(world::centered_offset(width)).checked_mul(maximum)?;
-    let scaled = u64::from(point.x).checked_mul(u64::from(width))?;
-    let local = scaled.checked_sub(offset)?.checked_div(u64::from(WIDTH))?;
-    Some(TouchPoint {
-        x: u16::try_from(local).ok()?,
-        ..point
-    })
+    point.in_centered_panel(u32::from(WIDTH), width)
 }
 
 /// Project base-panel coordinates into the full logical scene.
 pub(super) fn to_scene(point: TouchPoint, width: u32) -> Option<TouchPoint> {
-    if width < u32::from(WIDTH) {
-        return None;
-    }
-    let offset = u64::from(world::centered_offset(width))
-        .checked_mul(u64::from(u16::MAX))?;
-    let scaled = u64::from(point.x)
-        .checked_mul(u64::from(WIDTH))?
-        .checked_add(offset)?;
-    let horizontal = scaled.div_ceil(u64::from(width));
-    Some(TouchPoint {
-        x: u16::try_from(horizontal).ok()?,
-        ..point
-    })
+    point.on_centered_panel(u32::from(WIDTH), width)
 }
 
 #[cfg(test)]

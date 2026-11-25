@@ -33,7 +33,8 @@
 
 /// Read-only native canonical asset bundle access.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub mod bundle;
+mod bundle;
+
 /// Bounded native regular-file snapshots.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod file;
@@ -44,6 +45,33 @@ pub mod file;
     any(test, feature = "test-fixtures"),
 ))]
 pub mod fixtures;
+/// Explicitly unavailable native rejection-test fixtures.
+#[cfg(all(
+    not(any(target_os = "linux", target_os = "android")),
+    any(test, feature = "test-fixtures"),
+))]
+pub mod fixtures {
+    use std::io;
+    use std::path::Path;
+
+    /// Whether link and executable fixture operations are implemented.
+    pub const AVAILABLE: bool = false;
+
+    /// Reject unavailable fixture link creation.
+    /// # Errors
+    /// Always returns Unsupported.
+    pub fn file_link(_target: &Path, _link: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// Reject unavailable fixture permission changes.
+    /// # Errors
+    /// Always returns Unsupported.
+    pub fn owner_executable(_path: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
 /// Atomic persistence for portable display and input preferences.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod preferences;
@@ -56,19 +84,63 @@ pub mod save;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod staging;
 
+/// Safe file admission is unavailable until the target has a backend.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub mod file {
+    use std::io::ErrorKind;
+    use std::num::NonZeroU64;
+    use std::path::Path;
+
+    pub use super::snapshot;
+    pub use crate::ir::security::file::FileReadError;
+
+    /// Reject secret reads before touching any host resource.
+    /// # Errors
+    /// Always reports unsupported storage admission.
+    pub const fn snapshot_secret(
+        _path: &Path,
+        _maximum: NonZeroU64,
+    ) -> Result<Vec<u8>, FileReadError> {
+        Err(FileReadError::Io(ErrorKind::Unsupported))
+    }
+}
+
+/// Preferences require a verified atomic storage adapter.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub mod preferences {
+    /// Whether preference persistence is implemented on the target.
+    pub const AVAILABLE: bool = false;
+}
+
+/// Saves require a verified atomic storage adapter.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub mod save {
+    /// Whether save persistence is implemented on the target.
+    pub const AVAILABLE: bool = false;
+}
+
+/// Staging requires a verified descriptor-relative storage adapter.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub mod staging {
+    /// Whether the target provides private archive staging.
+    pub const AVAILABLE: bool = false;
+}
+
+use std::ffi::OsStr;
 #[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 use std::io;
 #[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 use std::num::NonZeroU64;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
 use std::path::Path;
 
 /// Read a bounded snapshot using the host's regular-file adapter.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub use file::snapshot;
+use games_assets::{ContentHash, ManifestLimits};
 
 /// Shared portable snapshot admission failure.
 pub use crate::ir::security::file::FileReadError;
+use crate::ir::storage::bundle::{BundleError, BundleFactory, CanonicalBundle};
 
 /// Reject a snapshot request when safe regular-file admission is unavailable.
 ///
@@ -81,6 +153,28 @@ pub const fn snapshot(
     _maximum: NonZeroU64,
 ) -> Result<Vec<u8>, FileReadError> {
     Err(FileReadError::Io(io::ErrorKind::Unsupported))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl BundleFactory for () {
+    fn open(
+        parent: &OsStr,
+        digest: ContentHash,
+        limits: ManifestLimits,
+    ) -> Result<CanonicalBundle, BundleError> {
+        bundle::open_bundle(Path::new(parent), digest, limits)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+impl BundleFactory for () {
+    fn open(
+        _parent: &OsStr,
+        _digest: ContentHash,
+        _limits: ManifestLimits,
+    ) -> Result<CanonicalBundle, BundleError> {
+        Err(BundleError::Io(io::ErrorKind::Unsupported))
+    }
 }
 
 #[cfg(test)]

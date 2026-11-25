@@ -18,10 +18,14 @@ name = "games-hooks"
 path = "src/hooks.rs"
 
 [dependencies]
+games-platform.workspace = true
 proc-macro2.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+games-platform = { workspace = true, features = ["test-fixtures"] }
 
 [lints]
 workspace = true

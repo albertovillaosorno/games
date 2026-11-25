@@ -12,6 +12,7 @@ categories.workspace = true
 [features]
 native-preview = [
     "dep:games",
+    "games-platform/interactive",
 ]
 
 [dependencies]

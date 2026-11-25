@@ -41,7 +41,7 @@ use games::input::physical::KeyboardKey;
 use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
-use games::presentation::FramePacing;
+use games::presentation::{FramePacing, rgba_row};
 use games::replay::LiveSimulation;
 use games::session::LocalSession;
 use games_platform::ir::frame::{FrameLayout, RenderError};
@@ -144,14 +144,10 @@ impl CombatArt {
             y: i32::from(position.y),
         };
         draws.push(missing.draw(rect, false));
-        if meter.filled > 0 {
-            draws.push(filled.draw(
-                SpriteRect {
-                    width: dimension(u32::from(meter.filled))?,
-                    ..rect
-                },
-                false,
-            ));
+        if let Some(portion) = rect.left_columns(u32::from(meter.filled)) {
+            draws.push(filled.draw(portion, false));
+        } else if meter.filled != 0 {
+            return Err(RenderError::InvalidDimensions);
         }
         Ok(())
     }
@@ -953,21 +949,12 @@ fn health_row(
     width: u32,
     columns: u8,
 ) -> Result<&[u8], RenderError> {
-    let horizontal = usize::try_from(point.x).map_err(failure)?;
-    let vertical = usize::try_from(point.y).map_err(failure)?;
-    let stride = usize::try_from(width).map_err(failure)?;
-    if horizontal.saturating_add(usize::from(columns)) > stride {
+    let horizontal = u32::try_from(point.x).map_err(failure)?;
+    let vertical = u32::try_from(point.y).map_err(failure)?;
+    if horizontal.saturating_add(u32::from(columns)) > width {
         return Err(RenderError::InvalidDimensions);
     }
-    let offset = vertical
-        .saturating_mul(stride)
-        .saturating_add(horizontal)
-        .saturating_mul(4);
-    pixels
-        .get(
-            offset
-                ..offset.saturating_add(usize::from(columns).saturating_mul(4)),
-        )
+    rgba_row(pixels, width, (horizontal, vertical), u32::from(columns))
         .ok_or(RenderError::InvalidLength)
 }
 

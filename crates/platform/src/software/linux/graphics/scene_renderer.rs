@@ -34,12 +34,9 @@
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use games::input::touch::TouchPoint;
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
 };
-use sdl2::EventPump;
-use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Rect, max_int_value, min_int_value};
 use sdl2::render::{
@@ -47,14 +44,17 @@ use sdl2::render::{
     WindowCanvas,
 };
 use sdl2::video::WindowContext;
+use sdl2::{EventPump, TimerSubsystem};
 
+use super::super::input::sample;
 use super::{
     apply_window_mode, copy_to_viewport, drawable_viewport, validate_dimensions,
 };
 use crate::ir::frame::{FrameLayout, RenderError};
-use crate::ir::scene::{
-    AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
-};
+use crate::ir::graphics::scene_renderer::SceneBackend;
+use crate::ir::hardware::InputSample;
+use crate::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
+use crate::ir::security::scene::{AtlasUsage, admit_atlas, admit_draws};
 
 struct Atlas<'texture> {
     layout: FrameLayout,
@@ -74,16 +74,15 @@ impl<'texture, Context> Atlases<'texture, Context> {
         layout: FrameLayout,
         pixels: &[u8],
     ) -> Result<AtlasId, RenderError> {
-        if pixels.len() != layout.bytes() {
-            return Err(RenderError::InvalidLength);
-        }
-        if self.entries.len() >= self.limits.atlases.get() {
-            return Err(RenderError::TooLarge);
-        }
-        let remaining = self
-            .remaining_bytes
-            .checked_sub(layout.bytes())
-            .ok_or(RenderError::TooLarge)?;
+        let remaining = admit_atlas(
+            self.limits,
+            AtlasUsage {
+                loaded: self.entries.len(),
+                remaining_bytes: self.remaining_bytes,
+            },
+            layout,
+            pixels.len(),
+        )?;
         self.entries
             .try_reserve(1)
             .map_err(|_error| RenderError::TooLarge)?;
@@ -119,15 +118,11 @@ impl<'texture, Context> Atlases<'texture, Context> {
     }
 
     fn validate(&self, sprites: &[SpriteDraw]) -> Result<(), RenderError> {
-        if sprites.len() > self.limits.sprites.get() {
-            return Err(RenderError::TooLarge);
-        }
+        admit_draws(self.limits, sprites, |id| {
+            self.entries.get(id.0).map(|atlas| atlas.layout)
+        })?;
         for sprite in sprites {
-            let atlas = self
-                .entries
-                .get(sprite.atlas.0)
-                .ok_or(RenderError::InvalidSprite)?;
-            let _source = source_rectangle(sprite.source, atlas.layout)?;
+            let _source = native_rectangle(sprite.source)?;
             let _destination = native_rectangle(sprite.destination)?;
         }
         Ok(())
@@ -243,63 +238,34 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
 }
 
 /// A logical render target, persistent atlases and a native event pump.
-pub struct SceneSession<'canvas, 'texture> {
+pub(super) struct LinuxScene<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
     events: EventPump,
     last_presented: Option<PresentationLayout>,
     textures: SceneTextures<'texture, WindowContext>,
+    timer: TimerSubsystem,
 }
 
-impl Debug for SceneSession<'_, '_> {
+impl Debug for LinuxScene<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SceneSession")
+        f.debug_struct("LinuxScene")
             .field("layout", &self.textures.layout)
             .finish_non_exhaustive()
     }
 }
 
-impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
+impl SceneBackend for LinuxScene<'_, '_> {
     /// Change the current window and viewport without rebuilding atlases.
     ///
     /// # Errors
     /// Reports a rejected native fullscreen transition.
-    pub fn apply_display_settings(
+    fn apply_display_settings(
         &mut self,
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
         apply_window_mode(self.canvas, settings.window)?;
         self.textures.mode = settings.presentation;
         Ok(())
-    }
-
-    /// Dispatch at most `budget` events in native queue order.
-    ///
-    /// Only the first poll may wait, if `wait_ms` is nonzero. Reaching the
-    /// limit does not consume or inspect the next event. Callers can perform
-    /// simulation and network work between batches even during input floods.
-    /// # Errors
-    /// Propagates an event handler failure without draining further events.
-    pub fn dispatch_events<Dispatch>(
-        &mut self,
-        budget: NonZeroUsize,
-        wait_ms: u32,
-        dispatch: Dispatch,
-    ) -> Result<EventBatch, RenderError>
-    where
-        Dispatch: FnMut(&Self, &Event) -> Result<bool, RenderError>,
-    {
-        dispatch_batch(
-            self,
-            budget,
-            |scene, first| {
-                if first && wait_ms != 0 {
-                    scene.events.wait_event_timeout(wait_ms)
-                } else {
-                    scene.events.poll_event()
-                }
-            },
-            dispatch,
-        )
     }
 
     /// Choose the bounded logical extent for the next frame.
@@ -309,7 +275,7 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
     /// Atlases stay resident, and the old target survives allocation failure.
     /// # Errors
     /// Rejects an invalid maximum or native query/allocation failure.
-    pub fn fit_adaptive_width(
+    fn fit_adaptive_width(
         &mut self,
         maximum: FrameLayout,
     ) -> Result<FrameLayout, RenderError> {
@@ -328,21 +294,19 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
 
     /// Exact layout of the last completed presentation attempt.
     /// None before presentation or when no drawable was available.
-    #[must_use]
-    pub const fn last_presented_layout(&self) -> Option<PresentationLayout> {
+    fn last_presented_layout(&self) -> Option<PresentationLayout> {
         self.last_presented
     }
 
     /// Current logical target, including any admitted adaptive extension.
-    #[must_use]
-    pub const fn layout(&self) -> FrameLayout {
+    fn layout(&self) -> FrameLayout {
         self.textures.layout
     }
 
     /// Upload one tightly packed RGBA atlas for reuse in subsequent frames.
     /// # Errors
     /// Rejects byte/count limit violations or failed native allocation.
-    pub fn load_atlas(
+    fn load_atlas(
         &mut self,
         layout: FrameLayout,
         pixels: &[u8],
@@ -350,41 +314,23 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         self.textures.atlases.load(layout, pixels)
     }
 
-    /// Project a surface-normalized touch point into the displayed scene.
-    /// Letterbox space, unavailable or not yet redrawn surfaces return None.
-    /// # Errors
-    /// Reports failure to query the drawable dimensions.
-    pub fn logical_touch(
-        &self,
-        point: TouchPoint,
-    ) -> Result<Option<TouchPoint>, RenderError> {
-        Ok(self
-            .visible_layout()?
-            .and_then(|layout| point.in_presentation(layout)))
-    }
-
-    pub(super) fn new(
-        canvas: &'canvas mut WindowCanvas,
-        events: EventPump,
-        textures: SceneTextures<'texture, WindowContext>,
-    ) -> Result<Self, RenderError> {
-        if !canvas.render_target_supported() {
-            return Err(RenderError::Backend(String::from(
-                "SDL render targets are unavailable",
-            )));
-        }
-        Ok(Self {
-            canvas,
-            events,
-            last_presented: None,
-            textures,
-        })
+    fn poll_event(&mut self, wait_ms: u32) -> Option<InputSample> {
+        let event = if wait_ms == 0 {
+            self.events.poll_event()
+        } else {
+            self.events.wait_event_timeout(wait_ms)
+        }?;
+        Some(sample(
+            &event,
+            self.canvas.window().id(),
+            self.timer.ticks64(),
+        ))
     }
 
     /// Composite a frame with no full-frame CPU pixel upload.
     /// # Errors
     /// Rejects invalid draw commands before rendering or native failures.
-    pub fn present(
+    fn present(
         &mut self,
         background: [u8; 3],
         sprites: &[SpriteDraw],
@@ -397,18 +343,6 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(drawable.is_some())
     }
 
-    /// Whether the last submitted frame matches the current geometry.
-    /// Idle renderers use this to redraw after silent drawable changes.
-    /// # Errors
-    /// Reports failure to query the drawable dimensions.
-    pub fn presentation_is_current(&self) -> Result<bool, RenderError> {
-        Ok(self.visible_layout()?.is_some())
-    }
-
-    pub(super) const fn presentation_mode(&self) -> PresentationMode {
-        self.textures.mode
-    }
-
     /// Read the current logical scene as RGBA bytes.
     ///
     /// Call only immediately after successful presentation. This diagnostic
@@ -417,27 +351,14 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
     ///
     /// # Errors
     /// Rejects failed native readback or an unexpected byte extent.
-    pub fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
+    fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
         self.textures.readback(self.canvas)
-    }
-
-    /// Project a displayed logical point onto the physical surface.
-    /// Returns None until the current geometry has been presented.
-    /// # Errors
-    /// Reports failure to query the drawable dimensions.
-    pub fn surface_touch(
-        &self,
-        point: TouchPoint,
-    ) -> Result<Option<TouchPoint>, RenderError> {
-        Ok(self
-            .visible_layout()?
-            .and_then(|layout| point.on_presentation(layout)))
     }
 
     /// Observe the last presented layout if it matches current geometry.
     /// # Errors
     /// Reports failure to query the drawable dimensions.
-    pub fn visible_layout(
+    fn visible_layout(
         &self,
     ) -> Result<Option<PresentationLayout>, RenderError> {
         let current = drawable_viewport(
@@ -453,13 +374,29 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
     }
 }
 
-impl AtlasUpload for SceneSession<'_, '_> {
-    fn upload_atlas(
-        &mut self,
-        layout: FrameLayout,
-        pixels: &[u8],
-    ) -> Result<AtlasId, RenderError> {
-        self.load_atlas(layout, pixels)
+impl<'canvas, 'texture> LinuxScene<'canvas, 'texture> {
+    pub(super) fn new(
+        canvas: &'canvas mut WindowCanvas,
+        events: EventPump,
+        textures: SceneTextures<'texture, WindowContext>,
+        timer: TimerSubsystem,
+    ) -> Result<Self, RenderError> {
+        if !canvas.render_target_supported() {
+            return Err(RenderError::Backend(String::from(
+                "SDL render targets are unavailable",
+            )));
+        }
+        Ok(Self {
+            canvas,
+            events,
+            last_presented: None,
+            textures,
+            timer,
+        })
+    }
+
+    pub(super) const fn presentation_mode(&self) -> PresentationMode {
+        self.textures.mode
     }
 }
 
@@ -480,52 +417,6 @@ fn native_rectangle(rectangle: SpriteRect) -> Result<Rect, RenderError> {
     ))
 }
 
-fn source_rectangle(
-    rectangle: SpriteRect,
-    layout: FrameLayout,
-) -> Result<Rect, RenderError> {
-    let left = u32::try_from(rectangle.x)
-        .map_err(|_error| RenderError::InvalidSprite)?;
-    let top = u32::try_from(rectangle.y)
-        .map_err(|_error| RenderError::InvalidSprite)?;
-    if left
-        .checked_add(rectangle.width.get())
-        .is_none_or(|right| right > layout.width().get())
-        || top
-            .checked_add(rectangle.height.get())
-            .is_none_or(|bottom| bottom > layout.height().get())
-    {
-        return Err(RenderError::InvalidSprite);
-    }
-    native_rectangle(rectangle)
-}
-
-fn dispatch_batch<Source, Next, Dispatch>(
-    source: &mut Source,
-    budget: NonZeroUsize,
-    mut next: Next,
-    mut dispatch: Dispatch,
-) -> Result<EventBatch, RenderError>
-where
-    Next: FnMut(&mut Source, bool) -> Option<Event>,
-    Dispatch: FnMut(&Source, &Event) -> Result<bool, RenderError>,
-{
-    for index in 0..budget.get() {
-        let first = index == 0;
-        let Some(event) = next(source, first) else {
-            return Ok(if first {
-                EventBatch::Empty
-            } else {
-                EventBatch::Drained
-            });
-        };
-        if !dispatch(source, &event)? {
-            return Ok(EventBatch::Stopped);
-        }
-    }
-    Ok(EventBatch::Limited)
-}
-
 fn compose<Target>(
     canvas: &mut Canvas<Target>,
     atlases: &[Atlas<'_>],
@@ -542,7 +433,7 @@ where
         let atlas = atlases
             .get(sprite.atlas.0)
             .ok_or(RenderError::InvalidSprite)?;
-        let source = source_rectangle(sprite.source, atlas.layout)?;
+        let source = native_rectangle(sprite.source)?;
         let destination = native_rectangle(sprite.destination)?;
         if sprite.flip_horizontal || sprite.flip_vertical {
             canvas
@@ -583,18 +474,16 @@ fn create_target<Context>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use games::presentation::{Dimensions, PresentationMode};
-    use sdl2::event::Event;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::render::Canvas;
     use sdl2::surface::{Surface, SurfaceContext};
 
     use super::{
-        Atlases, EventBatch, FrameLayout, RenderError, SceneLimits,
-        SceneTextures, SpriteDraw, SpriteRect, dispatch_batch,
+        Atlases, FrameLayout, RenderError, SceneLimits, SceneTextures,
+        SpriteDraw, SpriteRect,
     };
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
@@ -678,76 +567,6 @@ mod tests {
         condition
             .then_some(())
             .ok_or_else(|| RenderError::Backend(reason.to_owned()))
-    }
-
-    #[test]
-    fn bounded_native_batches_preserve_order_and_queue_tail()
-    -> Result<(), RenderError> {
-        let mut queue = (1..=5)
-            .map(|timestamp| Event::Quit { timestamp })
-            .collect::<VecDeque<_>>();
-        let mut delivered = Vec::new();
-        let mut first_polls = Vec::new();
-        for (expected, count) in [
-            (EventBatch::Limited, 2),
-            (EventBatch::Limited, 4),
-            (EventBatch::Drained, 5),
-            (EventBatch::Empty, 5),
-        ] {
-            let result = dispatch_batch(
-                &mut queue,
-                budget(2),
-                |source, first| {
-                    first_polls.push(first);
-                    source.pop_front()
-                },
-                |_source, event| {
-                    delivered.push(event.get_timestamp());
-                    Ok(true)
-                },
-            )?;
-            require(result == expected, "incorrect event batch result")?;
-            require(delivered.len() == count, "unexpected queue consumption")?;
-        }
-        require(delivered == [1, 2, 3, 4, 5], "event order differs")?;
-        require(
-            first_polls == [true, false, true, false, true, false, true],
-            "only the initial poll may wait",
-        )
-    }
-
-    #[test]
-    fn event_stop_or_failure_does_not_consume_next_native_event()
-    -> Result<(), RenderError> {
-        let mut queue = (1..=3)
-            .map(|timestamp| Event::Quit { timestamp })
-            .collect::<VecDeque<_>>();
-        require(
-            dispatch_batch(
-                &mut queue,
-                budget(3),
-                |source, _first| source.pop_front(),
-                |_source, _event| Ok(false),
-            )? == EventBatch::Stopped,
-            "stop not reported",
-        )?;
-        require(
-            queue.front() == Some(&Event::Quit { timestamp: 2 }),
-            "stop consumed the next event",
-        )?;
-        require(
-            dispatch_batch(
-                &mut queue,
-                budget(3),
-                |source, _first| source.pop_front(),
-                |_source, _event| Err(RenderError::InvalidLength),
-            ) == Err(RenderError::InvalidLength),
-            "handler error not propagated",
-        )?;
-        require(
-            queue.front() == Some(&Event::Quit { timestamp: 3 }),
-            "failure consumed the next event",
-        )
     }
 
     #[test]

@@ -273,3 +273,65 @@ Fresh mandatory validation passed in run 1795640960249074968-3023027:
 Clippy checks, default workspace Clippy, aggregate compilation and tests,
 engine packaging and 75 Markdown documents. This verifies the current
 checkpoint, not completed P1 migration or universal device support.
+
+The zero-only portability gate no longer loads or consults a migration
+baseline. It rejects every observed match and includes a real inventory
+fixture and count rejection tests. Read-only reference tools use the
+portable snapshot facade, removing 52 target predicate occurrences.
+Validator rejection fixtures delegate link and executable operations to
+platform; 13 more occurrences were removed. Unsupported native fixture
+capabilities are reported explicitly. The former baseline file is no
+longer an allowance and must be removed after the remaining migration.
+The strict audit run 1795641686770565245-3475071 rejected 116 remaining
+occurrences in build main and the title's main and library entry points.
+Complete neutral storage, graphics and runtime contracts before removing
+those predicates; do not mask them with aliases or restore exceptions.
+The 77 scoped validator and hook tests and 112 engine tests passed.
+
+The obsolete baseline file was removed after eliminating its role as an
+allowance. The live strict audit remains authoritative, and any remaining
+match still fails validation. No platform or tool exception was introduced.
+AGENTS requires parameterised shared mechanisms rather than arbitrary
+engine limits, while retaining checked resource and security admission.
+
+The obsolete portability baseline file has been deleted. The strict
+portability audit also runs before cache admission; an audit failure
+invalidates the prior success marker and records the diagnostic. A
+regression fixture covers the exact entrypoint predicates in both title
+and tool sources. Normal and fresh validation reject the remaining
+116 matches. Tool version discovery now uses the platform IR toolchain
+capability with a closed set of tool identifiers. Other host operations
+in tools still need migration to their owning IR capabilities.
+
+The audio IR now uses private factory dispatch for device creation and
+enumeration, with typed unsupported outcomes and a private playback port.
+Strict platform all-feature Clippy passed and 192 platform tests passed
+before the concurrent storage contract migration introduced new
+diagnostics. The previous release executable independently passed its
+native smoke with the pinned recovery.local catalogue. This confirms
+the last compiled checkpoint, not the currently modified source tree.
+
+The read-only build bundle check now consumes the neutral canonical
+bundle interface independently of publication, removing four target
+predicates (eight inventory matches). Its command parsing regression
+is no longer target-gated. Build and validator compilation passed after
+restricting the storage backend module to crate visibility. Fresh gate
+1795643385767612589-3984742 then rejected direct std::io and std::path
+imports in the new storage IR. A subsequent build test attempt failed
+on unresolved input-port imports during the concurrent graphics/input
+migration. Do not infer zero debt or commit until the full gate passes.
+Owner-confirmed audible attack effects and playable adaptive presentation
+are recorded in the title task; background music remains open.
+
+The former 108 target predicate occurrences are now absent from build
+and Simpsons entrypoints. The strict gate aggregates host and target
+findings, rejects the former platform root exemption, and tests stale
+cache invalidation. The old JSON baseline is deleted. Shared graphics,
+input and verified bundle factories expose neutral contracts; an optional
+interactive capability keeps SDL out of featureless core builds.
+All six portable-core target checks passed (Linux and Windows ARM64
+and x86-64, Android ARM64, and WebAssembly). Fresh native validation
+1795644190060834627-4124868 passed 1,337 test executions with zero
+failures, strict Clippy, package verification and 75 Markdown files.
+Native runtime compatibility on other operating systems is not proven.
+Non-native publication, preference and save adapters remain incomplete.

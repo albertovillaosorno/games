@@ -40,34 +40,103 @@ pub mod lan {
     pub const AVAILABLE: bool = false;
 }
 
-#[cfg(target_os = "linux")]
-pub use linux::graphics;
-#[cfg(not(target_os = "linux"))]
-pub mod graphics {
-    /// Whether the selected host supports graphics.
-    pub const AVAILABLE: bool = false;
-}
-#[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
-pub use linux::lan;
-#[cfg(not(target_arch = "wasm32"))]
-pub use linux::performance;
+/// Explicit absence of native measurement on this target.
 #[cfg(target_arch = "wasm32")]
 pub mod performance {
     /// Whether the selected host supports native measurement.
     pub const AVAILABLE: bool = false;
 }
-#[cfg(target_os = "linux")]
-pub use linux::{audio::NativeAudio, input};
-pub use linux::{storage, toolchain};
 
-/// Uninhabited playback handle on targets without a native audio adapter.
-#[cfg(not(target_os = "linux"))]
-#[derive(Clone, Copy, Debug)]
-pub enum NativeAudio {}
+use std::num::NonZeroU32;
 
-/// Input namespace on targets without a native input adapter.
-#[cfg(not(target_os = "linux"))]
-pub mod input {
-    /// Whether the selected host supports native input.
-    pub const AVAILABLE: bool = false;
+use games::input::physical::KeyboardKey;
+#[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
+pub use linux::lan;
+#[cfg(not(target_arch = "wasm32"))]
+pub use linux::performance;
+pub use linux::storage::*;
+pub use linux::toolchain;
+
+use crate::ir::audio::{
+    AudioDevices, PlaybackError, PlaybackFactory, PlaybackPort,
+};
+use crate::ir::frame::RenderError;
+use crate::ir::graphics::{WindowFactory, WindowPort};
+use crate::ir::input::InputNames;
+use crate::ir::security::audio::PlaybackRequest;
+
+#[cfg(all(feature = "interactive", target_os = "linux"))]
+impl PlaybackFactory for () {
+    fn devices() -> Result<AudioDevices, PlaybackError> {
+        linux::audio::devices()
+    }
+
+    fn open(
+        request: PlaybackRequest<'_>,
+    ) -> Result<PlaybackPort, PlaybackError> {
+        linux::audio::open_audio(request)
+    }
+}
+
+#[cfg(not(all(feature = "interactive", target_os = "linux")))]
+impl PlaybackFactory for () {
+    fn devices() -> Result<AudioDevices, PlaybackError> {
+        Err(PlaybackError::Unsupported)
+    }
+
+    fn open(
+        _request: PlaybackRequest<'_>,
+    ) -> Result<PlaybackPort, PlaybackError> {
+        Err(PlaybackError::Unsupported)
+    }
+}
+
+#[cfg(all(feature = "interactive", target_os = "linux"))]
+impl WindowFactory for () {
+    const SUPPORTED: bool = true;
+
+    fn open(
+        title: &str,
+        width: NonZeroU32,
+        height: NonZeroU32,
+        hidden: bool,
+    ) -> Result<WindowPort, RenderError> {
+        linux::graphics::open_window(title, width, height, hidden)
+    }
+}
+
+#[cfg(not(all(feature = "interactive", target_os = "linux")))]
+impl WindowFactory for () {
+    const SUPPORTED: bool = false;
+
+    fn open(
+        _title: &str,
+        _width: NonZeroU32,
+        _height: NonZeroU32,
+        _hidden: bool,
+    ) -> Result<WindowPort, RenderError> {
+        Err(RenderError::Unsupported)
+    }
+}
+
+#[cfg(all(feature = "interactive", target_os = "linux"))]
+impl InputNames for () {
+    fn key_from_name(name: &str) -> Option<KeyboardKey> {
+        linux::input::key_from_name(name)
+    }
+
+    fn key_name(key: KeyboardKey) -> &'static str {
+        linux::input::key_name(key)
+    }
+}
+
+#[cfg(not(all(feature = "interactive", target_os = "linux")))]
+impl InputNames for () {
+    fn key_from_name(_name: &str) -> Option<KeyboardKey> {
+        None
+    }
+
+    fn key_name(_key: KeyboardKey) -> &'static str {
+        "UNKNOWN"
+    }
 }

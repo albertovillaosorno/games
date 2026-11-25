@@ -43,5 +43,7 @@ pub mod haptics;
 pub mod lan;
 /// Versioned portable preference admission and encoding.
 pub mod preferences;
+/// Bounded atlas and ordered scene admission.
+pub mod scene;
 /// Fixed authored toolchain argument admission.
 pub mod toolchain;
