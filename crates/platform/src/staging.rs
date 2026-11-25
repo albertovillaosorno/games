@@ -38,7 +38,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use games::safety::{ArchiveBudget, EntryBudget, EntryKind, SafetyError};
+use games_assets::archive::{
+    ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
+};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{Mode, fstat, mkdirat};
@@ -61,7 +63,7 @@ pub enum StagingError {
     /// The filesystem or decoded stream failed.
     Io(io::ErrorKind),
     /// Shared archive admission or decoded-byte validation failed.
-    Safety(SafetyError),
+    Safety(ArchiveError),
     /// Output path is not within the portable ASCII namespace or depth.
     UnsupportedPath,
     /// The parent is not owned by the effective user or permits other writers.
@@ -80,8 +82,8 @@ impl From<io::Error> for StagingError {
     }
 }
 
-impl From<SafetyError> for StagingError {
-    fn from(error: SafetyError) -> Self {
+impl From<ArchiveError> for StagingError {
+    fn from(error: ArchiveError) -> Self {
         Self::Safety(error)
     }
 }
@@ -338,7 +340,7 @@ impl ArchiveStaging {
                 copy_bounded(input, &mut output, entry)
             },
             EntryKind::Hardlink | EntryKind::Other | EntryKind::Symlink => {
-                Err(SafetyError::LinkOrSpecial.into())
+                Err(ArchiveError::LinkOrSpecial.into())
             },
         }
     }
@@ -371,7 +373,7 @@ where
             Ok(0) => return Ok(budget.finish()?),
             Ok(count) => {
                 let chunk =
-                    buffer.get(..count).ok_or(SafetyError::InvalidEntry)?;
+                    buffer.get(..count).ok_or(ArchiveError::InvalidEntry)?;
                 budget.record(chunk.len())?;
                 output.write_all(chunk)?;
             },
@@ -546,7 +548,7 @@ mod tests {
             stage.write_entry(
                 member("a/b/file", EntryKind::File, 0),
                 &mut io::empty(),
-            ) == Err(StagingError::Safety(SafetyError::TooLarge)),
+            ) == Err(StagingError::Safety(ArchiveError::TooLarge)),
         )?;
         require(matches!(stage.finish(), Err(StagingError::Aborted)))
     }

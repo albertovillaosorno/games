@@ -202,6 +202,7 @@ name = "games-platform"
 version = "0.1.0"
 dependencies = [
  "games",
+ "games-assets",
  "nix",
  "rcgen",
  "rustls",

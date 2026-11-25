@@ -27,7 +27,7 @@ Protect the host from malformed or malicious user-supplied data.
 Partial evidence, 2026-11-24: fresh validation passed in run
 1795575348175824037-2468367 (70 tests).
 
-`games::safety` rejects synthetic traversal and Windows-drive paths,
+`games_assets::archive` rejects synthetic traversal and Windows-drive paths,
 link/special archive members, executable extensions and oversize entries.
 Portable path checks also reject device aliases, control characters,
 ambiguous trailing dots/spaces and overlong paths or components.

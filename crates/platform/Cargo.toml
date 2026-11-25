@@ -19,6 +19,7 @@ rcgen.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 nix.workspace = true
+games-assets.workspace = true
 
 [lints]
 workspace = true

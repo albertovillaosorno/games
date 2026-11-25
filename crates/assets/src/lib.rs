@@ -30,6 +30,8 @@
 //   - Reject unknown versions, malformed keys and invalid payload lengths.
 
 //! Source-independent canonical asset contracts.
+/// Shared archive-entry policy and decompression budgets.
+pub mod archive;
 
 use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64, NonZeroUsize};

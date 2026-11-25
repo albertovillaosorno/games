@@ -42,7 +42,7 @@ pub mod performance;
 pub mod presentation;
 /// Public-action recording and replay for deterministic fixed simulations.
 pub mod replay;
-/// Archive-entry and save integrity checks for untrusted local assets.
+/// Integrity checks for untrusted local save data.
 pub mod safety;
 /// Fixed-step simulation time shared across titles and platforms.
 pub mod timing;
