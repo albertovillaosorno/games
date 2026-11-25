@@ -79,6 +79,16 @@ pub(super) static SIMPSONS: Profile = Profile {
         width: 320,
     },
     revision: "world-4p-set-1",
+    sample_members: &[
+        super::samples::Member {
+            bytes: 0x0010_0000,
+            name: "072-d05.1f",
+        },
+        super::samples::Member {
+            bytes: 0x0004_0000,
+            name: "072-d04.1d",
+        },
+    ],
     sprite_wiring: super::sprites::Wiring { x: -43, y: -23 },
     tile_code_mask: 0x7fff,
     title: "simpsons-arcade",

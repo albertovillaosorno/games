@@ -341,3 +341,37 @@ checkpoints differ from the shorter-input scenario. The combined
 reference corpus now has 107 exact aligned scene comparisons.
 Native logical-target readback also matched the reconstructed raster
 at frames 1560, 1800 and 2280 of the repeated input-stress scenario.
+
+Two independent isolated 30-second input-script runs captured all four
+named K053260 voice states for 1,776 consecutive callbacks apiece.
+The 170,496-byte observation files matched byte-for-byte, and the
+mixed stereo WAV recordings matched all 1,440,001 sample frames.
+
+The importer now assembles the two exact sound ROM members of the
+verified archive in their declared address order. It can borrow bounded,
+forward, non-looping PCM8 and four-bit differential clips and decode
+signed amplitudes to PCM16 without running original code. The decoder
+uses the documented chip address preincrement, low-before-high nibble
+order and wrapping eight-bit differential accumulator. Hardware behavior
+was checked against the pinned MAME K053260 reference documentation at
+revision cdcbdf509292257dcdaedc8d8452f79d89ff20d4.
+
+The local read-only diagnostic accepts 24-byte little-endian records,
+four ordered voice records for every consecutive frame starting at zero:
+
+- Frame, start address and position: three unsigned 32-bit words.
+- Length and pitch: two unsigned 16-bit words.
+- Voice, output, playing, reverse, loop, differential, volume and pan:
+  eight bytes.
+
+```sh
+cargo run --locked -p games-build -- mame sample-check simpsons \
+  world-4p-set-1 OBSERVATIONS LIMIT ARCHIVE SOURCE ENTRY TOTAL COUNT
+```
+
+Each run matched all 2,788 active PCM and 654 active differential
+amplitudes (6,884 combined observations) with zero mismatches.
+Inactive voices are not counted as sample matches. This is sample
+decoding evidence, not pitch scheduling, reverse or looping behavior,
+YM2151 synthesis, panning, mixing or interactive audio parity.
+No original sound bytes or capture data are tracked.

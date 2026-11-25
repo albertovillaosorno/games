@@ -75,6 +75,8 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::path::Path;
 use std::path::PathBuf;
 
 use games_assets::archive::ArchiveBudget;
@@ -83,6 +85,8 @@ use games_assets::{
 };
 use games_importer::conversion::ConversionLimits;
 use games_importer::mame::Machine;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use games_importer::mame::samples::compare_observations;
 use games_importer::{ImportError, VerifiedSource};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use games_platform_storage::file::snapshot;
@@ -101,6 +105,8 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "GNU/Linux (native-preview): mame scene-render-check MACHINE REV ",
     "PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
+    "Linux/Android: mame sample-check MACHINE REV OBSERVATIONS LIMIT ",
+    "PATH SOURCE ENTRY TOTAL COUNT\n",
     "Linux/Android: mame object-check MACHINE REV CPU DEVICE\n",
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
     "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
@@ -215,6 +221,8 @@ enum Command {
     ))]
     RenderCheck(Machine, render_check::Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
+    SampleCheck(Machine, PathBuf, NonZeroU64, Arguments),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     TilemapCheck(Machine, PathBuf, PathBuf),
     Verify(Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -279,6 +287,8 @@ impl Command {
                     )?,
                 ))
             },
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            "sample-check" => Self::parse_sample(selected, args),
             "verify" => Ok(Self::Verify(Arguments::parse_mame(
                 selected,
                 args.collect(),
@@ -350,6 +360,24 @@ impl Command {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn parse_sample<Args>(
+        machine: Machine,
+        mut args: Args,
+    ) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        let raw = args.next().ok_or_else(|| String::from(USAGE))?;
+        let limit = args.next().ok_or_else(|| String::from(USAGE))?;
+        Ok(Self::SampleCheck(
+            machine,
+            raw.into(),
+            parse_limit(&limit)?,
+            Arguments::parse_mame(machine, args.collect())?,
+        ))
+    }
+
     fn run(self) -> Result<(), String> {
         match self {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -379,6 +407,10 @@ impl Command {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::WaveCompare(left, right, limit) => {
                 reference_audio::check(&left, &right, limit)
+            },
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::SampleCheck(machine, raw, limit, args) => {
+                report_samples(machine, &raw, limit, &args)
             },
             Self::Verify(args) => with_source(&args, verify_archive),
             Self::Import(machine, args) => {
@@ -479,6 +511,36 @@ fn verify_archive(
         identity.digest,
     )
     .map_err(|error| error.to_string())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn report_samples(
+    machine: Machine,
+    raw: &Path,
+    limit: NonZeroU64,
+    args: &Arguments,
+) -> Result<(), String> {
+    with_source(args, |source, archive| {
+        let rom = machine
+            .sample_rom(source, archive)
+            .map_err(|error| format!("sample ROM: {error:?}"))?;
+        let bytes = snapshot(raw, limit)
+            .map_err(|error| format!("observation: {error:?}"))?;
+        let report = compare_observations(&rom, &bytes)
+            .map_err(|error| format!("sample comparison: {error:?}"))?;
+        writeln!(
+            stdout().lock(),
+            "{} frames: {} PCM, {} differential, {} mismatches",
+            report.frames,
+            report.pcm,
+            report.differential,
+            report.mismatches,
+        )
+        .map_err(|error| error.to_string())?;
+        (report.mismatches == 0)
+            .then_some(())
+            .ok_or_else(|| String::from("observed sample amplitudes differ"))
+    })
 }
 
 fn report_manifest(

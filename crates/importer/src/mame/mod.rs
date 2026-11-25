@@ -39,6 +39,8 @@ pub mod objects;
 mod palette;
 /// Observed video mixer assignment and priority order.
 pub mod priority;
+/// Bounded signed sample ROM extraction and source-reference comparison.
+pub mod samples;
 /// Observed sprite composition and vertical mirror handling.
 pub mod sprites;
 /// Observed local tile-cell addresses and attributes.
@@ -47,6 +49,7 @@ pub mod tilemap;
 use std::iter::once;
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use games_assets::archive::ArchiveBudget;
 use games_assets::{
     AssetFormat, AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
@@ -100,6 +103,7 @@ struct Profile {
     palette: palette::Palette,
     raster: background::Raster,
     revision: &'static str,
+    sample_members: &'static [samples::Member],
     sprite_wiring: sprites::Wiring,
     tile_code_mask: u16,
     title: &'static str,
@@ -211,6 +215,20 @@ impl Machine {
     #[must_use]
     pub const fn palette_entries(self) -> NonZeroUsize {
         self.0.palette.entries
+    }
+
+    /// Assemble only the profiled sample ROM members from the verified archive.
+    /// # Errors
+    /// Rejects an incorrect source or missing or malformed sample members.
+    pub fn sample_rom(
+        self,
+        source: &VerifiedSource<'_>,
+        budget: ArchiveBudget,
+    ) -> Result<samples::SampleRom, ImportError> {
+        if source.identity() != &self.identity()? {
+            return Err(ImportError::IncorrectSource);
+        }
+        samples::SampleRom::load(source, budget, self.0.sample_members)
     }
 
     /// Select a supported machine and exact revision.
@@ -359,8 +377,6 @@ fn allocated_bytes(size: usize) -> Result<Vec<u8>, ImportError> {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
-
-    use games_assets::archive::ArchiveBudget;
 
     use super::*;
 
