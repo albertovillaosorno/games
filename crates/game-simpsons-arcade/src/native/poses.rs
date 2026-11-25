@@ -44,8 +44,8 @@ use games_platform_storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
 use crate::{
-    ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, EnemyAction,
-    JumpMotion, Pair, PairMotion, WalkMotion,
+    BART_LISA_JUMP_TICKS, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
+    ENEMY_WALK_TICKS, EnemyAction, JumpMotion, Pair, PairMotion, WalkMotion,
 };
 
 const MAX_POSES: usize = 200;
@@ -180,6 +180,14 @@ pub(super) struct PoseArt {
 }
 
 impl PoseArt {
+    pub(super) fn bart_lisa_jump(&self) -> bool {
+        self.entries.contains_key(&(
+            Subject::Pair(Pair::BartLisa),
+            Kind::Jump,
+            0,
+        ))
+    }
+
     pub(super) fn enemy(&self, action: EnemyAction) -> Option<Art> {
         let (kind, tick) = match action {
             EnemyAction::Approach { tick } => (Kind::Walk, tick),
@@ -196,6 +204,7 @@ impl PoseArt {
     pub(super) fn pair(&self, pair: Pair, motion: PairMotion) -> Option<Art> {
         let (kind, tick) = match motion {
             PairMotion::Idle { tick } => (Kind::Idle, tick),
+            PairMotion::Jump { tick } => (Kind::Jump, tick),
             PairMotion::Walk { tick } => (Kind::Walk, tick),
         };
         select_entry(&self.entries, (Subject::Pair(pair), kind, tick)).copied()
@@ -339,10 +348,16 @@ fn jump_entry<Value>(
 fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
     Pair::ALL.into_iter().all(|pair| {
         let subject = Subject::Pair(pair);
-        !entries.keys().any(|(existing, _, _)| *existing == subject)
-            || [Kind::Idle, Kind::Walk]
-                .into_iter()
-                .all(|kind| entries.contains_key(&(subject, kind, 0)))
+        let jump_complete = !entries.keys().any(|(existing, kind, _)| {
+            *existing == subject && *kind == Kind::Jump
+        }) || [0, 4, 28]
+            .into_iter()
+            .all(|tick| entries.contains_key(&(subject, Kind::Jump, tick)));
+        jump_complete
+            && (!entries.keys().any(|(existing, _, _)| *existing == subject)
+                || [Kind::Idle, Kind::Walk]
+                    .into_iter()
+                    .all(|kind| entries.contains_key(&(subject, kind, 0))))
     })
 }
 
@@ -382,6 +397,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         (Subject::Enemy, Kind::Walk) => ENEMY_WALK_TICKS,
         (Subject::Pair(pair), Kind::Idle) => pair.idle_end().saturating_add(1),
         (Subject::Pair(pair), Kind::Walk) => pair.walk_duration(),
+        (Subject::Pair(Pair::BartLisa), Kind::Jump) => BART_LISA_JUMP_TICKS,
         (Subject::Pair(_), _) => {
             return Err(failure("unknown pair pose maneuver"));
         },
@@ -776,6 +792,29 @@ mod tests {
         );
         assert!(
             Catalogue::parse(&format!("{both}bart-lisa walk 24 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn paired_jump_requires_all_observed_phases() {
+        let base = complete();
+        let pair = format!(
+            "{base}bart-lisa idle 0 {HASH}\n\
+             bart-lisa walk 0 {HASH}\n"
+        );
+        let opening = format!("{pair}bart-lisa jump 0 {HASH}\n");
+        let raised = format!("{opening}bart-lisa jump 4 {HASH}\n");
+        let complete = format!("{raised}bart-lisa jump 28 {HASH}\n");
+        assert!(Catalogue::parse(&opening).is_err());
+        assert!(Catalogue::parse(&raised).is_err());
+        assert!(Catalogue::parse(&complete).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{complete}bart-lisa jump 29 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{pair}marge-homer jump 0 {HASH}"))
                 .is_err()
         );
     }

@@ -1688,3 +1688,33 @@ combat run had zero missed 16.667 ms budgets across 600 movement and
 20 first-strike submissions; lifetime peak RSS was 100,708,352 bytes.
 Later-wave progression, original interaction rules and full stage
 acceptance remain open.
+
+Separate Bart and Lisa secondary controls in the pinned original
+produce the same combined vertical pose sequence, with the device
+transition occurring one frame later in the Lisa control. The left-
+facing Bart control provides three exact full-scene pose crops at
+device offsets zero, four and 28. The representative elevation
+sequence reaches 60 pixels at offset 12 and returns to zero at 28.
+After landing, tested Bart-only horizontal input leaves the pair
+stationary while Lisa-only input moves the combined actor.
+
+The optional 29-tick combined action retains both station ground
+points and the shared actor. Either Secondary starts it; repeated
+secondary edges do not start another action in flight. Directional
+priority remains first-member during flight and becomes second-
+member after landing. The catalogue requires all three jump poses
+and the existing idle/walk pair; older catalogues retain independent
+jumps. The 192-pose local catalogue fits the existing 200-record
+and 16 KiB limits. Exact pivots, airborne hit eligibility, horizontal
+and depth movement, control restoration and other pair actions
+remain provisional.
+
+Fresh workspace validation with native render and audio gates passed
+in run 1795628453438443107-150272. The 3,321,784-byte Linux build
+passed offscreen NVIDIA OpenGL smoke with the 192-pose adaptive
+426-by-304 touch and dummy-audio catalogue, verifying the combined
+jump opening, apex and landing through native readback. All 600
+movement and 20 first-strike submissions met the 16.667 ms budget;
+lifetime peak RSS was 101,593,088 bytes. The older 189-pose catalogue
+passed the aspect-fit smoke without the combined jump. No original
+assets are tracked, and physical multiplayer remains unverified.

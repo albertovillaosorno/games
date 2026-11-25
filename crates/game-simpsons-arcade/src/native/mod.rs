@@ -629,7 +629,7 @@ impl Scene {
                         ground_position(
                             pose,
                             view.project(joined.position),
-                            0,
+                            joined.motion.elevation(),
                         )?,
                         joined.facing == Facing::Right,
                     ),
@@ -2137,7 +2137,8 @@ fn smoke_cooperation(
     }
     let mut cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
         .map_err(failure)?
-        .with_cooperative_pairs(enabled);
+        .with_cooperative_pairs(enabled)
+        .with_bart_lisa_jump(art.poses.bart_lisa_jump());
     for player in Player::ALL {
         cabinet.input_step(0, &[
             LogicalAction {
@@ -2167,6 +2168,65 @@ fn smoke_cooperation(
     {
         return Err(failure("cooperative actors not visibly combined"));
     }
+    smoke_cooperation_movement(scene, art, &mut cabinet, families)?;
+    if art.poses.bart_lisa_jump() {
+        smoke_cooperation_jump(scene, art, &mut cabinet)?;
+    }
+    writeln!(
+        stdout().lock(),
+        "Cooperative pose smoke: {families} families"
+    )
+    .map_err(failure)
+}
+
+fn smoke_cooperation_jump(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &mut Cabinet,
+) -> Result<(), RenderError> {
+    let actions = [
+        (Player::Homer, Control::Right, false),
+        (Player::Lisa, Control::Right, false),
+        (Player::Bart, Control::Secondary, true),
+        (Player::Bart, Control::Secondary, false),
+    ]
+    .map(|(player, control, down)| LogicalAction {
+        action: Action { control, player },
+        down,
+    });
+    let still = scene.readback()?;
+    cabinet.input_step(49, &actions);
+    let _rise = art.present(scene, cabinet)?;
+    let opening = scene.readback()?;
+    if still == opening || cabinet.pair_pose(Pair::BartLisa).is_none() {
+        return Err(failure("combined jump opening not visible"));
+    }
+    for tick in 50..62 {
+        cabinet.input_step(tick, &[]);
+    }
+    let _apex = art.present(scene, cabinet)?;
+    if opening == scene.readback()? {
+        return Err(failure("combined jump elevation not visible"));
+    }
+    for tick in 62..79 {
+        cabinet.input_step(tick, &[]);
+    }
+    let _landed = art.present(scene, cabinet)?;
+    if cabinet.pair_pose(Pair::BartLisa).is_none()
+        || opening == scene.readback()?
+    {
+        return Err(failure("combined jump landing not visible"));
+    }
+    writeln!(stdout().lock(), "Bart/Lisa combined jump verified")
+        .map_err(failure)
+}
+
+fn smoke_cooperation_movement(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &mut Cabinet,
+    families: usize,
+) -> Result<(), RenderError> {
     let still = scene.readback()?;
     let actions = [Player::Homer, Player::Lisa].map(|player| LogicalAction {
         action: Action {
@@ -2179,17 +2239,13 @@ fn smoke_cooperation(
     for tick in 41..49 {
         cabinet.input_step(tick, &[]);
     }
-    let _moving = art.present(scene, &cabinet)?;
+    let _moving = art.present(scene, cabinet)?;
     if art.world.len() != Player::ALL.len().saturating_sub(families)
         || still == scene.readback()?
     {
         return Err(failure("cooperative locomotion not visibly presented"));
     }
-    writeln!(
-        stdout().lock(),
-        "Cooperative pose smoke: {families} families"
-    )
-    .map_err(failure)
+    Ok(())
 }
 
 fn smoke_optional(
@@ -2288,7 +2344,8 @@ fn window(
             LocalSession::with_display(options.display, touch_enabled);
         let cabinet =
             cabinet_with_scroll(source.enemy.is_some(), session, scroll_limit)?
-                .with_cooperative_pairs(art.poses.paired_families());
+                .with_cooperative_pairs(art.poses.paired_families())
+                .with_bart_lisa_jump(art.poses.bart_lisa_jump());
         let preview = Interactive::new(startup, options, &cabinet, host)?;
         options.controls.persist().map_err(failure)?;
         preview.run(scene, &mut art, playback.as_mut())

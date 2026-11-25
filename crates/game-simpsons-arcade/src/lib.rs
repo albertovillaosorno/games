@@ -54,7 +54,7 @@ pub mod native;
 use std::mem;
 use std::time::Duration;
 
-pub use cooperative::{Pair, PairMotion, PairPose};
+pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
     EnemyAction,
@@ -625,9 +625,10 @@ impl Slot {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct PairState {
-    enabled: bool,
     idle_ticks: u8,
     motion: Option<PairMotion>,
+    second_controls: bool,
+    support: PairSupport,
     walking: bool,
 }
 
@@ -635,6 +636,14 @@ struct PairState {
 struct Cooperation {
     bart_lisa: PairState,
     marge_homer: PairState,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PairSupport {
+    #[default]
+    Disabled,
+    Jump,
+    Locomotion,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -816,10 +825,11 @@ impl Cabinet {
         }
     }
 
-    fn finish_tick(&mut self, pending: [PendingManeuver; 4]) {
+    fn finish_tick(&mut self, mut pending: [PendingManeuver; 4]) {
         if self.phase() != Phase::Playing {
             return;
         }
+        let pair_jump = self.cooperation.filter_actions(&mut pending);
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut self.slots).zip(pending)
         {
@@ -828,7 +838,7 @@ impl Cabinet {
         self.advance_continue();
         if self.phase() == Phase::Playing {
             let layout = self.movement_layout();
-            self.cooperation.advance(&mut self.slots, layout);
+            self.cooperation.advance(&mut self.slots, layout, pair_jump);
             if let Some(encounter) = &mut self.encounter {
                 encounter.advance(
                     layout,
@@ -946,6 +956,21 @@ impl Cabinet {
         mem::swap(&mut first.held, &mut second.held);
         self.choices.swap(seat.index(), other);
         true
+    }
+
+    /// Enable the observed Bart/Lisa paired secondary action.
+    ///
+    /// Requires Bart/Lisa locomotion to be enabled. Ground points and
+    /// combat eligibility remain provisional during this action.
+    #[must_use]
+    pub const fn with_bart_lisa_jump(mut self, enabled: bool) -> Self {
+        let pair = &mut self.cooperation.bart_lisa;
+        pair.support = match (pair.support, enabled) {
+            (PairSupport::Disabled, _) => PairSupport::Disabled,
+            (_, true) => PairSupport::Jump,
+            (_, false) => PairSupport::Locomotion,
+        };
+        self
     }
 
     /// Enable optional pair locomotion in cabinet pair order.

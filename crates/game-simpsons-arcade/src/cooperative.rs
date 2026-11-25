@@ -33,13 +33,20 @@
 //! Provisional cooperative locomotion for two observed character pairs.
 
 use super::{
-    Cooperation, Facing, Maneuver, PairState, Player, Point, Recovery, Slot,
-    StreetLayout,
+    Cooperation, Facing, Maneuver, PairState, PairSupport, PendingManeuver,
+    Player, Point, Recovery, Slot, StreetLayout,
 };
 
 const ADMISSION_TICKS: u8 = 38;
 const HORIZONTAL_PROXIMITY: u16 = 32;
 const DEPTH_PROXIMITY: u16 = 24;
+// Device-observed elevation relative to the combined idle pose.
+const JUMP_ELEVATIONS: [i16; 29] = [
+    7, 14, 21, 28, 35, 40, 45, 50, 53, 56, 58, 59, 60, 59, 58, 57, 54, 51, 47,
+    44, 40, 35, 31, 26, 21, 16, 10, 5, 0,
+];
+/// Fixed duration of the observed Bart/Lisa paired secondary action.
+pub const BART_LISA_JUMP_TICKS: u8 = 29;
 
 /// Character combinations with observed shared locomotion.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -99,11 +106,30 @@ pub enum PairMotion {
         /// Zero-based phase in the opening sequence.
         tick: u8,
     },
+    /// Bart/Lisa combined vertical action, including its landing pose.
+    Jump {
+        /// Zero-based action phase.
+        tick: u8,
+    },
     /// Repeating locomotion pose, possibly held after stopping.
     Walk {
         /// Zero-based phase within the pair's walking cycle.
         tick: u8,
     },
+}
+
+impl PairMotion {
+    /// Vertical offset from the provisional shared ground point.
+    #[must_use]
+    pub fn elevation(self) -> i16 {
+        match self {
+            Self::Jump { tick } => JUMP_ELEVATIONS
+                .get(usize::from(tick))
+                .copied()
+                .unwrap_or_default(),
+            Self::Idle { .. } | Self::Walk { .. } => 0,
+        }
+    }
 }
 
 /// Read-only shared pose of two stations.
@@ -119,7 +145,7 @@ pub struct PairPose {
 
 impl PairState {
     fn admit(&mut self, first: &mut Slot, second: &mut Slot) {
-        if !self.enabled
+        if self.support == PairSupport::Disabled
             || !ready(first)
             || !ready(second)
             || first.direction() != (0, 0)
@@ -145,23 +171,44 @@ impl PairState {
 
     fn advance(
         &mut self,
-        pair: Pair,
+        (pair, jump): (Pair, bool),
         (first, second): (&mut Slot, &mut Slot),
         layout: StreetLayout,
     ) {
         self.invalidate(first, second);
         if let Some(motion) = self.motion {
-            let direction = if first.direction() == (0, 0) {
-                second.direction()
+            let direction = self.direction(first, second, jump);
+            if jump {
+                self.motion = Some(PairMotion::Jump { tick: 0 });
+                self.walking = false;
             } else {
-                first.direction()
-            };
-            self.update_motion(pair, motion, direction);
+                self.update_motion(pair, motion, direction);
+            }
             translate(first, second, direction, layout);
         } else {
             first.move_tick(layout);
             second.move_tick(layout);
             self.admit(first, second);
+        }
+    }
+
+    const fn advance_jump(&mut self, pair: Pair, tick: u8) {
+        let next = tick.saturating_add(1);
+        self.motion = Some(if next >= BART_LISA_JUMP_TICKS {
+            self.second_controls = true;
+            PairMotion::Idle { tick: pair.idle_end() }
+        } else {
+            PairMotion::Jump { tick: next }
+        });
+    }
+
+    fn direction(self, first: &Slot, second: &Slot, jump: bool) -> (i16, i16) {
+        let airborne =
+            jump || matches!(self.motion, Some(PairMotion::Jump { .. }));
+        if (self.second_controls && !airborne) || first.direction() == (0, 0) {
+            second.direction()
+        } else {
+            first.direction()
         }
     }
 
@@ -185,6 +232,7 @@ impl PairState {
     const fn reset(&mut self) {
         self.idle_ticks = 0;
         self.motion = None;
+        self.second_controls = false;
         self.walking = false;
     }
 
@@ -194,6 +242,10 @@ impl PairState {
         motion: PairMotion,
         direction: (i16, i16),
     ) {
+        if let PairMotion::Jump { tick } = motion {
+            self.advance_jump(pair, tick);
+            return;
+        }
         if direction == (0, 0) {
             self.motion = Some(match motion {
                 PairMotion::Idle { tick } => PairMotion::Idle {
@@ -202,7 +254,7 @@ impl PairState {
                 PairMotion::Walk { .. } if pair == Pair::BartLisa => {
                     PairMotion::Idle { tick: pair.idle_end() }
                 },
-                PairMotion::Walk { .. } => motion,
+                PairMotion::Walk { .. } | PairMotion::Jump { .. } => motion,
             });
             self.walking = false;
         } else {
@@ -211,7 +263,9 @@ impl PairState {
                     .saturating_add(1)
                     .checked_rem(pair.walk_duration())
                     .unwrap_or_default(),
-                PairMotion::Idle { .. } | PairMotion::Walk { .. } => 0,
+                PairMotion::Idle { .. }
+                | PairMotion::Jump { .. }
+                | PairMotion::Walk { .. } => 0,
             };
             self.motion = Some(PairMotion::Walk { tick });
             self.walking = true;
@@ -224,29 +278,70 @@ impl Cooperation {
         &mut self,
         slots: &mut [Slot; 4],
         layout: StreetLayout,
+        pair_jump: bool,
     ) {
         let [marge, homer, bart, lisa] = slots;
-        self.marge_homer
-            .advance(Pair::MargeHomer, (marge, homer), layout);
-        self.bart_lisa.advance(Pair::BartLisa, (bart, lisa), layout);
+        self.marge_homer.advance(
+            (Pair::MargeHomer, false),
+            (marge, homer),
+            layout,
+        );
+        self.bart_lisa.advance(
+            (Pair::BartLisa, pair_jump),
+            (bart, lisa),
+            layout,
+        );
     }
 
     pub(super) const fn configure(enabled: [bool; 2]) -> Self {
         let [marge_homer, bart_lisa] = enabled;
         Self {
             bart_lisa: PairState {
-                enabled: bart_lisa,
                 idle_ticks: 0,
                 motion: None,
+                second_controls: false,
+                support: if bart_lisa {
+                    PairSupport::Locomotion
+                } else {
+                    PairSupport::Disabled
+                },
                 walking: false,
             },
             marge_homer: PairState {
-                enabled: marge_homer,
                 idle_ticks: 0,
                 motion: None,
+                second_controls: false,
+                support: if marge_homer {
+                    PairSupport::Locomotion
+                } else {
+                    PairSupport::Disabled
+                },
                 walking: false,
             },
         }
+    }
+
+    pub(super) fn filter_actions(
+        &self,
+        pending: &mut [PendingManeuver; 4],
+    ) -> bool {
+        let pair = self.bart_lisa;
+        if pair.support != PairSupport::Jump || pair.motion.is_none() {
+            return false;
+        }
+        let [_, _, bart, lisa] = pending;
+        if [*bart, *lisa].into_iter().any(|action| {
+            action.chord
+                || action.candidate.is_some_and(|maneuver| {
+                    !matches!(maneuver, Maneuver::Jump(_))
+                })
+        }) {
+            return false;
+        }
+        let requested = bart.candidate.is_some() || lisa.candidate.is_some();
+        *bart = PendingManeuver::default();
+        *lisa = PendingManeuver::default();
+        requested && !matches!(pair.motion, Some(PairMotion::Jump { .. }))
     }
 
     pub(super) fn invalidate(&mut self, slots: &[Slot; 4]) {
@@ -516,6 +611,75 @@ mod tests {
             state.pair_pose(Pair::BartLisa).map(|pose| pose.motion),
             Some(PairMotion::Idle { tick: 9 })
         );
+    }
+
+    #[test]
+    fn combined_jump_has_observed_phase_and_landing() {
+        let mut state = joined().with_bart_lisa_jump(true);
+        let [_, _, bart, lisa] = state.stations();
+        state.input_step(41, &[
+            change(Player::Bart, Control::Secondary, true),
+            change(Player::Bart, Control::Secondary, false),
+        ]);
+        let phases = [7, 60, 0];
+        for (tick, elevation) in [(0, 0), (12, 1), (28, 2)] {
+            let advance = match tick {
+                0 => 0,
+                12 => 12,
+                _ => 16,
+            };
+            wait(&mut state, advance);
+            assert_eq!(
+                state.pair_pose(Pair::BartLisa).map(|pose| pose.motion),
+                Some(PairMotion::Jump { tick })
+            );
+            assert_eq!(
+                state
+                    .pair_pose(Pair::BartLisa)
+                    .map(|pose| pose.motion.elevation()),
+                phases.get(elevation).copied()
+            );
+        }
+        wait(&mut state, 1);
+        assert_eq!(
+            state.pair_pose(Pair::BartLisa).map(|pose| pose.motion),
+            Some(PairMotion::Idle { tick: 9 })
+        );
+        let [_, _, landed_bart, landed_lisa] = state.stations();
+        assert_eq!([landed_bart, landed_lisa], [bart, lisa]);
+    }
+
+    #[test]
+    fn combined_jump_changes_grounded_direction_priority() {
+        let mut state = joined().with_bart_lisa_jump(true);
+        let [_, _, before, _] = state.stations();
+        state.input_step(41, &[
+            change(Player::Lisa, Control::Secondary, true),
+            change(Player::Lisa, Control::Secondary, false),
+            change(Player::Bart, Control::Right, true),
+        ]);
+        let [_, _, moving, _] = state.stations();
+        assert_eq!(moving.position.x, before.position.x.saturating_add(2));
+        wait(&mut state, 29);
+        let [_, _, landed, _] = state.stations();
+        wait(&mut state, 3);
+        let [_, _, still, _] = state.stations();
+        assert_eq!(landed.position, still.position);
+        state.input_step(75, &[change(Player::Lisa, Control::Left, true)]);
+        let [_, _, moved, _] = state.stations();
+        assert_eq!(moved.position.x, still.position.x.saturating_sub(2));
+    }
+
+    #[test]
+    fn legacy_pair_catalogue_keeps_solo_jump() {
+        let mut state = joined();
+        state.input_step(41, &[
+            change(Player::Lisa, Control::Secondary, true),
+            change(Player::Lisa, Control::Secondary, false),
+        ]);
+        assert_eq!(state.pair_pose(Pair::BartLisa), None);
+        let [_, _, _, lisa] = state.stations();
+        assert!(lisa.maneuver.airborne());
     }
 
     #[test]
