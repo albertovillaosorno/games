@@ -444,3 +444,32 @@ executable as a graphics client in a separate idle observation, with
 10 MiB of sampled framebuffer memory. These are comparable host
 submission measurements and a device observation, not GPU execution
 latency, input-to-photon latency, display FPS or exact peak VRAM.
+
+At 4940fe8 the normal native build command produced a 3,219,320-byte
+optimized executable. Three local catalogues differ only in actor pose
+records: 63 held-jump, 76 with aerial attacks, and 88 with stationary
+simultaneous-button attacks. They share the same canonical base, street
+extension, encounter, audio, touch and adaptive settings. After one warm
+run per catalogue, four interleaved trials per variant used SDL offscreen
+OpenGL ES, NVIDIA EGL, the RTX 4060 (driver 620.70.06), and dummy audio.
+All 12 trials verified the 400x304 adaptive scene and 80 added columns,
+with zero host-work misses of 16.667 ms over 7,812 measured frames.
+
+- 63 poses: mean movement 106.955–112.723 microseconds; mean combat
+  84.796–93.062 microseconds; startup 139.8–161.8 ms; lifetime peak RSS
+  89,681,920–90,042,368 bytes.
+- 76 poses: mean movement 108.970–118.865 microseconds; mean combat
+  85.213–100.076 microseconds; startup 138.7–159.9 ms; lifetime peak RSS
+  89,772,032–90,402,816 bytes.
+- 88 poses: mean movement 107.017–149.719 microseconds; mean combat
+  83.163–86.061 microseconds; startup 144.0–151.9 ms; lifetime peak RSS
+  89,882,624–90,365,952 bytes.
+
+The largest movement interval was 4.254 ms (76 poses). One 88-pose
+trial had a movement p95 upper bound of 229.375 microseconds; the other
+three were at most 163.839 microseconds. NVIDIA's process monitor sampled
+active graphics clients with nonzero process framebuffer usage of
+13–21 MiB across the trials, without per-catalogue attribution. This
+compares catalogue admission and ordinary movement/combat workloads,
+not isolated timing of aerial or special attacks, actual display FPS,
+GPU execution latency, or exact peak VRAM.
