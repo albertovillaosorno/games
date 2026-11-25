@@ -3,6 +3,7 @@ members = [
     "crates/assets",
     "crates/build",
     "crates/engine",
+    "crates/game-simpsons-arcade",
     "crates/importer",
     "crates/platform",
     "crates/platform-audio",

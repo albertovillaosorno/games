@@ -28,3 +28,10 @@ Create title packages and their TODO.md files when implementation begins.
 ## Evidence
 
 Pending. Record actual checks and remaining limitations before completion.
+
+The first catalogue title now has a dedicated Rust package at
+`crates/game-simpsons-arcade`, with a preferred-source pointer to
+the canonical title task and inline deterministic behaviour tests.
+The prototype owns only its entry and movement rules and consumes shared
+engine timing, logical input and replay. Remaining title packages are
+not yet onboarded; keep the task open.

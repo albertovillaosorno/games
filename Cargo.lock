@@ -287,6 +287,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "games-simpsons-arcade"
+version = "0.1.0"
+dependencies = [
+ "games",
+]
+
+[[package]]
 name = "games-validator"
 version = "0.1.0"
 dependencies = [

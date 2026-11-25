@@ -416,3 +416,18 @@ The SDL dummy driver proves bounded native submission, not sound from a
 physical device. Linear interpolation is not a band-limited downsampler.
 Original event mapping, variable pitch, looping, FM synthesis and
 interactive gameplay remain unverified.
+
+The title package now models four fixed player stations (Marge, Homer,
+Bart and Lisa), virtual coin admission, Start and primary-button
+confirmation separately. Fresh isolated original-machine probes observed
+the selection screen after coin admission, a claimed station after Start,
+and the introductory sequence after primary-button confirmation. The
+fixed tick is 16,896 microseconds from the pinned display timing. A
+single-player Marge run observed two-pixel-per-tick left and down
+movement during unobstructed windows; the other character rates,
+spawn positions and movement bounds remain provisional.
+
+Inline tests exercise admission, simultaneous independent movement,
+opposed directions, credits, bounds and frame-partition-independent
+replay. The prototype skips the introduction and does not yet implement
+camera, collision, combat, enemies, scoring, continuing or presentation.
