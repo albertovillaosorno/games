@@ -209,9 +209,10 @@ expiry to rejoin for free. If all stations expire, the main menu returns
 and the encounter resets. Pausing freezes movement, combat, maneuver
 timing, meter animation and recovery. Enemy actions, damage, respawn
 positions, recovery delays and stock-marker artwork remain provisional.
-With the verified extended street, reinforcements arrive from the right,
-left and right at camera travel 50, 82 and 154 respectively. They reuse
-the first enemy's provisional combat and pose rules. Each is admitted
+With the verified extended street, additional enemies arrive from
+world positions beyond the supported view edges. The longest verified
+strip supports six provisional reinforcement gates. They reuse the first
+enemy's provisional combat and pose rules. Each is admitted
 only once per run. Full stage progression and the original game-over
 interlude are not implemented.
 
@@ -258,8 +259,9 @@ Optionally insert `--audio-mod MOD_SHA` immediately after `--audio SHA`.
 The explicitly selected passive replacement bundle may replace only the
 four attack slots, `audio/sample-0004` through `audio/sample-0007`.
 The base and replacement must have matching PCM layouts. A damaged or
-unapproved replacement is rejected, not silently ignored. See the root
-README for the bounded raw PCM and WAV authoring commands.
+unapproved replacement is rejected, not silently ignored. See the
+[asset pipeline](../../docs/technical/asset-pipeline.md) for the bounded
+raw PCM and WAV authoring commands.
 The hidden smoke uses a paused device to verify
 nonzero queued audio and one cue per held ground, aerial or special
 attack. Pause suspends playback and Settings keeps it suspended;

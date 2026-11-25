@@ -2110,3 +2110,18 @@ not exhaust player stocks. Both aspect-fit and adaptive native smoke
 verified all six reinforcement meters, both cooperative families and
 dedicated restraint recovery. The asset-backed runs used offscreen
 OpenGL and dummy audio, not physical input or listening tests.
+
+A visible follow-up used the 3,410,392-byte optimized preview in an
+isolated Xvfb screen with the owner's 1360-by-768 desktop dimensions,
+Xfwm4, software OpenGL and dummy audio. The fullscreen window reached
+1360 by 768 and the live measurement reported 396-by-224 adaptive
+logical frames. A 400-row mid-scene crop contained nonblack art from
+column 1 through 1357, leaving only three columns of aspect-fit rounding.
+Synthetic X11 keyboard and mouse events entered play, moved and jumped,
+requested an attack, and toggled Escape twice. Captures of gameplay,
+pause and resumed gameplay were distinct. Two measured gameplay
+segments submitted 577 and 65 frames, with mean work 2.681 and 8.331 ms
+and three and six misses of the 16.667 ms work budget respectively.
+The sample uses virtual input and a software renderer under a window
+manager; it does not establish physical GPU, controller, input-latency
+or audio acceptance. Captures and logs remain local and ignored.
