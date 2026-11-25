@@ -48,6 +48,8 @@ pub mod files;
 /// Isolated test fixture helpers.
 #[cfg(test)]
 pub mod fixtures;
+/// Parsed host API policy for portable crates.
+pub mod host_api;
 /// Platform isolation and migration guard.
 pub mod portability;
 /// Typed task validation.

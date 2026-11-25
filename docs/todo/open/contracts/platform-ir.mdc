@@ -117,3 +117,13 @@ coverage passed with native rendering and dummy audio in fresh validation
 1795636790890770112-1650625. Six title-side platform references were
 removed from the baseline. Physical devices and other backends remain
 unverified.
+
+The host-independence gate now parses Rust token trees for shared,
+runtime and importer roles. It rejects directly named host modules,
+root aliases and globs, grouped mixed-module imports, visible macro-body
+paths and output macros. Explicit in-memory I/O and fixed duration types
+remain admitted. The manifest codec now imports only its host-free I/O
+types and traits. Synthetic controls verify these distinctions. Fresh
+validation passed in run 1795637004022076798-1711638. No baseline entries
+were added. This is not semantic name resolution or macro expansion;
+title and tool host-I/O migration remains open.

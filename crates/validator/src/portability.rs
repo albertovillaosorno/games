@@ -33,8 +33,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::boundaries::dependency_tables;
+use crate::boundaries::{dependency_tables, host_independent};
 use crate::clones::tokens;
+use crate::host_api;
 
 const LEGACY: &str = include_str!("portability-baseline.json");
 
@@ -211,6 +212,10 @@ fn inventory(
         let text = fs::read_to_string(root.join(path))
             .map_err(|error| error.to_string())?;
         let counts = if is_rust {
+            if host_independent(&name) {
+                host_api::validate(&text)
+                    .map_err(|error| format!("{name}: {error}"))?;
+            }
             rust(&text)
         } else {
             manifest(&text, workspace)?

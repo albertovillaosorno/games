@@ -30,8 +30,11 @@
 //   - No unbounded record or output buffer growth.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::io::{
+    Error as IoError, ErrorKind, IoSlice, Result as IoResult, Write,
+};
 use std::num::NonZeroUsize;
-use std::{fmt, io};
 
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -86,12 +89,12 @@ struct BoundedBytes<'input> {
 }
 
 impl BoundedBytes<'_> {
-    fn budget_error(&mut self) -> io::Error {
+    fn budget_error(&mut self) -> IoError {
         self.exceeded = true;
-        io::ErrorKind::OutOfMemory.into()
+        ErrorKind::OutOfMemory.into()
     }
 
-    fn reserve(&mut self, additional: usize) -> io::Result<usize> {
+    fn reserve(&mut self, additional: usize) -> IoResult<usize> {
         let end = self
             .written
             .checked_add(additional)
@@ -129,25 +132,25 @@ impl fmt::Write for BoundedBytes<'_> {
     }
 
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        io::Write::write_all(self, s.as_bytes()).map_err(|_error| fmt::Error)
+        Write::write_all(self, s.as_bytes()).map_err(|_error| fmt::Error)
     }
 }
 
-impl io::Write for BoundedBytes<'_> {
+impl Write for BoundedBytes<'_> {
     fn by_ref(&mut self) -> &mut Self {
         self
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         self.write_all(buf)?;
         Ok(buf.len())
     }
 
-    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+    fn write_all(&mut self, buf: &[u8]) -> IoResult<()> {
         let end = self.reserve(buf.len())?;
         match &mut self.output {
             Output::Collect(bytes) => bytes.extend_from_slice(buf),
@@ -161,20 +164,17 @@ impl io::Write for BoundedBytes<'_> {
         Ok(())
     }
 
-    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> io::Result<()> {
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> IoResult<()> {
         fmt::write(self, args).map_err(|_error| {
             if self.exceeded {
-                io::ErrorKind::OutOfMemory.into()
+                ErrorKind::OutOfMemory.into()
             } else {
-                io::Error::other("manifest formatting")
+                IoError::other("manifest formatting")
             }
         })
     }
 
-    fn write_vectored(
-        &mut self,
-        bufs: &[io::IoSlice<'_>],
-    ) -> io::Result<usize> {
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> IoResult<usize> {
         let length = bufs
             .iter()
             .try_fold(0usize, |total, buf| total.checked_add(buf.len()))

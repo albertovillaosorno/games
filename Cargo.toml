@@ -31,6 +31,7 @@ games-assets = { path = "crates/assets", version = "0.1.0" }
 games-importer = { path = "crates/importer", version = "0.1.0" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["raw_value"] }
+proc-macro2 = "1.0.107"
 toml = "1.1.5"
 sha2 = "0.11"
 zeroize = "1.9.2"
