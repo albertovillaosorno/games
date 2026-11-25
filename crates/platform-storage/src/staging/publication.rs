@@ -32,13 +32,12 @@
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::ffi::OsStr;
 use std::fs::File;
-use std::os::fd::OwnedFd;
 use std::path::Path;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::{io, path::PathBuf};
 
 use games_assets::ContentHash;
-use nix::fcntl::{OFlag, openat};
+use nix::fcntl::openat;
 use nix::sys::stat::Mode;
 use nix::unistd::fsync;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -49,11 +48,11 @@ use nix::{
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::PrivateDirectory;
-use super::{ArchiveStaging, StagedArchive, StagingError};
+use super::{ArchiveStaging, PayloadSizes, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::bundle::bundle_name;
 use crate::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
-use crate::file::DIRECTORY_FLAGS;
+use crate::file::{DIRECTORY_FLAGS, FileReadError, sync_regular};
 
 /// A complete canonical bundle that has not yet been published.
 ///
@@ -145,25 +144,28 @@ impl AuthoredStaging {
     }
 }
 
-pub(super) fn finish<'digest>(
+pub(super) fn finish(
     stage: ArchiveStaging,
     digest: ContentHash,
-    payloads: impl Iterator<Item = &'digest ContentHash>,
+    manifest_size: u64,
+    payloads: &PayloadSizes,
 ) -> Result<StagedBundle, StagingError> {
-    let mut hashes = payloads.peekable();
-    if hashes.peek().is_some() {
+    stage.temporary.verify_location()?;
+    if !payloads.is_empty() {
         let directory = openat(
             &stage.temporary.root,
             PAYLOADS_DIRECTORY,
             DIRECTORY_FLAGS,
             Mode::empty(),
         )?;
-        for hash in hashes {
-            sync_file(&directory, &hash.to_string())?;
+        for (hash, size) in payloads {
+            sync_regular(&directory, &hash.to_string(), *size)
+                .map_err(sync_error)?;
         }
         File::from(directory).sync_all()?;
     }
-    sync_file(&stage.temporary.root, MANIFEST_NAME)?;
+    sync_regular(&stage.temporary.root, MANIFEST_NAME, manifest_size)
+        .map_err(sync_error)?;
     fsync(&stage.temporary.root)?;
     Ok(StagedBundle {
         archive: stage.finish()?,
@@ -198,13 +200,11 @@ fn publish_directory(
     })
 }
 
-fn sync_file(parent: &OwnedFd, name: &str) -> Result<(), StagingError> {
-    let fd = openat(
-        parent,
-        name,
-        OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-        Mode::empty(),
-    )?;
-    File::from(fd).sync_all()?;
-    Ok(())
+const fn sync_error(error: FileReadError) -> StagingError {
+    match error {
+        FileReadError::Io(kind) => StagingError::Io(kind),
+        FileReadError::UnsafeFile | FileReadError::TooLarge => {
+            StagingError::ChangedStorage
+        },
+    }
 }

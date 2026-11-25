@@ -75,6 +75,7 @@ impl From<io::Error> for FileReadError {
 
 /// Owned credential bytes with zeroizing drop and redacted debug output.
 pub type SecretSnapshot = Zeroizing<Vec<u8>>;
+type OpenedRegular = (File, FileStat);
 
 /// Read a bounded snapshot of a user-selected regular file.
 ///
@@ -135,6 +136,17 @@ fn read_pinned_into(
     admitted: fn(&FileStat) -> bool,
     bytes: &mut Vec<u8>,
 ) -> Result<(), FileReadError> {
+    let (file, stat) = reopen_pinned(pinned, maximum, admitted)?;
+    read_consistent(file, &stat, admitted, bytes)
+}
+
+// A metadata-only pin is checked before ordinary content access or
+// synchronisation, avoiding device or FIFO opens.
+fn reopen_pinned(
+    pinned: &OwnedFd,
+    maximum: u64,
+    admitted: fn(&FileStat) -> bool,
+) -> Result<OpenedRegular, FileReadError> {
     let before = fstat(pinned)?;
     if !admitted(&before) {
         return Err(FileReadError::UnsafeFile);
@@ -153,7 +165,7 @@ fn read_pinned_into(
     if !admitted(&after) || !same_content_metadata(&before, &after) {
         return Err(FileReadError::UnsafeFile);
     }
-    read_consistent(File::from(fd), &after, admitted, bytes)
+    Ok((File::from(fd), after))
 }
 
 // Ignore ctime and link count: atomic replacement can legitimately unlink
@@ -236,6 +248,32 @@ pub(crate) fn read_regular(
     }
     let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())?;
     read_pinned(&pinned, maximum, private_regular)
+}
+
+fn staged_regular(stat: &FileStat) -> bool {
+    private_regular(stat) && stat.st_nlink == 1
+}
+
+// Unlike a snapshot, a completed stage must not contain an unlinked inode.
+pub(crate) fn sync_regular(
+    parent: &impl AsFd,
+    name: &str,
+    expected: u64,
+) -> Result<(), FileReadError> {
+    if !trusted_directory(parent)? {
+        return Err(FileReadError::UnsafeFile);
+    }
+    let pinned = openat(parent, name, PIN_FLAGS, Mode::empty())?;
+    let (file, before) = reopen_pinned(&pinned, expected, staged_regular)?;
+    if file_size(&before)? != expected {
+        return Err(FileReadError::UnsafeFile);
+    }
+    file.sync_all()?;
+    let after = fstat(&file)?;
+    if !staged_regular(&after) || !same_content_metadata(&before, &after) {
+        return Err(FileReadError::UnsafeFile);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

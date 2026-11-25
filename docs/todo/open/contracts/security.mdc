@@ -266,3 +266,15 @@ Synthetic tests accept canonical bytes at their exact limit and reject
 semantically equivalent whitespace and escaped-key representations, while
 noncanonical parsing remains available for version two. This bounds extra
 output storage, not the decoded record and source identity allocations.
+
+Canonical staging now reuses the native metadata-only inode pin when
+syncing the manifest and each staged payload. The file must be ordinary,
+owned by the effective user, not writable by others, singly linked and
+exactly the admitted length before sync. Its identity and modification
+metadata are rechecked after sync. The staging root is checked before
+syncing and again at completion. Synthetic cases replace a payload with
+a FIFO, directory, symlink, hardlink, short or long file, or writable
+file; completion rejects each without affecting an unrelated sentinel.
+This detects observed metadata changes, not same-length content swaps or
+all concurrent same-user races; private staging remains trusted.
+Fresh validation passed in run 1795607432667590463-262106.

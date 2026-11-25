@@ -68,7 +68,7 @@ pub enum StagingError {
     Asset(AssetError),
     /// A pinned source canonical bundle failed verification.
     Bundle(BundleError),
-    /// The original staging directory or its parent was replaced.
+    /// Staged file metadata or its directory identity changed.
     ChangedStorage,
     /// A duplicate path, case collision or file/directory conflict.
     Collision,
@@ -469,15 +469,16 @@ impl CanonicalStaging {
             return Err(AssetError::PayloadMismatch.into());
         }
         let digest = ContentHash::calculate(bytes);
+        let size = manifest_size(bytes)?;
         self.stage.write_entry(
             StagingEntry {
                 kind: EntryKind::File,
                 path: MANIFEST_NAME,
-                size: manifest_size(bytes)?,
+                size,
             },
             &mut bytes,
         )?;
-        publication::finish(self.stage, digest, expected.keys())
+        publication::finish(self.stage, digest, size, expected)
     }
 
     /// Create a private canonical bundle transaction.
@@ -623,6 +624,7 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
     use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
+    use nix::unistd::mkfifo;
 
     use super::*;
     use crate::bundle::TestRoot;
@@ -1018,6 +1020,55 @@ mod tests {
         let path = bundle.path().to_owned();
         drop(bundle);
         require(!path.exists())
+    }
+
+    #[test]
+    fn canonical_completion_rejects_replaced_payload_metadata()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let sentinel = parent.path.join("sentinel");
+        fs::write(&sentinel, b"tile")?;
+        for replacement in [
+            "fifo",
+            "directory",
+            "symlink",
+            "hardlink",
+            "short",
+            "long",
+            "writable",
+        ] {
+            let mut stage =
+                CanonicalStaging::new(&parent.path, canonical_budget())?;
+            stage.write_payload(digest, b"tile")?;
+            let path = stage.stage.temporary.path.clone();
+            let payload = path.join(payload_path(digest));
+            fs::remove_file(&payload)?;
+            match replacement {
+                "fifo" => mkfifo(&payload, Mode::S_IRUSR)?,
+                "directory" => fs::create_dir_all(&payload)?,
+                "symlink" => symlink(&sentinel, &payload)?,
+                "hardlink" => fs::hard_link(&sentinel, &payload)?,
+                "short" => fs::write(&payload, b"x")?,
+                "long" => fs::write(&payload, b"tiles")?,
+                "writable" => {
+                    fs::write(&payload, b"tile")?;
+                    fs::set_permissions(
+                        &payload,
+                        fs::Permissions::from_mode(0o666),
+                    )?;
+                },
+                _ => return Err(StagingError::UnsupportedPath),
+            }
+            require(matches!(
+                stage.finish(&manifest, canonical_limits()),
+                Err(StagingError::ChangedStorage)
+            ))?;
+            require(!path.exists())?;
+            require(fs::read(&sentinel)? == b"tile")?;
+        }
+        Ok(())
     }
 
     #[test]
