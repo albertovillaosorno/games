@@ -3,7 +3,8 @@
 ## Current scope
 
 The engine uses SHA-2 for save integrity. The shared asset crate uses
-SHA-2 and Serde JSON for canonical manifests. The native platform
+SHA-2 and Serde JSON for canonical manifests. The importer uses ZIP
+and the pure-Rust zlib-rs Deflate backend. The native platform
 adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
 Nix for descriptor-relative archive staging. No
 original game assets, original game code or candidate project source is
@@ -38,24 +39,29 @@ for the current lockfile. They are not a completed distribution audit.
 | `bit-vec` | Apache-2.0 OR MIT |
 | `bitflags` | MIT OR Apache-2.0 |
 | `block-buffer` | MIT OR Apache-2.0 |
+| `bumpalo` | MIT OR Apache-2.0 |
 | `cc` | MIT OR Apache-2.0 |
 | `cfg-if` | MIT OR Apache-2.0 |
 | `cfg_aliases` | MIT |
 | `const-oid` | Apache-2.0 OR MIT |
+| `constant_time_eq` | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | `cpufeatures` | MIT OR Apache-2.0 |
+| `crc32fast` | MIT OR Apache-2.0 |
 | `crypto-common` | MIT OR Apache-2.0 |
 | `data-encoding` | MIT |
-| `deranged` | MIT OR Apache-2.0 |
 | `der-parser` | MIT OR Apache-2.0 |
+| `deranged` | MIT OR Apache-2.0 |
 | `digest` | MIT OR Apache-2.0 |
 | `displaydoc` | MIT OR Apache-2.0 |
 | `equivalent` | Apache-2.0 OR MIT |
 | `find-msvc-tools` | MIT OR Apache-2.0 |
+| `flate2` | MIT OR Apache-2.0 |
 | `getrandom` | MIT OR Apache-2.0 |
 | `hashbrown` | MIT OR Apache-2.0 |
 | `hybrid-array` | MIT OR Apache-2.0 |
 | `indexmap` | Apache-2.0 OR MIT |
 | `itoa` | MIT OR Apache-2.0 |
+| `js-sys` | MIT OR Apache-2.0 |
 | `lazy_static` | MIT OR Apache-2.0 |
 | `libc` | MIT OR Apache-2.0 |
 | `memchr` | Unlicense OR MIT |
@@ -71,17 +77,19 @@ for the current lockfile. They are not a completed distribution audit.
 | `powerfmt` | MIT OR Apache-2.0 |
 | `proc-macro2` | MIT OR Apache-2.0 |
 | `quote` | MIT OR Apache-2.0 |
+| `r-efi` | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | `rcgen` | MIT OR Apache-2.0 |
 | `ring` | Apache-2.0 AND ISC |
 | `rusticata-macros` | MIT/Apache-2.0 |
-| `rustls` | Apache-2.0 OR ISC OR MIT |
 | `rustls-pki-types` | MIT OR Apache-2.0 |
 | `rustls-webpki` | ISC |
+| `rustls` | Apache-2.0 OR ISC OR MIT |
+| `rustversion` | MIT OR Apache-2.0 |
 | `serde_core` | MIT OR Apache-2.0 |
 | `serde_derive` | MIT OR Apache-2.0 |
 | `serde_json` | MIT OR Apache-2.0 |
-| `serde` | MIT OR Apache-2.0 |
 | `serde_spanned` | MIT OR Apache-2.0 |
+| `serde` | MIT OR Apache-2.0 |
 | `sha2` | MIT OR Apache-2.0 |
 | `shlex` | MIT OR Apache-2.0 |
 | `subtle` | BSD-3-Clause |
@@ -93,27 +101,36 @@ for the current lockfile. They are not a completed distribution audit.
 | `time-macros` | MIT OR Apache-2.0 |
 | `time` | MIT OR Apache-2.0 |
 | `toml_datetime` | MIT OR Apache-2.0 |
-| `toml` | MIT OR Apache-2.0 |
 | `toml_parser` | MIT OR Apache-2.0 |
 | `toml_writer` | MIT OR Apache-2.0 |
+| `toml` | MIT OR Apache-2.0 |
+| `typed-path` | MIT OR Apache-2.0 |
 | `typenum` | MIT OR Apache-2.0 |
 | `unicode-ident` | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `untrusted` | ISC |
 | `wasi` | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
-| `windows_aarch64_gnullvm` | MIT OR Apache-2.0 |
-| `windows_aarch64_msvc` | MIT OR Apache-2.0 |
-| `windows_i686_gnullvm` | MIT OR Apache-2.0 |
-| `windows_i686_gnu` | MIT OR Apache-2.0 |
-| `windows_i686_msvc` | MIT OR Apache-2.0 |
+| `wasm-bindgen-macro-support` | MIT OR Apache-2.0 |
+| `wasm-bindgen-macro` | MIT OR Apache-2.0 |
+| `wasm-bindgen-shared` | MIT OR Apache-2.0 |
+| `wasm-bindgen` | MIT OR Apache-2.0 |
+| `windows-link` | MIT OR Apache-2.0 |
 | `windows-sys` | MIT OR Apache-2.0 |
 | `windows-targets` | MIT OR Apache-2.0 |
-| `windows_x86_64_gnullvm` | MIT OR Apache-2.0 |
+| `windows_aarch64_gnullvm` | MIT OR Apache-2.0 |
+| `windows_aarch64_msvc` | MIT OR Apache-2.0 |
+| `windows_i686_gnu` | MIT OR Apache-2.0 |
+| `windows_i686_gnullvm` | MIT OR Apache-2.0 |
+| `windows_i686_msvc` | MIT OR Apache-2.0 |
 | `windows_x86_64_gnu` | MIT OR Apache-2.0 |
+| `windows_x86_64_gnullvm` | MIT OR Apache-2.0 |
 | `windows_x86_64_msvc` | MIT OR Apache-2.0 |
 | `winnow` | MIT |
 | `x509-parser` | MIT OR Apache-2.0 |
 | `yasna` | MIT OR Apache-2.0 |
+| `zeroize_derive` | Apache-2.0 OR MIT |
 | `zeroize` | Apache-2.0 OR MIT |
+| `zip` | MIT |
+| `zlib-rs` | Zlib |
 | `zmij` | MIT |
 
 Refresh this inventory from Cargo.lock after dependency changes. Before

@@ -25,4 +25,10 @@ Provide one shared import and conversion interface.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+The shared importer verifies SHA-256 of an immutable source snapshot before
+opening the ZIP. The flat-file adapter admits stored and deflated entries
+through shared archive budgets, rejects duplicate and case-colliding names,
+unsafe paths, unsupported member types and inconsistent ZIP headers. It
+checks decoded length and CRC before each conversion callback. Six synthetic
+tests pass. Local source verification, canonical conversion and transactional
+publication remain open; callers must discard staged results on any failure.

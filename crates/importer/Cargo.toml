@@ -1,0 +1,17 @@
+[package]
+name = "games-importer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+description = "Source-media identification and bounded asset conversion"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+games-assets.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

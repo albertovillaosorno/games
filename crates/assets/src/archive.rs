@@ -115,6 +115,12 @@ impl ArchiveBudget {
             remaining_entries: max_entries.get(),
         }
     }
+
+    /// Number of additional archive members that may be admitted.
+    #[must_use]
+    pub const fn remaining_entries(&self) -> u64 {
+        self.remaining_entries
+    }
 }
 
 /// Tracks actual decoded bytes against one admitted archive entry.
