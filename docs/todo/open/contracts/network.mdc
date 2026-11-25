@@ -508,3 +508,13 @@ A real mutual-TLS loopback transfers a 16,385-byte frame across polled and
 blocking reads, preserves the deadline, and receives the next frame.
 Fresh validation passed in run 1795608554975522202-455815. This bounds
 allocation requests, not allocator-internal overhead or measured latency.
+
+The shared frame channel now checks the existing absolute transfer
+deadline again after successful or pending polled operations, and after
+blocking frame completion. A late result closes the transport instead
+of delivering a frame or reporting successful submission. Scripted
+streams begin an operation before a partial receive's deadline, then
+return successful I/O after expiry. Regressions cover both polled and
+blocking receive and send, including closure of the opposite direction.
+This cannot retract bytes already transmitted on the wire; it enforces
+the local result and channel lifetime boundary.

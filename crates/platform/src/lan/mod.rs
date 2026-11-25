@@ -420,18 +420,29 @@ where
         }
     }
 
-    fn poll_receive(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let result = self.poll_receive_inner();
+    fn poll<Output, Operation>(
+        &mut self,
+        operation: Operation,
+    ) -> io::Result<Output>
+    where
+        Operation: FnOnce(&mut Self) -> io::Result<Output>,
+    {
+        let deadline = self.active_deadline();
+        let check = || deadline.map(remaining).transpose();
+        let result = check()
+            .and_then(|_time| operation(self))
+            .and_then(|value| check().map(|_time| value));
         if result.is_err() {
             self.close();
         }
         result
     }
 
+    fn poll_receive(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.poll(Self::poll_receive_inner)
+    }
+
     fn poll_receive_inner(&mut self) -> io::Result<Option<Vec<u8>>> {
-        if let Some(deadline) = self.active_deadline() {
-            let _time = remaining(deadline)?;
-        }
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         match self
             .reader
@@ -460,17 +471,10 @@ where
     }
 
     fn poll_send(&mut self) -> io::Result<SendProgress> {
-        let result = self.poll_send_inner();
-        if result.is_err() {
-            self.close();
-        }
-        result
+        self.poll(Self::poll_send_inner)
     }
 
     fn poll_send_inner(&mut self) -> io::Result<SendProgress> {
-        if let Some(deadline) = self.active_deadline() {
-            let _time = remaining(deadline)?;
-        }
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         let Some(pending) = &mut self.pending_send else {
             return Ok(SendProgress::Idle);
@@ -532,6 +536,7 @@ where
                 .advance(self.config, |bytes| stream.read_chunk(bytes))
             {
                 Ok(Some(frame)) => {
+                    let _remaining = remaining(deadline)?;
                     self.read_deadline = None;
                     return Ok(frame);
                 },
@@ -563,7 +568,8 @@ where
         let stream = self.stream.as_mut().ok_or(ErrorKind::NotConnected)?;
         stream.reset_deadline(deadline);
         let result = remaining(deadline)
-            .and_then(|_time| operation(stream, self.config));
+            .and_then(|_time| operation(stream, self.config))
+            .and_then(|value| remaining(deadline).map(|_time| value));
         if result.is_err() {
             self.close();
         }
@@ -665,6 +671,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io::{self, ErrorKind, Read as _, Write as _};
     use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream};
     use std::num::{NonZeroU8, NonZeroUsize};
@@ -732,6 +739,126 @@ mod tests {
         fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
             self.poll_write_chunk(bytes)
         }
+    }
+
+    // Simulate a syscall that began before the deadline but returned late.
+    #[derive(Debug)]
+    struct LateStream<'probe> {
+        attempted: &'probe Cell<bool>,
+        deadline: Instant,
+        wire: &'static [u8],
+    }
+
+    impl LateStream<'_> {
+        fn delay(&self) {
+            self.attempted.set(true);
+            thread::sleep(
+                self.deadline
+                    .saturating_duration_since(Instant::now())
+                    .saturating_add(Duration::from_millis(5)),
+            );
+        }
+    }
+
+    impl TimedStream for LateStream<'_> {
+        fn poll_flush(&mut self) -> io::Result<bool> {
+            Ok(true)
+        }
+
+        fn poll_read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            self.delay();
+            self.wire.read(bytes)
+        }
+
+        fn poll_write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.delay();
+            Ok(bytes.len())
+        }
+
+        fn read_chunk(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            self.poll_read_chunk(bytes)
+        }
+
+        fn reset_deadline(&mut self, deadline: Instant) {
+            self.deadline = deadline;
+        }
+
+        fn write_chunk(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.poll_write_chunk(bytes)
+        }
+    }
+
+    fn late_channel(
+        attempted: &Cell<bool>,
+    ) -> io::Result<FrameChannel<LateStream<'_>>> {
+        let settings =
+            LanConfig::new(session_config(true), Duration::from_millis(100))?;
+        let deadline = settings.deadline()?;
+        let mut channel = FrameChannel::new(
+            LateStream {
+                attempted,
+                deadline,
+                wire: &[0, 0],
+            },
+            settings,
+        );
+        require(
+            channel
+                .reader
+                .advance(settings, |target| {
+                    let prefix =
+                        target.get_mut(..2).ok_or(ErrorKind::InvalidData)?;
+                    prefix.copy_from_slice(&[0, 0]);
+                    Ok(prefix.len())
+                })?
+                .is_none(),
+            "header started before the transfer deadline",
+        )?;
+        channel.read_deadline = Some(deadline);
+        Ok(channel)
+    }
+
+    #[test]
+    fn late_receive_success_expires_and_closes_channel() -> io::Result<()> {
+        for blocking in [false, true] {
+            let attempted = Cell::new(false);
+            let mut channel = late_channel(&attempted)?;
+            let result = if blocking {
+                channel.receive().map(Some)
+            } else {
+                channel.poll_receive()
+            };
+            require(
+                attempted.get()
+                    && error_kind(result) == Some(ErrorKind::TimedOut)
+                    && error_kind(channel.poll_send())
+                        == Some(ErrorKind::NotConnected),
+                "completed receive must not be admitted after expiry",
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn late_send_success_expires_and_closes_channel() -> io::Result<()> {
+        for blocking in [false, true] {
+            let attempted = Cell::new(false);
+            let mut channel = late_channel(&attempted)?;
+            let error = if blocking {
+                error_kind(channel.send(b""))
+            } else {
+                channel.queue_send(Vec::new())?;
+                error_kind(channel.poll_send())
+            };
+            require(
+                attempted.get()
+                    && error == Some(ErrorKind::TimedOut)
+                    && error_kind(channel.poll_receive())
+                        == Some(ErrorKind::NotConnected),
+                "send completion cannot extend the earlier receive deadline",
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn poll_accept<Connection, Accept>(
