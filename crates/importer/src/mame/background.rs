@@ -185,23 +185,28 @@ impl Layer<'_, '_> {
     fn compose_row(
         self,
         origin: Offset,
-        pixels: &mut [Pixel],
+        mut pixels: &mut [Pixel],
     ) -> Result<(), ImportError> {
-        let (start_x, row_y) = origin;
-        for (column, pixel) in pixels.iter_mut().enumerate() {
-            if let Some(pen) =
-                self.pen((start_x.wrapping_add(column), row_y))?
-            {
-                pixel.pen = pen;
-                pixel.priority |= self.coverage;
-            }
+        let mut column = origin.0 & 511;
+        let row = origin.1 & 255;
+        while !pixels.is_empty() {
+            let count = pixels.len().min(8usize.saturating_sub(column & 7));
+            let (span, remaining) = pixels
+                .split_at_mut_checked(count)
+                .ok_or(ImportError::UnsupportedMember)?;
+            self.compose_span((column, row), span)?;
+            column = column.wrapping_add(count) & 511;
+            pixels = remaining;
         }
         Ok(())
     }
 
-    fn pen(self, point: Offset) -> Result<Option<u16>, ImportError> {
-        let column = point.0 & 511;
-        let row = point.1 & 255;
+    fn compose_span(
+        self,
+        point: Offset,
+        pixels: &mut [Pixel],
+    ) -> Result<(), ImportError> {
+        let (column, row) = point;
         let cell_index = ((row >> 3u32) << 6u32) | (column >> 3u32);
         let cell = self
             .background
@@ -213,19 +218,25 @@ impl Layer<'_, '_> {
         } else {
             row & 7
         };
-        let offset = (tile_row << 3u32) | (column & 7);
-        let pen = self
+        let start = (tile_row << 3u32) | (column & 7);
+        let end = start.saturating_add(pixels.len());
+        let pens = self
             .background
             .tiles
             .tile(u32::from(cell.index))
-            .and_then(|tile| tile.get(offset))
-            .copied()
+            .and_then(|tile| tile.get(start..end))
             .ok_or(ImportError::UnsupportedMember)?;
-        if pen > 15 {
-            return Err(ImportError::UnsupportedMember);
+        let palette = u16::from(cell.palette_bank) << 4u32;
+        for (pixel, &pen) in pixels.iter_mut().zip(pens) {
+            if pen > 15 {
+                return Err(ImportError::UnsupportedMember);
+            }
+            if pen != 0 {
+                pixel.pen = palette | u16::from(pen);
+                pixel.priority |= self.coverage;
+            }
         }
-        Ok((pen != 0)
-            .then_some((u16::from(cell.palette_bank) << 4u32) | u16::from(pen)))
+        Ok(())
     }
 }
 
@@ -257,6 +268,51 @@ mod tests {
             size: byte_count,
         };
         Ok(IndexedTiles::new(&record, pixels)?)
+    }
+
+    #[test]
+    fn spans_preserve_transparency_and_wrap_across_tile_boundaries()
+    -> Result<(), ImportError> {
+        let machine = Machine::select("simpsons", "world-4p-set-1")?;
+        let mut pixels = [0u8; 128];
+        pixels
+            .get_mut(..8)
+            .ok_or(ImportError::UnsupportedMember)?
+            .copy_from_slice(&[1, 0, 3, 4, 5, 6, 7, 8]);
+        pixels
+            .get_mut(64..72)
+            .ok_or(ImportError::UnsupportedMember)?
+            .copy_from_slice(&[8, 7, 6, 5, 4, 3, 2, 1]);
+        let sheet = sheet(&pixels)?;
+        let mut ram = vec![0u8; 24_576];
+        *ram.get_mut(8192 + 63)
+            .ok_or(ImportError::UnsupportedMember)? = 1;
+        let mixer = machine.decode_video_priority(&[0; 16])?;
+        let state = machine.tilemap_snapshot(&ram, &[0; 6], mixer)?;
+        let layer = Layer {
+            background: Background {
+                scroll_control: 0,
+                state,
+                tiles: &sheet,
+            },
+            coverage: 4,
+            index: 0,
+        };
+        let initial = Pixel {
+            pen: 99,
+            priority: 1,
+            shadow: false,
+        };
+        let mut output = [initial; 12];
+        layer.compose_row((509, 0), &mut output)?;
+        let expected = [3, 2, 1, 1, 99, 3, 4, 5, 6, 7, 8, 1];
+        if output.map(Pixel::pen) != expected
+            || output.map(|pixel| pixel.priority)
+                != [5, 5, 5, 5, 1, 5, 5, 5, 5, 5, 5, 5]
+        {
+            return Err(ImportError::UnsupportedMember);
+        }
+        Ok(())
     }
 
     #[test]

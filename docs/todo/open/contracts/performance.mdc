@@ -169,3 +169,20 @@ repeated archive I/O or reference readback. A separate single-scene
 native readback matched all pixels; duplicate and misaligned corpora
 were rejected. These observations are not live gameplay, display FPS,
 physical input latency, GPU timing or VRAM measurements.
+
+The background compositor now resolves tile-cell attributes, palette and
+source row once per visible tile span instead of once per pixel. Its
+inline span test crosses the 512-pixel wrap, multiple tiles and clipped
+end spans, preserving transparent pixels and accumulated priority bits.
+The same 31-scene exact admission and two 620-frame release trials passed:
+
+- Mean: 766,602–772,096 ns (previously 3,002,352–3,018,901 ns).
+- p50: 720,896–786,431 ns; p95: 786,432–851,967 ns.
+- p99: 1,179,648–1,441,791 ns across both trials.
+- Maximum: 5,311,853 ns; 1,295–1,304 submissions/s; no budget misses.
+- Load: 345,806,907–482,435,234 ns; sampled peak RSS:
+  170,418,176–170,795,008 bytes; executable: 1,279,048 bytes.
+
+The measured mean submission interval decreased by about 74% at the
+same logical extent, scene corpus and renderer settings. These timings
+include presentation overhead and remain host-side diagnostics.
