@@ -257,3 +257,19 @@ version, exact lengths, roster identity and size rejection, two independent
 remote seats alongside a local station, seat isolation, disconnect/rejoin
 and host-only menu transitions. This adapter does not open a listener,
 schedule the I/O worker, provision credentials or replicate game state.
+
+The caller-driven host input pump now binds an explicitly opted-in private
+endpoint, reserves distinct local and remote identities and automatically
+schedules bounded handshake and receive work on the existing I/O worker.
+Ready and in-flight work is correlated and rotates through peers; a quiet
+pending socket or incomplete authenticated frame cannot block other input.
+It exposes only authenticated admission, schema-checked input and transport
+loss, and does not drop lifecycle events on behalf of its caller.
+
+The loopback tests exercise two approved peers and one local player, a
+silent pending socket, independent partial-frame delivery, malformed
+message rejection and continued valid input, disconnect and verified
+rejoin. Disabled LAN, empty enrolment and excess reserved capacity fail
+before opening a listener. Fresh validation passed in joint run
+1795602334492857230-2957088. Native title composition, outbound state,
+credential provisioning and physical LAN play remain open.

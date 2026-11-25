@@ -33,6 +33,8 @@
 pub mod host;
 /// Local credential import and explicit public trust exchange.
 pub mod identity;
+/// Fair, bounded scheduling of inbound host operations.
+pub mod pump;
 /// Bounded off-thread host session commands.
 pub mod worker;
 
