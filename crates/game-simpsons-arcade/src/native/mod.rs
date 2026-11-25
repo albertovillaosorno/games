@@ -1909,6 +1909,11 @@ fn smoke_poses(
     if idle != scene.readback().map_err(failure)? {
         return Err(failure("attack pose did not return to idle"));
     }
+    smoke_press(controls, simulation, Control::Primary)?;
+    let [marge, ..] = simulation.state().stations();
+    if marge.maneuver != Maneuver::Idle {
+        return Err(failure("ground attack ignored its recovery interval"));
+    }
     Ok(())
 }
 

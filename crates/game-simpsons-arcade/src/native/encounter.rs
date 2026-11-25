@@ -52,8 +52,9 @@ use super::{
     Art, Controls, Scene, dimension, failure, ground_position, live, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing, Maneuver,
-    Participation, Phase, Point, Station, TICK_INTERVAL,
+    CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing,
+    GROUND_ATTACK_RECOVERY_TICKS, Maneuver, Participation, Phase, Player,
+    Point, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -317,11 +318,17 @@ fn measure_strike(
     measurement: (&mut PerformanceCollector, Instant),
 ) -> Result<(), RenderError> {
     let (collector, injected) = measurement;
-    for tick in 0..17u8 {
+    for tick in 0..GROUND_ATTACK_RECOVERY_TICKS {
         let started = Instant::now();
         advance(simulation, 1)?;
         let [marge, ..] = simulation.state().stations();
-        if marge.maneuver != (Maneuver::Attack { tick }) {
+        let attack = Maneuver::Attack { tick };
+        let expected = if tick < attack.pose_duration(Player::Marge) {
+            attack
+        } else {
+            Maneuver::Idle
+        };
+        if marge.maneuver != expected {
             return Err(failure("strike timeline did not advance"));
         }
         if !art.present(scene, simulation.state())? {

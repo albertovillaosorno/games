@@ -273,15 +273,15 @@ mod tests {
         let Ok(mut cabinet) = result else {
             return;
         };
-        for (start, health) in [(3u64, 2), (20, 1), (37, 0)] {
+        for (start, health) in [(3u64, 2), (23, 1), (43, 0)] {
             cabinet.input_step(start, &pulse(Control::Primary));
-            for tick in start.saturating_add(1)..start.saturating_add(17) {
+            for tick in start.saturating_add(1)..start.saturating_add(20) {
                 cabinet.input_step(tick, &[]);
             }
             assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(health));
         }
         let defeated = cabinet.enemy();
-        for tick in 54..120 {
+        for tick in 63..120 {
             cabinet.input_step(tick, &[]);
         }
         assert_eq!(cabinet.enemy(), defeated);

@@ -1067,3 +1067,33 @@ host-work budget; maximum measured movement work was 3.285 ms.
 Lifetime peak RSS was 90,300,416 bytes. This remains synthetic
 input and offscreen submission evidence, not physical device or
 presentation latency acceptance.
+
+Repeated ground-attack and jump edges after an isolated ground attack
+were compared with each character's original attack-only object-DMA
+capture. Each of the eight offset-19 comparisons matched all 101
+sampled frames; each offset-20 comparison diverged. Marge's attack
+offsets 17 and 18 and jump offset 17 also matched all 101 frames.
+The preview now retains a station-local 20-tick input recovery
+interval without extending the observed 17- or 18-tick attack poses.
+Early edges are discarded rather than buffered. Active simulation
+ticks advance the recovery; pause does not. Movement and facing
+remain governed by the existing pose timeline. Damage cancels the
+provisional attack and its recovery. The original directional and
+damage-interruption recovery behavior still needs separate evidence.
+
+Regression coverage distinguishes offsets 17 through 20 for both
+buttons and all four characters, and checks station independence,
+held-edge rejection and pause. The encounter smoke exercises three
+distinct strikes at the new cadence, including the idle recovery
+frames, and the pose smoke rejects an additional primary edge at
+offset 19 before the next distinct maneuver.
+
+Fresh validation passed, including Android ARM64 and WASM core checks,
+in run 1795617760177114640-2916614 (1,031 test executions). The release
+build passed adaptive 400x304 offscreen OpenGL ES smoke with the
+verified 88-pose catalogue and touch enabled. It submitted 600
+movement and 60 combat frames without missing 16.667 ms. Mean host
+work was 112.882 and 87.153 microseconds respectively; lifetime peak
+RSS was 89,128,960 bytes. The revised combat sample includes the
+recovery frames, unlike the earlier 51-frame workload. This is
+offscreen host submission, not physical gameplay or display parity.
