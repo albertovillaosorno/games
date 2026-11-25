@@ -36,6 +36,7 @@ use std::time::Duration;
 use std::{mem, thread};
 
 use games::input::InputEvent;
+use games_platform_graphics::linux::input::profile::NATIVE_AXES;
 use games_platform_graphics::linux::input::{
     HostEvent, InputStartup, NativeInput,
 };
@@ -47,14 +48,15 @@ use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
 use super::launch::ControllerLaunch;
 use super::{
-    Controls, DEFAULT_PROFILES, EVENT_BUDGET, LocalActions, Profiles,
-    dimension, failure, key_label, lan, project_contact, size, touch,
+    CONTROLS, Controls, EVENT_BUDGET, LocalActions, Profiles, dimension,
+    failure, key_label, lan, project_contact, size, touch,
 };
+use crate::Control;
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
 
 const WIDTH: u16 = 320;
-const HEIGHT: u16 = 176;
+const HEIGHT: u16 = touch::PANEL_TOP;
 const MAX_BYTES: usize = 389_120;
 
 fn connection_failure(kind: ErrorKind) -> RenderError {
@@ -94,24 +96,60 @@ fn remote_controls(
     })
 }
 
+const fn remote_label(control: Control) -> Option<&'static str> {
+    match control {
+        Control::Pause => None,
+        Control::Start => Some("JOIN"),
+        Control::Primary => Some("ATTACK"),
+        Control::Secondary => Some("JUMP"),
+        Control::Left => Some("LEFT"),
+        Control::Right => Some("RIGHT"),
+        Control::Up => Some("UP"),
+        Control::Down => Some("DOWN"),
+    }
+}
+
 fn binding_hints(profiles: &Profiles) -> Vec<String> {
     let [keys, ..] = profiles.keys;
     let [buttons, ..] = profiles.buttons;
-    ["JOIN", "ATTACK", "JUMP", "LEFT", "RIGHT", "UP", "DOWN"]
+    CONTROLS
         .into_iter()
-        .zip(keys.into_iter().zip(buttons).skip(1))
-        .map(|(label, (key, button))| {
-            format!("{label}: {} / {}", key_label(key), button.string())
+        .zip(keys.into_iter().zip(buttons))
+        .filter_map(|(control, (key, button))| {
+            let label = remote_label(control)?;
+            Some(format!("{label}: {} / {}", key_label(key), button.string()))
         })
         .collect()
 }
 
-fn axis_hint(profiles: &Profiles) -> &'static str {
-    if profiles.axes.first() == DEFAULT_PROFILES.axes.first() {
-        "LEFT STICK ALSO MOVES"
-    } else {
-        "DIGITAL AXES USE LOCAL PROFILE"
+fn axis_label(slot: Option<usize>) -> Option<&'static str> {
+    slot.and_then(|index| CONTROLS.get(index).copied())
+        .and_then(remote_label)
+}
+
+fn axis_hints(profiles: &Profiles) -> Vec<String> {
+    let [axes, ..] = profiles.axes;
+    let mut hints: Vec<_> = NATIVE_AXES
+        .into_iter()
+        .zip(axes)
+        .filter_map(|(axis, profile)| {
+            let negative = axis_label(profile.negative);
+            let positive = axis_label(profile.positive);
+            if negative.is_none() && positive.is_none() {
+                return None;
+            }
+            Some(format!(
+                "{}: -{} +{}",
+                axis.string(),
+                negative.unwrap_or("NONE"),
+                positive.unwrap_or("NONE"),
+            ))
+        })
+        .collect();
+    if hints.is_empty() {
+        hints.push(String::from("NO REMOTE AXIS BINDINGS"));
     }
+    hints
 }
 
 fn panel(
@@ -120,23 +158,30 @@ fn panel(
     touch_enabled: bool,
 ) -> Result<SpriteDraw, RenderError> {
     let bindings = binding_hints(profiles);
+    let axes = axis_hints(profiles);
     let lines = [
         ("REMOTE CONTROLLER", 8, 3),
-        ("WATCH THE HOST SCREEN", 28, 2),
+        ("WATCH THE HOST SCREEN", 25, 2),
     ]
     .into_iter()
     .chain(
-        [44, 58, 72, 86, 100, 114, 128]
+        [42, 54, 66, 78, 90, 102, 114]
             .into_iter()
             .zip(&bindings)
             .map(|(top, hint)| (hint.as_str(), top, 2)),
     )
-    .chain([
-        (axis_hint(profiles), 144, 2),
-        ("CLOSE WINDOW TO LEAVE", 160, 2),
-    ])
-    .chain(touch_enabled.then_some(("TOUCH BUTTONS BELOW", 184, 2)))
-    .chain(touch_enabled.then_some(("DRAG OFF TO RELEASE", 200, 2)))
+    .chain(
+        [128, 140, 152, 164, 176, 188]
+            .into_iter()
+            .zip(&axes)
+            .map(|(top, hint)| (hint.as_str(), top, 2)),
+    )
+    .chain([("CLOSE WINDOW TO LEAVE", 201, 2)])
+    .chain(touch_enabled.then_some((
+        "TOUCH BELOW - DRAG OFF TO RELEASE",
+        213,
+        2,
+    )))
     .map(|(text, top, scale)| {
         TextLine {
             color: [245, 240, 220, 255],
@@ -151,11 +196,7 @@ fn panel(
         scene,
         PlateLayout {
             background: [24, 22, 30, 255],
-            height: if touch_enabled {
-                touch::PANEL_TOP
-            } else {
-                HEIGHT
-            },
+            height: HEIGHT,
             max_bytes: size(MAX_BYTES)?,
             width: WIDTH,
         },
@@ -357,9 +398,9 @@ mod tests {
         Axis, Button, Scancode, axis_code, button_code, key_code,
     };
 
-    use super::super::ACTION_NAMES;
+    use super::super::{ACTION_NAMES, DEFAULT_PROFILES};
     use super::*;
-    use crate::{Control, Player};
+    use crate::Player;
 
     fn remapped_profiles() -> Result<Profiles, RenderError> {
         DEFAULT_PROFILES
@@ -474,7 +515,8 @@ mod tests {
                 ),
             )
             .map_err(failure)?;
-        if axis_hint(&profiles) == axis_hint(&DEFAULT_PROFILES) {
+        if axis_hints(&profiles) != ["lefty: -UP +DOWN", "rightx: -LEFT +RIGHT"]
+        {
             return Err(failure("controller hint ignored custom axes"));
         }
         let mut controls = Controls::with_reserved(false, &profiles, [
@@ -505,6 +547,77 @@ mod tests {
                 },
                 expected,
             )?;
+        }
+        Ok(())
+    }
+
+    fn all_axis_profiles() -> Result<Profiles, RenderError> {
+        DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\n",
+                    "axis 1 leftx=primary/pause\n",
+                    "axis 1 lefty=pause/secondary\n",
+                    "axis 1 rightx=up/down\n",
+                    "axis 1 righty=start/left\n",
+                    "axis 1 lefttrigger=none/primary\n",
+                    "axis 1 righttrigger=none/secondary\n",
+                ),
+            )
+            .map_err(failure)
+    }
+
+    #[test]
+    fn axis_hints_cover_remote_assignments() -> Result<(), RenderError> {
+        if axis_hints(&DEFAULT_PROFILES)
+            != ["leftx: -LEFT +RIGHT", "lefty: -UP +DOWN"]
+        {
+            return Err(failure("default axis hints changed"));
+        }
+        let profiles = all_axis_profiles()?;
+        let hints = axis_hints(&profiles);
+        if hints
+            != [
+                "leftx: -ATTACK +NONE",
+                "lefty: -NONE +JUMP",
+                "rightx: -UP +DOWN",
+                "righty: -JOIN +LEFT",
+                "lefttrigger: -NONE +ATTACK",
+                "righttrigger: -NONE +JUMP",
+            ]
+        {
+            return Err(failure("incorrect effective axis hints"));
+        }
+        if !hints.iter().all(|hint| {
+            TextLine {
+                color: [245, 240, 220, 255],
+                scale: 2,
+                text: hint,
+                top: 0,
+            }
+            .fit_width(WIDTH)
+            .scale
+                == 2
+        }) {
+            return Err(failure("axis hints require reduced text scale"));
+        }
+        let disabled = DEFAULT_PROFILES
+            .configured(
+                ACTION_NAMES,
+                concat!(
+                    "version=1\n",
+                    "axis 1 leftx=pause/pause\n",
+                    "axis 1 lefty=none/none\n",
+                    "axis 1 rightx=none/none\n",
+                    "axis 1 righty=none/none\n",
+                    "axis 1 lefttrigger=none/none\n",
+                    "axis 1 righttrigger=none/pause\n",
+                ),
+            )
+            .map_err(failure)?;
+        if axis_hints(&disabled) != ["NO REMOTE AXIS BINDINGS"] {
+            return Err(failure("inactive axis hint advertises a control"));
         }
         Ok(())
     }
@@ -572,8 +685,22 @@ mod tests {
         Ok(())
     }
 
+    fn verify_axis_rows(pixels: &[u8]) -> Result<(), RenderError> {
+        for top in [128usize, 140, 152, 164, 176, 188] {
+            let width = usize::from(WIDTH).saturating_mul(4);
+            let visible =
+                pixels.chunks_exact(width).skip(top).take(10).any(|row| {
+                    row.as_chunks::<4>().0.contains(&[245, 240, 220, 255])
+                });
+            if !visible {
+                return Err(failure("controller axis row missing"));
+            }
+        }
+        Ok(())
+    }
+
     fn verify_touch_controller() -> Result<(), RenderError> {
-        let profiles = DEFAULT_PROFILES;
+        let profiles = all_axis_profiles()?;
         let layout = controller_layout(&profiles, true)?;
         let mut window = NativeWindow::open(
             "Touch controller smoke",
@@ -587,6 +714,7 @@ mod tests {
                 return Err(failure("touch controller not drawn"));
             }
             let pixels = scene.readback()?;
+            verify_axis_rows(&pixels)?;
             if !pixels.as_chunks::<4>().0.contains(&[242, 245, 250, 255]) {
                 return Err(failure("touch controller symbols missing"));
             }
@@ -634,15 +762,11 @@ mod tests {
                 sprites: size(1)?,
             },
             |scene| {
-                let sprite = panel(scene, &remapped_profiles()?, false)?;
+                let sprite = panel(scene, &all_axis_profiles()?, false)?;
                 if !scene.present([24, 22, 30], &[sprite])? {
                     return Err(failure("controller panel not drawn"));
                 }
-                let pixels = scene.readback()?;
-                if !pixels.as_chunks::<4>().0.contains(&[245, 240, 220, 255]) {
-                    return Err(failure("controller panel text missing"));
-                }
-                Ok(())
+                verify_axis_rows(&scene.readback()?)
             },
         )?;
         drop(window);
