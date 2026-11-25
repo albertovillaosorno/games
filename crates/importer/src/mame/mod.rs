@@ -33,6 +33,8 @@
 
 mod konami;
 mod palette;
+/// Observed video mixer assignment and priority order.
+pub mod priority;
 
 use std::iter::once;
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -89,6 +91,7 @@ struct Profile {
     palette: palette::Palette,
     revision: &'static str,
     title: &'static str,
+    video: priority::Wiring,
 }
 
 /// A supported machine and pinned original revision, selected by name.
@@ -145,6 +148,16 @@ impl Machine {
         output: &mut [[u8; 4]],
     ) -> Result<(), ImportError> {
         self.0.palette.decode(source, output)
+    }
+
+    /// Decode the selected machine's observed priority mixer registers.
+    /// # Errors
+    /// Rejects incomplete or malformed register snapshots.
+    pub fn decode_video_priority(
+        self,
+        registers: &[u8],
+    ) -> Result<priority::VideoPriority, ImportError> {
+        self.0.video.decode(registers)
     }
 
     /// Exact canonical graphics resource limits for this revision.

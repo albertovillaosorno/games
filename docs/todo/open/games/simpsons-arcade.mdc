@@ -158,3 +158,25 @@ with `mame render-bench` (append the measured frame count to the
 `render-check` arguments). Four optimized 600-frame trials passed the
 host 60 Hz submission budget; see the performance contract for the exact
 configuration and measurements. This does not establish gameplay FPS.
+
+Two further fresh, network-isolated reference executions captured the
+24,576-byte K052109 tile RAM, character-bank and control registers,
+K053251 mixer registers, and independent driver palette-bank/priority
+observations at the same six checkpoints. All raw captures matched
+byte-for-byte between runs; screen captures also matched previous runs.
+The generic profiled mixer decoder maps five inputs to backdrop,
+sprites and three tile layers, and orders layers back to front.
+
+```sh
+cargo run --locked -p games-build -- mame priority-check simpsons \
+  world-4p-set-1 MIXER_RAW OBSERVED_LE32
+```
+
+The observation file contains three layer palette banks in wiring order,
+three sorted layer priority values and the sprite palette bank, each
+as a little-endian 32-bit value. All 84 values across the twelve
+checkpoints matched; truncated observations were rejected. The mixer
+registers were constant in this scenario, so other register values and
+tie ordering have synthetic coverage only. Tile bank contents changed;
+tile reconstruction, sprite object attributes, shadow/highlight effects
+and complete screen composition still require independent comparison.

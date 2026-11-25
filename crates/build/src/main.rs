@@ -40,6 +40,9 @@ pub mod reference_audio;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only palette comparison against local observations.
 pub mod reference_palette;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Bounded read-only video mixer comparison against local observations.
+pub mod reference_priority;
 #[cfg(all(
     feature = "native-preview",
     target_os = "linux",
@@ -84,6 +87,7 @@ const USAGE: &str = concat!(
     "SOURCE ENTRY TOTAL COUNT\n",
     "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
+    "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
     "\n",
     "GNU/Linux (native-preview): mame render-check MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT",
@@ -179,6 +183,8 @@ enum Command {
     Import(Machine, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     PaletteCheck(Machine, PathBuf, PathBuf),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    PriorityCheck(Machine, PathBuf, PathBuf),
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     Publish(Machine, PathBuf, Arguments),
     #[cfg(all(
@@ -235,11 +241,8 @@ impl Command {
                 args.collect(),
             )?)),
             #[cfg(any(target_os = "linux", target_os = "android"))]
-            "palette-check" => {
-                let [raw, reference] =
-                    <[OsString; 2]>::try_from(args.collect::<Vec<_>>())
-                        .map_err(|_args| String::from(USAGE))?;
-                Ok(Self::PaletteCheck(selected, raw.into(), reference.into()))
+            "palette-check" | "priority-check" => {
+                Self::parse_reference(action, selected, args.collect())
             },
             #[cfg(all(
                 feature = "native-preview",
@@ -286,11 +289,34 @@ impl Command {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn parse_reference(
+        action: &str,
+        machine: Machine,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        let [raw, reference] = <[OsString; 2]>::try_from(args)
+            .map_err(|_args| String::from(USAGE))?;
+        match action {
+            "palette-check" => {
+                Ok(Self::PaletteCheck(machine, raw.into(), reference.into()))
+            },
+            "priority-check" => {
+                Ok(Self::PriorityCheck(machine, raw.into(), reference.into()))
+            },
+            _ => Err(String::from(USAGE)),
+        }
+    }
+
     fn run(self) -> Result<(), String> {
         match self {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::PaletteCheck(machine, raw, reference) => {
                 reference_palette::check(machine, &raw, &reference)
+            },
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::PriorityCheck(machine, raw, reference) => {
+                reference_priority::check(machine, &raw, &reference)
             },
             #[cfg(all(
                 feature = "native-preview",

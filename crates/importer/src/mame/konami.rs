@@ -36,6 +36,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use games_assets::ManifestLimits;
 
 use super::palette::{Palette, xbgr555_be};
+use super::priority::Wiring;
 use super::{Profile, Region};
 use crate::graphics::TileLayout;
 
@@ -70,6 +71,11 @@ pub(super) static SIMPSONS: Profile = Profile {
     },
     revision: "world-4p-set-1",
     title: "simpsons-arcade",
+    video: Wiring {
+        backdrop: 0,
+        layers: [2, 3, 4],
+        sprites: 1,
+    },
 };
 // Layout parameters from pinned public MAME hardware documentation:
 // k052109, k053246/k053247 NORMAL_PLANE_ORDER, and the simpsons ROM map.
