@@ -290,6 +290,13 @@ impl FrameSession<'_, '_> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DrawableViewport {
+    fitted: Viewport,
+    height: NonZeroU32,
+    width: NonZeroU32,
+}
+
 fn copy_to_viewport<Target>(
     canvas: &mut Canvas<Target>,
     texture: &Texture<'_>,
@@ -350,6 +357,25 @@ fn drawable_rect<Target>(
 where
     Target: RenderTarget,
 {
+    let Some(DrawableViewport { fitted, .. }) =
+        drawable_viewport(canvas, layout)?
+    else {
+        return Ok(None);
+    };
+    let left = i32::try_from(fitted.x)
+        .map_err(|_error| RenderError::InvalidDimensions)?;
+    let top = i32::try_from(fitted.y)
+        .map_err(|_error| RenderError::InvalidDimensions)?;
+    Ok(Some(Rect::new(left, top, fitted.width, fitted.height)))
+}
+
+fn drawable_viewport<Target>(
+    canvas: &Canvas<Target>,
+    layout: FrameLayout,
+) -> Result<Option<DrawableViewport>, RenderError>
+where
+    Target: RenderTarget,
+{
     let (output_width, output_height) =
         canvas.output_size().map_err(RenderError::Backend)?;
     let (Some(width), Some(height)) = (
@@ -360,11 +386,7 @@ where
     };
     validate_dimensions(width, height)?;
     let fitted = Viewport::fit(width, height, layout.width, layout.height);
-    let left = i32::try_from(fitted.x)
-        .map_err(|_error| RenderError::InvalidDimensions)?;
-    let top = i32::try_from(fitted.y)
-        .map_err(|_error| RenderError::InvalidDimensions)?;
-    Ok(Some(Rect::new(left, top, fitted.width, fitted.height)))
+    Ok(Some(DrawableViewport { fitted, height, width }))
 }
 
 fn validate_dimensions(

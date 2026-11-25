@@ -32,7 +32,9 @@
 //! Bounded touch contact geometry and lifetime tracking.
 
 use std::collections::BTreeSet;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+
+use crate::presentation::Viewport;
 
 /// A position in the normalized control surface, inclusive at both edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +43,28 @@ pub struct TouchPoint {
     pub x: u16,
     /// Vertical coordinate, from zero to `u16::MAX`.
     pub y: u16,
+}
+
+impl TouchPoint {
+    /// Project surface-normalized coordinates into a fitted viewport.
+    /// Returns None for letterbox areas or invalid viewport geometry.
+    #[must_use]
+    pub fn in_viewport(
+        self,
+        viewport: Viewport,
+        surface_width: NonZeroU32,
+        surface_height: NonZeroU32,
+    ) -> Option<Self> {
+        Some(Self {
+            x: project_axis(self.x, viewport.x, viewport.width, surface_width)?,
+            y: project_axis(
+                self.y,
+                viewport.y,
+                viewport.height,
+                surface_height,
+            )?,
+        })
+    }
 }
 
 /// A contact identity scoped to the originating touch device.
@@ -172,12 +196,35 @@ impl Contacts {
     }
 }
 
+fn project_axis(
+    point: u16,
+    offset: u32,
+    extent: u32,
+    surface: NonZeroU32,
+) -> Option<u16> {
+    let end = offset.checked_add(extent)?;
+    if end > surface.get() || extent == 0 {
+        return None;
+    }
+    let scale = u64::from(u16::MAX);
+    let coordinate =
+        u64::from(point).checked_mul(NonZeroU64::from(surface).get())?;
+    let start = u64::from(offset).checked_mul(scale)?;
+    let relative = coordinate.checked_sub(start)?;
+    let logical = relative.checked_div(u64::from(extent))?;
+    if coordinate > u64::from(end).checked_mul(scale)? {
+        return None;
+    }
+    u16::try_from(logical).ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU32, NonZeroUsize};
 
     use super::{ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone};
     use crate::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
+    use crate::presentation::Viewport;
 
     const LEFT: TouchPoint = TouchPoint { x: 100, y: 0 };
     const RIGHT: TouchPoint = TouchPoint { x: 500, y: 0 };
@@ -221,6 +268,36 @@ mod tests {
         down: bool,
     ) -> LogicalAction<&'static str> {
         LogicalAction { action, down }
+    }
+
+    #[test]
+    fn projection_rejects_letterbox_and_preserves_viewport_edges() {
+        let width = NonZeroU32::new(800).unwrap_or(NonZeroU32::MIN);
+        let height = NonZeroU32::new(400).unwrap_or(NonZeroU32::MIN);
+        let view = Viewport::fit(width, height, height, height);
+        assert_eq!(
+            TouchPoint { x: 0, y: 32768 }.in_viewport(view, width, height),
+            None
+        );
+        assert_eq!(
+            TouchPoint { x: 65535, y: 0 }.in_viewport(view, width, height),
+            None
+        );
+        assert_eq!(
+            TouchPoint { x: 32768, y: 0 }.in_viewport(view, width, height),
+            Some(TouchPoint { x: 32768, y: 0 })
+        );
+        assert_eq!(
+            TouchPoint { x: 16384, y: u16::MAX }
+                .in_viewport(view, width, height),
+            Some(TouchPoint { x: 0, y: u16::MAX })
+        );
+        assert_eq!(
+            TouchPoint { x: 49152, y: 0 }.in_viewport(view, width, height),
+            None
+        );
+        let invalid = Viewport { width: u32::MAX, ..view };
+        assert_eq!(LEFT.in_viewport(invalid, width, height), None);
     }
 
     #[test]

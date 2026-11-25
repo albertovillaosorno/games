@@ -34,6 +34,7 @@
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use games::input::touch::TouchPoint;
 use sdl2::EventPump;
 use sdl2::event::Event;
 use sdl2::pixels::{Color, PixelFormatEnum};
@@ -46,7 +47,7 @@ use sdl2::video::WindowContext;
 
 use super::{
     FrameLayout, RenderError, copy_to_viewport, drawable_rect,
-    validate_dimensions,
+    drawable_viewport, validate_dimensions,
 };
 
 /// An atlas identifier scoped to a scene session.
@@ -308,6 +309,22 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         pixels: &[u8],
     ) -> Result<AtlasId, RenderError> {
         self.textures.atlases.load(layout, pixels)
+    }
+
+    /// Project a surface-normalized touch point into the logical scene.
+    /// Letterbox space and unavailable drawable surfaces return None.
+    /// # Errors
+    /// Reports failure to query the drawable dimensions.
+    pub fn logical_touch(
+        &self,
+        point: TouchPoint,
+    ) -> Result<Option<TouchPoint>, RenderError> {
+        let Some(super::DrawableViewport { fitted, height, width }) =
+            drawable_viewport(self.canvas, self.textures.layout)?
+        else {
+            return Ok(None);
+        };
+        Ok(point.in_viewport(fitted, width, height))
     }
 
     pub(super) fn new(
