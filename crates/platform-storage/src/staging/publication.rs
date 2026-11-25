@@ -40,21 +40,20 @@ use std::{io, path::PathBuf};
 use games_assets::ContentHash;
 use nix::fcntl::{OFlag, openat};
 use nix::sys::stat::Mode;
+use nix::unistd::fsync;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use nix::{
     errno::Errno,
-    fcntl::{RenameFlags, open, renameat2},
+    fcntl::{RenameFlags, renameat2},
 };
 
-use super::{ArchiveStaging, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use super::{CreatedDirectory, PrivateDirectory};
+use super::PrivateDirectory;
+use super::{ArchiveStaging, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::bundle::bundle_name;
 use crate::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
 use crate::file::DIRECTORY_FLAGS;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use crate::file::trusted_directory;
 
 /// A complete canonical bundle that has not yet been published.
 ///
@@ -114,7 +113,7 @@ pub type PublishedBundle = PublishedDirectory;
 /// nested directories, and keep the parent and ancestors trusted and stable.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[derive(Debug)]
-pub struct AuthoredStaging(CreatedDirectory);
+pub struct AuthoredStaging(PrivateDirectory);
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 impl AuthoredStaging {
@@ -129,7 +128,7 @@ impl AuthoredStaging {
     /// Access the private output directory, removed on drop unless published.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.0.temporary.path
+        &self.0.path
     }
 
     /// Synchronise the root and publish the complete directory without replace.
@@ -138,12 +137,11 @@ impl AuthoredStaging {
     /// Rejects non-component names, collisions and pre-publication failures.
     /// The receipt reports a post-publication parent sync failure separately.
     pub fn publish(
-        self,
+        mut self,
         name: &OsStr,
     ) -> Result<PublishedDirectory, StagingError> {
-        let CreatedDirectory { root, mut temporary } = self.0;
-        File::from(root).sync_all()?;
-        publish_directory(&mut temporary, name)
+        fsync(&self.0.root)?;
+        publish_directory(&mut self.0, name)
     }
 }
 
@@ -155,7 +153,7 @@ pub(super) fn finish<'digest>(
     let mut hashes = payloads.peekable();
     if hashes.peek().is_some() {
         let directory = openat(
-            &stage.root,
+            &stage.temporary.root,
             PAYLOADS_DIRECTORY,
             DIRECTORY_FLAGS,
             Mode::empty(),
@@ -165,9 +163,8 @@ pub(super) fn finish<'digest>(
         }
         File::from(directory).sync_all()?;
     }
-    sync_file(&stage.root, MANIFEST_NAME)?;
-    let root = openat(&stage.root, ".", DIRECTORY_FLAGS, Mode::empty())?;
-    File::from(root).sync_all()?;
+    sync_file(&stage.temporary.root, MANIFEST_NAME)?;
+    fsync(&stage.temporary.root)?;
     Ok(StagedBundle {
         archive: stage.finish()?,
         digest,
@@ -185,18 +182,16 @@ fn publish_directory(
     let path = &temporary.path;
     let parent = path.parent().ok_or(StagingError::UnsupportedPath)?;
     let source = path.file_name().ok_or(StagingError::UnsupportedPath)?;
-    let fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
-    if !trusted_directory(&fd)? {
-        return Err(StagingError::UntrustedParent);
-    }
+    temporary.verify_location()?;
+    let fd = &temporary.parent;
     let destination = parent.join(name);
-    match renameat2(&fd, source, &fd, name, RenameFlags::RENAME_NOREPLACE) {
+    match renameat2(fd, source, fd, name, RenameFlags::RENAME_NOREPLACE) {
         Ok(()) => {},
         Err(Errno::EEXIST) => return Err(StagingError::Collision),
         Err(error) => return Err(error.into()),
     }
     temporary.cleanup = false;
-    let durability = File::from(fd).sync_all().map_err(|error| error.kind());
+    let durability = fsync(fd).map_err(|error| io::Error::from(error).kind());
     Ok(PublishedDirectory {
         durability,
         path: destination,

@@ -179,3 +179,15 @@ exact individual and aggregate limits on accepted canonical metadata.
 The initial borrowed JSON syntax scan remains bounded by the manifest byte
 limit; this does not bound allocations within an individual JSON record
 independently of that limit.
+
+Native staging now retains its original parent and root descriptors through
+completion and publication. It verifies that the exposed pathname still
+identifies both pinned directories, and publishes through the original
+parent descriptor. Drop skips cleanup if the named directory is no longer
+the pinned stage. Synthetic tests replace the active archive root, the
+completed canonical bundle and the authored-output parent; each operation
+rejects the substitution and preserves both the original staged bytes and
+the unrelated sentinel. Renamed staging data can require manual cleanup.
+This detects observed location changes; trusted ancestors and same-user
+writers are still required, and the checks are not an atomic defence
+against a concurrent same-user directory swap.

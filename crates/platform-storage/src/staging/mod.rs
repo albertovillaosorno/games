@@ -47,7 +47,7 @@ use games_assets::archive::{
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
-use nix::sys::stat::{Mode, mkdirat};
+use nix::sys::stat::{Mode, fstat, mkdirat};
 pub use publication::StagedBundle;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
@@ -68,6 +68,8 @@ pub enum StagingError {
     Asset(AssetError),
     /// A pinned source canonical bundle failed verification.
     Bundle(BundleError),
+    /// The original staging directory or its parent was replaced.
+    ChangedStorage,
     /// A duplicate path, case collision or file/directory conflict.
     Collision,
     /// The filesystem or decoded stream failed.
@@ -192,36 +194,30 @@ struct OpenedDirectory<'directory> {
 #[derive(Debug)]
 struct PrivateDirectory {
     cleanup: bool,
+    parent: OwnedFd,
     path: PathBuf,
-}
-
-#[derive(Debug)]
-struct CreatedDirectory {
     root: OwnedFd,
-    temporary: PrivateDirectory,
 }
 
 impl PrivateDirectory {
-    fn create(
-        parent: &Path,
-        parent_fd: &OwnedFd,
-    ) -> Result<CreatedDirectory, StagingError> {
+    fn create(parent: &Path, parent_fd: OwnedFd) -> Result<Self, StagingError> {
         for _ in 0u8..128 {
             let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let name = format!(".games-import-{}-{sequence}", process::id());
-            match mkdirat(parent_fd, name.as_str(), Mode::S_IRWXU) {
+            match mkdirat(&parent_fd, name.as_str(), Mode::S_IRWXU) {
                 Ok(()) => {
-                    let temporary = Self {
-                        cleanup: true,
-                        path: parent.join(&name),
-                    };
                     let root = openat(
-                        parent_fd,
+                        &parent_fd,
                         name.as_str(),
                         DIRECTORY_FLAGS,
                         Mode::empty(),
                     )?;
-                    return Ok(CreatedDirectory { root, temporary });
+                    return Ok(Self {
+                        cleanup: true,
+                        parent: parent_fd,
+                        path: parent.join(&name),
+                        root,
+                    });
                 },
                 Err(Errno::EEXIST) => {},
                 Err(error) => return Err(error.into()),
@@ -230,19 +226,48 @@ impl PrivateDirectory {
         Err(StagingError::Io(io::ErrorKind::AlreadyExists))
     }
 
-    fn create_in(parent: &Path) -> Result<CreatedDirectory, StagingError> {
+    fn create_in(parent: &Path) -> Result<Self, StagingError> {
         let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
         if !trusted_directory(&parent_fd)? {
             return Err(StagingError::UntrustedParent);
         }
         let absolute_parent = fs::canonicalize(parent)?;
-        Self::create(&absolute_parent, &parent_fd)
+        let canonical = open(&absolute_parent, DIRECTORY_FLAGS, Mode::empty())?;
+        if !same_directory(&parent_fd, &canonical)? {
+            return Err(StagingError::ChangedStorage);
+        }
+        let temporary = Self::create(&absolute_parent, parent_fd)?;
+        temporary.verify_location()?;
+        Ok(temporary)
+    }
+
+    // The public staging path must still name the directories we pinned.
+    // A same-user replacement can leave an orphan but must not publish or
+    // delete the unrelated directory now present at that path.
+    fn verify_location(&self) -> Result<(), StagingError> {
+        let path = self.path.parent().ok_or(StagingError::UnsupportedPath)?;
+        let name =
+            self.path.file_name().ok_or(StagingError::UnsupportedPath)?;
+        let parent = open(path, DIRECTORY_FLAGS, Mode::empty())?;
+        if !trusted_directory(&self.parent)? {
+            return Err(StagingError::UntrustedParent);
+        }
+        if !same_directory(&self.parent, &parent)? {
+            return Err(StagingError::ChangedStorage);
+        }
+        let root = openat(&self.parent, name, DIRECTORY_FLAGS, Mode::empty())?;
+        if !trusted_directory(&self.root)?
+            || !same_directory(&self.root, &root)?
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        Ok(())
     }
 }
 
 impl Drop for PrivateDirectory {
     fn drop(&mut self) {
-        if self.cleanup {
+        if self.cleanup && self.verify_location().is_ok() {
             let _result = fs::remove_dir_all(&self.path);
         }
     }
@@ -269,7 +294,6 @@ pub struct ArchiveStaging {
     budget: ArchiveBudget,
     failed: bool,
     registry: Directory,
-    root: OwnedFd,
     temporary: PrivateDirectory,
 }
 
@@ -282,6 +306,7 @@ impl ArchiveStaging {
         if self.failed {
             return Err(StagingError::Aborted);
         }
+        self.temporary.verify_location()?;
         Ok(StagedArchive(self.temporary))
     }
 
@@ -296,14 +321,11 @@ impl ArchiveStaging {
         parent: &Path,
         budget: ArchiveBudget,
     ) -> Result<Self, StagingError> {
-        let CreatedDirectory { temporary, root } =
-            PrivateDirectory::create_in(parent)?;
         Ok(Self {
             budget,
             failed: false,
             registry: Directory::default(),
-            root,
-            temporary,
+            temporary: PrivateDirectory::create_in(parent)?,
         })
     }
 
@@ -349,7 +371,8 @@ impl ArchiveStaging {
         let mut descriptor = None;
         if !parents.is_empty() {
             for part in parents.split('/') {
-                let parent = descriptor.as_ref().unwrap_or(&self.root);
+                let parent =
+                    descriptor.as_ref().unwrap_or(&self.temporary.root);
                 let OpenedDirectory { child, fd } = directory.open_child(
                     parent,
                     part,
@@ -359,7 +382,7 @@ impl ArchiveStaging {
                 descriptor = Some(fd);
             }
         }
-        let parent = descriptor.as_ref().unwrap_or(&self.root);
+        let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
         match kind {
             EntryKind::Directory => {
                 copy_bounded(input, &mut io::sink(), entry)?;
@@ -546,6 +569,12 @@ where
     }
 }
 
+fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
+    let before = fstat(left)?;
+    let after = fstat(right)?;
+    Ok(before.st_dev == after.st_dev && before.st_ino == after.st_ino)
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::{NonZeroU64, NonZeroUsize};
@@ -631,6 +660,82 @@ mod tests {
         require(fs::metadata(root.join("sprites/villain.bin"))?.len() == 0)?;
         drop(completed);
         require(!root.exists())
+    }
+
+    #[test]
+    fn replaced_archive_root_is_not_completed_or_removed()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let mut stage = ArchiveStaging::new(&parent.path, budget(8))?;
+        stage.write_entry(
+            member("asset", EntryKind::File, 4),
+            &mut b"tile".as_slice(),
+        )?;
+        let named = stage.temporary.path.clone();
+        let original = parent.path.join("original");
+        fs::rename(&named, &original)?;
+        fs::create_dir_all(&named)?;
+        fs::write(named.join("sentinel"), b"untouched")?;
+        require(matches!(stage.finish(), Err(StagingError::ChangedStorage)))?;
+        require(fs::read(named.join("sentinel"))? == b"untouched")?;
+        require(fs::read(original.join("asset"))? == b"tile")
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn replaced_parent_cannot_redirect_authored_publication()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let fixture = fixture()?;
+        let parent = fixture.path.join("parent");
+        let original = fixture.path.join("original");
+        fs::create_dir_all(&parent)?;
+        let stage = AuthoredStaging::new(&parent)?;
+        let named = stage.path().to_owned();
+        let leaf = named.file_name().ok_or(StagingError::UnsupportedPath)?;
+        fs::write(named.join("asset"), b"tile")?;
+        fs::rename(&parent, &original)?;
+        fs::create_dir_all(&named)?;
+        fs::write(named.join("sentinel"), b"untouched")?;
+        require(matches!(
+            stage.publish(OsStr::new("published")),
+            Err(StagingError::ChangedStorage)
+        ))?;
+        require(fs::read(named.join("sentinel"))? == b"untouched")?;
+        require(fs::read(original.join(leaf).join("asset"))? == b"tile")?;
+        require(!parent.join("published").exists())?;
+        require(!original.join("published").exists())
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn canonical_publication_rechecks_completed_staging_identity()
+    -> Result<(), StagingError> {
+        let parent = fixture()?;
+        let digest = ContentHash::calculate(b"tile");
+        let manifest = manifest(digest)?;
+        let mut stage =
+            CanonicalStaging::new(&parent.path, canonical_budget())?;
+        stage.write_payload(digest, b"tile")?;
+        let staged = stage.finish(&manifest, canonical_limits())?;
+        let named = staged.path().to_owned();
+        let original = parent.path.join("original");
+        let destination =
+            parent.path.join(format!("bundle-{}", staged.digest()));
+        fs::rename(&named, &original)?;
+        fs::create_dir_all(&named)?;
+        fs::write(named.join("sentinel"), b"untouched")?;
+        require(matches!(
+            staged.publish(),
+            Err(StagingError::ChangedStorage)
+        ))?;
+        require(fs::read(named.join("sentinel"))? == b"untouched")?;
+        require(
+            fs::read(original.join(MANIFEST_NAME))?
+                == manifest.encode(canonical_limits())?,
+        )?;
+        require(!destination.exists())
     }
 
     #[test]
