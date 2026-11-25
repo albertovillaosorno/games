@@ -62,6 +62,7 @@ pub struct NativeInput {
     controllers: BTreeMap<u64, GameController>,
     limit: NonZeroUsize,
     origin: u64,
+    rediscover: bool,
     subsystem: GameControllerSubsystem,
     timer: TimerSubsystem,
     touch_enabled: bool,
@@ -109,6 +110,23 @@ impl NativeInput {
         Ok(Some(InputEvent::Attached { device }))
     }
 
+    /// Discover replacements after a native poll returns no event.
+    ///
+    /// A removal in an earlier limited batch remains pending until the
+    /// caller has reached a no-event poll. Re-enumeration is
+    /// unnecessary unless an admitted controller was removed.
+    /// # Errors
+    /// Reports failed controller enumeration or device open.
+    pub fn discover_after_drain(
+        &mut self,
+    ) -> Result<Vec<InputEvent>, RenderError> {
+        if self.rediscover {
+            self.discover_available()
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     /// Discover available controllers in the current joystick-index order.
     ///
     /// Call after routing a removal and draining the native event queue.
@@ -122,6 +140,7 @@ impl NativeInput {
     ) -> Result<Vec<InputEvent>, RenderError> {
         let mut attached = Vec::new();
         if self.controllers.len() == self.limit.get() {
+            self.rediscover = false;
             return Ok(attached);
         }
         let count = self
@@ -136,6 +155,7 @@ impl NativeInput {
                 attached.push(event);
             }
         }
+        self.rediscover = false;
         Ok(attached)
     }
 
@@ -178,6 +198,7 @@ impl NativeInput {
             controllers: BTreeMap::new(),
             limit,
             origin: timer.ticks64(),
+            rediscover: false,
             subsystem,
             timer,
             touch_enabled: false,
@@ -192,7 +213,8 @@ impl NativeInput {
     /// Discovery uses the joystick index; subsequent button and removal
     /// events use the admitted controller's stable instance identifier.
     /// Devices above the explicit capacity are not opened. After removal,
-    /// the host can call `discover_available` to fill vacant slots.
+    /// the host can call `discover_after_drain` after a no-event poll
+    /// to fill vacant slots.
     ///
     /// # Errors
     /// Reports failure to open a newly reported native controller.
@@ -205,9 +227,13 @@ impl NativeInput {
         }
         if let Event::ControllerDeviceRemoved { which, .. } = *event {
             let device = u64::from(which);
-            return Ok(self.controllers.remove(&device).map(|_controller| {
-                HostEvent::Input(InputEvent::Detached { device })
-            }));
+            if self.controllers.remove(&device).is_some() {
+                self.rediscover = true;
+                return Ok(Some(HostEvent::Input(InputEvent::Detached {
+                    device,
+                })));
+            }
+            return Ok(None);
         }
         if self.touch_enabled && event.is_finger() {
             return Ok(route_contact(event));

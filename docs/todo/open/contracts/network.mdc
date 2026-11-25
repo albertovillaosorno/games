@@ -397,3 +397,16 @@ online frame pixel-for-pixel. Joining and moving that player changed
 19,539 pixels in the world. All disposable private keys were removed.
 This verifies native process-level liveness and visible status on one
 machine, not physical network interruption or multi-device latency.
+
+Both native title loops now cap each native event dispatch at 32 events.
+The shared dispatcher preserves FIFO order, leaves the next event queued
+when the budget is reached, and waits only for the initial controller
+poll. Network polling, fixed updates and presentation can run between
+batches. Controller replacement discovery is deferred across limited
+batches until a native poll returns no event. Synthetic tests cover
+queue tails, order, explicit stop and handler failure; the native render
+smoke queues distinct SDL keyboard events across two-event batches.
+Fresh native-enabled validation passed in run
+1795605700202886000-4148650.
+This bounds work by event count, not a hard wall-time deadline; physical
+controller replacement and sustained real-device traffic remain open.

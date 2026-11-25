@@ -32,16 +32,16 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use games::input::InputEvent;
 use games_platform_graphics::linux::input::{HostEvent, InputStartup};
 use games_platform_graphics::linux::sprites::{
-    SceneLimits, SceneSession, SpriteDraw,
+    EventBatch, SceneLimits, SceneSession, SpriteDraw,
 };
 use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
 use super::{
-    Controls, LocalActions, Profiles, dimension, key_label, lan, size,
+    Controls, EVENT_BUDGET, LocalActions, Profiles, dimension, key_label, lan,
+    size,
 };
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
@@ -165,26 +165,29 @@ fn interactive(
         controller
             .poll()
             .map_err(|error| connection_failure(error.kind()))?;
-        let mut event = scene.wait_event_timeout(8);
-        let redraw = event.is_some();
-        let mut removed = false;
-        while let Some(native) = event {
-            match input.translate(&native)? {
-                Some(HostEvent::Quit) => return Ok(()),
-                Some(HostEvent::Input(change)) => {
-                    removed |= matches!(change, InputEvent::Detached { .. });
-                    enqueue(&mut controller, controls.actions(change)?)?;
-                },
-                None => {},
-            }
-            event = scene.poll_event();
+        let batch = scene.dispatch_events(
+            size(EVENT_BUDGET)?,
+            8,
+            |_scene, native| {
+                match input.translate(native)? {
+                    Some(HostEvent::Quit) => return Ok(false),
+                    Some(HostEvent::Input(change)) => {
+                        enqueue(&mut controller, controls.actions(change)?)?;
+                    },
+                    None => {},
+                }
+                Ok(true)
+            },
+        )?;
+        if batch == EventBatch::Stopped {
+            return Ok(());
         }
-        if removed {
-            for attached in input.discover_available()? {
+        if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
+            for attached in input.discover_after_drain()? {
                 enqueue(&mut controller, controls.actions(attached)?)?;
             }
         }
-        if redraw {
+        if batch != EventBatch::Empty {
             let _drawn = scene.present([24, 22, 30], &[sprite])?;
         }
     }
@@ -222,6 +225,7 @@ pub(super) fn run(path: &Path) -> Result<(), String> {
 mod tests {
     use std::env;
 
+    use games::input::InputEvent;
     use games_platform_graphics::linux::input::{
         Button, Scancode, button_code, key_code,
     };

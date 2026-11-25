@@ -76,7 +76,7 @@ use games_platform_graphics::linux::input::{
 };
 use games_platform_graphics::linux::menu::{MenuArt, MenuContent};
 use games_platform_graphics::linux::sprites::{
-    AtlasId, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
+    AtlasId, EventBatch, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
 };
 use games_platform_graphics::linux::ui::PlateLayout;
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
@@ -90,6 +90,9 @@ use super::{
 };
 use crate::lan::HostLan;
 use crate::remote::HostedCabinet;
+
+// Leave transport, fixed updates and presentation time between input bursts.
+const EVENT_BUDGET: usize = 32;
 
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
@@ -987,30 +990,34 @@ where
     Simulation: InputStep,
     Simulation::Input: From<LogicalAction<Action>>,
 {
-    let mut removed = false;
-    while let Some(event) = scene.poll_event() {
-        match input.translate(&event)? {
-            Some(HostEvent::Quit) => return Ok(false),
-            Some(HostEvent::Input(logical)) => {
-                removed |= matches!(logical, InputEvent::Detached { .. });
-                let elapsed = input
-                    .event_elapsed(&event)
-                    .ok_or_else(|| failure("ambiguous event timestamp"))?;
-                if let Some(projected) = project_contact(scene, logical)? {
-                    controls.route(projected, elapsed, live)?;
-                }
-            },
-            None => {},
-        }
+    let batch =
+        scene.dispatch_events(size(EVENT_BUDGET)?, 0, |view, event| {
+            match input.translate(event)? {
+                Some(HostEvent::Quit) => return Ok(false),
+                Some(HostEvent::Input(logical)) => {
+                    let elapsed = input
+                        .event_elapsed(event)
+                        .ok_or_else(|| failure("ambiguous event timestamp"))?;
+                    if let Some(projected) = project_contact(view, logical)? {
+                        controls.route(projected, elapsed, live)?;
+                    }
+                },
+                None => {},
+            }
+            Ok(true)
+        })?;
+    match batch {
+        EventBatch::Stopped => Ok(false),
+        EventBatch::Limited => Ok(true),
+        EventBatch::Empty | EventBatch::Drained => {
+            let attached = input.discover_after_drain()?;
+            let elapsed = input.elapsed();
+            for event in attached {
+                controls.route(event, elapsed, live)?;
+            }
+            Ok(true)
+        },
     }
-    if removed {
-        let attached = input.discover_available()?;
-        let elapsed = input.elapsed();
-        for event in attached {
-            controls.route(event, elapsed, live)?;
-        }
-    }
-    Ok(true)
 }
 
 fn project_contact(

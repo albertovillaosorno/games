@@ -460,6 +460,7 @@ mod tests {
     use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
     use games::timing::StepClock;
+    use sdl2::EventSubsystem;
     use sdl2::event::Event;
     use sdl2::keyboard::Mod;
     use sdl2::pixels::PixelFormatEnum;
@@ -469,7 +470,9 @@ mod tests {
     use super::input::{
         Axis, Button, HostEvent, NativeInput, Scancode, key_code,
     };
-    use super::sprites::{SceneLimits, SpriteDraw, SpriteRect};
+    use super::sprites::{
+        EventBatch, SceneLimits, SceneSession, SpriteDraw, SpriteRect,
+    };
     use super::{
         FrameLayout, FramePresentation, NativeWindow, RenderError,
         create_texture, draw_frame,
@@ -728,6 +731,8 @@ mod tests {
                 "second frame not drawn",
             )
         })?;
+        let events = window.sdl.event().map_err(RenderError::Backend)?;
+        let window_id = window.canvas.window().id();
         window.with_scene(
             extent()?,
             SceneLimits {
@@ -736,6 +741,7 @@ mod tests {
                 sprites: budget(2),
             },
             |scene| {
+                verify_native_batches(scene, &events, window_id)?;
                 let atlas = scene.load_atlas(
                     extent()?,
                     [RED, GREEN, BLUE, WHITE].as_flattened(),
@@ -784,6 +790,60 @@ mod tests {
             )?;
         }
         window.apply_display_settings(DisplaySettings::default())
+    }
+
+    fn native_key(event: &Event, window_id: u32) -> Option<Scancode> {
+        if let Event::KeyDown {
+            window_id: id, scancode, ..
+        } = *event
+            && id == window_id
+        {
+            scancode
+        } else {
+            None
+        }
+    }
+
+    fn verify_native_batches(
+        scene: &mut SceneSession<'_, '_>,
+        events: &EventSubsystem,
+        window_id: u32,
+    ) -> Result<(), RenderError> {
+        let expected = [Scancode::F22, Scancode::F23, Scancode::F24];
+        for code in expected {
+            events
+                .push_event(Event::KeyDown {
+                    timestamp: 0,
+                    window_id,
+                    keycode: None,
+                    scancode: Some(code),
+                    keymod: Mod::NOMOD,
+                    repeat: false,
+                })
+                .map_err(RenderError::Backend)?;
+        }
+        let mut observed = Vec::new();
+        for _batch in 0u16..256 {
+            let mut count = 0usize;
+            let progress =
+                scene.dispatch_events(budget(2), 0, |_scene, event| {
+                    count = count.saturating_add(1);
+                    observed.extend(
+                        native_key(event, window_id)
+                            .filter(|code| expected.contains(code)),
+                    );
+                    Ok(true)
+                })?;
+            require(count <= 2, "native event batch exceeded its budget")?;
+            require(
+                (count == 2) == (progress == EventBatch::Limited),
+                "native batch limit status differs",
+            )?;
+            if observed.len() >= expected.len() {
+                break;
+            }
+        }
+        require(observed == expected, "queued native key order differs")
     }
 
     fn verify_native_input(window: &NativeWindow) -> Result<(), RenderError> {

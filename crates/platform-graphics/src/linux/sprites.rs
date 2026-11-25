@@ -68,6 +68,19 @@ pub struct SceneLimits {
     pub sprites: NonZeroUsize,
 }
 
+/// Result of processing one bounded batch of native events.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventBatch {
+    /// At least one event was delivered before a poll returned no event.
+    Drained,
+    /// The initial poll returned no event.
+    Empty,
+    /// The event budget was reached; more events may be waiting.
+    Limited,
+    /// The caller requested termination from its event handler.
+    Stopped,
+}
+
 /// A nonempty integer rectangle in atlas or logical scene pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpriteRect {
@@ -347,6 +360,36 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(())
     }
 
+    /// Dispatch at most `budget` events in native queue order.
+    ///
+    /// Only the first poll may wait, if `wait_ms` is nonzero. Reaching the
+    /// limit does not consume or inspect the next event. Callers can perform
+    /// simulation and network work between batches even during input floods.
+    /// # Errors
+    /// Propagates an event handler failure without draining further events.
+    pub fn dispatch_events<Dispatch>(
+        &mut self,
+        budget: NonZeroUsize,
+        wait_ms: u32,
+        dispatch: Dispatch,
+    ) -> Result<EventBatch, RenderError>
+    where
+        Dispatch: FnMut(&Self, &Event) -> Result<bool, RenderError>,
+    {
+        dispatch_batch(
+            self,
+            budget,
+            |scene, first| {
+                if first && wait_ms != 0 {
+                    scene.events.wait_event_timeout(wait_ms)
+                } else {
+                    scene.events.poll_event()
+                }
+            },
+            dispatch,
+        )
+    }
+
     /// Choose the bounded logical extent for the next frame.
     ///
     /// The maximum must retain the initial height and contain its width.
@@ -414,12 +457,6 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         Ok(Self { canvas, events, textures })
     }
 
-    /// Poll a native event for translation by the host input adapter.
-    #[must_use]
-    pub fn poll_event(&mut self) -> Option<Event> {
-        self.events.poll_event()
-    }
-
     /// Composite a frame with no full-frame CPU pixel upload.
     /// # Errors
     /// Rejects invalid draw commands before rendering or native failures.
@@ -468,12 +505,32 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
             .presentation_layout()?
             .and_then(|layout| point.on_presentation(layout)))
     }
+}
 
-    /// Wait briefly for a native event without busy-spinning a static scene.
-    #[must_use]
-    pub fn wait_event_timeout(&mut self, timeout_ms: u32) -> Option<Event> {
-        self.events.wait_event_timeout(timeout_ms)
+fn dispatch_batch<Source, Next, Dispatch>(
+    source: &mut Source,
+    budget: NonZeroUsize,
+    mut next: Next,
+    mut dispatch: Dispatch,
+) -> Result<EventBatch, RenderError>
+where
+    Next: FnMut(&mut Source, bool) -> Option<Event>,
+    Dispatch: FnMut(&Source, &Event) -> Result<bool, RenderError>,
+{
+    for index in 0..budget.get() {
+        let first = index == 0;
+        let Some(event) = next(source, first) else {
+            return Ok(if first {
+                EventBatch::Empty
+            } else {
+                EventBatch::Drained
+            });
+        };
+        if !dispatch(source, &event)? {
+            return Ok(EventBatch::Stopped);
+        }
     }
+    Ok(EventBatch::Limited)
 }
 
 fn compose<Target>(
@@ -533,16 +590,18 @@ fn create_target<Context>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use games::presentation::{Dimensions, PresentationMode};
+    use sdl2::event::Event;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::render::Canvas;
     use sdl2::surface::{Surface, SurfaceContext};
 
     use super::{
-        Atlases, FrameLayout, RenderError, SceneLimits, SceneTextures,
-        SpriteDraw, SpriteRect,
+        Atlases, EventBatch, FrameLayout, RenderError, SceneLimits,
+        SceneTextures, SpriteDraw, SpriteRect, dispatch_batch,
     };
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
@@ -626,6 +685,76 @@ mod tests {
         condition
             .then_some(())
             .ok_or_else(|| RenderError::Backend(reason.to_owned()))
+    }
+
+    #[test]
+    fn bounded_native_batches_preserve_order_and_queue_tail()
+    -> Result<(), RenderError> {
+        let mut queue = (1..=5)
+            .map(|timestamp| Event::Quit { timestamp })
+            .collect::<VecDeque<_>>();
+        let mut delivered = Vec::new();
+        let mut first_polls = Vec::new();
+        for (expected, count) in [
+            (EventBatch::Limited, 2),
+            (EventBatch::Limited, 4),
+            (EventBatch::Drained, 5),
+            (EventBatch::Empty, 5),
+        ] {
+            let result = dispatch_batch(
+                &mut queue,
+                budget(2),
+                |source, first| {
+                    first_polls.push(first);
+                    source.pop_front()
+                },
+                |_source, event| {
+                    delivered.push(event.get_timestamp());
+                    Ok(true)
+                },
+            )?;
+            require(result == expected, "incorrect event batch result")?;
+            require(delivered.len() == count, "unexpected queue consumption")?;
+        }
+        require(delivered == [1, 2, 3, 4, 5], "event order differs")?;
+        require(
+            first_polls == [true, false, true, false, true, false, true],
+            "only the initial poll may wait",
+        )
+    }
+
+    #[test]
+    fn event_stop_or_failure_does_not_consume_next_native_event()
+    -> Result<(), RenderError> {
+        let mut queue = (1..=3)
+            .map(|timestamp| Event::Quit { timestamp })
+            .collect::<VecDeque<_>>();
+        require(
+            dispatch_batch(
+                &mut queue,
+                budget(3),
+                |source, _first| source.pop_front(),
+                |_source, _event| Ok(false),
+            )? == EventBatch::Stopped,
+            "stop not reported",
+        )?;
+        require(
+            queue.front() == Some(&Event::Quit { timestamp: 2 }),
+            "stop consumed the next event",
+        )?;
+        require(
+            dispatch_batch(
+                &mut queue,
+                budget(3),
+                |source, _first| source.pop_front(),
+                |_source, _event| Err(RenderError::InvalidLength),
+            ) == Err(RenderError::InvalidLength),
+            "handler error not propagated",
+        )?;
+        require(
+            queue.front() == Some(&Event::Quit { timestamp: 3 }),
+            "failure consumed the next event",
+        )
     }
 
     #[test]
