@@ -118,13 +118,15 @@ before PARENT. These are separately verified local canonical bundles
 with `enemy/approach` and `enemy/strike` records respectively. The
 first enemy approaches an active station, can be struck with Primary,
 and can damage grounded players. Jump evades a ground strike.
-Health indicators and enemy actions are independently authored
-prototype rules, not an original-game hitbox or health reconstruction.
-The optional encounter supports a provisional 1200-tick continue window.
-Press Start before expiry to rejoin for free. If all stations expire,
-the main menu returns and the encounter resets. Pausing freezes movement,
-combat, maneuver timing and the countdown. The countdown, health and
-respawn rules remain provisional. Stage progression and the original
+The optional encounter models two health stocks and a 32-column meter
+that drains and refills one column every two ticks. The first depleted
+stock automatically restores play after a recovery interval; the final
+stock opens a provisional 1200-tick continue window. Press Start before
+expiry to rejoin for free. If all stations expire, the main menu returns
+and the encounter resets. Pausing freezes movement, combat, maneuver
+timing, meter animation and recovery. Enemy actions, damage, respawn
+positions, recovery delays and stock-marker artwork remain provisional.
+Stage progression and the original
 game-over interlude are not implemented.
 
 Optional `--audio SHA` follows `--enemy` (if used) and precedes PARENT.

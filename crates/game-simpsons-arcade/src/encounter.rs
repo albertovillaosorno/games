@@ -36,6 +36,7 @@ use super::{Facing, Maneuver, Point, Slot, StreetLayout};
 const ENEMY_HEALTH: u8 = 3;
 const PLAYER_STRIKE: u8 = 5;
 const ENEMY_STRIKE: u8 = 8;
+const ENEMY_DAMAGE: u8 = 3;
 const ENEMY_RECOVERY: u8 = 18;
 const STAGGER_TICKS: u8 = 12;
 
@@ -137,7 +138,7 @@ impl Enemy {
                         (22, 10),
                     )
             }) {
-                slot.damage();
+                slot.damage(ENEMY_DAMAGE);
             }
         }
         self.action = if next >= ENEMY_RECOVERY {
@@ -225,8 +226,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Action, CONTINUE_TICKS, Cabinet, Control, LayoutError, Participation,
-        Phase, Player,
+        Action, CONTINUE_TICKS, Cabinet, Control, LayoutError, PLAYER_HEALTH,
+        PLAYER_STOCKS, Participation, Phase, Player,
     };
 
     fn pulse(control: Control) -> [LogicalAction<Action>; 2] {
@@ -286,7 +287,10 @@ mod tests {
             cabinet.input_step(tick, &[]);
         }
         assert_eq!(cabinet.enemy(), defeated);
-        assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
+        assert_eq!(
+            cabinet.stations().first().map(|slot| slot.health),
+            Some(PLAYER_HEALTH)
+        );
     }
 
     #[test]
@@ -326,7 +330,10 @@ mod tests {
             cabinet.input_step(tick, &[]);
         }
         assert_eq!(cabinet.enemy().map(|enemy| enemy.health), Some(2));
-        assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
+        assert_eq!(
+            cabinet.stations().first().map(|slot| slot.health),
+            Some(PLAYER_HEALTH)
+        );
     }
 
     #[test]
@@ -362,9 +369,12 @@ mod tests {
         }
         assert_eq!(
             grounded.stations().first().map(|slot| slot.health),
-            Some(2)
+            Some(PLAYER_HEALTH.saturating_sub(ENEMY_DAMAGE))
         );
-        assert_eq!(jumping.stations().first().map(|slot| slot.health), Some(3));
+        assert_eq!(
+            jumping.stations().first().map(|slot| slot.health),
+            Some(PLAYER_HEALTH)
+        );
     }
 
     #[test]
@@ -374,7 +384,16 @@ mod tests {
         let Ok(mut cabinet) = result else {
             return;
         };
-        for tick in 3..100 {
+        for tick in 3..1600 {
+            if matches!(
+                cabinet
+                    .stations()
+                    .first()
+                    .map(|station| station.participation),
+                Some(Participation::Continuing { .. })
+            ) {
+                break;
+            }
             cabinet.input_step(tick, &[]);
         }
         let before = cabinet.stations();
@@ -409,9 +428,9 @@ mod tests {
 
     fn knocked_out() -> Result<Cabinet, LayoutError> {
         let mut cabinet = playing(Point { x: 128, y: 190 })?;
-        for tick in 3..100 {
+        for tick in 3..1600 {
             let [marge, ..] = cabinet.stations();
-            if marge.health == 0 {
+            if matches!(marge.participation, Participation::Continuing { .. }) {
                 break;
             }
             cabinet.input_step(tick, &[]);
@@ -452,7 +471,7 @@ mod tests {
             ),
             (
                 Participation::Playing,
-                3,
+                PLAYER_HEALTH,
                 Point { x: 110, y: 190 },
                 initial.attack_cues
             ),
@@ -483,7 +502,7 @@ mod tests {
         let [rejoined, ..] = cabinet.stations();
         assert_eq!(
             (rejoined.participation, rejoined.health),
-            (Participation::Playing, 3)
+            (Participation::Playing, PLAYER_HEALTH)
         );
     }
 
@@ -510,25 +529,26 @@ mod tests {
             },
             ..event
         });
-        cabinet.input_step(2, &[pulse(Control::Start), homer].concat());
-        for tick in 3..100 {
+        cabinet.input_step(2, &pulse(Control::Start));
+        for tick in 3..1600 {
             let [marge, ..] = cabinet.stations();
-            if marge.health == 0 {
+            if matches!(marge.participation, Participation::Continuing { .. }) {
                 break;
             }
             cabinet.input_step(tick, &[]);
         }
+        cabinet.input_step(99, &homer);
         let [knocked_out, before, ..] = cabinet.stations();
         assert_eq!(knocked_out.health, 0);
         assert_eq!(
             (before.participation, before.health),
-            (Participation::Playing, 3)
+            (Participation::Playing, PLAYER_HEALTH)
         );
         cabinet.input_step(100, &pulse(Control::Start));
         let [continued, after, ..] = cabinet.stations();
         assert_eq!(
             (continued.health, continued.participation),
-            (3, Participation::Playing)
+            (PLAYER_HEALTH, Participation::Playing)
         );
         assert_eq!(after, before);
     }
@@ -548,12 +568,10 @@ mod tests {
             player: Player::Marge,
         };
         cabinet.input_step(0, &[LogicalAction { action, down: true }]);
-        for tick in 1..100 {
-            if cabinet
-                .stations()
-                .first()
-                .is_some_and(|slot| slot.health == 0)
-            {
+        for tick in 1..1600 {
+            if cabinet.stations().first().is_some_and(|slot| {
+                matches!(slot.participation, Participation::Continuing { .. })
+            }) {
                 break;
             }
             cabinet.input_step(tick, &[]);
@@ -564,7 +582,7 @@ mod tests {
         cabinet.input_step(101, &[LogicalAction { action, down: false }]);
         cabinet.input_step(102, &pulse(Control::Start));
         let [continued, ..] = cabinet.stations();
-        assert_eq!(continued.health, 3);
+        assert_eq!(continued.health, PLAYER_HEALTH);
     }
 
     #[test]
@@ -585,7 +603,95 @@ mod tests {
         let [continued, ..] = cabinet.stations();
         assert_eq!(cabinet.phase(), Phase::Playing);
         assert_eq!(continued.participation, Participation::Playing);
-        assert_eq!(continued.health, 3);
+        assert_eq!(continued.health, PLAYER_HEALTH);
+    }
+
+    #[test]
+    fn meter_drains_at_observed_cadence_and_pause_freezes_it() {
+        let result = playing(Point { x: 128, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        for tick in 3..11 {
+            cabinet.input_step(tick, &[]);
+        }
+        let [damaged, ..] = cabinet.stations();
+        assert_eq!(damaged.health, PLAYER_HEALTH - ENEMY_DAMAGE);
+        assert_eq!(damaged.display_health, PLAYER_HEALTH);
+        cabinet.input_step(11, &[]);
+        let [first, ..] = cabinet.stations();
+        assert_eq!(first.display_health, PLAYER_HEALTH - 1);
+        cabinet.input_step(12, &[]);
+        assert_eq!(cabinet.stations().first(), Some(&first));
+        cabinet.input_step(13, &pulse(Control::Pause));
+        for tick in 14..100 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations().first(), Some(&first));
+        cabinet.input_step(100, &pulse(Control::Pause));
+        let [second, ..] = cabinet.stations();
+        assert_eq!(second.display_health, PLAYER_HEALTH - 2);
+    }
+
+    fn advance_until(
+        cabinet: &mut Cabinet,
+        predicate: impl Fn(crate::Station) -> bool,
+    ) -> crate::Station {
+        for tick in 0..1600 {
+            let [station, ..] = cabinet.stations();
+            if predicate(station) {
+                return station;
+            }
+            cabinet.input_step(tick, &[]);
+        }
+        let [station, ..] = cabinet.stations();
+        assert!(predicate(station));
+        station
+    }
+
+    #[test]
+    fn first_stock_refills_without_start_before_final_continue() {
+        let result = playing(Point { x: 128, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let empty = advance_until(&mut cabinet, |station| {
+            station.stocks == 1 && station.display_health == 0
+        });
+        assert_eq!(empty.health, 0);
+        assert!(!empty.can_fight());
+        assert!(matches!(
+            empty.participation,
+            Participation::Recovering { .. }
+        ));
+        cabinet.input_step(0, &pulse(Control::Start));
+        let [still_empty, ..] = cabinet.stations();
+        assert_eq!(still_empty.stocks, 1);
+        assert_eq!(still_empty.health, 0);
+        verify_refill_and_continue(&mut cabinet);
+    }
+
+    fn verify_refill_and_continue(cabinet: &mut Cabinet) {
+        let refill = advance_until(cabinet, |station| {
+            station.display_health == PLAYER_HEALTH.div_ceil(2)
+                && station.health == PLAYER_HEALTH
+        });
+        assert_eq!(refill.stocks, 1);
+        assert!(!refill.can_fight());
+        let recovered = advance_until(cabinet, crate::Station::can_fight);
+        assert_eq!(recovered.display_health, PLAYER_HEALTH);
+        assert_eq!(recovered.stocks, 1);
+        let final_empty = advance_until(cabinet, |station| {
+            matches!(station.participation, Participation::Continuing { .. })
+        });
+        assert_eq!(final_empty.stocks, 0);
+        assert_eq!(final_empty.display_health, 0);
+        cabinet.input_step(0, &pulse(Control::Start));
+        let [continued, ..] = cabinet.stations();
+        assert_eq!(continued.stocks, PLAYER_STOCKS);
+        assert_eq!(continued.display_health, PLAYER_HEALTH);
     }
 
     #[test]
@@ -607,6 +713,9 @@ mod tests {
         cabinet.input_step(1500, &pulse(Control::Pause));
         assert_eq!(cabinet.phase(), Phase::Playing);
         cabinet.input_step(1501, &pulse(Control::Start));
-        assert_eq!(cabinet.stations().first().map(|slot| slot.health), Some(3));
+        assert_eq!(
+            cabinet.stations().first().map(|slot| slot.health),
+            Some(PLAYER_HEALTH)
+        );
     }
 }

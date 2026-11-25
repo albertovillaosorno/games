@@ -1364,3 +1364,37 @@ and 60 combat submissions met the 16.667 ms host-work budget; mean
 submission work was 64.348 and 50.612 microseconds respectively, and
 whole-smoke peak RSS was 124,313,600 bytes. This establishes bounded
 native presentation, not exact original per-pixel shadow blending.
+
+Four isolated idle controls in the pinned original show two health
+stocks, with 32 visible columns of magenta and blue. Meter changes
+progress one column every two displayed frames. The first empty
+meter starts automatic refill after 147 to 159 frames, then reaches
+full health after another 62 frames. The second empty meter precedes
+the first visible continue text by 158 to 182 frames. No additional
+Start or credit input occurred in these observations.
+
+The prototype models the measured stock count and meter cadence,
+with representative 150-tick automatic recovery and 168-tick final
+knockout delays, plus a 64-tick refill. Logical health and visible
+columns are distinct; the independently authored encounter deals
+three logical columns per strike. A recovering station cannot attack,
+move or be targeted, and Start does not bypass its recovery. The
+second depletion opens the existing free continue window. The native
+preview renders a 32-column meter and two simple stock markers.
+Damage magnitudes, recovery animations, invulnerability, exact
+respawn coordinates and the original game-over interlude are not
+established by this checkpoint.
+
+Stock markers stay beside the meter inside the 28-row HUD, preserving
+the exact scrolled street readback. Native presentation reserves the
+additional eight stock-marker draws and verifies all four active HUDs
+with a live enemy, including simultaneous jumping. The native smoke
+also reads the empty first stock, half-refilled meter and free rejoin.
+The full 134-pose adaptive OpenGL smoke with encounter, shadow, world,
+touch and dummy-device audio passed on Linux x86-64 at 400x304.
+All 600 movement and 60 combat submissions met the 16.667 ms host
+work budget; mean submission work was 56.596 and 41.866 microseconds,
+respectively. Lifetime peak RSS was 146,202,624 bytes. Fresh workspace
+validation including native render and audio smoke passed in run
+1795623142669088726-3761889. These are synthetic host-work measurements,
+not original combat parity or physical input/audio validation.

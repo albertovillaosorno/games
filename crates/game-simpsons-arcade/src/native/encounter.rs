@@ -52,19 +52,27 @@ use super::{
     Art, Controls, Scene, dimension, failure, ground_position, live, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Enemy, EnemyAction, Facing,
-    GROUND_ATTACK_RECOVERY_TICKS, Maneuver, Participation, Phase, Player,
-    Point, Station, TICK_INTERVAL,
+    CONTINUE_TICKS, Cabinet, Control, Enemy, EnemyAction, Facing,
+    GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PLAYER_HEALTH, PLAYER_STOCKS,
+    Participation, Phase, Player, Point, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
 const MISSING: [u8; 4] = [128, 45, 53, 255];
+const PLAYER_FILLED: [u8; 4] = [255, 0, 255, 255];
+const PLAYER_MISSING: [u8; 4] = [33, 82, 189, 255];
+
+// One enemy and two enemy-meter draws, plus four station meters
+// and stock markers. Reserve the full active-player case.
+pub(super) const EXTRA_SPRITES: usize = 19;
 
 #[derive(Debug)]
 pub(super) struct CombatArt {
     approach: Art,
     filled: Art,
     missing: Art,
+    player_filled: Art,
+    player_missing: Art,
     strike: Art,
 }
 
@@ -90,7 +98,12 @@ impl CombatArt {
         draws: &mut Vec<SpriteDraw>,
         enemy: Enemy,
     ) -> Result<(), RenderError> {
-        self.health(draws, self.enemy_health_position(enemy)?, enemy.health)
+        Self::health(
+            draws,
+            self.enemy_health_position(enemy)?,
+            Meter::enemy(enemy.health),
+            [self.filled, self.missing],
+        )
     }
 
     fn enemy_health_position(
@@ -105,22 +118,22 @@ impl CombatArt {
     }
 
     fn health(
-        &self,
         draws: &mut Vec<SpriteDraw>,
         position: Point,
-        health: u8,
+        meter: Meter,
+        [filled, missing]: [Art; 2],
     ) -> Result<(), RenderError> {
         let rect = SpriteRect {
             height: dimension(3)?,
-            width: dimension(24)?,
+            width: dimension(u32::from(meter.columns))?,
             x: i32::from(position.x),
             y: i32::from(position.y),
         };
-        draws.push(self.missing.draw(rect, false));
-        if health > 0 {
-            draws.push(self.filled.draw(
+        draws.push(missing.draw(rect, false));
+        if meter.filled > 0 {
+            draws.push(filled.draw(
                 SpriteRect {
-                    width: dimension(u32::from(health).saturating_mul(8))?,
+                    width: dimension(u32::from(meter.filled))?,
                     ..rect
                 },
                 false,
@@ -141,9 +154,11 @@ impl CombatArt {
         }) {
             return Err(failure("unexpected enemy extent"));
         }
-        let layout = FrameLayout::new(dimension(2)?, dimension(1)?, size(8)?)?;
-        let atlas =
-            scene.load_atlas(layout, [FILLED, MISSING].as_flattened())?;
+        let layout = FrameLayout::new(dimension(4)?, dimension(1)?, size(16)?)?;
+        let atlas = scene.load_atlas(
+            layout,
+            [FILLED, MISSING, PLAYER_FILLED, PLAYER_MISSING].as_flattened(),
+        )?;
         let filled = Art {
             atlas,
             rect: SpriteRect {
@@ -157,10 +172,20 @@ impl CombatArt {
             rect: SpriteRect { x: 1, ..filled.rect },
             ..filled
         };
+        let player_filled = Art {
+            rect: SpriteRect { x: 2, ..filled.rect },
+            ..filled
+        };
+        let player_missing = Art {
+            rect: SpriteRect { x: 3, ..filled.rect },
+            ..filled
+        };
         Ok(Self {
             approach,
             filled,
             missing,
+            player_filled,
+            player_missing,
             strike,
         })
     }
@@ -171,14 +196,58 @@ impl CombatArt {
         x: i32,
         station: Station,
     ) -> Result<(), RenderError> {
-        self.health(
+        Self::health(
             draws,
             Point {
                 x: i16::try_from(x).map_err(failure)?,
                 y: 25,
             },
-            station.health,
-        )
+            Meter::player(station.display_health),
+            [self.player_filled, self.player_missing],
+        )?;
+        for stock in 0..PLAYER_STOCKS {
+            let marker = if stock < station.stocks {
+                self.player_filled
+            } else {
+                self.player_missing
+            };
+            draws.push(
+                marker.draw(
+                    SpriteRect {
+                        x: x.saturating_add(i32::from(PLAYER_HEALTH))
+                            .saturating_add(2)
+                            .saturating_add(i32::from(stock).saturating_mul(5)),
+                        y: 25,
+                        width: dimension(3)?,
+                        height: dimension(2)?,
+                    },
+                    false,
+                ),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Meter {
+    columns: u8,
+    filled: u8,
+}
+
+impl Meter {
+    const fn enemy(health: u8) -> Self {
+        Self {
+            columns: 24,
+            filled: health.saturating_mul(8),
+        }
+    }
+
+    const fn player(health: u8) -> Self {
+        Self {
+            columns: PLAYER_HEALTH,
+            filled: health,
+        }
     }
 }
 
@@ -247,6 +316,7 @@ pub(super) fn smoke(
     art: &mut Scene,
     touch_enabled: bool,
 ) -> Result<(), RenderError> {
+    smoke_four_player_encounter(scene, art)?;
     let mut simulation = live(true)?;
     let mut controls = Controls::new(touch_enabled)?;
     approach(&mut controls, &mut simulation)?;
@@ -261,6 +331,40 @@ pub(super) fn smoke(
     }
     smoke_counterstrike(scene, art, touch_enabled)?;
     smoke_expiry(scene, art, touch_enabled)
+}
+
+fn smoke_four_player_encounter(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+) -> Result<(), RenderError> {
+    let mut simulation = live(true)?;
+    let mut controls = Controls::new(false)?;
+    for control in [Control::Start, Control::Secondary] {
+        for player in Player::ALL {
+            let scancode = controls.key(player, control)?;
+            pulse(&mut controls, &mut simulation, scancode)?;
+        }
+        advance(&mut simulation, 1)?;
+        if !art.present(scene, simulation.state())? {
+            return Err(failure("four-player encounter was not submitted"));
+        }
+        verify_active_stations(scene, simulation.state())?;
+        verify_enemy_health(
+            art,
+            simulation.state(),
+            &scene.readback()?,
+            scene.layout().width().get(),
+        )?;
+    }
+    if simulation
+        .state()
+        .stations()
+        .iter()
+        .any(|station| !station.maneuver.airborne())
+    {
+        return Err(failure("simultaneous four-player jump failed"));
+    }
+    Ok(())
 }
 
 fn smoke_strikes(
@@ -382,13 +486,13 @@ fn smoke_counterstrike(
         let _drawn = art.present(scene, simulation.state())?;
         let pixels = scene.readback().map_err(failure)?;
         let [marge, ..] = simulation.state().stations();
-        verify_bar(
+        verify_station_health(
             &pixels,
-            Point { x: 28, y: 25 },
-            marge.health,
+            Player::Marge,
+            marge,
             scene.layout().width().get(),
         )?;
-        if marge.health == 2 {
+        if marge.display_health < PLAYER_HEALTH {
             return smoke_continue(scene, art, &mut controls, &mut simulation);
         }
         advance(&mut simulation, 1)?;
@@ -406,12 +510,14 @@ fn verify_enemy_health(
     let combat = art.combat.as_ref().ok_or(RenderError::InvalidSprite)?;
     let position = combat.enemy_health_position(enemy)?;
     if enemy.health == 0 {
-        let row = health_row(pixels, position, width)?;
+        let row = health_row(pixels, position, width, 24)?;
         if row.as_chunks::<4>().0.iter().all(|pixel| *pixel == MISSING) {
             return Err(failure("defeated enemy still has a health bar"));
         }
     } else {
-        verify_bar(pixels, position, enemy.health, width)?;
+        verify_bar(pixels, (position, width), Meter::enemy(enemy.health), [
+            FILLED, MISSING,
+        ])?;
     }
     Ok(())
 }
@@ -420,11 +526,12 @@ fn health_row(
     pixels: &[u8],
     point: Point,
     width: u32,
+    columns: u8,
 ) -> Result<&[u8], RenderError> {
     let horizontal = usize::try_from(point.x).map_err(failure)?;
     let vertical = usize::try_from(point.y).map_err(failure)?;
     let stride = usize::try_from(width).map_err(failure)?;
-    if horizontal.saturating_add(24) > stride {
+    if horizontal.saturating_add(usize::from(columns)) > stride {
         return Err(RenderError::InvalidDimensions);
     }
     let offset = vertical
@@ -432,22 +539,25 @@ fn health_row(
         .saturating_add(horizontal)
         .saturating_mul(4);
     pixels
-        .get(offset..offset.saturating_add(96))
+        .get(
+            offset
+                ..offset.saturating_add(usize::from(columns).saturating_mul(4)),
+        )
         .ok_or(RenderError::InvalidLength)
 }
 
 fn verify_bar(
     pixels: &[u8],
-    position: Point,
-    health: u8,
-    width: u32,
+    (position, width): (Point, u32),
+    meter: Meter,
+    [filled, missing]: [[u8; 4]; 2],
 ) -> Result<(), RenderError> {
-    let row = health_row(pixels, position, width)?;
+    let row = health_row(pixels, position, width, meter.columns)?;
     for (column, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
-        let expected = if column < usize::from(health).saturating_mul(8) {
-            FILLED
+        let expected = if column < usize::from(meter.filled) {
+            filled
         } else {
-            MISSING
+            missing
         };
         if *pixel != expected {
             return Err(failure("unexpected native health indicator pixels"));
@@ -462,22 +572,24 @@ fn smoke_continue(
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
+    smoke_stock(scene, art, simulation)?;
     wait_for_continue(simulation)?;
     let _drawn = art.present(scene, simulation.state())?;
     verify_prompt(scene)?;
     pulse(controls, simulation, Scancode::Return)?;
     advance(simulation, 1)?;
     let [continued, ..] = simulation.state().stations();
-    if continued.health != 3
+    if continued.health != PLAYER_HEALTH
+        || continued.stocks != PLAYER_STOCKS
         || continued.participation != Participation::Playing
     {
         return Err(failure("native free start did not continue player"));
     }
     let _continued_drawn = art.present(scene, simulation.state())?;
-    verify_bar(
+    verify_station_health(
         &scene.readback().map_err(failure)?,
-        Point { x: 28, y: 25 },
-        3,
+        Player::Marge,
+        continued,
         scene.layout().width().get(),
     )
 }
@@ -485,7 +597,7 @@ fn smoke_continue(
 fn verify_prompt(scene: &mut SceneSession<'_, '_>) -> Result<(), RenderError> {
     let pixels = scene.readback().map_err(failure)?;
     for point in [Point { x: 17, y: 3 }, Point { x: 9, y: 15 }] {
-        let row = health_row(&pixels, point, scene.layout().width().get())?;
+        let row = health_row(&pixels, point, scene.layout().width().get(), 1)?;
         if row.get(..4) != Some(&[248, 228, 168, 255]) {
             return Err(failure("missing native free rejoin prompt"));
         }
@@ -496,7 +608,7 @@ fn verify_prompt(scene: &mut SceneSession<'_, '_>) -> Result<(), RenderError> {
 fn wait_for_continue(
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    for _ in 0..100u8 {
+    for _ in 0..1600u16 {
         let [marge, ..] = simulation.state().stations();
         if matches!(marge.participation, Participation::Continuing { .. }) {
             return Ok(());
@@ -550,10 +662,11 @@ fn restart_after_expiry(
     }
     let _restarted = art.present(scene, simulation.state())?;
     let pixels = scene.readback().map_err(failure)?;
-    verify_bar(
+    let [restarted, ..] = simulation.state().stations();
+    verify_station_health(
         &pixels,
-        Point { x: 28, y: 25 },
-        3,
+        Player::Marge,
+        restarted,
         scene.layout().width().get(),
     )?;
     verify_enemy_health(
@@ -562,4 +675,101 @@ fn restart_after_expiry(
         &pixels,
         scene.layout().width().get(),
     )
+}
+
+pub(super) fn verify_active_stations(
+    scene: &mut SceneSession<'_, '_>,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    let pixels = scene.readback().map_err(failure)?;
+    let width = scene.layout().width().get();
+    for (player, station) in Player::ALL.into_iter().zip(cabinet.stations()) {
+        if station.participation != Participation::Playing {
+            return Err(failure("expected four active health meters"));
+        }
+        verify_station_health(&pixels, player, station, width)?;
+    }
+    Ok(())
+}
+
+fn verify_station_health(
+    pixels: &[u8],
+    player: Player,
+    station: Station,
+    width: u32,
+) -> Result<(), RenderError> {
+    let x = i16::try_from(
+        super::indicator(player)?
+            .x
+            .saturating_add(super::world::station_offset(width, player)?),
+    )
+    .map_err(failure)?;
+    verify_bar(
+        pixels,
+        (Point { x, y: 25 }, width),
+        Meter::player(station.display_health),
+        [PLAYER_FILLED, PLAYER_MISSING],
+    )?;
+    for stock in 0..PLAYER_STOCKS {
+        let point = Point {
+            x: x.saturating_add(34)
+                .saturating_add(i16::from(stock).saturating_mul(5)),
+            y: 25,
+        };
+        let row = health_row(pixels, point, width, 3)?;
+        let expected = if stock < station.stocks {
+            PLAYER_FILLED
+        } else {
+            PLAYER_MISSING
+        };
+        if !row
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == expected)
+        {
+            return Err(failure("unexpected native stock indicator pixels"));
+        }
+    }
+    Ok(())
+}
+
+fn smoke_stock(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let mut saw_zero = false;
+    for _ in 0..800u16 {
+        let [station, ..] = simulation.state().stations();
+        if station.stocks == 1
+            && station.health == 0
+            && station.display_health == 0
+            && !saw_zero
+        {
+            let _drawn = art.present(scene, simulation.state())?;
+            verify_station_health(
+                &scene.readback().map_err(failure)?,
+                Player::Marge,
+                station,
+                scene.layout().width().get(),
+            )?;
+            saw_zero = true;
+        }
+        if saw_zero
+            && station.stocks == 1
+            && station.health == PLAYER_HEALTH
+            && station.display_health == PLAYER_HEALTH.div_ceil(2)
+        {
+            let _drawn = art.present(scene, simulation.state())?;
+            return verify_station_health(
+                &scene.readback().map_err(failure)?,
+                Player::Marge,
+                station,
+                scene.layout().width().get(),
+            );
+        }
+        advance(simulation, 1)?;
+    }
+    Err(failure("native automatic stock refill was not observed"))
 }

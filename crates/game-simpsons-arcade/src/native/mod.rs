@@ -479,7 +479,7 @@ impl Scene {
                 .transpose()?,
             draws: Vec::with_capacity(
                 (if source.enemy.is_some() {
-                    28usize
+                    36usize
                 } else {
                     17usize
                 })
@@ -599,7 +599,10 @@ impl Scene {
             draw.destination.x = draw.destination.x.saturating_add(offset);
             self.draws.push(draw);
         }
-        if station.participation != Participation::Playing {
+        if !matches!(
+            station.participation,
+            Participation::Playing | Participation::Recovering { .. }
+        ) {
             return Ok(());
         }
         let actor = *self
@@ -614,7 +617,8 @@ impl Scene {
         if let Some(combat) = &self.combat {
             combat.station_health(&mut self.draws, icon.x, station)?;
         }
-        if station.health > 0 {
+        if station.participation == Participation::Playing && station.health > 0
+        {
             let position = view.project(station.position);
             if let Some(shadow) = &self.shadow
                 && shadow::visible(player, station.maneuver)
@@ -1361,6 +1365,9 @@ fn smoke(
             .map_err(|error| failure(format!("active readback: {error:?}")))?
     {
         return Err(failure("admitted players were not rendered"));
+    }
+    if art.combat.is_some() {
+        encounter::verify_active_stations(scene, simulation.state())?;
     }
     if touch_enabled {
         smoke_touch_movement(scene, &mut controls, &mut simulation)?;
@@ -2174,7 +2181,7 @@ fn scene_limits(
         0
     };
     let enemy_sprites: usize = if source.enemy.is_some() {
-        11
+        encounter::EXTRA_SPRITES
     } else {
         0
     };

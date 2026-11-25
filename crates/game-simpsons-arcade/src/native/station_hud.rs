@@ -84,7 +84,7 @@ impl StationHud {
                 };
                 base.saturating_add(usize::from(seconds.saturating_sub(1)))
             },
-            Participation::Playing => {
+            Participation::Playing | Participation::Recovering { .. } => {
                 let Some(base) = offline else {
                     return Ok(None);
                 };

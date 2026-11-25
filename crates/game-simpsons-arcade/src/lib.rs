@@ -65,7 +65,11 @@ pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
 
 /// Approximate twenty-second original continue opportunity in ticks.
 pub const CONTINUE_TICKS: u16 = 1200;
-const PLAYER_HEALTH: u8 = 3;
+const PLAYER_HEALTH: u8 = 32;
+const PLAYER_STOCKS: u8 = 2;
+const STOCK_REENTRY_TICKS: u16 = 150;
+const FINAL_KNOCKOUT_TICKS: u16 = 168;
+const REFILL_TICKS: u16 = 64;
 // Original ground-attack follow-up edges first take effect at offset 20.
 const GROUND_ATTACK_RECOVERY_TICKS: u8 = 20;
 
@@ -156,6 +160,11 @@ pub enum Participation {
     },
     /// Station is active in the street.
     Playing,
+    /// Waiting for the next stock or the final continue prompt.
+    Recovering {
+        /// Remaining delay after the meter reaches its target.
+        ticks_left: u16,
+    },
 }
 
 /// Integer world-space foot position in the first street prototype.
@@ -234,6 +243,8 @@ pub struct WalkMotion {
 pub struct Station {
     /// Cumulative attack cues at the observed provisional onset tick.
     pub attack_cues: u64,
+    /// Visible health columns, which animate toward logical health.
+    pub display_health: u8,
     /// Current sprite facing.
     pub facing: Facing,
     /// Experimental encounter health; zero means the station is knocked out.
@@ -244,6 +255,8 @@ pub struct Station {
     pub participation: Participation,
     /// Current foot position.
     pub position: Point,
+    /// Remaining health stocks, including the active stock.
+    pub stocks: u8,
     /// Walking phase and direction, absent outside admitted walking.
     pub walking: Option<WalkMotion>,
 }
@@ -305,6 +318,7 @@ struct Slot {
     action_recovery: Recovery,
     attack_quarters: i16,
     held: u8,
+    meter_wait: bool,
     spawn: Point,
     station: Station,
 }
@@ -340,6 +354,59 @@ impl Slot {
         }
     }
 
+    const fn advance_meter(&mut self) {
+        if self.station.display_health == self.station.health || self.meter_wait
+        {
+            self.meter_wait = false;
+        } else {
+            self.meter_wait = true;
+            self.station.display_health =
+                if self.station.display_health < self.station.health {
+                    self.station.display_health.saturating_add(1)
+                } else {
+                    self.station.display_health.saturating_sub(1)
+                };
+        }
+    }
+
+    const fn advance_participation(&mut self, camera: i16) {
+        self.advance_meter();
+        if let Participation::Recovering { ticks_left } =
+            self.station.participation
+        {
+            if self.station.health == 0 && self.station.display_health > 0 {
+                return;
+            }
+            self.station.participation = if ticks_left > 1 {
+                Participation::Recovering {
+                    ticks_left: ticks_left.saturating_sub(1),
+                }
+            } else if self.station.health > 0 {
+                Participation::Playing
+            } else if self.station.stocks > 0 {
+                self.restore_position(camera);
+                self.station.health = PLAYER_HEALTH;
+                Participation::Recovering { ticks_left: REFILL_TICKS }
+            } else {
+                Participation::Continuing {
+                    ticks_left: CONTINUE_TICKS,
+                }
+            };
+            return;
+        }
+        if let Participation::Continuing { ticks_left } =
+            self.station.participation
+        {
+            self.station.participation = if ticks_left <= 1 {
+                Participation::Absent
+            } else {
+                Participation::Continuing {
+                    ticks_left: ticks_left.saturating_sub(1),
+                }
+            };
+        }
+    }
+
     // Retain a quarter-pixel remainder and round the position downward.
     const fn attack_step(&mut self, horizontal: i16) -> i16 {
         let next = self.attack_quarters.saturating_add(horizontal.signum());
@@ -370,15 +437,20 @@ impl Slot {
         }
     }
 
-    const fn damage(&mut self) {
+    const fn damage(&mut self, amount: u8) {
         self.attack_quarters = 0;
         self.action_recovery = Recovery::Ready;
-        self.station.health = self.station.health.saturating_sub(1);
+        self.station.health = self.station.health.saturating_sub(amount);
         self.station.maneuver = Maneuver::Idle;
         self.station.walking = None;
         if self.station.health == 0 {
-            self.station.participation = Participation::Continuing {
-                ticks_left: CONTINUE_TICKS,
+            self.station.stocks = self.station.stocks.saturating_sub(1);
+            self.station.participation = Participation::Recovering {
+                ticks_left: if self.station.stocks > 0 {
+                    STOCK_REENTRY_TICKS
+                } else {
+                    FINAL_KNOCKOUT_TICKS
+                },
             };
         }
     }
@@ -410,20 +482,6 @@ impl Slot {
             self.held &= !mask;
         }
         down && !was_held
-    }
-
-    const fn expire_continue(&mut self) {
-        if let Participation::Continuing { ticks_left } =
-            self.station.participation
-        {
-            self.station.participation = if ticks_left <= 1 {
-                Participation::Absent
-            } else {
-                Participation::Continuing {
-                    ticks_left: ticks_left.saturating_sub(1),
-                }
-            };
-        }
     }
 
     const fn held(self, control: Control) -> bool {
@@ -509,17 +567,32 @@ impl Slot {
             action_recovery: Recovery::Ready,
             attack_quarters: 0,
             held: 0,
+            meter_wait: false,
             spawn: position,
             station: Station {
                 attack_cues: 0,
+                display_health: PLAYER_HEALTH,
                 facing: Facing::Right,
                 health: PLAYER_HEALTH,
                 maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
+                stocks: PLAYER_STOCKS,
                 walking: None,
             },
         }
+    }
+
+    const fn restore_position(&mut self, camera: i16) {
+        self.attack_quarters = 0;
+        self.action_recovery = Recovery::Ready;
+        self.station.position = Point {
+            x: self.spawn.x.saturating_add(camera),
+            ..self.spawn
+        };
+        self.station.facing = Facing::Right;
+        self.station.maneuver = Maneuver::Idle;
+        self.station.walking = None;
     }
 
     const fn start(&mut self, camera: i16) {
@@ -529,16 +602,11 @@ impl Slot {
         ) {
             return;
         }
-        self.attack_quarters = 0;
-        self.action_recovery = Recovery::Ready;
         self.station.health = PLAYER_HEALTH;
-        self.station.position = Point {
-            x: self.spawn.x.saturating_add(camera),
-            ..self.spawn
-        };
-        self.station.facing = Facing::Right;
-        self.station.maneuver = Maneuver::Idle;
-        self.station.walking = None;
+        self.station.display_health = PLAYER_HEALTH;
+        self.station.stocks = PLAYER_STOCKS;
+        self.meter_wait = false;
+        self.restore_position(camera);
         self.station.participation = Participation::Playing;
     }
 }
@@ -594,7 +662,7 @@ impl Cabinet {
             return;
         }
         for slot in &mut self.slots {
-            slot.expire_continue();
+            slot.advance_participation(self.camera);
         }
         if self
             .slots
@@ -1219,7 +1287,7 @@ mod tests {
         state.input_step(4, &pulse(Player::Marge, Control::Start));
         let [marge, ..] = state.stations();
         assert_eq!(marge.position.x, 114);
-        assert_eq!(marge.health, 3);
+        assert_eq!(marge.health, PLAYER_HEALTH);
     }
 
     #[test]
