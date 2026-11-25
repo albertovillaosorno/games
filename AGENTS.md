@@ -124,8 +124,8 @@
   owns pure format decoders (MAME, NEO and subsequent formats), never
   host access or title runtimes. The IR delegates; do not duplicate
   format conversion in tools, engine or titles. Keep import dependencies
-  out of runtime-only builds. Research diagnostics may inspect format
-  adapters directly; production conversion must use the import IR.
+  out of runtime-only builds. Research diagnostics consume the IR reference
+  interface. Only the import IR may depend directly on format decoders.
 - No reverse dependencies from shared crates to games, apps or tools.
   No title-to-title dependencies. Use a single Cargo workspace.
 - Runtime Rust lives under `crates/`, titles under `crates/games/<id>/`

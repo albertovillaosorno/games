@@ -31,6 +31,8 @@
 //! Shared asset import capability.
 
 mod import;
+/// Read-only format observations for reference research.
+pub mod reference;
 
 pub use games_assets::{AssetManifest, ContentHash, ManifestLimits};
 pub use games_importer::{ImportError, SourceSnapshot};

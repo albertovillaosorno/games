@@ -39,8 +39,7 @@ use std::path::PathBuf;
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
-use games_importer::mame::Machine;
-use games_importer::mame::background::Pixel;
+use games_platform::ir::importer::reference::{Machine, Pixel};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::staging::CanonicalStaging;
 

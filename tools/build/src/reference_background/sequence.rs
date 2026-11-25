@@ -34,10 +34,9 @@
 use std::ffi::OsString;
 use std::num::NonZeroU32;
 
-use games_importer::mame::Machine;
-use games_importer::mame::background::Pixel;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::{FrameSession, NativeWindow};
+use games_platform::ir::importer::reference::{Machine, Pixel};
 use games_platform::ir::measurement::now;
 use games_platform::ir::storage::bundle::CanonicalBundle;
 

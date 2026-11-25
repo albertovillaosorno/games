@@ -232,7 +232,8 @@ fn import_boundary(path: &str, source: &str) -> Result<(), String> {
     for token in tokens(source) {
         if matches!(
             token.text.as_str(),
-            "AssetSelection"
+            "games_importer"
+                | "AssetSelection"
                 | "ConversionLimits"
                 | "CartridgeGraphics"
                 | "convert_audio"
@@ -310,6 +311,7 @@ mod tests {
     fn production_conversion_requires_import_ir() {
         for source in [
             "use games_importer::conversion::ConversionLimits as Limits;",
+            "use games_importer::mame::Machine;",
             "let result = machine.convert_graphics(source, limits, stage);",
             "use games_importer::{neo::CartridgeGraphics as Profile};",
         ] {
@@ -334,7 +336,7 @@ mod tests {
         assert!(
             import_boundary(
                 "tools/build/src/reference_audio.rs",
-                "use games_importer::mame::samples::compare_observations;",
+                "use games_platform::ir::importer::reference::Machine;",
             )
             .is_ok()
         );

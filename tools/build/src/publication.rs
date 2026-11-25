@@ -37,7 +37,7 @@ use games_assets::archive::ArchiveBudget;
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
-use games_importer::wave::{WAVE_HEADER_BYTES, WavePcm};
+use games_platform::ir::importer::reference::{WAVE_HEADER_BYTES, WavePcm};
 use games_platform::ir::importer::{
     ImportError, ImportProfile, SourceSnapshot, import,
 };

@@ -46,17 +46,15 @@ use std::path::{Path, PathBuf};
 
 use games_assets::ContentHash;
 use games_assets::indexed::IndexedTiles;
-use games_importer::mame::Machine;
-#[cfg(feature = "native-preview")]
-use games_importer::mame::background::Raster;
-use games_importer::mame::background::{Background, Pixel};
-use games_importer::mame::objects::RAM_BYTES;
-use games_importer::mame::priority::VideoPriority;
-use games_importer::mame::tilemap::TilemapSnapshot;
 #[cfg(feature = "native-preview")]
 use games_platform::ir::frame::{FrameLayout, RenderError};
 #[cfg(feature = "native-preview")]
 use games_platform::ir::graphics::NativeWindow;
+#[cfg(feature = "native-preview")]
+use games_platform::ir::importer::reference::Raster;
+use games_platform::ir::importer::reference::{
+    Background, Machine, Pixel, RAM_BYTES, TilemapSnapshot, VideoPriority,
+};
 #[cfg(feature = "native-preview")]
 use games_platform::ir::scene::{SceneLimits, SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;

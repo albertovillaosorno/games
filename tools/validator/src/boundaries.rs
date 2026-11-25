@@ -115,7 +115,7 @@ const fn dependency_allowed(owner: Role, target: Role) -> bool {
                 Role::Shared,
                 Role::Runtime | Role::Importer | Role::Platform
             )
-            | (Role::Runtime | Role::Title, Role::Importer)
+            | (Role::Runtime | Role::Title | Role::Tool, Role::Importer)
             | (Role::Importer, Role::Runtime | Role::Platform)
     )
 }
@@ -758,6 +758,7 @@ serde_json = "1""#;
             (Role::Importer, Role::Platform),
             (Role::Importer, Role::Runtime),
             (Role::Title, Role::Importer),
+            (Role::Tool, Role::Importer),
             (Role::Title, Role::Title),
         ] {
             assert!(!dependency_allowed(owner, target));
@@ -862,10 +863,11 @@ serde_json = "1""#;
             "tools can use shared crates",
         )?;
         require(
-            dependency(Role::Tool, "importer", &inherited, &workspace).is_ok()
+            dependency(Role::Platform, "importer", &inherited, &workspace)
+                .is_ok()
                 && dependency(Role::Tool, "platform", &inherited, &workspace)
                     .is_ok(),
-            "host tools may compose conversion and platform services",
+            "platform owns decoder composition; tools consume platform",
         )?;
         for (owner, target) in [
             (Role::Shared, "title"),
@@ -873,6 +875,7 @@ serde_json = "1""#;
             (Role::Runtime, "build"),
             (Role::Importer, "platform"),
             (Role::Runtime, "importer"),
+            (Role::Tool, "importer"),
             (Role::Title, "title"),
         ] {
             require(

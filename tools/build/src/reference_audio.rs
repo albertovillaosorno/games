@@ -36,7 +36,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 
 use games_assets::AssetFormat;
-use games_importer::wave::WavePcm;
+use games_platform::ir::importer::reference::WavePcm;
 use games_platform::ir::storage::snapshot;
 
 /// Compare two bounded complete PCM16 reference recordings.

@@ -73,8 +73,7 @@ use games_assets::archive::ArchiveBudget;
 use games_assets::{
     AssetManifest, ContentHash, ManifestLimits, SourceIdentity,
 };
-use games_importer::mame::Machine;
-use games_importer::mame::samples::compare_observations;
+use games_platform::ir::importer::reference::{Machine, compare_observations};
 use games_platform::ir::importer::{
     AssetFamily, ImportProfile, SourceFormat, SourceSnapshot, Verification,
     import, verify,

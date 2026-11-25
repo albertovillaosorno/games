@@ -35,7 +35,7 @@ use std::io::{Write as _, stdout};
 use std::num::NonZeroU64;
 use std::path::Path;
 
-use games_importer::mame::Machine;
+use games_platform::ir::importer::reference::Machine;
 use games_platform::ir::storage::snapshot;
 
 pub(super) type Colors = Vec<[u8; 4]>;
