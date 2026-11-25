@@ -31,6 +31,8 @@
 
 use std::io::ErrorKind;
 use std::path::Path;
+use std::time::Duration;
+use std::{mem, thread};
 
 use games_platform_graphics::linux::input::{HostEvent, InputStartup};
 use games_platform_graphics::linux::sprites::{
@@ -75,13 +77,8 @@ fn connection_failure(kind: ErrorKind) -> RenderError {
 fn enqueue(
     controller: &mut ClientLan,
     actions: LocalActions,
-) -> Result<(), RenderError> {
-    for value in remote_controls(actions) {
-        controller
-            .enqueue(value)
-            .map_err(|error| connection_failure(error.kind()))?;
-    }
-    Ok(())
+) -> Result<(), Vec<RemoteControl>> {
+    controller.enqueue_batch(remote_controls(actions).collect())
 }
 
 fn remote_controls(
@@ -157,34 +154,47 @@ fn interactive(
     let mut controls =
         Controls::with_reserved(false, profiles, [false, true, true, true])?;
     for event in startup.attached {
-        enqueue(&mut controller, controls.actions(event)?)?;
+        enqueue(&mut controller, controls.actions(event)?)
+            .map_err(|_rejected| connection_failure(ErrorKind::WouldBlock))?;
     }
     let sprite = panel(scene, profiles)?;
     let _initial = scene.present([24, 22, 30], &[sprite])?;
+    let mut deferred = Vec::new();
     loop {
         controller
             .poll()
             .map_err(|error| connection_failure(error.kind()))?;
+        if let Err(rejected) =
+            controller.enqueue_batch(mem::take(&mut deferred))
+        {
+            deferred = rejected;
+            // Transport must progress before consuming more native input.
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        }
         let batch = scene.dispatch_events(
             size(EVENT_BUDGET)?,
             8,
             |_scene, native| {
-                match input.translate(native)? {
+                let change = match input.translate(native)? {
                     Some(HostEvent::Quit) => return Ok(false),
-                    Some(HostEvent::Input(change)) => {
-                        enqueue(&mut controller, controls.actions(change)?)?;
-                    },
-                    None => {},
-                }
-                Ok(true)
+                    Some(HostEvent::Input(change)) => change,
+                    None => return Ok(true),
+                };
+                deferred = enqueue(&mut controller, controls.actions(change)?)
+                    .err()
+                    .unwrap_or_default();
+                Ok(deferred.is_empty())
             },
         )?;
-        if batch == EventBatch::Stopped {
+        if batch == EventBatch::Stopped && deferred.is_empty() {
             return Ok(());
         }
         if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
             for attached in input.discover_after_drain()? {
-                enqueue(&mut controller, controls.actions(attached)?)?;
+                enqueue(&mut controller, controls.actions(attached)?).map_err(
+                    |_rejected| connection_failure(ErrorKind::WouldBlock),
+                )?;
             }
         }
         if batch != EventBatch::Empty {

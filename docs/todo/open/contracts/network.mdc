@@ -449,3 +449,11 @@ baseline executable (96c56f2) to exit with a future-input error.
 The revised release executable survived, changed 23,400 host pixels
 during movement, and produced identical captures after release.
 This is a process-stall observation, not a hard input-latency bound.
+
+The native controller atomically admits the digital edges from each
+translated event. It retains one complete rejected batch while transport
+polling drains the 128-edge queue, without consuming later native events.
+A real-TLS regression fills 127 slots, rejects a two-edge release and
+opposite press without partial admission, retries after drain, and
+observes the assigned actor stop and reverse in order. Physical network
+congestion remains unverified.

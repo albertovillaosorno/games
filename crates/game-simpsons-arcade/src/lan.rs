@@ -69,11 +69,15 @@ pub(crate) struct ClientLan {
 }
 
 impl ClientLan {
-    pub(crate) fn enqueue(&mut self, value: RemoteControl) -> io::Result<()> {
-        if self.pending.len() >= CLIENT_QUEUE {
-            return Err(ErrorKind::WouldBlock.into());
+    // Admit the complete native transition batch or return it unchanged.
+    pub(crate) fn enqueue_batch(
+        &mut self,
+        values: Vec<RemoteControl>,
+    ) -> Result<(), Vec<RemoteControl>> {
+        if values.len() > CLIENT_QUEUE.saturating_sub(self.pending.len()) {
+            return Err(values);
         }
-        self.pending.push_back(value);
+        self.pending.extend(values);
         Ok(())
     }
 
@@ -599,9 +603,9 @@ mod tests {
             .ok_or(ErrorKind::InvalidInput)?;
         let release = RemoteControl::new(Control::Right, false)
             .ok_or(ErrorKind::InvalidInput)?;
-        for edge in [start, right, release] {
-            client.enqueue(edge)?;
-        }
+        client
+            .enqueue_batch(vec![start, right, release])
+            .map_err(|_rejected| ErrorKind::WouldBlock)?;
         await_client(&mut host, &mut live, &mut client)?;
         let [_, joined, ..] = live.state().state().stations();
         await_client(&mut host, &mut live, &mut client)?;
@@ -614,14 +618,49 @@ mod tests {
                 && stopped.position == moved.position,
             "controller edge ordering",
         )?;
-        for _edge in 0..CLIENT_QUEUE {
-            client.enqueue(right)?;
-        }
+        saturation_and_retry(&mut host, &mut live, &mut client)
+    }
+
+    fn saturation_and_retry(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        client: &mut ClientLan,
+    ) -> io::Result<()> {
+        let right = RemoteControl::new(Control::Right, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        let release = RemoteControl::new(Control::Right, false)
+            .ok_or(ErrorKind::InvalidInput)?;
+        let left = RemoteControl::new(Control::Left, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        client
+            .enqueue_batch(vec![right; CLIENT_QUEUE.saturating_sub(1)])
+            .map_err(|_rejected| ErrorKind::WouldBlock)?;
+        let rejected = client
+            .enqueue_batch(vec![release, left])
+            .err()
+            .ok_or_else(|| io::Error::other("partial batch admitted"))?;
         require(
-            client.enqueue(release).err().map(|error| error.kind())
-                == Some(ErrorKind::WouldBlock)
-                && client.pending.len() == CLIENT_QUEUE,
-            "bounded outgoing queue",
+            rejected == [release, left]
+                && client.pending.len() == CLIENT_QUEUE.saturating_sub(1)
+                && client.pending.back() == Some(&right),
+            "outgoing queue rejects the complete batch without mutation",
+        )?;
+        await_client(host, live, client)?;
+        client
+            .enqueue_batch(rejected)
+            .map_err(|_rejected| ErrorKind::WouldBlock)?;
+        for _edge in 1..CLIENT_QUEUE.saturating_sub(1) {
+            await_client(host, live, client)?;
+        }
+        let [_, moving, ..] = live.state().state().stations();
+        await_client(host, live, client)?;
+        let [_, stopped, ..] = live.state().state().stations();
+        await_client(host, live, client)?;
+        let [_, reversed, ..] = live.state().state().stations();
+        require(
+            moving.position == stopped.position
+                && reversed.position.x < stopped.position.x,
+            "rejected release and subsequent opposite edge arrive in order",
         )
     }
 
