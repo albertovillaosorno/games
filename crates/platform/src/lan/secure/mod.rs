@@ -31,6 +31,8 @@
 
 /// Host-side enrolment and session admission.
 pub mod host;
+/// Local credential import and explicit public trust exchange.
+pub mod identity;
 
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::SocketAddr;
@@ -45,6 +47,7 @@ use rustls::client::{Resumption, WebPkiServerVerifier};
 use rustls::crypto::ring::default_provider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::{NoServerSessionStorage, WebPkiClientVerifier};
+use rustls::sign::{CertifiedKey, SingleCertAndKey};
 use rustls::version::TLS13;
 use rustls::{
     CertificateError, ClientConfig, ClientConnection, Connection,
@@ -92,18 +95,9 @@ impl PeerFingerprint {
 pub struct ClientTls(Arc<ClientConfig>);
 
 impl ClientTls {
-    /// Configure mutual TLS with local roots and an approved host fingerprint.
-    ///
-    /// Obtain the fingerprint through a trusted local enrolment process.
-    /// Changing the host leaf certificate requires explicit re-enrolment.
-    ///
-    /// # Errors
-    ///
-    /// Rejects empty trust roots, invalid keys and certificate chains.
-    pub fn new(
+    fn from_identity(
         roots: RootCertStore,
-        chain: Vec<CertificateDer<'static>>,
-        key: PrivateKeyDer<'static>,
+        certified: Arc<CertifiedKey>,
         expected_host: PeerFingerprint,
     ) -> io::Result<Self> {
         if roots.is_empty() {
@@ -124,11 +118,31 @@ impl ClientTls {
                 expected_host,
                 verifier,
             }))
-            .with_client_auth_cert(chain, key)
-            .map_err(io::Error::other)?;
+            .with_client_cert_resolver(Arc::new(SingleCertAndKey::from(
+                certified,
+            )));
         config.alpn_protocols = vec![PROTOCOL.to_vec()];
         config.resumption = Resumption::disabled();
         Ok(Self(Arc::new(config)))
+    }
+
+    /// Configure mutual TLS with local roots and an approved host fingerprint.
+    ///
+    /// Obtain the fingerprint through a trusted local enrolment process.
+    /// Changing the host leaf certificate requires explicit re-enrolment.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty trust roots, invalid keys and certificate chains.
+    pub fn new(
+        roots: RootCertStore,
+        chain: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+        expected_host: PeerFingerprint,
+    ) -> io::Result<Self> {
+        let certified = CertifiedKey::from_der(chain, key, &default_provider())
+            .map_err(io::Error::other)?;
+        Self::from_identity(roots, Arc::new(certified), expected_host)
     }
 }
 
@@ -199,15 +213,9 @@ impl ServerCertVerifier for PinnedHost {
 pub struct ServerTls(Arc<ServerConfig>);
 
 impl ServerTls {
-    /// Configure mandatory client verification with local trust roots.
-    ///
-    /// # Errors
-    ///
-    /// Rejects empty trust roots, invalid keys and certificate chains.
-    pub fn new(
+    fn from_identity(
         roots: RootCertStore,
-        chain: Vec<CertificateDer<'static>>,
-        key: PrivateKeyDer<'static>,
+        certified: Arc<CertifiedKey>,
     ) -> io::Result<Self> {
         let provider = Arc::new(default_provider());
         let verifier = WebPkiClientVerifier::builder_with_provider(
@@ -220,12 +228,26 @@ impl ServerTls {
             .with_protocol_versions(&[&TLS13])
             .map_err(io::Error::other)?
             .with_client_cert_verifier(verifier)
-            .with_single_cert(chain, key)
-            .map_err(io::Error::other)?;
+            .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified)));
         config.alpn_protocols = vec![PROTOCOL.to_vec()];
         config.send_tls13_tickets = 0;
         config.session_storage = Arc::new(NoServerSessionStorage {});
         Ok(Self(Arc::new(config)))
+    }
+
+    /// Configure mandatory client verification with local trust roots.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty trust roots, invalid keys and certificate chains.
+    pub fn new(
+        roots: RootCertStore,
+        chain: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> io::Result<Self> {
+        let certified = CertifiedKey::from_der(chain, key, &default_provider())
+            .map_err(io::Error::other)?;
+        Self::from_identity(roots, Arc::new(certified))
     }
 }
 

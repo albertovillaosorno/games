@@ -106,3 +106,17 @@ An explicitly enabled native smoke in run
 queued SDL key through its real event pump; unknown controller events
 were ignored. Physical controller hot-plug, analogue axes, remapping and
 touch-device integration remain unverified.
+
+The local credential importer now accepts one bounded root and directly
+signed leaf, consumes a bounded private key through Rustls, and checks
+key consistency, certificate validity, trust, role and host name before
+admission. Public identity exchange exposes only the root DER and leaf
+fingerprint. TLS configurations reuse the certified signing key, while
+the host roster independently enforces approved fingerprints and slots.
+Loopback tests cover independently issued identities, local players,
+approved remote actions, unapproved roots, malformed or mismatched
+credentials, expired leaves, duplicate approvals and disabled LAN.
+Credential generation and storage remain external; promoting the test
+certificate generator to production would introduce incompatible
+transitive dependency versions under the workspace's existing lint policy.
+An integrated provisioning UI and physical-device LAN remain unverified.
