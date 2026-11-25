@@ -245,3 +245,14 @@ share the same field checks, and legacy canonical byte verification is
 retained. A synthetic document with an invalid title and a malformed
 record confirms early identity rejection in both versions. The initial
 syntax scan remains bounded by the input manifest length.
+
+Native save publication now builds only the fixed integrity header and
+writes it followed by the borrowed payload to the private pending file.
+The in-memory encoder uses the same header construction. Size rejection
+still precedes temporary file creation; the complete envelope is synced
+before publication. The portable byte format is unchanged, and native
+regressions compare published nonempty and empty saves against the
+canonical in-memory encoder while retaining corruption, oversize and
+concurrent publication coverage. This removes the extra payload-sized
+allocation during native save publication, not the allocation required
+by the caller to produce its payload.

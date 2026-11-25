@@ -35,7 +35,7 @@ use std::num::NonZeroU64;
 
 use sha2::{Digest as _, Sha256};
 
-const SAVE_HEADER: u8 = 40;
+const SAVE_HEADER: usize = 40;
 const SAVE_MAGIC: &[u8] = b"GMS1";
 
 /// Rejections before save decoding or allocation.
@@ -63,7 +63,7 @@ pub fn save_envelope_limit(max_size: NonZeroU64) -> u64 {
     max_size
         .get()
         .min(u64::from(u32::MAX))
-        .saturating_add(u64::from(SAVE_HEADER))
+        .saturating_add(u64::try_from(SAVE_HEADER).unwrap_or(u64::MAX))
 }
 
 /// Encode a portable, integrity-checked save envelope with a size budget.
@@ -75,19 +75,38 @@ pub fn encode_save(
     payload: &[u8],
     max_size: NonZeroU64,
 ) -> Result<Vec<u8>, SafetyError> {
-    let length = checked_save(payload, max_size)?;
+    let header = encode_save_header(payload, max_size)?;
     let capacity = payload
         .len()
-        .checked_add(usize::from(SAVE_HEADER))
+        .checked_add(SAVE_HEADER)
         .ok_or(SafetyError::TooLarge)?;
     let mut data = Vec::new();
     data.try_reserve_exact(capacity)
         .map_err(|_error| SafetyError::TooLarge)?;
-    data.extend_from_slice(SAVE_MAGIC);
-    data.extend_from_slice(&length.to_le_bytes());
-    data.extend_from_slice(&Sha256::digest(payload));
+    data.extend_from_slice(&header);
     data.extend_from_slice(payload);
     Ok(data)
+}
+
+/// Encode only the fixed header of a portable save envelope.
+///
+/// Follow these bytes with the exact borrowed payload to produce the same
+/// envelope as [`encode_save`], without allocating a second payload buffer.
+///
+/// # Errors
+/// Rejects payloads exceeding the configured maximum or format capacity.
+pub fn encode_save_header(
+    payload: &[u8],
+    max_size: NonZeroU64,
+) -> Result<[u8; SAVE_HEADER], SafetyError> {
+    let length = checked_save(payload, max_size)?;
+    let mut header = [0u8; SAVE_HEADER];
+    let (magic, remainder) = header.split_at_mut(4);
+    let (declared, checksum) = remainder.split_at_mut(4);
+    magic.copy_from_slice(SAVE_MAGIC);
+    declared.copy_from_slice(&length.to_le_bytes());
+    checksum.copy_from_slice(&Sha256::digest(payload));
+    Ok(header)
 }
 
 /// Validate and decode a portable save without trusting its declared size.
@@ -107,12 +126,8 @@ pub fn decode_save(
     let length: [u8; 4] = declared
         .try_into()
         .map_err(|_error| SafetyError::InvalidSave)?;
-    let checksum = data
-        .get(8..usize::from(SAVE_HEADER))
-        .ok_or(SafetyError::InvalidSave)?;
-    let payload = data
-        .get(usize::from(SAVE_HEADER)..)
-        .ok_or(SafetyError::InvalidSave)?;
+    let checksum = data.get(8..SAVE_HEADER).ok_or(SafetyError::InvalidSave)?;
+    let payload = data.get(SAVE_HEADER..).ok_or(SafetyError::InvalidSave)?;
     let actual = checked_save(payload, max_size)?;
     if u32::from_le_bytes(length) != actual
         || checksum != Sha256::digest(payload).as_slice()

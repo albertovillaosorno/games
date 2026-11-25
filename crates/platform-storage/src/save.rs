@@ -37,7 +37,7 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use games::safety::{
-    SafetyError, decode_save, encode_save, save_envelope_limit,
+    SafetyError, decode_save, encode_save_header, save_envelope_limit,
 };
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat, renameat};
@@ -169,9 +169,10 @@ impl SaveStore {
             Err(Errno::ENOENT) => {},
             Err(error) => return Err(error.into()),
         }
-        let bytes = encode_save(payload, self.maximum)?;
+        let header = encode_save_header(payload, self.maximum)?;
         let mut pending = PendingSave::create(directory)?;
-        pending.file.write_all(&bytes)?;
+        pending.file.write_all(&header)?;
+        pending.file.write_all(payload)?;
         pending.file.sync_all()?;
         renameat(directory, pending.name.as_str(), directory, name.as_str())?;
         pending.published = true;
@@ -242,6 +243,7 @@ mod tests {
     use std::sync::Barrier;
     use std::{fs, thread};
 
+    use games::safety::encode_save;
     use nix::unistd::mkfifo;
 
     use super::*;
@@ -331,6 +333,7 @@ mod tests {
         let slot = root.path.join(slot_name(0));
         let original = fs::read(&slot)?;
         require(decode_save(&original, maximum)? == b"four")?;
+        require(original == encode_save(b"four", maximum)?)?;
         require(fs::metadata(&slot)?.permissions().mode() & 0o777 == 0o600)?;
         require(store.load(0)? == b"four")?;
         require(
@@ -340,6 +343,7 @@ mod tests {
         require(fs::read(&slot)? == original)?;
         require(store.store(0, b"")?.durability.is_ok())?;
         require(store.load(0)?.is_empty())?;
+        require(fs::read(&slot)? == encode_save(b"", maximum)?)?;
         require(store.store(u32::MAX, b"next")?.durability.is_ok())?;
         require(store.load(u32::MAX)? == b"next")?;
         require(fs::read_dir(&root.path)?.count() == 2)
