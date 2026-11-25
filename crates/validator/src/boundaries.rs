@@ -231,7 +231,9 @@ fn direct_groups(value: &Value) -> Result<Vec<&toml::Table>, String> {
     Ok(groups)
 }
 
-fn dependency_tables(value: &Value) -> Result<Vec<&toml::Table>, String> {
+pub(crate) fn dependency_tables(
+    value: &Value,
+) -> Result<Vec<&toml::Table>, String> {
     let mut groups = direct_groups(value)?;
     if let Some(targets) = value.get("target") {
         let entries =
@@ -518,7 +520,7 @@ fn manifests(
     root: &Path,
     members: &BTreeSet<PathBuf>,
     authored: &[PathBuf],
-) -> Result<(), String> {
+) -> Result<toml::Table, String> {
     let root_manifest = Value::Table(
         fs::read_to_string(root.join("Cargo.toml"))
             .map_err(|error| error.to_string())?
@@ -576,7 +578,7 @@ fn manifests(
         member(member_role, &value, dependencies)
             .map_err(|error| format!("{name}: {error}"))?;
     }
-    Ok(())
+    Ok(dependencies.clone())
 }
 
 /// Check source ownership and dependency boundary contracts.
@@ -589,8 +591,8 @@ pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
     let authored = files::authored(root)?;
     let members = metadata_members(&canonical, metadata, &authored)?;
     sources(root, &members, &authored)?;
-    manifests(root, &members, &authored)?;
-    portability::validate(root, &authored)
+    let dependencies = manifests(root, &members, &authored)?;
+    portability::validate(root, &authored, &dependencies)
 }
 
 #[cfg(test)]

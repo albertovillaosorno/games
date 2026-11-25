@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::boundaries::dependency_tables;
 use crate::clones::tokens;
 
 const LEGACY: &str = include_str!("portability-baseline.json");
@@ -140,10 +141,34 @@ fn rust(source: &str) -> Counts {
     result
 }
 
-fn manifest(source: &str) -> Result<Counts, String> {
-    let document = source
-        .parse::<toml::Table>()
-        .map_err(|error| error.to_string())?;
+fn sdk_dependency(
+    name: &str,
+    entry: &toml::Value,
+    workspace: &toml::Table,
+) -> Result<Option<String>, String> {
+    let specification = if entry.get("workspace").and_then(toml::Value::as_bool)
+        == Some(true)
+    {
+        workspace
+            .get(name)
+            .ok_or_else(|| format!("dependency not in workspace: {name}"))?
+    } else {
+        entry
+    };
+    let package = specification
+        .get("package")
+        .and_then(toml::Value::as_str)
+        .unwrap_or(name)
+        .replace('-', "_");
+    Ok(sdk(&package).then_some(package))
+}
+
+fn manifest(source: &str, workspace: &toml::Table) -> Result<Counts, String> {
+    let document = toml::Value::Table(
+        source
+            .parse::<toml::Table>()
+            .map_err(|error| error.to_string())?,
+    );
     let mut result = Counts::new();
     if let Some(targets) =
         document.get("target").and_then(toml::Value::as_table)
@@ -152,19 +177,21 @@ fn manifest(source: &str) -> Result<Counts, String> {
             record(&mut result, &format!("target-table:{name}"));
         }
     }
-    for group in ["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(entries) =
-            document.get(group).and_then(toml::Value::as_table)
-        {
-            for name in entries.keys().filter(|name| sdk(name)) {
-                record(&mut result, &format!("sdk:{name}"));
+    for entries in dependency_tables(&document)? {
+        for (name, entry) in entries {
+            if let Some(package) = sdk_dependency(name, entry, workspace)? {
+                record(&mut result, &format!("sdk:{package}"));
             }
         }
     }
     Ok(result)
 }
 
-fn inventory(root: &Path, authored: &[PathBuf]) -> Result<Inventory, String> {
+fn inventory(
+    root: &Path,
+    authored: &[PathBuf],
+    workspace: &toml::Table,
+) -> Result<Inventory, String> {
     let mut found = Inventory::new();
     for path in authored {
         let name = path.to_string_lossy().replace('\\', "/");
@@ -185,7 +212,7 @@ fn inventory(root: &Path, authored: &[PathBuf]) -> Result<Inventory, String> {
         let counts = if is_rust {
             rust(&text)
         } else {
-            manifest(&text)?
+            manifest(&text, workspace)?
         };
         if !counts.is_empty() {
             let _previous = found.insert(name, counts);
@@ -218,10 +245,14 @@ fn excess(found: &Inventory, legacy: &Inventory) -> Inventory {
 ///
 /// # Errors
 /// Reports unreadable sources, invalid baseline or additional coupling.
-pub fn validate(root: &Path, authored: &[PathBuf]) -> Result<(), String> {
+pub fn validate(
+    root: &Path,
+    authored: &[PathBuf],
+    workspace: &toml::Table,
+) -> Result<(), String> {
     let legacy: Inventory =
         serde_json::from_str(LEGACY).map_err(|error| error.to_string())?;
-    let found = inventory(root, authored)?;
+    let found = inventory(root, authored, workspace)?;
     let violations = excess(&found, &legacy);
     if violations.is_empty() {
         return Ok(());
@@ -236,6 +267,7 @@ pub fn validate(root: &Path, authored: &[PathBuf]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{Counts, Inventory, adapter, excess, manifest, rust};
+    use crate::fixtures::require;
 
     #[test]
     fn neutral_code_and_comments_are_admitted() {
@@ -262,9 +294,51 @@ mod tests {
             assert!(actual.contains_key(rule), "{rule}");
         }
         assert!(
-            manifest("[target.'cfg(unix)'.dependencies]\nsdl2 = \"1\"")
-                .is_ok_and(|cargo| !cargo.is_empty())
+            manifest(
+                "[target.'cfg(unix)'.dependencies]\nsdl2 = \"1\"",
+                &toml::Table::new(),
+            )
+            .is_ok_and(|cargo| cargo.get("sdk:sdl2") == Some(&1))
         );
+    }
+
+    #[test]
+    fn sdk_aliases_in_all_dependency_groups() -> Result<(), String> {
+        let workspace = concat!(
+            "input = { package = 'sdl2', version = '1' }\n",
+            "browser = { package = 'web-sys', version = '1' }\n",
+            "ordinary = '1'\n",
+            "unused = { package = 'wgpu', version = '1' }\n",
+        )
+        .parse::<toml::Table>()
+        .map_err(|error| error.to_string())?;
+        let counts = manifest(
+            concat!(
+                "[dependencies]\n",
+                "input.workspace = true\n",
+                "ordinary.workspace = true\n",
+                "[dev-dependencies]\n",
+                "input.workspace = true\n",
+                "[build-dependencies]\n",
+                "vendor = { package = 'libc', version = '1' }\n",
+                "[target.'cfg(unix)'.dev-dependencies]\n",
+                "browser.workspace = true\n",
+                "[target.'cfg(unix)'.build-dependencies]\n",
+                "graphics = { package = 'wayland-client', version = '1' }\n",
+            ),
+            &workspace,
+        )?;
+        require(counts.get("sdk:sdl2") == Some(&2), "SDL aliases")?;
+        for name in ["sdk:libc", "sdk:web_sys", "sdk:wayland_client"] {
+            require(counts.get(name) == Some(&1), name)?;
+        }
+        require(!counts.contains_key("sdk:wgpu"), "unused workspace SDK")?;
+        require(counts.len() == 5, "expected exact inventory")?;
+        require(
+            manifest("[dependencies]\nmissing.workspace = true", &workspace)
+                .is_err(),
+            "missing inherited package",
+        )
     }
 
     #[test]
