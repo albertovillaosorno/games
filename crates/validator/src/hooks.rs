@@ -36,10 +36,14 @@
 #[cfg(test)]
 pub mod fixtures;
 
+use std::collections::BTreeSet;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::from_utf8;
 use std::{env, fs};
+
+type DiffPaths<'path> = Vec<&'path [u8]>;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -237,14 +241,23 @@ fn relative_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && !matches!(part, "." | ".."))
 }
 
-fn check_paths(bytes: &[u8]) -> Result<(), String> {
+fn path_list(bytes: &[u8]) -> Result<DiffPaths<'_>, String> {
     if bytes.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let paths = bytes
+    let paths: Vec<_> = bytes
         .strip_suffix(&[0])
-        .ok_or("staged path list lacks final NUL")?;
-    for raw in paths.split(|byte| *byte == 0) {
+        .ok_or("path list lacks final NUL")?
+        .split(|byte| *byte == 0)
+        .collect();
+    if paths.iter().any(|path| path.is_empty()) {
+        return Err("empty path in diff".into());
+    }
+    Ok(paths)
+}
+
+fn check_paths(bytes: &[u8]) -> Result<(), String> {
+    for raw in path_list(bytes)? {
         let path = from_utf8(raw).map_err(|error| error.to_string())?;
         if prohibited_path(path) {
             return Err(format!("prohibited staged path: {path}"));
@@ -253,22 +266,71 @@ fn check_paths(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn check_staged() -> Result<(), String> {
+fn changed_paths(root: &Path, options: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
-        .current_dir(root())
+        .current_dir(root)
         .args([
             "diff",
-            "--cached",
             "--name-only",
-            "--diff-filter=ACMR",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
             "-z",
         ])
+        .args(options)
+        .arg("--")
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
-        return Err("cannot inspect staged paths".into());
+        return Err("cannot inspect changed paths".into());
     }
-    check_paths(&output.stdout)
+    Ok(output.stdout)
+}
+
+fn check_worktree(staged: &[u8], unstaged: &[u8]) -> Result<(), String> {
+    let dirty: BTreeSet<_> = path_list(unstaged)?.into_iter().collect();
+    for path in path_list(staged)? {
+        if dirty.contains(path) {
+            return Err(format!(
+                "staged file has unvalidated worktree changes: {}",
+                String::from_utf8_lossy(path)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_deleted(root: &Path, deleted: &[u8]) -> Result<(), String> {
+    for raw in path_list(deleted)? {
+        let path = from_utf8(raw).map_err(|error| error.to_string())?;
+        if !relative_path(path) {
+            return Err("invalid deleted path".into());
+        }
+        match fs::symlink_metadata(root.join(path)) {
+            Ok(metadata) if metadata.is_dir() => {},
+            Ok(_metadata) => {
+                return Err(format!("staged deletion still exists: {path}"));
+            },
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::NotFound | ErrorKind::NotADirectory
+                ) => {},
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn check_staged() -> Result<(), String> {
+    let root = root();
+    let staged = changed_paths(&root, &["--cached", "--diff-filter=ACMRT"])?;
+    check_paths(&staged)?;
+    check_worktree(&staged, &changed_paths(&root, &[])?)?;
+    check_deleted(
+        &root,
+        &changed_paths(&root, &["--cached", "--diff-filter=D"])?,
+    )
 }
 
 fn check_history_bytes(bytes: &[u8]) -> Result<(), String> {
@@ -339,8 +401,8 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        check_commit, check_history_bytes, check_message_file, check_paths,
-        root,
+        check_commit, check_deleted, check_history_bytes, check_message_file,
+        check_paths, check_worktree, root,
     };
     use crate::fixtures::{directory, require};
 
@@ -485,6 +547,28 @@ mod tests {
             assert!(check_paths(bytes).is_err(), "invalid framing");
         }
         assert!(check_paths(b"").is_ok(), "empty staged list");
+    }
+
+    #[test]
+    fn rejects_partial_staging_without_blocking_unrelated_edits() {
+        let staged = b"docs/a file.md\0crates/engine/src/lib.rs\0";
+        assert!(check_worktree(staged, b"docs/other.md\0").is_ok());
+        assert!(check_worktree(staged, b"docs/a file.md\0").is_err());
+        assert!(check_worktree(staged, b"crates/engine/src/lib.rs\0").is_err());
+        assert!(check_worktree(staged, b"invalid framing").is_err());
+    }
+
+    #[test]
+    fn rejects_restored_staged_deletions() -> Result<(), String> {
+        let fixture = directory("staged-deletion")?;
+        let deleted = b"old.md\0";
+        check_deleted(&fixture, deleted)?;
+        write(&fixture.join("old.md"), b"restored")?;
+        require(
+            check_deleted(&fixture, deleted).is_err(),
+            "restored deletion",
+        )?;
+        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
     }
 
     fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {

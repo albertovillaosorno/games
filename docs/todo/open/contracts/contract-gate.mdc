@@ -56,3 +56,11 @@ so a local glob cannot hide source files from validation or fingerprints.
 An isolated regression fixture supplies a configuration that would otherwise
 exclude Rust files. Fresh validation passed in run
 1795577633179381736-2865763.
+
+The pre-commit gate rejects an index change when its own worktree path
+has an additional unstaged modification, and rejects restored files
+scheduled for deletion. Unrelated unstaged paths remain allowed for
+coordinated concurrent work. The path check also covers Git type changes.
+Synthetic path-list and filesystem fixtures pass in fresh run
+1795577633179381736-2865763. This check does not constitute a separate
+validation build of an isolated index snapshot.
