@@ -267,6 +267,24 @@ impl Recovery {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PendingManeuver {
+    candidate: Option<Maneuver>,
+    chord: bool,
+}
+
+impl PendingManeuver {
+    // Resolve after all input edges for this tick have arrived.
+    // A directional chord is the ordinary jump, including its release state.
+    const fn resolve(self, directional: bool) -> Option<Maneuver> {
+        if self.chord && !directional {
+            Some(Maneuver::Special { hit: false, tick: 0 })
+        } else {
+            self.candidate
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Slot {
     action_recovery: Recovery,
@@ -277,7 +295,10 @@ struct Slot {
 }
 
 impl Slot {
-    fn advance_maneuver(&mut self, player: Player, queued: Option<Maneuver>) {
+    fn advance_maneuver(&mut self, player: Player, pending: PendingManeuver) {
+        let (dx, dy) = self.direction();
+        let queued = pending.resolve(dx != 0 || dy != 0);
+
         self.action_recovery = self.action_recovery.advance();
         if self.station.can_fight()
             && matches!(queued, Some(Maneuver::Attack { .. }))
@@ -344,15 +365,22 @@ impl Slot {
         }
     }
 
+    const fn direction(self) -> (i16, i16) {
+        (
+            axis(self.held(Control::Left), self.held(Control::Right)),
+            axis(self.held(Control::Up), self.held(Control::Down)),
+        )
+    }
+
     fn edge(
         &mut self,
         control: Control,
         down: bool,
-        pending: &mut Option<Maneuver>,
+        pending: &mut PendingManeuver,
     ) -> bool {
         if control == Control::Secondary && !down {
             self.station.maneuver.release_jump();
-            if let Some(maneuver) = pending {
+            if let Some(maneuver) = &mut pending.candidate {
                 maneuver.release_jump();
             }
         }
@@ -403,7 +431,11 @@ impl Slot {
                 (self.attack_step(dx), 0)
             },
             Maneuver::Idle if self.action_recovery != Recovery::Ready => (0, 0),
-            Maneuver::Idle | Maneuver::Jump(_) => {
+            Maneuver::Jump(ref mut motion) => {
+                self.attack_quarters = 0;
+                (motion.horizontal_step(dx), dy)
+            },
+            Maneuver::Idle => {
                 self.attack_quarters = 0;
                 (dx, dy)
             },
@@ -414,15 +446,12 @@ impl Slot {
         if !self.station.can_fight() {
             return;
         }
-        let dx = axis(self.held(Control::Left), self.held(Control::Right));
-        let dy = axis(self.held(Control::Up), self.held(Control::Down));
+        let (dx, dy) = self.direction();
         let facing_locked = match self.station.maneuver {
             Maneuver::Attack { tick } => tick > 0,
             Maneuver::AirAttack(air) => air.tick() > 0,
-            // A directional chord at onset remains a separate open case.
-            Maneuver::Special { tick, .. } => tick == 0,
             Maneuver::Idle => !self.action_recovery.allows_turn(),
-            Maneuver::Jump(_) => false,
+            Maneuver::Jump(_) | Maneuver::Special { .. } => false,
         };
         if !facing_locked && dx != 0 {
             self.station.facing = if dx < 0 {
@@ -562,7 +591,7 @@ impl Cabinet {
     fn apply(
         &mut self,
         change: &LogicalAction<Action>,
-        pending: &mut [Option<Maneuver>; 4],
+        pending: &mut [PendingManeuver; 4],
     ) {
         let seat = change.action.player;
         let Some(&character) = self.choices.get(seat.index()) else {
@@ -610,7 +639,7 @@ impl Cabinet {
             SessionEffect::None | SessionEffect::Exit => {},
         }
         if self.phase() != Phase::Playing {
-            *pending = [None; 4];
+            *pending = [PendingManeuver::default(); 4];
         }
     }
 
@@ -659,7 +688,7 @@ impl Cabinet {
         self.enemy
     }
 
-    fn finish_tick(&mut self, pending: [Option<Maneuver>; 4]) {
+    fn finish_tick(&mut self, pending: [PendingManeuver; 4]) {
         if self.phase() != Phase::Playing {
             return;
         }
@@ -818,7 +847,7 @@ impl InputStep for Cabinet {
     type Input = LogicalAction<Action>;
 
     fn input_step(&mut self, _tick: u64, actions: &[Self::Input]) {
-        let mut pending = [None; 4];
+        let mut pending = [PendingManeuver::default(); 4];
         for action in actions {
             self.apply(action, &mut pending);
         }
@@ -834,29 +863,27 @@ const fn axis(negative: bool, positive: bool) -> i16 {
     }
 }
 
-fn queue_maneuver(
-    queued: &mut Option<Maneuver>,
-    slot: &Slot,
-    control: Control,
-) {
-    let (maneuver, other, combines) = if control == Control::Primary {
-        (
-            Maneuver::Attack { tick: 0 },
-            Control::Secondary,
-            matches!(queued, Some(Maneuver::Jump(_))),
-        )
+fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {
+    let (maneuver, other) = if control == Control::Primary {
+        (Maneuver::Attack { tick: 0 }, Control::Secondary)
     } else {
-        (
-            Maneuver::jump(),
-            Control::Primary,
-            matches!(queued, Some(Maneuver::Attack { .. })),
-        )
+        (Maneuver::jump(), Control::Primary)
     };
-    if slot.station.maneuver == Maneuver::Idle && combines && slot.held(other) {
-        *queued = Some(Maneuver::Special { hit: false, tick: 0 });
-    } else {
-        let _first = queued.get_or_insert(maneuver);
+    if slot.station.maneuver == Maneuver::Idle
+        && !queued.chord
+        && slot.held(other)
+    {
+        match (queued.candidate, maneuver) {
+            (Some(jump @ Maneuver::Jump(_)), Maneuver::Attack { .. })
+            | (Some(Maneuver::Attack { .. }), jump @ Maneuver::Jump(_)) => {
+                queued.candidate = Some(jump);
+                queued.chord = true;
+                return;
+            },
+            _ => {},
+        }
     }
+    let _first = queued.candidate.get_or_insert(maneuver);
 }
 
 #[cfg(test)]
@@ -1009,6 +1036,94 @@ mod tests {
             state.input_step(tick, &[]);
         }
         assert_eq!(state.stations(), original);
+    }
+
+    #[test]
+    fn directional_chords_share_the_jump_trace() {
+        for player in Player::ALL {
+            for direction in
+                [Control::Left, Control::Right, Control::Up, Control::Down]
+            {
+                compare_chord_orders(player, direction);
+            }
+        }
+    }
+
+    fn compare_chord_orders(player: Player, direction: Control) {
+        for (buttons, hold) in [
+            ([Control::Primary, Control::Secondary], 3),
+            ([Control::Secondary, Control::Primary], 3),
+            ([Control::Primary, Control::Secondary], 30),
+            ([Control::Secondary, Control::Primary], 30),
+        ] {
+            compare_directional_chord(player, direction, buttons, hold);
+        }
+    }
+
+    fn compare_directional_chord(
+        player: Player,
+        direction: Control,
+        buttons: [Control; 2],
+        hold: u64,
+    ) {
+        let mut ordinary = four_playing();
+        let mut chord = four_playing();
+        ordinary.input_step(3, &[
+            change(player, direction, true),
+            change(player, Control::Secondary, true),
+        ]);
+        let [first, second] = buttons;
+        chord.input_step(3, &[
+            change(player, first, true),
+            change(player, second, true),
+            change(player, direction, true),
+        ]);
+        assert!(matches!(
+            station_for(&chord, player).maneuver,
+            Maneuver::Jump(j) if j.tick() == 0
+        ));
+        assert_eq!(chord.stations(), ordinary.stations());
+        ordinary.input_step(4, &[change(player, direction, false)]);
+        chord.input_step(4, &[
+            change(player, direction, false),
+            change(player, Control::Primary, false),
+        ]);
+        assert_eq!(chord.stations(), ordinary.stations());
+        for tick in 5..64 {
+            let release = [change(player, Control::Secondary, false)];
+            let edges = if tick == 3u64.saturating_add(hold) {
+                release.as_slice()
+            } else {
+                &[]
+            };
+            ordinary.input_step(tick, edges);
+            chord.input_step(tick, edges);
+            assert_eq!(chord.stations(), ordinary.stations());
+        }
+        assert_eq!(station_for(&chord, player).maneuver, Maneuver::Idle);
+    }
+
+    #[test]
+    fn directional_chord_preserves_a_same_tick_jump_release() {
+        let mut state = four_playing();
+        let player = Player::Marge;
+        state.input_step(3, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Secondary, true),
+            change(player, Control::Secondary, false),
+            change(player, Control::Secondary, true),
+            change(player, Control::Right, true),
+        ]);
+        state.input_step(4, &[change(player, Control::Right, false)]);
+        for tick in 5..34 {
+            state.input_step(tick, &[]);
+        }
+        assert!(matches!(
+            station_for(&state, player).maneuver,
+            Maneuver::Jump(j) if j.tick() == 30
+        ));
+        state.input_step(34, &[]);
+        assert_eq!(station_for(&state, player).maneuver, Maneuver::Idle);
     }
 
     #[test]
@@ -1501,6 +1616,93 @@ mod tests {
         assert_eq!(turned.facing, Facing::Left);
         assert_eq!(turned.position.x, before.position.x.saturating_sub(2));
         assert_eq!(turned.position.y, before.position.y - 2);
+    }
+
+    #[test]
+    fn airborne_stride_survives_release_and_can_reverse() {
+        for player in Player::ALL {
+            verify_airborne_stride(player);
+        }
+    }
+
+    fn verify_airborne_stride(player: Player) {
+        let mut state = four_playing();
+        let start = station_for(&state, player).position;
+        state.input_step(3, &[
+            change(player, Control::Right, true),
+            change(player, Control::Secondary, true),
+        ]);
+        state.input_step(4, &[
+            change(player, Control::Right, false),
+            change(player, Control::Secondary, false),
+        ]);
+        for tick in 5..13 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(
+            station_for(&state, player).position.x,
+            start.x.saturating_add(20)
+        );
+        state.input_step(13, &[
+            change(player, Control::Left, true),
+            change(player, Control::Up, true),
+        ]);
+        state.input_step(14, &[
+            change(player, Control::Left, false),
+            change(player, Control::Up, false),
+        ]);
+        for tick in 15..34 {
+            state.input_step(tick, &[]);
+        }
+        verify_stride_landing(&mut state, player, start);
+    }
+
+    fn verify_stride_landing(
+        state: &mut Cabinet,
+        player: Player,
+        start: Point,
+    ) {
+        let last = station_for(state, player);
+        assert!(matches!(last.maneuver, Maneuver::Jump(j) if j.tick() == 30));
+        assert_eq!(last.position.x, start.x.saturating_sub(22));
+        assert_eq!(last.position.y, start.y.saturating_sub(2));
+        assert_eq!(last.facing, Facing::Left);
+        assert_eq!(last.walking_ticks, None);
+        verify_stride_stops(state, player, last.position);
+    }
+
+    fn verify_stride_stops(
+        state: &mut Cabinet,
+        player: Player,
+        position: Point,
+    ) {
+        state.input_step(34, &[]);
+        let landed = station_for(state, player);
+        assert_eq!(landed.position, position);
+        assert_eq!(landed.maneuver, Maneuver::Idle);
+        state.input_step(35, &[]);
+        assert_eq!(station_for(state, player).position, landed.position);
+    }
+
+    #[test]
+    fn airborne_stride_can_start_after_a_stationary_takeoff() {
+        let mut state = four_playing();
+        let player = Player::Marge;
+        let start = station_for(&state, player).position;
+        state.input_step(3, &pulse(player, Control::Secondary));
+        for tick in 4..13 {
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(station_for(&state, player).position, start);
+        state.input_step(13, &[change(player, Control::Right, true)]);
+        state.input_step(14, &[change(player, Control::Right, false)]);
+        for tick in 15..35 {
+            state.input_step(tick, &[]);
+        }
+        let landed = station_for(&state, player);
+        assert_eq!(landed.position.x, start.x.saturating_add(42));
+        assert_eq!(landed.position.y, start.y);
+        assert_eq!(landed.maneuver, Maneuver::Idle);
     }
 
     #[test]

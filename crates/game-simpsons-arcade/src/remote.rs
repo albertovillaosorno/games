@@ -35,7 +35,7 @@ use games::input::LogicalAction;
 use games::network::MessageSchema;
 use games::replay::InputStep;
 
-use super::{Action, Cabinet, Control, Maneuver, Phase, Player};
+use super::{Action, Cabinet, Control, PendingManeuver, Phase, Player};
 
 /// Exact length of a version-two remote control message.
 pub const CONTROL_BYTES: usize = 3;
@@ -172,7 +172,7 @@ impl HostedCabinet {
     fn apply(
         &mut self,
         event: &HostedInput,
-        pending: &mut [Option<Maneuver>; 4],
+        pending: &mut [PendingManeuver; 4],
     ) {
         match event {
             HostedInput::Connected(peer) => {
@@ -246,7 +246,7 @@ impl HostedCabinet {
         })
     }
 
-    fn release(&mut self, seat: Player, pending: &mut [Option<Maneuver>; 4]) {
+    fn release(&mut self, seat: Player, pending: &mut [PendingManeuver; 4]) {
         for control in REMOTE_CONTROLS {
             self.cabinet.apply(
                 &LogicalAction {
@@ -258,7 +258,7 @@ impl HostedCabinet {
         }
     }
 
-    fn release_remote(&mut self, pending: &mut [Option<Maneuver>; 4]) {
+    fn release_remote(&mut self, pending: &mut [PendingManeuver; 4]) {
         for (seat, connected) in Player::ALL.into_iter().zip(self.connected) {
             if connected {
                 self.release(seat, pending);
@@ -285,7 +285,7 @@ impl InputStep for HostedCabinet {
     type Input = HostedInput;
 
     fn input_step(&mut self, _tick: u64, actions: &[Self::Input]) {
-        let mut pending = [None; 4];
+        let mut pending = [PendingManeuver::default(); 4];
         for action in actions {
             let playing = self.cabinet.phase() == Phase::Playing;
             self.apply(action, &mut pending);

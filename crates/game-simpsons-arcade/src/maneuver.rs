@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Title-specific attack and jump timing and provisional elevation.
+//   - Title-specific attack and jump timing, lift and horizontal stride.
 // - Must-Not:
 //   - Render, interpret original media or resolve enemy collisions.
 // - Allows:
-//   - Inputs: Character, held jump control and fixed-step maneuver.
-//   - Outputs: Next maneuver and approximate vertical displacement.
+//   - Inputs: Character, held controls and fixed-step maneuver.
+//   - Outputs: Next maneuver and movement components.
 //   - Side effects: None.
 // - Split-When:
 //   - Hit detection or damage requires independent state.
@@ -37,11 +37,12 @@ const QUARTERS_PER_PIXEL: i16 = 4;
 const SHORT_JUMP_TICKS: u8 = 31;
 const MIN_LIFT_TICKS: u8 = 4;
 
-/// A fixed-step airborne trajectory, independent of rendering and ground
-/// movement. Heights and vertical speeds use quarter-pixel units.
+/// A fixed-step airborne trajectory with retained horizontal stride.
+/// Heights and vertical speeds use quarter-pixel units.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JumpMotion {
     height: i16,
+    horizontal: i16,
     release_tick: Option<u8>,
     tick: u8,
     velocity: i16,
@@ -75,6 +76,7 @@ impl JumpMotion {
         } else {
             Some(Self {
                 height,
+                horizontal: self.horizontal,
                 release_tick: self.release_tick,
                 tick,
                 velocity,
@@ -84,6 +86,14 @@ impl JumpMotion {
 
     fn elevation(self) -> i16 {
         self.height.checked_div(QUARTERS_PER_PIXEL).unwrap_or(0)
+    }
+
+    // Neutral input retains the last horizontal direction until landing.
+    pub(super) const fn horizontal_step(&mut self, direction: i16) -> i16 {
+        if direction != 0 {
+            self.horizontal = direction;
+        }
+        self.horizontal
     }
 
     // The observed sustained ascent retains its opening pose through
@@ -133,6 +143,7 @@ impl JumpMotion {
     const fn start() -> Self {
         Self {
             height: 29,
+            horizontal: 0,
             release_tick: None,
             tick: 0,
             velocity: 29,

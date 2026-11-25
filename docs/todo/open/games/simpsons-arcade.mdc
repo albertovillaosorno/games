@@ -1218,3 +1218,28 @@ offscreen smoke with touch. All 600 movement and 60 combat submissions
 met the 16.667 ms host-work budget; mean submission work was 110.971
 and 86.603 microseconds respectively, with whole-smoke peak RSS of
 88,956,928 bytes. These are not physical presentation measurements.
+
+The directional chord is now identified as an ordinary jump, not a
+separate attack. Each of the four isolated directional chord traces
+matched all 101 object-DMA frames of its ordinary directional jump
+control. Marge's upward chord, 30-tick held chord, horizontal reversal
+at offset ten and held upward chord also matched their respective
+ordinary jump controls across all 101 frames. The unobstructed short
+horizontal jump retains two pixels of horizontal movement per tick
+after directional release, including direction changes during flight.
+Marge's stationary takeoff followed by a right pulse at offset ten
+traveled 42 pixels; a single upward pulse changed the ground anchor
+only while held. Marge and Homer's short-jump heights match the
+existing fixed-point lift. Collision and camera interference prevented
+a complete unobstructed comparison of every character and direction.
+
+The preview now resolves a simultaneous-button chord with the final
+held direction for its fixed tick: a neutral chord retains the
+stationary special, while directional chords reuse the ordinary jump
+state, poses and follow-up attack admission. Jump state retains
+horizontal stride across neutral input and discards it on landing;
+vertical movement remains held-input based. Inline regressions
+compare all four stations, four directions, both button orders and
+short/long holds, including same-tick release, delayed steering,
+reversal and landing. Remote input uses the same pending-action path.
+Fresh workspace validation passed in run 1795620061793906008-3417164.

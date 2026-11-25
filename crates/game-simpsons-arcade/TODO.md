@@ -54,14 +54,17 @@ touch devices and Android/browser presentation remain unverified.
 The isolated attack and jump timings are now modeled. Jump visibly
 raises the idle actor art using an approximate elevation curve. Attack
 retains its opening facing, with approximate slow horizontal drift and
-no vertical drift. Jump permits direction changes. The pose catalogue and
-combat encounter extend this preview. Hold Jump for a longer, higher
+no vertical drift. Jump retains the last horizontal stride until landing
+or another horizontal direction is pressed. Depth follows held input.
+The pose catalogue and combat encounter extend this preview. Hold
+Jump for a longer, higher
 flight; a short tap lasts 31 ticks and a full hold 58 ticks. The existing
 short-jump art is reused unless optional middle poses are supplied.
 Press Primary during Jump for a forward aerial attack. The initial height
 selects its speed; the attack lands automatically and can hit the
-experimental enemy once. Press both buttons together for a stationary
-30-tick special attack.
+experimental enemy once. Press both buttons together with a neutral stick
+for a stationary 30-tick special attack; a directional chord instead
+starts the same variable-height jump.
 
 For original attack and jump poses, optionally pass
 `--poses FILE` after `--touch` (if used) and before PARENT. The local
