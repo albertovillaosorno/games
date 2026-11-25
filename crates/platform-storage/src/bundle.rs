@@ -29,8 +29,7 @@
 // - Defaults:
 //   - Reject untrusted directories, special files and mismatched content.
 
-use std::fs::File;
-use std::io::{self, Read as _};
+use std::io;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 #[cfg(test)]
@@ -39,10 +38,13 @@ use std::{env, fs, path::PathBuf};
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat};
-use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat};
+use nix::sys::stat::{FileStat, Mode, fstat, fstatat};
 use nix::unistd::geteuid;
 #[cfg(test)]
 use nix::unistd::mkdtemp;
+
+use crate::file::{FileReadError, file_size, read_bounded_descriptor, regular};
+
 pub(crate) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
     .union(OFlag::O_NOFOLLOW)
@@ -72,6 +74,16 @@ impl From<AssetError> for BundleError {
 impl From<Errno> for BundleError {
     fn from(error: Errno) -> Self {
         Self::Io(io::Error::from(error).kind())
+    }
+}
+
+impl From<FileReadError> for BundleError {
+    fn from(error: FileReadError) -> Self {
+        match error {
+            FileReadError::Io(kind) => Self::Io(kind),
+            FileReadError::TooLarge => Self::Asset(AssetError::TooLarge),
+            FileReadError::UnsafeFile => Self::UnsafeStorage,
+        }
     }
 }
 
@@ -174,7 +186,7 @@ fn open_directory(
 }
 
 fn private_regular(stat: &FileStat) -> bool {
-    stat.st_mode & SFlag::S_IFMT.bits() == SFlag::S_IFREG.bits()
+    regular(stat)
         && stat.st_nlink == 1
         && stat.st_uid == geteuid().as_raw()
         && stat.st_mode & 0o022 == 0
@@ -208,26 +220,7 @@ fn read_regular(
     {
         return Err(BundleError::UnsafeStorage);
     }
-    let size =
-        u64::try_from(stat.st_size).map_err(|_error| AssetError::TooLarge)?;
-    if size > maximum {
-        return Err(AssetError::TooLarge.into());
-    }
-    let length =
-        usize::try_from(size).map_err(|_error| AssetError::TooLarge)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_error| AssetError::TooLarge)?;
-    bytes.resize(length, 0);
-    let mut file = File::from(fd);
-    file.read_exact(&mut bytes)?;
-    let mut extra = [0u8; 1];
-    match file.read_exact(&mut extra) {
-        Ok(()) => Err(AssetError::TooLarge.into()),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(bytes),
-        Err(error) => Err(error.into()),
-    }
+    Ok(read_bounded_descriptor(fd, file_size(&stat)?, maximum)?)
 }
 
 #[cfg(test)]

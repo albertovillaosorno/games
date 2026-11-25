@@ -50,7 +50,7 @@ The selected source adapter pins this archive as `world-4p-set-1`.
 Local read-only graphics conversion succeeded using:
 
 ```sh
-cargo run --locked -p games-importer -- --simpsons-graphics \
+cargo run --locked -p games-build -- --simpsons-graphics \
   .reference/games/simpsons-arcade/simpsons.zip simpsons-arcade \
   world-4p-set-1 \
   c88e549ab8f039ec3079b34bc39af6738379d306ca06cf81123f4d3501cf8dfa \
@@ -72,3 +72,29 @@ the expected 10,485,760 payload bytes and deterministic manifest identity:
 The read-only command reports identities and discards payload bytes.
 The adapter supports private transactional staging, but this command does
 not publish a filesystem bundle or render any gameplay.
+
+The read-only command has moved to the host composition crate
+`games-build`, preserving the importer/platform dependency boundary.
+Using the same verified source and limits, the GNU/Linux host command
+`--publish-simpsons-graphics` published the bundle beneath
+`.reference/games/simpsons-arcade/bundles/`. Independent
+`--check-simpsons-graphics` read both declared payloads and verified
+the manifest identity above. Repeating publication returned a collision;
+read-back still succeeded, and no staging directory remained.
+No assets are tracked. Palette reconstruction, audio, rendering,
+reference execution and gameplay remain unverified.
+
+Reference execution is now available locally. The official Fedora 45
+MAME 0.289-1.x86_64 RPM and seven dependency RPMs passed signature and
+digest checks, then were extracted without installing system packages.
+MAME reported the original ROM set good. A network-isolated Bubblewrap
+run with a read-only original archive completed 30 emulated seconds.
+Two independent fresh-state runs drove four coin, start, direction and
+button input ports with 40 press/release transitions. Raw 320-by-224
+screen buffers matched by SHA-256 at all six sampled frame checkpoints
+(120, 599, 660, 900, 1200 and 1500). A fresh no-input control matched
+the first three checkpoints and diverged at the last three. The reference
+observations are private and retained under `.reference/tools/mame/`.
+They establish repeatable original behaviour and input sensitivity, not
+remake gameplay parity. Audio, interpreted scene semantics and portable
+save behaviour remain unverified.

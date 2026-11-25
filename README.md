@@ -77,19 +77,26 @@ envelopes and constant-memory performance accounting. The native platform
 adapter provides bounded mutual TLS 1.3 and explicit player enrolment.
 On Linux, descriptor-relative archive staging enforces private files,
 no-overwrite creation, exact payload lengths and collision rejection. Physical
-LAN verification and credential provisioning remain pending. Archive format
-decoding, publication, sandboxing, graphics and playable titles remain open.
+LAN verification and credential provisioning remain pending. Mod sandboxing,
+rendering and playable titles remain open.
 The shared asset crate defines deterministic versioned manifests, SHA-256
-content identities and checked RGBA8 and PCM16 payload descriptors.
+content identities and checked RGBA8, PCM16 and indexed-tile descriptors.
 The importer validates a pinned immutable ZIP source and checks each flat
 archive member before conversion. The conversion interface assembles a
 canonical manifest with deduplicated, validated payload staging requests.
 The Linux platform stages content by SHA-256 and completes a private bundle
-only when its exact payload set matches the manifest.
-Use `cargo run --locked -p games-importer --` with the archive path, title ID,
+only when its exact payload set matches the manifest. GNU/Linux supports
+atomic publication without replacement and native verified read-back.
+
+Use `cargo run --locked -p games-build --` with the archive path, title ID,
 revision ID, SHA-256, source-byte limit, entry-byte limit, total-byte limit
-and entry-count limit for local read-only verification. Title-specific
-conversion, filesystem publication and runtime consumption remain open.
+and entry-count limit for local read-only verification. The same command
+accepts `--simpsons-graphics` for selected source graphics conversion,
+`--publish-simpsons-graphics PARENT` before the source arguments on
+GNU/Linux, or `--check-simpsons-graphics PARENT MANIFEST_SHA256` for read-back.
+Create a trusted, private output parent inside the ignored reference directory
+before publication. The selected Simpsons bundle is verified locally; palette,
+audio, runtime rendering and other platform publication remain open.
 
 ## Catalogue
 

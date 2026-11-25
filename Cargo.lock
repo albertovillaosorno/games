@@ -227,6 +227,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "games-build"
+version = "0.1.0"
+dependencies = [
+ "games-assets",
+ "games-importer",
+ "games-platform-storage",
+]
+
+[[package]]
 name = "games-download"
 version = "0.1.0"
 
@@ -243,11 +252,17 @@ name = "games-platform"
 version = "0.1.0"
 dependencies = [
  "games",
- "games-assets",
- "nix",
  "rcgen",
  "rustls",
  "sha2",
+]
+
+[[package]]
+name = "games-platform-storage"
+version = "0.1.0"
+dependencies = [
+ "games-assets",
+ "nix",
 ]
 
 [[package]]

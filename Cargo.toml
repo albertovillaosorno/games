@@ -1,9 +1,11 @@
 [workspace]
 members = [
     "crates/assets",
+    "crates/build",
     "crates/engine",
     "crates/importer",
     "crates/platform",
+    "crates/platform-storage",
     "crates/validator",
     "crates/download",
 ]
@@ -22,11 +24,16 @@ categories = ["game-development", "game-engines"]
 [workspace.dependencies]
 games = { path = "crates/engine" }
 games-assets = { path = "crates/assets", version = "0.1.0" }
+games-importer = { path = "crates/importer", version = "0.1.0" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "1.0.154"
 toml = "1.1.5"
 sha2 = "0.11"
 nix = { version = "0.31.3", features = ["fs", "user"] }
+[workspace.dependencies.games-platform-storage]
+path = "crates/platform-storage"
+version = "0.1.0"
+
 [workspace.dependencies.zip]
 version = "9.8.2"
 default-features = false

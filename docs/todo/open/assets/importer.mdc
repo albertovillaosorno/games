@@ -50,3 +50,12 @@ bytes, and rejection of existing destinations (including a symlink).
 Fresh validation passed in run 1795578494631580142-2996234.
 Crash fault injection, runtime consumption and Android publication remain
 unverified. The publication parent and staging files must remain trusted.
+
+The host composition tool now connects the selected graphics converter
+to native transactional staging without introducing an importer-to-platform
+dependency. On GNU/Linux the actual pinned Simpsons archive produced a
+published manifest-addressed bundle with 10,485,760 payload bytes.
+Independent pinned-manifest read-back verified both payloads.
+A repeated import rejected the existing destination and left its contents
+unchanged. Outputs are retained only beneath the ignored local reference
+directory. Other titles, Android publication and full gameplay remain open.

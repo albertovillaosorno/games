@@ -31,10 +31,10 @@
 
 //! Selected World four-player set 1 graphics conversion.
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use games_assets::archive::ArchiveBudget;
-use games_assets::{AssetFormat, AssetManifest, ContentHash};
+use games_assets::{AssetFormat, AssetManifest, ContentHash, ManifestLimits};
 
 use crate::conversion::{ConversionLimits, convert_verified};
 use crate::graphics::{TileLayout, interleave_words};
@@ -181,6 +181,17 @@ pub fn decode_graphics(
     Ok(IndexedGraphics { sprites, tiles })
 }
 
+/// Exact upper bounds for the selected canonical graphics bundle.
+#[must_use]
+pub fn graphics_limits() -> ManifestLimits {
+    ManifestLimits {
+        manifest_bytes: NonZeroUsize::new(4096).unwrap_or(NonZeroUsize::MIN),
+        payload_bytes: NonZeroU64::new(8_388_608).unwrap_or(NonZeroU64::MIN),
+        records: NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN),
+        total_bytes: NonZeroU64::new(10_485_760).unwrap_or(NonZeroU64::MIN),
+    }
+}
+
 /// Convert the selected graphics into a canonical private transaction.
 ///
 /// The staging callback must retain no published bytes until success.
@@ -223,9 +234,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
 
-    use games_assets::{ManifestLimits, SourceIdentity};
+    use games_assets::SourceIdentity;
 
     use super::*;
 

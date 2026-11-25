@@ -74,8 +74,8 @@ fn role(path: &str) -> Option<Role> {
         "crates" => Some(match name {
             "engine" | "runtime" => Role::Runtime,
             "importer" => Role::Importer,
-            "platform" => Role::Platform,
-            "validator" | "download" => Role::Tool,
+            "platform" | "platform-storage" => Role::Platform,
+            "validator" | "download" | "build" => Role::Tool,
             _ if name.starts_with("game-") || name.starts_with("app-") => {
                 Role::Title
             },
@@ -644,6 +644,8 @@ mod tests {
             ("title", "crates/game-simpsons-arcade"),
             ("importer", "crates/importer"),
             ("tool", "crates/download"),
+            ("build", "crates/build"),
+            ("platform", "crates/platform"),
         ] {
             let value = Value::Table(toml::Table::from_iter([(
                 String::from("path"),
@@ -660,9 +662,17 @@ mod tests {
             dependency(Role::Tool, "other", &inherited, &workspace).is_ok(),
             "tools can use shared crates",
         )?;
+        require(
+            dependency(Role::Tool, "importer", &inherited, &workspace).is_ok()
+                && dependency(Role::Tool, "platform", &inherited, &workspace)
+                    .is_ok(),
+            "host tools may compose conversion and platform services",
+        )?;
         for (owner, target) in [
             (Role::Shared, "title"),
             (Role::Shared, "tool"),
+            (Role::Runtime, "build"),
+            (Role::Importer, "platform"),
             (Role::Runtime, "importer"),
             (Role::Title, "title"),
         ] {
