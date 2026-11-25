@@ -36,7 +36,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::input::touch::TouchPoint;
 use games::presentation::{
-    DisplaySettings, PresentationLayout, PresentationMode,
+    Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
 };
 use sdl2::EventPump;
 use sdl2::event::Event;
@@ -212,6 +212,7 @@ impl<'texture, Context> Atlases<'texture, Context> {
 
 pub(super) struct SceneTextures<'texture, Context> {
     atlases: Atlases<'texture, Context>,
+    base: FrameLayout,
     layout: FrameLayout,
     mode: PresentationMode,
     target: Texture<'texture>,
@@ -248,6 +249,31 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         Ok(true)
     }
 
+    fn fit(
+        &mut self,
+        surface: Option<Dimensions>,
+        maximum: FrameLayout,
+    ) -> Result<FrameLayout, RenderError> {
+        if maximum.height() != self.base.height()
+            || maximum.width() < self.base.width()
+        {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let base = Dimensions::new(self.base.width(), self.base.height());
+        let design = surface.map_or(base, |extent| {
+            self.mode.design_for_surface(extent, base, maximum.width())
+        });
+        let budget =
+            NonZeroUsize::new(maximum.bytes()).ok_or(RenderError::TooLarge)?;
+        let layout = FrameLayout::new(design.width, design.height, budget)?;
+        if layout != self.layout {
+            let target = create_target(self.atlases.creator, layout)?;
+            self.target = target;
+            self.layout = layout;
+        }
+        Ok(self.layout)
+    }
+
     pub(super) fn new(
         creator: &'texture TextureCreator<Context>,
         layout: FrameLayout,
@@ -256,6 +282,7 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
     ) -> Result<Self, RenderError> {
         Ok(Self {
             atlases: Atlases::new(creator, limits),
+            base: layout,
             layout,
             mode,
             target: create_target(creator, layout)?,
@@ -318,6 +345,31 @@ impl<'canvas, 'texture> SceneSession<'canvas, 'texture> {
         apply_window_mode(self.canvas, settings.window)?;
         self.textures.mode = settings.presentation;
         Ok(())
+    }
+
+    /// Choose the bounded logical extent for the next frame.
+    ///
+    /// The maximum must retain the initial height and contain its width.
+    /// Only adaptive mode may extend; other modes restore the base target.
+    /// Atlases stay resident, and the old target survives allocation failure.
+    /// # Errors
+    /// Rejects an invalid maximum or native query/allocation failure.
+    pub fn fit_adaptive_width(
+        &mut self,
+        maximum: FrameLayout,
+    ) -> Result<FrameLayout, RenderError> {
+        let (width, height) =
+            self.canvas.output_size().map_err(RenderError::Backend)?;
+        let surface = NonZeroU32::new(width)
+            .zip(NonZeroU32::new(height))
+            .map(|(columns, rows)| Dimensions::new(columns, rows));
+        self.textures.fit(surface, maximum)
+    }
+
+    /// Current logical target, including any admitted adaptive extension.
+    #[must_use]
+    pub const fn layout(&self) -> FrameLayout {
+        self.textures.layout
     }
 
     /// Upload one tightly packed RGBA atlas for reuse in subsequent frames.
@@ -472,7 +524,7 @@ fn create_target<Context>(
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use games::presentation::PresentationMode;
+    use games::presentation::{Dimensions, PresentationMode};
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::render::Canvas;
     use sdl2::surface::{Surface, SurfaceContext};
@@ -563,6 +615,54 @@ mod tests {
         condition
             .then_some(())
             .ok_or_else(|| RenderError::Backend(reason.to_owned()))
+    }
+
+    #[test]
+    fn adaptive_target_changes_extent_and_preserves_atlases()
+    -> Result<(), RenderError> {
+        let mut canvas = canvas()?;
+        let creator = canvas.texture_creator();
+        let base = layout()?;
+        let maximum = FrameLayout::new(nz(6), nz(2), budget(48))?;
+        let mut scene = SceneTextures::new(
+            &creator,
+            base,
+            limits(),
+            PresentationMode::Adaptive,
+        )?;
+        let [sprite, _overlay] = commands(&mut scene.atlases)?;
+        let wide = Some(Dimensions::new(nz(12), nz(2)));
+        require(scene.fit(wide, maximum)? == maximum, "width cap differs")?;
+        let edge = SpriteDraw {
+            destination: rect(4, 1, 2, 1),
+            flip_horizontal: false,
+            ..sprite
+        };
+        require(scene.draw(&mut canvas, [0; 3], &[edge])?, "not drawn")?;
+        let mut expected = [BLACK; 12];
+        expected
+            .get_mut(10..12)
+            .ok_or(RenderError::InvalidLength)?
+            .copy_from_slice(&[RED, GREEN]);
+        require(
+            scene.readback(&mut canvas)? == expected.as_flattened(),
+            "resized target or persistent atlas differs",
+        )?;
+        let wrong_height = FrameLayout::new(nz(6), nz(3), budget(72))?;
+        require(
+            scene.fit(wide, wrong_height)
+                == Err(RenderError::InvalidDimensions)
+                && scene.layout == maximum,
+            "invalid extent changed target",
+        )?;
+        scene.mode = PresentationMode::AspectFit;
+        require(scene.fit(wide, maximum)? == base, "base not restored")?;
+        require(scene.draw(&mut canvas, [0; 3], &[sprite])?, "atlas lost")?;
+        let expected_base = [GREEN, GREEN, RED, RED, GREEN, GREEN, RED, RED];
+        require(
+            scene.readback(&mut canvas)? == expected_base.as_flattened(),
+            "restored target differs",
+        )
     }
 
     #[test]
