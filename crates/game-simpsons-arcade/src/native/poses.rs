@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another title-local module duplicates pose admission.
 // - Summary:
-//   - Resolve optional native attack and jump art.
+//   - Resolve optional native attack, jump and walking art.
 // - Description:
 //   - Every admitted sequence starts at tick zero and is bounded.
 // - Usage:
@@ -42,7 +42,7 @@ use games_platform_graphics::linux::RenderError;
 use games_platform_graphics::linux::sprites::SceneSession;
 use games_platform_storage::file::snapshot;
 
-use super::{Art, KEYS, Maneuver, Player, failure, open_bundle};
+use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
 
 const MAX_POSES: usize = 64;
 
@@ -50,13 +50,15 @@ const MAX_POSES: usize = 64;
 enum Kind {
     Attack,
     Jump,
+    Walk,
 }
 
 impl Kind {
-    const fn maneuver(self, tick: u8) -> Maneuver {
+    const fn duration(self, player: Player) -> u8 {
         match self {
-            Self::Attack => Maneuver::Attack { tick },
-            Self::Jump => Maneuver::Jump { tick },
+            Self::Attack => Maneuver::Attack { tick: 0 }.duration(player),
+            Self::Jump => Maneuver::Jump { tick: 0 }.duration(player),
+            Self::Walk => walk_duration(player),
         }
     }
 }
@@ -115,7 +117,12 @@ impl Catalogue {
                 .into_iter()
                 .all(|kind| entries.contains_key(&(player, kind, 0)))
         });
-        if !complete {
+        let walking = entries.keys().any(|(_, kind, _)| *kind == Kind::Walk);
+        let complete_walk = !walking
+            || Player::ALL
+                .into_iter()
+                .all(|player| entries.contains_key(&(player, Kind::Walk, 0)));
+        if !complete || !complete_walk {
             return Err(failure("missing tick-zero pose"));
         }
         Ok(Self { entries })
@@ -135,12 +142,14 @@ impl PoseArt {
     pub(super) fn select(
         &self,
         player: Player,
-        maneuver: Maneuver,
+        station: Station,
     ) -> Option<Art> {
-        let (kind, tick) = match maneuver {
+        let (kind, tick) = match station.maneuver {
             Maneuver::Attack { tick } => (Kind::Attack, tick),
             Maneuver::Jump { tick } => (Kind::Jump, tick),
-            Maneuver::Idle => return None,
+            Maneuver::Idle => {
+                (Kind::Walk, walking_offset(player, station.walking_ticks?)?)
+            },
         };
         select_entry(&self.entries, (player, kind, tick)).copied()
     }
@@ -160,10 +169,11 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
     let kind = match action {
         "attack" => Kind::Attack,
         "jump" => Kind::Jump,
+        "walk" => Kind::Walk,
         _ => return Err(failure("unknown pose maneuver")),
     };
     let tick = elapsed.parse::<u8>().map_err(failure)?;
-    if tick >= kind.maneuver(tick).duration(player) {
+    if tick >= kind.duration(player) {
         return Err(failure("pose tick outside maneuver"));
     }
     Ok(((player, kind, tick), digest.parse().map_err(failure)?))
@@ -178,6 +188,18 @@ fn select_entry<Value>(
         .range((player, kind, 0)..=(player, kind, tick))
         .next_back()
         .map(|(_, value)| value)
+}
+
+const fn walk_duration(player: Player) -> u8 {
+    match player {
+        Player::Marge => 42,
+        Player::Homer | Player::Lisa => 40,
+        Player::Bart => 25,
+    }
+}
+
+fn walking_offset(player: Player, elapsed: u64) -> Option<u8> {
+    u8::try_from(elapsed.checked_rem(u64::from(walk_duration(player)))?).ok()
 }
 
 #[cfg(test)]
@@ -195,6 +217,23 @@ mod tests {
                     .map(|kind| format!("{name} {kind} 0 {HASH}\n"))
             })
             .collect()
+    }
+
+    #[test]
+    fn walking_wraps_at_observed_cycle_lengths() {
+        for (player, period) in [
+            (Player::Marge, 42),
+            (Player::Homer, 40),
+            (Player::Bart, 25),
+            (Player::Lisa, 40),
+        ] {
+            assert_eq!(
+                walking_offset(player, period - 1),
+                u8::try_from(period - 1).ok()
+            );
+            assert_eq!(walking_offset(player, period), Some(0));
+            assert_eq!(walking_offset(player, period * 2 + 1), Some(1));
+        }
     }
 
     #[test]

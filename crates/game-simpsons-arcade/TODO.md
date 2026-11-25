@@ -55,7 +55,7 @@ UTF-8 catalogue has one whitespace-separated record per line:
 NAME ACTION TICK SHA256
 ```
 
-NAME is marge, homer, bart or lisa; ACTION is attack or jump. TICK is
+NAME is marge, homer, bart or lisa; ACTION is attack, jump or walk. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next

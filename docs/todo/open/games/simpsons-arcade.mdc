@@ -515,3 +515,12 @@ idle-only launches remain supported. Fresh validation passed
 all four attacks concurrently and returned to byte-identical idle
 pixels. Original pose pivots, facing-specific variants, held jump,
 walking art and enemy interaction remain open.
+
+All four observed rightward walking cycles now contribute 30 selected
+pose crops through the exact-scene MAME importer. Walking uses actual
+displaced simulation ticks and wraps after 42 ticks for Marge, 40 for
+Homer and Lisa, and 25 for Bart. The optional walk catalogue requires
+all four tick-zero entries when enabled; attack and jump take priority.
+The 59-pose combined local catalogue passed native touch-and-pose smoke
+and fresh workspace validation. Exact pivots, facing-specific variants,
+collision and comprehensive gameplay parity remain unverified.

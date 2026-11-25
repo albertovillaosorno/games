@@ -340,10 +340,7 @@ impl Scene {
             if station.participation == Participation::Playing
                 && cabinet.phase() == Phase::Street
             {
-                let pose = self
-                    .poses
-                    .select(player, station.maneuver)
-                    .unwrap_or(actor);
+                let pose = self.poses.select(player, station).unwrap_or(actor);
                 self.draws.push(pose.draw(
                     actor_position(pose, station)?,
                     station.facing == Facing::Left,
