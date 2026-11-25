@@ -1962,3 +1962,24 @@ independently confirmed both combined jumps and visible responses
 to double Primary in both families. The preview retains its
 no-solo-cue policy for these actions, with a fixed-step regression.
 These controls do not establish broader audio or combat parity.
+
+The grounded ownership implementation passed fresh validation including
+native rendering and audio smoke. The full 206-pose local configuration
+also passed adaptive 426x304 OpenGL readback, both paired jumps and
+Primary actions, 444-column street travel, three reinforcement meters
+and restraint escape. The 600 movement frames and 20 combat submissions
+missed no 16.667 ms host work budgets; mean work was 65.414 and 218.429
+microseconds respectively, with lifetime peak RSS of 134,840,320 bytes.
+Older both-pair, single-pair and no-pair configurations also passed
+native smoke. These results establish configuration compatibility on
+this host, not physical input latency or full gameplay parity.
+
+For the unresolved airborne horizontal persistence, reuse the existing
+solo neutral-input stride rule from the maneuver module rather than
+introduce a separate movement mechanism. Pair-specific state should
+retain the last nonzero airborne horizontal direction, leave depth
+responsive to held input, clear stride at landing and separation, and
+continue using the existing common bounded translation. Cover both
+families, either airborne controller, reversal after release, depth
+release, repeated jumps and restoration of the grounded owner.
+The exact seat sampling offsets still require original controls.

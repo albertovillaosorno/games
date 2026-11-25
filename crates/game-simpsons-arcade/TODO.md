@@ -144,8 +144,8 @@ buffered into landing. During the action either member can steer,
 with Bart taking priority for held conflicts; after landing the
 established ground driver resumes control. An initial grounded
 Primary can also select that driver. A grounded Primary displays one
-fixed tick of
-the combined landing pose when stationary and preserves the walking
+fixed tick of the combined landing pose when stationary and preserves
+the walking
 cycle when moving. A grounded chord starts the combined jump.
 Simultaneous edges select Secondary over Primary. Missing jump poses
 preserve the earlier solo maneuver behavior. No damage is inferred. Ground
@@ -160,16 +160,15 @@ Secondary starts a 29-tick vertical action, reaching a representative
 66-pixel elevation. In-flight button edges are discarded; both members
 can steer, with first-member priority. After landing the established
 ground driver resumes control, and the last post-landing pose holds
-when motion stops. The
-optional shadow mask is drawn independently of elevation.
+when motion stops. The optional shadow mask is drawn independently of
+elevation.
 With this complete jump sequence enabled, grounded Primary from either
 member advances the held walking pose phase without moving the pair.
 The original tested pre-jump cycle displays a new pose every four
 edges, and the landed cycle every two edges. Moving Primary preserves
 locomotion; a chord selects Secondary. Neither behavior adds damage.
-The phase advancement reuses existing pose records; the combined
-catalogue remains within its 200-record and 16 KiB limits. Without
-the jump sequence, Primary retains the earlier solo behavior.
+The phase advancement adds no pose records or atlas budget. Without the
+jump sequence, Primary retains the earlier solo behavior.
 Neither sampled paired action produced an isolated PCM cue.
 Jump-only admission without a prior ground driver retains the
 provisional second-member fallback. Exact pivots, hit eligibility,
