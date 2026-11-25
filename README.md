@@ -255,8 +255,10 @@ revisions will be selected when onboarding each title.
 | 34 | Plants vs. Zombies 2 | Android |
 | 35 | Plants vs. Zombies 3: Evolved | Android Evolved |
 | 36 | SimCity BuildIt | Android |
-| 37 | Hytale | PC |
-| 38 | Grand Theft Auto VI | PS5 |
+| 37 | LEGO Star Wars: The Skywalker Saga | PC |
+| 38 | Minecraft Java Edition | Latest stable PC |
+| 39 | Hytale | PC |
+| 40 | Grand Theft Auto VI | PS5 |
 
 ## Contributions
 

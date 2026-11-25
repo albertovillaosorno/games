@@ -1,0 +1,63 @@
+---
+id: "minecraft"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "games"
+task: "TODO - Minecraft Java Edition"
+depends_on:
+  - "lego-star-wars-the-skywalker-saga"
+validation:
+  - "cargo validate"
+---
+# TODO - Minecraft Java Edition
+
+## Objective
+
+Independently reconstruct the latest stable Java Edition client, server
+and launcher in Rust. Preserve the familiar official launcher workflow
+without impersonating Microsoft or Mojang. Maintain broad historical
+version, world and Java mod compatibility as an explicit long-term goal.
+
+## Acceptance
+
+- Target the latest stable Java Edition at implementation time, with
+  one current native Rust gameplay runtime, not separate native forks
+  for every historical release.
+- Implement a Rust launcher with familiar account, installation, version,
+  mod profile, settings and launch workflows. Require legitimate Microsoft
+  authentication and verified Java Edition entitlement before play.
+  Use authorized account flows; never collect passwords, bypass ownership
+  checks, forge sessions or embed private credentials.
+- Support historical official version installations and their appropriate
+  Java runtimes and loaders through isolated launcher profiles. Distinguish
+  original Java execution from native Rust execution in all compatibility
+  reports. Preserve existing saves and instance data on updates.
+- Aim for compatibility with unmodified Java mods on the native runtime.
+  Evaluate a JVM bridge, bytecode execution, versioned class and API
+  adapters, event hooks, mappings and loader contracts as needed.
+  Preserve a Rust core; use an appropriate Java runtime for Java mods
+  rather than assuming a Rust rewrite can execute arbitrary JARs.
+- Test representative Fabric, Forge, NeoForge and historical loader
+  combinations, including mixins, reflection, dependencies and networking.
+  Maintain a per-version and per-loader compatibility matrix. Record
+  incompatible mods explicitly; do not claim universal compatibility.
+- Preserve supported historical world formats and protocol interoperability;
+  test migrations on copies, never overwrite worlds destructively.
+- Reconstruct survival, creative, crafting, redstone, entities, world
+  generation, lighting, chunk streaming and client/server simulation.
+- Extract reusable voxel, spatial, rendering, construction, scripting,
+  persistence and network mechanisms only where justified by real needs.
+  Reuse existing project systems and verify previous title regressions.
+- Treat mods as executable untrusted code. Isolate execution where feasible,
+  bound resource use, protect credentials and respect third-party licences.
+- Verify performance, observable behaviour and supported platforms.
+  Do not distribute proprietary game binaries, assets or modified official
+  distributions. Respect official terms and branding requirements.
+- Check authorized local input in `.reference/games/minecraft/`.
+
+## Evidence
+
+Blocked: required original media is not present in the reference directory.
+No native implementation or universal mod compatibility is established.
+Historical launcher profiles and native mod compatibility are distinct.
