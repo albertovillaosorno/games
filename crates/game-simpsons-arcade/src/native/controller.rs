@@ -29,6 +29,7 @@
 // - Defaults:
 //   - No discovery, automatic connections, account service or world display.
 
+use std::io::ErrorKind;
 use std::path::Path;
 
 use games::input::InputEvent;
@@ -40,7 +41,7 @@ use games_platform_graphics::linux::ui::{PlateLayout, TextAtlas, TextLine};
 use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 
 use super::{
-    Controls, LocalActions, Profiles, dimension, failure, key_label, lan, size,
+    Controls, LocalActions, Profiles, dimension, key_label, lan, size,
 };
 use crate::lan::ClientLan;
 use crate::remote::RemoteControl;
@@ -49,12 +50,36 @@ const WIDTH: u16 = 320;
 const HEIGHT: u16 = 176;
 const BYTES: usize = 225_280;
 
+fn connection_failure(kind: ErrorKind) -> RenderError {
+    let context = if kind == ErrorKind::TimedOut {
+        "LAN connection timed out"
+    } else if kind == ErrorKind::InvalidData {
+        "Invalid LAN frame; use matching host and controller builds"
+    } else if kind == ErrorKind::WouldBlock {
+        "Remote input queue full"
+    } else if matches!(
+        kind,
+        ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+            | ErrorKind::UnexpectedEof
+    ) {
+        "LAN connection lost"
+    } else {
+        "LAN controller transport failed"
+    };
+    RenderError::Backend(format!("{context} ({kind:?}); re-launch to rejoin"))
+}
+
 fn enqueue(
     controller: &mut ClientLan,
     actions: LocalActions,
 ) -> Result<(), RenderError> {
     for value in remote_controls(actions) {
-        controller.enqueue(value).map_err(failure)?;
+        controller
+            .enqueue(value)
+            .map_err(|error| connection_failure(error.kind()))?;
     }
     Ok(())
 }
@@ -137,7 +162,9 @@ fn interactive(
     let sprite = panel(scene, profiles)?;
     let _initial = scene.present([24, 22, 30], &[sprite])?;
     loop {
-        controller.poll().map_err(failure)?;
+        controller
+            .poll()
+            .map_err(|error| connection_failure(error.kind()))?;
         let mut event = scene.wait_event_timeout(8);
         let redraw = event.is_some();
         let mut removed = false;
@@ -199,7 +226,7 @@ mod tests {
         Button, Scancode, button_code, key_code,
     };
 
-    use super::super::{ACTION_NAMES, DEFAULT_PROFILES};
+    use super::super::{ACTION_NAMES, DEFAULT_PROFILES, failure};
     use super::*;
     use crate::Control;
 
@@ -222,6 +249,31 @@ mod tests {
     ) -> Result<(), RenderError> {
         if !remote_controls(controls.actions(event)?).eq(expected) {
             return Err(failure("unexpected controller wire transition"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_transport_failures_explain_recovery() -> Result<(), RenderError>
+    {
+        for (kind, expected) in [
+            (ErrorKind::TimedOut, "LAN connection timed out"),
+            (
+                ErrorKind::InvalidData,
+                "use matching host and controller builds",
+            ),
+            (ErrorKind::WouldBlock, "Remote input queue full"),
+            (ErrorKind::ConnectionReset, "LAN connection lost"),
+            (ErrorKind::Other, "LAN controller transport failed"),
+        ] {
+            let RenderError::Backend(message) = connection_failure(kind) else {
+                return Err(failure("expected a native backend diagnostic"));
+            };
+            if !message.contains(expected)
+                || !message.ends_with("re-launch to rejoin")
+            {
+                return Err(failure("missing transport recovery guidance"));
+            }
         }
         Ok(())
     }

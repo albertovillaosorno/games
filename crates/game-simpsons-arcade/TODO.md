@@ -285,7 +285,9 @@ controls at a bounded rate. It disconnects a peer after three seconds
 without a valid decoded message and releases its held controls on the
 next eligible simulation tick. The controller also closes after three
 seconds without a valid host acknowledgement. Re-launch to rejoin if
-either lease expires. A loopback test stops host polling while the socket
+either lease expires. Runtime transport errors explain why the controller
+closed and how to rejoin; invalid frames also advise matching builds.
+A loopback test stops host polling while the socket
 remains open to verify controller-side expiry.
 
 #### Manual credential preparation
