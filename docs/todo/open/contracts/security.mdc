@@ -63,3 +63,11 @@ mod/process sandboxing remain unverified. The trusted parent assumption does
 not protect against another process acting as the same user. Actual host
 and game adapters must integrate and test those constraints before task
 completion.
+
+The canonical manifest now verifies non-executing media replacements against
+an explicit trusted title allowlist and the existing base asset descriptors.
+Unknown or unapproved keys, game-data replacements, incompatible dimensions,
+PCM layouts or lengths, and mismatched payload hashes are rejected. No files
+are opened or installed by this policy; it is not a process sandbox or a
+replacement for title-specific data validation. Synthetic image and audio
+fixtures passed in run 1795578114804270643-2943036 (121 tests).

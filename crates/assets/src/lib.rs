@@ -158,7 +158,13 @@ pub struct AssetRecord {
 }
 
 impl AssetRecord {
-    fn validate(&self) -> Result<(), AssetError> {
+    /// Validate the logical key, format and declared payload size.
+    ///
+    /// This does not verify payload bytes or their digest.
+    ///
+    /// # Errors
+    /// Rejects invalid identities or incompatible representation sizes.
+    pub fn validate(&self) -> Result<(), AssetError> {
         if !valid_key(&self.key) {
             return Err(AssetError::InvalidIdentity);
         }
@@ -352,6 +358,44 @@ impl AssetManifest {
         }
         Ok(())
     }
+
+    /// Verify a non-executing replacement for a title-approved media slot.
+    ///
+    /// The trusted runtime supplies the allowlist for this base manifest;
+    /// it must not derive approval from the untrusted replacement record.
+    /// Only existing RGBA8 and PCM slots with identical formats and byte
+    /// lengths can be replaced. Declarative game data requires separate
+    /// title-specific validation. No files are opened or installed here.
+    ///
+    /// # Errors
+    /// Rejects unknown or unapproved keys, incompatible media, and bytes
+    /// that do not match the replacement descriptor.
+    pub fn verify_media_replacement(
+        &self,
+        allowed_keys: &[&str],
+        replacement: &AssetRecord,
+        payload: &[u8],
+    ) -> Result<(), AssetError> {
+        let key = replacement.key.as_str();
+        if !allowed_keys.contains(&key) {
+            return Err(AssetError::InvalidIdentity);
+        }
+        let index = self
+            .records()
+            .binary_search_by(|record| record.key.as_str().cmp(key))
+            .map_err(|_error| AssetError::InvalidIdentity)?;
+        let original = self
+            .records()
+            .get(index)
+            .ok_or(AssetError::InvalidIdentity)?;
+        if original.format == AssetFormat::Data
+            || replacement.format != original.format
+            || replacement.size != original.size
+        {
+            return Err(AssetError::InvalidFormat);
+        }
+        replacement.verify(payload)
+    }
 }
 
 fn valid_key(value: &str) -> bool {
@@ -457,6 +501,130 @@ mod tests {
             ),
             Err(AssetError::TooLarge),
         );
+    }
+
+    fn image_record() -> AssetRecord {
+        AssetRecord {
+            format: AssetFormat::Rgba8 {
+                height: NonZeroU32::MIN,
+                width: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            },
+            ..record("sprite/hero", b"abcdefgh")
+        }
+    }
+
+    #[test]
+    fn media_replacements_require_explicit_existing_slots()
+    -> Result<(), AssetError> {
+        let original = image_record();
+        let data = record("stage/rules", b"abc");
+        let manifest = AssetManifest::new(
+            source(),
+            vec![original.clone(), data.clone()],
+            limits(),
+        )?;
+        let replacement = AssetRecord {
+            digest: ContentHash::calculate(b"12345678"),
+            ..original
+        };
+        let allowed = ["sprite/hero", "sprite/unknown", "stage/rules"];
+        manifest.verify_media_replacement(
+            &allowed,
+            &replacement,
+            b"12345678",
+        )?;
+        require(
+            manifest.verify_media_replacement(&[], &replacement, b"12345678")
+                == Err(AssetError::InvalidIdentity),
+        )?;
+        let unknown = AssetRecord {
+            key: String::from("sprite/unknown"),
+            ..replacement
+        };
+        require(
+            manifest.verify_media_replacement(&allowed, &unknown, b"12345678")
+                == Err(AssetError::InvalidIdentity),
+        )?;
+        require(
+            manifest.verify_media_replacement(&allowed, &data, b"abc")
+                == Err(AssetError::InvalidFormat),
+        )
+    }
+
+    #[test]
+    fn image_replacements_preserve_dimensions_and_payload_integrity()
+    -> Result<(), AssetError> {
+        let original = image_record();
+        let manifest =
+            AssetManifest::new(source(), vec![original.clone()], limits())?;
+        let allowed = ["sprite/hero"];
+        let replacement = AssetRecord {
+            digest: ContentHash::calculate(b"12345678"),
+            ..original
+        };
+        require(
+            manifest.verify_media_replacement(
+                &allowed,
+                &replacement,
+                b"87654321",
+            ) == Err(AssetError::PayloadMismatch),
+        )?;
+        require(
+            manifest.verify_media_replacement(&allowed, &replacement, b"short")
+                == Err(AssetError::PayloadMismatch),
+        )?;
+        let transposed = AssetRecord {
+            format: AssetFormat::Rgba8 {
+                height: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+                width: NonZeroU32::MIN,
+            },
+            ..replacement
+        };
+        require(
+            manifest.verify_media_replacement(
+                &allowed,
+                &transposed,
+                b"12345678",
+            ) == Err(AssetError::InvalidFormat),
+        )
+    }
+
+    #[test]
+    fn pcm_replacements_preserve_sample_layout() -> Result<(), AssetError> {
+        let original = AssetRecord {
+            format: AssetFormat::PcmS16Le {
+                channels: NonZeroU8::MIN,
+                frames: NonZeroU64::new(2).unwrap_or(NonZeroU64::MIN),
+                sample_rate: NonZeroU32::new(48_000).unwrap_or(NonZeroU32::MIN),
+            },
+            ..record("sound/hit", b"abcd")
+        };
+        let manifest =
+            AssetManifest::new(source(), vec![original.clone()], limits())?;
+        let replacement = AssetRecord {
+            digest: ContentHash::calculate(b"efgh"),
+            ..original
+        };
+        manifest.verify_media_replacement(
+            &["sound/hit"],
+            &replacement,
+            b"efgh",
+        )?;
+        let different_rate = AssetRecord {
+            format: AssetFormat::PcmS16Le {
+                channels: NonZeroU8::MIN,
+                frames: NonZeroU64::new(2).unwrap_or(NonZeroU64::MIN),
+                sample_rate: NonZeroU32::new(44_100).unwrap_or(NonZeroU32::MIN),
+            },
+            ..replacement
+        };
+        require(
+            manifest.verify_media_replacement(
+                &["sound/hit"],
+                &different_rate,
+                b"efgh",
+            ) == Err(AssetError::InvalidFormat),
+        )
     }
 
     #[test]
