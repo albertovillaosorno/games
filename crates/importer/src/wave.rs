@@ -37,6 +37,9 @@ use games_assets::AssetFormat;
 
 use crate::ImportError;
 
+/// Fixed size of the supported canonical WAV header.
+pub const WAVE_HEADER_BYTES: usize = 44;
+
 /// Exact borrowed PCM16 payload from a canonical-header WAV.
 #[derive(Clone, Copy, Debug)]
 pub struct WavePcm<'source> {
@@ -66,7 +69,7 @@ impl<'source> WavePcm<'source> {
             return Err(ImportError::TooLarge);
         }
         let (header, payload) = source
-            .split_first_chunk::<44>()
+            .split_first_chunk::<WAVE_HEADER_BYTES>()
             .ok_or(ImportError::InvalidWave)?;
         validate_header(header, size)?;
         let format = pcm_format(
@@ -85,7 +88,7 @@ impl<'source> WavePcm<'source> {
 }
 
 fn field<const N: usize>(
-    header: &[u8; 44],
+    header: &[u8; WAVE_HEADER_BYTES],
     offset: usize,
 ) -> Result<[u8; N], ImportError> {
     let end = offset.checked_add(N).ok_or(ImportError::InvalidWave)?;
@@ -96,7 +99,7 @@ fn field<const N: usize>(
 }
 
 fn pcm_format(
-    header: &[u8; 44],
+    header: &[u8; WAVE_HEADER_BYTES],
     bytes: u64,
 ) -> Result<AssetFormat, ImportError> {
     let channels = u16::from_le_bytes(field(header, 22)?);
@@ -130,7 +133,10 @@ fn pcm_format(
     })
 }
 
-fn validate_header(header: &[u8; 44], size: u64) -> Result<(), ImportError> {
+fn validate_header(
+    header: &[u8; WAVE_HEADER_BYTES],
+    size: u64,
+) -> Result<(), ImportError> {
     if field::<4>(header, 0)? != *b"RIFF"
         || field::<4>(header, 8)? != *b"WAVE"
         || field::<4>(header, 12)? != *b"fmt "
@@ -144,7 +150,10 @@ fn validate_header(header: &[u8; 44], size: u64) -> Result<(), ImportError> {
     let riff_size = u64::from(u32::from_le_bytes(field(header, 4)?));
     let data_size = u64::from(u32::from_le_bytes(field(header, 40)?));
     if riff_size.checked_add(8) != Some(size)
-        || data_size.checked_add(44) != Some(size)
+        || data_size.checked_add(
+            u64::try_from(WAVE_HEADER_BYTES)
+                .map_err(|_error| ImportError::InvalidWave)?,
+        ) != Some(size)
     {
         return Err(ImportError::InvalidWave);
     }

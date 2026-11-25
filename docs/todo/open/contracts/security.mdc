@@ -317,3 +317,13 @@ before hashing encoded metadata. Synthetic controls reject per-file,
 aggregate-byte and entry-count exhaustion even with a mismatching digest,
 leave no staged files and permanently abort the transaction. Fresh
 validation passed in run 1795608394182537080-425408.
+
+The authoring command also accepts a strict uncompressed PCM16 WAV via
+`bundle replace-wave`. It reuses the bounded borrowed WAV parser, derives
+the maximum file length from the exact pinned PCM descriptor plus the
+fixed WAV header, and rejects layout mismatches before publication.
+Synthetic tests reject a same-length wrong sample rate and a WAV directed
+at an image slot. Fresh validation passed in run
+1795608679689389454-473508. A 16,714-byte synthetic WAV produced the
+expected 16,670-byte canonical replacement and passed the same native
+600-frame movement and 51-frame combat smoke with dummy audio.

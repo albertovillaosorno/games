@@ -114,6 +114,8 @@ const USAGE: &str = concat!(
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "GNU/Linux: games-build bundle replace-media PARENT BASE_SHA256 KEY ",
     "RAW MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
+    "GNU/Linux: games-build bundle replace-wave PARENT BASE_SHA256 KEY ",
+    "WAV MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build zip verify PATH TITLE REV ",
     "SOURCE ENTRY TOTAL COUNT\n",
     "games-build mame verify|import|audio-import MACHINE REV PATH ",
@@ -306,7 +308,17 @@ impl Command {
             },
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             (Some("bundle"), Some("replace-media")) => {
-                Self::parse_replace_media(args.collect())
+                Self::parse_replace_media(
+                    args.collect(),
+                    publication::MediaEncoding::Raw,
+                )
+            },
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            (Some("bundle"), Some("replace-wave")) => {
+                Self::parse_replace_media(
+                    args.collect(),
+                    publication::MediaEncoding::Wave,
+                )
             },
             (Some("zip"), Some("verify")) => {
                 Ok(Self::Verify(None, Arguments::parse(args.collect())?))
@@ -510,16 +522,20 @@ impl Command {
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    fn parse_replace_media(args: Vec<OsString>) -> Result<Self, String> {
-        let [parent, digest, key, raw, metadata, payload, total, count] =
+    fn parse_replace_media(
+        args: Vec<OsString>,
+        encoding: publication::MediaEncoding,
+    ) -> Result<Self, String> {
+        let [parent, digest, key, source, metadata, payload, total, count] =
             <[OsString; 8]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
         Ok(Self::ReplaceMedia(publication::MediaReplacement {
             base: parse_manifest_digest(&digest)?,
+            encoding,
             key: text(&key)?.to_owned(),
             limits: parse_manifest_limits([metadata, payload, total, count])?,
             parent: parent.into(),
-            raw: raw.into(),
+            source: source.into(),
         }))
     }
 
@@ -947,6 +963,16 @@ mod tests {
             Command::parse(args.into_iter().take(9).map(OsString::from))
                 .is_err()
         );
+        let mut wave = args;
+        wave[1] = "replace-wave";
+        let parsed = Command::parse(wave.into_iter().map(OsString::from));
+        assert!(matches!(
+            parsed,
+            Ok(Command::ReplaceMedia(publication::MediaReplacement {
+                encoding: publication::MediaEncoding::Wave,
+                ..
+            }))
+        ));
         let mut invalid = args;
         invalid[3] = "wrong";
         assert!(

@@ -34,22 +34,73 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 use games_assets::archive::ArchiveBudget;
-use games_assets::{AssetManifest, ContentHash, ManifestLimits};
+use games_assets::{
+    AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
+};
 use games_importer::conversion::ConversionLimits;
 use games_importer::mame::AssetSelection;
+use games_importer::wave::{WAVE_HEADER_BYTES, WavePcm};
 use games_importer::{ImportError, SourceSnapshot};
 use games_platform_storage::bundle::CanonicalBundle;
 use games_platform_storage::file::snapshot;
 use games_platform_storage::staging::{CanonicalStaging, StagedBundle};
 
+/// Supported user-authored media encodings, explicitly selected.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MediaEncoding {
+    Raw,
+    Wave,
+}
+
+impl MediaEncoding {
+    fn limit(self, original: &AssetRecord) -> Result<NonZeroU64, String> {
+        let size = NonZeroU64::new(original.size)
+            .ok_or_else(|| String::from("empty media slot"))?;
+        match self {
+            Self::Raw => Ok(size),
+            Self::Wave
+                if matches!(original.format, AssetFormat::PcmS16Le { .. }) =>
+            {
+                size.checked_add(u64::try_from(WAVE_HEADER_BYTES).map_err(
+                    |_error| String::from("invalid WAV header size"),
+                )?)
+                .ok_or_else(|| String::from("WAV size overflow"))
+            },
+            Self::Wave => Err(String::from("WAV requires a PCM slot")),
+        }
+    }
+
+    fn payload<'source>(
+        self,
+        source: &'source [u8],
+        original: &AssetRecord,
+        limit: NonZeroU64,
+    ) -> Result<&'source [u8], String> {
+        match self {
+            Self::Raw => Ok(source),
+            Self::Wave => {
+                let wave = WavePcm::new(source, limit)
+                    .map_err(|error| format!("replacement WAV: {error:?}"))?;
+                if wave.format() != original.format {
+                    return Err(String::from(
+                        "replacement WAV layout mismatch",
+                    ));
+                }
+                Ok(wave.payload())
+            },
+        }
+    }
+}
+
 /// Explicit authoring selection for one existing passive-media slot.
 #[derive(Debug)]
 pub(crate) struct MediaReplacement {
     pub(crate) base: ContentHash,
+    pub(crate) encoding: MediaEncoding,
     pub(crate) key: String,
     pub(crate) limits: ManifestLimits,
     pub(crate) parent: PathBuf,
-    pub(crate) raw: PathBuf,
+    pub(crate) source: PathBuf,
 }
 
 impl MediaReplacement {
@@ -65,13 +116,15 @@ impl MediaReplacement {
             .map_err(|error| format!("replacement slot: {error:?}"))?;
         let size = NonZeroU64::new(original.size)
             .ok_or_else(|| String::from("empty media slot"))?;
-        let bytes = snapshot(&self.raw, size)
+        let limit = self.encoding.limit(original)?;
+        let source = snapshot(&self.source, limit)
             .map_err(|error| format!("replacement input: {error:?}"))?;
+        let bytes = self.encoding.payload(&source, original, limit)?;
         if u64::try_from(bytes.len()).ok() != Some(size.get()) {
             return Err(String::from("replacement byte length mismatch"));
         }
         let mut record = original.clone();
-        record.digest = ContentHash::calculate(&bytes);
+        record.digest = ContentHash::calculate(bytes);
         let digest = record.digest;
         let limits = ManifestLimits {
             manifest_bytes: self.limits.manifest_bytes,
@@ -86,7 +139,7 @@ impl MediaReplacement {
             CanonicalStaging::new(&self.parent, staging_budget(limits)?)
                 .map_err(|error| format!("stage: {error:?}"))?;
         stage
-            .write_payload(digest, &bytes)
+            .write_payload(digest, bytes)
             .map_err(|error| format!("stage: {error:?}"))?;
         finish(stage, &manifest, limits)
     }
@@ -245,10 +298,10 @@ pub fn upgrade(
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU8, NonZeroU32};
     use std::{env, fs};
 
-    use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
+    use games_assets::SourceIdentity;
     use games_importer::mame::Machine;
     use games_platform_storage::staging::AuthoredStaging;
 
@@ -259,6 +312,15 @@ mod tests {
         E: Debug,
     {
         format!("{error:?}")
+    }
+
+    fn fixture_limits() -> ManifestLimits {
+        ManifestLimits {
+            manifest_bytes: NonZeroUsize::MIN.saturating_add(4095),
+            payload_bytes: NonZeroU64::MIN.saturating_add(15),
+            records: NonZeroUsize::MIN.saturating_add(3),
+            total_bytes: NonZeroU64::MIN.saturating_add(63),
+        }
     }
 
     fn publish_base(
@@ -284,9 +346,19 @@ mod tests {
             key: String::from("rules"),
             size: 4,
         };
+        let pcm = AssetRecord {
+            digest: ContentHash::calculate(b"tone"),
+            format: AssetFormat::PcmS16Le {
+                channels: NonZeroU8::MIN,
+                frames: NonZeroU64::MIN.saturating_add(1),
+                sample_rate: NonZeroU32::MIN.saturating_add(9999),
+            },
+            key: String::from("audio/tone"),
+            size: 4,
+        };
         let manifest = AssetManifest::new(
             source,
-            vec![image.clone(), data.clone()],
+            vec![image.clone(), data.clone(), pcm.clone()],
             limits,
         )
         .map_err(failure)?;
@@ -296,6 +368,7 @@ mod tests {
             .write_payload(image.digest, b"abcd")
             .map_err(failure)?;
         stage.write_payload(data.digest, b"rule").map_err(failure)?;
+        stage.write_payload(pcm.digest, b"tone").map_err(failure)?;
         let staged = stage.finish(&manifest, limits).map_err(failure)?;
         let base = staged.digest();
         staged
@@ -311,19 +384,18 @@ mod tests {
         let directory = env::current_dir().map_err(failure)?;
         let root = AuthoredStaging::new(&directory).map_err(failure)?;
         let parent = root.path();
-        let machine =
-            Machine::select("simpsons", "world-4p-set-1").map_err(failure)?;
-        let limits = AssetSelection::Graphics(machine).limits();
+        let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
         let base = original.digest();
         let manifest = original.manifest();
         let raw = parent.join("authored.raw");
         let select = |key: &str| MediaReplacement {
             base,
+            encoding: MediaEncoding::Raw,
             key: key.to_owned(),
             limits,
             parent: parent.to_path_buf(),
-            raw: raw.clone(),
+            source: raw.clone(),
         };
         for (key, bytes) in [
             ("image/hero", b"x".as_slice()),
@@ -362,6 +434,66 @@ mod tests {
             || select("image/hero").run().is_ok()
         {
             return Err(String::from("replacement publication mismatch"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wave_authoring_requires_exact_pcm_layout() -> Result<(), String> {
+        const WAVE: [u8; 48] = [
+            b'R', b'I', b'F', b'F', 40, 0, 0, 0, b'W', b'A', b'V', b'E', b'f',
+            b'm', b't', b' ', 16, 0, 0, 0, 1, 0, 1, 0, 16, 39, 0, 0, 32, 78, 0,
+            0, 2, 0, 16, 0, b'd', b'a', b't', b'a', 4, 0, 0, 0, b'P', b'C',
+            b'M', b'!',
+        ];
+        let directory = env::current_dir().map_err(failure)?;
+        let root = AuthoredStaging::new(&directory).map_err(failure)?;
+        let parent = root.path();
+        let limits = fixture_limits();
+        let original = publish_base(parent, limits)?;
+        let source = parent.join("authored.wav");
+        let select = |key: &str| MediaReplacement {
+            base: original.digest(),
+            encoding: MediaEncoding::Wave,
+            key: key.to_owned(),
+            limits,
+            parent: parent.to_path_buf(),
+            source: source.clone(),
+        };
+        let mut wrong_rate = WAVE;
+        wrong_rate
+            .get_mut(24..32)
+            .ok_or("bad fixture")?
+            .copy_from_slice(&[64, 31, 0, 0, 128, 62, 0, 0]);
+        fs::write(&source, wrong_rate).map_err(failure)?;
+        if select("audio/tone").run().is_ok() {
+            return Err(String::from("incompatible rate accepted"));
+        }
+        fs::write(&source, WAVE).map_err(failure)?;
+        if select("image/hero").run().is_ok() {
+            return Err(String::from("WAV admitted for image slot"));
+        }
+        select("audio/tone").run()?;
+        let manifest = original.manifest();
+        let pcm = manifest.record("audio/tone").ok_or("missing PCM fixture")?;
+        let replacement = AssetManifest::new(
+            manifest.source().clone(),
+            vec![AssetRecord {
+                digest: ContentHash::calculate(b"PCM!"),
+                ..pcm.clone()
+            }],
+            limits,
+        )
+        .map_err(failure)?;
+        let digest = ContentHash::calculate(
+            &replacement.encode(limits).map_err(failure)?,
+        );
+        let published =
+            CanonicalBundle::open(parent, digest, limits).map_err(failure)?;
+        if published.read_payload("audio/tone").map_err(failure)? != b"PCM!"
+            || original.read_payload("audio/tone").map_err(failure)? != b"tone"
+        {
+            return Err(String::from("WAV publication mismatch"));
         }
         Ok(())
     }

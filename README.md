@@ -177,6 +177,12 @@ or use `--audio BASE_SHA --audio-mod MOD_SHA`. Only the four attack clips
 slot `audio/sample-0004` needs 8,335 mono frames (16,670 bytes) at the
 canonical 10 kHz rate. No executable or game-data replacement is permitted.
 
+For an exact uncompressed PCM16 WAV export, use `bundle replace-wave`
+with the same arguments, replacing RAW with the WAV path. The supported
+RIFF layout has the standard 44-byte header without additional chunks.
+The base descriptor bounds the input size, and its sample rate, channels
+and frame count must all match; no resampling or conversion is performed.
+
 The selected Simpsons bundle is verified locally. Its observed palette RAM
 and mixer assignments match independent reference values; bounded tilemap
 admission and exact PCM reference comparison also pass. The optional GNU/Linux
