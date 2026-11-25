@@ -10,12 +10,7 @@ Use `cargo validate` before committing or pushing changes.
 
 ## P0 - Bootstrap
 
-### TODO - Commit hooks and contribution gates
-
-Verify contribution validation and activate the repository hooks.
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - Commit hooks and contribution gates](docs/todo/open/foundation/hooks.mdc)
+Completed. See `docs/todo/completed/foundation/`.
 
 ## P1 - Contracts
 

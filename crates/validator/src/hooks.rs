@@ -524,4 +524,74 @@ mod tests {
         }
         fs::remove_dir_all(fixture).map_err(|error| error.to_string())
     }
+
+    #[cfg(unix)]
+    fn executable(path: &Path, bytes: &[u8]) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        write(path, bytes)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(unix)]
+    fn hook_dispatch(
+        fixture: &Path,
+        hook: &str,
+        failure: &str,
+        expected: &str,
+    ) -> Result<(), String> {
+        let calls = fixture.join("calls");
+        write(&calls, b"")?;
+        let status = Command::new("/bin/sh")
+            .arg(root().join(".githooks").join(hook))
+            .arg(fixture.join("COMMIT_MSG"))
+            .current_dir(fixture)
+            .env("PATH", fixture)
+            .env("HOOK_FIXTURE", fixture)
+            .env("HOOK_FAIL", failure)
+            .status()
+            .map_err(|error| error.to_string())?;
+        require(
+            status.success() == failure.is_empty(),
+            "hook must propagate delegate failure",
+        )?;
+        let actual =
+            fs::read_to_string(calls).map_err(|error| error.to_string())?;
+        require(actual == expected, "hook delegate order or arguments")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hooks_execute_delegates_and_fail_closed() -> Result<(), String> {
+        let fixture = directory("hook-dispatch")?;
+        executable(
+            &fixture.join("git"),
+            b"#!/bin/sh\nprintf '%s\\n' \"$HOOK_FIXTURE\"\n",
+        )?;
+        executable(
+            &fixture.join("cargo"),
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s\\n' \"$*\" >> \"$HOOK_FIXTURE/calls\"\n",
+                "for arg do\n",
+                "  if [ \"$arg\" = \"$HOOK_FAIL\" ]; then exit 1; fi\n",
+                "done\n",
+            )
+            .as_bytes(),
+        )?;
+        let staged = "run --locked -q -p games-validator --bin games-hooks";
+        let first = format!("{staged} -- staged\n");
+        let both = format!("{first}validate\n");
+        hook_dispatch(&fixture, "pre-commit", "", &both)?;
+        hook_dispatch(&fixture, "pre-commit", "staged", &first)?;
+        hook_dispatch(&fixture, "pre-commit", "validate", &both)?;
+        let message = format!(
+            "{staged} -- commit-message {}/COMMIT_MSG\n",
+            fixture.display()
+        );
+        hook_dispatch(&fixture, "commit-msg", "", &message)?;
+        hook_dispatch(&fixture, "commit-msg", "commit-message", &message)?;
+        fs::remove_dir_all(fixture).map_err(|error| error.to_string())
+    }
 }

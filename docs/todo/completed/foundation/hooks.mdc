@@ -1,6 +1,6 @@
 ---
 id: "hooks"
-status: "open"
+status: "completed"
 lane: "0"
 priority: "p0"
 area: "foundation"
@@ -27,4 +27,15 @@ Verify contribution validation and activate the repository hooks.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+Fresh validation passed on 2026-11-24 in run
+1795575589898921939-2506275 (73 tests). Rust fixtures validate positive and
+negative commit subjects, mandatory scope, 72-character maximum, DCO
+trailer syntax, staged file paths and reachable commit-history framing.
+Unix temporary fixtures execute both actual hook scripts with isolated
+command delegates, verifying dispatch arguments, ordering and rejection
+when either validation subprocess fails.
+
+Local `core.hooksPath` is `.githooks`. Both executable hooks ran successfully
+on signed commits `edb3142` and `3a170c9`; the fresh validation history
+check accepted every reachable HEAD commit. Both commits were pushed to
+`origin/main`. This policy validates DCO syntax, not identity ownership.
