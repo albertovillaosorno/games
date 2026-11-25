@@ -461,3 +461,17 @@ diagonal movement and release. The default preview remains unchanged.
 Fresh workspace validation passed in run 1795590044112489749-360869,
 and the native `--smoke --touch` launch succeeded with local art.
 Physical touchscreen, Android and browser integration remain open.
+
+Additional isolated original-machine runs observed two-pixel-per-tick
+displacement during short unobstructed walking intervals for Homer,
+Bart and Lisa. Repeating each run reproduced all 376 captured raw-state
+and RGB frame files byte-for-byte. Combat interruption and camera
+movement affected other intervals, particularly Lisa's. This supports
+the provisional shared cardinal rate, not collision, camera or diagonal
+parity. No raw observations or proprietary images are tracked.
+
+The title now exposes zero-based consecutive displaced simulation ticks
+for animation selection. Opposing controls, release and a fully clamped
+position return to idle; renewed displacement starts at tick zero.
+This is a deterministic prototype presentation policy, not yet an
+original walk-cycle timing comparison.

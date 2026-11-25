@@ -164,9 +164,10 @@ pub enum Facing {
 
 /// Prototype walkable area and four initial foot positions.
 ///
-/// The Marge movement rate was observed on the original machine. These
-/// boundaries, spawn offsets and other stations' rates remain provisional
-/// until their independent reference observations are compared.
+/// Isolated original-machine observations support the two-pixel rate
+/// during some unobstructed movement intervals for all four stations.
+/// Boundaries, spawn offsets, diagonal motion and collisions remain
+/// provisional until further independent comparisons.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreetLayout {
     /// Maximum foot position.
@@ -214,6 +215,8 @@ pub struct Station {
     pub participation: Participation,
     /// Current foot position.
     pub position: Point,
+    /// Consecutive displaced ticks, zero-based; None when stationary.
+    pub walking_ticks: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,6 +270,7 @@ impl Slot {
         } else if dx > 0 {
             self.station.facing = Facing::Right;
         }
+        let previous = self.station.position;
         let position = &mut self.station.position;
         position.x = position
             .x
@@ -276,6 +280,15 @@ impl Slot {
             .y
             .saturating_add(dy)
             .clamp(layout.min.y, layout.max.y);
+        self.station.walking_ticks = if *position == previous {
+            None
+        } else {
+            Some(
+                self.station
+                    .walking_ticks
+                    .map_or(0, |elapsed| elapsed.saturating_add(1)),
+            )
+        };
     }
 
     const fn new(position: Point) -> Self {
@@ -286,6 +299,7 @@ impl Slot {
                 facing: Facing::Right,
                 participation: Participation::Absent,
                 position,
+                walking_ticks: None,
             },
         }
     }
@@ -519,6 +533,29 @@ mod tests {
         state.input_step(6, &pulse(Player::Homer, Control::Start));
         let [_, joined, ..] = state.stations();
         assert_eq!(joined.participation, Participation::Playing);
+    }
+
+    #[test]
+    fn walking_ticks_track_actual_displacement_and_restart() {
+        let mut state = four_playing();
+        state.input_step(3, &[change(Player::Marge, Control::Right, true)]);
+        let [started, _, _, _] = state.stations();
+        assert_eq!(started.walking_ticks, Some(0));
+        state.input_step(4, &[]);
+        let [moving, _, _, _] = state.stations();
+        assert_eq!(moving.walking_ticks, Some(1));
+        state.input_step(5, &[change(Player::Marge, Control::Left, true)]);
+        let [opposed, _, _, _] = state.stations();
+        assert_eq!(opposed.walking_ticks, None);
+        state.input_step(6, &[change(Player::Marge, Control::Right, false)]);
+        let [restarted, _, _, _] = state.stations();
+        assert_eq!(restarted.walking_ticks, Some(0));
+        for tick in 7..300 {
+            state.input_step(tick, &[]);
+        }
+        let [blocked, _, _, _] = state.stations();
+        assert_eq!(blocked.position.x, StreetLayout::DOWNTOWN.min.x);
+        assert_eq!(blocked.walking_ticks, None);
     }
 
     #[test]
