@@ -41,6 +41,9 @@ pub mod reference_audio;
 /// Bounded background-reference comparison.
 pub mod reference_background;
 #[cfg(any(target_os = "linux", target_os = "android"))]
+/// Read-only CPU and device object buffer comparison.
+pub mod reference_objects;
+#[cfg(any(target_os = "linux", target_os = "android"))]
 /// Bounded read-only palette comparison against local observations.
 pub mod reference_palette;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -94,6 +97,7 @@ const USAGE: &str = concat!(
     "GNU/Linux: mame check MACHINE REV PARENT MANIFEST_SHA256\n",
     "GNU/Linux: mame background-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
+    "Linux/Android: mame object-check MACHINE REV CPU DEVICE\n",
     "Linux/Android: mame palette-check MACHINE REV RAW ARGB32",
     "\nLinux/Android: mame priority-check MACHINE REV RAW OBSERVED_LE32",
     "\nLinux/Android: mame tilemap-check MACHINE REV RAM REGISTERS",
@@ -193,6 +197,8 @@ enum Command {
     Check(Machine, PathBuf, ContentHash),
     Import(Machine, Arguments),
     #[cfg(any(target_os = "linux", target_os = "android"))]
+    ObjectCheck(Machine, PathBuf, PathBuf),
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     PaletteCheck(Machine, PathBuf, PathBuf),
     #[cfg(any(target_os = "linux", target_os = "android"))]
     PriorityCheck(Machine, PathBuf, PathBuf),
@@ -256,7 +262,8 @@ impl Command {
                 args.collect(),
             )?)),
             #[cfg(any(target_os = "linux", target_os = "android"))]
-            "palette-check" | "priority-check" | "tilemap-check" => {
+            "object-check" | "palette-check" | "priority-check"
+            | "tilemap-check" => {
                 Self::parse_reference(action, selected, args.collect())
             },
             #[cfg(all(
@@ -313,6 +320,9 @@ impl Command {
         let [raw, reference] = <[OsString; 2]>::try_from(args)
             .map_err(|_args| String::from(USAGE))?;
         match action {
+            "object-check" => {
+                Ok(Self::ObjectCheck(machine, raw.into(), reference.into()))
+            },
             "palette-check" => {
                 Ok(Self::PaletteCheck(machine, raw.into(), reference.into()))
             },
@@ -330,6 +340,10 @@ impl Command {
         match self {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             Self::BackgroundCheck(machine, args) => args.run(machine),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::ObjectCheck(machine, cpu, device) => {
+                reference_objects::check(machine, &cpu, &device)
+            },
             #[cfg(any(target_os = "linux", target_os = "android"))]
             Self::PaletteCheck(machine, raw, reference) => {
                 reference_palette::check(machine, &raw, &reference)

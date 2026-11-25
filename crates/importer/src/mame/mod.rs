@@ -34,6 +34,8 @@
 /// Observed background raster composition for supported tilemap modes.
 pub mod background;
 mod konami;
+/// Observed sprite object transfer and record admission.
+pub mod objects;
 mod palette;
 /// Observed video mixer assignment and priority order.
 pub mod priority;
@@ -92,6 +94,7 @@ struct Profile {
     graphics: &'static [Region],
     limits: ManifestLimits,
     machine: &'static str,
+    object_transfer: objects::TransferPolicy,
     palette: palette::Palette,
     raster: background::Raster,
     revision: &'static str,
@@ -109,6 +112,17 @@ impl Machine {
     #[must_use]
     pub const fn background_raster(self) -> background::Raster {
         self.0.raster
+    }
+
+    /// Compare an observed CPU object buffer and captured device buffer.
+    /// # Errors
+    /// Rejects incomplete or malformed snapshots.
+    pub fn compare_object_transfer(
+        self,
+        cpu: &[u8],
+        device: &[u8],
+    ) -> Result<objects::TransferReport, ImportError> {
+        self.0.object_transfer.compare(cpu, device)
     }
 
     /// Convert every declared graphics region to a private canonical sink.

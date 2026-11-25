@@ -36,6 +36,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use games_assets::ManifestLimits;
 
 use super::background::Raster;
+use super::objects::TransferPolicy;
 use super::palette::{Palette, xbgr555_be};
 use super::priority::Wiring;
 use super::{Profile, Region};
@@ -66,6 +67,7 @@ pub(super) static SIMPSONS: Profile = Profile {
         total_bytes: NonZeroU64::MIN.saturating_add(10_485_760 - 1),
     },
     machine: "simpsons",
+    object_transfer: TransferPolicy { nonzero_depth: true },
     palette: Palette {
         decode_word: xbgr555_be,
         entries: NonZeroUsize::MIN.saturating_add(2048 - 1),

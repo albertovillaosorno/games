@@ -224,3 +224,40 @@ sprites without independent evidence. Synthetic checks cover coordinate
 wrap, priority ordering, transparent pens and invalid observations.
 No source images are published. Gameplay, object decoding, unsupported
 scroll modes, full composited parity and platform acceptance remain open.
+
+Two additional fresh, isolated original runs captured the named CPU
+sprite RAM (4,096 bytes) and candidate device object RAM and control
+registers. The MAME Lua device item map omitted the sprite device; the
+candidate buffer was located by its pinned MAME 0.289 save-item index
+and exact shape (2,048 16-bit words). Candidate registers were captured
+by index and shape as well; they are not yet independently named.
+All 30 object files, six tile RAM files and six screen files matched
+byte-for-byte between these runs. The screen files also matched the
+earlier reference captures.
+
+```sh
+cargo run --locked -p games-build -- mame object-check simpsons \
+  world-4p-set-1 CPU_OBJECT_RAM DEVICE_OBJECT_RAM
+```
+
+The comparison applies the selected machine's active/nonzero-depth
+transfer rule, preserving record order and comparing every selected
+16-byte record. Inactive payload words may be stale, but every header
+after the selected prefix must be zero. Both runs produced:
+
+| Original frame | Selected CPU | Active device | Exact records |
+| -------------- | -----------: | ------------: | ------------: |
+| 120            | 0            | 0             | 0             |
+| 599            | 0            | 0             | 0             |
+| 660            | 8            | 8             | 2             |
+| 900            | 37           | 37            | 32            |
+| 1200           | 0            | 0             | 0             |
+| 1500           | 13           | 13            | 4             |
+
+No uncleared headers were observed. The active counts and partial record
+agreement corroborate the candidate device buffer's identity; the
+different records are preserved as evidence, not treated as exact DMA
+equivalence. The CPU and device captures need not reflect the same DMA
+instant. All zero-object frames are also the exact background matches.
+Sprite attributes, placement, scaling, shadow/priority composition and
+actual DMA timing remain open.
