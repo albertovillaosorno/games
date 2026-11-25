@@ -381,14 +381,17 @@ fn validate_dimensions(
 mod tests {
     use std::env;
     use std::num::{NonZeroU32, NonZeroUsize};
+    use std::time::Duration;
 
-    use games::input::InputEvent;
+    use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
+    use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
+    use games::timing::StepClock;
     use sdl2::event::Event;
     use sdl2::keyboard::Mod;
     use sdl2::pixels::PixelFormatEnum;
     use sdl2::surface::Surface;
 
-    use super::input::{Button, HostEvent, Scancode, key_code};
+    use super::input::{Button, HostEvent, NativeInput, Scancode, key_code};
     use super::sprites::{SceneLimits, SpriteDraw, SpriteRect};
     use super::{
         FrameLayout, NativeWindow, RenderError, create_texture, draw_frame,
@@ -399,6 +402,23 @@ mod tests {
     const GREEN: [u8; 4] = [0, 255, 0, 255];
     const RED: [u8; 4] = [255, 0, 0, 255];
     const WHITE: [u8; 4] = [255, 255, 255, 255];
+
+    #[derive(Debug, Default)]
+    struct ActionTrace {
+        last: Option<(u64, bool)>,
+    }
+
+    impl InputStep for ActionTrace {
+        type Input = LogicalAction<&'static str>;
+
+        fn input_step(&mut self, tick: u64, actions: &[Self::Input]) {
+            if let Some(action) =
+                actions.iter().rfind(|item| item.action == "jump")
+            {
+                self.last = Some((tick, action.down));
+            }
+        }
+    }
 
     fn extent() -> Result<FrameLayout, RenderError> {
         FrameLayout::new(nz(2), nz(2), budget(16))
@@ -416,6 +436,43 @@ mod tests {
         condition
             .then_some(())
             .ok_or_else(|| RenderError::Backend(reason.to_owned()))
+    }
+
+    fn verify_routed_timestamp(
+        adapter: &NativeInput,
+        native: &Event,
+        event: InputEvent,
+    ) -> Result<(), RenderError> {
+        let timestamp = adapter.event_elapsed(native).ok_or_else(|| {
+            RenderError::Backend(String::from("invalid queued input timestamp"))
+        })?;
+        require(timestamp <= adapter.elapsed(), "future event")?;
+        let interval = Duration::from_secs(1);
+        let clock = StepClock::new(interval, nz(128))
+            .map_err(|error| RenderError::Backend(format!("{error:?}")))?;
+        let target = clock.tick_at(timestamp).ok_or_else(|| {
+            RenderError::Backend(String::from("unrepresentable input time"))
+        })?;
+        let mut live = LiveSimulation::new(
+            ActionTrace::default(),
+            clock,
+            LiveInputLimits {
+                future_ticks: 127,
+                pending_actions: budget(4),
+            },
+        );
+        let mut mapping = InputMapping::new();
+        mapping.bind_key(key_code(Scancode::Space), "jump");
+        let mut router = InputRouter::new(mapping);
+        live.enqueue_at(timestamp, router.handle(event))
+            .map_err(|error| RenderError::Backend(format!("{error:?}")))?;
+        let _report = live
+            .advance(timestamp.saturating_add(interval))
+            .map_err(|error| RenderError::Backend(format!("{error:?}")))?;
+        require(
+            live.state().last == Some((target, true)),
+            "wrong action tick",
+        )
     }
 
     #[test]
@@ -587,13 +644,16 @@ mod tests {
         let events = window.sdl.event().map_err(RenderError::Backend)?;
         events.push_event(event).map_err(RenderError::Backend)?;
         let mut pump = window.sdl.event_pump().map_err(RenderError::Backend)?;
-        let expected = HostEvent::Input(InputEvent::Key {
+        let expected = InputEvent::Key {
             code: key_code(Scancode::Space),
             down: true,
-        });
+        };
         for native in pump.poll_iter().take(256) {
-            if startup.input.translate(&native)? == Some(expected) {
-                return Ok(());
+            if let Some(HostEvent::Input(input)) =
+                startup.input.translate(&native)?
+                && input == expected
+            {
+                return verify_routed_timestamp(&startup.input, &native, input);
             }
         }
         Err(RenderError::Backend(String::from(

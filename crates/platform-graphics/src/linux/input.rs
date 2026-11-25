@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - SDL keyboard and bounded native controller event admission.
+//   - SDL input admission and event timestamp reconstruction.
 // - Must-Not:
 //   - Assign players, define title actions or advance simulation.
 // - Allows:
@@ -34,13 +34,14 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Formatter};
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use games::input::InputEvent;
 pub use sdl2::controller::Button;
 use sdl2::controller::GameController;
 use sdl2::event::{Event, WindowEvent};
 pub use sdl2::keyboard::Scancode;
-use sdl2::{GameControllerSubsystem, Sdl};
+use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
 use super::RenderError;
 
@@ -57,7 +58,9 @@ pub enum HostEvent {
 pub struct NativeInput {
     controllers: BTreeMap<u64, GameController>,
     limit: NonZeroUsize,
+    origin: u64,
     subsystem: GameControllerSubsystem,
+    timer: TimerSubsystem,
     window: u32,
 }
 
@@ -102,17 +105,39 @@ impl NativeInput {
         Ok(Some(InputEvent::Attached { device }))
     }
 
+    /// Time since the input session began, using SDL's millisecond clock.
+    ///
+    /// Use successive elapsed samples to advance a simulation clock.
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        Duration::from_millis(self.timer.ticks64().saturating_sub(self.origin))
+    }
+
+    /// Map an SDL event's timestamp onto the input session's elapsed time.
+    ///
+    /// Events queued before startup belong to time zero. Poll frequently:
+    /// SDL timestamps are 32-bit milliseconds, so this reconstruction only
+    /// accepts stamps within the preceding half of that counter's range.
+    /// Returns None for a future or ambiguous timestamp.
+    #[must_use]
+    pub fn event_elapsed(&self, event: &Event) -> Option<Duration> {
+        event_elapsed(self.origin, self.timer.ticks64(), event.get_timestamp())
+    }
+
     pub(super) fn open(
         sdl: &Sdl,
         window: u32,
         limit: NonZeroUsize,
     ) -> Result<InputStartup, RenderError> {
         let subsystem = sdl.game_controller().map_err(RenderError::Backend)?;
+        let timer = sdl.timer().map_err(RenderError::Backend)?;
         let count = subsystem.num_joysticks().map_err(RenderError::Backend)?;
         let mut input = Self {
             controllers: BTreeMap::new(),
             limit,
+            origin: timer.ticks64(),
             subsystem,
+            timer,
             window,
         };
         let mut attached = Vec::new();
@@ -157,6 +182,19 @@ impl NativeInput {
         }
         Ok(routed)
     }
+}
+
+fn event_elapsed(origin: u64, now: u64, stamp: u32) -> Option<Duration> {
+    if now < origin {
+        return None;
+    }
+    let low = u32::try_from(now & u64::from(u32::MAX)).ok()?;
+    let age = low.wrapping_sub(stamp);
+    if age > 0x7fff_ffff {
+        return None;
+    }
+    let absolute = now.checked_sub(u64::from(age))?;
+    Some(Duration::from_millis(absolute.saturating_sub(origin)))
 }
 
 /// SDL physical scancode for use in a title's shared key mapping.
@@ -235,11 +273,37 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
     use sdl2::event::{Event, WindowEvent};
     use sdl2::keyboard::Mod;
 
-    use super::{Button, HostEvent, Scancode, button_code, key_code, route};
+    use super::{
+        Button, HostEvent, Scancode, button_code, event_elapsed, key_code,
+        route,
+    };
+
+    #[test]
+    fn event_time_reconstructs_wrap_and_pre_start_events() {
+        let wrap = u64::from(u32::MAX).saturating_add(1);
+        let origin = wrap.saturating_sub(10);
+        let now = wrap.saturating_add(8);
+        for (stamp, millis) in [
+            (u32::MAX, 9),
+            (0, 10),
+            (8, 18),
+            (u32::MAX.saturating_sub(20), 0),
+        ] {
+            assert_eq!(
+                event_elapsed(origin, now, stamp),
+                Some(Duration::from_millis(millis))
+            );
+        }
+        assert_eq!(event_elapsed(origin, now, 9), None);
+        assert_eq!(event_elapsed(10, 9, 9), None);
+        assert_eq!(event_elapsed(0, 3, u32::MAX), None);
+    }
 
     fn key(window_id: u32, repeat: bool) -> Event {
         Event::KeyDown {

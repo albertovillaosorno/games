@@ -227,6 +227,27 @@ impl<Simulation: InputStep> LiveSimulation<Simulation> {
         Ok(())
     }
 
+    /// Admit actions according to their timestamp from the clock's zero.
+    ///
+    /// A timestamp's target tick is independent of render cadence. Late
+    /// events are not silently moved to a different tick; the host can
+    /// explicitly retry the returned batch on the next unexecuted tick.
+    /// # Errors
+    /// Rejects late, unrepresentable, too-far-future or oversized batches.
+    pub fn enqueue_at(
+        &mut self,
+        elapsed: Duration,
+        actions: Vec<Simulation::Input>,
+    ) -> EnqueueResult<Simulation::Input> {
+        let Some(tick) = self.clock.tick_at(elapsed) else {
+            return Err(RejectedInput {
+                actions,
+                reason: QueueRejection::Future,
+            });
+        };
+        self.enqueue(tick, actions)
+    }
+
     /// Start with a simulation aligned to the supplied fixed clock.
     #[must_use]
     pub const fn new(
@@ -782,6 +803,54 @@ mod tests {
         assert!(live.advance(Duration::from_millis(9)).is_ok());
         assert_eq!(live.state().0, [(0, vec![Action::Shoot])]);
         assert_eq!(live.pending_actions(), 0);
+    }
+
+    #[test]
+    fn timestamped_actions_match_across_frame_partitions() {
+        let Some(clock) = live_clock() else {
+            return;
+        };
+        let expected = [
+            (0, vec![Action::Move(3)]),
+            (1, vec![Action::Shoot, Action::Move(-2)]),
+            (2, vec![]),
+        ];
+        for frames in [[10u64, 10, 10], [25, 0, 5]] {
+            let mut live = LiveSimulation::new(
+                OrderedState::default(),
+                clock,
+                limits(3, 2),
+            );
+            for (millis, action) in [
+                (9, Action::Move(3)),
+                (10, Action::Shoot),
+                (19, Action::Move(-2)),
+            ] {
+                assert_eq!(
+                    live.enqueue_at(Duration::from_millis(millis), vec![
+                        action
+                    ]),
+                    Ok(())
+                );
+            }
+            for elapsed in frames {
+                assert!(live.advance(Duration::from_millis(elapsed)).is_ok());
+            }
+            assert_eq!(live.state().0, expected);
+            for (timestamp, reason) in [
+                (Duration::from_millis(29), QueueRejection::Late),
+                (Duration::MAX, QueueRejection::Future),
+            ] {
+                assert_eq!(
+                    live.enqueue_at(timestamp, vec![Action::Shoot]),
+                    Err(RejectedInput {
+                        actions: vec![Action::Shoot],
+                        reason,
+                    })
+                );
+            }
+            assert_eq!(live.pending_actions(), 0);
+        }
     }
 
     #[test]

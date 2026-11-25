@@ -153,6 +153,21 @@ impl StepClock {
         self.accumulated
     }
 
+    /// Map an absolute elapsed timestamp to its fixed simulation tick.
+    ///
+    /// Time is measured from this clock's original zero, independently of
+    /// frame partitions and backlog. A timestamp exactly on a tick boundary
+    /// belongs to the new tick. Returns None for an unexecutable tick index.
+    #[must_use]
+    pub fn tick_at(&self, elapsed: Duration) -> Option<u64> {
+        let tick = elapsed
+            .as_nanos()
+            .checked_div(self.interval.as_nanos())
+            .and_then(|index| u64::try_from(index).ok())?;
+        // Executing a tick must leave a representable successor.
+        (tick < u64::MAX).then_some(tick)
+    }
+
     /// Return the index of the next fixed update.
     #[must_use]
     pub const fn tick_index(&self) -> u64 {

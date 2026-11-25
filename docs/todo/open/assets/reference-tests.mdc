@@ -59,3 +59,19 @@ They also verify atomic rejection and clock-overflow recovery.
 Fresh validation passed in run 1795584092916684839-3725186.
 A title host must still map native event timing to assigned ticks; no
 physical input latency or original-game equivalence is implied.
+
+Native Linux input now exposes elapsed SDL milliseconds and reconstructs
+32-bit event timestamps across a counter wrap against the 64-bit clock.
+Events from before the input session start map to zero; an ambiguous or
+future timestamp is rejected under the documented polling interval.
+The shared live queue maps absolute elapsed timestamps to fixed tick
+indices, including exact boundaries, independently of render partitions.
+It preserves the rejected batch if a timestamp is late or unrepresentable.
+
+The native accelerated smoke routes a queued SDL keyboard event through
+the logical action mapping and timestamped queue into a synthetic fixed
+update. Synthetic tests cover timestamp wrap, pre-start input, boundaries,
+and equivalent action delivery under different frame partitions. No
+physical input latency, gameplay parity or actual device timing is
+established; the SDL timestamps have millisecond granularity. A title
+host must decide explicitly how to handle delayed or rejected releases.
