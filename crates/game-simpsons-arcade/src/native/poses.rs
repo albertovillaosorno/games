@@ -52,6 +52,7 @@ enum Kind {
     AirAttack,
     Attack,
     AttackMoving,
+    Hurt,
     Jump,
     Lift,
     Special,
@@ -67,6 +68,7 @@ impl Kind {
                 Maneuver::Attack { moving: false, tick: 0 }
                     .pose_duration(player)
             },
+            Self::Hurt => Maneuver::Hurt { tick: 0 }.pose_duration(player),
             Self::Jump => Maneuver::jump().pose_duration(player),
             Self::Lift => 1,
             Self::Special => 30,
@@ -132,6 +134,7 @@ impl Catalogue {
         let complete_optional = [
             Kind::AirAttack,
             Kind::AttackMoving,
+            Kind::Hurt,
             Kind::Lift,
             Kind::Special,
             Kind::Walk,
@@ -173,6 +176,9 @@ impl PoseArt {
                 select_entry(&self.entries, (player, Kind::Special, tick))
                     .or_else(|| air_attack_entry(&self.entries, player, tick))
                     .copied()
+            },
+            Maneuver::Hurt { tick } => {
+                select_entry(&self.entries, (player, Kind::Hurt, tick)).copied()
             },
             Maneuver::Jump(motion) => {
                 jump_entry(&self.entries, player, motion).copied()
@@ -263,6 +269,7 @@ fn parse_line(line: &str) -> Result<Entry, RenderError> {
         "air-attack" => Kind::AirAttack,
         "attack" => Kind::Attack,
         "attack-moving" => Kind::AttackMoving,
+        "hurt" => Kind::Hurt,
         "jump" => Kind::Jump,
         "jump-lift" => Kind::Lift,
         "special" => Kind::Special,
@@ -315,6 +322,57 @@ mod tests {
                     .map(|kind| format!("{name} {kind} 0 {HASH}\n"))
             })
             .collect()
+    }
+
+    #[test]
+    fn optional_hurt_art_requires_every_station_and_respects_duration() {
+        let base = complete();
+        let hurt = format!(
+            "marge hurt 0 {HASH}\n\
+             homer hurt 0 {HASH}\n\
+             bart hurt 0 {HASH}\n\
+             lisa hurt 0 {HASH}\n"
+        );
+        assert!(Catalogue::parse(&base).is_ok());
+        assert!(
+            Catalogue::parse(&format!("{base}marge hurt 0 {HASH}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{hurt}bart hurt 16 {HASH}"))
+                .is_ok()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{hurt}bart hurt 17 {HASH}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{hurt}lisa hurt 14 {HASH}"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn hurt_pose_holds_until_the_next_observed_offset() {
+        let entries = BTreeMap::from([
+            ((Player::Marge, Kind::Hurt, 0), "first"),
+            ((Player::Marge, Kind::Hurt, 6), "second"),
+            ((Player::Bart, Kind::Hurt, 0), "opening"),
+            ((Player::Bart, Kind::Hurt, 4), "middle"),
+            ((Player::Bart, Kind::Hurt, 9), "last"),
+        ]);
+        for (player, tick, expected) in [
+            (Player::Marge, 5, Some(&"first")),
+            (Player::Marge, 6, Some(&"second")),
+            (Player::Bart, 3, Some(&"opening")),
+            (Player::Bart, 8, Some(&"middle")),
+            (Player::Bart, 9, Some(&"last")),
+            (Player::Lisa, 0, None),
+        ] {
+            assert_eq!(
+                select_entry(&entries, (player, Kind::Hurt, tick)),
+                expected
+            );
+        }
     }
 
     #[test]

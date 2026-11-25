@@ -32,6 +32,7 @@
 //! Native presentation of the optional first-street encounter.
 
 use std::io::{Write as _, stdout};
+use std::mem::take;
 use std::num::NonZeroU64;
 use std::time::Instant;
 
@@ -492,12 +493,67 @@ fn smoke_counterstrike(
             marge,
             scene.layout().width().get(),
         )?;
-        if marge.display_health < PLAYER_HEALTH {
+        if marge.health < PLAYER_HEALTH {
+            smoke_hurt(scene, art, &mut controls, &mut simulation)?;
             return smoke_continue(scene, art, &mut controls, &mut simulation);
         }
         advance(&mut simulation, 1)?;
     }
     Err(failure("native enemy counterstrike did not damage Marge"))
+}
+
+fn smoke_hurt(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let [before, ..] = simulation.state().stations();
+    if before.maneuver != (Maneuver::Hurt { tick: 0 }) {
+        return Err(failure("native damage did not start a hit reaction"));
+    }
+    verify_hurt_art(scene, art, simulation.state())?;
+    pulse(controls, simulation, Scancode::Z)?;
+    advance(simulation, 1)?;
+    let [first, ..] = simulation.state().stations();
+    if first.maneuver != (Maneuver::Hurt { tick: 1 })
+        || first.position != before.position
+        || first.attack_cues != before.attack_cues
+    {
+        return Err(failure("native hit reaction admitted an early attack"));
+    }
+    advance(simulation, 5)?;
+    verify_hurt_art(scene, art, simulation.state())?;
+    advance(simulation, 7)?;
+    pulse(controls, simulation, Scancode::Z)?;
+    advance(simulation, 1)?;
+    let [after, ..] = simulation.state().stations();
+    if after.maneuver != (Maneuver::Attack { moving: false, tick: 0 }) {
+        return Err(failure("native hit recovery did not admit a new attack"));
+    }
+    Ok(())
+}
+
+fn verify_hurt_art(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    let [marge, ..] = cabinet.stations();
+    if art.poses.select(Player::Marge, marge).is_none() {
+        return Ok(());
+    }
+    let _presented = art.present(scene, cabinet)?;
+    let animated = scene.readback().map_err(failure)?;
+    let saved = take(&mut art.poses);
+    let fallback = art.present(scene, cabinet);
+    art.poses = saved;
+    let _fallback_presented = fallback?;
+    if animated == scene.readback().map_err(failure)? {
+        return Err(failure("optional hit pose was not visibly presented"));
+    }
+    let _restored = art.present(scene, cabinet)?;
+    Ok(())
 }
 
 fn verify_enemy_health(

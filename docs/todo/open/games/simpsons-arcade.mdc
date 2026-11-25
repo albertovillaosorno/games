@@ -1422,3 +1422,39 @@ pose, recovery and facing tests. Fresh workspace validation passed in
 run 1795623279589323049-3778961; the complete adaptive touch, enemy,
 shadow and dummy-audio OpenGL smoke passed again with the 134-pose
 catalogue. Neither timing correction establishes original hitboxes.
+
+Four isolated light-hit observations in the pinned original show
+14 displayed reaction ticks for Marge, Homer and Lisa (pose changes
+at offsets zero and six) and 17 for Bart (offsets zero, four and
+nine). Each observed hit drains three of the 32 meter columns, with
+the first column changing one frame after the first reaction object
+state. Longer knockdowns also occur in the idle controls and are
+not represented by this short reaction.
+
+A one-frame primary pulse at displayed-object offset 12 (15 for
+Bart) is rejected. Offset 13 (16 for Bart) is admitted and produces
+the first attack object four frames after the pulse, matching the
+reference input-to-object offset. Marge's held upward input remains
+stationary through the reaction and resumes walking after recovery.
+The prototype interrupts a nonlethal grounded hit with the respective
+14- or 17-tick action state, retains facing and position until the
+reaction ends, discards early button edges, and resumes held walking
+or accepts a fresh button edge at the transition. Secondary recovery,
+repeated hits, facing relative to the attacker and the damage model
+remain provisional.
+
+All nine isolated reaction poses were published locally after exact
+71,680-pixel scene verification using preceding callback object and
+tile state and current displayed RGB and palette. The optional hurt
+catalogue sequence preserves the 144-record and 16 KiB bounds; the
+combined local catalogue contains 143 records. The older catalogue
+falls back to idle art. Fresh workspace validation including native
+render and audio smoke passed in run 1795623847196450943-3848854.
+Adaptive native touch, combat, shadow, scroll and dummy-audio smoke
+passed with both catalogues. Native smoke compares the two Marge hit
+poses against the idle fallback and exercises rejected early and
+accepted recovery-boundary inputs. With 143 poses, all 600 movement
+and 60 combat submissions met the 16.667 ms host-work budget; mean
+submission work was 64.834 and 50.515 microseconds, respectively.
+Lifetime peak RSS was 147,423,232 bytes. Original knockdown, damage,
+hit effects, invulnerability and exact pivots remain unresolved.

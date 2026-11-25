@@ -77,7 +77,7 @@ NAME ACTION TICK SHA256
 ```
 
 NAME is marge, homer, bart or lisa; ACTION is attack, attack-moving,
-air-attack, jump, jump-lift, special, walk or walk-up. TICK is
+air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
@@ -104,6 +104,9 @@ same duration as attack. Horizontal input on the tick after attack
 admission selects it for the rest of that attack. Its first preview
 tick and missing moving art use the neutral sequence. Hit timing and
 recovery are unchanged.
+An optional hurt sequence requires tick-zero art for each station.
+Marge, Homer and Lisa permit offsets through 13; Bart through 16.
+Without hurt art, the idle sprite is used during the reaction.
 
 Optional `--shadow SHA` follows the audio selection (if used) and
 precedes `--world` or PARENT. It selects an independently isolated
@@ -120,6 +123,9 @@ before PARENT. These are separately verified local canonical bundles
 with `enemy/approach` and `enemy/strike` records respectively. The
 first enemy approaches an active station, can be struck with Primary,
 and can damage grounded players. Jump evades a ground strike.
+A nonlethal light hit interrupts the current maneuver and prevents
+movement and action admission for 14 ticks (17 for Bart). Held
+directional input resumes on recovery; early button presses are lost.
 The optional encounter models two health stocks and a 32-column meter
 that drains and refills one column every two ticks. The first depleted
 stock automatically restores play after a recovery interval; the final

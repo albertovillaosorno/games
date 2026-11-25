@@ -249,7 +249,7 @@ pub struct Station {
     pub facing: Facing,
     /// Experimental encounter health; zero means the station is knocked out.
     pub health: u8,
-    /// Current attack or jump, independent of rendering.
+    /// Current action or hit reaction, independent of rendering.
     pub maneuver: Maneuver,
     /// Whether the station has joined.
     pub participation: Participation,
@@ -440,7 +440,11 @@ impl Slot {
         self.attack_quarters = 0;
         self.action_recovery = Recovery::Ready;
         self.station.health = self.station.health.saturating_sub(amount);
-        self.station.maneuver = Maneuver::Idle;
+        self.station.maneuver = if self.station.health == 0 {
+            Maneuver::Idle
+        } else {
+            Maneuver::Hurt { tick: 0 }
+        };
         self.station.walking = None;
         if self.station.health == 0 {
             self.station.stocks = self.station.stocks.saturating_sub(1);
@@ -498,7 +502,9 @@ impl Slot {
                 (motion.step().saturating_mul(forward), 0)
             },
             Maneuver::Attack { tick: 2.., .. } => (self.attack_step(dx), 0),
-            Maneuver::Special { .. } | Maneuver::Attack { .. } => (0, 0),
+            Maneuver::Special { .. }
+            | Maneuver::Attack { .. }
+            | Maneuver::Hurt { .. } => (0, 0),
             // Original drift continues through offset 18, then stops.
             Maneuver::Idle
                 if matches!(self.action_recovery, Recovery::Ground(2..)) =>
@@ -519,6 +525,7 @@ impl Slot {
         let facing_locked = match self.station.maneuver {
             Maneuver::Attack { tick, .. } => tick > 0,
             Maneuver::AirAttack(air) => air.tick() > 0,
+            Maneuver::Hurt { .. } => true,
             Maneuver::Idle => !self.action_recovery.allows_turn(),
             Maneuver::Jump(_) | Maneuver::Special { .. } => false,
         };
@@ -1104,6 +1111,114 @@ mod tests {
             state.input_step(2, &pulse(player, Control::Start));
         }
         state
+    }
+
+    #[test]
+    fn light_hit_interrupts_actions_and_releases_held_movement() {
+        for (player, duration) in light_hit_durations() {
+            check_hurt_movement(player, duration);
+        }
+    }
+
+    fn check_hurt_movement(player: Player, duration: u8) {
+        let mut state = four_playing();
+        state.input_step(3, &pulse(player, Control::Primary));
+        let original = state.stations();
+        hurt_station(&mut state, player);
+        let before = station(&state, player);
+        assert_eq!(before.maneuver, Maneuver::Hurt { tick: 0 });
+        assert_eq!(before.health, PLAYER_HEALTH - 3);
+        assert_eq!(before.attack_cues, 0);
+        check_hurt_lock(&mut state, player, duration, before);
+        state.input_step(3 + u64::from(duration), &[]);
+        let after = station(&state, player);
+        assert_eq!(after.maneuver, Maneuver::Idle);
+        assert_eq!(after.position.x, before.position.x.saturating_sub(2));
+        assert_eq!(after.facing, Facing::Left);
+        assert_eq!(after.walking_ticks(), Some(0));
+        let unchanged = Player::ALL
+            .into_iter()
+            .zip(original)
+            .filter(|(other, _)| *other != player)
+            .all(|(other, previous)| station(&state, other) == previous);
+        assert!(unchanged);
+    }
+
+    fn check_hurt_lock(
+        state: &mut Cabinet,
+        player: Player,
+        duration: u8,
+        before: Station,
+    ) {
+        for offset in 1..duration {
+            let movement = [change(player, Control::Left, true)];
+            let actions = if offset == 1 {
+                movement.as_slice()
+            } else {
+                &[]
+            };
+            state.input_step(3 + u64::from(offset), actions);
+            let current = station(state, player);
+            assert_eq!(current.maneuver, Maneuver::Hurt { tick: offset });
+            assert_eq!(current.position, before.position);
+            assert_eq!(current.facing, before.facing);
+            assert_eq!(current.walking, None);
+            assert_eq!(current.attack_cues, before.attack_cues);
+        }
+    }
+
+    #[test]
+    fn light_hit_discards_early_buttons_and_admits_fresh_recovery_edges() {
+        for (player, duration) in light_hit_durations() {
+            check_hurt_button(player, duration, Control::Primary);
+            check_hurt_button(player, duration, Control::Secondary);
+        }
+    }
+
+    fn check_hurt_button(player: Player, duration: u8, control: Control) {
+        let mut state = four_playing();
+        hurt_station(&mut state, player);
+        for offset in 1..duration {
+            state.input_step(2 + u64::from(offset), &pulse(player, control));
+            assert_eq!(station(&state, player).maneuver, Maneuver::Hurt {
+                tick: offset
+            });
+        }
+        let mut neutral = state;
+        neutral.input_step(2 + u64::from(duration), &[]);
+        assert_eq!(station(&neutral, player).maneuver, Maneuver::Idle);
+        state.input_step(2 + u64::from(duration), &pulse(player, control));
+        let resumed = station(&state, player).maneuver;
+        if control == Control::Primary {
+            assert_eq!(resumed, Maneuver::Attack { moving: false, tick: 0 });
+        } else {
+            assert!(matches!(resumed, Maneuver::Jump(_)));
+        }
+    }
+
+    const fn light_hit_durations() -> [(Player, u8); 4] {
+        [
+            (Player::Marge, 14),
+            (Player::Homer, 14),
+            (Player::Bart, 17),
+            (Player::Lisa, 14),
+        ]
+    }
+
+    fn hurt_station(state: &mut Cabinet, player: Player) {
+        if let Some(slot) = state.slots.get_mut(player.index()) {
+            slot.damage(3);
+        }
+    }
+
+    fn station(state: &Cabinet, player: Player) -> Station {
+        let [marge, homer, bart, lisa] = state.stations();
+        match player {
+            Player::Marge => marge,
+            Player::Homer => homer,
+            Player::Bart => bart,
+            Player::Lisa => lisa,
+        }
     }
 
     #[test]

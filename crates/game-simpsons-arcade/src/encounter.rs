@@ -619,19 +619,29 @@ mod tests {
         let [damaged, ..] = cabinet.stations();
         assert_eq!(damaged.health, PLAYER_HEALTH - ENEMY_DAMAGE);
         assert_eq!(damaged.display_health, PLAYER_HEALTH);
+        assert_eq!(damaged.maneuver, Maneuver::Hurt { tick: 0 });
         cabinet.input_step(11, &[]);
         let [first, ..] = cabinet.stations();
         assert_eq!(first.display_health, PLAYER_HEALTH - 1);
         cabinet.input_step(12, &[]);
-        assert_eq!(cabinet.stations().first(), Some(&first));
+        let [between, ..] = cabinet.stations();
+        assert_eq!(between, crate::Station {
+            maneuver: Maneuver::Hurt { tick: 2 },
+            ..first
+        });
+        check_meter_pause(&mut cabinet, between);
+    }
+
+    fn check_meter_pause(cabinet: &mut Cabinet, between: crate::Station) {
         cabinet.input_step(13, &pulse(Control::Pause));
         for tick in 14..100 {
             cabinet.input_step(tick, &[]);
         }
-        assert_eq!(cabinet.stations().first(), Some(&first));
+        assert_eq!(cabinet.stations().first(), Some(&between));
         cabinet.input_step(100, &pulse(Control::Pause));
         let [second, ..] = cabinet.stations();
         assert_eq!(second.display_health, PLAYER_HEALTH - 2);
+        assert_eq!(second.maneuver, Maneuver::Hurt { tick: 3 });
     }
 
     fn advance_until(

@@ -234,6 +234,11 @@ pub enum Maneuver {
         /// Zero-based displayed pose tick.
         tick: u8,
     },
+    /// Station is recovering from a grounded light hit.
+    Hurt {
+        /// Zero-based displayed reaction tick.
+        tick: u8,
+    },
     /// Station is on the ground without a displayed maneuver.
     Idle,
     /// Station is airborne.
@@ -259,6 +264,14 @@ impl Maneuver {
                 let next = tick.saturating_add(1);
                 if next < duration {
                     Self::Attack { moving, tick: next }
+                } else {
+                    Self::Idle
+                }
+            },
+            Self::Hurt { tick } => {
+                let next = tick.saturating_add(1);
+                if next < self.pose_duration(player) {
+                    Self::Hurt { tick: next }
                 } else {
                     Self::Idle
                 }
@@ -301,7 +314,7 @@ impl Maneuver {
                 tick == onset
             },
             Self::Special { tick, .. } => tick == 4,
-            Self::Idle | Self::Jump(_) => false,
+            Self::Hurt { .. } | Self::Idle | Self::Jump(_) => false,
         }
     }
 
@@ -332,7 +345,7 @@ impl Maneuver {
         match self {
             Self::Jump(motion) => motion.elevation(),
             Self::AirAttack(motion) => motion.elevation(),
-            Self::Attack { .. } | Self::Idle => 0,
+            Self::Attack { .. } | Self::Hurt { .. } | Self::Idle => 0,
             Self::Special { tick, .. } => {
                 let elapsed = i16::from(tick).saturating_add(1);
                 elapsed
@@ -353,6 +366,8 @@ impl Maneuver {
         match self {
             Self::Attack { .. } if matches!(player, Player::Bart) => 18,
             Self::Attack { .. } => 17,
+            Self::Hurt { .. } if matches!(player, Player::Bart) => 17,
+            Self::Hurt { .. } => 14,
             Self::Idle => 0,
             Self::Jump(_) => SHORT_JUMP_TICKS,
             Self::AirAttack(_) => 60,
