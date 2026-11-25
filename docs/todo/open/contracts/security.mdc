@@ -379,3 +379,10 @@ archive also published with the exact 14-member, 7,209,088-byte budget;
 a duplicate publication was rejected, and both read-backs verified
 the unchanged 10,485,760-byte graphics payload set with no staging
 directory left behind.
+
+Native save publication also reuses the written-file metadata check.
+The slot writer captures the file metadata after writing its envelope;
+both the pre-sync and post-sync checks compare the still-named private
+inode against that observation. A same-length in-place modification
+with an observable timestamp change must leave the previous valid slot
+intact. This is not a lock against concurrent hostile same-user writes.

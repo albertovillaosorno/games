@@ -42,12 +42,12 @@ use games::safety::{
 };
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat, renameat};
-use nix::sys::stat::{Mode, fstat, fstatat};
+use nix::sys::stat::{FileStat, Mode, fstat, fstatat};
 use nix::unistd::{UnlinkatFlags, unlinkat};
 
 use crate::file::{
-    DIRECTORY_FLAGS, FileReadError, private_regular, read_bounded_descriptor,
-    read_regular_with, same_inode, trusted_directory,
+    DIRECTORY_FLAGS, FileReadError, check_staged_metadata, private_regular,
+    read_bounded_descriptor, read_regular_with, same_inode, trusted_directory,
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -181,7 +181,8 @@ impl SaveStore {
         let mut pending = PendingSave::create(directory)?;
         pending.file.write_all(&header)?;
         pending.file.write_all(payload)?;
-        pending.publish(&name, expected)?;
+        let stamp = fstat(&pending.file)?;
+        pending.publish(&name, expected, &stamp)?;
         Ok(SaveReceipt {
             durability: self.directory.sync_all().map_err(|error| error.kind()),
         })
@@ -226,20 +227,31 @@ impl<'directory> PendingSave<'directory> {
         Err(Errno::EEXIST.into())
     }
 
-    fn publish(&mut self, name: &str, expected: u64) -> Result<(), SaveError> {
-        self.verify_location()?;
-        self.file.sync_all()?;
-        self.verify_location()?;
-        if self.file.metadata()?.len() != expected {
+    fn publish(
+        &mut self,
+        name: &str,
+        expected: u64,
+        stamp: &FileStat,
+    ) -> Result<(), SaveError> {
+        if u64::try_from(stamp.st_size).ok() != Some(expected) {
             return Err(SaveError::UnsafeStorage);
         }
+        self.verify_contents(stamp)?;
+        self.file.sync_all()?;
+        self.verify_contents(stamp)?;
         admit_slot(self.directory, name)?;
         renameat(self.directory, self.name.as_str(), self.directory, name)?;
         self.published = true;
         Ok(())
     }
 
-    fn verify_location(&self) -> Result<(), SaveError> {
+    fn verify_contents(&self, stamp: &FileStat) -> Result<(), SaveError> {
+        let named = self.verify_location()?;
+        check_staged_metadata(stamp, &named)
+            .map_err(|_error| SaveError::UnsafeStorage)
+    }
+
+    fn verify_location(&self) -> Result<FileStat, SaveError> {
         if !trusted_directory(self.directory)? {
             return Err(SaveError::UnsafeStorage);
         }
@@ -256,7 +268,7 @@ impl<'directory> PendingSave<'directory> {
         {
             return Err(SaveError::UnsafeStorage);
         }
-        Ok(())
+        Ok(named)
     }
 }
 
@@ -289,6 +301,7 @@ fn slot_name(slot: u32) -> String {
 mod tests {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::sync::Barrier;
+    use std::time::UNIX_EPOCH;
     use std::{fs, thread};
 
     use games::safety::{decode_save, encode_save};
@@ -454,17 +467,44 @@ mod tests {
         let expected = u64::try_from(bytes.len())
             .map_err(|_error| SafetyError::TooLarge)?;
         let path = root.path.join(&pending.name);
+        let stamp = fstat(&pending.file)?;
         let moved = root.path.join("moved");
         fs::rename(&path, &moved)?;
         fs::write(&path, b"sentinel")?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         require(
-            pending.publish(&slot_name(0), expected)
+            pending.publish(&slot_name(0), expected, &stamp)
                 == Err(SaveError::UnsafeStorage),
         )?;
         drop(pending);
         require(fs::read(&path)? == b"sentinel")?;
         require(fs::read(moved)? == bytes)?;
+        require(store.load(0)? == b"a")
+    }
+
+    #[test]
+    fn modified_pending_save_preserves_previous_slot() -> Result<(), SaveError>
+    {
+        let root = TestRoot::new()?;
+        let store = SaveStore::open(&root.path, NonZeroU64::MIN)?;
+        require(store.store(0, b"a")?.durability.is_ok())?;
+        let mut pending = PendingSave::create(&store.directory)?;
+        let bytes = encode_save(b"b", NonZeroU64::MIN)?;
+        pending.file.write_all(&bytes)?;
+        let stamp = fstat(&pending.file)?;
+        let expected = u64::try_from(bytes.len())
+            .map_err(|_error| SafetyError::TooLarge)?;
+        let path = root.path.join(&pending.name);
+        fs::write(&path, vec![0; bytes.len()])?;
+        pending
+            .file
+            .set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH))?;
+        require(
+            pending.publish(&slot_name(0), expected, &stamp)
+                == Err(SaveError::UnsafeStorage),
+        )?;
+        drop(pending);
+        require(!path.exists())?;
         require(store.load(0)? == b"a")
     }
 
@@ -480,10 +520,15 @@ mod tests {
         let sentinel = root.path.join("sentinel");
         fs::write(&sentinel, b"untouched")?;
         pending.file.write_all(b"x")?;
-        require(pending.publish(&name, 2) == Err(SaveError::UnsafeStorage))?;
+        let stamp = fstat(&pending.file)?;
+        require(
+            pending.publish(&name, 2, &stamp) == Err(SaveError::UnsafeStorage),
+        )?;
         require(!destination.exists())?;
         symlink(&sentinel, &destination)?;
-        require(pending.publish(&name, 1) == Err(SaveError::UnsafeStorage))?;
+        require(
+            pending.publish(&name, 1, &stamp) == Err(SaveError::UnsafeStorage),
+        )?;
         drop(pending);
         require(!path.exists())?;
         require(fs::symlink_metadata(destination)?.file_type().is_symlink())?;

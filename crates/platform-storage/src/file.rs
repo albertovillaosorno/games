@@ -288,7 +288,7 @@ fn staged_regular(stat: &FileStat) -> bool {
 
 // A staged file cannot legitimately change identity, length, ownership,
 // permissions or content timestamps after the writer closes it.
-fn check_staged_metadata(
+pub(crate) fn check_staged_metadata(
     expected: &FileStat,
     current: &FileStat,
 ) -> Result<(), FileReadError> {
