@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Reusable deterministic input scripts and observable checkpoints.
+//   - Deterministic live inputs, replay scripts and observable checkpoints.
 // - Must-Not:
 //   - Encode gameplay rules, transport protocols or renderer behaviour.
 // - Allows:
@@ -25,16 +25,19 @@
 // - Description:
 //   - Feeds recorded public actions into the fixed-step scheduler.
 // - Usage:
-//   - Compose Scripted with a StepClock and InputStep implementation.
+//   - Compose Scripted or LiveSimulation with the canonical StepClock.
 // - Defaults:
 //   - Empty input on unrecorded ticks; insertion order within a tick.
 //
-//! Replay public action scripts without coupling to rendering frame rate.
+//! Drive live and replayed public actions independently of frame rate.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fmt::{Debug, Formatter, Result as FormatResult};
+use std::num::NonZeroUsize;
+use std::time::Duration;
 
-use crate::timing::FixedTick;
+use crate::timing::{FixedTick, StepClock, StepError, StepReport};
 
 /// A title-independent state machine driven by explicit public actions.
 pub trait InputStep {
@@ -102,6 +105,160 @@ impl<Simulation: InputStep> Scripted<Simulation> {
 impl<Simulation: InputStep> FixedTick for Scripted<Simulation> {
     fn fixed_tick(&mut self, index: u64) {
         self.state.input_step(index, self.inputs.actions(index));
+    }
+}
+
+/// Explicit bounds for actions waiting to enter fixed simulation ticks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LiveInputLimits {
+    /// Maximum tick distance from the next unexecuted tick, inclusive.
+    pub future_ticks: u64,
+    /// Maximum total queued action count, regardless of their target ticks.
+    pub pending_actions: NonZeroUsize,
+}
+
+/// Why a complete live action batch was rejected without being enqueued.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueueRejection {
+    /// The batch would exceed the configured action count.
+    Capacity,
+    /// The batch is beyond the future window or cannot execute.
+    Future,
+    /// The requested simulation tick has already executed.
+    Late,
+}
+
+/// A rejected batch returned to its caller without losing any input.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RejectedInput<Input> {
+    /// Original ordered actions, unchanged.
+    pub actions: Vec<Input>,
+    /// The reason no action was admitted.
+    pub reason: QueueRejection,
+}
+
+/// Admission either succeeds or returns the complete rejected batch.
+pub type EnqueueResult<Input> = Result<(), RejectedInput<Input>>;
+
+/// Own the fixed clock, bounded live action queue and public simulation.
+#[derive(Debug)]
+pub struct LiveSimulation<Simulation: InputStep> {
+    clock: StepClock,
+    inputs: InputScript<Simulation::Input>,
+    limits: LiveInputLimits,
+    pending: usize,
+    state: Simulation,
+}
+
+struct LiveConsumer<'live, Simulation: InputStep> {
+    inputs: &'live mut InputScript<Simulation::Input>,
+    pending: &'live mut usize,
+    state: &'live mut Simulation,
+}
+
+impl<Simulation: InputStep> FixedTick for LiveConsumer<'_, Simulation> {
+    fn fixed_tick(&mut self, index: u64) {
+        if let Some(actions) = self.inputs.by_tick.remove(&index) {
+            *self.pending = self.pending.saturating_sub(actions.len());
+            self.state.input_step(index, &actions);
+        } else {
+            self.state.input_step(index, &[]);
+        }
+    }
+}
+
+impl<Simulation: InputStep> LiveSimulation<Simulation> {
+    /// Execute eligible fixed updates and consume only their queued actions.
+    ///
+    /// # Errors
+    /// A clock error leaves both queued input and simulation unchanged.
+    pub fn advance(
+        &mut self,
+        elapsed: Duration,
+    ) -> Result<StepReport, StepError> {
+        let mut consumer = LiveConsumer {
+            inputs: &mut self.inputs,
+            pending: &mut self.pending,
+            state: &mut self.state,
+        };
+        self.clock.advance(elapsed, &mut consumer)
+    }
+
+    /// Admit a complete ordered action batch for a specific unexecuted tick.
+    ///
+    /// Repeated batches for one tick retain insertion order. The caller
+    /// retains ownership of the batch on rejection and may handle or retry
+    /// it explicitly; dropping a rejected release could leave an action held.
+    ///
+    /// # Errors
+    /// Rejects a late tick, excessive lookahead or insufficient queue space.
+    pub fn enqueue(
+        &mut self,
+        tick: u64,
+        actions: Vec<Simulation::Input>,
+    ) -> EnqueueResult<Simulation::Input> {
+        let room = self
+            .limits
+            .pending_actions
+            .get()
+            .saturating_sub(self.pending);
+        let rejection = match tick.checked_sub(self.clock.tick_index()) {
+            None => Some(QueueRejection::Late),
+            Some(distance)
+                if tick == u64::MAX || distance > self.limits.future_ticks =>
+            {
+                Some(QueueRejection::Future)
+            },
+            Some(_) if actions.len() > room => Some(QueueRejection::Capacity),
+            Some(_) => None,
+        };
+        if let Some(reason) = rejection {
+            return Err(RejectedInput { actions, reason });
+        }
+        if !actions.is_empty() {
+            self.pending = self.pending.saturating_add(actions.len());
+            match self.inputs.by_tick.entry(tick) {
+                Entry::Occupied(mut entry) => entry.get_mut().extend(actions),
+                Entry::Vacant(entry) => {
+                    let _stored = entry.insert(actions);
+                },
+            }
+        }
+        Ok(())
+    }
+
+    /// Start with a simulation aligned to the supplied fixed clock.
+    #[must_use]
+    pub const fn new(
+        state: Simulation,
+        clock: StepClock,
+        limits: LiveInputLimits,
+    ) -> Self {
+        Self {
+            clock,
+            inputs: InputScript::new(),
+            limits,
+            pending: 0,
+            state,
+        }
+    }
+
+    /// Return the next fixed tick that can receive actions.
+    #[must_use]
+    pub const fn next_tick(&self) -> u64 {
+        self.clock.tick_index()
+    }
+
+    /// Return the count of admitted actions not yet delivered.
+    #[must_use]
+    pub const fn pending_actions(&self) -> usize {
+        self.pending
+    }
+
+    /// Inspect simulation state after the most recent executed tick.
+    #[must_use]
+    pub const fn state(&self) -> &Simulation {
+        &self.state
     }
 }
 
@@ -231,11 +388,13 @@ where
 #[cfg(test)]
 mod tests {
     use std::iter::repeat_n;
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
     use super::{
-        CheckpointError, CheckpointReplay, InputScript, InputStep, Scripted,
+        CheckpointError, CheckpointReplay, InputScript, InputStep,
+        LiveInputLimits, LiveSimulation, QueueRejection, RejectedInput,
+        Scripted,
     };
     use crate::timing::{FixedTick as _, StepClock, StepError};
 
@@ -250,6 +409,19 @@ mod tests {
         position: i64,
         shots: u64,
         ticks: u64,
+    }
+
+    type OrderedActions = Vec<(u64, Vec<Action>)>;
+
+    #[derive(Debug, Default, Eq, PartialEq)]
+    struct OrderedState(OrderedActions);
+
+    impl InputStep for OrderedState {
+        type Input = Action;
+
+        fn input_step(&mut self, tick: u64, actions: &[Action]) {
+            self.0.push((tick, actions.to_vec()));
+        }
     }
 
     impl InputStep for ObservableState {
@@ -485,5 +657,150 @@ mod tests {
             comparison.fixed_tick(2);
             assert_eq!(comparison.finish(), Err(CheckpointError::Skipped(1)));
         }
+    }
+
+    fn live_clock() -> Option<StepClock> {
+        let clock = StepClock::new(
+            Duration::from_millis(10),
+            NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+        );
+        assert!(clock.is_ok(), "test clock must be valid");
+        clock.ok()
+    }
+
+    fn limits(actions: usize, future_ticks: u64) -> LiveInputLimits {
+        LiveInputLimits {
+            future_ticks,
+            pending_actions: NonZeroUsize::new(actions)
+                .unwrap_or(NonZeroUsize::MIN),
+        }
+    }
+
+    fn queue_example(live: &mut LiveSimulation<OrderedState>) {
+        assert_eq!(live.enqueue(2, vec![Action::Shoot]), Ok(()));
+        assert_eq!(live.enqueue(0, vec![Action::Move(3)]), Ok(()));
+        assert_eq!(live.enqueue(0, vec![Action::Shoot]), Ok(()));
+        assert_eq!(live.enqueue(2, vec![Action::Move(-2)]), Ok(()));
+        assert_eq!(live.pending_actions(), 4);
+    }
+
+    #[test]
+    fn live_actions_match_replay_across_render_partitions() {
+        let Some(clock) = live_clock() else {
+            return;
+        };
+        let mut live =
+            LiveSimulation::new(OrderedState::default(), clock, limits(4, 2));
+        queue_example(&mut live);
+        let mut script = InputScript::new();
+        script.record(0, Action::Move(3));
+        script.record(0, Action::Shoot);
+        script.record(2, Action::Shoot);
+        script.record(2, Action::Move(-2));
+        let mut replay = Scripted::new(OrderedState::default(), script);
+        let mut replay_clock = clock;
+        for elapsed in [25u64, 0, 5] {
+            assert!(live.advance(Duration::from_millis(elapsed)).is_ok());
+        }
+        for elapsed in [1u64; 30] {
+            assert!(
+                replay_clock
+                    .advance(Duration::from_millis(elapsed), &mut replay,)
+                    .is_ok()
+            );
+        }
+        assert_eq!(live.state(), replay.state());
+        assert_eq!(live.state().0, [
+            (0, vec![Action::Move(3), Action::Shoot]),
+            (1, vec![]),
+            (2, vec![Action::Shoot, Action::Move(-2)]),
+        ]);
+        assert_eq!(live.next_tick(), 3);
+        assert_eq!(live.pending_actions(), 0);
+    }
+
+    fn reject_before_advance(live: &mut LiveSimulation<OrderedState>) {
+        assert_eq!(live.enqueue(1, vec![Action::Move(1)]), Ok(()));
+        assert_eq!(
+            live.enqueue(0, vec![Action::Move(2), Action::Shoot]),
+            Err(RejectedInput {
+                actions: vec![Action::Move(2), Action::Shoot],
+                reason: QueueRejection::Capacity,
+            })
+        );
+        assert_eq!(
+            live.enqueue(2, vec![Action::Shoot]),
+            Err(RejectedInput {
+                actions: vec![Action::Shoot],
+                reason: QueueRejection::Future,
+            })
+        );
+        assert_eq!(live.enqueue(1, vec![]), Ok(()));
+        assert_eq!(live.pending_actions(), 1);
+    }
+
+    #[test]
+    fn rejected_batches_are_returned_and_never_partially_enqueued() {
+        let Some(clock) = live_clock() else {
+            return;
+        };
+        let mut live =
+            LiveSimulation::new(OrderedState::default(), clock, limits(2, 1));
+        reject_before_advance(&mut live);
+        assert!(live.advance(Duration::from_millis(10)).is_ok());
+        assert_eq!(
+            live.enqueue(0, vec![Action::Shoot]),
+            Err(RejectedInput {
+                actions: vec![Action::Shoot],
+                reason: QueueRejection::Late,
+            })
+        );
+        assert_eq!(live.enqueue(2, vec![Action::Shoot]), Ok(()));
+        assert!(live.advance(Duration::from_millis(20)).is_ok());
+        assert_eq!(live.state().0, [
+            (0, vec![]),
+            (1, vec![Action::Move(1)]),
+            (2, vec![Action::Shoot]),
+        ]);
+        assert_eq!(live.pending_actions(), 0);
+        assert_eq!(live.enqueue(3, vec![Action::Shoot]), Ok(()));
+    }
+
+    #[test]
+    fn clock_error_preserves_live_state_and_pending_actions() {
+        let Some(clock) = live_clock() else {
+            return;
+        };
+        let mut live =
+            LiveSimulation::new(OrderedState::default(), clock, limits(1, 0));
+        assert_eq!(live.enqueue(0, vec![Action::Shoot]), Ok(()));
+        assert!(live.advance(Duration::from_millis(1)).is_ok());
+        assert_eq!(live.advance(Duration::MAX), Err(StepError::TimeOverflow));
+        assert_eq!(live.next_tick(), 0);
+        assert_eq!(live.pending_actions(), 1);
+        assert_eq!(live.state(), &OrderedState::default());
+        assert!(live.advance(Duration::from_millis(9)).is_ok());
+        assert_eq!(live.state().0, [(0, vec![Action::Shoot])]);
+        assert_eq!(live.pending_actions(), 0);
+    }
+
+    #[test]
+    fn rejects_a_tick_that_cannot_have_a_representable_successor() {
+        let Some(clock) = live_clock() else {
+            return;
+        };
+        let mut live = LiveSimulation::new(
+            OrderedState::default(),
+            clock,
+            limits(1, u64::MAX),
+        );
+        assert_eq!(
+            live.enqueue(u64::MAX, vec![Action::Shoot]),
+            Err(RejectedInput {
+                actions: vec![Action::Shoot],
+                reason: QueueRejection::Future,
+            })
+        );
+        assert_eq!(live.pending_actions(), 0);
     }
 }

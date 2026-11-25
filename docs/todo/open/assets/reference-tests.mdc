@@ -47,3 +47,15 @@ duplicate or unfinished checkpoints. Synthetic tests exercise different
 render frame partitions. A local MAME reference run is now available; see
 the Simpsons task for repeatable original observations. Those observations
 are not yet compared against remake gameplay.
+
+Live simulations now own the same fixed clock and public InputStep
+contract as scripted replays. Explicit limits bound pending action count
+and future tick distance. Admission returns the entire rejected batch
+on capacity, late or unreachable/future tick errors, and accepted actions
+are consumed only at their assigned ticks in insertion order. Synthetic
+tests compare the exact live and replayed public action sequences across
+different frame partitions, including idle and backlog-draining ticks.
+They also verify atomic rejection and clock-overflow recovery.
+Fresh validation passed in run 1795584092916684839-3725186.
+A title host must still map native event timing to assigned ticks; no
+physical input latency or original-game equivalence is implied.
