@@ -56,8 +56,8 @@ use games_platform_graphics::linux::{FrameLayout, NativeWindow, RenderError};
 use games_platform_storage::bundle::CanonicalBundle;
 
 use super::{
-    Action, Cabinet, Control, Facing, Participation, Phase, Player, Station,
-    StreetLayout, TICK_INTERVAL,
+    Action, Cabinet, Control, Facing, Maneuver, Participation, Phase, Player,
+    Station, StreetLayout, TICK_INTERVAL,
 };
 
 const SOURCE_SHA: &str =
@@ -365,7 +365,9 @@ fn actor_position(
     let vertical = i32::try_from(actor.rect.height.get()).map_err(failure)?;
     Ok(SpriteRect {
         x: i32::from(station.position.x).saturating_sub(horizontal),
-        y: i32::from(station.position.y).saturating_sub(vertical),
+        y: i32::from(station.position.y)
+            .saturating_sub(vertical)
+            .saturating_sub(i32::from(station.maneuver.elevation())),
         ..actor.rect
     })
 }
@@ -586,6 +588,47 @@ fn smoke(
     }
     if touch_enabled {
         smoke_touch_movement(scene, &mut controls, &mut simulation)?;
+    }
+    smoke_jump(scene, art, &mut controls, &mut simulation)
+}
+
+fn smoke_jump(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let [before, ..] = simulation.state().stations();
+    let _drawn = art.present(scene, simulation.state())?;
+    let pixels = scene.readback().map_err(failure)?;
+    let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
+    for down in [true, false] {
+        controls.route(
+            InputEvent::Key {
+                code: key_code(Scancode::X),
+                down,
+            },
+            TICK_INTERVAL.saturating_mul(tick),
+            simulation,
+        )?;
+    }
+    let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    let [airborne, ..] = simulation.state().stations();
+    if airborne.maneuver != (Maneuver::Jump { tick: 0 })
+        || airborne.position != before.position
+    {
+        return Err(failure("jump did not preserve ground position"));
+    }
+    let _redrawn = art.present(scene, simulation.state())?;
+    if pixels == scene.readback().map_err(failure)? {
+        return Err(failure("jump not visibly presented"));
+    }
+    for _ in 0..31u8 {
+        let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+    }
+    let [landed, ..] = simulation.state().stations();
+    if landed.maneuver != Maneuver::Idle || landed.position != before.position {
+        return Err(failure("jump did not return to ground"));
     }
     Ok(())
 }

@@ -475,3 +475,23 @@ for animation selection. Opposing controls, release and a fully clamped
 position return to idle; renewed displacement starts at tick zero.
 This is a deterministic prototype presentation policy, not yet an
 original walk-cycle timing comparison.
+
+Single-button pulses in isolated first-street observations distinguished
+attack from jump. Marge, Homer and Lisa showed 17 displayed attack
+frames; Bart showed 17 attack frames plus one transient pose before
+idle. A separate earlier Bart pulse avoided enemy interruption and
+confirmed the same 31 displayed jump frames observed for the other
+three characters. A stationary held attack did not repeat during the
+observed interval. Held jump changed the pose sequence, and moving
+attack differed from the stationary sequence. These variants are open.
+
+The title now models isolated attack and jump ticks independently per
+station. Attack blocks ground displacement, while jump permits normal
+directional motion; its approximate elevation changes only rendering,
+not the ground anchor or depth order. These are provisional policies,
+not reconstructed action physics. New presses during an active maneuver
+are discarded, and the held-jump variant, enemies, hitboxes, damage,
+combos, distinct attack art and exact jump pivots remain unimplemented.
+Fresh workspace validation passed (1795590514370710766-424353), and
+native touch smoke also verified changed jump pixels and a return to
+the original ground position.

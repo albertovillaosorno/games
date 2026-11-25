@@ -31,6 +31,8 @@
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
+mod maneuver;
+
 #[cfg(all(
     feature = "native-preview",
     target_os = "linux",
@@ -38,11 +40,11 @@
 ))]
 /// Native prototype host for locally imported art.
 pub mod native;
-
 use std::time::Duration;
 
 use games::input::LogicalAction;
 use games::replay::InputStep;
+pub use maneuver::Maneuver;
 
 /// Fixed reference screen period: 384 by 264 clocks at 6 MHz.
 pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
@@ -86,11 +88,11 @@ pub enum Control {
     Down,
     /// Left on the eight-way stick.
     Left,
-    /// First button, confirms entry in the character selection screen.
+    /// First button; confirms entry or starts an attack in the street.
     Primary,
     /// Right on the eight-way stick.
     Right,
-    /// Second button; combat semantics are not implemented yet.
+    /// Second button; starts a jump in the street.
     Secondary,
     /// Claim a station after inserting a virtual coin.
     Start,
@@ -211,6 +213,8 @@ pub struct Station {
     pub credits: u8,
     /// Current sprite facing.
     pub facing: Facing,
+    /// Current attack or jump, independent of rendering.
+    pub maneuver: Maneuver,
     /// Whether the station has joined.
     pub participation: Participation,
     /// Current foot position.
@@ -243,16 +247,31 @@ impl Slot {
             },
             Control::Start => self.start(phase),
             Control::Primary => {
-                return phase == Phase::Selection
-                    && self.station.participation == Participation::Selected;
+                if phase == Phase::Selection {
+                    return self.station.participation
+                        == Participation::Selected;
+                }
+                if phase == Phase::Street {
+                    self.begin_maneuver(Maneuver::Attack { tick: 0 });
+                }
             },
-            Control::Down
-            | Control::Left
-            | Control::Right
-            | Control::Secondary
-            | Control::Up => {},
+            Control::Secondary => {
+                if phase == Phase::Street {
+                    self.begin_maneuver(Maneuver::Jump { tick: 0 });
+                }
+            },
+            Control::Down | Control::Left | Control::Right | Control::Up => {},
         }
         false
+    }
+
+    fn begin_maneuver(&mut self, maneuver: Maneuver) {
+        if self.station.participation == Participation::Playing
+            && self.station.maneuver == Maneuver::Idle
+        {
+            self.station.maneuver = maneuver;
+            self.station.walking_ticks = None;
+        }
     }
 
     const fn held(self, control: Control) -> bool {
@@ -270,6 +289,9 @@ impl Slot {
         } else if dx > 0 {
             self.station.facing = Facing::Right;
         }
+        if matches!(self.station.maneuver, Maneuver::Attack { .. }) {
+            return;
+        }
         let previous = self.station.position;
         let position = &mut self.station.position;
         position.x = position
@@ -280,7 +302,9 @@ impl Slot {
             .y
             .saturating_add(dy)
             .clamp(layout.min.y, layout.max.y);
-        self.station.walking_ticks = if *position == previous {
+        self.station.walking_ticks = if *position == previous
+            || self.station.maneuver != Maneuver::Idle
+        {
             None
         } else {
             Some(
@@ -297,6 +321,7 @@ impl Slot {
             station: Station {
                 credits: 0,
                 facing: Facing::Right,
+                maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
                 walking_ticks: None,
@@ -321,8 +346,9 @@ impl Slot {
 
 /// Deterministic first-street title state, independent of the host platform.
 ///
-/// The prototype omits the original intro, camera, collision, combat,
-/// enemies, scoring and continuing. It is not a gameplay parity claim.
+/// The prototype omits the original intro, camera, collision, enemy
+/// combat, scoring and continuing. Maneuver timings are provisional.
+/// It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
     layout: StreetLayout,
@@ -387,6 +413,9 @@ impl InputStep for Cabinet {
     type Input = LogicalAction<Action>;
 
     fn input_step(&mut self, _tick: u64, actions: &[Self::Input]) {
+        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
+            slot.station.maneuver = slot.station.maneuver.advance(player);
+        }
         for action in actions {
             self.apply(action);
         }
@@ -559,6 +588,67 @@ mod tests {
     }
 
     #[test]
+    fn isolated_actions_respect_station_and_ground_state() {
+        let mut state = four_playing();
+        let [before, homer, ..] = state.stations();
+        state.input_step(3, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Marge, Control::Right, true),
+            change(Player::Homer, Control::Secondary, true),
+        ]);
+        let [attacking, jumping, ..] = state.stations();
+        assert_eq!(attacking.maneuver, Maneuver::Attack { tick: 0 });
+        assert_eq!(attacking.position, before.position);
+        assert_eq!(jumping.maneuver, Maneuver::Jump { tick: 0 });
+        assert_eq!(jumping.position, homer.position);
+        state.input_step(4, &pulse(Player::Marge, Control::Secondary));
+        for tick in 5..20 {
+            state.input_step(tick, &[]);
+        }
+        assert_maneuvers_at_end(&state, before.position);
+        state.input_step(20, &[]);
+        let [walking, ..] = state.stations();
+        assert_eq!(walking.maneuver, Maneuver::Idle);
+        assert_eq!(walking.position.x, before.position.x + 2);
+        assert_eq!(walking.walking_ticks, Some(0));
+    }
+
+    fn assert_maneuvers_at_end(state: &Cabinet, position: Point) {
+        let [attack_end, still_airborne, ..] = state.stations();
+        assert_eq!(attack_end.position, position);
+        assert_eq!(attack_end.maneuver, Maneuver::Attack { tick: 16 });
+        assert_eq!(still_airborne.maneuver, Maneuver::Jump { tick: 16 });
+    }
+
+    #[test]
+    fn jump_requires_new_press_after_landing() {
+        let mut state = four_playing();
+        let [_, homer, ..] = state.stations();
+        state.input_step(3, &[change(Player::Homer, Control::Secondary, true)]);
+        for tick in 4..35 {
+            state.input_step(tick, &[]);
+        }
+        let [_, landed, ..] = state.stations();
+        assert_eq!(landed.maneuver, Maneuver::Idle);
+        assert_eq!(landed.position, homer.position);
+        state.input_step(35, &[change(
+            Player::Homer,
+            Control::Secondary,
+            true,
+        )]);
+        let [_, held, ..] = state.stations();
+        assert_eq!(held.maneuver, Maneuver::Idle);
+        state.input_step(36, &[change(
+            Player::Homer,
+            Control::Secondary,
+            false,
+        )]);
+        state.input_step(37, &pulse(Player::Homer, Control::Secondary));
+        let [_, restarted, ..] = state.stations();
+        assert_eq!(restarted.maneuver, Maneuver::Jump { tick: 0 });
+    }
+
+    #[test]
     fn replay_is_independent_of_render_frame_partition() {
         let mut script = InputScript::new();
         for action in pulse(Player::Marge, Control::Coin) {
@@ -572,6 +662,9 @@ mod tests {
         }
         script.record(3, change(Player::Marge, Control::Right, true));
         script.record(8, change(Player::Marge, Control::Right, false));
+        for action in pulse(Player::Marge, Control::Secondary) {
+            script.record(9, action);
+        }
         let clocks = StepClock::new(TICK_INTERVAL, NonZeroU32::MAX);
         assert!(clocks.is_ok());
         let Ok(mut slow_clock) = clocks else {

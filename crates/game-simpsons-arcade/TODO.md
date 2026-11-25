@@ -29,15 +29,20 @@ press Start, then Primary to enter the prototype. Close the window to quit.
 | Lisa | 4 | 8 | Keypad 1 / 2 | Keypad 8/4/5/6 |
 
 Connected SDL controllers are assigned in order to available stations.
-Back inserts a coin, Start claims the station, A confirms, B is reserved,
-and the D-pad or left stick moves the character. For a finite hidden
+Back inserts a coin, Start claims the station, A confirms or attacks,
+B jumps, and the D-pad or left stick moves the character. For a finite hidden
 native smoke, insert `--smoke` before PARENT. This is a movement
 prototype, not a complete arcade recreation.
 
 Insert `--touch` before PARENT to append a touch panel below the scene.
 The panel controls Marge: the coin and triangle insert a virtual coin
-and start, A confirms, B remains reserved, and the four arrows move.
+and start, A confirms or attacks, B jumps, and the four arrows move.
 Use two fingers for diagonal movement. Other stations retain keyboard
 and controller mappings. Combine the options as `--smoke --touch` to
 run the finite synthetic contact and native rendering check. Physical
 touch devices and Android/browser presentation remain unverified.
+
+The isolated attack and jump timings are now modeled. Jump visibly
+raises the idle actor art using an approximate elevation curve. Attack
+currently locks ground displacement; distinct pose art and actual
+enemy combat are not yet implemented. Held-jump variants are omitted.
