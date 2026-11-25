@@ -35,3 +35,9 @@ The release hash and direct dynamic dependencies were checked and the
 packaged executable passed a hidden native smoke with separate assets.
 This is not a legal distribution audit or cross-host compatibility test.
 Portable Linux, Android and Web builds remain unverified.
+
+The package writer now shares the canonical bundle directory publication
+primitive. A failed write removes its private staging on normal return
+and does not publish a partial package. Tests exercise rollback,
+non-component destinations and existing-output preservation. Abrupt
+process termination and power-loss recovery have not been tested.

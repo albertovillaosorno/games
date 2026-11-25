@@ -32,17 +32,18 @@
 mod license_inventory;
 
 use std::collections::BTreeMap;
-use std::fs::{self, DirBuilder, OpenOptions, Permissions};
+#[cfg(test)]
+use std::fs::DirBuilder;
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{ErrorKind, Write as _, stdout};
 use std::num::NonZeroU64;
-use std::os::unix::fs::{
-    DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::str;
 
 use games_assets::ContentHash;
 use games_platform_storage::file::snapshot;
+use games_platform_storage::staging::AuthoredStaging;
 
 use self::license_inventory::Inventory;
 use crate::title_build::{NATIVE_TARGET, Title, workspace_root};
@@ -138,17 +139,38 @@ impl Prepared {
     }
 
     fn publish(self, output: &Path, receipt: &str) -> Result<(), String> {
-        // The caller selects a trusted, stable parent. No existing path is
-        // replaced. The receipt is written last; an I/O failure may leave
-        // a partial directory; the receipt is written only after all files.
-        DirBuilder::new()
-            .mode(0o700)
-            .create(output)
-            .map_err(|error| format!("new package directory: {error}"))?;
+        let name = output
+            .file_name()
+            .ok_or("package needs a destination name")?;
+        let parent = output
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let stage = AuthoredStaging::new(parent)
+            .map_err(|error| format!("package stage: {error:?}"))?;
         for (path, file) in self.files {
-            write_file(&output.join(path), &file.bytes, file.executable)?;
+            let target = stage.path().join(path);
+            write_file(&target, &file.bytes, file.executable)?;
+            for directory in target
+                .ancestors()
+                .skip(1)
+                .take_while(|directory| *directory != stage.path())
+            {
+                File::open(directory)
+                    .and_then(|handle| handle.sync_all())
+                    .map_err(|error| error.to_string())?;
+            }
         }
-        write_file(&output.join(RECEIPT), receipt.as_bytes(), false)
+        write_file(&stage.path().join(RECEIPT), receipt.as_bytes(), false)?;
+        let published = stage
+            .publish(name)
+            .map_err(|error| format!("package publish: {error:?}"))?;
+        published.durability.map_err(|error| {
+            format!(
+                "package published at {}, but directory sync failed: {error:?}",
+                published.path.display()
+            )
+        })
     }
 }
 
@@ -156,7 +178,7 @@ impl Prepared {
 ///
 /// # Errors
 /// Rejects build, licence inventory, source admission and filesystem errors.
-/// An I/O failure can leave a partial directory; discard it before retrying.
+/// Publication is atomic; a post-rename sync failure is reported separately.
 pub fn run(title: Title, output: &Path) -> Result<(), String> {
     match fs::symlink_metadata(output) {
         Ok(_) => {
@@ -223,6 +245,7 @@ fn write_file(
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::DirBuilderExt as _;
     use std::time::{SystemTime, UNIX_EPOCH};
     use std::{env, process};
 
@@ -293,7 +316,30 @@ mod tests {
                 .map_err(|error| error.to_string())?
                 == b"complete",
         )?;
-        require(!root.0.join("escape").exists())
+        require(!root.0.join("escape").exists())?;
+        require(
+            fs::read_dir(&root.0)
+                .map_err(|error| error.to_string())?
+                .count()
+                == 1,
+        )
+    }
+
+    #[test]
+    fn failed_write_does_not_publish_partial_package() -> Result<(), String> {
+        let root = TestRoot::new()?;
+        let output = root.0.join("package");
+        let mut prepared = Prepared::default();
+        prepared.add("licenses".into(), vec![1], false)?;
+        prepared.add("licenses/MIT".into(), vec![2], false)?;
+        require(prepared.publish(&output, "incomplete").is_err())?;
+        require(!output.exists())?;
+        require(
+            fs::read_dir(&root.0)
+                .map_err(|error| error.to_string())?
+                .count()
+                == 0,
+        )
     }
 
     fn require(condition: bool) -> Result<(), String> {

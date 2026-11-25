@@ -36,16 +36,18 @@ title, preflights bounded executable and licence sources, and writes
 them into a new private directory. It rejects an existing destination,
 unknown title, wrong ELF target and unreviewed dependency licence
 metadata. Original media, imported canonical assets and system
-libraries are not bundled. An I/O failure can leave a partial directory;
-the receipt is written only after the other files.
+libraries are not bundled. Publication now uses private sibling staging,
+synchronises files and directories, and performs a no-replace rename.
+A failed write leaves no final package; a post-rename parent sync error
+is reported separately.
 
 The first local package contained a 984,632-byte x86-64 ELF and 59
 non-executable files. Its recorded SHA-256 matched independent hashing.
 Reinvocation at the same destination was rejected. From the package
 directory, the hidden touch, pose, enemy and dummy-audio smoke passed
 using explicitly selected external bundles. The package remains local
-to the development host. Linux ABI portability, automatic local asset
-discovery, save paths and complete gameplay remain open.
+to the development host. Linux ABI portability, save paths and complete
+gameplay remain open.
 
 The native launch catalogue now resolves explicitly pinned local asset
 identities from an executable-adjacent file or `--config FILE`. Paths
@@ -55,3 +57,8 @@ package and external assets. Duplicate keys and a symlinked catalogue
 were rejected. The catalogue is a trusted local selection, not media
 scanning or an authenticity proof. Portable distribution and save
 paths remain open.
+
+A fresh package after the atomic publication change contains a
+1,013,360-byte executable whose independently calculated SHA-256
+matches its receipt. Its complete hidden native smoke passed with the
+adjacent local catalogue from an unrelated working directory.

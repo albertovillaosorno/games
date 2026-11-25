@@ -48,9 +48,9 @@ use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{Mode, mkdirat};
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-pub use publication::PublishedBundle;
 pub use publication::StagedBundle;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub use publication::{AuthoredStaging, PublishedBundle, PublishedDirectory};
 
 use super::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
 use super::file::{DIRECTORY_FLAGS, trusted_directory};
@@ -219,6 +219,15 @@ impl PrivateDirectory {
         }
         Err(StagingError::Io(io::ErrorKind::AlreadyExists))
     }
+
+    fn create_in(parent: &Path) -> Result<CreatedDirectory, StagingError> {
+        let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
+        if !trusted_directory(&parent_fd)? {
+            return Err(StagingError::UntrustedParent);
+        }
+        let absolute_parent = fs::canonicalize(parent)?;
+        Self::create(&absolute_parent, &parent_fd)
+    }
 }
 
 impl Drop for PrivateDirectory {
@@ -277,13 +286,8 @@ impl ArchiveStaging {
         parent: &Path,
         budget: ArchiveBudget,
     ) -> Result<Self, StagingError> {
-        let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
-        if !trusted_directory(&parent_fd)? {
-            return Err(StagingError::UntrustedParent);
-        }
-        let absolute_parent = fs::canonicalize(parent)?;
         let CreatedDirectory { temporary, root } =
-            PrivateDirectory::create(&absolute_parent, &parent_fd)?;
+            PrivateDirectory::create_in(parent)?;
         Ok(Self {
             budget,
             failed: false,
@@ -512,6 +516,25 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     use crate::bundle::CanonicalBundle;
     use crate::bundle::TestRoot;
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn authored_staging_rejects_non_component_destinations()
+    -> Result<(), StagingError> {
+        use std::ffi::OsStr;
+
+        let parent = fixture()?;
+        for name in ["", ".", "..", "../escape", "nested/entry", "end/"] {
+            let stage = AuthoredStaging::new(&parent.path)?;
+            let temporary = stage.path().to_owned();
+            require(matches!(
+                stage.publish(OsStr::new(name)),
+                Err(StagingError::UnsupportedPath)
+            ))?;
+            require(!temporary.exists())?;
+        }
+        require(fs::read_dir(&parent.path)?.count() == 0)
+    }
 
     fn budget(entries: u64) -> ArchiveBudget {
         ArchiveBudget::new(
