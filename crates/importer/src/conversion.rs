@@ -202,10 +202,32 @@ where
         &mut Conversion<'_, Stage>,
     ) -> Result<(), ImportError>,
 {
-    let mut output = Conversion::new(source.identity(), limits.manifest, stage);
-    source.visit_flat_zip(limits.archive, |name, payload| {
-        convert(name, payload, &mut output)
-    })?;
+    convert_verified(source, limits.manifest, stage, |verified, output| {
+        verified.visit_flat_zip(limits.archive, |name, payload| {
+            convert(name, payload, output)
+        })
+    })
+}
+
+/// Assemble assets from a verified source, including multi-member decoders.
+/// The private sink must be discarded if conversion or completion fails.
+/// # Errors
+/// Propagates conversion, staging and manifest validation failures.
+pub(crate) fn convert_verified<Stage, Convert>(
+    source: &VerifiedSource<'_>,
+    limits: ManifestLimits,
+    stage: Stage,
+    convert: Convert,
+) -> Result<AssetManifest, ImportError>
+where
+    Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
+    Convert: FnOnce(
+        &VerifiedSource<'_>,
+        &mut Conversion<'_, Stage>,
+    ) -> Result<(), ImportError>,
+{
+    let mut output = Conversion::new(source.identity(), limits, stage);
+    convert(source, &mut output)?;
     output.finish()
 }
 

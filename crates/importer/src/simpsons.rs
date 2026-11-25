@@ -31,10 +31,12 @@
 
 //! Selected World four-player set 1 graphics conversion.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use games_assets::archive::ArchiveBudget;
+use games_assets::{AssetFormat, AssetManifest, ContentHash};
 
+use crate::conversion::{ConversionLimits, convert_verified};
 use crate::graphics::{TileLayout, interleave_words};
 use crate::{ImportError, VerifiedSource};
 
@@ -174,13 +176,88 @@ pub fn decode_graphics(
         )
     })?;
     let tiles = decode_region(&tile_lanes, 0x0008_0000, &tile_layout())?;
+    drop(tile_lanes);
     let sprites = decode_region(&sprite_lanes, 0x0010_0000, &sprite_layout())?;
     Ok(IndexedGraphics { sprites, tiles })
 }
 
+/// Convert the selected graphics into a canonical private transaction.
+///
+/// The staging callback must retain no published bytes until success.
+/// # Errors
+/// Rejects unverified media, layout errors and canonical budget or sink
+/// failures.
+pub fn convert_graphics<Stage>(
+    source: &VerifiedSource<'_>,
+    limits: ConversionLimits,
+    stage: Stage,
+) -> Result<AssetManifest, ImportError>
+where
+    Stage: FnMut(ContentHash, &[u8]) -> Result<(), ImportError>,
+{
+    convert_verified(source, limits.manifest, stage, |verified, output| {
+        let decoded = decode_graphics(verified, limits.archive)?;
+        let tiles = NonZeroU32::new(32_768).unwrap_or(NonZeroU32::MIN);
+        let background = NonZeroU32::new(8).unwrap_or(NonZeroU32::MIN);
+        let sprite = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN);
+        output.write(
+            "graphics/tiles",
+            AssetFormat::IndexedTiles8 {
+                height: background,
+                tiles,
+                width: background,
+            },
+            &decoded.tiles,
+        )?;
+        output.write(
+            "graphics/sprites",
+            AssetFormat::IndexedTiles8 {
+                height: sprite,
+                tiles,
+                width: sprite,
+            },
+            &decoded.sprites,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
+    use games_assets::{ManifestLimits, SourceIdentity};
+
     use super::*;
+
+    #[test]
+    fn wrong_archive_identity_never_stages_payloads() -> Result<(), ImportError>
+    {
+        let media = b"synthetic";
+        let identity = SourceIdentity {
+            digest: ContentHash::calculate(media),
+            revision: REVISION.to_owned(),
+            title: TITLE.to_owned(),
+        };
+        let budget = NonZeroU64::new(32).unwrap_or(NonZeroU64::MIN);
+        let verified = VerifiedSource::new(media, &identity, budget)?;
+        let limits = ConversionLimits {
+            archive: ArchiveBudget::new(budget, budget, budget),
+            manifest: ManifestLimits {
+                manifest_bytes: NonZeroUsize::MIN,
+                payload_bytes: budget,
+                records: NonZeroUsize::MIN,
+                total_bytes: budget,
+            },
+        };
+        let mut called = false;
+        let result = convert_graphics(&verified, limits, |_digest, _bytes| {
+            called = true;
+            Ok(())
+        });
+        (result == Err(ImportError::IncorrectSource) && !called)
+            .then_some(())
+            .ok_or(ImportError::StageFailed)
+    }
 
     #[test]
     fn tile_rows_observe_plane_and_lane_order() -> Result<(), ImportError> {

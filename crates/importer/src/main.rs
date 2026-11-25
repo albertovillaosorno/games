@@ -35,11 +35,12 @@ use std::env;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write as _, stdout};
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use games_assets::archive::ArchiveBudget;
-use games_assets::{ContentHash, SourceIdentity};
+use games_assets::{ContentHash, ManifestLimits, SourceIdentity};
+use games_importer::conversion::ConversionLimits;
 use games_importer::{ImportError, VerifiedSource, simpsons};
 
 const USAGE: &str = concat!(
@@ -128,17 +129,7 @@ fn main() -> Result<(), String> {
     let source = VerifiedSource::new(&bytes, &args.identity, args.source_limit)
         .map_err(|error| format!("source: {error:?}"))?;
     if graphics {
-        let decoded = simpsons::decode_graphics(&source, args.archive)
-            .map_err(|error| format!("graphics: {error:?}"))?;
-        return writeln!(
-            stdout().lock(),
-            "Tiles: {} bytes ({})\nSprites: {} bytes ({})",
-            decoded.tiles.len(),
-            ContentHash::calculate(&decoded.tiles),
-            decoded.sprites.len(),
-            ContentHash::calculate(&decoded.sprites),
-        )
-        .map_err(|error| error.to_string());
+        return report_graphics(&source, args.archive);
     }
     let mut count = 0u64;
     let mut total = 0u64;
@@ -161,6 +152,42 @@ fn main() -> Result<(), String> {
         identity.title,
         identity.revision,
         identity.digest,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn report_graphics(
+    source: &VerifiedSource<'_>,
+    archive: ArchiveBudget,
+) -> Result<(), String> {
+    let manifest = ManifestLimits {
+        manifest_bytes: NonZeroUsize::new(4096).unwrap_or(NonZeroUsize::MIN),
+        payload_bytes: NonZeroU64::new(8_388_608).unwrap_or(NonZeroU64::MIN),
+        records: NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN),
+        total_bytes: NonZeroU64::new(10_485_760).unwrap_or(NonZeroU64::MIN),
+    };
+    let converted = simpsons::convert_graphics(
+        source,
+        ConversionLimits { archive, manifest },
+        |_digest, _bytes| Ok(()),
+    )
+    .map_err(|error| format!("graphics: {error:?}"))?;
+    let mut output = stdout().lock();
+    for record in converted.records() {
+        writeln!(
+            output,
+            "{}: {} bytes ({})",
+            record.key, record.size, record.digest
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let encoded = converted
+        .encode(manifest)
+        .map_err(|error| format!("manifest: {error:?}"))?;
+    writeln!(
+        output,
+        "Canonical manifest: {}",
+        ContentHash::calculate(&encoded)
     )
     .map_err(|error| error.to_string())
 }

@@ -103,6 +103,15 @@ impl FromStr for ContentHash {
 pub enum AssetFormat {
     /// Title-defined declarative data, never executable source code.
     Data,
+    /// Tile-major, row-major unsigned eight-bit palette indices.
+    IndexedTiles8 {
+        /// Height of each tile in pixels.
+        height: NonZeroU32,
+        /// Number of complete tiles.
+        tiles: NonZeroU32,
+        /// Width of each tile in pixels.
+        width: NonZeroU32,
+    },
     /// Interleaved signed 16-bit little-endian PCM samples.
     PcmS16Le {
         /// Channels, limited to eight.
@@ -125,6 +134,15 @@ impl AssetFormat {
     fn expected_size(self) -> Result<Option<u64>, AssetError> {
         let bytes = match self {
             Self::Data => return Ok(None),
+            Self::IndexedTiles8 { height, tiles, width } => {
+                NonZeroU64::from(height)
+                    .checked_mul(NonZeroU64::from(width))
+                    .and_then(|pixels| {
+                        pixels
+                            .checked_mul(NonZeroU64::from(tiles))
+                            .map(NonZeroU64::get)
+                    })
+            },
             Self::PcmS16Le {
                 channels,
                 frames,
@@ -321,6 +339,16 @@ impl AssetManifest {
         Ok(manifest)
     }
 
+    /// Return an exact logical-key match in the validated sorted manifest.
+    #[must_use]
+    pub fn record(&self, key: &str) -> Option<&AssetRecord> {
+        let index = self
+            .records()
+            .binary_search_by(|record| record.key.as_str().cmp(key))
+            .ok()?;
+        self.records().get(index)
+    }
+
     /// Return records in deterministic logical-key order.
     #[must_use]
     pub fn records(&self) -> &[AssetRecord] {
@@ -380,16 +408,11 @@ impl AssetManifest {
         if !allowed_keys.contains(&key) {
             return Err(AssetError::InvalidIdentity);
         }
-        let index = self
-            .records()
-            .binary_search_by(|record| record.key.as_str().cmp(key))
-            .map_err(|_error| AssetError::InvalidIdentity)?;
-        let original = self
-            .records()
-            .get(index)
-            .ok_or(AssetError::InvalidIdentity)?;
-        if original.format == AssetFormat::Data
-            || replacement.format != original.format
+        let original = self.record(key).ok_or(AssetError::InvalidIdentity)?;
+        if !matches!(
+            original.format,
+            AssetFormat::Rgba8 { .. } | AssetFormat::PcmS16Le { .. }
+        ) || replacement.format != original.format
             || replacement.size != original.size
         {
             return Err(AssetError::InvalidFormat);
@@ -625,6 +648,41 @@ mod tests {
                 b"efgh",
             ) == Err(AssetError::InvalidFormat),
         )
+    }
+
+    #[test]
+    fn indexed_tiles_round_trip_and_reject_unapproved_replacement()
+    -> Result<(), AssetError> {
+        let mut item = record("graphics/tiles", b"1234");
+        item.format = AssetFormat::IndexedTiles8 {
+            height: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            tiles: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            width: NonZeroU32::MIN,
+        };
+        let manifest =
+            AssetManifest::new(source(), vec![item.clone()], limits())?;
+        let encoded = manifest.encode(limits())?;
+        require(
+            AssetManifest::parse(&encoded, limits()) == Ok(manifest.clone()),
+        )?;
+        require(manifest.record("graphics/tiles") == Some(&item))?;
+        require(manifest.record("graphics/missing").is_none())?;
+        require(item.verify(b"1234") == Ok(()))?;
+        require(
+            manifest.verify_media_replacement(
+                &["graphics/tiles"],
+                &item,
+                b"1234",
+            ) == Err(AssetError::InvalidFormat),
+        )?;
+        item.size = 3;
+        require(item.validate() == Err(AssetError::InvalidFormat))?;
+        item.format = AssetFormat::IndexedTiles8 {
+            height: NonZeroU32::MAX,
+            tiles: NonZeroU32::MAX,
+            width: NonZeroU32::MAX,
+        };
+        require(item.validate() == Err(AssetError::InvalidFormat))
     }
 
     #[test]

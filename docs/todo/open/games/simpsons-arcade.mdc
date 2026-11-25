@@ -62,3 +62,13 @@ and 32,768 16-by-16 sprite tiles (8,388,608 bytes) as palette indices.
 Synthetic fixtures cover hardware lane ordering and bit permutations.
 No original code or pixels were written to tracked storage. Palette
 selection, audio, asset publication and observable gameplay remain open.
+
+The same command now builds a validated canonical indexed-tile manifest
+with two content-addressed entries. The actual local conversion produced
+the expected 10,485,760 payload bytes and deterministic manifest identity:
+
+`d5a9aec63eb8e02d392ba3f954e85c9d908c6499f2d96aecb148f841bcd2cd91`
+
+The read-only command reports identities and discards payload bytes.
+The adapter supports private transactional staging, but this command does
+not publish a filesystem bundle or render any gameplay.
