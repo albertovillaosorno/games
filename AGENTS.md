@@ -5,8 +5,10 @@
 - Use one agent initially. Follow the catalogue order and root README.
 - Run `cargo validate` before completing work. Do not weaken checks,
   suppress diagnostics, or remove tests simply to obtain a passing result.
-- Stay on main. Use Git and sign Conventional Commits with DCO.
+- Stay on main. Use Git and sign scoped Conventional Commits with DCO.
   Run `cargo validate` before committing; push validated commits only.
+  Use `type(scope): description`; scope is mandatory, lowercase kebab-case.
+  Subjects must not exceed 72 characters. Use a meaningful body.
   Never create branches or worktrees. Preserve concurrent work.
 - Coordinate with other agents: claim distinct tasks and avoid overlapping
   edits. Never overwrite changes from another agent.

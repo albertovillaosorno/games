@@ -55,6 +55,48 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const CHECKS: &[&[&str]] = &[
+    &[
+        "run",
+        "--locked",
+        "--quiet",
+        "-p",
+        "games-validator",
+        "--bin",
+        "games-hooks",
+        "--",
+        "history",
+    ],
+    &[
+        "+nightly",
+        "fmt",
+        "--all",
+        "--",
+        "--config-path",
+        "rustfmt.toml",
+        "--check",
+    ],
+    &[
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings",
+    ],
+    &["test", "--workspace", "--locked"],
+    &["check", "--workspace", "--all-targets", "--locked"],
+    &[
+        "package",
+        "--package",
+        "games",
+        "--locked",
+        "--offline",
+        "--allow-dirty",
+    ],
+];
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -79,37 +121,7 @@ fn run_validation(root: &Path, log: &mut File) -> Result<(), String> {
     writeln!(log, "Authored language and width policy")
         .map_err(|error| error.to_string())?;
     files::validate(root)?;
-    let checks: &[&[&str]] = &[
-        &[
-            "+nightly",
-            "fmt",
-            "--all",
-            "--",
-            "--config-path",
-            "rustfmt.toml",
-            "--check",
-        ],
-        &[
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--locked",
-            "--",
-            "-D",
-            "warnings",
-        ],
-        &["test", "--workspace", "--locked"],
-        &["check", "--workspace", "--all-targets", "--locked"],
-        &[
-            "package",
-            "--package",
-            "games",
-            "--locked",
-            "--offline",
-            "--allow-dirty",
-        ],
-    ];
-    for args in checks {
+    for args in CHECKS {
         writeln!(log, "cargo {}", args.join(" "))
             .map_err(|error| error.to_string())?;
         execute(Command::new("cargo").current_dir(root).args(*args), log)?;

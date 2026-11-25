@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Dormant staged-path and commit-message checks.
+//   - Staged-path, commit-message and history checks.
 // - Must-Not:
 //   - Approve untested behaviour or modify authored source.
 // - Allows:
@@ -21,16 +21,16 @@
 // - Merge-When:
 //   - A shared runner supersedes the entry point.
 // - Summary:
-//   - Future publication hook checks.
+//   - Contribution and commit history checks.
 // - Description:
 //   - Checks staged paths, Conventional Commits and DCO trailers.
 // - Usage:
-//   - Called only by future authorised Git hooks.
+//   - Called by cargo validate and Git hooks.
 // - Defaults:
 //   - Fail if any required check fails.
 //
 
-//! Dormant Git hook checks for future authorised publication.
+//! Validate prospective commit messages and committed history.
 
 /// Isolated test fixture helpers.
 #[cfg(test)]
@@ -47,28 +47,48 @@ fn root() -> PathBuf {
 
 fn scope_valid(scope: &str) -> bool {
     !scope.is_empty()
-        && scope
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._/-".contains(&byte))
+        && scope.split('-').all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit()
+                })
+        })
+}
+
+fn type_valid(kind: &str) -> bool {
+    matches!(
+        kind,
+        "build"
+            | "chore"
+            | "ci"
+            | "docs"
+            | "feat"
+            | "fix"
+            | "perf"
+            | "refactor"
+            | "release"
+            | "revert"
+            | "style"
+            | "test"
+    )
 }
 
 fn subject_valid(subject: &str) -> Result<(), String> {
     let (raw_kind, description) = subject
         .split_once(": ")
-        .ok_or("expected Conventional Commit")?;
+        .ok_or("expected type(scope): description")?;
     let kind = raw_kind.strip_suffix('!').unwrap_or(raw_kind);
-    let commit_type = if let Some((prefix, scope)) = kind.split_once('(') {
-        if !scope.strip_suffix(')').is_some_and(scope_valid) {
-            return Err("invalid Conventional Commit scope".into());
-        }
-        prefix
-    } else {
-        kind
-    };
-    if commit_type.is_empty()
-        || !commit_type.bytes().all(|byte| byte.is_ascii_lowercase())
+    let (commit_type, scope) =
+        kind.split_once('(').ok_or("commit scope is required")?;
+    if !scope.strip_suffix(')').is_some_and(scope_valid) {
+        return Err("invalid Conventional Commit scope".into());
+    }
+    if !type_valid(commit_type)
+        || subject.chars().count() > 72
         || description.is_empty()
         || description.trim() != description
+        || description.ends_with('.')
+        || description.contains("  ")
         || description.chars().any(char::is_control)
     {
         return Err("invalid Conventional Commit subject".into());
@@ -251,10 +271,60 @@ fn check_staged() -> Result<(), String> {
     check_paths(&output.stdout)
 }
 
+fn check_history_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let records = bytes.strip_suffix(&[0]).ok_or("invalid history framing")?;
+    for record in records.split(|byte| *byte == 0) {
+        let text = from_utf8(record).map_err(|error| error.to_string())?;
+        let (id, message) = text.split_once('\n').ok_or("invalid history")?;
+        if id.len() != 40 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("invalid commit identity".into());
+        }
+        check_commit(message).map_err(|error| format!("{id}: {error}"))?;
+    }
+    Ok(())
+}
+
+fn check_history() -> Result<(), String> {
+    if !root().join(".git").exists() {
+        return Ok(());
+    }
+    let head = Command::new("git")
+        .current_dir(root())
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if head.status.code() == Some(1i32) {
+        let unborn = Command::new("git")
+            .current_dir(root())
+            .args(["symbolic-ref", "--quiet", "HEAD"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if unborn.status.success() {
+            return Ok(());
+        }
+    }
+    if !head.status.success() {
+        return Err("cannot resolve commit history".into());
+    }
+    let history = Command::new("git")
+        .current_dir(root())
+        .args(["log", "-z", "--format=%H%n%B", "HEAD"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !history.status.success() {
+        return Err("cannot read commit history".into());
+    }
+    check_history_bytes(&history.stdout)
+}
+
 fn main() -> Result<(), String> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     match args.as_slice() {
         [mode] if mode == "staged" => check_staged(),
+        [mode] if mode == "history" => check_history(),
         [mode, path] if mode == "commit-message" => {
             check_message_file(Path::new(path))
         },
@@ -268,7 +338,10 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    use super::{check_commit, check_message_file, check_paths, root};
+    use super::{
+        check_commit, check_history_bytes, check_message_file, check_paths,
+        root,
+    };
     use crate::fixtures::{directory, require};
 
     const SIGNED: &str = "Signed-off-by: Example <example@example.com>";
@@ -277,8 +350,8 @@ mod tests {
     fn accepts_conventional_subjects_and_final_trailers() {
         for subject in [
             "feat(engine): add capability",
-            "fix(input/gamepad)!: change mapping",
-            "docs: describe contracts",
+            "fix(input-gamepad)!: change mapping",
+            "docs(contracts): describe contracts",
         ] {
             let message = format!(
                 "{subject}\n\nBody text.\n\nRefs: #42\n{SIGNED}\n\n# status"
@@ -291,7 +364,14 @@ mod tests {
     fn rejects_malformed_subjects() {
         for subject in [
             "changes",
+            "feat: changes",
             "Feat: changes",
+            "feat(Engine): changes",
+            "feat(input/gamepad): changes",
+            "feat(engine--input): changes",
+            "unknown(engine): changes",
+            "feat(engine): changes.",
+            "feat(engine): two  spaces",
             "feat(): changes",
             "feat(a(b)): changes",
             "feat( ): changes",
@@ -305,6 +385,26 @@ mod tests {
     }
 
     #[test]
+    fn history_uses_the_same_required_scope() {
+        let id = "a".repeat(40);
+        let valid = format!("{id}\nfeat(engine): change\n\n{SIGNED}\n\0");
+        assert!(check_history_bytes(valid.as_bytes()).is_ok());
+        let invalid = valid.replace("feat(engine):", "feat:");
+        assert!(check_history_bytes(invalid.as_bytes()).is_err());
+        assert!(
+            check_history_bytes(valid.trim_end_matches('\0').as_bytes())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_overlong_subjects() {
+        let subject = format!("feat(engine): {}", "a".repeat(60));
+        let message = format!("{subject}\n\n{SIGNED}");
+        assert!(check_commit(&message).is_err());
+    }
+
+    #[test]
     fn rejects_missing_or_invalid_dco_trailers() {
         for identity in [
             "Example <@example.com>",
@@ -315,14 +415,15 @@ mod tests {
             " <example@example.com>",
             "Example <example@example.com> trailing",
         ] {
-            let message = format!("feat: change\n\nSigned-off-by: {identity}");
+            let message =
+                format!("feat(engine): change\n\nSigned-off-by: {identity}");
             assert!(check_commit(&message).is_err(), "{identity}");
         }
         for message in [
-            String::from("feat: change"),
-            format!("feat: change\n{SIGNED}"),
-            format!("feat: change\n\n{SIGNED}\n\nNot a trailer."),
-            format!("feat: change\n\n{SIGNED}\nSigned-off-by: Invalid"),
+            String::from("feat(engine): change"),
+            format!("feat(engine): change\n{SIGNED}"),
+            format!("feat(engine): change\n\n{SIGNED}\n\nNot a trailer."),
+            format!("feat(engine): change\n\n{SIGNED}\nSigned-off-by: Invalid"),
         ] {
             assert!(check_commit(&message).is_err(), "{message}");
         }
@@ -394,9 +495,12 @@ mod tests {
     fn exercises_isolated_hook_fixtures() -> Result<(), String> {
         let fixture = directory("hooks")?;
         let message = fixture.join("COMMIT_MSG");
-        write(&message, format!("feat: change\n\n{SIGNED}").as_bytes())?;
+        write(
+            &message,
+            format!("feat(engine): change\n\n{SIGNED}").as_bytes(),
+        )?;
         check_message_file(&message)?;
-        write(&message, b"feat: change")?;
+        write(&message, b"feat(engine): change")?;
         require(
             check_message_file(&message).is_err(),
             "invalid commit message file",

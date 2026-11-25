@@ -20,6 +20,8 @@ Verify contribution validation and activate the repository hooks.
 
 - Test pre-commit and commit-msg hooks using isolated temporary fixtures.
 - Reject invalid Conventional Commits and missing or invalid DCO trailers.
+- Require a lowercase kebab-case scope and a subject of at most 72 characters.
+- Validate all reachable HEAD messages with the same prospective policy.
 - Reject staged non-distributable files and keep commit checks reusable.
 - Activate local hooks and validate each signed Conventional Commit.
 

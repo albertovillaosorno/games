@@ -97,6 +97,15 @@ fn tool_versions(root: &Path, hash: &mut Sha256) -> Result<(), String> {
 fn fingerprint(root: &Path) -> Result<Vec<u8>, String> {
     let mut hash = Sha256::new();
     tool_versions(root, &mut hash)?;
+    if root.join(".git").exists() {
+        let head = Command::new("git")
+            .current_dir(root)
+            .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        hash_value(&mut hash, b"git-history");
+        hash_value(&mut hash, &head.stdout);
+    }
     for path in authored(root)? {
         hash_value(&mut hash, path.as_os_str().as_encoded_bytes());
         let bytes =
