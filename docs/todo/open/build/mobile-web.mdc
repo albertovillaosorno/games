@@ -942,3 +942,20 @@ rendered zero frames and completed once with no picker or canvas. No
 original assets were read by that attempt. The WebKitGTK canonical
 directory ingress and asset-backed gameplay remain unverified; this
 observation is not a general claim about other WebKit hosts.
+
+An isolated Firefox/Xvfb session using the exact packaged JavaScript
+and Wasm from e86b2d7 also exercised browser-trusted keyboard and mouse
+events generated through X11 rather than synthetic DOM dispatch. The
+trusted directory selection admitted 740 reads. Enter joined station
+one; A moved its actor from logical x=110 through x=92 and release
+settled it at x=48 in two observations. A left mouse press on the
+canvas was handled and acquired real browser pointer capture. Moving
+into the browser chrome and releasing outside the canvas still
+produced a handled pointer-up, then a loss-of-capture event. A second
+inside click reacquired and released capture. Both press/release pairs
+were trusted and their defaults were suppressed. There were zero audio
+source starts before the attack and 132 by normal menu exit. The audio
+context closed successfully; one completion, 252 callbacks, 177 blits
+and no pending callback, picker or canvas remained. This confirms
+browser capture and release with virtual X11 keyboard and mouse input,
+not physical controls, hardware graphics or audible output.
