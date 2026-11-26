@@ -35,7 +35,7 @@
 pub mod framing;
 
 /// Initial host roster and endpoint admission.
-pub mod host;
+pub mod host_binding;
 
 use core::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU64;

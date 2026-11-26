@@ -45,7 +45,7 @@ use super::worker::{
 };
 use super::{PendingConnection, SecureLanListener, SendProgress, ServerTls};
 use crate::ir::lan::pump::{PumpBackend, PumpProgress, RemoteEvent};
-use crate::ir::security::lan::host::HostBindRequest;
+use crate::ir::security::lan::host_binding::HostBindRequest;
 use crate::software::linux::performance::now;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

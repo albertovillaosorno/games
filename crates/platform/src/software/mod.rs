@@ -46,7 +46,7 @@ mod unavailable_lan {
     use crate::ir::lan::{
         ClientTls, FramePort, LanAvailability, LanConfig, LanFactory, ServerTls,
     };
-    use crate::ir::security::lan::host::HostBindRequest;
+    use crate::ir::security::lan::host_binding::HostBindRequest;
 
     impl LanAvailability for () {
         const SUPPORTED: bool = false;

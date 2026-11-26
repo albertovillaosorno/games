@@ -40,8 +40,8 @@ use rustls::Connection;
 use super::{PeerFingerprint, SecureFrameStream, SendProgress};
 use crate::ir::lan::FrameBackend as _;
 #[cfg(test)]
-use crate::ir::security::lan::host::HostAdmissionError;
-use crate::ir::security::lan::host::HostRoster;
+use crate::ir::security::lan::host_binding::HostAdmissionError;
+use crate::ir::security::lan::host_binding::HostRoster;
 
 /// Host admission, session policy or transport failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -51,7 +51,7 @@ use sha2::{Digest as _, Sha256};
 use self::identity::IdentityPort;
 use self::pump::PumpPort;
 pub use super::security::lan::framing::SendProgress;
-use super::security::lan::host::HostBindRequest;
+use super::security::lan::host_binding::HostBindRequest;
 use super::security::lan::{LanAdmissionError, LanLimits, admit_endpoint};
 
 /// Whether the selected platform provides authenticated private transport.

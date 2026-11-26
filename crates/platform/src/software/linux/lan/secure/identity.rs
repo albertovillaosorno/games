@@ -47,7 +47,7 @@ use rustls::sign::CertifiedKey;
 use super::{ClientTls, PeerFingerprint, ServerTls};
 use crate::ir::lan::identity::PublicIdentity;
 use crate::ir::security::lan::CredentialKind;
-use crate::ir::security::lan::host::ClientApprovals;
+use crate::ir::security::lan::host_binding::ClientApprovals;
 
 /// Local private leaf credentials with no private-key export operation.
 ///

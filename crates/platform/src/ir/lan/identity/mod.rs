@@ -41,7 +41,7 @@ use super::{
     ClientTls, CredentialPort, LanFactory, PeerFingerprint, ServerTls,
 };
 use crate::ir::security::lan::CredentialKind;
-use crate::ir::security::lan::host::ClientApprovals;
+use crate::ir::security::lan::host_binding::ClientApprovals;
 
 /// Public material to exchange and verify through a trusted local channel.
 /// Receiving this value does not establish trust or enrol a player.

@@ -39,7 +39,9 @@ use std::time::Duration;
 use games::network::{MessageSchema, SessionConfig, SessionError};
 
 use super::{LanFactory, PeerFingerprint, ServerTls};
-use crate::ir::security::lan::host::{HostAdmissionError, HostBindRequest};
+use crate::ir::security::lan::host_binding::{
+    HostAdmissionError, HostBindRequest,
+};
 
 /// Explicit endpoint, transport limits and pre-approved player identities.
 #[derive(Clone, Copy, Debug)]

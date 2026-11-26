@@ -27,7 +27,7 @@
 // - Usage:
 //   - Invoked by the mandatory architecture contract runner.
 // - Defaults:
-//   - Allow only canonical roots and recorded migration files.
+//   - Require canonical owners and directory module roots in the IR.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -101,11 +101,7 @@ fn owner_source(relative: &str) -> bool {
         return false;
     };
     match directory {
-        "ir" => {
-            remainder == "mod.rs"
-                || (remainder.contains('/')
-                    && !remainder.starts_with("native/"))
-        },
+        "ir" => remainder == "mod.rs" || remainder.ends_with("/mod.rs"),
         "software" => backend_path(remainder, os_backend),
         "hardware" => backend_path(remainder, device_family),
         _ => false,
@@ -205,6 +201,8 @@ mod tests {
             "crates/platform/src/lib.rs",
             "crates/platform/src/ir/security/mod.rs",
             "crates/platform/src/ir/audio/mod.rs",
+            "crates/platform/src/ir/security/lan/host_binding/mod.rs",
+            "crates/platform/src/ir/ui/scene/mod.rs",
             "crates/platform/src/software/linux/file.rs",
             "crates/platform/src/software/windows/input.rs",
             "crates/platform/src/software/linux/toolchain/mod.rs",
@@ -233,6 +231,10 @@ mod tests {
             "crates/platform/src/software/windows/graphics/input.rs",
             "crates/platform/src/software/linux/graphics/sprites.rs",
             "crates/platform/src/ir/audio.rs",
+            "crates/platform/src/ir/security/audio.rs",
+            "crates/platform/src/ir/ui/menu.rs",
+            "crates/platform/src/ir/security/lan/host.rs",
+            "crates/platform/src/ir/graphics/helper.rs",
             "crates/platform/src/ir/host/Cargo.toml",
             "crates/platform/src/ir.rs",
             "crates/platform/src/hardware/linux/input.rs",
@@ -262,6 +264,25 @@ mod tests {
         ] {
             assert!(!path_allowed(path), "{path}");
         }
+    }
+
+    #[test]
+    fn nested_ir_modules_require_directory_roots() {
+        let root = "crates/platform/src";
+        let mut paths = [
+            "lib.rs",
+            "ir/mod.rs",
+            "ir/security/mod.rs",
+            "ir/hardware/mod.rs",
+            "software/mod.rs",
+            "ir/security/audio/inner/mod.rs",
+        ]
+        .into_iter()
+        .map(|path| OsString::from(format!("{root}/{path}")))
+        .collect::<Vec<_>>();
+        assert!(validate(&paths).is_err());
+        paths.push(OsString::from(format!("{root}/ir/security/audio/mod.rs")));
+        assert!(validate(&paths).is_ok());
     }
 
     #[test]

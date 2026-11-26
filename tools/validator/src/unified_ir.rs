@@ -349,7 +349,7 @@ mod tests {
             );
             assert!(
                 import_boundary(
-                    "crates/platform/src/ir/importer/import.rs",
+                    "crates/platform/src/ir/importer/import/mod.rs",
                     source,
                 )
                 .is_ok()

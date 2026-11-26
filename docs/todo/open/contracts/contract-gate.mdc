@@ -423,3 +423,12 @@ The vendor-token policy retains its existing title and engine scope.
 This is not full Rust name resolution or macro expansion. Fresh native
 X11 and dummy audio validation 1795652720063938322-1773839 passed
 1,514 aggregate test executions and six portable core checks.
+
+The remaining six flat IR source modules now use directory roots.
+The host binding policy uses a descriptive host_binding directory
+rather than the forbidden generic host name. The layout gate rejects
+flat Rust source at every IR depth and requires intermediate mod.rs
+roots. Positive and negative synthetic inventories cover both rules.
+Fresh Xvfb/X11 and dummy-audio validation
+1795657849795133218-3149203 passed 1,642 aggregate test executions
+and all six portable core checks. No native capability was added.

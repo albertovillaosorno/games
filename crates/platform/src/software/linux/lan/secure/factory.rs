@@ -49,7 +49,9 @@ use crate::ir::lan::{
     ClientTls, CredentialPort, FramePort, LanAvailability, LanConfig,
     LanFactory, ServerTls,
 };
-use crate::ir::security::lan::host::{ClientApprovals, HostBindRequest};
+use crate::ir::security::lan::host_binding::{
+    ClientApprovals, HostBindRequest,
+};
 
 impl LanAvailability for () {
     const SUPPORTED: bool = true;
