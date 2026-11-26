@@ -2799,3 +2799,22 @@ without exceeding the host-work budget, and the same cooperative and
 restraint recovery checks. Whole-smoke peak RSS was 100,605,952,
 100,659,200 and 100,892,672 bytes respectively. These are individual
 native diagnostic observations, not physical display acceptance.
+
+The 3,475,344-byte optimized Linux preview at 54a87f5 passed a fresh
+original-backed diagnostic with the existing 218-pose recovery selection
+following the portable graphics, storage and controller admission changes.
+NVIDIA EGL/OpenGL ES with dummy audio passed adaptive, aspect-fit, integer
+and stretch with touch, and fill without touch. Fill with touch was
+rejected before startup. Adaptive retained a 426 by 304 logical scene
+with 106 added columns; the other touch modes retained 320 by 304.
+Each admitted run verified 444 camera columns, 600 movement and 20 combat
+submissions, two cooperative families, six reinforcement meters and both
+restraint recovery paths, with zero 16.667 ms host-work budget misses.
+Whole-smoke peak RSS ranged from 100,573,184 to 101,744,640 bytes.
+An Xvfb/X11 adaptive touch run also passed, with zero budget misses and
+135,184,384 bytes peak RSS. Driver selection and virtual-display overhead
+prevent treating these isolated observations as a controlled performance
+comparison. Physical input, audio, display and full gameplay parity remain
+unverified. Fresh native-enabled workspace validation
+1795655381182031058-2515004 passed 1,591 aggregate test executions and six
+portable core checks.
