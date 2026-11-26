@@ -143,6 +143,11 @@ impl TouchGeometry {
             && stamp.is_some_and(|elapsed| elapsed >= self.cutoff)
     }
 
+    /// A routed native cancellation already released the old contacts.
+    pub(crate) const fn acknowledge_cancellation(&mut self) {
+        self.pending_cancellation = false;
+    }
+
     /// Invalid observations withdraw geometry immediately. Retain any
     /// required cancellation until the next successful synchronization.
     pub(crate) const fn invalidate(&mut self) {

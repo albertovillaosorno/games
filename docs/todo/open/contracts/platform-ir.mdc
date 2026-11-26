@@ -619,3 +619,12 @@ Native input routing also rejects preprojected logical touch-zone events;
 only geometry- and clock-admitted physical contacts reach title routing.
 A portable fixture checks disabled, unobserved and valid geometry states
 and retains the existing touch-cancellation event.
+
+An owning native touch cancellation or focus loss now withdraws the
+previously observed touch geometry before routing subsequent events.
+Successful cancellation delivery is acknowledged; an omitted delivery
+retains a pending cancellation until synchronization. Synthetic coverage
+rejects foreign-window cancellation, same-batch stale contacts and
+contacts predating the next geometry observation. Fresh X11 rendering
+and dummy audio validation 1795661194037297138-4049132 passed 1,697
+aggregate test executions and all six portable core checks.

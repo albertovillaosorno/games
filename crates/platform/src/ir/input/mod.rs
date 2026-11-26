@@ -197,7 +197,9 @@ impl NativeInput {
     /// Discovery notifications and unknown controllers do not fabricate
     /// attachment events. Native touch contacts require a current presented
     /// geometry and a timestamp at or after its observation before routing.
-    /// Logical touch-zone events belong to the title and are not admitted.
+    /// Native cancellation withdraws geometry immediately, so subsequent
+    /// contacts require a fresh presentation observation. Logical touch-zone
+    /// events belong to the title and are not admitted.
     #[must_use]
     pub fn translate(&mut self, event: &InputSample) -> Option<HostEvent> {
         if !self.clock.matches(event) {
@@ -213,9 +215,25 @@ impl NativeInput {
         {
             return None;
         }
+        let cancellation = matches!(
+            event.transition(),
+            InputTransition::Event(
+                HostEvent::Input(
+                    InputEvent::TouchCancelled | InputEvent::FocusLost
+                ) | HostEvent::Quit
+            )
+        );
+        if cancellation {
+            self.touch_geometry.invalidate();
+        }
         self.focus.observe(event.transition());
-        self.controllers
-            .route(event.transition(), self.backend.translate(event)?)
+        let routed = self
+            .controllers
+            .route(event.transition(), self.backend.translate(event)?);
+        if cancellation && routed.is_some() {
+            self.touch_geometry.acknowledge_cancellation();
+        }
+        routed
     }
 }
 
@@ -270,6 +288,7 @@ mod tests {
         feedback: Rc<Cell<Option<super::HapticCommand>>>,
         initial_feedback_allowed: bool,
         scope: u64,
+        suppress_cancellation: bool,
     }
 
     impl super::InputBackend for TestInput {
@@ -323,6 +342,10 @@ mod tests {
             event: &super::InputSample,
         ) -> Option<super::HostEvent> {
             match event.transition() {
+                super::InputTransition::Event(super::HostEvent::Input(
+                    super::InputEvent::TouchCancelled
+                    | super::InputEvent::FocusLost,
+                )) if self.suppress_cancellation => None,
                 super::InputTransition::Event(routed) => Some(routed),
                 super::InputTransition::Disconnected(device) => {
                     Some(super::HostEvent::Input(super::InputEvent::Detached {
@@ -554,6 +577,73 @@ mod tests {
             )),
             &Some(cancelled),
         )?;
+        Ok(())
+    }
+
+    fn input_sample(
+        stamp: u64,
+        event: super::HostEvent,
+        scope: u64,
+    ) -> super::InputSample {
+        super::InputSample::new(
+            Some(Duration::from_millis(stamp)),
+            super::InputTransition::Event(event),
+            Some(scope),
+        )
+    }
+
+    #[test]
+    fn native_cancellation_withdraws_touch_until_observation()
+    -> Result<(), super::RenderError> {
+        use games::input::touch::{ContactId, ContactPhase, TouchPoint};
+
+        use super::{HostEvent, InputEvent};
+        let ms = Duration::from_millis;
+        let size = Dimensions::new(NonZeroU32::MIN, NonZeroU32::MIN);
+        let geometry = PresentationMode::AspectFit.layout(size, size);
+        let contact = HostEvent::Input(InputEvent::Contact {
+            id: ContactId { device: 1, finger: 1 },
+            phase: ContactPhase::Down(TouchPoint { x: 10, y: 10 }),
+        });
+        let sample = input_sample;
+        for (event, suppressed) in [
+            (InputEvent::TouchCancelled, false),
+            (InputEvent::TouchCancelled, true),
+            (InputEvent::FocusLost, false),
+            (InputEvent::FocusLost, true),
+        ] {
+            let cancellation = HostEvent::Input(event);
+            let clock = Rc::new(Cell::new(Duration::ZERO));
+            let mut input = super::InputStartup::new(
+                Box::new(TestInput {
+                    clock: Rc::clone(&clock),
+                    scope: 7,
+                    suppress_cancellation: suppressed,
+                    ..TestInput::default()
+                }),
+                NonZeroUsize::MIN,
+            )?
+            .input;
+            input.enable_touch();
+            clock.set(ms(10));
+            check(&input.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
+            check(&input.translate(&sample(10, contact, 7)), &Some(contact))?;
+            clock.set(ms(20));
+            check(&input.translate(&sample(20, cancellation, 8)), &None)?;
+            check(&input.translate(&sample(20, contact, 7)), &Some(contact))?;
+            check(
+                &input.translate(&sample(20, cancellation, 7)),
+                &(!suppressed).then_some(cancellation),
+            )?;
+            check(&input.translate(&sample(20, contact, 7)), &None)?;
+            clock.set(ms(30));
+            check(
+                &input.synchronize_touch(|| Ok(Some(geometry)))?,
+                &suppressed.then_some(ms(30)),
+            )?;
+            check(&input.translate(&sample(20, contact, 7)), &None)?;
+            check(&input.translate(&sample(30, contact, 7)), &Some(contact))?;
+        }
         Ok(())
     }
 
