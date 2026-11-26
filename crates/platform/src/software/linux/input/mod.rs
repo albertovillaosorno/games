@@ -478,26 +478,6 @@ const fn mouse_code(button: MouseButton) -> Option<u8> {
     )
 }
 
-#[expect(
-    clippy::as_conversions,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "finite normalized coordinates are checked before conversion"
-)]
-fn normalized_coordinate(value: f32) -> Option<u16> {
-    if !(0.0..=1.0).contains(&value) {
-        return None;
-    }
-    Some((value * f32::from(u16::MAX)).round() as u16)
-}
-
-fn normalized_point(horizontal: f32, vertical: f32) -> Option<TouchPoint> {
-    Some(TouchPoint {
-        x: normalized_coordinate(horizontal)?,
-        y: normalized_coordinate(vertical)?,
-    })
-}
-
 pub(super) fn sample(event: &Event, window: u32, now: u64) -> InputSample {
     let transition = if matches!(event, Event::ControllerDeviceAdded { .. }) {
         InputTransition::DiscoveryHint
@@ -649,7 +629,10 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
         (
             touch_id,
             finger_id,
-            ContactPhase::Down(normalized_point(x, y)?),
+            ContactPhase::Down(TouchPoint::from_normalized(
+                f64::from(x),
+                f64::from(y),
+            )?),
         )
     } else if let Event::FingerMotion {
         touch_id,
@@ -662,7 +645,10 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
         (
             touch_id,
             finger_id,
-            ContactPhase::Motion(normalized_point(x, y)),
+            ContactPhase::Motion(TouchPoint::from_normalized(
+                f64::from(x),
+                f64::from(y),
+            )),
         )
     } else if let Event::FingerUp { touch_id, finger_id, .. } = *event {
         (touch_id, finger_id, ContactPhase::Up)

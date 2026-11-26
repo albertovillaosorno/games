@@ -49,6 +49,16 @@ pub struct TouchPoint {
 }
 
 impl TouchPoint {
+    /// Admit finite surface-relative coordinates, including both edges.
+    /// Rounds to the nearest normalized unit without clamping outside input.
+    #[must_use]
+    pub fn from_normalized(horizontal: f64, vertical: f64) -> Option<Self> {
+        Some(Self {
+            x: normalized_axis(horizontal)?,
+            y: normalized_axis(vertical)?,
+        })
+    }
+
     /// Map into a centered horizontal panel without changing vertical input.
     /// Rejects points outside the panel and invalid surface dimensions.
     #[must_use]
@@ -380,6 +390,19 @@ impl Contacts {
     }
 }
 
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "finite normalized coordinates are checked before conversion"
+)]
+fn normalized_axis(value: f64) -> Option<u16> {
+    if !(0.0f64..=1.0f64).contains(&value) {
+        return None;
+    }
+    Some((value * f64::from(u16::MAX)).round() as u16)
+}
+
 /// Map a pixel boundary to the first inclusive normalized coordinate.
 ///
 /// Rounds upward so adjacent pixel-defined regions do not overlap. Zero
@@ -445,6 +468,25 @@ mod tests {
     const LEFT: TouchPoint = TouchPoint { x: 100, y: 0 };
     const RIGHT: TouchPoint = TouchPoint { x: 500, y: 0 };
     const OUTSIDE: TouchPoint = TouchPoint { x: 900, y: 0 };
+
+    #[test]
+    fn normalized_coordinates_admit_only_the_inclusive_surface() {
+        for (horizontal, vertical, expected) in [
+            (0.0f64, 1.0f64, Some(TouchPoint { x: 0, y: u16::MAX })),
+            (0.5f64, 0.5f64, Some(TouchPoint { x: 32_768, y: 32_768 })),
+            (0.25f64, 0.75f64, Some(TouchPoint { x: 16_384, y: 49_151 })),
+            (-f64::MIN_POSITIVE, 0.5f64, None),
+            (1.0f64 + f64::EPSILON, 0.5f64, None),
+            (f64::NAN, 0.5f64, None),
+            (0.5f64, f64::INFINITY, None),
+            (0.5f64, f64::NEG_INFINITY, None),
+        ] {
+            assert_eq!(
+                TouchPoint::from_normalized(horizontal, vertical),
+                expected
+            );
+        }
+    }
 
     fn zone(id: u16, start: u16, end: u16) -> TouchZone {
         TouchZone {

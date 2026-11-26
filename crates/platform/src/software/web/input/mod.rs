@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Scoped browser keyboard and focus event subscription.
+//   - Scoped browser keyboard, touch and focus event subscription.
 // - Must-Not:
 //   - Own game actions, rendering or controller discovery policy.
 // - Allows:
@@ -28,6 +28,8 @@
 //   - Subscribe to a host target, drain samples and route through input IR.
 // - Defaults:
 //   - Ignore unknown keys and autorepeat; no gamepad support.
+
+mod pointer;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -63,8 +65,9 @@ struct EventQueue {
 }
 
 struct EventSource {
-    _listeners: Vec<Listener>,
+    listeners: Vec<Listener>,
     queue: Rc<RefCell<EventQueue>>,
+    scope: u64,
 }
 
 struct Listener {
@@ -176,33 +179,45 @@ impl EventSource {
         scope: u64,
         capacity: NonZeroUsize,
     ) -> Result<Self, RenderError> {
-        let queue = Rc::new(RefCell::new(EventQueue::new(capacity)?));
-        let mut listeners = Vec::new();
+        let mut source = Self {
+            listeners: Vec::new(),
+            queue: Rc::new(RefCell::new(EventQueue::new(capacity)?)),
+            scope,
+        };
         for kind in ["keydown", "keyup", "focus", "blur"] {
-            let sink = Rc::clone(&queue);
-            let callback = Closure::<dyn FnMut(Event)>::new(move |event| {
-                if let Some(transition) = transition(kind, &event) {
-                    let stamp =
-                        super::performance::timestamp(event.time_stamp()).ok();
-                    sink.borrow_mut().push(stamp, transition, scope);
-                }
-            });
-            target
-                .add_event_listener_with_callback(
-                    kind,
-                    callback.as_ref().unchecked_ref(),
-                )
-                .map_err(dom_error)?;
-            listeners.push(Listener {
-                callback,
-                kind,
-                target: target.clone(),
-            });
+            source
+                .listen(target, kind, move |event| transition(kind, event))?;
         }
-        Ok(Self {
-            _listeners: listeners,
-            queue,
-        })
+        Ok(source)
+    }
+
+    fn listen(
+        &mut self,
+        target: &EventTarget,
+        kind: &'static str,
+        mut translate: impl FnMut(&Event) -> Option<InputTransition> + 'static,
+    ) -> Result<(), RenderError> {
+        let sink = Rc::clone(&self.queue);
+        let scope = self.scope;
+        let callback = Closure::<dyn FnMut(Event)>::new(move |event| {
+            if let Some(transition) = translate(&event) {
+                let stamp =
+                    super::performance::timestamp(event.time_stamp()).ok();
+                sink.borrow_mut().push(stamp, transition, scope);
+            }
+        });
+        target
+            .add_event_listener_with_callback(
+                kind,
+                callback.as_ref().unchecked_ref(),
+            )
+            .map_err(dom_error)?;
+        self.listeners.push(Listener {
+            callback,
+            kind,
+            target: target.clone(),
+        });
+        Ok(())
     }
 
     fn pop(&self) -> Option<InputSample> {
@@ -301,7 +316,7 @@ fn key_code(code: &str) -> Option<KeyboardKey> {
     KeyboardKey::from_profile_name(name)
 }
 
-fn next_key(
+fn next_event(
     source: &EventSource,
     input: &mut NativeInput,
 ) -> Result<Option<HostEvent>, RenderError> {
@@ -389,7 +404,7 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
         verify(!send_key(&target, "keyup", code, false)?, "up default")?;
         for down in [true, false] {
             verify(
-                next_key(&source, &mut input)?
+                next_event(&source, &mut input)?
                     == Some(HostEvent::Input(InputEvent::Key {
                         code: expected.code(),
                         down,
@@ -397,14 +412,14 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
                 "key translation",
             )?;
         }
-        verify(next_key(&source, &mut input)?.is_none(), "unexpected key")?;
+        verify(next_event(&source, &mut input)?.is_none(), "unexpected key")?;
     }
     verify(
         send_key(&target, "keydown", "Unidentified", false)?,
         "unknown",
     )?;
     verify(
-        next_key(&source, &mut input)?.is_none(),
+        next_event(&source, &mut input)?.is_none(),
         "unknown event routed",
     )?;
     let focus = Event::new("focus").map_err(dom_error)?;
@@ -415,7 +430,7 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
     let blur = Event::new("blur").map_err(dom_error)?;
     let _sent = target.dispatch_event(&blur).map_err(dom_error)?;
     verify(
-        next_key(&source, &mut input)?
+        next_event(&source, &mut input)?
             == Some(HostEvent::Input(InputEvent::FocusLost)),
         "blur",
     )?;
@@ -439,10 +454,10 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
             == Some(HostEvent::Input(InputEvent::FocusLost)),
         "overflow",
     )?;
-    verify(next_key(&source, &mut input)?.is_none(), "overflow drain")?;
+    verify(next_event(&source, &mut input)?.is_none(), "overflow drain")?;
     let _sent = send_key(&target, "keyup", "KeyA", false)?;
     verify(
-        next_key(&source, &mut input)?
+        next_event(&source, &mut input)?
             == Some(HostEvent::Input(InputEvent::Key {
                 code: KeyboardKey::LETTER_A.code(),
                 down: false,
@@ -453,5 +468,6 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
     verify(
         send_key(&target, "keydown", "KeyA", false)?,
         "listener removed",
-    )
+    )?;
+    pointer::verify_touch_source()
 }

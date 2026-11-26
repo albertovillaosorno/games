@@ -32,8 +32,10 @@ nix.workspace = true
 js-sys.workspace = true
 wasm-bindgen.workspace = true
 web-sys = { workspace = true, features = [
-    "Event", "EventTarget", "KeyboardEvent", "KeyboardEventInit",
-    "Performance", "Storage", "Window",
+    "Document", "DomRect", "DomRectReadOnly", "Element", "Event",
+    "EventTarget", "HtmlElement", "KeyboardEvent", "KeyboardEventInit",
+    "MouseEvent", "Node", "Performance", "PointerEvent", "PointerEventInit",
+    "Storage", "Window",
 ] }
 
 [features]

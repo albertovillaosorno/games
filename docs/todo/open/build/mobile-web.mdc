@@ -327,3 +327,36 @@ rejected it, removed all eight listeners and dispatched 50 events in total;
 the following normal launch passed. The independently hashed bound module
 was 87,617 bytes. All five screenshot indicators were green. This verifies
 fixture cancellation timing, not integration with the title's runtime.
+
+A shared TouchPoint constructor now admits finite normalized coordinates
+and rounds to the nearest inclusive unit. The SDL adapter and browser
+source use the same conversion; inline tests cover edges, interior
+rounding and rejection of invalid coordinates.
+
+The fixture-only browser source subscribes to touch pointer events on an
+explicit element, sharing the bounded, timestamped keyboard event queue.
+It maps client coordinates relative to the CSS rectangle, preserves
+distinct pointer identities, rejects outside presses and maps outside
+motion to a positionless contact. Cancellation, release, capture loss
+and uncaptured leave terminate the contact; a trusted press requires
+existing or successfully requested capture. Shared input admission still
+requires a current presentation geometry. The fixture supplies that
+geometry explicitly rather than claiming a browser renderer exists.
+
+Fresh validation 1795679350478191644-3092444 passed with Xvfb/X11 software
+OpenGL, the native render smoke, dummy audio queue smoke and all portable
+targets. The updated bound browser module was 106,828 bytes and its
+binding JavaScript was 19,541 bytes. Two normal isolated Firefox launches
+each dispatched 54 keyboard/focus diagnostic events and 28 canvas
+pointer events, with 20 canvas listener registrations and removals.
+Two touch identities, both inclusive edges, the centre, outside motion,
+release, cancellation, capture loss and sibling-surface rejection passed
+on an attached 180 by 90 CSS canvas with 360 by 180 backing pixels.
+
+An injected seventh canvas listener registration failed in both
+invocations, removing the six prior subscriptions in each and leaving
+no canvas elements or pointer dispatches. The invalid-clock and
+subsequent normal cases passed their expected outcomes. Synthetic
+events do not exercise trusted pointer capture; real touch, actual
+browser scene geometry, mouse/gamepad and visibility integration remain
+open.
