@@ -2494,9 +2494,9 @@ edges and approach independently in world coordinates. Art-only travel
 may reach 444 columns; opening combat is capped at 362 with six
 reinforcements and seven total enemies. Full stage
 progression remains open.
-Fill may crop the game HUD and is rejected with touch enabled.
-Settings
-can also be changed through the main or pause menu: Up/Down selects,
+Fill may crop the game HUD. With touch enabled, only the game scene is
+cropped; the complete control strip is fitted in its protected region.
+Settings can also be changed through the main or pause menu: Up/Down selects,
 Primary cycles display, toggles desktop fullscreen or cycles master
 volume (100, 75, 50, 25 and 0 percent); Back returns.
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
@@ -2512,8 +2512,8 @@ settings.
 The directory must exist and be trusted, and must not contain game-progress
 slots. The versioned display payload is stored atomically in slot-0.gms;
 master volume uses the independent slot-2.gms.
-Malformed data or failed persistence is reported as an error. A saved
-Fill preference is safely opened as aspect-fit when touch is enabled.
+Malformed data or failed persistence is reported as an error. Saved Fill
+is available with touch; settings menus temporarily fit the whole frame.
 
 #### Digital control profiles
 
@@ -2528,7 +2528,10 @@ the shared settings menu also offers RESET CONTROLS NEXT LAUNCH: Primary
 atomically saves defaults, without changing the active profile or world.
 The row is unavailable during smoke, or when resetting touch seats would
 conflict with the current remote reservations. Restart without an explicit
-control override to activate the defaults. Live remapping remains open.
+control override to activate the defaults. EDIT CONTROLS opens the
+interactive next-launch editor for keyboard, mouse, controller buttons,
+touch slots and controller axes. Changes are admitted and stored together
+in the control profile. Active bindings remain unchanged until relaunch.
 
 With the game and controller client closed, edit one saved binding
 without opening the display or assets:
@@ -2595,8 +2598,8 @@ bindings. Press magnitudes must be 1-32767 and release magnitudes
 must be smaller (including zero). Defaults remain 16000 to press
 and 10000 to release. Both the host and remote controller support
 these digital profiles; the remote controller uses station 1's
-profile. Proportional movement and an interactive remapping menu
-remain open.
+profile. The host settings editor can configure signed directions and
+thresholds together; proportional movement remains open.
 
 For optional touch panels, select stations and swap button
 positions in the same profile, using the default action names as slots:
@@ -2620,7 +2623,8 @@ keyboard and controllers remain usable. A contact stays assigned to the
 initial panel until release; dragging elsewhere releases held actions
 without activating another panel. A LAN host rejects any selection
 that includes a reserved remote seat. Physical touchscreen testing and
-interactive panel layout editing remain open.
+interactive panel seat selection remain open. Individual touch slots can
+be remapped in the next-launch settings editor.
 
 #### Explicit LAN hosting
 

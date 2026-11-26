@@ -1483,6 +1483,22 @@ const fn adaptive_hint(world_available: bool) -> &'static str {
     }
 }
 
+const fn settings_hint(
+    hidden: bool,
+    persistent: bool,
+    editor: bool,
+) -> &'static str {
+    if hidden {
+        "SMOKE DOES NOT SAVE SETTINGS"
+    } else if !persistent {
+        "USE --SETTINGS DIR TO SAVE"
+    } else if editor {
+        "CONTROL EDITS APPLY NEXT LAUNCH"
+    } else {
+        "DISPLAY AND VOLUME SAVED"
+    }
+}
+
 const fn main_menu_hints(hosted: bool) -> &'static [&'static str] {
     if hosted {
         &[
@@ -1602,7 +1618,11 @@ fn load_menu(
             settings_hints: &[
                 "PRIMARY CHANGES VALUE - PAUSE RETURNS",
                 adaptive_hint(world_available),
-                "CONTROL EDITS APPLY NEXT LAUNCH",
+                settings_hint(
+                    options.hidden,
+                    options.preferences.is_some(),
+                    options.can_reset_controls(reserved),
+                ),
             ],
             title: "THE SIMPSONS ARCADE",
         },
@@ -3463,6 +3483,28 @@ mod tests {
             return Err(failure("rejected release left movement held"));
         }
         Ok(())
+    }
+
+    #[test]
+    fn settings_hint_follows_persistence_availability() {
+        use super::settings_hint;
+
+        assert_eq!(
+            settings_hint(true, true, false),
+            "SMOKE DOES NOT SAVE SETTINGS"
+        );
+        assert_eq!(
+            settings_hint(false, false, false),
+            "USE --SETTINGS DIR TO SAVE"
+        );
+        assert_eq!(
+            settings_hint(false, true, false),
+            "DISPLAY AND VOLUME SAVED"
+        );
+        assert_eq!(
+            settings_hint(false, true, true),
+            "CONTROL EDITS APPLY NEXT LAUNCH"
+        );
     }
 
     #[test]

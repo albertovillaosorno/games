@@ -134,6 +134,14 @@ launch catalogue pointing at independently verified assets; see the
 [asset pipeline](asset-pipeline.md) for shared content storage and
 migration limitations.
 
+For persistent display, volume and control profiles, create an existing
+owner-only settings directory outside the package and asset store. Set
+`settings=DIR` in the private local launch catalogue, or launch with
+`--settings DIR`. Relative catalogue paths are anchored to that file.
+Without this selection, display and volume changes are session-only and
+control editing/reset is unavailable. A normal launch with the directory
+selected enables the next-launch control editor; smoke never writes it.
+
 Keep the engine modular, dependency versions centralised and game code
 limited to unique behaviour.
 Runtime and title crates live under `crates/`; contributor tools live
