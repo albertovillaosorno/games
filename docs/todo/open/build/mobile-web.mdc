@@ -1326,3 +1326,35 @@ remaining canvas. The earlier nested-focus-only module also passed
 WebKitGTK after a private bus-proxy startup failure was resolved by
 using a shorter scratch path. Neither diagnostic establishes physical
 controller operation or latency.
+
+The published c1cfce6 package passed the independent trusted
+keyboard/mouse observer again in isolated visible Firefox. The chooser
+listed 743 files and read exactly 616 selected entries (24,937,054
+bytes). The actor moved from x=110 through x=92 and settled at x=46
+twice. Pointer capture, outside release, a fresh attack and menu exit
+passed with 252 callbacks, 162 blits, peak one pending callback,
+163 audio starts, one successful context close and one completion.
+The picker and canvas were removed.
+
+Two further asset-backed runs supplied simulated Gamepad API objects
+through a private observer without modifying the published JavaScript
+or Wasm. A nonstandard mapping and a standard mapping with a nonfinite
+axis were both rejected before the valid mapped snapshot joined the
+first seat. The first scenario moved from x=110 through x=92,
+removed the held device from the observed list and settled at x=90
+twice. Reconnection at the same browser index allowed movement back
+and an attack. The initial observer missed a short-lived window title
+and did not send the menu exit; the corrected run completed normally
+with 204 simulated polls, 203 callbacks, 92 blits and one context close.
+
+The second scenario blurred the actual canvas while its simulated
+axis remained held. Movement settled at x=90 twice; the poll count
+stayed at 62 throughout the unfocused interval. Refocusing the canvas
+reasserted the same held direction and moved to x=80, then reversing
+the axis and attacking succeeded. The normal menu exit completed
+once with 172 simulated polls, 195 callbacks, 84 blits and one context
+close. Both successful runs verified the exact selected reads and
+removed the picker and canvas. These exercise the production
+acquisition and routing path with simulated objects, not physical
+Gamepad API exposure or hardware. The host uinput node is not writable
+by the current account; no elevated input access was attempted.

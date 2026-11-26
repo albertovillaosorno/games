@@ -419,3 +419,14 @@ SHA-256 checks matched every receipt entry. Receipt SHA-256 was
 The first publication completed the asset-backed browser gameplay
 recorded in mobile-web, and its receipt verified unchanged afterward.
 This is host-local reproducibility, not independent-host qualification.
+
+Two independent c1cfce6 browser publications also matched
+byte-for-byte, with 88 mode-0600 files and 1,545,420 bytes. Every
+receipt entry passed an independent SHA-256 readback; the receipt
+digest was
+`5e9ebd8cf362b390f7d71733c6ffc2c5616c11cb7ad39c8c0afa18509cee78e3`.
+The published 1,041,496-byte module digest was
+`dc9c57b7beca5935d5be62b989add11e1b08ef14281f6211fe37f2f637f56cce`.
+The package and its isolated copies verified unchanged after
+asset-backed keyboard, mouse and simulated controller gameplay.
+Independent-host and physical-device acceptance remain open.
