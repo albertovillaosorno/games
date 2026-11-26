@@ -53,8 +53,8 @@ use super::{
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend;
 use crate::ir::hardware::InputSample;
-use crate::ir::scene::{AtlasId, SpriteDraw, SpriteRect};
-use crate::ir::security::scene::AdmittedDraws;
+use crate::ir::scene::{SpriteDraw, SpriteRect};
+use crate::ir::security::scene::{AdmittedAtlas, AdmittedDraws};
 
 struct Atlases<'texture, Context> {
     creator: &'texture TextureCreator<Context>,
@@ -62,13 +62,10 @@ struct Atlases<'texture, Context> {
 }
 
 impl<'texture, Context> Atlases<'texture, Context> {
-    fn load(
-        &mut self,
-        id: AtlasId,
-        layout: FrameLayout,
-        pixels: &[u8],
-    ) -> Result<(), RenderError> {
-        if id.0 != self.entries.len() {
+    fn load(&mut self, upload: AdmittedAtlas<'_>) -> Result<(), RenderError> {
+        let frame = upload.frame();
+        let layout = frame.layout();
+        if upload.id().0 != self.entries.len() {
             return Err(RenderError::InvalidSprite);
         }
         self.entries
@@ -85,7 +82,7 @@ impl<'texture, Context> Atlases<'texture, Context> {
         texture.set_blend_mode(BlendMode::BLEND);
         texture.set_scale_mode(ScaleMode::Nearest);
         texture
-            .update(None, pixels, layout.pitch())
+            .update(None, frame.pixels(), layout.pitch())
             .map_err(|error| RenderError::Backend(error.to_string()))?;
         self.entries.push(texture);
         Ok(())
@@ -248,11 +245,9 @@ impl SceneBackend for LinuxScene<'_, '_> {
     /// Rejects an inconsistent atlas identity or native upload failure.
     fn load_atlas(
         &mut self,
-        id: AtlasId,
-        layout: FrameLayout,
-        pixels: &[u8],
+        upload: AdmittedAtlas<'_>,
     ) -> Result<(), RenderError> {
-        self.textures.atlases.load(id, layout, pixels)
+        self.textures.atlases.load(upload)
     }
 
     fn poll_event(&mut self, wait_ms: u32) -> Option<InputSample> {
@@ -453,8 +448,7 @@ mod tests {
         pixels: &[u8],
     ) -> Result<AtlasId, RenderError> {
         let layout = atlas_layout()?;
-        admission
-            .load(layout, pixels.len(), |id| atlases.load(id, layout, pixels))
+        admission.load(layout, pixels, |upload| atlases.load(upload))
     }
 
     fn commands(

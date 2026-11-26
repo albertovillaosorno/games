@@ -457,3 +457,13 @@ it no longer owns the stale-geometry policy. Synthetic controls exercise
 invalid receipts, native failures, retries, unavailable surfaces and stale
 geometry. Fresh X11 and dummy-audio validation 1795654793324438808-2367535
 passed 1,571 aggregate test executions and all six portable core checks.
+
+Full-frame and atlas uploads now borrow exactly one checked RGBA slice and
+its corresponding frame layout through a shared admission value. Scene
+admission also binds the next atlas identity to its budget-checked upload;
+metadata and capacity commit only on backend success. Frame sessions reject
+an inconsistent adapter extent even when its byte count matches. Synthetic
+controls check exact received pixels, mismatched dimensions and failures
+before dispatch. Fresh X11 and dummy-audio validation
+1795655048812018202-2444502 passed 1,577 aggregate test executions and all
+six portable core checks.

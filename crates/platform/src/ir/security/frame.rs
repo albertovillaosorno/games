@@ -68,6 +68,19 @@ pub struct FrameLayout {
 }
 
 impl FrameLayout {
+    /// Borrow exactly one tightly packed RGBA8 frame.
+    /// # Errors
+    /// Rejects a slice that does not contain the complete frame.
+    pub const fn admit(
+        self,
+        pixels: &[u8],
+    ) -> Result<AdmittedRgba<'_>, RenderError> {
+        if pixels.len() != self.bytes {
+            return Err(RenderError::InvalidLength);
+        }
+        Ok(AdmittedRgba { layout: self, pixels })
+    }
+
     /// Number of bytes in one complete frame.
     #[must_use]
     pub const fn bytes(self) -> usize {
@@ -134,6 +147,27 @@ impl FrameLayout {
     #[must_use]
     pub const fn width(self) -> NonZeroU32 {
         self.width
+    }
+}
+
+/// Exact borrowed RGBA8 bytes and the corresponding admitted layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedRgba<'pixels> {
+    layout: FrameLayout,
+    pixels: &'pixels [u8],
+}
+
+impl<'pixels> AdmittedRgba<'pixels> {
+    /// Exact admitted layout.
+    #[must_use]
+    pub const fn layout(self) -> FrameLayout {
+        self.layout
+    }
+
+    /// Original tightly packed pixel bytes.
+    #[must_use]
+    pub const fn pixels(self) -> &'pixels [u8] {
+        self.pixels
     }
 }
 

@@ -54,7 +54,7 @@ use sdl2::{EventPump, Sdl, TimerSubsystem};
 
 use self::scene_renderer::{LinuxScene, SceneTextures};
 use super::input::{open_input, sample};
-use crate::ir::frame::{FrameLayout, RenderError};
+use crate::ir::frame::{AdmittedRgba, FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend as _;
 use crate::ir::graphics::{
     FrameBackend, FrameRun, SceneRun, WindowBackend, WindowPort,
@@ -241,6 +241,10 @@ impl Debug for LinuxFrame<'_, '_> {
 }
 
 impl FrameBackend for LinuxFrame<'_, '_> {
+    fn layout(&self) -> FrameLayout {
+        self.presentation.layout
+    }
+
     /// Poll one window-scoped portable input observation.
     fn poll_event(&mut self) -> Option<InputSample> {
         self.events.poll_event().map(|event| {
@@ -254,22 +258,25 @@ impl FrameBackend for LinuxFrame<'_, '_> {
     /// allocating a replacement texture or advancing simulation.
     ///
     /// # Errors
-    /// Rejects incorrect frame lengths or failed native operations.
-    fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
+    /// Rejects inconsistent frame geometry or failed native operations.
+    fn present(
+        &mut self,
+        frame: AdmittedRgba<'_>,
+    ) -> Result<bool, RenderError> {
+        if frame.layout() != self.presentation.layout {
+            return Err(RenderError::InvalidDimensions);
+        }
         if !drawable_allowed(
             self.canvas.window().window_flags(),
             self.diagnostic_hidden,
         ) {
-            if pixels.len() != self.presentation.layout.bytes() {
-                return Err(RenderError::InvalidLength);
-            }
             return Ok(false);
         }
         let drawn = draw_frame(
             self.canvas,
             &mut self.texture,
             self.presentation,
-            pixels,
+            frame,
         )?;
         if drawn {
             self.canvas.present();
@@ -340,20 +347,20 @@ fn draw_frame<Target>(
     canvas: &mut Canvas<Target>,
     texture: &mut Texture<'_>,
     presentation: FramePresentation,
-    pixels: &[u8],
+    frame: AdmittedRgba<'_>,
 ) -> Result<bool, RenderError>
 where
     Target: RenderTarget,
 {
     let FramePresentation { layout, mode } = presentation;
-    if pixels.len() != layout.bytes() {
-        return Err(RenderError::InvalidLength);
+    if frame.layout() != layout {
+        return Err(RenderError::InvalidDimensions);
     }
     let Some(drawable) = drawable_viewport(canvas, layout, mode)? else {
         return Ok(false);
     };
     texture
-        .update(None, pixels, layout.pitch())
+        .update(None, frame.pixels(), layout.pitch())
         .map_err(|error| RenderError::Backend(error.to_string()))?;
     copy_to_viewport(canvas, texture, drawable)?;
     Ok(true)
@@ -578,7 +585,7 @@ mod tests {
             &mut canvas,
             &mut texture,
             presentation,
-            pixels.as_flattened(),
+            layout.admit(pixels.as_flattened())?,
         )?;
         require(drawn, "frame was not drawn")?;
         let result = canvas
@@ -592,8 +599,9 @@ mod tests {
             "nearest sampling or letterbox colors differ",
         )?;
         require(
-            draw_frame(&mut canvas, &mut texture, presentation, &[])
-                == Err(RenderError::InvalidLength),
+            layout.admit(&[]).and_then(|frame| {
+                draw_frame(&mut canvas, &mut texture, presentation, frame)
+            }) == Err(RenderError::InvalidLength),
             "invalid frame accepted",
         )?;
         require(
@@ -609,7 +617,7 @@ mod tests {
                 &mut canvas,
                 &mut texture,
                 presentation,
-                replacement.as_flattened(),
+                layout.admit(replacement.as_flattened())?,
             )?,
             "second frame not drawn",
         )?;
@@ -652,7 +660,7 @@ mod tests {
                     &mut canvas,
                     &mut texture,
                     FramePresentation { layout, mode },
-                    pixels.as_flattened().as_flattened(),
+                    layout.admit(pixels.as_flattened().as_flattened())?,
                 )?,
                 "frame was not drawn",
             )?;
@@ -685,7 +693,7 @@ mod tests {
                     layout,
                     mode: PresentationMode::Integer,
                 },
-                pixels.as_flattened(),
+                layout.admit(pixels.as_flattened())?,
             )?,
             "integer frame not drawn",
         )?;
@@ -724,7 +732,7 @@ mod tests {
         require(!renderer_name.is_empty(), "missing renderer name")?;
         let expected_name = renderer_name.clone();
         window.with_frame(extent()?, &mut |backend| {
-            let mut frame = FrameSession::new(backend, extent()?);
+            let mut frame = FrameSession::new(backend, extent()?)?;
             let pixels = [RED, GREEN, BLUE, WHITE];
             require(frame.present(pixels.as_flattened())?, "no drawable")?;
             let replacement = [BLUE; 4];

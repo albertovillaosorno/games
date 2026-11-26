@@ -40,7 +40,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use games::presentation::{DisplaySettings, PresentationMode};
 
 use self::scene_renderer::{SceneBackend, SceneSession};
-use super::frame::{FrameLayout, RenderError, validate_extent};
+use super::frame::{AdmittedRgba, FrameLayout, RenderError, validate_extent};
 use super::hardware::InputSample;
 use super::input::{InputPort, InputStartup};
 use super::scene::SceneLimits;
@@ -163,7 +163,7 @@ impl NativeWindow {
     {
         run_once(run, |once| {
             self.backend.with_frame(layout, &mut |backend| {
-                let mut session = FrameSession::new(backend, layout);
+                let mut session = FrameSession::new(backend, layout)?;
                 once.call(|callback| callback(&mut session))
             })
         })
@@ -210,8 +210,10 @@ impl<Run, Output> OnceRun<Run, Output> {
 
 /// Private presentation port scoped to the owning window.
 pub(crate) trait FrameBackend: Debug {
+    fn layout(&self) -> FrameLayout;
     fn poll_event(&mut self) -> Option<InputSample>;
-    fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError>;
+    fn present(&mut self, frame: AdmittedRgba<'_>)
+    -> Result<bool, RenderError>;
 }
 
 /// Persistent frame resources borrowed for one rendering session.
@@ -232,8 +234,11 @@ impl<'session, 'backend> FrameSession<'session, 'backend> {
     pub(crate) fn new(
         backend: &'session mut (dyn FrameBackend + 'backend),
         layout: FrameLayout,
-    ) -> Self {
-        Self { backend, layout }
+    ) -> Result<Self, RenderError> {
+        if backend.layout() != layout {
+            return Err(RenderError::InvalidDimensions);
+        }
+        Ok(Self { backend, layout })
     }
 
     /// Poll a normalized observation, without exposing a native event type.
@@ -246,10 +251,7 @@ impl<'session, 'backend> FrameSession<'session, 'backend> {
     /// # Errors
     /// Rejects incorrect byte extent or backend presentation failure.
     pub fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
-        if pixels.len() != self.layout.bytes() {
-            return Err(RenderError::InvalidLength);
-        }
-        self.backend.present(pixels)
+        self.backend.present(self.layout.admit(pixels)?)
     }
 }
 
@@ -274,25 +276,52 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use super::{
-        FrameBackend, FrameLayout, FrameSession, InputSample, NativeWindow,
-        RenderError, callback_error, run_once,
+        AdmittedRgba, FrameBackend, FrameLayout, FrameSession, InputSample,
+        NativeWindow, RenderError, callback_error, run_once,
     };
     use crate::ir::check;
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct TestFrame {
-        presented: bool,
+        layout: FrameLayout,
+        presented: Vec<u8>,
     }
 
     impl FrameBackend for TestFrame {
+        fn layout(&self) -> FrameLayout {
+            self.layout
+        }
+
         fn poll_event(&mut self) -> Option<InputSample> {
             None
         }
 
-        fn present(&mut self, _pixels: &[u8]) -> Result<bool, RenderError> {
-            self.presented = true;
+        fn present(
+            &mut self,
+            frame: AdmittedRgba<'_>,
+        ) -> Result<bool, RenderError> {
+            self.presented = frame.pixels().to_vec();
             Ok(true)
         }
+    }
+
+    #[test]
+    fn frame_session_rejects_inconsistent_adapter_extent()
+    -> Result<(), RenderError> {
+        let size = NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN);
+        let layout =
+            FrameLayout::new(size, NonZeroU32::MIN, NonZeroUsize::MAX)?;
+        let wrong = FrameLayout::new(NonZeroU32::MIN, size, NonZeroUsize::MAX)?;
+        let mut frame = TestFrame {
+            layout: wrong,
+            presented: Vec::new(),
+        };
+        check(
+            &FrameSession::new(&mut frame, layout).err(),
+            &Some(RenderError::InvalidDimensions),
+        )?;
+        check(&frame.presented.is_empty(), &true)?;
+        Ok(())
     }
 
     #[test]
@@ -302,18 +331,21 @@ mod tests {
             NonZeroU32::MIN,
             NonZeroUsize::MAX,
         )?;
-        let mut frame = TestFrame::default();
+        let mut frame = TestFrame {
+            layout,
+            presented: Vec::new(),
+        };
         {
-            let mut session = FrameSession::new(&mut frame, layout);
+            let mut session = FrameSession::new(&mut frame, layout)?;
             check(&session.present(&[0; 3]), &Err(RenderError::InvalidLength))?;
             check(&session.poll_event(), &None)?;
         }
-        check(&frame.presented, &false)?;
+        check(&frame.presented.is_empty(), &true)?;
         check(
-            &FrameSession::new(&mut frame, layout).present(&[0; 4]),
+            &FrameSession::new(&mut frame, layout)?.present(&[1, 2, 3, 4]),
             &Ok(true),
         )?;
-        check(&frame.presented, &true)?;
+        check(&frame.presented, &[1, 2, 3, 4])?;
         Ok(())
     }
 

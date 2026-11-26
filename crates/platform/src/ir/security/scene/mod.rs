@@ -31,7 +31,9 @@
 
 //! Bounded scene resource and draw admission.
 
-use crate::ir::frame::{FrameLayout, RenderError, validate_rectangle};
+use crate::ir::frame::{
+    AdmittedRgba, FrameLayout, RenderError, validate_rectangle,
+};
 use crate::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
 
 /// Borrowed draw list admitted against the owning scene's resource budget.
@@ -47,6 +49,27 @@ impl<'draws> AdmittedDraws<'draws> {
     #[must_use]
     pub const fn as_slice(self) -> &'draws [SpriteDraw] {
         self.sprites
+    }
+}
+
+/// One atlas upload admitted against the owning scene budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedAtlas<'pixels> {
+    frame: AdmittedRgba<'pixels>,
+    id: AtlasId,
+}
+
+impl<'pixels> AdmittedAtlas<'pixels> {
+    /// The exact admitted frame and layout.
+    #[must_use]
+    pub const fn frame(self) -> AdmittedRgba<'pixels> {
+        self.frame
+    }
+
+    /// The next committed scene-local atlas identity.
+    #[must_use]
+    pub const fn id(self) -> AtlasId {
+        self.id
     }
 }
 
@@ -68,29 +91,29 @@ impl SceneAdmission {
     }
 
     /// Admit and reserve metadata before asking the adapter to allocate.
-    pub(crate) fn load<Upload>(
+    pub(crate) fn load<'pixels, Upload>(
         &mut self,
         layout: FrameLayout,
-        pixel_bytes: usize,
+        pixels: &'pixels [u8],
         upload: Upload,
     ) -> Result<AtlasId, RenderError>
     where
-        Upload: FnOnce(AtlasId) -> Result<(), RenderError>,
+        Upload: FnOnce(AdmittedAtlas<'pixels>) -> Result<(), RenderError>,
     {
+        let frame = layout.admit(pixels)?;
         let remaining = admit_atlas(
             self.limits,
             AtlasUsage {
                 loaded: self.layouts.len(),
                 remaining_bytes: self.remaining_bytes,
             },
-            layout,
-            pixel_bytes,
+            frame,
         )?;
         self.layouts
             .try_reserve(1)
             .map_err(|_error| RenderError::TooLarge)?;
         let id = AtlasId(self.layouts.len());
-        upload(id)?;
+        upload(AdmittedAtlas { frame, id })?;
         self.layouts.push(layout);
         self.remaining_bytes = remaining;
         Ok(id)
@@ -117,23 +140,19 @@ pub struct AtlasUsage {
 /// Admit one allocation and return the prospective remaining byte budget.
 ///
 /// # Errors
-/// Rejects mismatched input size or exceeded count and byte limits.
+/// Rejects exceeded count and byte limits for admitted pixel data.
 pub fn admit_atlas(
     limits: SceneLimits,
     usage: AtlasUsage,
-    layout: FrameLayout,
-    pixel_bytes: usize,
+    frame: AdmittedRgba<'_>,
 ) -> Result<usize, RenderError> {
-    if pixel_bytes != layout.bytes() {
-        return Err(RenderError::InvalidLength);
-    }
     if usage.loaded >= limits.atlases.get() {
         return Err(RenderError::TooLarge);
     }
     usage
         .remaining_bytes
         .min(limits.atlas_bytes.get())
-        .checked_sub(layout.bytes())
+        .checked_sub(frame.layout().bytes())
         .ok_or(RenderError::TooLarge)
 }
 
@@ -211,6 +230,7 @@ mod tests {
     fn allocation_admission_checks_length_count_and_bytes()
     -> Result<(), RenderError> {
         let layout = layout()?;
+        let bytes = [0u8; 16];
         for (loaded, remaining, pixels, expected) in [
             (0, 16, 15, Err(RenderError::InvalidLength)),
             (1, 16, 16, Err(RenderError::TooLarge)),
@@ -219,15 +239,22 @@ mod tests {
             (0, usize::MAX, 16, Ok(0)),
         ] {
             check(
-                &admit_atlas(
-                    limits(),
-                    AtlasUsage {
-                        loaded,
-                        remaining_bytes: remaining,
-                    },
-                    layout,
-                    pixels,
-                ),
+                &layout
+                    .admit(
+                        bytes
+                            .get(..pixels)
+                            .ok_or(RenderError::InvalidLength)?,
+                    )
+                    .and_then(|frame| {
+                        admit_atlas(
+                            limits(),
+                            AtlasUsage {
+                                loaded,
+                                remaining_bytes: remaining,
+                            },
+                            frame,
+                        )
+                    }),
                 &expected,
             )?;
         }

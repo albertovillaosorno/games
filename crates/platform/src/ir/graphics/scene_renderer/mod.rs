@@ -44,7 +44,9 @@ use crate::ir::hardware::InputSample;
 use crate::ir::scene::{
     AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw,
 };
-use crate::ir::security::scene::{AdmittedDraws, SceneAdmission};
+use crate::ir::security::scene::{
+    AdmittedAtlas, AdmittedDraws, SceneAdmission,
+};
 
 /// Private, callback-scoped ordered rendering port.
 pub(crate) trait SceneBackend: Debug {
@@ -58,9 +60,7 @@ pub(crate) trait SceneBackend: Debug {
     // An error must leave the previously admitted resources unchanged.
     fn load_atlas(
         &mut self,
-        id: AtlasId,
-        layout: FrameLayout,
-        pixels: &[u8],
+        upload: AdmittedAtlas<'_>,
     ) -> Result<(), RenderError>;
     fn poll_event(&mut self, wait_ms: u32) -> Option<InputSample>;
     fn present(
@@ -251,9 +251,8 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         layout: FrameLayout,
         pixels: &[u8],
     ) -> Result<AtlasId, RenderError> {
-        self.admission.load(layout, pixels.len(), |id| {
-            self.backend.load_atlas(id, layout, pixels)
-        })
+        self.admission
+            .load(layout, pixels, |upload| self.backend.load_atlas(upload))
     }
 
     /// Map surface-normalized touch to the actually presented scene.
@@ -371,16 +370,17 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AdmittedDraws, AtlasId, Dimensions, DisplaySettings, EventBatch,
-        FrameLayout, InputSample, PresentationLayout, PresentationMode,
-        RenderError, SceneBackend, SceneLimits, SceneSession, SceneView,
-        SpriteDraw,
+        AdmittedAtlas, AdmittedDraws, AtlasId, Dimensions, DisplaySettings,
+        EventBatch, FrameLayout, InputSample, PresentationLayout,
+        PresentationMode, RenderError, SceneBackend, SceneLimits, SceneSession,
+        SceneView, SpriteDraw,
     };
     use crate::ir::check;
     use crate::ir::hardware::{HostEvent, InputTransition};
     use crate::ir::scene::SpriteRect;
 
     type PresentationResult = Result<Option<PresentationLayout>, RenderError>;
+    type RecordedUpload = (AtlasId, FrameLayout, Vec<u8>);
 
     #[derive(Debug)]
     struct TestScene {
@@ -395,7 +395,7 @@ mod tests {
         resizes: Vec<FrameLayout>,
         surface: Option<Dimensions>,
         surface_queries: Cell<usize>,
-        uploads: Vec<AtlasId>,
+        uploads: Vec<RecordedUpload>,
         waits: Vec<u32>,
     }
 
@@ -450,15 +450,18 @@ mod tests {
 
         fn load_atlas(
             &mut self,
-            id: AtlasId,
-            _layout: FrameLayout,
-            _pixels: &[u8],
+            upload: AdmittedAtlas<'_>,
         ) -> Result<(), RenderError> {
             if self.fail_upload {
                 self.fail_upload = false;
                 return Err(RenderError::Unsupported);
             }
-            self.uploads.push(id);
+            let frame = upload.frame();
+            self.uploads.push((
+                upload.id(),
+                frame.layout(),
+                frame.pixels().to_vec(),
+            ));
             Ok(())
         }
 
@@ -616,7 +619,7 @@ mod tests {
             &scene.present([0; 3], &[sprite]),
             &Err(RenderError::InvalidSprite),
         )?;
-        let id = scene.load_atlas(layout, &[0; 4])?;
+        let id = scene.load_atlas(layout, &[1, 2, 3, 4])?;
         check(&id, &AtlasId(0))?;
         check(
             &scene.load_atlas(layout, &[0; 4]),
@@ -643,7 +646,7 @@ mod tests {
             &Err(RenderError::InvalidSprite),
         )?;
         check(&scene.present([0; 3], &[sprite]), &Ok(false))?;
-        check(&backend.uploads, &[AtlasId(0)])?;
+        check(&backend.uploads, &[(AtlasId(0), layout, vec![1, 2, 3, 4])])?;
         check(&backend.draws, &1)?;
         Ok(())
     }
