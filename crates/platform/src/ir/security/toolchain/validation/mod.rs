@@ -37,6 +37,9 @@ use games_assets::archive::validate_path;
 use super::identifier;
 use crate::ir::toolchain::Target;
 
+/// Framed path bytes that have not passed name admission.
+pub type PathRecords<'input> = Vec<&'input [u8]>;
+
 /// Fixed contributor check with explicitly admitted dynamic inputs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Request<'input> {
@@ -333,17 +336,50 @@ impl FixtureDelegate {
 /// # Errors
 /// Rejects incomplete records, non-UTF-8 names or unsafe path components.
 pub fn admit_paths(bytes: &[u8]) -> Result<Vec<&str>, InvalidRequest> {
-    if bytes.is_empty() {
-        return Ok(Vec::new());
-    }
-    let complete = bytes.strip_suffix(&[0]).ok_or(InvalidRequest)?;
-    complete
-        .split(|byte| *byte == 0)
+    path_records(bytes)?
+        .into_iter()
         .map(|part| {
             let name = from_utf8(part).map_err(|_error| InvalidRequest)?;
             admit_path(name)
         })
         .collect()
+}
+
+/// Decode NUL-delimited path records without interpreting their names.
+///
+/// These bytes are not admitted paths. Use them only for identity comparison
+/// or further admission; legacy deletions may contain nonportable names.
+/// # Errors
+/// Rejects incomplete framing and empty records.
+pub fn path_records(bytes: &[u8]) -> Result<PathRecords<'_>, InvalidRequest> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let complete = bytes.strip_suffix(&[0]).ok_or(InvalidRequest)?;
+    let records: Vec<_> = complete.split(|byte| *byte == 0).collect();
+    if records.iter().any(|record| record.is_empty()) {
+        return Err(InvalidRequest);
+    }
+    Ok(records)
+}
+
+/// Admit a legacy relative name only for staged deletion checks.
+///
+/// The portable name policy may reject older tracked names. Permit these
+/// to be removed, but never admit traversal or an absolute name.
+/// # Errors
+/// Rejects non-UTF-8, ambiguous separators and unsafe components.
+pub fn admit_deleted_path(bytes: &[u8]) -> Result<&str, InvalidRequest> {
+    let name = from_utf8(bytes).map_err(|_error| InvalidRequest)?;
+    if name.contains(['\\', ':'])
+        || name.chars().any(char::is_control)
+        || name
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+    {
+        return Err(InvalidRequest);
+    }
+    Ok(name)
 }
 
 /// Admit a canonical portable authored relative name.
@@ -567,6 +603,29 @@ mod tests {
             admit_paths(b".gitignore\0src/lib.rs\0"),
             Ok(vec![".gitignore", "src/lib.rs"])
         );
+    }
+
+    #[test]
+    fn deletion_and_dirty_identity_do_not_admit_new_authored_names() {
+        let legacy = b"docs/NUL.txt";
+        assert_eq!(admit_deleted_path(legacy), Ok("docs/NUL.txt"));
+        assert!(admit_path("docs/NUL.txt").is_err());
+        assert_eq!(
+            path_records(b"docs/NUL.txt\0bad\xff\0"),
+            Ok(vec![legacy.as_slice(), b"bad\xff".as_slice()])
+        );
+        for name in [
+            b"".as_slice(),
+            b"../outside",
+            b"/outside",
+            b"dir//name",
+            b"dir/./name",
+            b"C:/name",
+            b"bad\\name",
+            b"bad\xff",
+        ] {
+            assert!(admit_deleted_path(name).is_err());
+        }
     }
 
     #[test]

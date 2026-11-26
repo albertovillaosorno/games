@@ -385,3 +385,12 @@ for the validator. Fresh validation 1795651684295749253-1313136 passed
 1,495 aggregate test executions and six portable core target checks.
 This remains a parsed source policy rather than compiler-grade semantic
 analysis; native backend and physical device conformance remain open.
+
+Staged authored names now use the same portable admission as file
+inventories. NUL record framing is shared; comparison of unrelated dirty
+names preserves their byte identity, and deletion-only admission permits
+legacy nonportable names without accepting absolute or parent traversal.
+Tests reject nonportable staged names and malformed records while
+preserving cleanup and partial-staging protection. Fresh validation
+1795651948369546316-1468249 passed 1497 aggregate test executions
+and six portable core target checks.

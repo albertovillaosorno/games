@@ -42,14 +42,15 @@ use std::io::ErrorKind;
 use std::num::NonZeroU64;
 use std::str::from_utf8;
 
+use games_platform::ir::security::toolchain::validation::{
+    admit_deleted_path, admit_paths, path_records,
+};
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::{PathKind, join_path, path_kind};
 use games_platform::ir::toolchain::validation::{
     GitRequest, Request, repository_head, run,
 };
 use games_platform::ir::toolchain::{arguments, workspace_root};
-
-type DiffPaths<'path> = Vec<&'path [u8]>;
 
 fn root() -> Result<OsString, String> {
     workspace_root().map_err(|error| error.to_string())
@@ -194,9 +195,6 @@ fn title_data(parts: &[&str]) -> bool {
 }
 
 fn prohibited_path(path: &str) -> bool {
-    if !relative_path(path) {
-        return true;
-    }
     let lower = path.to_ascii_lowercase();
     let parts: Vec<_> = lower.split('/').collect();
     matches!(
@@ -245,32 +243,10 @@ fn prohibited_path(path: &str) -> bool {
         .any(|ext| lower.ends_with(ext))
 }
 
-fn relative_path(path: &str) -> bool {
-    !path.contains(['\\', ':'])
-        && !path.chars().any(char::is_control)
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && !matches!(part, "." | ".."))
-}
-
-fn path_list(bytes: &[u8]) -> Result<DiffPaths<'_>, String> {
-    if bytes.is_empty() {
-        return Ok(Vec::new());
-    }
-    let paths: Vec<_> = bytes
-        .strip_suffix(&[0])
-        .ok_or("path list lacks final NUL")?
-        .split(|byte| *byte == 0)
-        .collect();
-    if paths.iter().any(|path| path.is_empty()) {
-        return Err("empty path in diff".into());
-    }
-    Ok(paths)
-}
-
 fn check_paths(bytes: &[u8]) -> Result<(), String> {
-    for raw in path_list(bytes)? {
-        let path = from_utf8(raw).map_err(|error| error.to_string())?;
+    for path in
+        admit_paths(bytes).map_err(|_error| "invalid staged path list")?
+    {
         if prohibited_path(path) {
             return Err(format!("prohibited staged path: {path}"));
         }
@@ -288,12 +264,16 @@ fn changed_paths(root: &OsStr, request: GitRequest) -> Result<Vec<u8>, String> {
 }
 
 fn check_worktree(staged: &[u8], unstaged: &[u8]) -> Result<(), String> {
-    let dirty: BTreeSet<_> = path_list(unstaged)?.into_iter().collect();
-    for path in path_list(staged)? {
-        if dirty.contains(path) {
+    let dirty: BTreeSet<_> = path_records(unstaged)
+        .map_err(|_error| "invalid unstaged path list")?
+        .into_iter()
+        .collect();
+    for path in
+        admit_paths(staged).map_err(|_error| "invalid staged path list")?
+    {
+        if dirty.contains(path.as_bytes()) {
             return Err(format!(
-                "staged file has unvalidated worktree changes: {}",
-                String::from_utf8_lossy(path)
+                "staged file has unvalidated worktree changes: {path}"
             ));
         }
     }
@@ -301,11 +281,11 @@ fn check_worktree(staged: &[u8], unstaged: &[u8]) -> Result<(), String> {
 }
 
 fn check_deleted(root: &OsStr, deleted: &[u8]) -> Result<(), String> {
-    for raw in path_list(deleted)? {
-        let path = from_utf8(raw).map_err(|error| error.to_string())?;
-        if !relative_path(path) {
-            return Err("invalid deleted path".into());
-        }
+    for raw in
+        path_records(deleted).map_err(|_error| "invalid deleted path list")?
+    {
+        let path =
+            admit_deleted_path(raw).map_err(|_error| "invalid deleted path")?;
         match path_kind(
             &join_path(root, path).map_err(|error| error.to_string())?,
         ) {
@@ -517,6 +497,10 @@ mod tests {
             "games//file",
             "C:/file",
             "games\\file",
+            "docs/NUL.txt",
+            "docs/trailing.",
+            "docs/trailing ",
+            "docs/bad?name",
         ] {
             let bytes = format!("{path}\0");
             assert!(check_paths(bytes.as_bytes()).is_err(), "{path}");
@@ -554,6 +538,8 @@ mod tests {
         assert!(check_worktree(staged, b"docs/a file.md\0").is_err());
         assert!(check_worktree(staged, b"crates/engine/src/lib.rs\0").is_err());
         assert!(check_worktree(staged, b"invalid framing").is_err());
+        assert!(check_worktree(staged, b"docs/NUL.txt\0").is_ok());
+        assert!(check_worktree(b"docs/NUL.txt\0", b"").is_err());
     }
 
     #[test]
@@ -562,6 +548,11 @@ mod tests {
         let fixture = fixture_owner.location();
         let deleted = b"old.md\0";
         check_deleted(fixture, deleted)?;
+        check_deleted(fixture, b"legacy.\0")?;
+        require(
+            check_deleted(fixture, b"../outside\0").is_err(),
+            "invalid deletion",
+        )?;
         write(&fixture_owner, "old.md", b"restored")?;
         require(
             check_deleted(fixture, deleted).is_err(),
