@@ -37,6 +37,12 @@
     target_os = "unknown",
     feature = "test-fixtures"
 ))]
+pub(super) mod graphics;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "test-fixtures"
+))]
 pub(super) mod input;
 pub(super) mod performance;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]

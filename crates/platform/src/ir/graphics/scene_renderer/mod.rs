@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Shared frame or scene contracts cover equivalent operations.
 // - Summary:
-//   - Callback-scoped ordered scene over a private rendering port.
+//   - Ordered scene over a borrowed or independently owned rendering port.
 // - Description:
 //   - Project touch against the actual last presented scene geometry.
 // - Usage:
@@ -33,6 +33,7 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::ops::{Deref, DerefMut};
 
 use games::input::touch::TouchPoint;
 use games::presentation::{
@@ -50,7 +51,7 @@ use crate::ir::security::scene::{
     AdmittedAtlas, AdmittedDraws, PresentationAdmission, SceneAdmission,
 };
 
-/// Private, callback-scoped ordered rendering port.
+/// Private ordered rendering port.
 pub(crate) trait SceneBackend: Debug {
     fn apply_display_settings(
         &mut self,
@@ -164,10 +165,36 @@ impl SceneView<'_> {
     }
 }
 
-/// Persistent ordered scene resources scoped to the window's callback.
+/// The native callback borrows its scene; event-driven hosts may own one.
+enum ScenePort<'session, 'backend> {
+    Borrowed(&'session mut (dyn SceneBackend + 'backend)),
+    Resident(Box<dyn SceneBackend + 'backend>),
+}
+
+impl<'backend> Deref for ScenePort<'_, 'backend> {
+    type Target = dyn SceneBackend + 'backend;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(backend) => &**backend,
+            Self::Resident(backend) => backend.as_ref(),
+        }
+    }
+}
+
+impl DerefMut for ScenePort<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Borrowed(backend) => &mut **backend,
+            Self::Resident(backend) => backend.as_mut(),
+        }
+    }
+}
+
+/// Persistent ordered scene resources, borrowed or independently owned.
 pub struct SceneSession<'session, 'backend> {
     admission: SceneAdmission,
-    backend: &'session mut (dyn SceneBackend + 'backend),
+    backend: ScenePort<'session, 'backend>,
     base: FrameLayout,
     layout: FrameLayout,
     mode: PresentationMode,
@@ -269,6 +296,26 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         Ok(layout)
     }
 
+    fn from_port(
+        backend: ScenePort<'session, 'backend>,
+        base: FrameLayout,
+        limits: SceneLimits,
+        mode: PresentationMode,
+    ) -> Result<Self, RenderError> {
+        if backend.layout() != base || backend.presentation_mode() != mode {
+            return Err(RenderError::InvalidDimensions);
+        }
+        Ok(Self {
+            admission: SceneAdmission::new(limits),
+            backend,
+            base,
+            layout: base,
+            mode,
+            presentation: PresentationAdmission::default(),
+            protected_bottom: None,
+        })
+    }
+
     /// Last successful drawable receipt not invalidated by a later change.
     #[must_use]
     pub const fn last_presented_layout(&self) -> Option<PresentationLayout> {
@@ -313,18 +360,7 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         limits: SceneLimits,
         mode: PresentationMode,
     ) -> Result<Self, RenderError> {
-        if backend.layout() != base || backend.presentation_mode() != mode {
-            return Err(RenderError::InvalidDimensions);
-        }
-        Ok(Self {
-            admission: SceneAdmission::new(limits),
-            backend,
-            base,
-            layout: base,
-            mode,
-            presentation: PresentationAdmission::default(),
-            protected_bottom: None,
-        })
+        Self::from_port(ScenePort::Borrowed(backend), base, limits, mode)
     }
 
     /// Present ordered sprite commands over the opaque background.
@@ -406,7 +442,7 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
     #[must_use]
     pub fn view(&self) -> SceneView<'_> {
         SceneView {
-            backend: self.backend,
+            backend: &*self.backend,
             layout: self.layout,
             mode: self.mode,
             presentation: &self.presentation,
@@ -421,6 +457,17 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         &self,
     ) -> Result<Option<PresentationLayout>, RenderError> {
         self.view().visible_layout()
+    }
+}
+
+impl SceneSession<'static, 'static> {
+    pub(crate) fn resident(
+        backend: Box<dyn SceneBackend>,
+        base: FrameLayout,
+        limits: SceneLimits,
+        mode: PresentationMode,
+    ) -> Result<Self, RenderError> {
+        Self::from_port(ScenePort::Resident(backend), base, limits, mode)
     }
 }
 
@@ -612,6 +659,73 @@ mod tests {
             atlases: NonZeroUsize::MIN,
             sprites: NonZeroUsize::MIN,
         }
+    }
+
+    #[test]
+    fn owned_scene_retains_admitted_resources_across_steps()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(2)?;
+        let layout = backend.layout;
+        let mode = backend.mode;
+        let surface = Dimensions::new(layout.width(), layout.height());
+        let expected = layout.presentation(mode, surface)?;
+        backend.surface = Some(surface);
+        backend.presentations =
+            VecDeque::from([Ok(Some(expected)), Ok(Some(expected))]);
+        let mut scene =
+            SceneSession::resident(Box::new(backend), layout, limits(), mode)?;
+        let id = scene.load_atlas(layout, &[255, 0, 0, 255])?;
+        let rectangle = SpriteRect {
+            x: 0,
+            y: 0,
+            width: NonZeroU32::MIN,
+            height: NonZeroU32::MIN,
+        };
+        let sprite = SpriteDraw {
+            atlas: id,
+            destination: rectangle,
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rectangle,
+        };
+        let mut delivered = Vec::new();
+        for tick in 1..=2 {
+            check(
+                &scene.dispatch_events(NonZeroUsize::MIN, 0, |_, event| {
+                    delivered.push(event.elapsed_since(Duration::ZERO));
+                    Ok(true)
+                })?,
+                &EventBatch::Limited,
+            )?;
+            check(&scene.present([0; 3], &[sprite]), &Ok(true))?;
+            check(&scene.visible_layout()?, &Some(expected))?;
+            check(
+                &delivered.last(),
+                &Some(&Some(Duration::from_millis(tick))),
+            )?;
+        }
+        check(
+            &scene.dispatch_events(NonZeroUsize::MIN, 0, |_, _| Ok(true))?,
+            &EventBatch::Empty,
+        )?;
+        check(
+            &scene.load_atlas(layout, &[0; 4]),
+            &Err(RenderError::TooLarge),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn owned_scene_rejects_mismatched_geometry() -> Result<(), RenderError> {
+        let backend = TestScene::new(0)?;
+        let layout = backend.layout;
+        let result = SceneSession::resident(
+            Box::new(backend),
+            layout,
+            limits(),
+            PresentationMode::Adaptive,
+        );
+        check(&result.err(), &Some(RenderError::InvalidDimensions))
     }
 
     #[test]

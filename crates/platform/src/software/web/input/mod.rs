@@ -65,7 +65,7 @@ struct EventQueue {
     samples: VecDeque<InputSample>,
 }
 
-struct EventSource {
+pub(super) struct EventSource {
     listeners: Vec<Listener>,
     queue: Rc<RefCell<EventQueue>>,
     scope: u64,
@@ -75,6 +75,10 @@ struct Listener {
     callback: Closure<dyn FnMut(Event)>,
     kind: &'static str,
     target: EventTarget,
+}
+
+pub(super) fn browser_input(scope: u64) -> crate::ir::input::InputPort {
+    Box::new(BrowserInput { scope })
 }
 
 impl InputBackend for BrowserInput {
@@ -225,7 +229,17 @@ impl EventSource {
         Ok(())
     }
 
-    fn pop(&self) -> Option<InputSample> {
+    pub(super) fn for_element(
+        element: &web_sys::Element,
+        scope: u64,
+        capacity: NonZeroUsize,
+    ) -> Result<Self, RenderError> {
+        let mut source = Self::new(element, scope, capacity)?;
+        pointer::subscribe(&mut source, element)?;
+        Ok(source)
+    }
+
+    pub(super) fn pop(&self) -> Option<InputSample> {
         self.queue.borrow_mut().pop()
     }
 }

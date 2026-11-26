@@ -55,7 +55,8 @@ use self::scene_renderer::{LinuxScene, SceneTextures};
 use super::input::{open_input, sample};
 use crate::ir::frame::{AdmittedRgba, FrameLayout, RenderError};
 use crate::ir::graphics::{
-    FrameBackend, FrameRun, SceneRun, WindowBackend, WindowPort,
+    FrameBackend, FrameRun, ResidentScenePort, SceneRun, WindowBackend,
+    WindowPort,
 };
 use crate::ir::hardware::InputSample;
 use crate::ir::input::InputPort;
@@ -100,6 +101,14 @@ impl WindowBackend for LinuxWindow {
     /// Reports unavailable controller enumeration or failed device opens.
     fn input(&self, limit: NonZeroUsize) -> Result<InputPort, RenderError> {
         open_input(&self.sdl, self.canvas.window(), limit)
+    }
+
+    fn into_scene(
+        self: Box<Self>,
+        _layout: FrameLayout,
+        _mode: PresentationMode,
+    ) -> Result<ResidentScenePort, RenderError> {
+        Err(RenderError::Unsupported)
     }
 
     /// Owned name reported by the selected native rendering driver.

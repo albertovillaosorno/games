@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable window, frame and callback-scoped rendering capability.
+//   - Portable window, frame and borrowed or resident scene capability.
 // - Must-Not:
 //   - Select native APIs, leak native handles or advance simulation.
 // - Allows:
@@ -31,6 +31,9 @@
 
 //! Portable window and frame presentation sessions.
 
+#[cfg(any(test, feature = "test-fixtures"))]
+/// Explicit isolated host scene diagnostics.
+pub mod fixtures;
 /// Ordered scene presentation and portable geometry observations.
 pub mod scene_renderer;
 
@@ -48,18 +51,26 @@ use super::security::frame::validate_window_mode;
 
 pub(crate) type FrameRun<'run> =
     dyn FnMut(&mut dyn FrameBackend) -> Result<(), RenderError> + 'run;
+pub(crate) type ResidentScenePort = Box<dyn SceneBackend>;
 pub(crate) type SceneRun<'run> =
     dyn FnMut(&mut dyn SceneBackend) -> Result<(), RenderError> + 'run;
 
 pub(crate) type WindowPort = Box<dyn WindowBackend>;
 
-/// Private window adapter. Frame and scene callbacks are scoped to this port.
+/// Private window adapter for scoped frame and scene resources.
 pub(crate) trait WindowBackend: Debug {
     fn apply_window_mode(
         &mut self,
         mode: WindowMode,
     ) -> Result<WindowMode, RenderError>;
     fn input(&self, limit: NonZeroUsize) -> Result<InputPort, RenderError>;
+    /// Consume the window into an independently owned scene when supported.
+    /// Borrowing-only adapters report unsupported.
+    fn into_scene(
+        self: Box<Self>,
+        _layout: FrameLayout,
+        _mode: PresentationMode,
+    ) -> Result<ResidentScenePort, RenderError>;
     fn renderer_name(&self) -> String;
     fn with_frame(
         &mut self,
@@ -121,6 +132,18 @@ impl NativeWindow {
         limit: NonZeroUsize,
     ) -> Result<InputStartup, RenderError> {
         InputStartup::new(self.backend.input(limit)?, limit)
+    }
+
+    /// Consume this window into a scene whose resources survive host callbacks.
+    /// # Errors
+    /// Reports unsupported ownership, allocation or inconsistent geometry.
+    pub fn into_scene(
+        self,
+        layout: FrameLayout,
+        limits: SceneLimits,
+    ) -> Result<SceneSession<'static, 'static>, RenderError> {
+        let backend = self.backend.into_scene(layout, self.mode)?;
+        SceneSession::resident(backend, layout, limits, self.mode)
     }
 
     /// Open a resizable, accelerated window, optionally hidden for diagnostics.
@@ -385,6 +408,14 @@ mod tests {
             &self,
             _limit: NonZeroUsize,
         ) -> Result<InputPort, RenderError> {
+            Err(RenderError::Unsupported)
+        }
+
+        fn into_scene(
+            self: Box<Self>,
+            _layout: FrameLayout,
+            _mode: PresentationMode,
+        ) -> Result<super::ResidentScenePort, RenderError> {
             Err(RenderError::Unsupported)
         }
 

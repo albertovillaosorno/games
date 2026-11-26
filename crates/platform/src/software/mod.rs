@@ -122,6 +122,8 @@ use crate::ir::audio::{
     AudioDevices, PlaybackError, PlaybackFactory, PlaybackPort,
 };
 use crate::ir::frame::RenderError;
+#[cfg(any(test, feature = "test-fixtures"))]
+use crate::ir::graphics::fixtures::SceneFixturePort;
 use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::identification::IdentificationPort;
 use crate::ir::input::InputNames;
@@ -447,5 +449,23 @@ impl crate::ir::toolchain::validation::fixtures::FixtureBackend for () {
         _failure: crate::ir::toolchain::validation::fixtures::FixtureDelegate,
     ) -> Result<bool, ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl SceneFixturePort for () {
+    fn verify_resident_scene() -> Result<(), RenderError> {
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "test-fixtures"
+        ))]
+        return web::graphics::verify_resident_scene();
+        #[cfg(not(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "test-fixtures"
+        )))]
+        Err(RenderError::Unsupported)
     }
 }

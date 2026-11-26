@@ -106,7 +106,7 @@ fn touch_transition(
     Some(InputTransition::Event(contact(id, phase)))
 }
 
-fn subscribe(
+pub(super) fn subscribe(
     source: &mut EventSource,
     element: &Element,
 ) -> Result<(), RenderError> {
@@ -239,8 +239,7 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
     let surface = Surface::new()?;
     let canvas = &surface.0;
     let capacity = NonZeroUsize::MIN.saturating_add(7);
-    let mut source = EventSource::new(canvas, SCOPE, capacity)?;
-    subscribe(&mut source, canvas)?;
+    let source = EventSource::for_element(canvas, SCOPE, capacity)?;
     let mut input = InputStartup::new(
         Box::new(BrowserInput { scope: SCOPE }),
         NonZeroUsize::MIN,

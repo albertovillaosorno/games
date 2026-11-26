@@ -442,3 +442,24 @@ failure cleaned both preceding document listeners and all 24 canvas
 listeners. All six indicators were green. The visibility and blur events
 were dispatched by the fixture; actual user-driven tab switching and
 callback scheduling in a live game remain unverified.
+
+The graphics IR now admits an owned scene alongside the existing borrowed
+scene, retaining the common atlas and presentation admission across steps.
+Native borrowing-only windows explicitly reject ownership transfer. A
+fixture-only browser Canvas2D scene exercises actual atlas upload, ordered
+sprite drawing, nearest sampling, flipping, alpha blending and clipping.
+The fixture verifies logical and visible pixels, a retained atlas after
+resize, the new presentation receipt and input against that geometry.
+Fullscreen is explicitly unsupported. This is not a production window,
+accelerated renderer, frame scheduler or browser gameplay acceptance.
+
+Fresh validation 1795680248328728587-3283668 passed, including the added
+browser-scene Wasm linkage and resident-scene admission tests. The bound
+scene module was 142,752 bytes; binding JavaScript was 25,113 bytes.
+Module SHA-256 was
+cabeac88a4e200b44b7b81d2ec82862447570c4dbf532f15599359d878d14dc3.
+Two isolated Firefox success cases each made sixteen draw calls across
+both invocations, registered and removed twenty-eight listeners, and
+removed both attached canvases. Injected missing Canvas2D context and
+throwing draw cases returned failure without leaked attached surfaces
+or listeners. All four independent screenshot indicators were green.
