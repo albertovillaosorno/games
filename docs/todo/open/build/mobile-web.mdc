@@ -554,3 +554,24 @@ followed the expected completion and cleanup contracts. Bound modules
 were 158,647 bytes for the window and 208,600 for the frame smoke.
 Firefox used llvmpipe or similar; no hardware acceleration, full
 asset-backed browser gameplay or browser packaging claim is made.
+
+A silent event-driven title preview now accepts typed pinned asset
+identities and an admitted memory snapshot, loads the ordinary title
+scene and drives the same fixed-step input/session runtime as the
+native preview. Its callback owns scene and interactive state.
+The shared settings menu omits unsupported window switching without
+altering the native menu. No local paths, persistence or network
+are required by this launch path.
+
+Fresh validation 1795682396095434390-3579167 passed 1,896 aggregate
+tests and linked the procedural title diagnostic. Firefox 160.0
+under Xvfb with software OpenGL used synthesized keyboard events
+to enter gameplay, move the actor, pause and exit. The observed
+actor-colored framebuffer centroid changed from 53.5 to 65.9,
+with 50 delivered callbacks, 38 blits, at most one outstanding
+callback, one successful completion and no remaining canvas.
+The bound diagnostic was 861,475 bytes of Wasm and 35,317 bytes
+of JavaScript. This is a live title-runtime diagnostic with
+procedural canonical media; original-asset ingress, launch packaging,
+browser audio activation, durable preferences and physical
+acceleration remain open.

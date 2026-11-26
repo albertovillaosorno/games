@@ -47,7 +47,10 @@ use games_platform::ir::process::write_status;
 use games_platform::ir::storage::bundle::{BundleSource, MediaOverlay};
 
 use super::launch::AudioSelection;
-use super::{Controls, failure, live, open_selected_bundle, size, smoke_press};
+use super::{
+    Controls, failure, live, open_selected_bundle, parse_hash, size,
+    smoke_press,
+};
 use crate::{Action, Cabinet, Control, Phase, Player, TICK_INTERVAL};
 
 const CHUNK: usize = 256;
@@ -102,18 +105,25 @@ impl Samples {
         store: BundleSource<'_>,
         selection: &AudioSelection,
     ) -> Result<Self, RenderError> {
-        let bundle =
-            open_selected_bundle(store, &selection.base, ManifestLimits {
+        let bundle = open_selected_bundle(
+            store,
+            parse_hash(&selection.base)?,
+            ManifestLimits {
                 manifest_bytes: size(65_536)?,
                 payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
                 records: size(161)?,
                 total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
-            })?;
+            },
+        )?;
         let replacement = selection
             .replacement
             .as_ref()
             .map(|hash| {
-                open_selected_bundle(store, hash, replacement_limits()?)
+                open_selected_bundle(
+                    store,
+                    parse_hash(hash)?,
+                    replacement_limits()?,
+                )
             })
             .transpose()?;
         let allowed = CLIPS.map(|(key, _frames)| key);

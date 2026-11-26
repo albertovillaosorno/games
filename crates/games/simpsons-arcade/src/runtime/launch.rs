@@ -48,8 +48,8 @@ use games_platform::ir::storage::preferences::{
 use games_platform::ir::storage::{executable_path, join_path, parent_path};
 
 use super::{
-    ACTION_NAMES, MAX_PROFILE_BYTES, Profiles, configured_profiles,
-    profile_limit, read_profile, validate_keyboard_pause,
+    ACTION_NAMES, DEFAULT_PROFILES, MAX_PROFILE_BYTES, Profiles,
+    configured_profiles, profile_limit, read_profile, validate_keyboard_pause,
 };
 
 const DEFAULT_PROFILE: &str = "version=1\n";
@@ -414,6 +414,14 @@ impl ResolvedControls {
             format!("control preferences durability: {error:?}")
         })
     }
+
+    pub(super) const fn transient() -> Self {
+        Self {
+            pending: None,
+            profiles: DEFAULT_PROFILES,
+            store: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -545,7 +553,7 @@ pub(super) fn edit_control(args: &[OsString]) -> Result<(), String> {
         .to_str()
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|value| value.checked_sub(1))
-        .filter(|value| *value < super::DEFAULT_PROFILES.keys.len())
+        .filter(|value| *value < DEFAULT_PROFILES.keys.len())
         .ok_or("invalid control seat")?;
     let action_slot = action_index(action.to_str().ok_or("invalid action")?)?;
     let binding = edit_binding(
@@ -791,7 +799,6 @@ mod tests {
     use games::presentation::{PresentationMode, WindowMode};
     use games_platform::ir::storage::fixtures::TestRoot;
 
-    use super::super::DEFAULT_PROFILES;
     use super::*;
 
     const FALLBACK_PROFILE: &str = "version=1\nkey 1 right=Q\n";

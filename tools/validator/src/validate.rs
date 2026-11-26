@@ -186,6 +186,39 @@ fn validate_feature_graphs(
     Ok(())
 }
 
+fn validate_browser_smokes(
+    root: &OsStr,
+    log: &mut dyn Write,
+) -> Result<(), String> {
+    for (binary, feature) in [
+        (
+            "simpsons-arcade-browser-storage-smoke",
+            "browser-storage-smoke",
+        ),
+        ("simpsons-arcade-browser-input-smoke", "browser-input-smoke"),
+        ("simpsons-arcade-browser-scene-smoke", "browser-scene-smoke"),
+        ("simpsons-arcade-browser-webgl-smoke", "browser-webgl-smoke"),
+        (
+            "simpsons-arcade-browser-window-smoke",
+            "browser-window-smoke",
+        ),
+        ("simpsons-arcade-browser-frame-smoke", "browser-frame-smoke"),
+        ("simpsons-arcade-browser-title-smoke", "browser-title-smoke"),
+        ("simpsons-arcade-browser-audio-smoke", "browser-audio-smoke"),
+    ] {
+        execute(
+            root,
+            Request::WasmSmokeBuild {
+                package: "games-simpsons-arcade",
+                binary,
+                feature: Some(feature),
+            },
+            log,
+        )?;
+    }
+    Ok(())
+}
+
 fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
     writeln!(log, "Workspace and task contracts")
         .map_err(|error| error.to_string())?;
@@ -212,31 +245,7 @@ fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
         Request::WasmSmokeRun("simpsons-arcade-core-smoke"),
         log,
     )?;
-    for (binary, feature) in [
-        (
-            "simpsons-arcade-browser-storage-smoke",
-            "browser-storage-smoke",
-        ),
-        ("simpsons-arcade-browser-input-smoke", "browser-input-smoke"),
-        ("simpsons-arcade-browser-scene-smoke", "browser-scene-smoke"),
-        ("simpsons-arcade-browser-webgl-smoke", "browser-webgl-smoke"),
-        (
-            "simpsons-arcade-browser-window-smoke",
-            "browser-window-smoke",
-        ),
-        ("simpsons-arcade-browser-frame-smoke", "browser-frame-smoke"),
-        ("simpsons-arcade-browser-audio-smoke", "browser-audio-smoke"),
-    ] {
-        execute(
-            root,
-            Request::WasmSmokeBuild {
-                package: "games-simpsons-arcade",
-                binary,
-                feature: Some(feature),
-            },
-            log,
-        )?;
-    }
+    validate_browser_smokes(root, log)?;
     let paths = files::authored(root)?;
     let markdown: Vec<_> = paths
         .iter()

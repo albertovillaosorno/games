@@ -38,6 +38,8 @@ mod encounter;
 mod lan;
 mod launch;
 mod measurement;
+/// Path-independent event-driven title presentation.
+pub mod memory_preview;
 mod poses;
 mod shadow;
 mod station_hud;
@@ -47,6 +49,7 @@ mod world;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::rc::Rc;
 use std::time::Duration;
 
 use games::audio::MasterVolume;
@@ -843,12 +846,12 @@ impl Scene {
     }
 }
 
-struct OptionalSources {
-    audio: Option<launch::AudioSelection>,
-    enemy: Option<[OsString; 2]>,
+struct OptionalSources<'selection> {
+    audio: Option<&'selection launch::AudioSelection>,
+    enemy: Option<[ContentHash; 2]>,
     poses: poses::Catalogue,
-    shadow: Option<OsString>,
-    world: Option<OsString>,
+    shadow: Option<ContentHash>,
+    world: Option<ContentHash>,
 }
 
 struct Sources<'source> {
@@ -864,48 +867,73 @@ struct Sources<'source> {
 impl<'source> Sources<'source> {
     fn load(
         store: BundleSource<'source>,
-        actors: &[OsString; 4],
-        options: OptionalSources,
+        actors: [ContentHash; 4],
+        options: OptionalSources<'_>,
     ) -> Result<Self, RenderError> {
         Ok(Self {
             actors: open_bundles(store, actors)?,
             audio: options
                 .audio
-                .as_ref()
                 .map(|selection| audio::Samples::load(store, selection))
                 .transpose()?,
             enemy: options
                 .enemy
                 .as_ref()
-                .map(|hashes| open_bundles(store, hashes))
+                .map(|hashes| open_bundles(store, *hashes))
                 .transpose()?,
             poses: options.poses,
             shadow: options
                 .shadow
                 .as_ref()
-                .map(|hash| open_bundle(store, hash))
+                .map(|hash| open_bundle(store, *hash))
                 .transpose()?,
             store,
             world: options
                 .world
                 .as_ref()
-                .map(|hash| open_bundle(store, hash))
+                .map(|hash| open_bundle(store, *hash))
                 .transpose()?,
         })
     }
+
+    fn local(assets: &'source launch::Assets) -> Result<Self, RenderError> {
+        Self::load(
+            BundleSource::Local(&assets.directory),
+            parse_hashes(&assets.actors)?,
+            OptionalSources {
+                audio: assets.audio.as_ref(),
+                enemy: assets.enemy.as_ref().map(parse_hashes).transpose()?,
+                poses: assets
+                    .poses
+                    .as_deref()
+                    .map(poses::Catalogue::open)
+                    .transpose()?
+                    .unwrap_or_default(),
+                shadow: assets.shadow.as_deref().map(parse_hash).transpose()?,
+                world: assets.world.as_deref().map(parse_hash).transpose()?,
+            },
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowSwitching {
+    Fixed,
+    Supported,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct PreviewOptions<'profiles> {
     audio_device: Option<&'profiles str>,
-    controls: &'profiles launch::ResolvedControls,
+    controls: &'profiles Rc<launch::ResolvedControls>,
     display: DisplaySettings,
     hidden: bool,
     measure: bool,
-    preferences: Option<&'profiles DisplayStore>,
+    preferences: Option<&'profiles Rc<DisplayStore>>,
     touch_enabled: bool,
     volume: MasterVolume,
-    volume_store: Option<&'profiles VolumeStore>,
+    volume_store: Option<&'profiles Rc<VolumeStore>>,
+    window_switching: WindowSwitching,
 }
 
 impl PreviewOptions<'_> {
@@ -919,6 +947,7 @@ impl PreviewOptions<'_> {
     fn session(self, reserved: [bool; 4]) -> LocalSession {
         LocalSession::with_preferences(self.display, self.volume, false)
             .with_control_reset(self.can_reset_controls(reserved))
+            .with_fixed_window(self.window_switching == WindowSwitching::Fixed)
     }
 }
 
@@ -953,9 +982,9 @@ impl NativeBatch {
     }
 }
 
-struct Interactive<'preferences> {
+struct Interactive {
     applied: DisplaySettings,
-    control_preferences: &'preferences launch::ResolvedControls,
+    control_preferences: Rc<launch::ResolvedControls>,
     controls: Controls,
     deferred: Option<NativeBatch>,
     editor: ControlEditor,
@@ -963,7 +992,7 @@ struct Interactive<'preferences> {
     input: NativeInput,
     measurement: Option<measurement::LiveMeasurement>,
     next_profiles: Profiles,
-    preferences: Option<&'preferences DisplayStore>,
+    preferences: Option<Rc<DisplayStore>>,
     presented: Option<HostedCabinet>,
     previous: Duration,
     requested: DisplaySettings,
@@ -971,10 +1000,10 @@ struct Interactive<'preferences> {
     simulation: LiveSimulation<HostedCabinet>,
     stopped: bool,
     volume: MasterVolume,
-    volume_store: Option<&'preferences VolumeStore>,
+    volume_store: Option<Rc<VolumeStore>>,
 }
 
-impl<'preferences> Interactive<'preferences> {
+impl Interactive {
     const fn acknowledge_edit(&mut self, candidate: Option<&Profiles>) {
         self.editor.acknowledge(candidate.is_some());
         if let Some(profiles) = candidate {
@@ -1055,6 +1084,25 @@ impl<'preferences> Interactive<'preferences> {
         Ok(releases)
     }
 
+    fn for_scene(
+        startup: InputStartup,
+        options: PreviewOptions<'_>,
+        art: &Scene,
+        host: Option<HostLan>,
+    ) -> Result<Self, RenderError> {
+        let reserved = host.as_ref().map_or([false; 4], HostLan::reserved);
+        let scroll_limit =
+            art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
+        let cabinet = art.poses.configure_cabinet(&cabinet_with_scroll(
+            art.combat.is_some(),
+            options.session(reserved),
+            scroll_limit,
+        )?);
+        let preview = Self::new(startup, options, &cabinet, host)?;
+        options.controls.persist().map_err(failure)?;
+        Ok(preview)
+    }
+
     fn measure_presented(
         &mut self,
         started: Option<Duration>,
@@ -1081,7 +1129,7 @@ impl<'preferences> Interactive<'preferences> {
 
     fn new(
         startup: InputStartup,
-        options: PreviewOptions<'preferences>,
+        options: PreviewOptions<'_>,
         cabinet: &Cabinet,
         host: Option<HostLan>,
     ) -> Result<Self, RenderError> {
@@ -1103,7 +1151,7 @@ impl<'preferences> Interactive<'preferences> {
         }
         Ok(Self {
             applied: options.display,
-            control_preferences: options.controls,
+            control_preferences: Rc::clone(options.controls),
             controls,
             deferred: None,
             editor: ControlEditor::default(),
@@ -1113,7 +1161,7 @@ impl<'preferences> Interactive<'preferences> {
                 .measure
                 .then(measurement::LiveMeasurement::default),
             next_profiles: options.controls.profiles,
-            preferences: options.preferences,
+            preferences: options.preferences.map(Rc::clone),
             presented: None,
             previous: Duration::ZERO,
             requested: cabinet.session().display(),
@@ -1121,7 +1169,7 @@ impl<'preferences> Interactive<'preferences> {
             simulation,
             stopped: false,
             volume: cabinet.session().volume(),
-            volume_store: options.volume_store,
+            volume_store: options.volume_store.map(Rc::clone),
         })
     }
 
@@ -1140,12 +1188,12 @@ impl<'preferences> Interactive<'preferences> {
     ) -> Result<(), RenderError> {
         let requested = session.display();
         if requested != self.requested {
-            save_display(self.preferences, requested)?;
+            save_display(self.preferences.as_deref(), requested)?;
             self.requested = requested;
         }
         let volume = session.volume();
         if volume != self.volume {
-            save_volume(self.volume_store, volume)?;
+            save_volume(self.volume_store.as_deref(), volume)?;
             self.volume = volume;
         }
         if session.control_reset() != ControlReset::Requested {
@@ -1646,6 +1694,8 @@ fn load_menu(
                 ),
             ],
             title: "THE SIMPSONS ARCADE",
+            window_switching: options.window_switching
+                == WindowSwitching::Supported,
         },
     )
 }
@@ -1742,9 +1792,28 @@ where
     }))
 }
 
+fn parse_hash(digest: &OsStr) -> Result<ContentHash, RenderError> {
+    digest
+        .to_str()
+        .ok_or_else(|| failure("invalid hash"))?
+        .parse()
+        .map_err(failure)
+}
+
+fn parse_hashes<const COUNT: usize>(
+    hashes: &[OsString; COUNT],
+) -> Result<[ContentHash; COUNT], RenderError> {
+    hashes
+        .iter()
+        .map(|digest| parse_hash(digest))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_error| failure("bundle count"))
+}
+
 fn open_bundle(
     store: BundleSource<'_>,
-    digest: &OsString,
+    digest: ContentHash,
 ) -> Result<CanonicalBundle, RenderError> {
     let limits = ManifestLimits {
         manifest_bytes: size(32_768)?,
@@ -1759,15 +1828,10 @@ fn open_bundle(
 
 fn open_selected_bundle(
     store: BundleSource<'_>,
-    digest: &OsString,
+    digest: ContentHash,
     limits: ManifestLimits,
 ) -> Result<CanonicalBundle, RenderError> {
-    let hash: ContentHash = digest
-        .to_str()
-        .ok_or_else(|| failure("invalid hash"))?
-        .parse()
-        .map_err(failure)?;
-    let bundle = store.open(hash, limits).map_err(failure)?;
+    let bundle = store.open(digest, limits).map_err(failure)?;
     let source = bundle.manifest().source();
     if source.title != "simpsons-arcade" || source.revision != "world-4p-set-1"
     {
@@ -1778,10 +1842,10 @@ fn open_selected_bundle(
 
 fn open_bundles<const COUNT: usize>(
     store: BundleSource<'_>,
-    hashes: &[OsString; COUNT],
+    hashes: [ContentHash; COUNT],
 ) -> Result<[CanonicalBundle; COUNT], RenderError> {
     hashes
-        .iter()
+        .into_iter()
         .map(|hash| open_bundle(store, hash))
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
@@ -1851,27 +1915,11 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
         volume,
         volume_store,
     } = launch::Launch::parse(args)?;
-    let resolved = controls.resolve()?;
+    let resolved = Rc::new(controls.resolve()?);
+    let display_store = preferences.map(Rc::new);
+    let shared_volume_store = volume_store.map(Rc::new);
     let listener = host.as_deref().map(lan::open_host).transpose()?;
-    let catalogue = assets
-        .poses
-        .as_deref()
-        .map(poses::Catalogue::open)
-        .transpose()
-        .map_err(|error| format!("{error:?}"))?
-        .unwrap_or_default();
-    let result = Sources::load(
-        BundleSource::Local(&assets.directory),
-        &assets.actors,
-        OptionalSources {
-            audio: assets.audio,
-            enemy: assets.enemy,
-            poses: catalogue,
-            shadow: assets.shadow,
-            world: assets.world,
-        },
-    )
-    .and_then(|source| {
+    let result = Sources::local(&assets).and_then(|source| {
         window(
             &source,
             PreviewOptions {
@@ -1880,10 +1928,11 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
                 display,
                 hidden: smoke,
                 measure,
-                preferences: preferences.as_ref(),
+                preferences: display_store.as_ref(),
                 touch_enabled,
                 volume,
-                volume_store: volume_store.as_ref(),
+                volume_store: shared_volume_store.as_ref(),
+                window_switching: WindowSwitching::Supported,
             },
             listener,
             load_started,
@@ -3045,16 +3094,7 @@ fn window(
             smoke_optional(scene, &mut art, touch_enabled, playback.as_mut())?;
             return smoke_peak_report();
         }
-        let scroll_limit =
-            art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
-        let session = options.session(reserved);
-        let cabinet = art.poses.configure_cabinet(&cabinet_with_scroll(
-            source.enemy.is_some(),
-            session,
-            scroll_limit,
-        )?);
-        let preview = Interactive::new(startup, options, &cabinet, host)?;
-        options.controls.persist().map_err(failure)?;
+        let preview = Interactive::for_scene(startup, options, &art, host)?;
         preview.run(scene, &mut art, playback.as_mut())
     })
 }
@@ -3163,9 +3203,7 @@ fn preview_layout(
 
 #[cfg(test)]
 mod tests {
-    use std::array;
     use std::collections::BTreeMap;
-    use std::ffi::OsString;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
     use games::input::physical::{
@@ -3248,7 +3286,7 @@ mod tests {
             },
         )
         .map_err(failure)?;
-        let actors = array::from_fn(|_| OsString::from(valid.to_string()));
+        let actors = [valid; 4];
         let options = || OptionalSources {
             audio: None,
             enemy: None,
@@ -3257,17 +3295,16 @@ mod tests {
             world: None,
         };
         let source =
-            Sources::load(BundleSource::Memory(&store), &actors, options())?;
+            Sources::load(BundleSource::Memory(&store), actors, options())?;
         for (actor, key) in source.actors.iter().zip(KEYS) {
             if actor.read_payload(key).map_err(failure)? != pixel {
                 return Err(failure("selected memory actor changed"));
             }
         }
-        let foreign_actors =
-            array::from_fn(|_| OsString::from(foreign.to_string()));
+        let foreign_actors = [foreign; 4];
         if Sources::load(
             BundleSource::Memory(&store),
-            &foreign_actors,
+            foreign_actors,
             options(),
         )
         .is_ok()

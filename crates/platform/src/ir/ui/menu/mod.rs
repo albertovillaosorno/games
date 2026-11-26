@@ -88,6 +88,8 @@ pub struct MenuContent<'text> {
     pub settings_hints: &'text [&'text str],
     /// Visible title of the current game.
     pub title: &'text str,
+    /// Whether the host supports changing window mode.
+    pub window_switching: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,6 +167,7 @@ pub struct MenuArt {
     control_reset: bool,
     panels: TextAtlas,
     rows: TextAtlas,
+    window_switching: bool,
 }
 
 impl MenuArt {
@@ -226,6 +229,7 @@ impl MenuArt {
                 },
                 &rows,
             )?,
+            window_switching: content.window_switching,
         })
     }
 
@@ -243,8 +247,9 @@ impl MenuArt {
             return Ok(());
         };
         if session.phase() == SessionPhase::Settings
-            && self.control_reset
+            && (self.control_reset
                 == matches!(session.control_reset(), ControlReset::Disabled)
+                || self.window_switching != session.window_switching())
         {
             return Err(RenderError::InvalidSprite);
         }
@@ -304,8 +309,12 @@ fn panel(
         }
         .fit_width(width),
     ];
-    let count = u16::try_from(phase.items(content.control_reset).len())
-        .unwrap_or(u16::MAX);
+    let count = u16::try_from(
+        phase
+            .items_with_window(content.control_reset, content.window_switching)
+            .len(),
+    )
+    .unwrap_or(u16::MAX);
     let mut top = ROW_TOP
         .saturating_add(count.saturating_mul(ROW_HEIGHT))
         .saturating_add(12);
@@ -457,6 +466,7 @@ mod tests {
                 pause_hints: &["RESUME"],
                 settings_hints: &["BACK"],
                 title: "TEST",
+                window_switching: true,
             },
         );
         assert!(loaded.is_ok());

@@ -32,7 +32,7 @@
 //! Optional verified maneuver pose catalogue.
 
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::num::NonZeroU64;
 use std::str::from_utf8;
 
@@ -124,8 +124,7 @@ impl Catalogue {
     ) -> Result<PoseArt, RenderError> {
         let mut entries = BTreeMap::new();
         for (&key, digest) in &self.entries {
-            let bundle =
-                open_bundle(store, &OsString::from(digest.to_string()))?;
+            let bundle = open_bundle(store, *digest)?;
             let name = match (key.0, key.1) {
                 (Subject::Station(player), _) => KEYS
                     .get(player.index())

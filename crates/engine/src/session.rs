@@ -48,6 +48,15 @@ const SETTINGS_ITEMS: [MenuItem; 4] = [
     MenuItem::Volume,
     MenuItem::Back,
 ];
+const FIXED_WINDOW_SETTINGS: [MenuItem; 3] =
+    [MenuItem::Display, MenuItem::Volume, MenuItem::Back];
+const FIXED_WINDOW_SETTINGS_WITH_CONTROL_RESET: [MenuItem; 5] = [
+    MenuItem::Display,
+    MenuItem::Volume,
+    MenuItem::ResetControls,
+    MenuItem::EditControls,
+    MenuItem::Back,
+];
 const SETTINGS_WITH_CONTROL_RESET: [MenuItem; 6] = [
     MenuItem::Display,
     MenuItem::Window,
@@ -146,9 +155,23 @@ impl SessionPhase {
     /// Visible menu choices, empty while playing or after exit.
     #[must_use]
     pub const fn items(self, control_reset: bool) -> &'static [MenuItem] {
+        self.items_with_window(control_reset, true)
+    }
+
+    /// Visible menu choices for the host window capabilities.
+    #[must_use]
+    pub const fn items_with_window(
+        self,
+        control_reset: bool,
+        window_switching: bool,
+    ) -> &'static [MenuItem] {
         match self {
             Self::MainMenu => &MAIN_ITEMS,
             Self::Paused => &PAUSE_ITEMS,
+            Self::Settings if !window_switching && control_reset => {
+                &FIXED_WINDOW_SETTINGS_WITH_CONTROL_RESET
+            },
+            Self::Settings if !window_switching => &FIXED_WINDOW_SETTINGS,
             Self::Settings if control_reset => &SETTINGS_WITH_CONTROL_RESET,
             Self::Settings => &SETTINGS_ITEMS,
             Self::Controls | Self::Playing | Self::Exited => &[],
@@ -161,6 +184,7 @@ impl SessionPhase {
 pub struct LocalSession {
     control_reset: ControlReset,
     display: DisplaySettings,
+    fixed_window: bool,
     phase: SessionPhase,
     restrict_fill: bool,
     selection: usize,
@@ -171,7 +195,11 @@ pub struct LocalSession {
 impl LocalSession {
     const fn close_controls(&mut self) {
         self.transition(SessionPhase::Settings);
-        self.selection = 4;
+        self.selection = if self.fixed_window {
+            3
+        } else {
+            4
+        };
         self.control_reset = ControlReset::Available;
     }
 
@@ -266,8 +294,10 @@ impl LocalSession {
     /// Visible choices for the current screen, empty while playing.
     #[must_use]
     pub const fn items(self) -> &'static [MenuItem] {
-        self.phase
-            .items(!matches!(self.control_reset, ControlReset::Disabled))
+        self.phase.items_with_window(
+            !matches!(self.control_reset, ControlReset::Disabled),
+            self.window_switching(),
+        )
     }
 
     fn navigate(&mut self, input: MenuInput) {
@@ -347,6 +377,12 @@ impl LocalSession {
         self.volume
     }
 
+    /// Whether the host can switch between window modes.
+    #[must_use]
+    pub const fn window_switching(self) -> bool {
+        !self.fixed_window
+    }
+
     /// Offer the optional next-launch control reset at session creation.
     #[must_use]
     pub const fn with_control_reset(mut self, enabled: bool) -> Self {
@@ -366,6 +402,13 @@ impl LocalSession {
         restrict_fill: bool,
     ) -> Self {
         Self::with_preferences(display, MasterVolume::Full, restrict_fill)
+    }
+
+    /// Retain the initial host window mode and omit unavailable switching.
+    #[must_use]
+    pub const fn with_fixed_window(mut self, fixed: bool) -> Self {
+        self.fixed_window = fixed;
+        self
     }
 
     /// Initialise a session with portable display and volume preferences.
@@ -388,6 +431,7 @@ impl LocalSession {
         Self {
             control_reset: ControlReset::Disabled,
             display: adjusted,
+            fixed_window: false,
             phase: SessionPhase::MainMenu,
             restrict_fill,
             selection: 0,
@@ -419,6 +463,37 @@ mod tests {
         assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
         assert_eq!(session.items(), &SETTINGS_ITEMS);
         assert_eq!(session.control_reset(), ControlReset::Disabled);
+    }
+
+    #[test]
+    fn fixed_window_settings_hide_unavailable_switching() {
+        let mut session = LocalSession::default().with_fixed_window(true);
+        menu_input(&mut session, MenuInput::Next);
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.items(), &FIXED_WINDOW_SETTINGS);
+        menu_input(&mut session, MenuInput::Next);
+        assert_eq!(session.selected(), Some(MenuItem::Volume));
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.display().window, WindowMode::Windowed);
+        assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
+    }
+
+    #[test]
+    fn fixed_window_editor_returns_to_its_visible_row() {
+        let mut session = LocalSession::default()
+            .with_fixed_window(true)
+            .with_control_reset(true);
+        menu_input(&mut session, MenuInput::Next);
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.items(), &FIXED_WINDOW_SETTINGS_WITH_CONTROL_RESET);
+        for _ in 0u8..3 {
+            menu_input(&mut session, MenuInput::Next);
+        }
+        assert_eq!(session.selected(), Some(MenuItem::EditControls));
+        menu_input(&mut session, MenuInput::Confirm);
+        assert_eq!(session.phase(), SessionPhase::Controls);
+        menu_input(&mut session, MenuInput::Pause);
+        assert_eq!(session.selected(), Some(MenuItem::EditControls));
     }
 
     fn select_reset_in_pause() -> LocalSession {
