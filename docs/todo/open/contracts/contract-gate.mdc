@@ -397,3 +397,19 @@ all six portable core targets. Commits fe50054 and f456414 passed their
 hooks. Direct filesystem and process operations in validator test fixtures
 still need migration; the native directory observation is not an atomic
 filesystem snapshot, and no new native target is established.
+
+The contributor test and host API boundary now includes build, download
+and validator roles as well as shared libraries, importers and titles.
+Commit 4d4b1ac moved native validator fixtures behind typed storage,
+process and toolchain ports. Commit cc6ebd8 moved the remaining
+validator lexical paths through shared storage and canonical authored
+name checks; compiler-embedded workspace fixtures became bounded reads.
+The source gate checks these roles, including inline tests, with no
+legacy inventory allowances. Commit c3259be shares staged path
+admission with authored inventory admission; unrelated dirty names
+retain their byte identity and legacy deletion checks remain narrow.
+Fresh validation 1795651989805946864-1503289 passed the signed hook,
+1,497 aggregate test executions and all six portable core checks.
+Source admission is not compiler-grade name resolution, and passing
+library checks does not demonstrate physical device or native runtime
+conformance on other platforms. The remaining P1 dependencies stay open.

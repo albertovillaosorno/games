@@ -96,13 +96,16 @@ fn role(path: &str) -> Option<Role> {
 
 /// Whether a crate role must remain independent of native host APIs.
 pub(crate) fn host_independent(path: &str) -> bool {
-    path.starts_with("tools/download/")
-        || path.starts_with("tools/build/")
-        || path.starts_with("tools/validator/")
-        || matches!(
-            role(path),
-            Some(Role::Shared | Role::Runtime | Role::Importer | Role::Title)
+    matches!(
+        role(path),
+        Some(
+            Role::Shared
+                | Role::Runtime
+                | Role::Importer
+                | Role::Title
+                | Role::Tool
         )
+    )
 }
 
 const fn dependency_allowed(owner: Role, target: Role) -> bool {

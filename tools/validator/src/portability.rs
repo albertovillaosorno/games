@@ -516,6 +516,7 @@ mod tests {
             "crates/platform/src/hardware/example/mod.rs",
             "tools/download/src/download.rs",
             "tools/validator/src/validate.rs",
+            "tools/future-tool/src/main.rs",
             "crates/platform/src/software/linux/example/mod.rs",
         ]
         .map(OsString::from);
@@ -542,7 +543,7 @@ mod tests {
         }
         let result = validate(root, &authored, &toml::Table::new());
         let error = result.err().ok_or("accepted compile-time host inputs")?;
-        for relative in authored.iter().take(6) {
+        for relative in authored.iter().take(7) {
             require(
                 error.contains(relative.to_string_lossy().as_ref()),
                 "missing portable path",
