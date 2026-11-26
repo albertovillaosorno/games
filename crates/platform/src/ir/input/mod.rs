@@ -45,7 +45,9 @@ use super::hardware::{
     InputSample, InputTransition,
 };
 use super::security::haptics::FeedbackRequest;
-use super::security::input::{ControllerAdmission, InputClock};
+use super::security::input::{
+    ControllerAdmission, FeedbackFocus, InputClock, TouchGeometry,
+};
 
 pub(crate) type InputPort = Box<dyn InputBackend>;
 
@@ -54,8 +56,8 @@ pub(crate) trait InputBackend: Debug {
     fn clock(&self) -> Duration;
     fn discover_after_drain(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError>;
-    fn feedback_allowed(&self) -> bool;
     fn feedback_support(&self, device: u64) -> Option<HapticSupport>;
+    fn initial_feedback_allowed(&self) -> bool;
     fn submit_feedback(
         &mut self,
         request: FeedbackRequest,
@@ -85,6 +87,7 @@ impl InputStartup {
         limit: NonZeroUsize,
     ) -> Result<Self, RenderError> {
         let clock = InputClock::new(backend.clock(), backend.window_scope());
+        let focus = FeedbackFocus::new(backend.initial_feedback_allowed());
         let mut controllers = ControllerAdmission::new(limit);
         let attached = controllers.admit(backend.discover_available()?)?;
         Ok(Self {
@@ -93,6 +96,7 @@ impl InputStartup {
                 backend,
                 clock,
                 controllers,
+                focus,
                 touch_enabled: false,
                 touch_geometry: TouchGeometry::default(),
             },
@@ -105,6 +109,7 @@ pub struct NativeInput {
     backend: InputPort,
     clock: InputClock,
     controllers: ControllerAdmission,
+    focus: FeedbackFocus,
     touch_enabled: bool,
     touch_geometry: TouchGeometry,
 }
@@ -177,8 +182,10 @@ impl NativeInput {
         if !self.touch_enabled {
             return Ok(None);
         }
-        let layout = observe()?;
-        let elapsed = self.elapsed()?;
+        let observed = observe()
+            .and_then(|layout| self.elapsed().map(|elapsed| (layout, elapsed)));
+        let (layout, elapsed) =
+            observed.inspect_err(|_| self.touch_geometry.invalidate())?;
         Ok(self
             .touch_geometry
             .observe(layout, elapsed)
@@ -205,6 +212,7 @@ impl NativeInput {
         {
             return None;
         }
+        self.focus.observe(event.transition());
         self.controllers
             .route(event.transition(), self.backend.translate(event)?)
     }
@@ -215,7 +223,7 @@ impl Haptics for NativeInput {
         let request = FeedbackRequest::new(
             command,
             self.support(command.device),
-            self.backend.feedback_allowed(),
+            self.focus.allows_feedback(),
         )?;
         self.backend.submit_feedback(request)
     }
@@ -225,33 +233,6 @@ impl Haptics for NativeInput {
             return None;
         }
         self.backend.feedback_support(device)
-    }
-}
-
-#[derive(Debug, Default)]
-struct TouchGeometry {
-    cutoff: Duration,
-    layout: Option<PresentationLayout>,
-}
-
-impl TouchGeometry {
-    fn accepts(&self, stamp: Option<Duration>) -> bool {
-        self.layout.is_some()
-            && stamp.is_some_and(|elapsed| elapsed >= self.cutoff)
-    }
-
-    fn observe(
-        &mut self,
-        layout: Option<PresentationLayout>,
-        elapsed: Duration,
-    ) -> bool {
-        if self.layout == layout {
-            return false;
-        }
-        let invalidated = self.layout.is_some();
-        self.layout = layout;
-        self.cutoff = elapsed;
-        invalidated
     }
 }
 
@@ -283,10 +264,10 @@ mod tests {
     #[derive(Debug, Default)]
     struct TestInput {
         after_drain: Vec<super::InputEvent>,
-        allowed: Rc<Cell<bool>>,
         attachments: Vec<super::InputEvent>,
         clock: Rc<Cell<Duration>>,
         feedback: Rc<Cell<Option<super::HapticCommand>>>,
+        initial_feedback_allowed: bool,
         scope: u64,
     }
 
@@ -307,10 +288,6 @@ mod tests {
             Ok(mem::take(&mut self.attachments))
         }
 
-        fn feedback_allowed(&self) -> bool {
-            self.allowed.get()
-        }
-
         fn feedback_support(
             &self,
             device: u64,
@@ -321,6 +298,10 @@ mod tests {
                 3 => Some(super::HapticSupport::Unsupported),
                 _ => None,
             }
+        }
+
+        fn initial_feedback_allowed(&self) -> bool {
+            self.initial_feedback_allowed
         }
 
         fn submit_feedback(
@@ -372,7 +353,6 @@ mod tests {
             ..TestInput::default()
         };
         let feedback = Rc::clone(&backend.feedback);
-        let allowed = Rc::clone(&backend.allowed);
         let mut input = super::InputStartup::new(
             Box::new(backend),
             NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN),
@@ -400,7 +380,14 @@ mod tests {
         };
         check(&input.submit(stop), &Ok(()))?;
         check(&feedback.get(), &Some(stop))?;
-        allowed.set(true);
+        check(
+            &input.translate(&super::InputSample::new(
+                None,
+                super::InputTransition::FocusGained,
+                Some(0),
+            )),
+            &None,
+        )?;
         for (device, admitted, result) in [
             (1, effect.single_motor(), Ok(())),
             (2, effect, Ok(())),
@@ -412,6 +399,66 @@ mod tests {
                 &Some(HapticCommand { device, effect: admitted }),
             )?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn feedback_permission_follows_only_the_owning_lifecycle()
+    -> Result<(), super::RenderError> {
+        use games::capability::HapticEffect;
+
+        use super::{
+            HapticCommand, HapticError, Haptics as _, HostEvent, InputEvent,
+            InputSample, InputTransition,
+        };
+
+        let backend = TestInput {
+            attachments: vec![InputEvent::Attached { device: 2 }],
+            initial_feedback_allowed: true,
+            scope: 7,
+            ..TestInput::default()
+        };
+        let feedback = Rc::clone(&backend.feedback);
+        let mut input =
+            super::InputStartup::new(Box::new(backend), NonZeroUsize::MIN)?
+                .input;
+        let command = HapticCommand {
+            device: 2,
+            effect: HapticEffect::Rumble {
+                low: 5,
+                high: 5,
+                milliseconds: NonZeroU16::MIN,
+            },
+        };
+        let lost =
+            InputTransition::Event(HostEvent::Input(InputEvent::FocusLost));
+        let quit = InputTransition::Event(HostEvent::Quit);
+        check(&input.submit(command), &Ok(()))?;
+        for (scope, transition, admitted) in [
+            (Some(8), lost, true),
+            (Some(7), lost, false),
+            (Some(8), InputTransition::FocusGained, false),
+            (Some(7), InputTransition::FocusGained, true),
+            (None, quit, false),
+            (Some(7), InputTransition::FocusGained, false),
+        ] {
+            let _routed =
+                input.translate(&InputSample::new(None, transition, scope));
+            feedback.set(None);
+            let expected = if admitted {
+                Ok(())
+            } else {
+                Err(HapticError::Unavailable)
+            };
+            check(&input.submit(command), &expected)?;
+            check(&feedback.get(), &admitted.then_some(command))?;
+        }
+        let stop = HapticCommand {
+            effect: HapticEffect::Stop,
+            ..command
+        };
+        check(&input.submit(stop), &Ok(()))?;
+        check(&feedback.get(), &Some(stop))?;
         Ok(())
     }
 
@@ -471,6 +518,66 @@ mod tests {
         check(&session.translate(&sample(None)), &None)?;
         check(&session.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
         check(&session.translate(&sample(Some(clock))), &Some(contact))?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_touch_observation_withdraws_geometry_and_defers_cancellation()
+    -> Result<(), super::RenderError> {
+        use games::input::touch::{ContactId, ContactPhase, TouchPoint};
+
+        let ms = Duration::from_millis;
+        let observation = Rc::new(Cell::new(Duration::ZERO));
+        let mut input = super::InputStartup::new(
+            Box::new(TestInput {
+                clock: Rc::clone(&observation),
+                ..TestInput::default()
+            }),
+            NonZeroUsize::MIN,
+        )?
+        .input;
+        input.enable_touch();
+        let size = Dimensions::new(NonZeroU32::MIN, NonZeroU32::MIN);
+        let geometry = PresentationMode::AspectFit.layout(size, size);
+        let contact = super::HostEvent::Input(super::InputEvent::Contact {
+            id: ContactId { device: 1, finger: 1 },
+            phase: ContactPhase::Down(TouchPoint { x: 10, y: 10 }),
+        });
+        let sample = |stamp| {
+            super::InputSample::new(
+                Some(ms(stamp)),
+                super::InputTransition::Event(contact),
+                None,
+            )
+        };
+        observation.set(ms(20));
+        check(&input.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
+        check(&input.translate(&sample(20)), &Some(contact))?;
+        check(
+            &input.synchronize_touch(|| Err(super::RenderError::Unsupported)),
+            &Err(super::RenderError::Unsupported),
+        )?;
+        check(&input.translate(&sample(20)), &None)?;
+        observation.set(ms(25));
+        check(
+            &input.synchronize_touch(|| Ok(Some(geometry)))?,
+            &Some(ms(25)),
+        )?;
+        check(&input.translate(&sample(20)), &None)?;
+        check(&input.translate(&sample(25)), &Some(contact))?;
+        observation.set(ms(24));
+        check(
+            &input.synchronize_touch(|| Ok(Some(geometry))),
+            &Err(super::RenderError::InvalidTimestamp),
+        )?;
+        check(&input.translate(&sample(24)), &None)?;
+        observation.set(ms(30));
+        check(&input.synchronize_touch(|| Ok(None))?, &Some(ms(30)))?;
+        check(&input.synchronize_touch(|| Ok(None))?, &None)?;
+        observation.set(ms(31));
+        check(&input.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
+        check(&input.translate(&sample(30)), &None)?;
+        check(&input.translate(&sample(31)), &Some(contact))?;
         Ok(())
     }
 

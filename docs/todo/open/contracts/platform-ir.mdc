@@ -556,3 +556,12 @@ that enumeration remains bound to the opened directory. Fresh native
 validation 1795656875146521310-2913759 passed 1,620 aggregate test
 executions and six portable core checks. Directory membership may change
 during observation; trusted procfs and ancestors remain required.
+
+Shared input admission now owns feedback focus after the initial native
+window observation. Foreign lifecycle events cannot change permission,
+and closing a session prevents later focus events from re-enabling rumble.
+Explicit stop remains admissible. A failed touch geometry or clock query
+withdraws contact admission immediately and retains the required
+cancellation until the next successful synchronization. Fresh native
+validation 1795656993703362794-2946590 passed 1,624 aggregate test
+executions and all six portable core checks.

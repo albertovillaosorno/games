@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded controller identity, window and clock admission.
+//   - Bounded controller identity, window, clock and lifecycle admission.
 // - Must-Not:
 //   - Enumerate devices or manage native controller resources.
 // - Allows:
@@ -32,10 +32,12 @@
 //! Bounded admission of controller, scope and clock observations.
 
 use std::cell::Cell;
+use std::mem;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use games::input::InputEvent;
+use games::presentation::PresentationLayout;
 
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
@@ -86,6 +88,78 @@ impl InputClock {
             previous: Cell::new(origin),
             scope,
         }
+    }
+}
+
+/// Foreground feedback permission follows the admitted session lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FeedbackFocus {
+    Background,
+    Closed,
+    Foreground,
+}
+
+impl FeedbackFocus {
+    pub(crate) const fn allows_feedback(self) -> bool {
+        matches!(self, Self::Foreground)
+    }
+
+    pub(crate) const fn new(foreground: bool) -> Self {
+        if foreground {
+            Self::Foreground
+        } else {
+            Self::Background
+        }
+    }
+
+    pub(crate) fn observe(&mut self, transition: InputTransition) {
+        if *self == Self::Closed {
+            return;
+        }
+        if transition == InputTransition::Event(HostEvent::Quit) {
+            *self = Self::Closed;
+        } else if transition == InputTransition::FocusGained {
+            *self = Self::Foreground;
+        } else if transition
+            == InputTransition::Event(HostEvent::Input(InputEvent::FocusLost))
+        {
+            *self = Self::Background;
+        }
+    }
+}
+
+/// Touch admission is tied to the most recently observed presented layout.
+#[derive(Debug, Default)]
+pub(crate) struct TouchGeometry {
+    cutoff: Duration,
+    layout: Option<PresentationLayout>,
+    pending_cancellation: bool,
+}
+
+impl TouchGeometry {
+    pub(crate) fn accepts(&self, stamp: Option<Duration>) -> bool {
+        self.layout.is_some()
+            && !self.pending_cancellation
+            && stamp.is_some_and(|elapsed| elapsed >= self.cutoff)
+    }
+
+    /// Invalid observations withdraw geometry immediately. Retain any
+    /// required cancellation until the next successful synchronization.
+    pub(crate) const fn invalidate(&mut self) {
+        self.pending_cancellation |= self.layout.take().is_some();
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        layout: Option<PresentationLayout>,
+        elapsed: Duration,
+    ) -> bool {
+        if self.layout != layout {
+            self.invalidate();
+            self.layout = layout;
+            self.cutoff = elapsed;
+        }
+        mem::take(&mut self.pending_cancellation)
     }
 }
 

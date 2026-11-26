@@ -56,7 +56,7 @@ use crate::ir::security::haptics::FeedbackRequest;
 /// Owns the opened native controllers for one host window.
 struct LinuxInput {
     controllers: BTreeMap<u64, GameController>,
-    feedback_allowed: bool,
+    initial_feedback_allowed: bool,
     limit: NonZeroUsize,
     rediscover: bool,
     subsystem: GameControllerSubsystem,
@@ -125,12 +125,12 @@ impl InputBackend for LinuxInput {
         Ok(attached)
     }
 
-    fn feedback_allowed(&self) -> bool {
-        self.feedback_allowed
-    }
-
     fn feedback_support(&self, device: u64) -> Option<HapticSupport> {
         self.controllers.get(&device).and_then(controller_support)
+    }
+
+    fn initial_feedback_allowed(&self) -> bool {
+        self.initial_feedback_allowed
     }
 
     fn submit_feedback(
@@ -172,18 +172,15 @@ impl InputBackend for LinuxInput {
                     HostEvent::Input(InputEvent::Detached { device })
                 });
             },
-            InputTransition::FocusGained => {
-                self.feedback_allowed = true;
+            InputTransition::FocusGained | InputTransition::Ignored => {
                 return None;
             },
-            InputTransition::Ignored => return None,
             InputTransition::Event(routed) => Some(routed),
         };
         if matches!(
             routed,
             Some(HostEvent::Quit | HostEvent::Input(InputEvent::FocusLost))
         ) {
-            self.feedback_allowed = false;
             self.stop_all_feedback();
         }
         if let Some(HostEvent::Input(
@@ -213,7 +210,7 @@ impl LinuxInput {
         let timer = sdl.timer().map_err(RenderError::Backend)?;
         let input = Self {
             controllers: BTreeMap::new(),
-            feedback_allowed: window.has_input_focus()
+            initial_feedback_allowed: window.has_input_focus()
                 && !window.is_minimized(),
             limit,
             rediscover: false,
