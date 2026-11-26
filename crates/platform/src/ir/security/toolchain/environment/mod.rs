@@ -49,6 +49,7 @@ pub const FINGERPRINT_KEYS: &[&str] = &[
     "RUSTC_WRAPPER",
     "RUSTC_WORKSPACE_WRAPPER",
     "CLIPPY_CONF_DIR",
+    "NODE_OPTIONS",
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",

@@ -39,7 +39,12 @@ reference test inputs. Every fresh run checks all workspace libraries on
 Linux and Windows ARM64/x86-64, Android ARM64 and WebAssembly. Install
 the corresponding Rust targets; missing targets are errors. Runtime
 dependency graphs must exclude source decoders. The installed target
-inventory contributes to the cache fingerprint. Logs are stored under
+inventory and Node.js version contribute to the cache fingerprint. A fresh
+run also links and executes the Simpsons Arcade portable simulation smoke
+with the official WebAssembly Rust target and the installed Node.js runtime.
+This requires Node.js on the contributor host, but does not require a browser
+or an original asset bundle and is not a browser packaging check. Logs are
+stored under
 `.temp/validate/`.
 
 Place lawfully obtained original files in `.reference/games/<id>/` using

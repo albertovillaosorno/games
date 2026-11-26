@@ -73,3 +73,21 @@ recognized core-only targets from invalid target names and refuses each
 of the five non-native distribution requests before invoking Cargo.
 Android and browser packaging, runtime graphics, input and storage
 acceptance remain open.
+
+Fresh validation run 1795675217834953245-2363038 linked the first
+authored portable gameplay smoke using the official WebAssembly target
+and Rust 1.100.0, without the native preview features. The optimized
+75,597-byte module ran in Node.js 24.18.0 with an empty host import
+object and returned success. The same scenario is exercised by native
+tests. It verifies all four players join, move 16 world units over
+eight fixed ticks, stop on release, enter and leave the pause phase, and
+reach identical state across one-frame and sixteen-frame scheduling.
+The shared validator now requires this executable check, fingerprints
+the Node.js version and options, and still checks all six portable
+library targets. It does not require original media.
+
+The headless Firefox attempt in a network-isolated local sandbox failed
+during browser startup because the sandbox did not permit access to
+/dev/null. No browser execution or graphics, touch or storage acceptance
+is inferred. Android linking, device execution and distribution remain
+open; the title still cannot be packaged for Android or browsers.

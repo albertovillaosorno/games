@@ -1,5 +1,6 @@
 [package]
 name = "games-simpsons-arcade"
+default-run = "simpsons-arcade"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -33,3 +34,7 @@ rcgen.workspace = true
 name = "simpsons-arcade"
 path = "src/main.rs"
 required-features = ["native-preview"]
+
+[[bin]]
+name = "simpsons-arcade-core-smoke"
+path = "src/bin/core-smoke.rs"

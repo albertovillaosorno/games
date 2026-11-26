@@ -37,6 +37,9 @@ use games_assets::archive::validate_path;
 use super::identifier;
 use crate::ir::toolchain::Target;
 
+const WORKSPACE_METADATA: [&str; 5] =
+    ["metadata", "--no-deps", "--locked", "--format-version", "1"];
+
 /// Captured result of one admitted validation subprocess.
 #[derive(Debug)]
 pub struct Report {
@@ -131,6 +134,15 @@ pub enum Request<'input> {
         /// Include all workspace features.
         all_features: bool,
     },
+    /// Link a portable executable without its native preview features.
+    WasmSmokeBuild {
+        /// Workspace package containing the executable.
+        package: &'input str,
+        /// Authored smoke executable name.
+        binary: &'input str,
+    },
+    /// Execute a linked, import-free WebAssembly smoke artifact.
+    WasmSmokeRun(&'input str),
     /// Obtain the locked workspace member metadata, without dependencies.
     WorkspaceMetadata,
 }
@@ -246,6 +258,7 @@ impl<'input> Request<'input> {
                 });
             },
             Self::Git(request) => ("git", git(request)),
+            Self::WasmSmokeRun(binary) => return wasm_smoke_runner(binary),
             Self::BuildGraph
             | Self::ClippyPackage(_)
             | Self::ClippyWorkspace
@@ -256,6 +269,7 @@ impl<'input> Request<'input> {
             | Self::Portable { .. }
             | Self::RuntimeGraph(_)
             | Self::TestWorkspace { .. }
+            | Self::WasmSmokeBuild { .. }
             | Self::WorkspaceMetadata => ("cargo", self.cargo()?),
         };
         Ok(Arguments {
@@ -289,9 +303,10 @@ impl<'input> Request<'input> {
                 "rustfmt.toml",
                 "--check",
             ]),
-            Self::AuthoredFiles | Self::Git(_) | Self::Markdown(_) => {
-                Err(InvalidRequest)
-            },
+            Self::AuthoredFiles
+            | Self::Git(_)
+            | Self::Markdown(_)
+            | Self::WasmSmokeRun(_) => Err(InvalidRequest),
             Self::History => Ok(vec![
                 "run",
                 "--locked",
@@ -316,13 +331,10 @@ impl<'input> Request<'input> {
             Self::TestWorkspace { all_features } => {
                 Ok(workspace("test", all_features, false))
             },
-            Self::WorkspaceMetadata => Ok(vec![
-                "metadata",
-                "--no-deps",
-                "--locked",
-                "--format-version",
-                "1",
-            ]),
+            Self::WasmSmokeBuild { package, binary } => {
+                wasm_smoke_build(package, binary)
+            },
+            Self::WorkspaceMetadata => Ok(WORKSPACE_METADATA.to_vec()),
         }
     }
 }
@@ -579,6 +591,54 @@ fn graph<'input>(
     ])
 }
 
+fn wasm_smoke_build<'input>(
+    package: &'input str,
+    binary: &'input str,
+) -> Result<Vec<&'input str>, InvalidRequest> {
+    if !identifier(package) || !identifier(binary) {
+        return Err(InvalidRequest);
+    }
+    Ok(vec![
+        "build",
+        "--locked",
+        "--release",
+        "--target",
+        "wasm32-unknown-unknown",
+        "--target-dir",
+        "target",
+        "--no-default-features",
+        "-p",
+        package,
+        "--bin",
+        binary,
+    ])
+}
+
+fn wasm_smoke_runner(binary: &str) -> Result<Arguments, InvalidRequest> {
+    const SCRIPT: &str = concat!(
+        "const fs = require('node:fs'); ",
+        "const m = new WebAssembly.Module(fs.readFileSync(process.argv[1])); ",
+        "const instance = new WebAssembly.Instance(m, {}); ",
+        "if (instance.exports.main(0, 0) !== 0) ",
+        "throw new Error('WebAssembly core smoke failed'); ",
+        "console.log('WebAssembly core smoke passed');",
+    );
+    if !identifier(binary) {
+        return Err(InvalidRequest);
+    }
+    Ok(Arguments {
+        args: vec![
+            "--no-addons".into(),
+            "--eval".into(),
+            SCRIPT.into(),
+            "--".into(),
+            format!("target/wasm32-unknown-unknown/release/{binary}.wasm")
+                .into(),
+        ],
+        program: "node",
+    })
+}
+
 fn portable<'input>(
     packages: &[&'input str],
     target: Target,
@@ -710,6 +770,23 @@ mod tests {
         for invalid in ["", "--help", "a/b", "a b", "a,b"] {
             assert!(Request::ClippyPackage(invalid).admit().is_err());
             assert!(Request::RuntimeGraph(invalid).admit().is_err());
+            assert!(Request::WasmSmokeRun(invalid).admit().is_err());
+            assert!(
+                Request::WasmSmokeBuild {
+                    package: invalid,
+                    binary: "smoke",
+                }
+                .admit()
+                .is_err()
+            );
+            assert!(
+                Request::WasmSmokeBuild {
+                    package: "title",
+                    binary: invalid,
+                }
+                .admit()
+                .is_err()
+            );
             assert!(
                 Request::Portable {
                     packages: &[invalid],
@@ -769,6 +846,45 @@ mod tests {
                 "--prefix",
                 "none",
             ]
+        {
+            return Err(InvalidRequest);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wasm_smoke_requests_link_and_execute_the_same_fixed_artifact()
+    -> Result<(), InvalidRequest> {
+        let build = Request::WasmSmokeBuild {
+            package: "game-example",
+            binary: "core-smoke",
+        }
+        .admit()?;
+        if build.program() != "cargo"
+            || build.args()
+                != [
+                    "build",
+                    "--locked",
+                    "--release",
+                    "--target",
+                    "wasm32-unknown-unknown",
+                    "--target-dir",
+                    "target",
+                    "--no-default-features",
+                    "-p",
+                    "game-example",
+                    "--bin",
+                    "core-smoke",
+                ]
+        {
+            return Err(InvalidRequest);
+        }
+        let run = Request::WasmSmokeRun("core-smoke").admit()?;
+        if run.program() != "node"
+            || run.args().last()
+                != Some(&OsString::from(
+                    "target/wasm32-unknown-unknown/release/core-smoke.wasm",
+                ))
         {
             return Err(InvalidRequest);
         }

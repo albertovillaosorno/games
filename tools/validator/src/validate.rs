@@ -198,6 +198,19 @@ fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
     }
     validate_feature_graphs(root, &packages, log)?;
     validate_portable(root, &packages, log)?;
+    execute(
+        root,
+        Request::WasmSmokeBuild {
+            package: "games-simpsons-arcade",
+            binary: "simpsons-arcade-core-smoke",
+        },
+        log,
+    )?;
+    execute(
+        root,
+        Request::WasmSmokeRun("simpsons-arcade-core-smoke"),
+        log,
+    )?;
     let paths = files::authored(root)?;
     let markdown: Vec<_> = paths
         .iter()

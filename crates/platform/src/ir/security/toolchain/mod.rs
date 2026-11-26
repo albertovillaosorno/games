@@ -141,6 +141,8 @@ pub enum ValidationTool {
     Git,
     /// Markdown policy checker.
     Markdown,
+    /// WebAssembly executable smoke host.
+    Node,
     /// Source inventory search.
     Ripgrep,
     /// Rust compiler identity.
@@ -169,6 +171,7 @@ impl ValidationTool {
             Self::Clippy => ("cargo", &["clippy", "-V"]),
             Self::Git => ("git", &["--version"]),
             Self::Markdown => ("markdownlint-cli2", &["--version"]),
+            Self::Node => ("node", &["--version"]),
             Self::Ripgrep => ("rg", &["--version"]),
             Self::Rustc => ("rustc", &["-vV"]),
             Self::Rustfmt => ("cargo", &["+nightly", "fmt", "--version"]),

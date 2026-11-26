@@ -126,6 +126,7 @@ fn tool_versions(
         ValidationTool::Rustfmt,
         ValidationTool::RustupTargets,
         ValidationTool::Markdown,
+        ValidationTool::Node,
         ValidationTool::Ripgrep,
         ValidationTool::Git,
     ] {
