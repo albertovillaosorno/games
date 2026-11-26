@@ -45,6 +45,7 @@ use super::worker::{
 };
 use super::{PendingConnection, SecureLanListener, SendProgress, ServerTls};
 use crate::ir::lan::pump::{PumpBackend, PumpProgress, RemoteEvent};
+use crate::ir::security::lan::LanLimits;
 use crate::ir::security::lan::host_binding::HostBindRequest;
 use crate::software::linux::performance::now;
 
@@ -107,9 +108,9 @@ impl PollTask {
 /// queue or renew an inbound lease. It does not publish world state.
 #[derive(Debug)]
 pub(super) struct HostInputPump<Message> {
-    frame_budget: usize,
     idle_timeout: Option<Duration>,
     in_flight: BTreeMap<u64, PollKind>,
+    limits: LanLimits,
     listener: SecureLanListener,
     next_request: u64,
     ready: VecDeque<PollTask>,
@@ -170,9 +171,9 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         let listener = SecureLanListener::bind(address, settings, tls)?;
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
-            frame_budget: limits.max_message_bytes.get(),
             idle_timeout,
             in_flight: BTreeMap::new(),
+            limits: settings.limits(),
             listener,
             next_request: 0,
             ready: VecDeque::new(),
@@ -414,9 +415,7 @@ impl<Message: Send + 'static> PumpBackend<Message> for HostInputPump<Message> {
     /// # Errors
     /// Rejects oversized replies and unavailable or already busy peers.
     fn queue_reply(&mut self, peer: u64, bytes: Vec<u8>) -> io::Result<()> {
-        if bytes.len() > self.frame_budget {
-            return Err(ErrorKind::InvalidInput.into());
-        }
+        let _length = self.limits.outbound_length(bytes.len())?;
         for task in &mut self.ready {
             if let PollKind::Receive(actual, deadline) = task.kind
                 && actual == peer
@@ -643,9 +642,15 @@ mod tests {
         first.send(b"M\x05")?;
         expect_message(&mut pump, 1, 5)?;
         require(
-            pump.queue_reply(1, vec![0; pump.frame_budget.saturating_add(1)])
-                .err()
-                .map(|error| error.kind())
+            pump.queue_reply(1, vec![
+                0;
+                session_config(true)
+                    .max_message_bytes
+                    .get()
+                    .saturating_add(1)
+            ])
+            .err()
+            .map(|error| error.kind())
                 == Some(ErrorKind::InvalidInput),
             "oversized reply rejected without consuming the receive slot",
         )?;

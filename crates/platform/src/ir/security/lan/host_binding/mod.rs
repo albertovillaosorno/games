@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable client approval, host binding and initial roster admission.
+//   - Portable client approval, host binding and remote observations.
 // - Must-Not:
 //   - Acquire sockets, authenticate credentials or read native clocks.
 // - Allows:
 //   - Inputs: Explicit host endpoint, enrolled and local identities, limits.
-//   - Outputs: Admitted request and uniquely allocated initial roster.
+//   - Outputs: Admitted requests, rosters and ordered remote observations.
 //   - Side effects: Bounded in-memory allocation for approved identities.
 // - Split-When:
 //   - A distinct host capability needs another initial roster policy.
@@ -37,9 +37,9 @@ use std::time::Duration;
 
 use games::network::{PeerKind, Session, SessionConfig, SessionError};
 
-use super::{LanAdmissionError, admit_endpoint};
+use super::{LanAdmissionError, LanLimits, admit_endpoint};
 use crate::ir::lan::identity::PublicIdentity;
-use crate::ir::lan::pump::HostInputConfig;
+use crate::ir::lan::pump::{HostInputConfig, RemoteEvent};
 use crate::ir::lan::{LanConfig, PeerFingerprint};
 
 /// Host admission rejection before any native resource access.
@@ -209,7 +209,7 @@ impl HostBindRequest {
         approved: &BTreeSet<PeerFingerprint>,
     ) -> Result<Self, HostAdmissionError> {
         admit_endpoint(config.address)?;
-        let transport = LanConfig::from_limits(super::LanLimits::new(
+        let transport = LanConfig::from_limits(LanLimits::new(
             config.session,
             config.timeout,
         )?);
@@ -240,6 +240,134 @@ impl HostBindRequest {
     pub const fn transport(&self) -> LanConfig {
         self.transport
     }
+}
+
+/// Rejection of a transport observation or reply request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HostObservationError {
+    Lan(LanAdmissionError),
+    UnavailablePeer,
+    UnexpectedAddress,
+    UnexpectedEvent,
+}
+
+#[derive(Debug, Default)]
+struct RemoteObservation {
+    active: bool,
+    last_completed: Option<Duration>,
+}
+
+/// Observable remote membership and the admitted binding contract.
+pub(crate) struct PumpAdmission {
+    address: SocketAddr,
+    limits: LanLimits,
+    peers: BTreeMap<u64, RemoteObservation>,
+}
+
+impl PumpAdmission {
+    pub(crate) fn address(
+        &self,
+        observed: SocketAddr,
+    ) -> Result<SocketAddr, HostObservationError> {
+        if !matches_binding(self.address, observed) {
+            return Err(HostObservationError::UnexpectedAddress);
+        }
+        Ok(self.address)
+    }
+
+    pub(crate) fn admit_address(
+        &mut self,
+        observed: SocketAddr,
+    ) -> Result<(), HostObservationError> {
+        if !matches_binding(self.address, observed) {
+            return Err(HostObservationError::UnexpectedAddress);
+        }
+        self.address = observed;
+        Ok(())
+    }
+
+    pub(crate) fn admit_event<Message>(
+        &mut self,
+        event: &RemoteEvent<Message>,
+    ) -> Result<(), HostObservationError> {
+        let peer = match *event {
+            RemoteEvent::Connected(peer)
+            | RemoteEvent::Disconnected { peer, .. }
+            | RemoteEvent::Message { peer, .. } => peer,
+        };
+        let state = self
+            .peers
+            .get_mut(&peer)
+            .ok_or(HostObservationError::UnexpectedEvent)?;
+        match *event {
+            RemoteEvent::Connected(_) if !state.active => {
+                state.active = true;
+            },
+            RemoteEvent::Disconnected { .. } if state.active => {
+                state.active = false;
+            },
+            RemoteEvent::Message { completed_at, .. }
+                if state.active
+                    && state
+                        .last_completed
+                        .is_none_or(|last| completed_at >= last) =>
+            {
+                state.last_completed = Some(completed_at);
+            },
+            RemoteEvent::Connected(_)
+            | RemoteEvent::Disconnected { .. }
+            | RemoteEvent::Message { .. } => {
+                return Err(HostObservationError::UnexpectedEvent);
+            },
+        }
+        Ok(())
+    }
+
+    pub(crate) fn admit_reply(
+        &self,
+        peer: u64,
+        length: usize,
+    ) -> Result<(), HostObservationError> {
+        let _length = self
+            .limits
+            .outbound_length(length)
+            .map_err(HostObservationError::Lan)?;
+        if !self.peers.get(&peer).is_some_and(|state| state.active) {
+            return Err(HostObservationError::UnavailablePeer);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn new(request: &HostBindRequest) -> Self {
+        let peers = request
+            .roster
+            .enrolled
+            .values()
+            .copied()
+            .map(|peer| (peer, RemoteObservation::default()))
+            .collect();
+        Self {
+            address: request.address(),
+            limits: request.transport().limits(),
+            peers,
+        }
+    }
+}
+
+fn matches_binding(requested: SocketAddr, observed: SocketAddr) -> bool {
+    let same_interface = match (requested, observed) {
+        (SocketAddr::V4(left), SocketAddr::V4(right)) => {
+            left.ip() == right.ip()
+        },
+        (SocketAddr::V6(left), SocketAddr::V6(right)) => {
+            left.ip() == right.ip() && left.scope_id() == right.scope_id()
+        },
+        (SocketAddr::V4(_), SocketAddr::V6(_))
+        | (SocketAddr::V6(_), SocketAddr::V4(_)) => false,
+    };
+    same_interface
+        && observed.port() != 0
+        && (requested.port() == 0 || requested.port() == observed.port())
 }
 
 fn enrolment_map(
@@ -273,7 +401,7 @@ fn local_session(
 
 #[cfg(test)]
 mod tests {
-    use core::net::{IpAddr, Ipv4Addr};
+    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV6};
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use super::*;
@@ -430,6 +558,20 @@ mod tests {
         let accepted =
             HostBindRequest::new(request(&[(FIRST, 1)]), &approved());
         assert!(accepted.is_ok());
+    }
+
+    #[test]
+    fn observed_binding_preserves_ipv6_interface_scope() {
+        let ip = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
+        let requested = SocketAddr::V6(SocketAddrV6::new(ip, 0, 0, 3));
+        let assigned = SocketAddr::V6(SocketAddrV6::new(ip, 42, 0, 3));
+        let wrong_scope = SocketAddr::V6(SocketAddrV6::new(ip, 42, 0, 4));
+        let wrong_port = SocketAddr::V6(SocketAddrV6::new(ip, 43, 0, 3));
+        assert!(matches_binding(requested, assigned));
+        assert!(!matches_binding(requested, wrong_scope));
+        assert!(!matches_binding(requested, LOOPBACK));
+        assert!(!matches_binding(assigned, wrong_port));
+        assert!(!matches_binding(assigned, requested));
     }
 
     #[test]

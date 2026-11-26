@@ -793,3 +793,12 @@ frames, and rejection without dispatch. Native TLS remains responsible
 for certificate and wire authentication. Fresh native-enabled validation
 1795660768109552625-3969552 passed 1683 aggregate test executions and
 all six portable core checks.
+
+The portable host pump now admits the observed bound address and exact
+approved remote identities. It rejects impossible connection transitions,
+reversed message completion times and replies outside active membership
+or the admitted frame budget. Synthetic ports cover ephemeral and fixed
+bindings, IPv6 scope, disconnect and rejoin, and reply rejection. Native
+scheduling retains its bounded operation queue. Fresh native validation
+1795660931495701582-3992274 passed 1691 aggregate test executions and
+all six portable core checks. Physical multi-device play remains open.
