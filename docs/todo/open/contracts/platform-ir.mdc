@@ -414,3 +414,15 @@ changing fixed-step simulation. Visible play remains uncapped. Fresh
 native validation 1795653139586277029-1875658 passed 1,527 aggregate
 test executions and six portable core checks. Original-backed X11 and
 offscreen OpenGL ES observations are in the Simpsons task record.
+
+The PCM playback contract now admits backend queue observations in complete
+sample frames and rejects partial-frame or over-budget results before
+submitting any more samples. Mixed samples and bounded canonical PCM
+ranges pass the same typed admission before native dispatch. The arcade
+preview and contributor audio diagnostic now use frame counts instead of
+native byte widths; their queue budgets and sample mixing are unchanged.
+In-memory regressions exercise caller-selected channel counts, malformed
+observations, backend rejection and successful retry. Fresh X11 and
+dummy-audio validation 1795653896779320717-2105317 passed 1,551 aggregate
+test executions and all six portable core checks. Physical audio and
+non-Linux native audio support remain unverified.

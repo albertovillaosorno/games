@@ -36,7 +36,9 @@ use std::num::{NonZeroU8, NonZeroU16, NonZeroU32};
 
 use games_assets::pcm::PcmSamples;
 
-use super::security::audio::{PlaybackRequest, QueueLayout, validate_devices};
+use super::security::audio::{
+    AdmittedSamples, PlaybackRequest, QueueLayout, validate_devices,
+};
 
 /// Explicit audio playback configuration and software-queue budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +68,8 @@ pub enum PlaybackError {
     InvalidDevice,
     /// An empty, incomplete or out-of-range frame submission.
     InvalidFrames,
+    /// The backend reported queue occupancy outside the admitted layout.
+    InvalidQueue,
     /// The requested playback configuration is not representable.
     InvalidSpec,
     /// No playback adapter is available for the selected host.
@@ -90,7 +94,10 @@ pub(crate) trait PlaybackBackend: Debug {
     /// Stop consuming queued samples.
     fn pause(&self);
     /// Submit admitted complete frames.
-    fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError>;
+    fn queue_samples(
+        &self,
+        samples: AdmittedSamples<'_>,
+    ) -> Result<(), PlaybackError>;
     /// Observe current software-queue occupancy.
     fn queued_bytes(&self) -> u32;
     /// Begin consuming queued samples.
@@ -181,7 +188,7 @@ impl NativeAudio {
     /// Scratch storage is reused, and only the admitted range is decoded.
     ///
     /// # Errors
-    /// Rejects incompatible PCM, invalid ranges, capacity or backend failure.
+    /// Rejects incompatible PCM, invalid ranges, queue or backend failure.
     pub fn queue_pcm(
         &mut self,
         pcm: &PcmSamples<'_>,
@@ -189,31 +196,34 @@ impl NativeAudio {
         frames: NonZeroU32,
     ) -> Result<(), PlaybackError> {
         let range = self.layout.pcm_range(pcm, start, frames)?;
-        self.layout
-            .admit(range.len(), self.backend.queued_bytes())?;
+        let queued = self.backend.queued_bytes();
+        self.layout.admit(range.len(), queued)?;
         self.scratch.clear();
         self.scratch
             .try_reserve_exact(range.len())
             .map_err(|_error| PlaybackError::Allocation)?;
         self.scratch
             .extend(pcm.samples().skip(range.start).take(range.len()));
-        self.backend.queue_samples(&self.scratch)
+        let admitted = self.layout.admit_samples(&self.scratch, queued)?;
+        self.backend.queue_samples(admitted)
     }
 
     /// Enqueue already mixed interleaved signed 16-bit sample frames.
     ///
     /// # Errors
-    /// Rejects empty or incomplete frames, capacity or backend failure.
+    /// Rejects empty or incomplete frames, queue or backend failure.
     pub fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError> {
-        self.layout
-            .admit(samples.len(), self.backend.queued_bytes())?;
-        self.backend.queue_samples(samples)
+        let admitted = self
+            .layout
+            .admit_samples(samples, self.backend.queued_bytes())?;
+        self.backend.queue_samples(admitted)
     }
 
-    /// Number of sample bytes pending in the native software queue.
-    #[must_use]
-    pub fn queued_bytes(&self) -> u32 {
-        self.backend.queued_bytes()
+    /// Number of complete sample frames pending in the software queue.
+    /// # Errors
+    /// Rejects malformed or out-of-budget backend observations.
+    pub fn queued_frames(&self) -> Result<u32, PlaybackError> {
+        self.layout.queued_frames(self.backend.queued_bytes())
     }
 
     /// Begin consuming software-queued frames.
@@ -275,8 +285,10 @@ mod tests {
 
     #[derive(Debug)]
     struct FakeBackend {
+        observation: Cell<Option<u32>>,
         paused: Cell<bool>,
         samples: RefCell<Vec<i16>>,
+        submission_fails: Cell<bool>,
     }
 
     impl PlaybackBackend for Rc<FakeBackend> {
@@ -292,15 +304,25 @@ mod tests {
             self.paused.set(true);
         }
 
-        fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError> {
-            self.samples.borrow_mut().extend_from_slice(samples);
+        fn queue_samples(
+            &self,
+            samples: AdmittedSamples<'_>,
+        ) -> Result<(), PlaybackError> {
+            if self.submission_fails.get() {
+                return Err(PlaybackError::Backend(String::from("rejected")));
+            }
+            self.samples
+                .borrow_mut()
+                .extend_from_slice(samples.samples());
             Ok(())
         }
 
         fn queued_bytes(&self) -> u32 {
-            u32::try_from(self.samples.borrow().len())
-                .unwrap_or(u32::MAX)
-                .saturating_mul(2)
+            self.observation.get().unwrap_or_else(|| {
+                u32::try_from(self.samples.borrow().len())
+                    .unwrap_or(u32::MAX)
+                    .saturating_mul(2)
+            })
         }
 
         fn resume(&self) {
@@ -312,8 +334,10 @@ mod tests {
 
     fn fake() -> Result<FakePlayback, PlaybackError> {
         let backend = Rc::new(FakeBackend {
+            observation: Cell::new(None),
             paused: Cell::new(true),
             samples: RefCell::new(Vec::new()),
+            submission_fails: Cell::new(false),
         });
         let handle = NativeAudio {
             backend: Box::new(Rc::clone(&backend)),
@@ -350,10 +374,60 @@ mod tests {
             return Err(PlaybackError::FormatMismatch);
         }
         handle.queue_samples(&[2, 3, 4, 5])?;
-        if handle.queued_bytes() != 12
+        if handle.queued_frames()? != 3
             || handle.queue_samples(&[6, 7]) != Err(PlaybackError::Capacity)
             || handle.queue_samples(&[6]) != Err(PlaybackError::InvalidFrames)
             || state.samples.borrow().as_slice() != [1, -1, 2, 3, 4, 5]
+        {
+            return Err(PlaybackError::InvalidFrames);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_queue_observations_never_dispatch_samples()
+    -> Result<(), PlaybackError> {
+        let (mut handle, state) = fake()?;
+        let source = pcm()?;
+        for bytes in [1, 2, 5, 16, u32::MAX] {
+            state.observation.set(Some(bytes));
+            if handle.queued_frames() != Err(PlaybackError::InvalidQueue)
+                || handle.queue_samples(&[1, -1])
+                    != Err(PlaybackError::InvalidQueue)
+                || handle.queue_pcm(&source, 0, NonZeroU32::MIN)
+                    != Err(PlaybackError::InvalidQueue)
+                || !state.samples.borrow().is_empty()
+            {
+                return Err(PlaybackError::Backend(format!(
+                    "invalid observation admitted: {bytes}"
+                )));
+            }
+        }
+        state.observation.set(None);
+        handle.queue_pcm(&source, 0, NonZeroU32::MIN)?;
+        if handle.queued_frames()? != 1 {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn backend_rejection_is_reported_without_consuming_queue_budget()
+    -> Result<(), PlaybackError> {
+        let (mut handle, state) = fake()?;
+        let source = pcm()?;
+        state.submission_fails.set(true);
+        let error = PlaybackError::Backend(String::from("rejected"));
+        if handle.queue_samples(&[1, -1]) != Err(error.clone())
+            || handle.queue_pcm(&source, 1, NonZeroU32::MIN) != Err(error)
+            || handle.queued_frames()? != 0
+        {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        state.submission_fails.set(false);
+        handle.queue_pcm(&source, 1, NonZeroU32::MIN)?;
+        if handle.queued_frames()? != 1
+            || state.samples.borrow().as_slice() != [1, -1]
         {
             return Err(PlaybackError::InvalidFrames);
         }
@@ -373,7 +447,7 @@ mod tests {
             return Err(PlaybackError::InvalidSpec);
         }
         handle.clear();
-        if handle.queued_bytes() != 0 || state.paused.get() {
+        if handle.queued_frames()? != 0 || state.paused.get() {
             return Err(PlaybackError::InvalidFrames);
         }
         handle.pause();

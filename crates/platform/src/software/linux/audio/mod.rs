@@ -38,7 +38,9 @@ use sdl2::audio::{AudioFormat, AudioQueue, AudioSpecDesired};
 use crate::ir::audio::{
     AudioDevices, PlaybackBackend, PlaybackError, PlaybackPort,
 };
-use crate::ir::security::audio::{PlaybackRequest, admit_device_count};
+use crate::ir::security::audio::{
+    AdmittedSamples, PlaybackRequest, admit_device_count,
+};
 
 /// Native device ownership; format and queue admission belong to the IR.
 struct AudioBackend {
@@ -66,9 +68,12 @@ impl PlaybackBackend for AudioBackend {
         self.device.pause();
     }
 
-    fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError> {
+    fn queue_samples(
+        &self,
+        samples: AdmittedSamples<'_>,
+    ) -> Result<(), PlaybackError> {
         self.device
-            .queue_audio(samples)
+            .queue_audio(samples.samples())
             .map_err(PlaybackError::Backend)
     }
 
@@ -174,18 +179,18 @@ mod tests {
             "unexpected default output",
         )?;
         let source = pcm()?;
-        require(audio.queued_bytes() == 0, "expected empty queue")?;
+        require(audio.queued_frames()? == 0, "expected empty queue")?;
         audio.queue_pcm(&source, 1, NonZeroU32::MIN)?;
-        require(audio.queued_bytes() == 4, "PCM range not queued")?;
+        require(audio.queued_frames()? == 1, "PCM range not queued")?;
         audio.queue_samples(&[0, 0, 1, -1])?;
-        require(audio.queued_bytes() == 12, "queue size changed")?;
+        require(audio.queued_frames()? == 3, "queue size changed")?;
         require(
             audio.queue_samples(&[0, 0]) == Err(PlaybackError::Capacity),
             "queue overflow accepted",
         )?;
-        require(audio.queued_bytes() == 12, "queue size changed")?;
+        require(audio.queued_frames()? == 3, "queue size changed")?;
         audio.clear();
-        require(audio.queued_bytes() == 0, "expected empty queue")?;
+        require(audio.queued_frames()? == 0, "expected empty queue")?;
         audio.resume();
         audio.pause();
         drop(audio);

@@ -171,8 +171,7 @@ impl<'samples> Playback<'samples> {
     fn fill(&mut self) -> Result<(), RenderError> {
         for _ in 0..MAX_CHUNKS {
             if self.mixer.active() == 0
-                || self.device.queued_bytes()
-                    > QUEUE_FRAMES.saturating_sub(256).saturating_mul(4)
+                || self.queued_frames()? > QUEUE_FRAMES.saturating_sub(256)
             {
                 break;
             }
@@ -214,6 +213,10 @@ impl<'samples> Playback<'samples> {
         })
     }
 
+    fn queued_frames(&self) -> Result<u32, RenderError> {
+        self.device.queued_frames().map_err(failure)
+    }
+
     fn set_running(&mut self, running: bool) {
         if self.running != running {
             if running {
@@ -228,14 +231,14 @@ impl<'samples> Playback<'samples> {
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
         let mut simulation = smoke_entry()?;
         self.update(simulation.state())?;
-        if self.device.queued_bytes() != 0 {
+        if self.queued_frames()? != 0 {
             return Err(failure("entry incorrectly triggered attack audio"));
         }
         let _first = simulation
             .advance(TICK_INTERVAL.saturating_mul(4))
             .map_err(failure)?;
         self.update(simulation.state())?;
-        if self.device.queued_bytes() != 0 {
+        if self.queued_frames()? != 0 {
             return Err(failure("attack audio started before cue"));
         }
         let _cue = simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -263,7 +266,7 @@ impl<'samples> Playback<'samples> {
         }
         if self.cues != [1; 4]
             || self.mixer.active() != 0
-            || self.device.queued_bytes() != 0
+            || self.queued_frames()? != 0
         {
             return Err(failure("held attack repeated or audio did not drain"));
         }
@@ -304,7 +307,7 @@ impl<'samples> Playback<'samples> {
         smoke_press(&mut controls, simulation, Control::Pause)?;
         self.device.clear();
         self.update(simulation.state())?;
-        if self.device.queued_bytes() != 0 || self.mixer.active() != 4 {
+        if self.queued_frames()? != 0 || self.mixer.active() != 4 {
             return Err(failure("paused audio advanced"));
         }
         smoke_press(&mut controls, simulation, Control::Pause)?;
@@ -340,13 +343,13 @@ impl<'samples> Playback<'samples> {
         }
         self.update(simulation.state())?;
         if simulation.state().phase() != Phase::MainMenu
-            || self.device.queued_bytes() != 0
+            || self.queued_frames()? != 0
             || self.mixer.active() != 0
         {
             return Err(failure(format!(
                 "reset retained stale audio: {:?}, {}, {}",
                 simulation.state().phase(),
-                self.device.queued_bytes(),
+                self.queued_frames()?,
                 self.mixer.active()
             )));
         }
@@ -370,7 +373,7 @@ impl<'samples> Playback<'samples> {
         self.set_running(self.live_output && playing);
         if matches!(phase, Phase::MainMenu | Phase::Exited) {
             self.cues = current;
-            if self.device.queued_bytes() != 0 {
+            if self.queued_frames()? != 0 {
                 self.device.clear();
             }
             self.mixer.clear();
@@ -397,7 +400,7 @@ impl<'samples> Playback<'samples> {
     fn verify_quiet(&self) -> Result<(), RenderError> {
         if self.cues != [0; 4]
             || self.mixer.active() != 0
-            || self.device.queued_bytes() != 0
+            || self.queued_frames()? != 0
         {
             return Err(failure("audio played before an admitted cue"));
         }
@@ -406,7 +409,7 @@ impl<'samples> Playback<'samples> {
 
     fn verify_submission(&self, active: usize) -> Result<(), RenderError> {
         if self.mixer.active() != active
-            || self.device.queued_bytes() != QUEUE_FRAMES.saturating_mul(4)
+            || self.queued_frames()? != QUEUE_FRAMES
             || self.scratch.iter().all(|frame| *frame == [0, 0])
         {
             return Err(failure("unexpected native attack audio submission"));

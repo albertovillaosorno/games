@@ -233,11 +233,13 @@ fn verify_mix(
         device
             .queue_samples(samples)
             .map_err(|error| format!("queue: {error:?}"))?;
-        let expected_bytes = u32::try_from(count)
-            .ok()
-            .and_then(|value| value.checked_mul(4))
-            .ok_or_else(|| String::from("queue size overflow"))?;
-        if device.queued_bytes() != expected_bytes {
+        let expected_frames = u32::try_from(count)
+            .map_err(|_error| String::from("queue size overflow"))?;
+        if device
+            .queued_frames()
+            .map_err(|error| format!("queue: {error:?}"))?
+            != expected_frames
+        {
             return Err(String::from("native queue extent differs"));
         }
         device.clear();

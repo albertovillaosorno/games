@@ -79,10 +79,25 @@ impl<'device> PlaybackRequest<'device> {
     }
 }
 
+/// Complete interleaved samples admitted against the current queue budget.
+#[derive(Clone, Copy, Debug)]
+pub struct AdmittedSamples<'samples> {
+    samples: &'samples [i16],
+}
+
+impl<'samples> AdmittedSamples<'samples> {
+    /// The exact admitted signed PCM slice.
+    #[must_use]
+    pub const fn samples(self) -> &'samples [i16] {
+        self.samples
+    }
+}
+
 /// Validated PCM queue geometry and admission policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QueueLayout {
     channels: usize,
+    frame_bytes: u32,
     frequency: i32,
     max_bytes: u32,
     spec: PlaybackSpec,
@@ -91,7 +106,7 @@ pub struct QueueLayout {
 impl QueueLayout {
     /// Admit complete interleaved samples within remaining queue capacity.
     /// # Errors
-    /// Rejects partial frames or exceeded queue limits.
+    /// Rejects partial frames, invalid observations or exceeded queue limits.
     pub fn admit(
         self,
         samples: usize,
@@ -100,14 +115,27 @@ impl QueueLayout {
         if samples == 0 || !samples.is_multiple_of(self.channels) {
             return Err(PlaybackError::InvalidFrames);
         }
-        let bytes = u32::try_from(samples)
-            .ok()
-            .and_then(|count| count.checked_mul(2))
+        let queued = self.queued_frames(queued_bytes)?;
+        let frames = samples
+            .checked_div(self.channels)
+            .and_then(|count| u32::try_from(count).ok())
             .ok_or(PlaybackError::Capacity)?;
-        if bytes > self.max_bytes.saturating_sub(queued_bytes) {
+        if frames > self.spec.max_queued_frames.get().saturating_sub(queued) {
             return Err(PlaybackError::Capacity);
         }
         Ok(())
+    }
+
+    /// Admit complete samples and bind the verified slice for dispatch.
+    /// # Errors
+    /// Rejects incomplete frames, invalid observations or queue overflow.
+    pub fn admit_samples(
+        self,
+        samples: &[i16],
+        queued_bytes: u32,
+    ) -> Result<AdmittedSamples<'_>, PlaybackError> {
+        self.admit(samples.len(), queued_bytes)?;
+        Ok(AdmittedSamples { samples })
     }
 
     /// Checked signed sample rate for the backend request.
@@ -128,14 +156,16 @@ impl QueueLayout {
         }
         let frequency = i32::try_from(spec.sample_rate.get())
             .map_err(|_error| PlaybackError::InvalidSpec)?;
+        let frame_bytes =
+            NonZeroU32::from(spec.channels).get().saturating_mul(2);
         let max_bytes = spec
             .max_queued_frames
             .get()
-            .checked_mul(NonZeroU32::from(spec.channels).get())
-            .and_then(|count| count.checked_mul(2))
+            .checked_mul(frame_bytes)
             .ok_or(PlaybackError::InvalidSpec)?;
         Ok(Self {
             channels: NonZeroUsize::from(spec.channels).get(),
+            frame_bytes,
             frequency,
             max_bytes,
             spec,
@@ -169,6 +199,23 @@ impl QueueLayout {
             .and_then(|value| value.checked_mul(self.channels))
             .ok_or(PlaybackError::InvalidFrames)?;
         Ok(first..last)
+    }
+
+    /// Validate a backend byte observation and express it in sample frames.
+    /// # Errors
+    /// Rejects partial frames and observations beyond the admitted budget.
+    pub fn queued_frames(
+        self,
+        queued_bytes: u32,
+    ) -> Result<u32, PlaybackError> {
+        if queued_bytes > self.max_bytes
+            || !queued_bytes.is_multiple_of(self.frame_bytes)
+        {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        queued_bytes
+            .checked_div(self.frame_bytes)
+            .ok_or(PlaybackError::InvalidQueue)
     }
 
     /// Original playback request admitted by this layout.
@@ -247,18 +294,66 @@ mod tests {
     }
 
     #[test]
-    fn rejects_incomplete_frames_and_software_queue_overflow() {
-        let checked = QueueLayout::new(configuration());
-        assert!(checked.is_ok());
-        let Ok(layout) = checked else {
-            return;
-        };
-        assert_eq!(layout.admit(0, 0), Err(PlaybackError::InvalidFrames));
-        assert_eq!(layout.admit(1, 0), Err(PlaybackError::InvalidFrames));
-        assert_eq!(layout.admit(6, 0), Ok(()));
-        assert_eq!(layout.admit(4, 4), Ok(()));
-        assert_eq!(layout.admit(4, 5), Err(PlaybackError::Capacity));
-        assert_eq!(layout.admit(2, u32::MAX), Err(PlaybackError::Capacity));
+    fn rejects_incomplete_frames_and_software_queue_overflow()
+    -> Result<(), PlaybackError> {
+        let layout = QueueLayout::new(configuration())?;
+        for (samples, queued, expected) in [
+            (0, 0, Err(PlaybackError::InvalidFrames)),
+            (1, 0, Err(PlaybackError::InvalidFrames)),
+            (6, 0, Ok(())),
+            (4, 4, Ok(())),
+            (4, 8, Err(PlaybackError::Capacity)),
+            (4, 5, Err(PlaybackError::InvalidQueue)),
+            (2, u32::MAX, Err(PlaybackError::InvalidQueue)),
+        ] {
+            let actual = layout.admit(samples, queued);
+            if actual != expected {
+                return Err(PlaybackError::Backend(format!(
+                    "admission: expected {expected:?}, observed {actual:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn frame_occupancy_preserves_caller_selected_channel_geometry()
+    -> Result<(), PlaybackError> {
+        for channels in [1u8, 2, 6, u8::MAX] {
+            verify_channel_layout(channels)?;
+        }
+        Ok(())
+    }
+
+    fn verify_channel_layout(channels: u8) -> Result<(), PlaybackError> {
+        let layout = QueueLayout::new(PlaybackSpec {
+            channels: NonZeroU8::new(channels).unwrap_or(NonZeroU8::MIN),
+            ..configuration()
+        })?;
+        let bytes = u32::from(channels).saturating_mul(2);
+        let samples = usize::from(channels).saturating_mul(2);
+        for (queued, expected) in [
+            (0, Ok(0)),
+            (bytes, Ok(1)),
+            (bytes.saturating_mul(3), Ok(3)),
+            (bytes.saturating_sub(1), Err(PlaybackError::InvalidQueue)),
+            (bytes.saturating_mul(4), Err(PlaybackError::InvalidQueue)),
+        ] {
+            let actual = layout.queued_frames(queued);
+            if actual != expected {
+                return Err(PlaybackError::Backend(format!(
+                    "{channels} channels: expected {expected:?}, \
+                     observed {actual:?}"
+                )));
+            }
+        }
+        if layout.admit(samples, bytes).is_err()
+            || layout.admit(samples, bytes.saturating_mul(2))
+                != Err(PlaybackError::Capacity)
+        {
+            return Err(PlaybackError::Capacity);
+        }
+        Ok(())
     }
 
     #[test]
