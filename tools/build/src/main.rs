@@ -98,6 +98,11 @@ const USAGE: &str = concat!(
     "TOTAL_BYTES COUNT TEMPLATE TEMPLATE_BYTES fields:KEY,... ",
     "STAGE_ENTRY STAGE_TOTAL STAGE_COUNT last-token SIDECAR_BYTES ",
     "[POSE_FILE POSE_BYTES]\n",
+    "games-build bundle migration-verify TITLE LEGACY_ROOT ",
+    "STORE_ENTRIES STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES ",
+    "TOTAL_BYTES COUNT TEMPLATE TEMPLATE_BYTES fields:KEY,... ",
+    "STAGE_ENTRY STAGE_TOTAL STAGE_COUNT last-token SIDECAR_BYTES ",
+    "[POSE_FILE POSE_BYTES]\n",
     "games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle replace-media PARENT BASE_SHA256 KEY ",
@@ -348,6 +353,9 @@ impl Command {
             ))),
             "migration-publish" => Ok(Self::MigrationRehearsal(Box::new(
                 store_migration::rehearsal::Rehearsal::parse_publish(args)?,
+            ))),
+            "migration-verify" => Ok(Self::MigrationRehearsal(Box::new(
+                store_migration::rehearsal::Rehearsal::parse_verify(args)?,
             ))),
             "upgrade" => Self::parse_upgrade(args),
             "replace-media" => {

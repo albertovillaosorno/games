@@ -47,6 +47,7 @@ use crate::ir::storage::bundle::{
     CanonicalBundle, MANIFEST_NAME, OBJECT_PAYLOAD, OBJECTS_DIRECTORY,
     PAYLOADS_DIRECTORY, bundle_name,
 };
+use crate::ir::storage::file::snapshot;
 use crate::ir::storage::{PathKind, directory_entries, join_path};
 
 /// Explicit source selection for migration; its parent must remain trusted.
@@ -116,6 +117,65 @@ pub struct MigrationMetadata<'input> {
     pub files: &'input [MigrationFile<'input>],
 }
 
+impl MigrationMetadata<'_> {
+    /// Verify the complete published shared namespace against an audited map.
+    ///
+    /// The caller must freshly audit the legacy source and regenerate the
+    /// expected metadata. This read-only observation is not a deletion grant.
+    ///
+    /// # Errors
+    /// Rejects missing, unexpected, changed or unsafe entries or payloads.
+    pub fn verify_published(
+        self,
+        path: &OsStr,
+        limits: ManifestLimits,
+    ) -> Result<(), StagingError> {
+        let mut entries = BTreeMap::new();
+        let manifests: BTreeSet<_> =
+            self.expected.manifests.values().copied().collect();
+        for &digest in &manifests {
+            let name = OsString::from(bundle_name(digest));
+            let _previous = entries.insert(name, PathKind::Directory);
+        }
+        if self.expected.objects != 0 {
+            let _previous = entries
+                .insert(OsString::from(OBJECTS_DIRECTORY), PathKind::Directory);
+        }
+        let mut folded_names = BTreeSet::new();
+        for file in self.files {
+            validate_metadata_name(file.name)?;
+            if !folded_names.insert(file.name.to_ascii_lowercase()) {
+                return Err(StagingError::Collision);
+            }
+            if entries
+                .insert(file.name.into(), PathKind::RegularFile)
+                .is_some()
+            {
+                return Err(StagingError::Collision);
+            }
+        }
+        check_directory(path, &entries)?;
+        for &digest in &manifests {
+            let directory = join_path(path, &bundle_name(digest))?;
+            check_single_file(&directory, MANIFEST_NAME)?;
+        }
+        let objects = read_back(path, self.expected, limits)?;
+        check_objects(path, &objects, self.expected.objects)?;
+        for file in self.files {
+            let location = join_path(path, file.name)?;
+            let size = u64::try_from(file.bytes.len())
+                .map_err(|_error| AssetError::TooLarge)?;
+            let limit = NonZeroU64::new(size).unwrap_or(NonZeroU64::MIN);
+            if !snapshot(&location, limit)
+                .is_ok_and(|bytes| bytes == file.bytes)
+            {
+                return Err(StagingError::ChangedStorage);
+            }
+        }
+        check_directory(path, &entries)
+    }
+}
+
 /// A private, verified shared-store rehearsal; dropping it removes staging.
 #[derive(Debug)]
 pub struct StagedMigration {
@@ -157,7 +217,8 @@ impl StagedMigration {
             stage_metadata(&mut transaction, &report, selection)?;
         }
         let stage = transaction.finish()?;
-        read_back(stage.path(), &report, source.limits.manifest)?;
+        let _objects =
+            read_back(stage.path(), &report, source.limits.manifest)?;
         stage.verify()?;
         Ok(Self { report, stage })
     }
@@ -297,6 +358,23 @@ impl Inventory {
     }
 }
 
+fn check_directory(
+    path: &OsStr,
+    expected: &BTreeMap<OsString, PathKind>,
+) -> Result<(), StagingError> {
+    let maximum =
+        NonZeroUsize::new(expected.len()).unwrap_or(NonZeroUsize::MIN);
+    let entries = directory_entries(path, maximum)?;
+    if entries.len() != expected.len()
+        || entries
+            .iter()
+            .any(|entry| expected.get(&entry.name) != Some(&entry.kind))
+    {
+        return Err(StagingError::ChangedStorage);
+    }
+    Ok(())
+}
+
 fn check_inventory(
     source: &OsStr,
     digest: ContentHash,
@@ -331,6 +409,30 @@ fn check_inventory(
     Ok(())
 }
 
+fn check_objects(
+    path: &OsStr,
+    objects: &BTreeSet<ContentHash>,
+    expected: usize,
+) -> Result<(), StagingError> {
+    if objects.len() != expected {
+        return Err(StagingError::ChangedStorage);
+    }
+    if objects.is_empty() {
+        return Ok(());
+    }
+    let parent = join_path(path, OBJECTS_DIRECTORY)?;
+    let entries = objects
+        .iter()
+        .map(|digest| (OsString::from(digest.to_string()), PathKind::Directory))
+        .collect();
+    check_directory(&parent, &entries)?;
+    for digest in objects {
+        let directory = join_path(&parent, &digest.to_string())?;
+        check_single_file(&directory, OBJECT_PAYLOAD)?;
+    }
+    check_directory(&parent, &entries)
+}
+
 fn check_payload_inventory(
     path: &OsStr,
     expected: &BTreeMap<ContentHash, u64>,
@@ -352,12 +454,20 @@ fn check_payload_inventory(
     Ok(())
 }
 
+fn check_single_file(path: &OsStr, name: &str) -> Result<(), StagingError> {
+    check_directory(
+        path,
+        &BTreeMap::from([(name.into(), PathKind::RegularFile)]),
+    )
+}
+
 fn read_back(
     stage: &OsStr,
     report: &MigrationReport,
     limits: ManifestLimits,
-) -> Result<(), StagingError> {
+) -> Result<BTreeSet<ContentHash>, StagingError> {
     let mut manifests = BTreeSet::new();
+    let mut unique = BTreeSet::new();
     for &digest in report.manifests.values() {
         if !manifests.insert(digest) {
             continue;
@@ -367,10 +477,11 @@ fn read_back(
         for record in bundle.manifest().records() {
             if objects.insert(record.digest) {
                 drop(bundle.read_payload(&record.key)?);
+                let _inserted = unique.insert(record.digest);
             }
         }
     }
-    Ok(())
+    Ok(unique)
 }
 
 fn stage_file(
@@ -399,12 +510,17 @@ fn stage_metadata(
         return Err(StagingError::ChangedStorage);
     }
     for file in selection.files {
-        let _name = PublicationName::new(OsStr::new(file.name))?;
-        let folded = file.name.to_ascii_lowercase();
-        if folded == OBJECTS_DIRECTORY || folded.starts_with("bundle-") {
-            return Err(StagingError::UnsupportedPath);
-        }
+        validate_metadata_name(file.name)?;
         stage_file(transaction, file.name, file.bytes)?;
+    }
+    Ok(())
+}
+
+fn validate_metadata_name(name: &str) -> Result<(), StagingError> {
+    let _admitted = PublicationName::new(OsStr::new(name))?;
+    let folded = name.to_ascii_lowercase();
+    if folded == OBJECTS_DIRECTORY || folded.starts_with("bundle-") {
+        return Err(StagingError::UnsupportedPath);
     }
     Ok(())
 }
@@ -452,7 +568,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::ir::storage::file::snapshot;
     use crate::ir::storage::fixtures::{AVAILABLE, TestRoot};
     use crate::ir::storage::path_leaf;
 
@@ -537,6 +652,30 @@ mod tests {
 
     fn require(condition: bool) -> Result<(), StagingError> {
         condition.then_some(()).ok_or(StagingError::ChangedStorage)
+    }
+
+    fn verify_mutations(
+        parent: &TestRoot,
+        output: &OsStr,
+        metadata: MigrationMetadata<'_>,
+    ) -> Result<(), StagingError> {
+        let verify = || metadata.verify_published(output, limits().manifest);
+        verify()?;
+        parent.write_file("assets/launch.local", b"parent=x\n")?;
+        require(verify().is_err())?;
+        parent.write_file("assets/launch.local", b"parent=.\n")?;
+        verify()?;
+        parent.write_file("assets/unexpected.txt", b"extra")?;
+        require(verify().is_err())?;
+        parent.remove_file("assets/unexpected.txt")?;
+        let object = format!(
+            "assets/{OBJECTS_DIRECTORY}/{}/{OBJECT_PAYLOAD}",
+            ContentHash::calculate(b"tile")
+        );
+        parent.write_file(&object, b"evil")?;
+        require(verify().is_err())?;
+        parent.write_file(&object, b"tile")?;
+        verify()
     }
 
     #[test]
@@ -643,6 +782,11 @@ mod tests {
             snapshot(&catalogue, maximum)
                 .is_ok_and(|bytes| bytes == b"parent=.\n"),
         )?;
+        let metadata = MigrationMetadata {
+            expected: &report,
+            files: &files,
+        };
+        verify_mutations(&parent, &output, metadata)?;
         require(parent.entry_count()? == 1)?;
         require(legacy(&source).audit()? == report)
     }

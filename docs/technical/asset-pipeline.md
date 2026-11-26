@@ -126,6 +126,14 @@ authored executable at it using `--config`. Account for other launch
 catalogues and verify retirement separately before removing legacy
 content. This command does not remove or overwrite historical files.
 
+Use `bundle migration-verify` with the same arguments to independently
+re-audit the legacy inputs and compare the published namespace against
+the normalized inventory. The read-only check verifies all manifests
+and payloads, exact directory membership and translated catalogue
+bytes; it rejects stale metadata, missing or extra files, and corrupt
+objects. It neither stages another store nor grants permission to
+delete the legacy source.
+
 Downloaded originals and tools remain in `.reference/games/` and
 `.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
 Do not store reference data in disposable `.cache/` or `.temp/`.

@@ -54,9 +54,15 @@ use crate::title_build::{Title, local_layout, workspace_root};
 const LAUNCH: &str = "launch.local";
 const POSES: &str = "launch-poses.txt";
 
+#[derive(Clone, Copy, Debug)]
+enum ConfiguredAction {
+    Publish,
+    Verify,
+}
+
 #[derive(Debug)]
 enum Output {
-    Configured(NonZeroU64),
+    Configured(NonZeroU64, ConfiguredAction),
     Private(OsString),
 }
 
@@ -90,7 +96,7 @@ impl Rehearsal {
                 translate_sidecar(&sidecar.path, sidecar.limit, report)?,
             )?;
         }
-        if let Output::Configured(limit) = self.output {
+        if let Output::Configured(limit, _) = self.output {
             for name in &report.sidecars {
                 let filename =
                     name.to_str().ok_or("invalid sidecar filename")?;
@@ -104,16 +110,19 @@ impl Rehearsal {
     }
 
     pub(crate) fn parse(args: Vec<OsString>) -> Result<Self, String> {
-        Self::parse_inner(args, false)
+        Self::parse_inner(args, None)
     }
 
-    fn parse_inner(args: Vec<OsString>, publish: bool) -> Result<Self, String> {
+    fn parse_inner(
+        args: Vec<OsString>,
+        action: Option<ConfiguredAction>,
+    ) -> Result<Self, String> {
         let mut values = args.into_iter();
         let catalogue = Catalogue::parse(values.by_ref().take(11).collect())?;
         if !matches!(catalogue.format, CatalogueFormat::Fields(_)) {
             return Err(String::from("launch requires fields:KEY,..."));
         }
-        let parent = if publish {
+        let parent = if action.is_some() {
             None
         } else {
             Some(values.next().ok_or_else(|| String::from(USAGE))?)
@@ -130,7 +139,10 @@ impl Rehearsal {
                 return Err(String::from("legacy sidecars require last-token"));
             }
             let limit = values.next().ok_or_else(|| String::from(USAGE))?;
-            Output::Configured(parse_limit(&limit)?)
+            Output::Configured(
+                parse_limit(&limit)?,
+                action.ok_or("missing configured action")?,
+            )
         };
         let sidecar = match (values.next(), values.next(), values.next()) {
             (None, None, None) => None,
@@ -153,7 +165,11 @@ impl Rehearsal {
     }
 
     pub(crate) fn parse_publish(args: Vec<OsString>) -> Result<Self, String> {
-        Self::parse_inner(args, true)
+        Self::parse_inner(args, Some(ConfiguredAction::Publish))
+    }
+
+    pub(crate) fn parse_verify(args: Vec<OsString>) -> Result<Self, String> {
+        Self::parse_inner(args, Some(ConfiguredAction::Verify))
     }
 
     pub(crate) fn run(self) -> Result<(), String> {
@@ -161,16 +177,17 @@ impl Rehearsal {
         let title = Title::parse(&audit.title, &[])?;
         let workspace = workspace_root()?;
         let destination = match &self.output {
-            Output::Configured(_) => Some(configured_destination(
+            Output::Configured(_, action) => Some(configured_destination(
                 &local_layout(&workspace)?,
                 title,
                 &audit.parent,
+                *action,
             )?),
             Output::Private(_) => None,
         };
         let parent = match (&self.output, &destination) {
             (Output::Private(path), None) => path.as_os_str(),
-            (Output::Configured(_), Some(path)) => {
+            (Output::Configured(..), Some(path)) => {
                 parent_path(path).map_err(|error| error.to_string())?
             },
             _ => return Err(String::from("missing migration destination")),
@@ -185,14 +202,24 @@ impl Rehearsal {
             .map_err(|error| format!("migration audit: {error:?}"))?;
         let files = self.metadata(&report)?;
         let staged = files.borrowed();
+        let metadata = MigrationMetadata {
+            expected: &report,
+            files: &staged,
+        };
+        if matches!(
+            self.output,
+            Output::Configured(_, ConfiguredAction::Verify)
+        ) {
+            let path = destination
+                .as_deref()
+                .ok_or("missing verification destination")?;
+            return verify_published(metadata, path, source);
+        }
         let store = StagedMigration::prepare_with_metadata(
             source,
             parent,
             self.budget,
-            MigrationMetadata {
-                expected: &report,
-                files: &staged,
-            },
+            metadata,
         )
         .map_err(|error| format!("migration stage: {error:?}"))?;
         smoke(title, &workspace, store.path())?;
@@ -201,6 +228,7 @@ impl Rehearsal {
             .map_err(|error| format!("stage: {error:?}"))?;
         if let Some(path) = destination {
             publish(store, &path, title, &workspace)?;
+            verify_published(metadata, &path, source)?;
         }
         toolchain::write_line("Verified migration consumer smoke.")
             .map_err(|error| error.to_string())
@@ -252,6 +280,7 @@ fn configured_destination(
     layout: &Layout,
     title: Title,
     source: &OsStr,
+    action: ConfiguredAction,
 ) -> Result<OsString, String> {
     let assets = OsString::from(layout.assets(title.binary())?);
     let output = OsString::from(layout.binaries(title.binary())?);
@@ -261,10 +290,16 @@ fn configured_destination(
         }
     }
     reject_overlap(&assets, &output)?;
-    if path_kind(&assets).map_err(|error| error.to_string())?
-        != PathKind::Missing
-    {
-        return Err(String::from("asset destination already exists"));
+    let kind = path_kind(&assets).map_err(|error| error.to_string())?;
+    match (action, kind) {
+        (ConfiguredAction::Publish, PathKind::Missing)
+        | (ConfiguredAction::Verify, PathKind::Directory) => {},
+        (ConfiguredAction::Publish, _) => {
+            return Err(String::from("asset destination already exists"));
+        },
+        (ConfiguredAction::Verify, _) => {
+            return Err(String::from("asset destination is not a directory"));
+        },
     }
     let parent = parent_path(&assets).map_err(|error| error.to_string())?;
     if path_kind(parent).map_err(|error| error.to_string())?
@@ -391,6 +426,28 @@ fn translate_sidecar(
     rewrite(input, &CatalogueFormat::LastToken, &report.manifests)
 }
 
+fn verify_published(
+    metadata: MigrationMetadata<'_>,
+    path: &OsStr,
+    source: LegacyStore<'_>,
+) -> Result<(), String> {
+    metadata
+        .verify_published(path, source.limits.manifest)
+        .map_err(|error| {
+            format!("published migration verification: {error:?}")
+        })?;
+    let report = metadata.expected;
+    toolchain::write_line(&format!(
+        "Verified published migration: {} legacy manifests, {} objects, \
+         {} object bytes, {} catalogue files.",
+        report.manifests.len(),
+        report.objects,
+        report.object_bytes,
+        metadata.files.len(),
+    ))
+    .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use games_assets::ContentHash;
@@ -433,13 +490,23 @@ mod tests {
         ))?;
         let title = Title::SimpsonsArcade;
         let destination = path("deploy/simpsons-arcade/assets")?;
+        let resolve =
+            |action| configured_destination(&layout, title, &legacy, action);
+        require(resolve(ConfiguredAction::Publish)? == destination)?;
         require(
-            configured_destination(&layout, title, &legacy)? == destination,
+            configured_destination(
+                &layout,
+                title,
+                &deploy,
+                ConfiguredAction::Publish,
+            )
+            .is_err(),
         )?;
-        require(configured_destination(&layout, title, &deploy).is_err())?;
+        require(resolve(ConfiguredAction::Verify).is_err())?;
         root.create_directories("deploy/simpsons-arcade/assets")
             .map_err(|error| error.to_string())?;
-        require(configured_destination(&layout, title, &legacy).is_err())
+        require(resolve(ConfiguredAction::Publish).is_err())?;
+        require(resolve(ConfiguredAction::Verify)? == destination)
     }
 
     #[test]
@@ -550,6 +617,16 @@ mod tests {
         };
         let valid = ["512", "1024", "16", "last-token", "4096"];
         assert!(parse(&valid).is_ok());
+        assert!(
+            Rehearsal::parse_verify(
+                PREFIX
+                    .into_iter()
+                    .chain(valid)
+                    .map(OsString::from)
+                    .collect()
+            )
+            .is_ok()
+        );
         let mut optional = valid.to_vec();
         optional.extend(["poses.txt", "4096"]);
         assert!(parse(&optional).is_ok());
