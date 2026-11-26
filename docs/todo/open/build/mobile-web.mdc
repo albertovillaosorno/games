@@ -900,3 +900,45 @@ missing directory-selection API. The latter retained the explicit
 Unsupported diagnostic with no picker or canvas rather than reporting
 readiness. The capability injection changed only the test response's
 HTML; the packaged JavaScript and Wasm remained unchanged.
+
+Independent alternate-engine acceptance used Epiphany 51.2 with
+WebKitGTK 2.54.2 on GNU/Linux, isolated profiles, loopback HTTP, Xvfb
+and software rendering. The diagnostics used the locked wasm-bindgen
+0.2.127 CLI and current linked Rust fixtures. Storage and input passed;
+the input observer counted 160 dispatched events and 28 balanced
+listener pairs. The Canvas2D scene passed with 42 drawImage calls,
+two attached and removed surfaces and 28 listener pairs. Its initial
+observer incorrectly counted eight detached scratch canvases as
+attached surfaces; the corrected observer distinguished the two.
+The WebGL scene passed with 30 draws, 12 blits, two removed surfaces,
+28 listener pairs and balanced texture, shader, program and framebuffer
+creation/deletion (8, 4, 2 and 6 respectively). The ordinary window
+passed with four draws, four blits, two removed surfaces and 30 listener
+pairs. Missing WebGL context failed without attaching a surface or
+registering a listener. The fixed-step frame diagnostic delivered 12
+callbacks, 44 draws and 12 blits, with at most one pending callback,
+one removed surface and balanced resources and listeners.
+
+The procedural four-seat title entered gameplay, moved each actor's
+framebuffer centroid 106 pixels and exited through the menu. It delivered
+64 callbacks and 40 blits, with peak one pending callback, one successful
+completion and no remaining canvas. The silent Web Audio diagnostic
+received a trusted activation click, verified PCM conversion, submitted
+four silent stereo 256-frame 48 kHz buffers, observed three trusted ended
+events and one explicit stop, balanced all four source listeners and
+closed the context. Audio used the existing null sink, not physical
+output. These checks establish the exercised WebKitGTK APIs only; the
+renderer label was not evidence of hardware acceleration.
+
+An asset-backed WebKitGTK launch could not be completed. The package
+exposed the directory input, but the GTK portal displayed a file chooser
+rather than a directory chooser. The earlier GNOME portal lacked its
+file-chooser interface in the isolated Xvfb session, and the interrupted
+selection correctly removed the picker. After isolating the GTK portal
+and dismissing the browser's first-run prompt, a trusted selection of
+one noncanonical scratch file supplied an empty relative path. The exact
+package from 62e8686 rejected it as UnsafeStorage, read zero bytes,
+rendered zero frames and completed once with no picker or canvas. No
+original assets were read by that attempt. The WebKitGTK canonical
+directory ingress and asset-backed gameplay remain unverified; this
+observation is not a general claim about other WebKit hosts.
