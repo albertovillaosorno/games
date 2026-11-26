@@ -40,6 +40,7 @@ pub mod profile;
 pub mod touch;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::mem::take;
 use std::ops::RangeInclusive;
 
 use self::touch::{
@@ -434,6 +435,19 @@ impl<Action: Clone + Ord> InputRouter<Action> {
         }
         let _count = self.pressed.remove(&action);
         Some(LogicalAction { action, down: false })
+    }
+
+    /// Clear all held logical sources while retaining device assignments.
+    ///
+    /// Modal host input must not leave captured controls held in gameplay.
+    /// Every previously held logical action emits one release.
+    pub fn release_all(&mut self) -> Vec<LogicalAction<Action>> {
+        self.contacts.clear();
+        self.held.clear();
+        take(&mut self.pressed)
+            .into_keys()
+            .map(|action| LogicalAction { action, down: false })
+            .collect()
     }
 
     fn release_controller(
@@ -1007,6 +1021,46 @@ mod tests {
         assert_eq!(router.handle(InputEvent::Key { code: 10, down: false }), [
             LogicalAction { action: 1, down: false },
         ]);
+    }
+
+    #[test]
+    fn modal_release_retains_device_mappings_and_releases_each_action_once() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_key(1, 1u16);
+        mapping.bind_button(1, 1);
+        let mut router = InputRouter::new(mapping);
+        for event in [
+            InputEvent::Attached { device: 1 },
+            InputEvent::Key { code: 1, down: true },
+            InputEvent::Button {
+                device: 1,
+                code: 1,
+                down: true,
+            },
+        ] {
+            drop(router.handle(event));
+        }
+        assert_eq!(router.release_all(), [LogicalAction {
+            action: 1,
+            down: false
+        }]);
+        assert_eq!(router.release_all(), []);
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 1,
+                code: 1,
+                down: true
+            }),
+            [LogicalAction { action: 1, down: true }]
+        );
+        assert_eq!(
+            router.handle(InputEvent::Button {
+                device: 1,
+                code: 1,
+                down: false
+            }),
+            [LogicalAction { action: 1, down: false }]
+        );
     }
 
     #[test]

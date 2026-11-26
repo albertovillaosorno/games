@@ -30,6 +30,8 @@
 //   - Empty or invalid glyph coordinates produce no ink.
 
 //! Bounded compact bitmap UI and reusable static text plates.
+/// Shared digital control editor presentation.
+pub mod editor;
 /// Portable menu layout and artwork.
 pub mod menu;
 /// Portable scene rendering commands.

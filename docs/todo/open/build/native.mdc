@@ -259,3 +259,30 @@ meters. The saved hash remained unchanged through smoke. The initial
 display connection was unavailable; virtual X11 and dummy audio were
 used instead. Interactive remapping, physical device acceptance and
 audible output remain open.
+
+The shared interactive next-launch digital editor now opens from local
+settings when a writable control store is available. It uses keyboard
+selection and capture for physical keys and mouse or controller buttons;
+touch slots are selected by keyboard. It displays the admitted binding
+and the save or rejection outcome. Running mappings are unchanged until
+relaunch. Inline regressions cover conflict rejection, capture cancellation,
+controller proposals, release of held logical actions, and preservation of
+the suspended session and saved profile.
+
+On 2026-11-25 two visible Xvfb/X11 software OpenGL runs exercised the
+authored release executable with disposable settings and the configured
+shared assets. One rejected a duplicate keyboard assignment without
+creating a save, saved a new right-movement key, cancelled a second
+capture without modifying the save, and resumed the suspended game.
+All 266 measured gameplay submissions met the 16.667 ms work budget.
+The other saved a new primary mouse button, swapped the primary and
+secondary touch slots, and edited a keyboard assignment while retaining
+the earlier changes. Both isolated saved profiles passed the hidden
+touch-enabled relaunch smoke, with 444 camera columns, two cooperative
+pose families, six reinforcement meters, 600 movement and 20 combat
+submissions each, no work-budget misses, and unchanged save hashes.
+The first display-driver attempt failed before startup; explicit X11
+selection succeeded. These runs used injected keyboard and mouse events,
+keyboard-selected touch slots and dummy audio, not physical devices.
+Controller-only and touch-only editor navigation, analogue editing,
+actual physical devices and audible output remain unverified.

@@ -50,7 +50,12 @@ use std::time::Duration;
 
 use games::audio::MasterVolume;
 use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
-use games::input::profile::{AxisProfile, DigitalProfiles, ProfileText};
+use games::input::profile::editor::{
+    ControlEditor, EditorEffect, EditorStatus,
+};
+use games::input::profile::{
+    AxisProfile, DigitalBinding, DigitalProfiles, ProfileText,
+};
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
@@ -84,6 +89,7 @@ use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{DisplayStore, VolumeStore};
 use games_platform::ir::ui::PlateLayout;
+use games_platform::ir::ui::editor::{ControlEditorArt, ControlEditorView};
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Pair, Participation, Phase,
@@ -98,6 +104,8 @@ const EVENT_BUDGET: usize = 32;
 const IDLE_EVENT_WAIT_MS: u32 = 8;
 // Apply the same title-owned budget to snapshot, storage and parsing.
 const MAX_PROFILE_BYTES: usize = 8192;
+const MENU_WIDTH: u16 = 280;
+const MENU_HEIGHT: u16 = 192;
 
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
@@ -309,6 +317,24 @@ impl Controls {
             .ok_or(RenderError::InvalidSprite)
     }
 
+    fn modal_actions(
+        &mut self,
+        event: InputEvent,
+        allow_close: bool,
+    ) -> Result<LocalActions, RenderError> {
+        let mut actions = self.actions(event)?;
+        actions.retain(|change| {
+            !change.down
+                || (allow_close
+                    && matches!(
+                        change.action.control,
+                        Control::Pause | Control::Start
+                    ))
+        });
+        actions.extend(self.router.release_all());
+        Ok(actions)
+    }
+
     fn new(touch_enabled: bool) -> Result<Self, RenderError> {
         Self::with_profiles(touch_enabled, &DEFAULT_PROFILES)
     }
@@ -442,6 +468,7 @@ struct Scene {
     background: Art,
     combat: Option<encounter::CombatArt>,
     draws: Vec<SpriteDraw>,
+    editor: Option<ControlEditorArt>,
     hud: station_hud::StationHud,
     menu: MenuArt,
     panel: Option<SpriteDraw>,
@@ -496,6 +523,7 @@ impl Scene {
                     usize::from(source.shadow.is_some()).saturating_mul(4),
                 ),
             ),
+            editor: load_editor(scene, options.can_reset_controls(reserved))?,
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
             menu: load_menu(scene, world_art.is_some(), options, reserved)?,
             panel: if touch_enabled {
@@ -519,6 +547,15 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
     ) -> Result<bool, RenderError> {
+        self.present_with_editor(scene, cabinet, None)
+    }
+
+    fn present_with_editor(
+        &mut self,
+        scene: &mut SceneSession<'_, '_>,
+        cabinet: &Cabinet,
+        editor: Option<(ControlEditor, &Profiles)>,
+    ) -> Result<bool, RenderError> {
         let view = self.presentation_view(scene, cabinet)?;
         let width = view.width;
         let center =
@@ -541,6 +578,20 @@ impl Scene {
             (20i32.saturating_add(center), 16i32),
             &mut self.draws,
         )?;
+        if cabinet.phase() == Phase::Controls {
+            let (selection, profiles) =
+                editor.ok_or(RenderError::InvalidSprite)?;
+            self.editor.ok_or(RenderError::InvalidSprite)?.queue(
+                ControlEditorView {
+                    actions: ACTION_NAMES,
+                    editor: selection,
+                    key_name,
+                    profiles,
+                },
+                (20i32.saturating_add(center), 16i32),
+                &mut self.draws,
+            )?;
+        }
         if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused) {
             let shift = if cabinet.phase() == Phase::Paused {
                 12i32
@@ -866,9 +917,11 @@ struct Interactive<'preferences> {
     control_preferences: &'preferences launch::ResolvedControls,
     controls: Controls,
     deferred: Option<NativeBatch>,
+    editor: ControlEditor,
     host: Option<HostLan>,
     input: NativeInput,
     measurement: Option<measurement::LiveMeasurement>,
+    next_profiles: Profiles,
     preferences: Option<&'preferences DisplayStore>,
     previous: Duration,
     requested: DisplaySettings,
@@ -890,6 +943,45 @@ impl<'preferences> Interactive<'preferences> {
             }
         }
         Ok(())
+    }
+
+    fn edit_binding(
+        &mut self,
+        binding: DigitalBinding,
+    ) -> Result<(), RenderError> {
+        let candidate = self
+            .control_preferences
+            .persist_edit(
+                &self.next_profiles,
+                (self.editor.station(), self.editor.action()),
+                binding,
+            )
+            .map_err(failure)?;
+        self.editor.acknowledge(candidate.is_some());
+        if let Some(profiles) = candidate {
+            self.next_profiles = profiles;
+        }
+        Ok(())
+    }
+
+    fn editor_actions(
+        &mut self,
+        event: InputEvent,
+    ) -> Result<LocalActions, RenderError> {
+        let capturing = self.editor.status() == EditorStatus::Capturing;
+        let effect = self.editor.input(event, &self.next_profiles);
+        if let EditorEffect::Propose(binding) = effect {
+            self.edit_binding(binding)?;
+        }
+        let close = effect == EditorEffect::Close
+            || (!capturing
+                && matches!(
+                    event,
+                    InputEvent::Button { .. }
+                        | InputEvent::Contact { .. }
+                        | InputEvent::Touch { .. }
+                ));
+        self.controls.modal_actions(event, close)
     }
 
     fn measure_presented(
@@ -943,11 +1035,13 @@ impl<'preferences> Interactive<'preferences> {
             control_preferences: options.controls,
             controls,
             deferred: None,
+            editor: ControlEditor::default(),
             host,
             input,
             measurement: options
                 .measure
                 .then(measurement::LiveMeasurement::default),
+            next_profiles: options.controls.profiles,
             preferences: options.preferences,
             previous: Duration::ZERO,
             requested: cabinet.session().display(),
@@ -981,12 +1075,13 @@ impl<'preferences> Interactive<'preferences> {
             save_volume(self.volume_store, volume)?;
             self.volume = volume;
         }
-        if !self.reset_persisted
-            && session.control_reset() == ControlReset::Requested
-        {
+        if session.control_reset() != ControlReset::Requested {
+            self.reset_persisted = false;
+        } else if !self.reset_persisted {
             self.control_preferences
                 .persist_defaults()
                 .map_err(failure)?;
+            self.next_profiles = DEFAULT_PROFILES;
             self.reset_persisted = true;
         }
         Ok(())
@@ -1058,12 +1153,13 @@ impl<'preferences> Interactive<'preferences> {
         event: InputEvent,
         elapsed: Duration,
     ) -> Result<bool, RenderError> {
-        let actions = self
-            .controls
-            .actions(event)?
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        let changes =
+            if self.simulation.state().state().phase() == Phase::Controls {
+                self.editor_actions(event)?
+            } else {
+                self.controls.actions(event)?
+            };
+        let actions = changes.into_iter().map(Into::into).collect();
         self.deferred = NativeBatch { actions, elapsed }
             .submit(&mut self.simulation, self.measurement.as_mut());
         Ok(self.deferred.is_none())
@@ -1096,9 +1192,15 @@ impl<'preferences> Interactive<'preferences> {
             }
             self.poll_host()?;
             let delta = self.next_delta()?;
+            let old_phase = self.simulation.state().state().phase();
             let advanced = self.simulation.advance(delta).map_err(failure)?;
             self.advance_measurement(advanced.next_tick)?;
             let session = self.simulation.state().state().session();
+            if old_phase != Phase::Controls
+                && session.phase() == Phase::Controls
+            {
+                self.editor = ControlEditor::default();
+            }
             let desired = session.effective_display();
             if desired != self.applied {
                 scene.apply_display_settings(desired)?;
@@ -1114,7 +1216,11 @@ impl<'preferences> Interactive<'preferences> {
             if frame_due(hosted, presented.as_ref(), batch)
                 || !scene.presentation_is_current()?
             {
-                let drawn = art.present(scene, cabinet)?;
+                let drawn = art.present_with_editor(
+                    scene,
+                    cabinet,
+                    Some((self.editor, &self.next_profiles)),
+                )?;
                 presented = (drawn && cabinet.phase() != Phase::Playing)
                     .then_some(*hosted);
                 let submitted =
@@ -1364,6 +1470,25 @@ fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 3] {
     ]
 }
 
+fn load_editor(
+    scene: &mut SceneSession<'_, '_>,
+    enabled: bool,
+) -> Result<Option<ControlEditorArt>, RenderError> {
+    enabled
+        .then(|| {
+            ControlEditorArt::load(scene, PlateLayout {
+                background: [24, 22, 30, 255],
+                height: MENU_HEIGHT,
+                max_bytes: size(ControlEditorArt::bytes(
+                    MENU_WIDTH,
+                    MENU_HEIGHT,
+                ))?,
+                width: MENU_WIDTH,
+            })
+        })
+        .transpose()
+}
+
 fn load_menu(
     scene: &mut SceneSession<'_, '_>,
     world_available: bool,
@@ -1376,9 +1501,9 @@ fn load_menu(
         scene,
         PlateLayout {
             background: [24, 22, 30, 255],
-            height: 192,
+            height: MENU_HEIGHT,
             max_bytes: size(1_400_000)?,
-            width: 280,
+            width: MENU_WIDTH,
         },
         MenuContent {
             control_reset: options.can_reset_controls(reserved),
@@ -1387,7 +1512,7 @@ fn load_menu(
             settings_hints: &[
                 "PRIMARY CHANGES VALUE - PAUSE RETURNS",
                 adaptive_hint(world_available),
-                "CONTROLS: --CONTROLS / --RESET-CONTROLS",
+                "CONTROL EDITS APPLY NEXT LAUNCH",
             ],
             title: "THE SIMPSONS ARCADE",
         },
@@ -2757,6 +2882,20 @@ fn window(
     })
 }
 
+fn editor_limits(enabled: bool) -> (usize, usize) {
+    if enabled {
+        (
+            107_520usize.saturating_add(ControlEditorArt::bytes(
+                MENU_WIDTH,
+                MENU_HEIGHT,
+            )),
+            ControlEditorArt::sprites(MENU_WIDTH).saturating_add(2),
+        )
+    } else {
+        (0, 0)
+    }
+}
+
 fn scene_limits(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
@@ -2776,14 +2915,12 @@ fn scene_limits(
     let count = source.poses.count().saturating_add(enemy_atlases);
     let extension = usize::from(source.world.is_some());
     let shadows = usize::from(source.shadow.is_some());
+    let editor = options.can_reset_controls(reserved);
+    let (editor_bytes, editor_sprites) = editor_limits(editor);
     Ok(SceneLimits {
         atlas_bytes: size(
             3_607_872usize
-                .saturating_add(if options.can_reset_controls(reserved) {
-                    71_680
-                } else {
-                    0
-                })
+                .saturating_add(editor_bytes)
                 .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
                     touch::extra_bytes(&options.controls.profiles)
@@ -2800,6 +2937,7 @@ fn scene_limits(
             count
                 .saturating_add(extension)
                 .saturating_add(shadows)
+                .saturating_add(usize::from(editor).saturating_mul(2))
                 .saturating_add(if touch_enabled {
                     9
                 } else {
@@ -2808,9 +2946,7 @@ fn scene_limits(
         )?,
         sprites: size(
             enemy_sprites
-                .saturating_add(usize::from(
-                    options.can_reset_controls(reserved),
-                ))
+                .saturating_add(editor_sprites)
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
                 .saturating_add(if touch_enabled {
@@ -2867,6 +3003,77 @@ mod tests {
     use crate::remote::{HostedCabinet, HostedInput};
 
     type TestCabinet = (Controls, LiveSimulation<Cabinet>);
+
+    #[test]
+    fn editor_capture_releases_holds_without_leaking_gameplay_presses()
+    -> Result<(), RenderError> {
+        let mut controls = Controls::new(false)?;
+        let held = controls.actions(InputEvent::Key {
+            code: KeyboardKey::LETTER_W.code(),
+            down: true,
+        })?;
+        if held
+            != [LogicalAction {
+                action: Action {
+                    control: Control::Up,
+                    player: Player::Marge,
+                },
+                down: true,
+            }]
+        {
+            return Err(failure("initial key not routed"));
+        }
+        let modal = controls.modal_actions(
+            InputEvent::Key {
+                code: KeyboardKey::LETTER_D.code(),
+                down: true,
+            },
+            false,
+        )?;
+        if modal.iter().any(|change| change.down)
+            || !modal.contains(&LogicalAction {
+                action: Action {
+                    control: Control::Up,
+                    player: Player::Marge,
+                },
+                down: false,
+            })
+        {
+            return Err(failure("modal captured presses or left holds"));
+        }
+        verify_editor_close(&mut controls)
+    }
+
+    fn verify_editor_close(controls: &mut Controls) -> Result<(), RenderError> {
+        let close = controls.modal_actions(
+            InputEvent::Key {
+                code: KeyboardKey::ESCAPE.code(),
+                down: true,
+            },
+            true,
+        )?;
+        if close
+            != [true, false].map(|down| LogicalAction {
+                action: Action {
+                    control: Control::Pause,
+                    player: Player::Marge,
+                },
+                down,
+            })
+        {
+            return Err(failure("close did not route one pause"));
+        }
+        if !controls
+            .actions(InputEvent::Key {
+                code: KeyboardKey::LETTER_D.code(),
+                down: false,
+            })?
+            .is_empty()
+        {
+            return Err(failure("captured release leaked"));
+        }
+        Ok(())
+    }
 
     fn route_now(
         controls: &mut Controls,

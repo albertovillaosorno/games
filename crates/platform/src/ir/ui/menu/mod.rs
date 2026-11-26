@@ -49,7 +49,7 @@ const PHASES: [SessionPhase; 3] = [
 ];
 const ROW_HEIGHT: u16 = 16;
 const ROW_TOP: u16 = 48;
-const ROWS: [Row; 20] = [
+const ROWS: [Row; 21] = [
     Row::Choice(MenuItem::Back),
     Row::Choice(MenuItem::Exit),
     Row::Choice(MenuItem::MainMenu),
@@ -70,6 +70,7 @@ const ROWS: [Row; 20] = [
     Row::Window(WindowMode::Windowed),
     Row::ControlReset(false),
     Row::ControlReset(true),
+    Row::Choice(MenuItem::EditControls),
 ];
 const SELECTED: [u8; 4] = [248, 228, 168, 255];
 const TEXT: [u8; 4] = [220, 222, 232, 255];
@@ -114,6 +115,7 @@ impl Row {
             MenuItem::Volume => Self::Volume(volume),
             MenuItem::Window => Self::Window(display.window),
             MenuItem::Back
+            | MenuItem::EditControls
             | MenuItem::Exit
             | MenuItem::MainMenu
             | MenuItem::Play
@@ -127,6 +129,7 @@ impl Row {
             Self::Choice(item) => match item {
                 MenuItem::Back => "BACK",
                 MenuItem::Display => "DISPLAY",
+                MenuItem::EditControls => "EDIT CONTROLS NEXT LAUNCH",
                 MenuItem::Exit => "EXIT",
                 MenuItem::MainMenu => "MAIN MENU",
                 MenuItem::Play => "PLAY",
@@ -191,7 +194,12 @@ impl MenuArt {
         let labels = ROWS
             .into_iter()
             .take_while(|row| {
-                content.control_reset || !matches!(row, Row::ControlReset(_))
+                content.control_reset
+                    || !matches!(
+                        row,
+                        Row::ControlReset(_)
+                            | Row::Choice(MenuItem::EditControls)
+                    )
             })
             .flat_map(|row| {
                 let label = row.label();
@@ -276,7 +284,9 @@ fn panel(
         SessionPhase::MainMenu => ("FREE PLAY", content.main_hints),
         SessionPhase::Paused => ("PAUSED", content.pause_hints),
         SessionPhase::Settings => ("SETTINGS", content.settings_hints),
-        SessionPhase::Playing | SessionPhase::Exited => ("", &[][..]),
+        SessionPhase::Controls
+        | SessionPhase::Playing
+        | SessionPhase::Exited => ("", &[][..]),
     };
     let mut lines = vec![
         TextLine {
@@ -473,7 +483,7 @@ mod tests {
         let mut session = select_reset();
         let mut initial = Vec::new();
         assert_eq!(art.queue(session, (0i32, 0i32), &mut initial), Ok(()));
-        assert_eq!(initial.len(), 6);
+        assert_eq!(initial.len(), 7);
         assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
         let mut requested = Vec::new();
         assert_eq!(art.queue(session, (0i32, 0i32), &mut requested), Ok(()));

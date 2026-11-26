@@ -48,11 +48,12 @@ const SETTINGS_ITEMS: [MenuItem; 4] = [
     MenuItem::Volume,
     MenuItem::Back,
 ];
-const SETTINGS_WITH_CONTROL_RESET: [MenuItem; 5] = [
+const SETTINGS_WITH_CONTROL_RESET: [MenuItem; 6] = [
     MenuItem::Display,
     MenuItem::Window,
     MenuItem::Volume,
     MenuItem::ResetControls,
+    MenuItem::EditControls,
     MenuItem::Back,
 ];
 
@@ -71,6 +72,8 @@ pub enum ControlReset {
 /// Current screen of a local gameplay session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SessionPhase {
+    /// The host is editing a next-launch control profile.
+    Controls,
     /// The user has requested that the host close.
     Exited,
     /// Initial menu, before any character has joined.
@@ -91,6 +94,8 @@ pub enum MenuItem {
     Back,
     /// Cycle the logical presentation mode.
     Display,
+    /// Open the host control profile editor.
+    EditControls,
     /// Close the host.
     Exit,
     /// Abandon the current world and return to the main menu.
@@ -146,7 +151,7 @@ impl SessionPhase {
             Self::Paused => &PAUSE_ITEMS,
             Self::Settings if control_reset => &SETTINGS_WITH_CONTROL_RESET,
             Self::Settings => &SETTINGS_ITEMS,
-            Self::Playing | Self::Exited => &[],
+            Self::Controls | Self::Playing | Self::Exited => &[],
         }
     }
 }
@@ -164,6 +169,12 @@ pub struct LocalSession {
 }
 
 impl LocalSession {
+    const fn close_controls(&mut self) {
+        self.transition(SessionPhase::Settings);
+        self.selection = 4;
+        self.control_reset = ControlReset::Available;
+    }
+
     const fn close_settings(&mut self) {
         self.transition(self.settings_origin);
         self.selection = 1;
@@ -173,6 +184,9 @@ impl LocalSession {
         match self.selected() {
             Some(MenuItem::Back) => self.close_settings(),
             Some(MenuItem::Display) => self.cycle_display(),
+            Some(MenuItem::EditControls) => {
+                self.transition(SessionPhase::Controls);
+            },
             Some(MenuItem::Settings) => {
                 self.settings_origin = self.phase;
                 self.transition(SessionPhase::Settings);
@@ -300,6 +314,10 @@ impl LocalSession {
                 self.transition(SessionPhase::Playing);
                 SessionEffect::None
             },
+            SessionPhase::Controls => {
+                self.close_controls();
+                SessionEffect::None
+            },
             SessionPhase::Settings => {
                 self.close_settings();
                 SessionEffect::None
@@ -312,6 +330,7 @@ impl LocalSession {
         match self.phase {
             SessionPhase::Playing => self.transition(SessionPhase::Paused),
             SessionPhase::Paused => self.transition(SessionPhase::Playing),
+            SessionPhase::Controls => self.close_controls(),
             SessionPhase::Settings => self.close_settings(),
             SessionPhase::MainMenu | SessionPhase::Exited => {},
         }
@@ -381,8 +400,10 @@ impl LocalSession {
     #[must_use]
     pub const fn world_visible(self) -> bool {
         matches!(self.phase, SessionPhase::Playing | SessionPhase::Paused)
-            || (matches!(self.phase, SessionPhase::Settings)
-                && matches!(self.settings_origin, SessionPhase::Paused))
+            || (matches!(
+                self.phase,
+                SessionPhase::Settings | SessionPhase::Controls
+            ) && matches!(self.settings_origin, SessionPhase::Paused))
     }
 }
 
@@ -413,6 +434,27 @@ mod tests {
         assert_eq!(session.selected(), Some(MenuItem::ResetControls));
         assert_eq!(session.control_reset(), ControlReset::Available);
         session
+    }
+
+    #[test]
+    fn editor_returns_to_suspended_settings_without_world_reset() {
+        let mut session = select_reset_in_pause();
+        assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        assert_eq!(session.selected(), Some(MenuItem::EditControls));
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert_eq!(session.phase(), SessionPhase::Controls);
+        assert!(session.world_visible());
+        assert_eq!(session.items(), []);
+        leave_editor(&mut session);
+    }
+
+    fn leave_editor(session: &mut LocalSession) {
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert_eq!(session.phase(), SessionPhase::Controls);
+        assert_eq!(session.input(MenuInput::Pause), SessionEffect::None);
+        assert_eq!(session.selected(), Some(MenuItem::EditControls));
+        assert_eq!(session.input(MenuInput::Pause), SessionEffect::None);
+        assert_eq!(session.phase(), SessionPhase::Paused);
     }
 
     #[test]

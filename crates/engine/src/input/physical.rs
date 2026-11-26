@@ -328,6 +328,8 @@ impl ControllerButton {
 pub struct KeyboardKey(u32);
 
 impl KeyboardKey {
+    /// Physical DELETE key.
+    pub const DELETE: Self = Self(76);
     /// Physical DOWN key.
     pub const DOWN: Self = Self(81);
     /// Physical ENTER key.
@@ -414,6 +416,8 @@ impl KeyboardKey {
     pub const RIGHT: Self = Self(79);
     /// Physical SPACE key.
     pub const SPACE: Self = Self(44);
+    /// Physical TAB key.
+    pub const TAB: Self = Self(43);
     /// Physical UP key.
     pub const UP: Self = Self(82);
 

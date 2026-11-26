@@ -74,6 +74,7 @@ const USAGE: &str = concat!(
     "key|mouse|button|touch BINDING"
 );
 
+type AdmittedEdit = (Profiles, String);
 type Arguments = Peekable<vec::IntoIter<OsString>>;
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
 type EnemyHashes = Option<[OsString; 2]>;
@@ -362,6 +363,22 @@ impl ResolvedControls {
         Self::store_profile(store, DEFAULT_PROFILE)
     }
 
+    pub(super) fn persist_edit(
+        &self,
+        current: &Profiles,
+        selection: (usize, usize),
+        binding: DigitalBinding,
+    ) -> Result<Option<Profiles>, String> {
+        let store = self.store.as_ref().ok_or("control store unavailable")?;
+        let Ok((candidate, encoded)) =
+            admit_edit(current, selection.0, selection.1, binding)
+        else {
+            return Ok(None);
+        };
+        Self::store_profile(store, &encoded)?;
+        Ok(Some(candidate))
+    }
+
     fn store_profile(store: &ControlStore, text: &str) -> Result<(), String> {
         let receipt = store
             .store(text)
@@ -517,14 +534,25 @@ pub(super) fn edit_control(args: &[OsString]) -> Result<(), String> {
         .map_err(|error| format!("control preferences: {error:?}"))?;
     let current =
         configured_profiles(stored.as_deref().unwrap_or(DEFAULT_PROFILE))?;
-    let candidate = current.edited(station, action_slot, binding)?;
+    let (_candidate, encoded) =
+        admit_edit(&current, station, action_slot, binding)?;
+    ResolvedControls::store_profile(&store, &encoded)
+}
+
+fn admit_edit(
+    current: &Profiles,
+    station: usize,
+    action: usize,
+    binding: DigitalBinding,
+) -> Result<AdmittedEdit, String> {
+    let candidate = current.edited(station, action, binding)?;
     validate_keyboard_pause(&candidate)?;
     let encoded = candidate.encoded(
         ACTION_NAMES,
         MAX_PROFILE_BYTES,
         (key_name, key_from_name),
     )?;
-    ResolvedControls::store_profile(&store, &encoded)
+    Ok((candidate, encoded))
 }
 
 fn action_index(name: &str) -> Result<usize, String> {
@@ -1223,6 +1251,53 @@ mod tests {
             || fixture.resolve(&[])?.profiles != DEFAULT_PROFILES
         {
             return Err("reset did not survive relaunch".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn interactive_edits_keep_current_profile_and_save_only_valid_candidates()
+    -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let resolved = fixture.resolve(&[])?;
+        let original = resolved.profiles;
+        let right = action_index("right")?;
+        let primary = action_index("primary")?;
+        let pause = action_index("pause")?;
+        let candidate = resolved
+            .persist_edit(
+                &original,
+                (0, right),
+                DigitalBinding::Key(key_from_name("E")),
+            )?
+            .ok_or("valid key edit rejected")?;
+        let next = resolved
+            .persist_edit(
+                &candidate,
+                (0, primary),
+                DigitalBinding::Mouse(Some(PointerButton::Right)),
+            )?
+            .ok_or("valid mouse edit rejected")?;
+        let store = fixture.store()?;
+        let before = store.load().map_err(|error| format!("{error:?}"))?;
+        if resolved
+            .persist_edit(&next, (0, pause), DigitalBinding::Key(None))?
+            .is_some()
+            || resolved
+                .persist_edit(
+                    &next,
+                    (1, right),
+                    DigitalBinding::Key(key_from_name("E")),
+                )?
+                .is_some()
+        {
+            return Err("invalid edit was admitted".into());
+        }
+        if store.load().map_err(|error| format!("{error:?}"))? != before
+            || fixture.resolve(&[])?.profiles != next
+            || resolved.profiles != original
+        {
+            return Err("edit changed an active or admitted profile".into());
         }
         Ok(())
     }

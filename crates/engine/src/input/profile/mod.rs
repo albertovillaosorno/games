@@ -33,6 +33,8 @@
 
 //! Bounded, reusable portable digital input profiles.
 
+/// Shared digital binding editor.
+pub mod editor;
 mod encode;
 
 use std::collections::{BTreeMap, BTreeSet};
