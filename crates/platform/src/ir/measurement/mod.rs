@@ -188,13 +188,14 @@ pub fn executable_bytes() -> IoResult<u64> {
     <() as MeasurementSource>::executable_bytes()
 }
 
-/// Read the process-wide monotonic observation clock.
+/// Read the host monotonic observation clock.
 ///
-/// The origin is arbitrary, shared within this process and distinct from
-/// wall time, simulation ticks and device input session clocks.
+/// The origin is arbitrary, shared within one execution context and distinct
+/// from wall time, simulation ticks and device input session clocks. Do not
+/// compare observations across processes, browser documents or workers.
 ///
 /// # Errors
-/// Reports an unavailable observation clock.
+/// Reports an unavailable clock or an invalid host timestamp.
 pub fn now() -> IoResult<Duration> {
     <() as MeasurementSource>::now()
 }

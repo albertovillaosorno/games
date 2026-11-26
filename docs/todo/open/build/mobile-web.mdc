@@ -169,3 +169,27 @@ This establishes a real browser persistence slice, not browser title
 packaging, physical touch, graphics presentation, audio, portable save
 transfer between origins or crash-durability acceptance. Android
 SDK/NDK and attached device remain unavailable.
+
+The browser host now exposes the document's monotonic performance clock
+through the shared measurement capability. It converts fractional
+milliseconds into durations, rejects invalid or unrepresentable
+timestamps and retains the portable reversed-interval rejection. Clock
+origins must not be compared across documents, workers or processes.
+Browser resident memory and executable size remain unsupported.
+
+Fresh validation 1795677054225325622-2687397 passed 1,869 aggregate
+test executions and the six-target matrix. The browser diagnostic
+now observes the clock before opening storage. The official binding CLI
+generated a 77,688-byte module and 11,348-byte JavaScript binding.
+The exact module embedded in the diagnostic had SHA-256
+f9761f1e2a70947ed9d604a9ccd2ee89d66eaaa89825dcabf72cf2019935ea3d.
+
+Eight isolated Firefox 160.0 launches passed. The six storage cases
+also observed four finite, nonnegative, nondecreasing timestamps from
+the actual browser clock per launch. Equal timestamps were accepted
+at browser timer precision. Two injected host-clock controls returned
+failure before changing the stored value: a NaN timestamp and a
+100-to-99-millisecond reversed interval. All eight screenshots
+reported green acceptance indicators. This establishes a browser
+clock observation adapter, not a browser game loop, graphics,
+touch or distribution acceptance.

@@ -9,33 +9,34 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - An explicitly invoked storage-capability smoke scenario.
+//   - An explicitly invoked storage and clock capability smoke.
 // - Must-Not:
 //   - Open native or browser APIs, use real saves or interpret game data.
 // - Allows:
 //   - Inputs: Synthetic payloads in a dedicated smoke-only namespace.
-//   - Outputs: Success or a storage invariant failure.
+//   - Outputs: Success or a storage or clock invariant failure.
 //   - Side effects: Replacement of a bounded diagnostic save slot.
 // - Split-When:
-//   - Another storage scenario needs independent diagnostic setup.
+//   - Another capability scenario needs independent diagnostic setup.
 // - Merge-When:
-//   - A shared executable covers equivalent storage acceptance.
+//   - A shared executable covers equivalent capability acceptance.
 // - Summary:
-//   - Check save-slot publication, replacement and reload.
+//   - Check monotonic observations and save-slot publication and reload.
 // - Description:
-//   - Exercise the platform's selected persistence implementation.
+//   - Exercise the platform's selected clock and persistence implementations.
 // - Usage:
 //   - Invoke in an isolated test environment, not a user profile.
 // - Defaults:
 //   - No original assets or gameplay state.
 
-//! Explicit storage smoke for an isolated diagnostic namespace.
+//! Explicit host capability smoke for an isolated diagnostic namespace.
 
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
 use games::safety::SafetyError;
+use games_platform::ir::measurement::{elapsed_between, now};
 use games_platform::ir::storage::file::FileReadError;
 use games_platform::ir::storage::save::{SaveError, SaveStore};
 
@@ -49,6 +50,10 @@ fn open(name: &str) -> Result<SaveStore, &'static str> {
 }
 
 fn main() -> Result<(), &'static str> {
+    let first = now().map_err(|_error| "clock unavailable or invalid")?;
+    let second = now().map_err(|_error| "clock unavailable or invalid")?;
+    let _interval =
+        elapsed_between(first, second).map_err(|_error| "clock reversed")?;
     let store = open(NAMESPACE)?;
     let separate = open("browser-storage-smoke-other")?;
     let missing = SaveError::Read(FileReadError::Io(ErrorKind::NotFound));

@@ -31,7 +31,7 @@ nix.workspace = true
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 js-sys.workspace = true
 wasm-bindgen.workspace = true
-web-sys = { workspace = true, features = ["Window", "Storage"] }
+web-sys = { workspace = true, features = ["Window", "Storage", "Performance"] }
 
 [features]
 importer = ["dep:games-importer"]

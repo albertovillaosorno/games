@@ -243,7 +243,9 @@ impl MeasurementSource for () {
     fn now() -> io::Result<Duration> {
         #[cfg(not(target_arch = "wasm32"))]
         return Ok(linux::performance::now());
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        return web::performance::now();
+        #[cfg(all(target_arch = "wasm32", not(target_os = "unknown")))]
         Err(ErrorKind::Unsupported.into())
     }
 

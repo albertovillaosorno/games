@@ -23,7 +23,7 @@
 // - Summary:
 //   - Platform integration outside the transport-neutral engine.
 // - Description:
-//   - Exposes origin-local storage behind a private browser boundary.
+//   - Exposes origin-local storage and timing behind a private boundary.
 // - Usage:
 //   - Compose adapters with the engine in a host application.
 // - Defaults:
@@ -31,4 +31,5 @@
 
 //! Browser implementations behind the portable capability interface.
 
+pub(super) mod performance;
 mod storage;
