@@ -32,6 +32,7 @@
 //! Title runtime composition for the initial street and session loop.
 
 mod audio;
+mod axis_smoke;
 mod controller;
 mod encounter;
 mod lan;
@@ -2071,7 +2072,11 @@ fn smoke_controller_selection(profiles: &Profiles) -> Result<(), RenderError> {
     {
         return Err(failure("controller selection did not join Homer"));
     }
-    Ok(())
+    let directions = axis_smoke::verify(profiles)?;
+    write_status(format_args!(
+        "Synthetic controller axes: {directions} directions verified"
+    ))
+    .map_err(failure)
 }
 
 fn smoke_touch_selection(

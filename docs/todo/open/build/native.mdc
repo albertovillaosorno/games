@@ -332,3 +332,17 @@ meters, 600 movement and 20 combat submissions, and zero movement
 work-budget misses. Its saved hash remained unchanged. This verifies
 keyboard-driven axis editing and persistence, not physical analogue
 controller operation or audible output.
+
+Native hidden smoke now checks all 48 signed controller-axis
+directions across the four loaded station profiles. Each probe
+checks neutral, below-press, exact press, retained hold, exact
+release and neutral again, including unbound sides. Both a saved
+interactive axis profile and an explicit edge-case profile passed
+the rebuilt release binary's Xvfb/OpenGL smoke on 2026-11-25. The
+latter included thresholds 32767/32766 and 1/0, a positive trigger
+assignment and the same logical action on both sides. Each run
+verified 48 directions, 600 movement and 20 combat submissions with
+zero frame-budget misses, 444 camera columns, two cooperative pose
+families and six reinforcement meters. The saved-profile run left
+its settings hash unchanged. These are synthetic input events and
+do not replace physical device or audible-output acceptance.
