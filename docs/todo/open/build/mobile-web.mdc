@@ -1358,3 +1358,19 @@ removed the picker and canvas. These exercise the production
 acquisition and routing path with simulated objects, not physical
 Gamepad API exposure or hardware. The host uinput node is not writable
 by the current account; no elevated input access was attempted.
+
+The exact 234,040-byte diagnostic module was also rerun with the
+external Firefox observer reporting zero for every keyboard and focus
+event timestamp. This deliberately makes the keyboard admission and
+controller cancellation on blur share the same timestamp; their order
+must instead follow acquisition. All six expected outcomes passed,
+including the three negative controls. The visible, hidden and repeated
+success cases again removed every canvas and balanced all installed
+listeners. The observer initially failed to apply its timestamp override;
+the corrected run verified the override before execution. This is a
+synthetic clock-coarsening check, not a physical latency measurement.
+
+On 2026-11-26 Android Debug Bridge remained available, but the SDK and
+NDK environment variables, conventional installation directories,
+SDK manager, NDK build command and Android cross-linker were absent.
+The Android target remains compile-time evidence only.
