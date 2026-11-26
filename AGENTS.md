@@ -19,6 +19,16 @@
   Cache is under `.cache/validate/`; run logs are under `.temp/validate/`.
 - Keep task headings, identifiers, priorities and dependency order aligned.
   Move records to the completed directory only with actual evidence.
+- Prioritise task acceptance over accumulating refinements. Begin each
+  work slice by naming the earliest open task and its unmet criterion.
+  Review acceptance after every validated implementation slice; close
+  satisfied shared contracts without waiting for future title parity
+  or unimplemented backends assigned to later tasks. Preserve concrete
+  limitations and regression tests. Do not reopen or expand accepted
+  scope merely to polish it. Fix newly discovered real defects, but
+  defer speculative enhancements until a current title requires them.
+  Coordinate distinct acceptance blockers rather than parallel work
+  on the same already-demonstrated capability.
 - Keep the root README concise: purpose, goals, platform status, entry
   points and catalogue. Put implementation details, commands, limits and
   technical design under docs/technical; keep title evidence in tasks.

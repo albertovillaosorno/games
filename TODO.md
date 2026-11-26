@@ -20,12 +20,6 @@ Verify local and self-hosted play without commercial services.
 
 [TODO - Offline and multiplayer contracts](docs/todo/open/contracts/network.mdc)
 
-### TODO - Host and asset safety
-
-Protect the host from malformed or malicious user-supplied data.
-
-[TODO - Host and asset safety](docs/todo/open/contracts/security.mdc)
-
 ### TODO - Portable capability IR and platform isolation
 
 Eliminate existing platform coupling through one platform crate: public

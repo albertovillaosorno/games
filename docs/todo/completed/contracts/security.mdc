@@ -1,6 +1,6 @@
 ---
 id: "security"
-status: "open"
+status: "completed"
 lane: "1"
 priority: "p1"
 area: "contracts"
@@ -24,7 +24,7 @@ Protect the host from malformed or malicious user-supplied data.
 
 ## Evidence
 
-Partial evidence, 2026-11-24: fresh validation passed in run
+Initial evidence, 2026-11-24: fresh validation passed in run
 1795575348175824037-2468367 (70 tests).
 
 `games_assets::archive` rejects synthetic traversal and Windows-drive paths,
@@ -548,3 +548,18 @@ non-single-link and untrusted-mode lease entries without changing their
 contents. Fresh Xvfb/X11 and dummy-audio validation
 1795660534548555459-3863730 passed 1,674 aggregate test executions and all
 six portable core checks. Trusted workspace ancestry remains required.
+
+Acceptance review, 2026-11-25: the current host and asset safety contract
+is satisfied for admitted passive media and supported Linux operations.
+The archive and save regressions reject traversal, links, excessive
+resources and corrupt envelopes. Imports decode data without executing
+original binaries. Passive overlays require explicit trusted slots,
+matching media layouts and verified payloads. Bounded authenticated
+network messages and owner-controlled file access constrain host effects.
+Ordinary-user diagnostics demonstrate no required elevated privileges.
+Future executable or gameplay-data mod support requires a new admission
+and isolation review before activation; it is not presently supported.
+Trusted workspace ancestry and same-user process assumptions remain.
+Other native backends must demonstrate their own storage conformance
+before being declared supported. This acceptance does not certify
+arbitrary executable mods or protection against hostile same-user code.
