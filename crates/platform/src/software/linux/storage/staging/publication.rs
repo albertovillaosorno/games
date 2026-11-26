@@ -39,8 +39,6 @@ use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::Path;
 
 use games_assets::ContentHash;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use games_assets::archive::validate_path;
 use nix::fcntl::openat;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use nix::sys::stat::fchmod;
@@ -59,10 +57,12 @@ use super::super::file::{
     trusted_directory_stat, verify_staged_regular,
 };
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
+use super::PrivateDirectory;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::pool::SharedPool;
 use super::{ArchiveStaging, Directory, StagedArchive, StagingError};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use super::{PrivateDirectory, staging_path};
+use crate::ir::security::staging::{AdmittedAuthoredFile, PublicationName};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::{
     AuthoredFactory, AuthoredPort, OpenAuthored, PublishedDirectory,
@@ -160,16 +160,27 @@ impl AuthoredStaging {
     /// Rejects aborted writes, changed storage, non-component destinations,
     /// collisions and pre-publication failures. The receipt reports a
     /// post-publication parent sync failure separately.
+    #[cfg(test)]
     pub(super) fn publish(
-        mut self,
+        self,
         name: &OsStr,
+    ) -> Result<PublishedDirectory, StagingError> {
+        if self.failed {
+            return Err(StagingError::Aborted);
+        }
+        self.publish_admitted(PublicationName::new(name)?)
+    }
+
+    fn publish_admitted(
+        mut self,
+        name: PublicationName<'_>,
     ) -> Result<PublishedDirectory, StagingError> {
         if self.failed {
             return Err(StagingError::Aborted);
         }
         self.temporary.verify_tree(&self.registry, true)?;
         self.temporary.verify_tree(&self.registry, false)?;
-        publish_directory(&mut self.temporary, name)
+        publish_directory(&mut self.temporary, name.value())
     }
 
     /// Write an admitted, independently authored file without replacement.
@@ -180,6 +191,7 @@ impl AuthoredStaging {
     /// # Errors
     /// Rejects collisions, unsafe paths and observed directory substitution.
     /// Any write failure permanently aborts publication.
+    #[cfg(test)]
     pub(super) fn write_file(
         &mut self,
         path: &str,
@@ -189,37 +201,31 @@ impl AuthoredStaging {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        let result = self.write_member(path, bytes, executable);
+        let result = AdmittedAuthoredFile::new(path, bytes, executable)
+            .and_then(|file| self.write_member(file));
         self.failed = result.is_err();
         result
     }
 
     fn write_member(
         &mut self,
-        path: &str,
-        bytes: &[u8],
-        executable: bool,
+        file: AdmittedAuthoredFile<'_>,
     ) -> Result<(), StagingError> {
-        validate_path(path)?;
-        let (parents, leaf) = staging_path(path)?;
+        let (parents, leaf) = file.parts();
         let (directory, descriptor) =
             self.registry.descend(&self.temporary.root, parents, None)?;
         let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
         let mode = Mode::S_IRUSR
             | Mode::S_IWUSR
-            | if executable {
+            | if file.executable() {
                 Mode::S_IXUSR
             } else {
                 Mode::empty()
             };
-        let (mut file, node) = directory.create_file(parent, leaf)?;
-        file.write_all(bytes)?;
-        fchmod(&file, mode)?;
-        node.record_file(
-            &file,
-            u64::try_from(bytes.len())
-                .map_err(|_error| StagingError::ChangedStorage)?,
-        )
+        let (mut output, node) = directory.create_file(parent, leaf)?;
+        output.write_all(file.bytes())?;
+        fchmod(&output, mode)?;
+        node.record_file(&output, file.size())
     }
 }
 
@@ -261,11 +267,9 @@ impl AuthoredFactory for () {
 impl AuthoredPort for AuthoredStaging {
     fn append_member(
         &mut self,
-        path: &str,
-        bytes: &[u8],
-        executable: bool,
+        file: AdmittedAuthoredFile<'_>,
     ) -> Result<(), StagingError> {
-        self.write_file(path, bytes, executable)
+        self.write_member(file)
     }
 
     fn location(&self) -> &OsStr {
@@ -274,9 +278,9 @@ impl AuthoredPort for AuthoredStaging {
 
     fn publish_complete(
         self: Box<Self>,
-        name: &OsStr,
+        name: PublicationName<'_>,
     ) -> Result<PublishedDirectory, StagingError> {
-        (*self).publish(name)
+        (*self).publish_admitted(name)
     }
 }
 

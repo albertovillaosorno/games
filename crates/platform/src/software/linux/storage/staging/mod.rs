@@ -71,8 +71,6 @@ use crate::ir::storage::bundle::PAYLOADS_DIRECTORY;
 use crate::ir::storage::staging::PreparedManifest;
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::PublishedBundle;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-use crate::ir::storage::staging::staging_path;
 use crate::ir::storage::staging::{
     AdmittedArchiveEntry, ArchiveFactory, ArchivePort, CanonicalFactory,
     CanonicalPort, CompletedArchive, CompletedArchivePort, CompletedBundle,
@@ -776,7 +774,18 @@ mod tests {
         use std::ffi::OsStr;
 
         let parent = fixture()?;
-        for name in ["", ".", "..", "../escape", "nested/entry", "end/"] {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "nested/entry",
+            "end/",
+            "a\\b",
+            "NUL",
+            "trailing.",
+            "trailing ",
+        ] {
             let stage = AuthoredStaging::new(&parent.path)?;
             let temporary = stage.path().to_owned();
             require(matches!(

@@ -37,13 +37,14 @@ use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read, Write};
 
 use games_assets::archive::{
-    ArchiveBudget, ArchiveError, EntryBudget, EntryKind, validate_path,
+    ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
 };
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 
 use super::bundle::{BundleError, CanonicalBundle};
 use crate::ir::security::staging::{
-    AdmittedManifest, AdmittedPayload, CanonicalAdmission,
+    AdmittedAuthoredFile, AdmittedManifest, AdmittedPayload,
+    CanonicalAdmission, PublicationName, staging_path,
 };
 
 /// A staging operation failed and the result must not be published.
@@ -590,16 +591,14 @@ pub(crate) trait AuthoredFactory {
 pub(crate) trait AuthoredPort: Debug {
     fn append_member(
         &mut self,
-        path: &str,
-        bytes: &[u8],
-        executable: bool,
+        file: AdmittedAuthoredFile<'_>,
     ) -> Result<(), StagingError>;
 
     fn location(&self) -> &OsStr;
 
     fn publish_complete(
         self: Box<Self>,
-        name: &OsStr,
+        name: PublicationName<'_>,
     ) -> Result<PublishedDirectory, StagingError>;
 }
 
@@ -642,7 +641,8 @@ impl AuthoredStaging {
         self,
         name: &OsStr,
     ) -> Result<PublishedDirectory, StagingError> {
-        self.transaction.finish()?.publish_complete(name)
+        let backend = self.transaction.finish()?;
+        backend.publish_complete(PublicationName::new(name)?)
     }
 
     /// Write one trusted file using the portable ASCII namespace.
@@ -657,21 +657,11 @@ impl AuthoredStaging {
         executable: bool,
     ) -> Result<(), StagingError> {
         self.transaction.apply(|backend| {
-            validate_path(path)?;
-            let _parts = staging_path(path)?;
-            backend.append_member(path, bytes, executable)
+            backend.append_member(AdmittedAuthoredFile::new(
+                path, bytes, executable,
+            )?)
         })
     }
-}
-
-type PathParts<'path> = (&'path str, &'path str);
-
-pub(crate) fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
-    const MAX_DEPTH: usize = 64;
-    if !path.is_ascii() || path.split('/').count() > MAX_DEPTH {
-        return Err(StagingError::UnsupportedPath);
-    }
-    Ok(path.rsplit_once('/').unwrap_or(("", path)))
 }
 
 #[cfg(test)]
@@ -809,11 +799,13 @@ mod tests {
     impl AuthoredPort for AuthoredFake {
         fn append_member(
             &mut self,
-            path: &str,
-            bytes: &[u8],
-            executable: bool,
+            file: AdmittedAuthoredFile<'_>,
         ) -> Result<(), StagingError> {
-            if path == "program" && bytes == b"binary" && executable {
+            if file.parts() == ("", "program")
+                && file.bytes() == b"binary"
+                && file.executable()
+                && file.size() == 6
+            {
                 Ok(())
             } else {
                 Err(StagingError::Collision)
@@ -826,11 +818,11 @@ mod tests {
 
         fn publish_complete(
             self: Box<Self>,
-            name: &OsStr,
+            name: PublicationName<'_>,
         ) -> Result<PublishedDirectory, StagingError> {
             Ok(PublishedDirectory {
                 durability: Err(ErrorKind::Other),
-                path: name.to_os_string(),
+                path: name.value().to_os_string(),
             })
         }
     }
@@ -1264,6 +1256,51 @@ mod tests {
         AuthoredStaging {
             transaction: Transaction::new(Box::new(AuthoredFake)),
         }
+    }
+
+    #[test]
+    fn authored_publication_rejects_nonportable_destinations() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "nested/entry",
+            "end/",
+            "a\\b",
+            "C:drive",
+            "NUL",
+            "trailing.",
+            "trailing ",
+            "caf\u{e9}",
+            "a\0b",
+        ] {
+            assert!(matches!(
+                authored().publish(OsStr::new(name)),
+                Err(StagingError::UnsupportedPath)
+            ));
+        }
+    }
+
+    #[test]
+    fn authored_file_admission_preserves_nested_bytes_and_mode()
+    -> Result<(), StagingError> {
+        let bytes = b"independently authored";
+        let member =
+            AdmittedAuthoredFile::new("nested/bin/program.exe", bytes, true)?;
+        let mut stage = authored();
+        (member.parts() == ("nested/bin", "program.exe")
+            && member.bytes() == bytes
+            && member.size() == 22
+            && member.executable()
+            && stage.write_file("../bad", bytes, true)
+                == Err(StagingError::Safety(ArchiveError::UnsafePath))
+            && matches!(
+                stage.publish(OsStr::new("invalid/name")),
+                Err(StagingError::Aborted)
+            ))
+        .then_some(())
+        .ok_or(StagingError::ChangedStorage)
     }
 
     #[test]

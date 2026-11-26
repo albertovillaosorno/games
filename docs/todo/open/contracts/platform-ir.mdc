@@ -508,3 +508,13 @@ The fixed-step preview propagates clock errors rather than clamping a
 reversed simulation interval. Fresh X11 and dummy-audio validation
 1795656042862555034-2727825 passed 1,600 aggregate test executions and
 all six portable core checks.
+
+Authored package staging now binds exact bytes, portable path components,
+length and explicit executable intent before native writes. Destination names
+must be one portable ASCII component before publication dispatch, including
+on adapters that would otherwise accept an invalid name. Native descriptor,
+metadata, permission and no-replace publication checks remain mandatory.
+Fake and native regressions exercise unsafe names, nested executable files
+and aborted transaction precedence. Fresh native validation
+1795656170216363487-2757491 passed 1,604 aggregate test executions and all
+six portable core checks.

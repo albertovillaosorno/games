@@ -8,7 +8,7 @@
 //   - LICENSE
 // Boundary-Contract:
 // - Owns:
-//   - Portable budget, payload integrity and canonical manifest admission.
+//   - Portable archive paths, payload budgets and publication admission.
 // - Must-Not:
 //   - Open storage, choose native paths or publish assets.
 // - Allows:
@@ -20,19 +20,20 @@
 // - Merge-When:
 //   - Another shared policy owns equivalent canonical admission.
 // - Summary:
-//   - Bind each canonical payload to its verified identity and limits.
+//   - Bind staged members and destinations to shared admission policy.
 // - Description:
-//   - Reserve resources before hashing and check the complete inventory.
+//   - Check paths and inventory before dispatching storage operations.
 // - Usage:
-//   - Admit payloads before dispatch and verify manifests before finishing.
+//   - Admit members and destinations before storage dispatch.
 // - Defaults:
 //   - Reject duplicates, exhausted budgets and integrity mismatches.
 
-//! Shared canonical staging admission.
+//! Shared private staging and publication admission.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 
-use games_assets::archive::{ArchiveBudget, EntryKind};
+use games_assets::archive::{ArchiveBudget, EntryKind, validate_path};
 use games_assets::{AssetError, ContentHash};
 
 use crate::ir::storage::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
@@ -181,6 +182,101 @@ impl AdmittedManifest<'_> {
     }
 }
 
+/// An independently authored file with an admitted portable path and bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct AdmittedAuthoredFile<'input> {
+    bytes: &'input [u8],
+    executable: bool,
+    leaf: &'input str,
+    parents: &'input str,
+    size: u64,
+}
+
+impl<'input> AdmittedAuthoredFile<'input> {
+    /// Exact independently authored bytes.
+    #[must_use]
+    pub const fn bytes(&self) -> &'input [u8] {
+        self.bytes
+    }
+
+    /// Whether the owner execute bit was explicitly requested.
+    #[must_use]
+    pub const fn executable(&self) -> bool {
+        self.executable
+    }
+
+    pub(crate) fn new(
+        path: &'input str,
+        bytes: &'input [u8],
+        executable: bool,
+    ) -> Result<Self, StagingError> {
+        validate_path(path)?;
+        let (parents, leaf) = staging_path(path)?;
+        let size = u64::try_from(bytes.len())
+            .map_err(|_error| StagingError::ChangedStorage)?;
+        Ok(Self {
+            bytes,
+            executable,
+            leaf,
+            parents,
+            size,
+        })
+    }
+
+    /// Admitted parent components and final filename.
+    #[must_use]
+    pub const fn parts(&self) -> (&'input str, &'input str) {
+        (self.parents, self.leaf)
+    }
+
+    /// Exact admitted length.
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+/// One portable component admitted as a new publication directory name.
+#[derive(Clone, Copy, Debug)]
+pub struct PublicationName<'name>(&'name OsStr);
+
+impl<'name> PublicationName<'name> {
+    pub(crate) fn new(name: &'name OsStr) -> Result<Self, StagingError> {
+        let component = name.to_str().ok_or(StagingError::UnsupportedPath)?;
+        if !component.is_ascii()
+            || component.contains('/')
+            || validate_path(component).is_err()
+        {
+            return Err(StagingError::UnsupportedPath);
+        }
+        Ok(Self(name))
+    }
+
+    /// The exact admitted destination component.
+    #[must_use]
+    pub const fn value(&self) -> &'name OsStr {
+        self.0
+    }
+}
+
+type PathParts<'path> = (&'path str, &'path str);
+
+pub(crate) fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
+    const MAX_DEPTH: usize = 64;
+    if !path.is_ascii() || path.split('/').count() > MAX_DEPTH {
+        return Err(StagingError::UnsupportedPath);
+    }
+    Ok(path.rsplit_once('/').unwrap_or(("", path)))
+}
+
+pub(crate) fn manifest_size(bytes: &[u8]) -> Result<u64, AssetError> {
+    u64::try_from(bytes.len()).map_err(|_error| AssetError::TooLarge)
+}
+
+pub(crate) fn payload_path(digest: ContentHash) -> String {
+    format!("{PAYLOADS_DIRECTORY}/{digest}")
+}
+
 fn reserve_payload(
     budget: &mut ArchiveBudget,
     digest: ContentHash,
@@ -195,12 +291,4 @@ fn reserve_payload(
             .finish()?;
     }
     Ok(())
-}
-
-pub(crate) fn manifest_size(bytes: &[u8]) -> Result<u64, AssetError> {
-    u64::try_from(bytes.len()).map_err(|_error| AssetError::TooLarge)
-}
-
-pub(crate) fn payload_path(digest: ContentHash) -> String {
-    format!("{PAYLOADS_DIRECTORY}/{digest}")
 }
