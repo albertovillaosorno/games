@@ -45,7 +45,10 @@ use web_sys::KeyboardEventInit;
 use web_sys::{Event, EventTarget, KeyboardEvent};
 
 #[cfg(feature = "interactive")]
-use super::gamepad::browser::{Gamepads, Samples};
+use super::gamepad::{
+    ControllerEvents,
+    browser::{Events, Gamepads},
+};
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::sensor::{MotionError, MotionSensor};
 use crate::ir::hardware::{
@@ -75,7 +78,7 @@ struct EventQueue {
 
 pub(super) struct EventSource {
     #[cfg(feature = "interactive")]
-    controller_samples: Samples,
+    controller_events: Events,
     listeners: Vec<Listener>,
     mouse: Rc<RefCell<mouse::MouseButtons>>,
     queue: Rc<RefCell<EventQueue>>,
@@ -210,7 +213,9 @@ impl EventSource {
     ) -> Result<Self, RenderError> {
         let mut source = Self {
             #[cfg(feature = "interactive")]
-            controller_samples: Rc::new(RefCell::new(VecDeque::new())),
+            controller_events: Rc::new(RefCell::new(ControllerEvents::new(
+                scope,
+            ))),
             listeners: Vec::new(),
             mouse: Rc::new(RefCell::new(mouse::MouseButtons::default())),
             queue: Rc::new(RefCell::new(EventQueue::new(capacity)?)),
@@ -232,6 +237,8 @@ impl EventSource {
         let sink = Rc::clone(&self.queue);
         let mouse = Rc::clone(&self.mouse);
         let scope = self.scope;
+        #[cfg(feature = "interactive")]
+        let controllers = Rc::clone(&self.controller_events);
         let callback = Closure::<dyn FnMut(Event)>::new(move |event| {
             let mut transitions = translate(&event).into_iter();
             let Some(first) = transitions.next() else {
@@ -240,6 +247,10 @@ impl EventSource {
             let stamp = super::performance::timestamp(event.time_stamp()).ok();
             let mut queue = sink.borrow_mut();
             for transition in std::iter::once(first).chain(transitions) {
+                #[cfg(feature = "interactive")]
+                if transition == focus_lost() {
+                    controllers.borrow_mut().cancel(stamp);
+                }
                 queue.push(stamp, transition, scope);
             }
             // Overflow cancels logical holds. Discard adapter holds too,
@@ -278,15 +289,8 @@ impl EventSource {
         element: &web_sys::Element,
         limit: NonZeroUsize,
     ) -> Result<crate::ir::input::InputPort, RenderError> {
-        if Rc::strong_count(&self.controller_samples) != 1 {
-            return Err(RenderError::Unsupported);
-        }
-        let gamepads = Gamepads::new(
-            element,
-            limit,
-            Rc::clone(&self.controller_samples),
-            self.scope,
-        )?;
+        let gamepads =
+            Gamepads::new(element, limit, Rc::clone(&self.controller_events))?;
         Ok(Box::new(BrowserInput {
             gamepads: Some(gamepads),
             scope: self.scope,
@@ -295,7 +299,7 @@ impl EventSource {
 
     pub(super) fn pop(&self) -> Option<InputSample> {
         #[cfg(feature = "interactive")]
-        if let Some(sample) = self.controller_samples.borrow_mut().pop_front() {
+        if let Some(sample) = self.controller_events.borrow_mut().pop() {
             return Some(sample);
         }
         self.queue.borrow_mut().pop()

@@ -32,13 +32,16 @@
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub(super) mod browser;
 
+use std::collections::VecDeque;
+use std::mem;
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use games::input::InputEvent;
 use games::input::physical::{ControllerAxis, ControllerButton};
 
 use crate::ir::frame::RenderError;
-use crate::ir::hardware::{HostEvent, InputTransition};
+use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
 
 const BUTTONS: [(u32, ControllerButton); 15] = [
     (0, ControllerButton::South),
@@ -62,6 +65,95 @@ const MAX_DEVICES: usize = 64;
 const MAX_TRANSITIONS: usize = BUTTONS.len() + ControllerAxis::ALL.len();
 
 type Observation = (u32, State);
+
+/// One event feed shared by the scoped surface and its controller port.
+/// A real focus-loss observation may arrive before the next frame poll.
+pub(super) struct ControllerEvents {
+    registry: Option<Registry>,
+    samples: VecDeque<InputSample>,
+    scope: u64,
+}
+
+impl ControllerEvents {
+    pub(super) fn cancel(&mut self, stamp: Option<Duration>) {
+        if let Some(registry) = &mut self.registry {
+            let scope = self.scope;
+            registry.neutralize(|edge| {
+                self.samples.push_back(InputSample::new(
+                    stamp,
+                    edge,
+                    Some(scope),
+                ));
+            });
+        }
+    }
+
+    fn close(&mut self) {
+        self.samples.clear();
+        self.registry = None;
+    }
+
+    fn disconnect(&mut self, index: u32) {
+        if let Some(registry) = &mut self.registry {
+            registry.disconnect(index);
+        }
+    }
+
+    pub(super) const fn new(scope: u64) -> Self {
+        Self {
+            registry: None,
+            samples: VecDeque::new(),
+            scope,
+        }
+    }
+
+    fn open(&mut self, limit: NonZeroUsize) -> Result<(), RenderError> {
+        if self.registry.is_some() {
+            return Err(RenderError::Unsupported);
+        }
+        let registry = Registry::new(limit)?;
+        // One polled batch and one cancellation batch may coexist. Further
+        // cancellation is idempotent until all samples are drained.
+        self.samples
+            .try_reserve_exact(
+                registry
+                    .limit
+                    .saturating_mul(MAX_TRANSITIONS)
+                    .saturating_mul(2),
+            )
+            .map_err(|_error| RenderError::TooLarge)?;
+        self.registry = Some(registry);
+        Ok(())
+    }
+
+    fn poll(
+        &mut self,
+        observations: Option<&[Observation]>,
+        stamp: Duration,
+    ) -> Result<Vec<InputEvent>, RenderError> {
+        if !self.samples.is_empty() {
+            return Ok(Vec::new());
+        }
+        let registry =
+            self.registry.as_mut().ok_or(RenderError::Unsupported)?;
+        let scope = self.scope;
+        registry.poll(observations, |edge| {
+            self.samples.push_back(InputSample::new(
+                Some(stamp),
+                edge,
+                Some(scope),
+            ));
+        })
+    }
+
+    pub(super) fn pop(&mut self) -> Option<InputSample> {
+        self.samples.pop_front()
+    }
+
+    fn remove(&mut self, id: u64) -> Option<HostEvent> {
+        self.registry.as_mut()?.remove(id)
+    }
+}
 
 #[derive(Debug)]
 struct Device {
@@ -116,6 +208,15 @@ impl Registry {
             self.devices.iter_mut().find(|device| device.index == index)
         {
             device.disconnected = true;
+        }
+    }
+
+    fn neutralize(&mut self, mut emit: impl FnMut(InputTransition)) {
+        for device in &mut self.devices {
+            let state = mem::take(&mut device.state);
+            for edge in State::default().changes(state, device.id) {
+                emit(edge);
+            }
         }
     }
 
@@ -238,6 +339,117 @@ fn signed_axis(value: f64) -> i16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_cancellation_precedes_the_next_focused_snapshot()
+    -> Result<(), RenderError> {
+        let scope = 7;
+        let mut feed = ControllerEvents::new(scope);
+        let limit = NonZeroUsize::MIN.saturating_add(1);
+        feed.open(limit)?;
+        check(feed.open(limit).is_err(), "one owning controller port")?;
+        let state = State::from_values([1.0f64; 6], [true; BUTTONS.len()])
+            .ok_or(RenderError::InvalidLength)?;
+        let observed = [(0, state), (1, state)];
+        let stamp = |ms| Duration::from_millis(ms);
+        check(
+            feed.poll(Some(&observed), stamp(1))?
+                == [InputEvent::Attached { device: 1 }, InputEvent::Attached {
+                    device: 2,
+                }],
+            "both controllers admitted",
+        )?;
+        check(
+            feed.poll(Some(&observed), stamp(2))?.is_empty(),
+            "held observations queued",
+        )?;
+        // Blur and refocus can occur between polls. Preserve all queued
+        // edges, append the neutral state at the loss time exactly once,
+        // and never admit a new snapshot ahead of those releases.
+        feed.cancel(Some(stamp(3)));
+        feed.cancel(Some(stamp(4)));
+        check(
+            feed.poll(Some(&observed), stamp(5))?.is_empty(),
+            "snapshot deferred while cancellation is queued",
+        )?;
+        for (old, new, time) in [
+            (State::default(), state, stamp(2)),
+            (state, State::default(), stamp(3)),
+        ] {
+            verify_samples(&mut feed, (old, new), time, scope)?;
+        }
+        check(feed.pop().is_none(), "duplicate cancellation")?;
+        check(
+            feed.poll(Some(&observed), stamp(6))?.is_empty(),
+            "same device identities on refocus",
+        )?;
+        verify_samples(&mut feed, (State::default(), state), stamp(6), scope)
+    }
+
+    #[test]
+    fn feed_ownership_and_disconnect_are_scoped() -> Result<(), RenderError> {
+        let scope = 7;
+        let mut feed = ControllerEvents::new(scope);
+        let limit = NonZeroUsize::MIN.saturating_add(1);
+        feed.open(limit)?;
+        let observed = [(0, State::default()), (1, State::default())];
+        let stamp = Duration::from_millis;
+        check(feed.poll(Some(&observed), stamp(1))?.len() == 2, "attached")?;
+        feed.disconnect(0);
+        check(
+            feed.poll(Some(&observed), stamp(7))?.is_empty()
+                && feed.pop()
+                    == Some(InputSample::new(
+                        Some(stamp(7)),
+                        InputTransition::Disconnected(1),
+                        Some(scope),
+                    )),
+            "disconnect still ordered",
+        )?;
+        check(
+            feed.remove(1)
+                == Some(HostEvent::Input(InputEvent::Detached { device: 1 })),
+            "detach still observed",
+        )?;
+        feed.close();
+        feed.cancel(Some(stamp(8)));
+        check(feed.pop().is_none(), "closed feed releases ownership")?;
+        feed.open(limit)?;
+        check(
+            feed.poll(Some(&observed), stamp(9))?
+                == [InputEvent::Attached { device: 1 }, InputEvent::Attached {
+                    device: 2,
+                }],
+            "independent reopened session",
+        )
+    }
+
+    fn verify_samples(
+        feed: &mut ControllerEvents,
+        (old, new): (State, State),
+        stamp: Duration,
+        scope: u64,
+    ) -> Result<(), RenderError> {
+        for device in [1, 2] {
+            let edges: Vec<_> = new.changes(old, device).collect();
+            check(
+                edges.len() == MAX_TRANSITIONS,
+                "complete controller snapshot",
+            )?;
+            for edge in edges {
+                check(
+                    feed.pop()
+                        == Some(InputSample::new(
+                            Some(stamp),
+                            edge,
+                            Some(scope),
+                        )),
+                    "ordered, scoped controller edge",
+                )?;
+            }
+        }
+        Ok(())
+    }
 
     fn axis(device: u64, value: i16) -> InputTransition {
         input(InputEvent::Axis { code: 0, device, value })

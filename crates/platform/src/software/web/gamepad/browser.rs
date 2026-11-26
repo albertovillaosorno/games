@@ -30,7 +30,6 @@
 //   - Ignore unavailable APIs and unmapped or malformed devices.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
@@ -42,14 +41,12 @@ use web_sys::{
     Window,
 };
 
-use super::{
-    BUTTONS, MAX_DEVICES, MAX_TRANSITIONS, Observation, Registry, State,
-};
+use super::{BUTTONS, ControllerEvents, MAX_DEVICES, Observation, State};
 use crate::ir::frame::RenderError;
-use crate::ir::hardware::{HostEvent, InputEvent, InputSample};
+use crate::ir::hardware::{HostEvent, InputEvent};
 use crate::software::web::performance;
 
-pub(in crate::software::web) type Samples = Rc<RefCell<VecDeque<InputSample>>>;
+pub(in crate::software::web) type Events = Rc<RefCell<ControllerEvents>>;
 
 struct Disconnect {
     callback: Closure<dyn FnMut(Event)>,
@@ -68,15 +65,13 @@ impl Drop for Disconnect {
 pub(in crate::software::web) struct Gamepads {
     _disconnect: Disconnect,
     element: Element,
-    registry: Rc<RefCell<Registry>>,
-    samples: Samples,
-    scope: u64,
+    events: Events,
 }
 
 impl Debug for Gamepads {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gamepads")
-            .field("scope", &self.scope)
+            .field("scope", &self.events.borrow().scope)
             .finish_non_exhaustive()
     }
 }
@@ -85,19 +80,13 @@ impl Gamepads {
     pub(in crate::software::web) fn new(
         element: &Element,
         limit: NonZeroUsize,
-        samples: Samples,
-        scope: u64,
+        events: Events,
     ) -> Result<Self, RenderError> {
         let window = element
             .owner_document()
             .and_then(|document| document.default_view())
             .ok_or(RenderError::Unsupported)?;
-        let registry = Rc::new(RefCell::new(Registry::new(limit)?));
-        samples
-            .borrow_mut()
-            .try_reserve_exact(limit.get().min(MAX_DEVICES) * MAX_TRANSITIONS)
-            .map_err(|_error| RenderError::TooLarge)?;
-        let devices = Rc::clone(&registry);
+        let devices = Rc::clone(&events);
         let callback = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
             if event.is_trusted()
                 && let Some(gamepad) = event
@@ -113,20 +102,19 @@ impl Gamepads {
                 callback.as_ref().unchecked_ref(),
             )
             .map_err(|_error| RenderError::Unsupported)?;
+        let disconnect = Disconnect { callback, window };
+        events.borrow_mut().open(limit)?;
         Ok(Self {
-            _disconnect: Disconnect { callback, window },
+            _disconnect: disconnect,
             element: element.clone(),
-            registry,
-            samples,
-            scope,
+            events,
         })
     }
 
     pub(in crate::software::web) fn poll(
         &self,
     ) -> Result<Vec<InputEvent>, RenderError> {
-        let mut samples = self.samples.borrow_mut();
-        if !samples.is_empty() {
+        if !self.events.borrow().samples.is_empty() {
             return Ok(Vec::new());
         }
         let focused = self.element.owner_document().is_some_and(|document| {
@@ -139,26 +127,22 @@ impl Gamepads {
         } else {
             None
         };
-        let stamp = Some(
-            performance::now()
-                .map_err(|_error| RenderError::InvalidTimestamp)?,
-        );
-        self.registry
-            .borrow_mut()
-            .poll(observed.as_deref(), |edge| {
-                samples.push_back(InputSample::new(
-                    stamp,
-                    edge,
-                    Some(self.scope),
-                ));
-            })
+        let stamp = performance::now()
+            .map_err(|_error| RenderError::InvalidTimestamp)?;
+        self.events.borrow_mut().poll(observed.as_deref(), stamp)
     }
 
     pub(in crate::software::web) fn remove(
         &self,
         id: u64,
     ) -> Option<HostEvent> {
-        self.registry.borrow_mut().remove(id)
+        self.events.borrow_mut().remove(id)
+    }
+}
+
+impl Drop for Gamepads {
+    fn drop(&mut self) {
+        self.events.borrow_mut().close();
     }
 }
 
