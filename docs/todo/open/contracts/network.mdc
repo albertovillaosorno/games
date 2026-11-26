@@ -828,3 +828,15 @@ and both admitted credential roles; certificate and private-key verification
 remain native responsibilities. Fresh Xvfb/X11 and dummy-audio validation
 1795662334733150647-94792 passed 1,721 aggregate test executions and all six
 portable core checks. Physical credential provisioning remains unverified.
+
+The native release at f3f91bf was rebuilt and exercised through the
+original-backed Simpsons preview with one host and three separately
+configured loopback controller processes. In an Xvfb display using SDL
+X11 and dummy audio, each remote joined, moved and released; all three
+remained responsive after 256 repeated input pairs. Disconnecting the
+middle controller while holding a direction stopped movement, the other
+controllers remained responsive, and same-identity rejoin restored input.
+Changed pixels and repeated stable captures verified observable movement
+and release. The initial launch lacked required settings directories;
+the corrected isolated run passed. Synthetic keyboard input, virtual
+presentation and loopback do not establish physical-device LAN acceptance.
