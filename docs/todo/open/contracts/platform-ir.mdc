@@ -628,3 +628,11 @@ rejects foreign-window cancellation, same-batch stale contacts and
 contacts predating the next geometry observation. Fresh X11 rendering
 and dummy audio validation 1795661194037297138-4049132 passed 1,697
 aggregate test executions and all six portable core checks.
+
+Common physical keyboard identities now resolve 133 version-one profile
+names without any native backend. Their keyboard-page routing codes and
+case-insensitive names remain unchanged; other legacy names retain the
+native adapter fallback. Portable round-trip and rejection tests, plus
+native name and extended-key fallback conformance, passed fresh X11
+rendering and dummy audio validation 1795661350177103436-4105345
+(1,702 aggregate test executions and all six portable core checks).

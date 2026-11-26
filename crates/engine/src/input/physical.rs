@@ -29,6 +29,115 @@
 // - Defaults:
 //   - Unrecognized profile names are rejected.
 
+// Version-one profile labels for common keyboard-page usage ranges.
+// Keep other named legacy keys with the platform fallback.
+const KEYBOARD_NAMES: &[KeyNameRange] = &[
+    (4, &[
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N",
+        "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ]),
+    (30, &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]),
+    (40, &[
+        "Return",
+        "Escape",
+        "Backspace",
+        "Tab",
+        "Space",
+        "-",
+        "=",
+        "[",
+        "]",
+        "\\",
+        "#",
+        ";",
+        "'",
+        "`",
+        ",",
+        ".",
+        "/",
+        "CapsLock",
+    ]),
+    (58, &[
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11",
+        "F12",
+    ]),
+    (70, &[
+        "PrintScreen",
+        "ScrollLock",
+        "Pause",
+        "Insert",
+        "Home",
+        "PageUp",
+        "Delete",
+        "End",
+        "PageDown",
+        "Right",
+        "Left",
+        "Down",
+        "Up",
+        "Numlock",
+        "Keypad /",
+        "Keypad *",
+        "Keypad -",
+        "Keypad +",
+        "Keypad Enter",
+        "Keypad 1",
+        "Keypad 2",
+        "Keypad 3",
+        "Keypad 4",
+        "Keypad 5",
+        "Keypad 6",
+        "Keypad 7",
+        "Keypad 8",
+        "Keypad 9",
+        "Keypad 0",
+        "Keypad .",
+    ]),
+    (101, &[
+        "Application",
+        "Power",
+        "Keypad =",
+        "F13",
+        "F14",
+        "F15",
+        "F16",
+        "F17",
+        "F18",
+        "F19",
+        "F20",
+        "F21",
+        "F22",
+        "F23",
+        "F24",
+        "Execute",
+        "Help",
+        "Menu",
+        "Select",
+        "Stop",
+        "Again",
+        "Undo",
+        "Cut",
+        "Copy",
+        "Paste",
+        "Find",
+        "Mute",
+        "VolumeUp",
+        "VolumeDown",
+    ]),
+    (224, &[
+        "Left Ctrl",
+        "Left Shift",
+        "Left Alt",
+        "Left GUI",
+        "Right Ctrl",
+        "Right Shift",
+        "Right Alt",
+        "Right GUI",
+    ]),
+];
+
+type KeyNameRange = (u32, &'static [&'static str]);
+
 /// Standard gamepad axes, independent of device-specific enumerations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControllerAxis {
@@ -319,6 +428,29 @@ impl KeyboardKey {
     pub const fn from_code(code: u32) -> Self {
         Self(code)
     }
+
+    /// Resolve a common physical key using its version-one profile name.
+    ///
+    /// Case is ignored, but whitespace and punctuation remain significant.
+    /// Other legacy names may require the originating platform adapter.
+    #[must_use]
+    pub fn from_profile_name(name: &str) -> Option<Self> {
+        KEYBOARD_NAMES.iter().find_map(|(first, names)| {
+            let offset = names
+                .iter()
+                .position(|label| label.eq_ignore_ascii_case(name))?;
+            first.checked_add(u32::try_from(offset).ok()?).map(Self)
+        })
+    }
+
+    /// Stable version-one profile name for a common physical key.
+    #[must_use]
+    pub fn profile_name(self) -> Option<&'static str> {
+        KEYBOARD_NAMES.iter().find_map(|(first, names)| {
+            let offset = usize::try_from(self.0.checked_sub(*first)?).ok()?;
+            names.get(offset).copied()
+        })
+    }
 }
 
 /// Physical pointer buttons, excluding unknown or synthetic touch buttons.
@@ -365,7 +497,7 @@ impl PointerButton {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControllerAxis, ControllerButton, PointerButton};
+    use super::{ControllerAxis, ControllerButton, KeyboardKey, PointerButton};
 
     #[test]
     fn axis_codes_and_names_are_stable() {
@@ -397,6 +529,41 @@ mod tests {
             Some(ControllerButton::South)
         );
         assert_eq!(ControllerButton::from_profile_name("unknown"), None);
+    }
+
+    #[test]
+    fn keyboard_names_round_trip_without_a_platform() {
+        for code in (4..=99).chain(101..=129).chain(224..=231) {
+            let key = KeyboardKey::from_code(code);
+            assert!(key.profile_name().is_some());
+            if let Some(name) = key.profile_name() {
+                assert_eq!(KeyboardKey::from_profile_name(name), Some(key));
+                assert_eq!(
+                    KeyboardKey::from_profile_name(&name.to_ascii_lowercase()),
+                    Some(key)
+                );
+            }
+        }
+        for (key, name) in [
+            (KeyboardKey::LETTER_A, "A"),
+            (KeyboardKey::ENTER, "Return"),
+            (KeyboardKey::SPACE, "Space"),
+            (KeyboardKey::F2, "F2"),
+            (KeyboardKey::KP_1, "Keypad 1"),
+            (KeyboardKey::LEFT, "Left"),
+        ] {
+            assert_eq!(key.profile_name(), Some(name));
+        }
+    }
+
+    #[test]
+    fn keyboard_unknown_names_and_codes_are_not_admitted() {
+        for code in [0, 3, 100, 130, 223, 232, u32::MAX] {
+            assert_eq!(KeyboardKey::from_code(code).profile_name(), None);
+        }
+        for name in ["", "none", "UNKNOWN", " A", "A ", "A\0"] {
+            assert_eq!(KeyboardKey::from_profile_name(name), None);
+        }
     }
 
     #[test]

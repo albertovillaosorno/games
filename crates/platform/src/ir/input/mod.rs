@@ -255,16 +255,18 @@ impl Haptics for NativeInput {
     }
 }
 
-/// Resolve a legacy physical keyboard profile name.
+/// Resolve a standard physical keyboard profile name or a legacy alias.
 #[must_use]
 pub fn key_from_name(name: &str) -> Option<KeyboardKey> {
-    <() as InputNames>::key_from_name(name)
+    KeyboardKey::from_profile_name(name)
+        .or_else(|| <() as InputNames>::key_from_name(name))
 }
 
 /// Display a physical keyboard profile name.
 #[must_use]
 pub fn key_name(key: KeyboardKey) -> &'static str {
-    <() as InputNames>::key_name(key)
+    key.profile_name()
+        .unwrap_or_else(|| <() as InputNames>::key_name(key))
 }
 
 #[cfg(test)]

@@ -662,6 +662,9 @@ mod tests {
     };
     use crate::ir::frame::RenderError;
     use crate::ir::hardware::InputTransition;
+    use crate::ir::input::{
+        key_from_name as portable_key_from_name, key_name as portable_key_name,
+    };
 
     #[test]
     fn keyboard_profile_names_preserve_routing_identities() {
@@ -679,6 +682,23 @@ mod tests {
         }
         assert_eq!(key_from_name("not-a-key"), None);
         assert_eq!(key_name(KeyboardKey::from_code(u32::MAX)), "UNKNOWN");
+    }
+
+    #[test]
+    fn common_portable_keyboard_names_match_existing_native_profiles() {
+        for code in (4..=99).chain(101..=129).chain(224..=231) {
+            let key = KeyboardKey::from_code(code);
+            assert_eq!(key.profile_name(), Some(key_name(key)));
+            if let Some(name) = key.profile_name() {
+                assert_eq!(key_from_name(name), Some(key));
+                assert_eq!(portable_key_from_name(name), Some(key));
+                assert_eq!(portable_key_name(key), name);
+            }
+        }
+        let extended = KeyboardKey::from_code(133);
+        assert_eq!(extended.profile_name(), None);
+        assert_eq!(portable_key_from_name("Keypad ,"), Some(extended));
+        assert_eq!(portable_key_name(extended), "Keypad ,");
     }
 
     #[test]
