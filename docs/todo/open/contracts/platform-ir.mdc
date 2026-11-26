@@ -565,3 +565,13 @@ withdraws contact admission immediately and retains the required
 cancellation until the next successful synchronization. Fresh native
 validation 1795656993703362794-2946590 passed 1,624 aggregate test
 executions and all six portable core checks.
+
+Frame and scene sessions now retain their admitted logical extent rather
+than accepting unsolicited adapter geometry. Frame and scene presentation
+check the extent before and after dispatch; scene readback receives the
+admitted extent and verifies it before and after native allocation.
+Scene settings also require the requested presentation mode to be
+observed before committing it. Drift invalidates presentation receipts,
+and a successful admitted resize can recover an inconsistent extent.
+Fresh native validation 1795657228495677731-2999073 passed 1,634 aggregate
+test executions and all six portable core checks.

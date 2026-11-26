@@ -69,7 +69,8 @@ pub(crate) trait SceneBackend: Debug {
         sprites: AdmittedDraws<'_>,
     ) -> Result<Option<PresentationLayout>, RenderError>;
     fn presentation_mode(&self) -> PresentationMode;
-    fn readback(&mut self) -> Result<Vec<u8>, RenderError>;
+    fn readback(&mut self, layout: FrameLayout)
+    -> Result<Vec<u8>, RenderError>;
     fn resize_target(&mut self, layout: FrameLayout)
     -> Result<(), RenderError>;
     fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError>;
@@ -79,6 +80,8 @@ pub(crate) trait SceneBackend: Debug {
 #[derive(Clone, Copy)]
 pub struct SceneView<'session> {
     backend: &'session dyn SceneBackend,
+    layout: FrameLayout,
+    mode: PresentationMode,
     presentation: &'session PresentationAdmission,
 }
 
@@ -93,8 +96,8 @@ impl Debug for SceneView<'_> {
 impl SceneView<'_> {
     /// Logical extent of the current target, including adaptive extension.
     #[must_use]
-    pub fn layout(self) -> FrameLayout {
-        self.backend.layout()
+    pub const fn layout(self) -> FrameLayout {
+        self.layout
     }
 
     /// Map surface-normalized input to the actually presented scene.
@@ -121,22 +124,31 @@ impl SceneView<'_> {
             .and_then(|layout| point.on_presentation(layout)))
     }
 
+    fn verify_geometry(self) -> Result<(), RenderError> {
+        if self.backend.layout() != self.layout
+            || self.backend.presentation_mode() != self.mode
+        {
+            self.presentation.invalidate();
+            return Err(RenderError::InvalidDimensions);
+        }
+        Ok(())
+    }
+
     /// Last presented layout, only if it matches current drawable geometry.
     /// # Errors
     /// Reports a failed drawable query.
     pub fn visible_layout(
         self,
     ) -> Result<Option<PresentationLayout>, RenderError> {
+        self.verify_geometry()?;
         self.presentation.visible(|| {
             if !self.backend.drawable_available() {
                 return Ok(None);
             }
-            self.backend
-                .surface_dimensions()?
-                .map(|surface| {
-                    self.layout()
-                        .presentation(self.backend.presentation_mode(), surface)
-                })
+            let observed = self.backend.surface_dimensions()?;
+            self.verify_geometry()?;
+            observed
+                .map(|surface| self.layout().presentation(self.mode, surface))
                 .transpose()
         })
     }
@@ -147,6 +159,8 @@ pub struct SceneSession<'session, 'backend> {
     admission: SceneAdmission,
     backend: &'session mut (dyn SceneBackend + 'backend),
     base: FrameLayout,
+    layout: FrameLayout,
+    mode: PresentationMode,
     presentation: PresentationAdmission,
 }
 
@@ -167,7 +181,14 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
         self.presentation.invalidate();
-        self.backend.apply_display_settings(settings)
+        self.backend.apply_display_settings(settings)?;
+        SceneView {
+            mode: settings.presentation,
+            ..self.view()
+        }
+        .verify_geometry()?;
+        self.mode = settings.presentation;
+        Ok(())
     }
 
     /// Poll at most the caller's event budget, waiting only on the first poll.
@@ -214,22 +235,25 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         maximum: FrameLayout,
     ) -> Result<FrameLayout, RenderError> {
         let request = AdaptiveWidthRequest::new(self.base, maximum)?;
-        let mode = self.backend.presentation_mode();
-        let surface = if request.needs_surface(mode) {
+        if self.backend.presentation_mode() != self.mode {
+            self.presentation.invalidate();
+            return Err(RenderError::InvalidDimensions);
+        }
+        let surface = if request.needs_surface(self.mode) {
             self.presentation
                 .observe_surface(self.backend.surface_dimensions())?
         } else {
             None
         };
-        let layout = request.select(mode, surface)?;
-        if self.layout() == layout {
+        let layout = request.select(self.mode, surface)?;
+        if self.layout == layout && self.backend.layout() == layout {
+            self.view().verify_geometry()?;
             return Ok(layout);
         }
         self.presentation.invalidate();
         self.backend.resize_target(layout)?;
-        if self.layout() != layout {
-            return Err(RenderError::InvalidDimensions);
-        }
+        SceneView { layout, ..self.view() }.verify_geometry()?;
+        self.layout = layout;
         Ok(layout)
     }
 
@@ -241,8 +265,8 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
 
     /// Current logical render extent.
     #[must_use]
-    pub fn layout(&self) -> FrameLayout {
-        self.backend.layout()
+    pub const fn layout(&self) -> FrameLayout {
+        self.layout
     }
 
     /// Upload a bounded, tightly packed RGBA atlas.
@@ -275,10 +299,13 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         if backend.layout() != base {
             return Err(RenderError::InvalidDimensions);
         }
+        let mode = backend.presentation_mode();
         Ok(Self {
             admission: SceneAdmission::new(limits),
             backend,
             base,
+            layout: base,
+            mode,
             presentation: PresentationAdmission::default(),
         })
     }
@@ -292,13 +319,11 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         sprites: &[SpriteDraw],
     ) -> Result<bool, RenderError> {
         let admitted = self.admission.draws(sprites)?;
+        self.view().verify_geometry()?;
         self.presentation.invalidate();
         let receipt = self.backend.present(background, admitted)?;
-        self.presentation.complete(
-            receipt,
-            self.layout(),
-            self.backend.presentation_mode(),
-        )
+        self.view().verify_geometry()?;
+        self.presentation.complete(receipt, self.layout, self.mode)
     }
 
     /// Whether the last presented frame still matches current geometry.
@@ -312,8 +337,11 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
     /// # Errors
     /// Rejects incorrect extent or backend readback failure.
     pub fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
-        let pixels = self.backend.readback()?;
-        if pixels.len() != self.layout().bytes() {
+        self.view().verify_geometry()?;
+        let result = self.backend.readback(self.layout);
+        self.view().verify_geometry()?;
+        let pixels = result?;
+        if pixels.len() != self.layout.bytes() {
             return Err(RenderError::InvalidLength);
         }
         Ok(pixels)
@@ -334,6 +362,8 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
     pub fn view(&self) -> SceneView<'_> {
         SceneView {
             backend: self.backend,
+            layout: self.layout,
+            mode: self.mode,
             presentation: &self.presentation,
         }
     }
@@ -363,6 +393,7 @@ mod tests {
     use std::cell::Cell;
     use std::collections::VecDeque;
     use std::num::{NonZeroU32, NonZeroUsize};
+    use std::rc::Rc;
     use std::time::Duration;
 
     use super::{
@@ -386,9 +417,14 @@ mod tests {
         fail_upload: bool,
         layout: FrameLayout,
         mode: PresentationMode,
+        present_layout: Option<FrameLayout>,
         presentations: VecDeque<PresentationResult>,
+        readback_layout: Option<FrameLayout>,
+        readbacks: Vec<FrameLayout>,
+        reported_layout: Rc<Cell<Option<FrameLayout>>>,
         resize_outcome: Result<bool, RenderError>,
         resizes: Vec<FrameLayout>,
+        settings_applied: bool,
         settings_outcome: Result<(), RenderError>,
         surface: Option<Dimensions>,
         surface_queries: Cell<usize>,
@@ -417,9 +453,14 @@ mod tests {
                     NonZeroUsize::MAX,
                 )?,
                 mode: PresentationMode::AspectFit,
+                present_layout: None,
                 presentations: VecDeque::new(),
+                readback_layout: None,
+                readbacks: Vec::new(),
+                reported_layout: Rc::new(Cell::new(None)),
                 resize_outcome: Ok(true),
                 resizes: Vec::new(),
+                settings_applied: true,
                 settings_outcome: Ok(()),
                 surface: None,
                 surface_queries: Cell::new(0),
@@ -434,7 +475,9 @@ mod tests {
             &mut self,
             settings: DisplaySettings,
         ) -> Result<(), RenderError> {
-            self.mode = settings.presentation;
+            if self.settings_applied {
+                self.mode = settings.presentation;
+            }
             self.settings_outcome.clone()
         }
 
@@ -443,7 +486,7 @@ mod tests {
         }
 
         fn layout(&self) -> FrameLayout {
-            self.layout
+            self.reported_layout.get().unwrap_or(self.layout)
         }
 
         fn load_atlas(
@@ -474,6 +517,9 @@ mod tests {
             _sprites: AdmittedDraws<'_>,
         ) -> Result<Option<PresentationLayout>, RenderError> {
             self.draws = self.draws.saturating_add(1);
+            if let Some(layout) = self.present_layout.take() {
+                self.layout = layout;
+            }
             self.presentations.pop_front().unwrap_or(Ok(None))
         }
 
@@ -481,7 +527,14 @@ mod tests {
             self.mode
         }
 
-        fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
+        fn readback(
+            &mut self,
+            layout: FrameLayout,
+        ) -> Result<Vec<u8>, RenderError> {
+            self.readbacks.push(layout);
+            if let Some(changed) = self.readback_layout.take() {
+                self.layout = changed;
+            }
             Ok(Vec::new())
         }
 
@@ -492,6 +545,7 @@ mod tests {
             self.resizes.push(layout);
             if self.resize_outcome.clone()? {
                 self.layout = layout;
+                self.reported_layout.set(None);
             }
             Ok(())
         }
@@ -583,6 +637,87 @@ mod tests {
         backend.resize_outcome = Ok(true);
         let mut scene = SceneSession::new(&mut backend, base, limits())?;
         check(&scene.fit_adaptive_width(maximum), &Ok(maximum))?;
+        Ok(())
+    }
+
+    #[test]
+    fn reported_target_drift_cannot_authorize_draw_or_readback()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        let base = backend.layout;
+        let wider = FrameLayout::new(
+            NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            base.height(),
+            NonZeroUsize::MAX,
+        )?;
+        let surface = Dimensions::new(base.width(), base.height());
+        let expected =
+            base.presentation(PresentationMode::AspectFit, surface)?;
+        backend.surface = Some(surface);
+        backend.presentations = VecDeque::from([Ok(Some(expected))]);
+        let observation = Rc::clone(&backend.reported_layout);
+        {
+            let mut scene = SceneSession::new(&mut backend, base, limits())?;
+            check(&scene.present([0; 3], &[]), &Ok(true))?;
+            observation.set(Some(wider));
+            check(&scene.layout(), &base)?;
+            check(&scene.view().layout(), &base)?;
+            check(
+                &scene.visible_layout(),
+                &Err(RenderError::InvalidDimensions),
+            )?;
+            check(
+                &scene.present([0; 3], &[]),
+                &Err(RenderError::InvalidDimensions),
+            )?;
+            check(&scene.readback(), &Err(RenderError::InvalidDimensions))?;
+            check(&scene.last_presented_layout(), &None)?;
+            check(&scene.fit_adaptive_width(base), &Ok(base))?;
+            check(&scene.visible_layout()?, &None)?;
+        }
+        check(&backend.draws, &1)?;
+        check(&backend.readbacks, &[])?;
+        check(&backend.resizes, &[base])?;
+        Ok(())
+    }
+
+    #[test]
+    fn dispatched_target_drift_cannot_change_the_admitted_extent()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        let base = backend.layout;
+        let wider = FrameLayout::new(
+            NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            base.height(),
+            NonZeroUsize::MAX,
+        )?;
+        let surface = Dimensions::new(wider.width(), wider.height());
+        backend.surface = Some(surface);
+        backend.present_layout = Some(wider);
+        backend.presentations = VecDeque::from([
+            Ok(Some(
+                wider.presentation(PresentationMode::AspectFit, surface)?,
+            )),
+            Ok(Some(
+                base.presentation(PresentationMode::AspectFit, surface)?,
+            )),
+        ]);
+        backend.readback_layout = Some(wider);
+        {
+            let mut scene = SceneSession::new(&mut backend, base, limits())?;
+            check(
+                &scene.present([0; 3], &[]),
+                &Err(RenderError::InvalidDimensions),
+            )?;
+            check(&scene.layout(), &base)?;
+            check(&scene.last_presented_layout(), &None)?;
+            check(&scene.fit_adaptive_width(base), &Ok(base))?;
+            check(&scene.present([0; 3], &[]), &Ok(true))?;
+            check(&scene.readback(), &Err(RenderError::InvalidDimensions))?;
+            check(&scene.last_presented_layout(), &None)?;
+            check(&scene.layout(), &base)?;
+        }
+        check(&backend.readbacks, &[base])?;
         Ok(())
     }
 
@@ -771,6 +906,33 @@ mod tests {
     }
 
     #[test]
+    fn display_success_requires_the_requested_presentation_mode()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        let base = backend.layout;
+        let surface = Dimensions::new(base.width(), base.height());
+        let expected =
+            base.presentation(PresentationMode::AspectFit, surface)?;
+        backend.surface = Some(surface);
+        backend.presentations =
+            VecDeque::from([Ok(Some(expected)), Ok(Some(expected))]);
+        backend.settings_applied = false;
+        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(
+            &scene.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::Stretch,
+                ..DisplaySettings::default()
+            }),
+            &Err(RenderError::InvalidDimensions),
+        )?;
+        check(&scene.last_presented_layout(), &None)?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(&scene.visible_layout()?, &Some(expected))?;
+        Ok(())
+    }
+
+    #[test]
     fn dispatched_geometry_changes_require_fresh_presentation()
     -> Result<(), RenderError> {
         let mut backend = TestScene::new(0)?;
@@ -864,6 +1026,8 @@ mod tests {
         let visible = |adapter: &TestScene| {
             SceneView {
                 backend: adapter,
+                layout: base,
+                mode: PresentationMode::AspectFit,
                 presentation: &presentation,
             }
             .visible_layout()
@@ -919,6 +1083,8 @@ mod tests {
             check(&admitted, &true)?;
             SceneView {
                 backend: adapter,
+                layout: base,
+                mode: PresentationMode::AspectFit,
                 presentation: &presentation,
             }
             .visible_layout()
@@ -926,10 +1092,10 @@ mod tests {
         backend.surface = Some(surface);
         check(&visible(&backend), &Ok(Some(expected)))?;
         backend.mode = PresentationMode::Stretch;
-        check(&visible(&backend), &Ok(None))?;
+        check(&visible(&backend), &Err(RenderError::InvalidDimensions))?;
         backend.mode = PresentationMode::AspectFit;
         backend.layout = FrameLayout::new(width, height, NonZeroUsize::MAX)?;
-        check(&visible(&backend), &Ok(None))?;
+        check(&visible(&backend), &Err(RenderError::InvalidDimensions))?;
         backend.layout = base;
         backend.surface = Some(Dimensions::new(height, width));
         check(&visible(&backend), &Ok(None))?;

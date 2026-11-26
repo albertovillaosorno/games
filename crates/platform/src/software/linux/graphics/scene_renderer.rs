@@ -294,7 +294,13 @@ impl SceneBackend for LinuxScene<'_, '_> {
     ///
     /// # Errors
     /// Rejects failed native readback or an unexpected byte extent.
-    fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
+    fn readback(
+        &mut self,
+        layout: FrameLayout,
+    ) -> Result<Vec<u8>, RenderError> {
+        if self.textures.layout != layout {
+            return Err(RenderError::InvalidDimensions);
+        }
         self.textures.readback(self.canvas)
     }
 

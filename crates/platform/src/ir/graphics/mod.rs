@@ -251,7 +251,15 @@ impl<'session, 'backend> FrameSession<'session, 'backend> {
     /// # Errors
     /// Rejects incorrect byte extent or backend presentation failure.
     pub fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
-        self.backend.present(self.layout.admit(pixels)?)
+        let admitted = self.layout.admit(pixels)?;
+        if self.backend.layout() != self.layout {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let result = self.backend.present(admitted);
+        if self.backend.layout() != self.layout {
+            return Err(RenderError::InvalidDimensions);
+        }
+        result
     }
 }
 
@@ -284,6 +292,8 @@ mod tests {
     #[derive(Debug)]
     struct TestFrame {
         layout: FrameLayout,
+        layout_after_poll: Option<FrameLayout>,
+        layout_after_present: Option<FrameLayout>,
         presented: Vec<u8>,
     }
 
@@ -293,6 +303,9 @@ mod tests {
         }
 
         fn poll_event(&mut self) -> Option<InputSample> {
+            if let Some(layout) = self.layout_after_poll.take() {
+                self.layout = layout;
+            }
             None
         }
 
@@ -301,6 +314,9 @@ mod tests {
             frame: AdmittedRgba<'_>,
         ) -> Result<bool, RenderError> {
             self.presented = frame.pixels().to_vec();
+            if let Some(layout) = self.layout_after_present.take() {
+                self.layout = layout;
+            }
             Ok(true)
         }
     }
@@ -314,6 +330,8 @@ mod tests {
         let wrong = FrameLayout::new(NonZeroU32::MIN, size, NonZeroUsize::MAX)?;
         let mut frame = TestFrame {
             layout: wrong,
+            layout_after_poll: None,
+            layout_after_present: None,
             presented: Vec::new(),
         };
         check(
@@ -321,6 +339,50 @@ mod tests {
             &Some(RenderError::InvalidDimensions),
         )?;
         check(&frame.presented.is_empty(), &true)?;
+        Ok(())
+    }
+
+    #[test]
+    fn frame_extent_changes_do_not_admit_presentation()
+    -> Result<(), RenderError> {
+        let layout = FrameLayout::new(
+            NonZeroU32::MIN,
+            NonZeroU32::MIN,
+            NonZeroUsize::MAX,
+        )?;
+        let wider = FrameLayout::new(
+            NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+            NonZeroU32::MIN,
+            NonZeroUsize::MAX,
+        )?;
+        for (after_poll, after_present) in
+            [(Some(wider), None), (None, Some(wider))]
+        {
+            let mut frame = TestFrame {
+                layout,
+                layout_after_poll: after_poll,
+                layout_after_present: after_present,
+                presented: Vec::new(),
+            };
+            {
+                let mut session = FrameSession::new(&mut frame, layout)?;
+                check(&session.poll_event(), &None)?;
+                check(
+                    &session.present(&[0; 4]),
+                    &Err(RenderError::InvalidDimensions),
+                )?;
+                check(
+                    &session.present(&[1; 4]),
+                    &Err(RenderError::InvalidDimensions),
+                )?;
+            }
+            let expected: &[u8] = if after_poll.is_some() {
+                &[]
+            } else {
+                &[0; 4]
+            };
+            check(&frame.presented.as_slice(), &expected)?;
+        }
         Ok(())
     }
 
@@ -333,6 +395,8 @@ mod tests {
         )?;
         let mut frame = TestFrame {
             layout,
+            layout_after_poll: None,
+            layout_after_present: None,
             presented: Vec::new(),
         };
         {
