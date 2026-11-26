@@ -152,11 +152,21 @@ impl Drop for BrowserAudio {
 impl PlaybackBackend for BrowserAudio {
     fn clear(&self) -> Result<(), PlaybackError> {
         let mut queue = self.queue.borrow_mut();
-        for source in queue.iter().filter_map(|chunk| chunk.source.as_ref()) {
-            source.cancel()?;
-        }
-        queue.clear();
-        Ok(())
+        let mut failure = None;
+        // One failed cancellation must not prevent clearing other sources.
+        // Keep only failed chunks charged so cleanup can be retried.
+        queue.retain(|chunk| {
+            if let Some(source) = &chunk.source
+                && let Err(error) = source.cancel()
+            {
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                return true;
+            }
+            false
+        });
+        failure.map_or(Ok(()), Err)
     }
 
     fn observe_playback(&self) -> PlaybackObservation {
@@ -379,14 +389,19 @@ impl Drop for ScheduledSource {
 
 impl ScheduledSource {
     fn cancel(&self) -> Result<(), PlaybackError> {
-        if !self.ended.get() {
+        let stopped = if self.ended.get() {
+            Ok(())
+        } else {
             let base: &AudioScheduledSourceNode = self.node.as_ref();
             base.stop()
-                .map_err(|_error| backend_error("browser audio stop failed"))?;
-        }
-        self.node
+                .map_err(|_error| backend_error("browser audio stop failed"))
+        };
+        // Disconnect even when the host refuses to stop the source.
+        let disconnected = self
+            .node
             .disconnect()
-            .map_err(|_error| backend_error("browser audio disconnect failed"))
+            .map_err(|_error| backend_error("browser audio disconnect failed"));
+        stopped.and(disconnected)
     }
 }
 

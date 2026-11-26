@@ -81,6 +81,8 @@ async fn finish(audio: NativeAudio) -> Result<(), PlaybackError> {
     drain(|| audio.queued_frames()).await?;
     audio.queue_samples(&SILENCE)?;
     require(audio.queued_frames()? == 256, "running submission charge")?;
+    audio.queue_samples(&SILENCE)?;
+    require(audio.queued_frames()? == 512, "running refill charge")?;
     audio.clear()?;
     require(
         audio.queued_frames()? == 0,

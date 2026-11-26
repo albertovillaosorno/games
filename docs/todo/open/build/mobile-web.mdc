@@ -1603,3 +1603,22 @@ private runtime directories. These are silent scheduling and teardown
 observations, not physical output or mobile-device acceptance.
 Fresh integrated validation 1795735623022254336-40362 passed 1,968
 test executions.
+
+The running-clear diagnostic was extended to two queued silent sources.
+An injected stop failure previously attempted source 2 twice and never
+attempted source 3, even though final context closure removed its
+connection. Clear now attempts each source independently, attempts
+both stop and disconnect, returns the first error and retains only
+failed chunks for retry rather than discarding their queue charges.
+On the fixed diagnostic, persistent injected stop and disconnect
+failures each attempted stops in order 2, 3, 2, attempted disconnection
+of both sources, removed all four installed listeners and closed both
+contexts. The errors were reported rather than converted into success.
+Normal and synthetic-completion controls each scheduled seven silent
+256-frame blocks, cancelled both running-clear sources, retained
+contiguous near-tail scheduling, removed all seven listeners and
+closed both contexts. These controls used isolated headless Firefox
+with explicit autoplay permission and a private null sink. Several
+visible reruns did not receive the activation gesture and are not
+counted as successful checks. No owner browser preference was changed.
+Fresh validation 1795735915564835357-80352 passed.
