@@ -491,3 +491,29 @@ the context without starting a source. An injected resume rejection
 also reported failure, started no source and closed the context.
 The output was a dummy sink, not evidence of physical audibility,
 continuous low-latency playback or a running browser title.
+
+An isolated WebGL 2 resident scene now uses immutable RGBA8 atlases,
+an owned logical framebuffer and an ordered nearest-sampled sprite
+program. The browser adapter checks texture and viewport limits,
+framebuffer completeness, context state and the observed drawing buffer.
+It shares the attached surface and event lifetime with Canvas2D. The
+same fixture verifies ordered alpha composition, flips, clipping,
+scaling, logical readback, adaptive resizing, protected Fill regions
+and input against the current presentation receipt.
+
+Fresh validation 1795681085922709760-3398388 passed, including linkage
+of the GPU scene diagnostic. The pinned bound WebGL module was 167,600
+bytes with 30,714 bytes of JavaScript; module SHA-256 was
+59734a0855db658605a4d917188b12de5ed3834cd1186a63e6d9a5a0c001ecc7.
+Two Firefox success cases each submitted 30 sprite draws and 12
+framebuffer blits across both invocations, released eight textures,
+four shaders, two programs and six framebuffers, removed both canvases
+and balanced all 28 listener registrations. Missing context, invalid
+shader, throwing atlas upload and injected context-loss observation
+failed as expected, with balanced resource and listener cleanup.
+The expanded Canvas2D fixture also passed two successes and the
+missing-context and throwing-draw failure cases; its bound module
+was 146,232 bytes. Firefox reported llvmpipe or similar; this is real
+WebGL API execution with a software renderer, not physical GPU
+acceleration. Production window integration, context recovery and
+browser gameplay remain open.

@@ -27,6 +27,7 @@ browser-audio-smoke = [
 browser-input-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 browser-scene-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 browser-storage-smoke = ["dep:games-platform"]
+browser-webgl-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 native-preview = [
     "dep:games-assets",
     "dep:games-platform",
@@ -66,3 +67,8 @@ required-features = ["browser-scene-smoke"]
 name = "simpsons-arcade-browser-audio-smoke"
 path = "src/bin/browser-audio-smoke.rs"
 required-features = ["browser-audio-smoke"]
+
+[[bin]]
+name = "simpsons-arcade-browser-webgl-smoke"
+path = "src/bin/browser-webgl-smoke.rs"
+required-features = ["browser-webgl-smoke"]

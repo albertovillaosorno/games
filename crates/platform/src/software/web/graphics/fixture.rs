@@ -35,13 +35,12 @@ use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationMode, WindowMode,
 };
-use web_sys::{
-    CanvasRenderingContext2d, HtmlCanvasElement, PointerEvent, PointerEventInit,
-};
+use web_sys::{HtmlCanvasElement, PointerEvent, PointerEventInit};
 
+use super::webgl::{WebGlScene, read_rgba};
 use super::{CanvasScene, dom_error};
 use crate::ir::frame::{FrameLayout, RenderError};
-use crate::ir::graphics::scene_renderer::SceneSession;
+use crate::ir::graphics::scene_renderer::{SceneBackend, SceneSession};
 use crate::ir::hardware::{HostEvent, InputEvent};
 use crate::ir::input::{InputStartup, NativeInput};
 use crate::ir::scene::{EventBatch, SceneLimits, SpriteDraw, SpriteRect};
@@ -59,15 +58,55 @@ pub(in crate::software) fn verify_resident_scene() -> Result<(), RenderError> {
         SCOPE,
         NonZeroUsize::new(8).ok_or(RenderError::InvalidLength)?,
     )?;
-    let canvas = backend.surface.0.canvas.clone();
-    let context = backend.surface.0.context.clone();
+    let canvas = backend.visible.canvas.clone();
+    let context = backend.visible.context.clone();
+    verify_scene(Box::new(backend), &canvas, |surface| {
+        Ok(context
+            .get_image_data(
+                0.0,
+                0.0,
+                f64::from(surface.width().get()),
+                f64::from(surface.height().get()),
+            )
+            .map_err(dom_error)?
+            .data()
+            .0)
+    })
+}
+
+pub(in crate::software) fn verify_webgl_scene() -> Result<(), RenderError> {
+    let base = layout(4, 2)?;
+    let surface = Dimensions::new(nonzero(8)?, nonzero(8)?);
+    let backend = WebGlScene::new(
+        base,
+        surface,
+        SCOPE,
+        NonZeroUsize::new(8).ok_or(RenderError::InvalidLength)?,
+    )?;
+    let canvas = backend.canvas().clone();
+    let context = backend.context().clone();
+    verify_scene(Box::new(backend), &canvas, |surface| {
+        read_rgba(&context, surface)
+    })
+}
+
+fn verify_scene<Read>(
+    backend: Box<dyn SceneBackend>,
+    canvas: &HtmlCanvasElement,
+    read: Read,
+) -> Result<(), RenderError>
+where
+    Read: Fn(FrameLayout) -> Result<Vec<u8>, RenderError>,
+{
+    let base = layout(4, 2)?;
+    let surface = Dimensions::new(nonzero(8)?, nonzero(8)?);
     let limits = SceneLimits {
         atlas_bytes: NonZeroUsize::new(16).ok_or(RenderError::InvalidLength)?,
         atlases: NonZeroUsize::MIN,
         sprites: NonZeroUsize::new(3).ok_or(RenderError::InvalidLength)?,
     };
     let mut scene = SceneSession::resident(
-        Box::new(backend),
+        backend,
         base,
         limits,
         PresentationMode::AspectFit,
@@ -109,13 +148,20 @@ pub(in crate::software) fn verify_resident_scene() -> Result<(), RenderError> {
         "browser scene receipt",
     )?;
     verify_pixels(&scene.readback()?)?;
-    verify_surface(&context)?;
+    let surface_layout = layout(8, 8)?;
+    verify_surface(&read(surface_layout)?, surface_layout)?;
+    verify_order(&mut scene, sprite)?;
+    verify(
+        scene.present(BACKGROUND, &sprites)?,
+        "restore contact scene",
+    )?;
     let mut input =
         InputStartup::new(input::browser_input(SCOPE), NonZeroUsize::MIN)?
             .input;
     input.enable_touch();
-    verify_contact(&mut scene, &mut input, &canvas)?;
-    verify_resize(&mut scene, &mut input, &canvas, &sprites)?;
+    verify_contact(&mut scene, &mut input, canvas)?;
+    verify_resize(&mut scene, &mut input, canvas, &sprites)?;
+    verify_protected(&mut scene, canvas, &sprites, &read)?;
     drop(scene);
     verify(!canvas.is_connected(), "resident browser surface cleanup")
 }
@@ -144,20 +190,20 @@ fn verify_pixels(pixels: &[u8]) -> Result<(), RenderError> {
 }
 
 fn verify_surface(
-    context: &CanvasRenderingContext2d,
+    pixels: &[u8],
+    surface: FrameLayout,
 ) -> Result<(), RenderError> {
     for (position, expected) in [
-        ([0.0, 0.0], [0, 0, 0, 255]),
-        ([0.0, 2.0], [255, 0, 0, 255]),
-        ([6.0, 2.0], [255, 0, 0, 255]),
+        ([0, 0], [0, 0, 0, 255]),
+        ([0, 2], [255, 0, 0, 255]),
+        ([2, 2], [0, 255, 0, 255]),
+        ([6, 2], [255, 0, 0, 255]),
+        ([0, 7], [0, 0, 0, 255]),
     ] {
-        let [x, y] = position;
-        let observed = context
-            .get_image_data(x, y, 1.0, 1.0)
-            .map_err(dom_error)?
-            .data()
-            .0;
-        verify(observed == expected, "actual drawable letterbox pixels")?;
+        verify(
+            pixel(pixels, surface, position)? == expected,
+            "actual drawable letterbox pixels",
+        )?;
     }
     Ok(())
 }
@@ -273,4 +319,120 @@ fn verify(condition: bool, message: &str) -> Result<(), RenderError> {
     } else {
         Err(RenderError::Backend(message.to_owned()))
     }
+}
+
+fn pixel(
+    pixels: &[u8],
+    layout: FrameLayout,
+    [x, y]: [u32; 2],
+) -> Result<&[u8], RenderError> {
+    if x >= layout.width().get() || y >= layout.height().get() {
+        return Err(RenderError::InvalidDimensions);
+    }
+    let x = usize::try_from(x).map_err(|_| RenderError::InvalidDimensions)?;
+    let y = usize::try_from(y).map_err(|_| RenderError::InvalidDimensions)?;
+    let start = y * layout.pitch() + x * 4;
+    pixels
+        .get(start..start + 4)
+        .ok_or(RenderError::InvalidLength)
+}
+
+fn verify_order(
+    scene: &mut SceneSession<'_, '_>,
+    sprite: SpriteDraw,
+) -> Result<(), RenderError> {
+    let draws = [
+        SpriteDraw {
+            destination: rectangle(0, 0, 4, 2)?,
+            ..sprite
+        },
+        SpriteDraw {
+            source: rectangle(1, 0, 1, 2)?,
+            destination: rectangle(1, 0, 2, 2)?,
+            flip_vertical: true,
+            ..sprite
+        },
+        SpriteDraw {
+            source: rectangle(0, 1, 1, 1)?,
+            destination: rectangle(0, 0, 4, 2)?,
+            ..sprite
+        },
+    ];
+    verify(scene.present(BACKGROUND, &draws)?, "ordered scene")?;
+    let pixels = scene.readback()?;
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let expected = [
+        red,
+        [127, 0, 128, 255],
+        [0, 127, 128, 255],
+        green,
+        red,
+        green,
+        green,
+        green,
+    ];
+    verify(
+        pixels
+            .iter()
+            .zip(expected.into_iter().flatten())
+            .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+        "ordered scaling, vertical flip and alpha",
+    )
+}
+
+fn verify_protected<Read>(
+    scene: &mut SceneSession<'_, '_>,
+    canvas: &HtmlCanvasElement,
+    sprites: &[SpriteDraw],
+    read: &Read,
+) -> Result<(), RenderError>
+where
+    Read: Fn(FrameLayout) -> Result<Vec<u8>, RenderError>,
+{
+    canvas.set_width(8);
+    canvas.set_height(8);
+    scene.apply_display_settings(DisplaySettings {
+        presentation: PresentationMode::Fill,
+        window: WindowMode::Windowed,
+    })?;
+    let base = layout(4, 2)?;
+    verify(
+        scene.fit_adaptive_width(layout(6, 2)?)? == base,
+        "restored logical target",
+    )?;
+    scene.protect_bottom(Some(NonZeroU32::MIN))?;
+    verify(scene.present(BACKGROUND, sprites)?, "protected fill")?;
+    let size = Dimensions::new(nonzero(8)?, nonzero(8)?);
+    let expected = base.presentation_with_protected_bottom(
+        PresentationMode::Fill,
+        size,
+        Some(NonZeroU32::MIN),
+    )?;
+    verify(
+        expected.protected.is_some()
+            && scene.visible_layout()? == Some(expected),
+        "protected two-region receipt",
+    )?;
+    let surface = layout(8, 8)?;
+    let pixels = read(surface)?;
+    for (point, expected) in [
+        ([0, 0], [0, 255, 0, 255]),
+        ([7, 3], [0, 255, 0, 255]),
+        ([0, 4], [0, 0, 0, 255]),
+        ([0, 7], [0, 0, 0, 255]),
+        ([7, 5], [10, 20, 30, 255]),
+    ] {
+        verify(
+            pixel(&pixels, surface, point)? == expected,
+            "actual protected fill pixels",
+        )?;
+    }
+    let blue = pixel(&pixels, surface, [0, 5])?;
+    verify(
+        blue.iter()
+            .zip([5, 10, 143, 255])
+            .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+        "uncropped protected region",
+    )
 }

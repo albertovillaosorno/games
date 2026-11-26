@@ -54,7 +54,15 @@ interactive = [
     "web-sys/AudioScheduledSourceNode",
 ]
 secure-lan = ["dep:rustls"]
-test-fixtures = []
+test-fixtures = [
+    "web-sys/WebGl2RenderingContext",
+    "web-sys/WebGlContextAttributes",
+    "web-sys/WebGlFramebuffer",
+    "web-sys/WebGlProgram",
+    "web-sys/WebGlShader",
+    "web-sys/WebGlTexture",
+    "web-sys/WebGlUniformLocation",
+]
 
 [lints]
 workspace = true

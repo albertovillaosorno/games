@@ -30,11 +30,15 @@
 //   - Nearest sampling; windowed only; no claimed GPU acceleration.
 
 mod fixture;
+mod surface;
+mod webgl;
 
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
-pub(in crate::software) use fixture::verify_resident_scene;
+pub(in crate::software) use fixture::{
+    verify_resident_scene, verify_webgl_scene,
+};
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
     Viewport, WindowMode,
@@ -45,7 +49,7 @@ use web_sys::{
     CanvasRenderingContext2d, Document, HtmlCanvasElement, ImageData,
 };
 
-use super::input::EventSource;
+use self::surface::BrowserSurface;
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend;
 use crate::ir::hardware::InputSample;
@@ -60,13 +64,7 @@ struct Target {
 
 impl Target {
     fn new(document: &Document, size: Dimensions) -> Result<Self, RenderError> {
-        let canvas = document
-            .create_element("canvas")
-            .map_err(dom_error)?
-            .dyn_into::<HtmlCanvasElement>()
-            .map_err(|_| RenderError::Unsupported)?;
-        canvas.set_width(size.width.get());
-        canvas.set_height(size.height.get());
+        let canvas = surface::canvas(document, size)?;
         let context = canvas
             .get_context("2d")
             .map_err(dom_error)?
@@ -166,22 +164,13 @@ impl Target {
     }
 }
 
-struct Attached(Target);
-
-impl Drop for Attached {
-    fn drop(&mut self) {
-        self.0.canvas.remove();
-    }
-}
-
 struct CanvasScene {
     atlases: Vec<HtmlCanvasElement>,
-    document: Document,
-    events: EventSource,
     layout: FrameLayout,
     logical: Target,
     mode: PresentationMode,
-    surface: Attached,
+    visible: Target,
+    surface: BrowserSurface,
 }
 
 impl Debug for CanvasScene {
@@ -199,32 +188,21 @@ impl CanvasScene {
         scope: u64,
         capacity: NonZeroUsize,
     ) -> Result<Self, RenderError> {
-        let document = web_sys::window()
-            .and_then(|window| window.document())
-            .ok_or(RenderError::Unsupported)?;
+        let document = surface::document()?;
         let logical = Target::new(&document, dimensions(layout))?;
-        let surface = Attached(Target::new(&document, size)?);
-        let canvas = &surface.0.canvas;
-        canvas
-            .set_attribute(
-                "style",
-                concat!(
-                    "position:absolute;left:0;top:0;width:160px;height:160px;",
-                    "image-rendering:pixelated;touch-action:none"
-                ),
-            )
-            .map_err(dom_error)?;
-        canvas.set_attribute("tabindex", "0").map_err(dom_error)?;
-        let body = document.body().ok_or(RenderError::Unsupported)?;
-        let _node = body.append_child(canvas).map_err(dom_error)?;
-        let events = EventSource::for_element(canvas, scope, capacity)?;
+        let visible = Target::new(&document, size)?;
+        let surface = BrowserSurface::attach(
+            document,
+            visible.canvas.clone(),
+            scope,
+            capacity,
+        )?;
         Ok(Self {
             atlases: Vec::new(),
-            document,
-            events,
             layout,
             logical,
             mode: PresentationMode::AspectFit,
+            visible,
             surface,
         })
     }
@@ -243,7 +221,7 @@ impl SceneBackend for CanvasScene {
     }
 
     fn drawable_available(&self) -> bool {
-        self.surface.0.canvas.is_connected() && !self.document.hidden()
+        self.surface.available()
     }
 
     fn layout(&self) -> FrameLayout {
@@ -262,7 +240,7 @@ impl SceneBackend for CanvasScene {
             .map_err(|_| RenderError::TooLarge)?;
         let frame = upload.frame();
         let size = dimensions(frame.layout());
-        let atlas = Target::new(&self.document, size)?;
+        let atlas = Target::new(self.surface.document(), size)?;
         let data = ImageData::new_with_u8_clamped_array_and_sh(
             Clamped(frame.pixels()),
             size.width.get(),
@@ -278,7 +256,7 @@ impl SceneBackend for CanvasScene {
     }
 
     fn poll_event(&mut self, _wait_ms: u32) -> Option<InputSample> {
-        self.events.pop()
+        self.surface.pop()
     }
 
     fn present(
@@ -303,9 +281,9 @@ impl SceneBackend for CanvasScene {
                 .ok_or(RenderError::InvalidSprite)?;
             self.logical.sprite(atlas, sprite)?;
         }
-        self.surface.0.clear([0; 3]);
+        self.visible.clear([0; 3]);
         for region in layout.regions().into_iter().flatten() {
-            self.surface.0.copy(
+            self.visible.copy(
                 &self.logical.canvas,
                 viewport(region.source),
                 viewport(region.destination),
@@ -330,28 +308,14 @@ impl SceneBackend for CanvasScene {
         &mut self,
         layout: FrameLayout,
     ) -> Result<(), RenderError> {
-        let target = Target::new(&self.document, dimensions(layout))?;
+        let target = Target::new(self.surface.document(), dimensions(layout))?;
         self.logical = target;
         self.layout = layout;
         Ok(())
     }
 
     fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError> {
-        if !self.drawable_available() {
-            return Ok(None);
-        }
-        let canvas = &self.surface.0.canvas;
-        let rect = canvas.get_bounding_client_rect();
-        if !rect.width().is_finite()
-            || !rect.height().is_finite()
-            || rect.width() <= 0.0
-            || rect.height() <= 0.0
-        {
-            return Ok(None);
-        }
-        Ok(NonZeroU32::new(canvas.width())
-            .zip(NonZeroU32::new(canvas.height()))
-            .map(|(width, height)| Dimensions::new(width, height)))
+        Ok(self.surface.dimensions())
     }
 }
 

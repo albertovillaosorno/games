@@ -499,6 +499,21 @@ impl crate::ir::toolchain::validation::fixtures::FixtureBackend for () {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl SceneFixturePort for () {
+    fn verify_gpu_scene() -> Result<(), RenderError> {
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "test-fixtures"
+        ))]
+        return web::graphics::verify_webgl_scene();
+        #[cfg(not(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "test-fixtures"
+        )))]
+        Err(RenderError::Unsupported)
+    }
+
     fn verify_resident_scene() -> Result<(), RenderError> {
         #[cfg(all(
             target_arch = "wasm32",

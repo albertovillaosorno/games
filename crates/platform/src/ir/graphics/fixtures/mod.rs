@@ -32,6 +32,7 @@
 use crate::ir::frame::RenderError;
 
 pub(crate) trait SceneFixturePort {
+    fn verify_gpu_scene() -> Result<(), RenderError>;
     fn verify_resident_scene() -> Result<(), RenderError>;
 }
 
@@ -41,4 +42,12 @@ pub(crate) trait SceneFixturePort {
 /// Reports unavailable diagnostics or an observed invariant failure.
 pub fn verify_resident_scene() -> Result<(), RenderError> {
     <() as SceneFixturePort>::verify_resident_scene()
+}
+
+/// Verify the selected GPU API scene, including actual presentation.
+///
+/// # Errors
+/// Reports unavailable diagnostics or an observed invariant failure.
+pub fn verify_gpu_scene() -> Result<(), RenderError> {
+    <() as SceneFixturePort>::verify_gpu_scene()
 }
