@@ -83,9 +83,13 @@ use std::path::PathBuf;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::path::{Component, Path};
 
-use games_assets::{ContentHash, ManifestLimits};
+use games_assets::ContentHash;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use games_assets::ManifestLimits;
 
-use crate::ir::storage::bundle::{BundleError, BundleFactory, CanonicalBundle};
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
+use crate::ir::storage::bundle::{BundleFactory, OpenBundle};
 use crate::ir::storage::file::{
     FileReadError, SecretSnapshot, SnapshotBackend,
 };
@@ -150,22 +154,14 @@ impl SnapshotBackend for () {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl BundleFactory for () {
-    fn open(
-        parent: &OsStr,
-        digest: ContentHash,
-        limits: ManifestLimits,
-    ) -> Result<CanonicalBundle, BundleError> {
-        bundle::open_bundle(Path::new(parent), digest, limits)
+    fn open(parent: &OsStr, digest: ContentHash) -> OpenBundle {
+        bundle::open_bundle(Path::new(parent), digest)
     }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl BundleFactory for () {
-    fn open(
-        _parent: &OsStr,
-        _digest: ContentHash,
-        _limits: ManifestLimits,
-    ) -> Result<CanonicalBundle, BundleError> {
+    fn open(_parent: &OsStr, _digest: ContentHash) -> OpenBundle {
         Err(BundleError::Io(io::ErrorKind::Unsupported))
     }
 }

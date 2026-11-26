@@ -416,3 +416,15 @@ rejections, and a fake backend returning incorrect payload bytes without
 fallback to the base asset. Fresh validation passed in run
 1795653536950945801-1989943 with 1,541 aggregate test executions and
 six portable core checks.
+
+Canonical bundle opening now separates the pinned native namespace from
+manifest admission. The shared IR admits the returned byte length before
+hashing, verifies the requested digest and canonical record limits, and
+only then asks the selected adapter to open a payload namespace. A backend
+can no longer construct an unchecked canonical bundle. Native legacy and
+shared-object layouts, empty manifests and per-payload verification retain
+their existing behavior. Portable fixtures reject excessive, mismatched
+and malformed manifests before payload dispatch and exercise both empty
+and populated namespaces. Fresh native X11 and dummy audio validation
+1795654372649660988-2255910 passed 1,561 aggregate test executions and
+all six portable core checks.

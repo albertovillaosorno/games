@@ -30,17 +30,20 @@
 //   - Reject untrusted directories, special files and mismatched content.
 
 use std::io;
+use std::num::NonZeroUsize;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 
-use games_assets::{AssetError, AssetRecord, ContentHash, ManifestLimits};
+use games_assets::{AssetError, AssetRecord, ContentHash};
 use nix::errno::Errno;
 use nix::fcntl::{open, openat};
 use nix::sys::stat::Mode;
 
 use super::file::{DIRECTORY_FLAGS, read_regular, trusted_directory};
-use crate::ir::storage::bundle::PayloadSource;
 pub(super) use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
+use crate::ir::storage::bundle::{
+    BundlePort, OpenBundle, OpenPayloads, PayloadSource,
+};
 
 pub(super) const MANIFEST_NAME: &str = "manifest.json";
 pub(super) const PAYLOADS_DIRECTORY: &str = "payloads";
@@ -77,35 +80,48 @@ impl PayloadSource for DirectorySource {
     }
 }
 
-pub(super) fn open_bundle(
-    parent: &Path,
-    digest: ContentHash,
-    limits: ManifestLimits,
-) -> Result<CanonicalBundle, BundleError> {
+#[derive(Debug)]
+struct DirectoryBundle {
+    parent: OwnedFd,
+    root: OwnedFd,
+}
+
+impl BundlePort for DirectoryBundle {
+    fn open_payloads(self: Box<Self>, has_payloads: bool) -> OpenPayloads {
+        let source = if has_payloads {
+            match open_directory(&self.root, PAYLOADS_DIRECTORY) {
+                Ok(directory) => DirectorySource::Legacy(directory),
+                Err(BundleError::Io(io::ErrorKind::NotFound)) => {
+                    DirectorySource::Shared(open_directory(
+                        &self.parent,
+                        OBJECTS_DIRECTORY,
+                    )?)
+                },
+                Err(error) => return Err(error),
+            }
+        } else {
+            DirectorySource::Empty
+        };
+        Ok(Box::new(source))
+    }
+
+    fn read_manifest(
+        &self,
+        maximum: NonZeroUsize,
+    ) -> Result<Vec<u8>, BundleError> {
+        Ok(read_regular(
+            &self.root,
+            MANIFEST_NAME,
+            u64::try_from(maximum.get())
+                .map_err(|_error| AssetError::TooLarge)?,
+        )?)
+    }
+}
+
+pub(super) fn open_bundle(parent: &Path, digest: ContentHash) -> OpenBundle {
     let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
     let root = open_directory(&parent_fd, &bundle_name(digest))?;
-    let bytes = read_regular(
-        &root,
-        MANIFEST_NAME,
-        u64::try_from(limits.manifest_bytes.get())
-            .map_err(|_error| AssetError::TooLarge)?,
-    )?;
-    let manifest = CanonicalBundle::admit_manifest(&bytes, digest, limits)?;
-    let source = if manifest.records().is_empty() {
-        DirectorySource::Empty
-    } else {
-        match open_directory(&root, PAYLOADS_DIRECTORY) {
-            Ok(directory) => DirectorySource::Legacy(directory),
-            Err(BundleError::Io(io::ErrorKind::NotFound)) => {
-                DirectorySource::Shared(open_directory(
-                    &parent_fd,
-                    OBJECTS_DIRECTORY,
-                )?)
-            },
-            Err(error) => return Err(error),
-        }
-    };
-    Ok(CanonicalBundle::with_source(digest, manifest, source))
+    Ok(Box::new(DirectoryBundle { parent: parent_fd, root }))
 }
 
 pub(super) fn bundle_name(digest: ContentHash) -> String {
@@ -129,11 +145,13 @@ fn open_directory(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroU64};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::PathBuf;
 
-    use games_assets::{AssetFormat, AssetManifest, SourceIdentity};
+    use games_assets::{
+        AssetFormat, AssetManifest, ManifestLimits, SourceIdentity,
+    };
     use nix::unistd::mkfifo;
 
     use super::super::fixtures::TestRoot;

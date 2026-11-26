@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::io::{Error as IoError, ErrorKind};
+use std::num::NonZeroUsize;
 
 use games_assets::{
     AssetError, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
@@ -76,13 +77,22 @@ impl From<IoError> for BundleError {
     }
 }
 
-/// Private selected backend for the verified bundle opening operation.
+pub(crate) type OpenBundle = Result<Box<dyn BundlePort>, BundleError>;
+pub(crate) type OpenPayloads = Result<Box<dyn PayloadSource>, BundleError>;
+
+/// Selected backend pins the manifest namespace without admitting metadata.
 pub(crate) trait BundleFactory {
-    fn open(
-        parent: &OsStr,
-        digest: ContentHash,
-        limits: ManifestLimits,
-    ) -> Result<CanonicalBundle, BundleError>;
+    fn open(parent: &OsStr, digest: ContentHash) -> OpenBundle;
+}
+
+/// Read bounded bytes before opening any payload namespace.
+pub(crate) trait BundlePort: Debug {
+    fn open_payloads(self: Box<Self>, has_payloads: bool) -> OpenPayloads;
+
+    fn read_manifest(
+        &self,
+        maximum: NonZeroUsize,
+    ) -> Result<Vec<u8>, BundleError>;
 }
 
 /// A selected backend reads only the descriptor supplied by the IR.
@@ -102,11 +112,14 @@ pub struct CanonicalBundle {
 }
 
 impl CanonicalBundle {
-    pub(crate) fn admit_manifest(
+    fn admit_manifest(
         bytes: &[u8],
         digest: ContentHash,
         limits: ManifestLimits,
     ) -> Result<AssetManifest, BundleError> {
+        if bytes.len() > limits.manifest_bytes.get() {
+            return Err(AssetError::TooLarge.into());
+        }
         if ContentHash::calculate(bytes) != digest {
             return Err(AssetError::PayloadMismatch.into());
         }
@@ -145,7 +158,22 @@ impl CanonicalBundle {
                 return Err(AssetError::PayloadMismatch.into());
             }
         }
-        Ok(Self::with_source(digest, manifest, MemorySource(payloads)))
+        Ok(Self {
+            digest,
+            manifest,
+            source: Box::new(MemorySource(payloads)),
+        })
+    }
+
+    fn from_port(
+        port: Box<dyn BundlePort>,
+        digest: ContentHash,
+        limits: ManifestLimits,
+    ) -> Result<Self, BundleError> {
+        let bytes = port.read_manifest(limits.manifest_bytes)?;
+        let manifest = Self::admit_manifest(&bytes, digest, limits)?;
+        let source = port.open_payloads(!manifest.records().is_empty())?;
+        Ok(Self { digest, manifest, source })
     }
 
     /// Access admitted metadata for title-specific interpretation.
@@ -167,7 +195,11 @@ impl CanonicalBundle {
     where
         Parent: AsRef<OsStr> + ?Sized,
     {
-        <() as BundleFactory>::open(parent.as_ref(), digest, limits)
+        Self::from_port(
+            <() as BundleFactory>::open(parent.as_ref(), digest)?,
+            digest,
+            limits,
+        )
     }
 
     /// Read the declared payload and verify its bytes after backend dispatch.
@@ -181,18 +213,6 @@ impl CanonicalBundle {
         let bytes = self.source.read(record)?;
         record.verify(&bytes)?;
         Ok(bytes)
-    }
-
-    pub(crate) fn with_source(
-        digest: ContentHash,
-        manifest: AssetManifest,
-        source: impl PayloadSource + 'static,
-    ) -> Self {
-        Self {
-            digest,
-            manifest,
-            source: Box::new(source),
-        }
     }
 }
 
@@ -281,7 +301,10 @@ mod tests {
         ManifestLimits, SourceIdentity,
     };
 
-    use super::{BundleError, CanonicalBundle, MediaOverlay, PayloadSource};
+    use super::{
+        BundleError, BundlePort, CanonicalBundle, MediaOverlay, OpenPayloads,
+        PayloadSource,
+    };
 
     #[derive(Debug)]
     struct IncorrectPayload;
@@ -292,7 +315,118 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FixturePort {
+        bytes: Vec<u8>,
+        expected_payloads: bool,
+        open_error: Option<BundleError>,
+    }
+
+    impl BundlePort for FixturePort {
+        fn open_payloads(self: Box<Self>, has_payloads: bool) -> OpenPayloads {
+            if has_payloads != self.expected_payloads {
+                return Err(BundleError::UnsafeStorage);
+            }
+            if let Some(error) = self.open_error {
+                return Err(error);
+            }
+            Ok(Box::new(IncorrectPayload))
+        }
+
+        fn read_manifest(
+            &self,
+            maximum: NonZeroUsize,
+        ) -> Result<Vec<u8>, BundleError> {
+            if maximum != limits().manifest_bytes {
+                return Err(BundleError::UnsafeStorage);
+            }
+            // A fake backend deliberately ignores the read bound.
+            Ok(self.bytes.clone())
+        }
+    }
+
     type FixtureRecord<'record> = (&'record str, AssetFormat, &'record [u8; 4]);
+
+    fn port(
+        bytes: &[u8],
+        expected_payloads: bool,
+        open_error: Option<BundleError>,
+    ) -> Box<dyn BundlePort> {
+        Box::new(FixturePort {
+            bytes: bytes.to_vec(),
+            expected_payloads,
+            open_error,
+        })
+    }
+
+    #[test]
+    fn portable_open_rejects_metadata_before_opening_payloads()
+    -> Result<(), BundleError> {
+        let wrong_digest = ContentHash::calculate(b"wrong");
+        let too_large =
+            vec![0; limits().manifest_bytes.get().saturating_add(1)];
+        let invalid = b"not metadata";
+        let open_error = Some(BundleError::MissingKey);
+
+        let cases = [
+            (too_large.as_slice(), wrong_digest, AssetError::TooLarge),
+            (
+                invalid.as_slice(),
+                wrong_digest,
+                AssetError::PayloadMismatch,
+            ),
+            (
+                invalid.as_slice(),
+                ContentHash::calculate(invalid),
+                AssetError::InvalidEncoding,
+            ),
+        ];
+        for (bytes, digest, expected) in cases {
+            let result = CanonicalBundle::from_port(
+                port(bytes, false, open_error),
+                digest,
+                limits(),
+            );
+            if result.err() != Some(BundleError::Asset(expected)) {
+                return Err(BundleError::UnsafeStorage);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn portable_open_selects_payload_namespace_after_admission()
+    -> Result<(), BundleError> {
+        for populated in [false, true] {
+            let records: &[FixtureRecord<'_>] = if populated {
+                &[("asset", AssetFormat::Data, b"data")]
+            } else {
+                &[]
+            };
+            let fixture = fixture_bundle("test", records)?;
+            let bytes = fixture.manifest().encode(limits())?;
+            let digest = fixture.digest();
+            let opened = CanonicalBundle::from_port(
+                port(&bytes, populated, None),
+                digest,
+                limits(),
+            )?;
+            if opened.digest() != digest
+                || opened.manifest().records() != fixture.manifest().records()
+            {
+                return Err(BundleError::UnsafeStorage);
+            }
+            let result = CanonicalBundle::from_port(
+                port(&bytes, populated, Some(BundleError::MissingKey)),
+                digest,
+                limits(),
+            );
+            if !matches!(result, Err(BundleError::MissingKey)) {
+                return Err(BundleError::UnsafeStorage);
+            }
+        }
+        Ok(())
+    }
 
     fn fixture_bundle(
         title: &str,
@@ -429,11 +563,11 @@ mod tests {
         {
             return Err(BundleError::UnsafeStorage);
         }
-        let rejected = CanonicalBundle::with_source(
-            replacement.digest(),
-            replacement.manifest().clone(),
-            IncorrectPayload,
-        );
+        let rejected = CanonicalBundle {
+            digest: replacement.digest(),
+            manifest: replacement.manifest().clone(),
+            source: Box::new(IncorrectPayload),
+        };
         let rejected_overlay = MediaOverlay::new(&base, &rejected, &allowed)?;
         if rejected_overlay.read_payload("media/hero")
             != Err(AssetError::PayloadMismatch.into())
