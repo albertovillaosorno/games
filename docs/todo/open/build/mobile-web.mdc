@@ -852,3 +852,34 @@ The expected context-loss diagnostic completed once after 55 callbacks
 and 50 blits; the audio context closed without error, no callback
 remained pending, and the picker and canvas were removed. This verifies
 the browser mouse-to-title attack route, not physical mouse operation.
+
+A portable control-slot round trip passed on 2026-11-26 using the
+verified browser package of e86b2d7 (88 files, 1,506,356 bytes; receipt
+identical to the preceding bootstrap package). An isolated test observer
+encoded the native-authored E-primary/Q-right control envelope as the
+browser's lowercase hexadecimal storage representation. Real Firefox
+admitted the unchanged envelope and the trusted canonical directory
+selection. The inactive Z key did not change the selected menu's
+framebuffer; E opened settings. Reset selection made no writes until
+confirmation, which published exactly one default control save. In the
+same running session, D left the first actor at x=110 and Q moved it to
+x=132. A fresh launch on the same origin made zero writes, ignored E
+in the menu and accepted Z. Q left the actor at x=110 and D moved it to
+x=132. Both launches admitted 740 reads and ended once through the menu,
+with 98 and 83 callbacks respectively, no pending callback, picker or
+canvas. Earlier harness attempts failed at chooser timing and at an
+unstable first framebuffer comparison; the corrected observer allowed
+the initial presentation to settle and confirmed a single upload.
+
+Decoding the browser-produced control slot yielded the exact 67 bytes
+of an independently generated native reset save. A separate private
+native settings directory admitted those bytes without modification in
+an adaptive fullscreen touch-enabled release smoke from an unrelated
+working directory. It verified 106 added logical columns, 444 camera
+columns, 48 synthetic axis directions, two cooperative pose families
+and six reinforcement meters. All 600 movement and 20 combat submissions
+met the 16.667 ms host-work budget. This demonstrates envelope and
+control semantics interoperability, not a shipped save-transfer UI or
+browser crash durability. No owner settings, installed package or assets
+were changed. Synthetic input, Xvfb and dummy audio do not establish
+physical-device acceptance.
