@@ -290,6 +290,7 @@ fn io_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::storage::fixtures::FixtureStorage as _;
     use crate::software::linux::storage::fixtures::{TestRoot, file_link};
 
     fn revision(value: &str) -> Result<ReferenceRevision<'_>, String> {

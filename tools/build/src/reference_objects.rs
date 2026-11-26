@@ -31,8 +31,8 @@
 
 //! Host-side original object buffer comparison.
 
+use std::ffi::OsStr;
 use std::num::NonZeroU64;
-use std::path::Path;
 
 use games_platform::ir::importer::reference::{Machine, RAM_BYTES};
 use games_platform::ir::storage::file::snapshot;
@@ -43,16 +43,16 @@ use games_platform::ir::toolchain;
 /// Rejects unsafe, incomplete or oversized local files.
 pub fn check(
     machine: Machine,
-    cpu: &Path,
-    device: &Path,
+    cpu: &OsStr,
+    device: &OsStr,
 ) -> Result<(), String> {
     let limit = u64::try_from(RAM_BYTES)
         .ok()
         .and_then(NonZeroU64::new)
         .ok_or_else(|| String::from("invalid object budget"))?;
-    let cpu_ram = snapshot(cpu.as_os_str(), limit)
+    let cpu_ram = snapshot(cpu, limit)
         .map_err(|error| format!("CPU object RAM: {error:?}"))?;
-    let device_ram = snapshot(device.as_os_str(), limit)
+    let device_ram = snapshot(device, limit)
         .map_err(|error| format!("device object RAM: {error:?}"))?;
     let report = machine
         .compare_object_transfer(&cpu_ram, &device_ram)

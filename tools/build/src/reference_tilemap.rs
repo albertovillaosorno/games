@@ -31,8 +31,8 @@
 
 //! Host-side tile RAM admission diagnostic.
 
+use std::ffi::OsStr;
 use std::num::NonZeroU64;
-use std::path::Path;
 
 use games_platform::ir::importer::reference::Machine;
 use games_platform::ir::storage::file::snapshot;
@@ -43,17 +43,14 @@ use games_platform::ir::toolchain;
 /// Rejects unsafe files, malformed observations or unresolved cells.
 pub fn check(
     machine: Machine,
-    ram_path: &Path,
-    registers_path: &Path,
+    ram_path: &OsStr,
+    registers_path: &OsStr,
 ) -> Result<(), String> {
-    let ram =
-        snapshot(ram_path.as_os_str(), NonZeroU64::MIN.saturating_add(24_575))
-            .map_err(|error| format!("tile RAM: {error:?}"))?;
-    let registers = snapshot(
-        registers_path.as_os_str(),
-        NonZeroU64::MIN.saturating_add(21),
-    )
-    .map_err(|error| format!("tile registers: {error:?}"))?;
+    let ram = snapshot(ram_path, NonZeroU64::MIN.saturating_add(24_575))
+        .map_err(|error| format!("tile RAM: {error:?}"))?;
+    let registers =
+        snapshot(registers_path, NonZeroU64::MIN.saturating_add(21))
+            .map_err(|error| format!("tile registers: {error:?}"))?;
     let count = resolve(machine, &ram, &registers)?;
     toolchain::write_line(&format!("Resolved {count} local tile cells"))
         .map_err(|error| error.to_string())

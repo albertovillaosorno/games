@@ -34,7 +34,6 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
-use std::path::PathBuf;
 
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
@@ -62,7 +61,7 @@ struct Group {
 #[derive(Debug)]
 pub struct Art {
     groups: Vec<Group>,
-    output: PathBuf,
+    output: OsString,
     scene: Arguments,
 }
 
@@ -76,7 +75,7 @@ impl Art {
             return Err(String::from(USAGE));
         }
         let groups = args.split_off(10);
-        let output = PathBuf::from(args.remove(0));
+        let output = args.remove(0);
         let mut used = BTreeSet::new();
         let mut parsed = Vec::new();
         for value in groups {
@@ -162,7 +161,7 @@ impl Art {
 /// Bounded adjacent scene observations for a continuous background strip.
 #[derive(Debug)]
 pub struct Strip {
-    output: PathBuf,
+    output: OsString,
     scenes: Vec<Arguments>,
     side: usize,
     top: usize,
@@ -199,7 +198,7 @@ impl Strip {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            output: output.into(),
+            output: output.clone(),
             scenes,
             side,
             top,

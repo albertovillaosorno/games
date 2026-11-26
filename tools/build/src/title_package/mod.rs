@@ -32,19 +32,23 @@
 mod license_inventory;
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
 use std::str;
 
 use games_assets::ContentHash;
 use games_assets::archive::validate_path;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::AuthoredStaging;
-use games_platform::ir::storage::{PathKind, path_kind};
+use games_platform::ir::storage::{
+    PathKind, parent_path, path_is_absolute, path_kind, path_leaf,
+};
 use games_platform::ir::toolchain::write_line;
 
 use self::license_inventory::Inventory;
-use crate::title_build::{NATIVE_TARGET, Title, local_layout, workspace_root};
+use crate::title_build::{
+    NATIVE_TARGET, Title, local_layout, local_path, workspace_root,
+};
 
 const ELF_HEADER: usize = 64;
 const ELF_PROGRAM_HEADER: usize = 56;
@@ -64,19 +68,18 @@ struct PackageFile {
 #[derive(Debug, Default)]
 struct Prepared {
     bytes: usize,
-    files: BTreeMap<PathBuf, PackageFile>,
+    files: BTreeMap<String, PackageFile>,
 }
 
 impl Prepared {
     fn add(
         &mut self,
-        path: PathBuf,
+        path: String,
         bytes: Vec<u8>,
         executable: bool,
     ) -> Result<(), String> {
-        let name = path.to_str().ok_or("non-UTF-8 package entry")?;
-        validate_path(name)
-            .map_err(|error| format!("package entry {name}: {error:?}"))?;
+        validate_path(&path)
+            .map_err(|error| format!("package entry {path}: {error:?}"))?;
         if self.files.contains_key(&path) || self.files.len() >= MAX_FILES {
             return Err(String::from("invalid or excessive package entries"));
         }
@@ -95,12 +98,12 @@ impl Prepared {
     }
 
     fn prepare(
-        root: &Path,
+        root: &OsStr,
         title: Title,
-        executable: &Path,
+        executable: &OsStr,
         inventory: Inventory,
     ) -> Result<Self, String> {
-        let bytes = snapshot(executable.as_os_str(), MAX_EXECUTABLE)
+        let bytes = snapshot(executable, MAX_EXECUTABLE)
             .map_err(|error| format!("authored executable: {error:?}"))?;
         if !native_elf(&bytes) {
             return Err(String::from("expected an x86-64 ELF executable"));
@@ -121,7 +124,11 @@ impl Prepared {
         prepared.add(RECEIPT.into(), receipt.into_bytes(), false)?;
         prepared.add(title.binary().into(), bytes, true)?;
         for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
-            prepared.add(name.into(), document(&root.join(name))?, false)?;
+            prepared.add(
+                name.into(),
+                document(&local_path(root, name)?)?,
+                false,
+            )?;
         }
         for (destination, source) in inventory.documents {
             prepared.add(destination, document(&source)?, false)?;
@@ -134,30 +141,24 @@ impl Prepared {
         Ok(prepared)
     }
 
-    fn publish(self, output: &Path) -> Result<(), String> {
-        if self
-            .files
-            .get(Path::new(RECEIPT))
-            .is_none_or(|file| file.executable)
-        {
+    fn publish(self, output: &OsStr) -> Result<(), String> {
+        if self.files.get(RECEIPT).is_none_or(|file| file.executable) {
             return Err(String::from("missing or executable package receipt"));
         }
-        let name = output
-            .file_name()
-            .ok_or("package needs a destination name")?;
-        let parent = output
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let mut stage = AuthoredStaging::new(parent)
+        let name = path_leaf(output)
+            .map_err(|error| format!("package destination name: {error}"))?;
+        let parent = parent_path(output).map_err(|error| error.to_string())?;
+        let destination_parent = if parent.is_empty() {
+            OsStr::new(".")
+        } else {
+            parent
+        };
+        let mut stage = AuthoredStaging::new(destination_parent)
             .map_err(|error| format!("package stage: {error:?}"))?;
         for (path, file) in self.files {
-            let entry = path.to_str().ok_or("non-UTF-8 package entry")?;
             stage
-                .write_file(entry, &file.bytes, file.executable)
-                .map_err(|error| {
-                    format!("package entry {}: {error:?}", path.display())
-                })?;
+                .write_file(&path, &file.bytes, file.executable)
+                .map_err(|error| format!("package entry {path}: {error:?}"))?;
         }
         let published = stage
             .publish(name)
@@ -165,7 +166,7 @@ impl Prepared {
         published.durability.map_err(|error| {
             format!(
                 "package published at {}, but directory sync failed: {error:?}",
-                Path::new(&published.path).display()
+                published.path.to_string_lossy()
             )
         })
     }
@@ -182,19 +183,21 @@ pub fn configured(title: Title) -> Result<(), String> {
     if layout.target() != NATIVE_TARGET {
         return Err(String::from("configured package target is unsupported"));
     }
-    let output = PathBuf::from(layout.binaries(title.binary())?);
-    let assets = PathBuf::from(layout.assets(title.binary())?);
-    if !output.is_absolute() || !assets.is_absolute() {
+    let output = OsString::from(layout.binaries(title.binary())?);
+    let assets = OsString::from(layout.assets(title.binary())?);
+    if !path_is_absolute(&output).map_err(|error| error.to_string())?
+        || !path_is_absolute(&assets).map_err(|error| error.to_string())?
+    {
         return Err(String::from("persistent roots must be absolute"));
     }
-    let parent = output.parent().ok_or("invalid package parent")?;
-    if path_kind(parent.as_os_str()).map_err(|error| error.to_string())?
+    let parent = parent_path(&output).map_err(|error| error.to_string())?;
+    if path_kind(parent).map_err(|error| error.to_string())?
         != PathKind::Directory
     {
         return Err(String::from("create the configured bin directory first"));
     }
     run(title, &output)?;
-    write_line(&format!("Shared assets: {}", assets.display()))
+    write_line(&format!("Shared assets: {}", assets.to_string_lossy()))
         .map_err(|error| error.to_string())
 }
 
@@ -203,8 +206,8 @@ pub fn configured(title: Title) -> Result<(), String> {
 /// # Errors
 /// Rejects build, licence inventory, source admission and filesystem errors.
 /// Publication is atomic; a post-rename sync failure is reported separately.
-pub fn run(title: Title, output: &Path) -> Result<(), String> {
-    if path_kind(output.as_os_str()).map_err(|error| error.to_string())?
+pub fn run(title: Title, output: &OsStr) -> Result<(), String> {
+    if path_kind(output).map_err(|error| error.to_string())?
         != PathKind::Missing
     {
         return Err(String::from("package destination already exists"));
@@ -214,17 +217,22 @@ pub fn run(title: Title, output: &Path) -> Result<(), String> {
     let inventory = Inventory::load(&root, title)?;
     let prepared = Prepared::prepare(&root, title, &executable, inventory)?;
     prepared.publish(output)?;
-    write_line(&format!("Package: {}", output.display()))
+    write_line(&format!("Package: {}", output.to_string_lossy()))
         .map_err(|error| error.to_string())
 }
 
-fn document(path: &Path) -> Result<Vec<u8>, String> {
-    let bytes = snapshot(path.as_os_str(), MAX_DOCUMENT)
-        .map_err(|error| format!("licence {}: {error:?}", path.display()))?;
-    let text = str::from_utf8(&bytes)
-        .map_err(|error| format!("licence {}: {error}", path.display()))?;
+fn document(path: &OsStr) -> Result<Vec<u8>, String> {
+    let bytes = snapshot(path, MAX_DOCUMENT).map_err(|error| {
+        format!("licence {}: {error:?}", path.to_string_lossy())
+    })?;
+    let text = str::from_utf8(&bytes).map_err(|error| {
+        format!("licence {}: {error}", path.to_string_lossy())
+    })?;
     if text.trim().is_empty() || text.contains('\0') {
-        return Err(format!("empty or nontext licence: {}", path.display()));
+        return Err(format!(
+            "empty or nontext licence: {}",
+            path.to_string_lossy()
+        ));
     }
     Ok(bytes)
 }
@@ -393,7 +401,7 @@ mod tests {
         require(prepared.admit_length(usize::MAX).is_err())?;
         require(prepared.add(RECEIPT.into(), vec![], false).is_err())?;
         for index in 1..MAX_FILES {
-            prepared.add(format!("entry-{index}").into(), vec![], false)?;
+            prepared.add(format!("entry-{index}"), vec![], false)?;
         }
         require(prepared.add("overflow".into(), vec![], false).is_err())
     }
@@ -402,7 +410,7 @@ mod tests {
     fn package_requires_a_receipt_and_rejects_nonportable_paths()
     -> Result<(), String> {
         let root = TestRoot::new().map_err(|error| error.to_string())?;
-        let output = root.path().join("package");
+        let output = local_path(root.location(), "package")?;
         let mut prepared = Prepared::default();
         for path in [
             "licenses//MIT",
@@ -426,7 +434,7 @@ mod tests {
     #[test]
     fn package_never_replaces_an_existing_directory() -> Result<(), String> {
         let root = TestRoot::new().map_err(|error| error.to_string())?;
-        let output = root.path().join("package");
+        let output = local_path(root.location(), "package")?;
         let mut prepared = Prepared::default();
         prepared.add("title".into(), vec![1, 2, 3], true)?;
         prepared.add("licenses/MIT".into(), b"text".to_vec(), false)?;
@@ -439,17 +447,17 @@ mod tests {
         replacement.add(RECEIPT.into(), b"replacement".to_vec(), false)?;
         require(replacement.publish(&output).is_err())?;
         require(
-            snapshot(output.join("title").as_os_str(), MAX_DOCUMENT)
+            snapshot(&local_path(&output, "title")?, MAX_DOCUMENT)
                 .map_err(|error| format!("{error:?}"))?
                 == [1, 2, 3],
         )?;
         require(
-            snapshot(output.join(RECEIPT).as_os_str(), MAX_DOCUMENT)
+            snapshot(&local_path(&output, RECEIPT)?, MAX_DOCUMENT)
                 .map_err(|error| format!("{error:?}"))?
                 == b"complete",
         )?;
         require(
-            path_kind(root.path().join("escape").as_os_str())
+            path_kind(&local_path(root.location(), "escape")?)
                 .map_err(|error| error.to_string())?
                 == PathKind::Missing,
         )?;
@@ -459,14 +467,14 @@ mod tests {
     #[test]
     fn failed_write_does_not_publish_partial_package() -> Result<(), String> {
         let root = TestRoot::new().map_err(|error| error.to_string())?;
-        let output = root.path().join("package");
+        let output = local_path(root.location(), "package")?;
         let mut prepared = Prepared::default();
         prepared.add("licenses".into(), vec![1], false)?;
         prepared.add("licenses/MIT".into(), vec![2], false)?;
         prepared.add(RECEIPT.into(), b"incomplete".to_vec(), false)?;
         require(prepared.publish(&output).is_err())?;
         require(
-            path_kind(output.as_os_str()).map_err(|error| error.to_string())?
+            path_kind(&output).map_err(|error| error.to_string())?
                 == PathKind::Missing,
         )?;
         require(root.entry_count().map_err(|error| error.to_string())? == 0)

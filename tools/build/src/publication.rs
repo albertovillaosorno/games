@@ -29,8 +29,8 @@
 // - Defaults:
 //   - Never overwrite and do not publish on conversion failure.
 
+use std::ffi::{OsStr, OsString};
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::{Path, PathBuf};
 
 use games_assets::archive::ArchiveBudget;
 use games_assets::{
@@ -43,10 +43,12 @@ use games_platform::ir::importer::{
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::{CanonicalStaging, StagedBundle};
-use games_platform::ir::storage::{PathKind, path_kind};
+use games_platform::ir::storage::{
+    PathKind, path_is_absolute, path_kind, paths_equivalent,
+};
 use games_platform::ir::toolchain;
 
-use crate::title_build::{local_layout, workspace_root};
+use crate::title_build::{local_layout, local_path, workspace_root};
 
 /// Supported user-authored media encodings, explicitly selected.
 #[derive(Clone, Copy, Debug)]
@@ -102,8 +104,8 @@ pub(crate) struct MediaReplacement {
     pub(crate) encoding: MediaEncoding,
     pub(crate) key: String,
     pub(crate) limits: ManifestLimits,
-    pub(crate) parent: PathBuf,
-    pub(crate) source: PathBuf,
+    pub(crate) parent: OsString,
+    pub(crate) source: OsString,
 }
 
 impl MediaReplacement {
@@ -113,7 +115,7 @@ impl MediaReplacement {
 
     fn run_with<Check>(self, check: Check) -> Result<(), String>
     where
-        Check: FnOnce(&Path, &str) -> Result<(), String>,
+        Check: FnOnce(&OsStr, &str) -> Result<(), String>,
     {
         let bundle =
             CanonicalBundle::open(&self.parent, self.base, self.limits)
@@ -162,7 +164,7 @@ impl MediaReplacement {
 /// Returns conversion, staging, publication or output failures.
 pub fn publish(
     selection: ImportProfile,
-    parent: &Path,
+    parent: &OsStr,
     source: &SourceSnapshot<'_>,
     archive: ArchiveBudget,
 ) -> Result<(), String> {
@@ -212,32 +214,37 @@ fn publish_staged(
     if let Err(error) = receipt.durability {
         return Err(format!(
             "published {digest} at {}, but directory sync failed: {error:?}",
-            Path::new(&receipt.path).display()
+            receipt.path.to_string_lossy()
         ));
     }
     toolchain::write_line(&format!(
         "Published canonical bundle {digest} at {}",
-        Path::new(&receipt.path).display()
+        receipt.path.to_string_lossy()
     ))
     .map_err(|error| error.to_string())?;
     super::report_manifest(converted, digest)
 }
 
 pub(crate) fn require_asset_parent(
-    parent: &Path,
+    parent: &OsStr,
     title: &str,
 ) -> Result<(), String> {
     let root = workspace_root()?;
     let layout = local_layout(&root)?;
-    let expected = PathBuf::from(layout.assets(title)?);
-    if !expected.is_absolute() || expected != parent {
+    let expected = OsString::from(layout.assets(title)?);
+    if !path_is_absolute(&expected).map_err(|error| error.to_string())?
+        || !paths_equivalent(&expected, parent)
+            .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "asset publication requires {}",
-            expected.display()
+            expected.to_string_lossy()
         ));
     }
-    let legacy = root.join(".reference/games").join(title).join("bundles");
-    if legacy != expected
+    let legacy =
+        local_path(&root, &format!(".reference/games/{title}/bundles"))?;
+    if !paths_equivalent(&legacy, &expected)
+        .map_err(|error| error.to_string())?
         && path_kind(legacy.as_os_str()).map_err(|error| error.to_string())?
             != PathKind::Missing
     {
@@ -275,7 +282,7 @@ pub(crate) fn staging_budget(
 /// # Errors
 /// Rejects already-current metadata, corruption, limits or publication errors.
 pub fn upgrade(
-    parent: &Path,
+    parent: &OsStr,
     digest: ContentHash,
     limits: ManifestLimits,
 ) -> Result<(), String> {
@@ -336,7 +343,7 @@ mod tests {
     }
 
     fn publish_base(
-        parent: &Path,
+        parent: &OsStr,
         limits: ManifestLimits,
     ) -> Result<CanonicalBundle, String> {
         let source = SourceIdentity {
@@ -394,18 +401,18 @@ mod tests {
     #[test]
     fn media_authoring_requires_exact_passive_slots() -> Result<(), String> {
         let root = TestRoot::new().map_err(failure)?;
-        let parent = root.path();
+        let parent = root.location();
         let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
         let base = original.digest();
         let manifest = original.manifest();
-        let raw = parent.join("authored.raw");
+        let raw = local_path(parent, "authored.raw")?;
         let select = |key: &str| MediaReplacement {
             base,
             encoding: MediaEncoding::Raw,
             key: key.to_owned(),
             limits,
-            parent: parent.to_path_buf(),
+            parent: parent.to_os_string(),
             source: raw.clone(),
         };
         for (key, bytes) in [
@@ -454,16 +461,16 @@ mod tests {
     #[test]
     fn wave_authoring_requires_exact_pcm_layout() -> Result<(), String> {
         let root = TestRoot::new().map_err(failure)?;
-        let parent = root.path();
+        let parent = root.location();
         let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
-        let source = parent.join("authored.wav");
+        let source = local_path(parent, "authored.wav")?;
         let select = |key: &str| MediaReplacement {
             base: original.digest(),
             encoding: MediaEncoding::Wave,
             key: key.to_owned(),
             limits,
-            parent: parent.to_path_buf(),
+            parent: parent.to_os_string(),
             source: source.clone(),
         };
         let mut wrong_rate = WAVE;
@@ -532,10 +539,10 @@ mod tests {
     #[test]
     fn invalid_wave_layouts_publish_nothing() -> Result<(), String> {
         let root = TestRoot::new().map_err(failure)?;
-        let parent = root.path();
+        let parent = root.location();
         let limits = fixture_limits();
         let original = publish_base(parent, limits)?;
-        let source = parent.join("authored.wav");
+        let source = local_path(parent, "authored.wav")?;
         root.write_file("authored.wav", &WAVE).map_err(failure)?;
         let entries = root.entry_count().map_err(failure)?;
         let mut stereo = WAVE;
@@ -569,7 +576,7 @@ mod tests {
                 encoding: MediaEncoding::Wave,
                 key: String::from("audio/tone"),
                 limits,
-                parent: parent.to_path_buf(),
+                parent: parent.to_os_string(),
                 source: source.clone(),
             };
             if replacement.run_with(|_parent, _title| Ok(())).is_ok()

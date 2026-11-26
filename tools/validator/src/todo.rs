@@ -440,8 +440,7 @@ pub fn validate(root: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::{
         MAX_TASK_DEPTH, Task, TaskInventory, collect, dependency_order,
@@ -466,11 +465,13 @@ mod tests {
     fn task_inventory_rejects_depth_and_entry_exhaustion() -> Result<(), String>
     {
         let fixture = directory()?;
-        let root = fixture.path();
+        let root = Path::new(fixture.location());
         let directory = root.join("records");
-        fs::create_dir_all(directory.join("nested"))
+        fixture
+            .create_directories("records/nested")
             .map_err(|error| error.to_string())?;
-        fs::write(directory.join("ignored.txt"), "")
+        fixture
+            .write_file("records/ignored.txt", b"")
             .map_err(|error| error.to_string())?;
         let inventory = |remaining| TaskInventory {
             remaining,
@@ -512,14 +513,18 @@ mod tests {
     #[test]
     fn untracked_roadmaps_fail_the_real_task_gate() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        let nested = root.join("crates/games/example");
-        fs::create_dir_all(&nested).map_err(|error| error.to_string())?;
-        fs::write(root.join(".gitignore"), "/.reference/\n")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .create_directories("crates/games/example")
             .map_err(|error| error.to_string())?;
-        fs::write(root.join("TODO.md"), "# Roadmap\n")
+        root_owner
+            .write_file(".gitignore", b"/.reference/\n")
             .map_err(|error| error.to_string())?;
-        fs::write(nested.join("TODO.md"), "# Duplicate\n")
+        root_owner
+            .write_file("TODO.md", b"# Roadmap\n")
+            .map_err(|error| error.to_string())?;
+        root_owner
+            .write_file("crates/games/example/TODO.md", b"# Duplicate\n")
             .map_err(|error| error.to_string())?;
         let result = validate(root);
         require(

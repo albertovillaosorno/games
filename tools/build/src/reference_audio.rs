@@ -31,8 +31,8 @@
 
 //! Exact local reference audio comparison.
 
+use std::ffi::OsStr;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::Path;
 
 use games_assets::AssetFormat;
 use games_platform::ir::importer::reference::WavePcm;
@@ -43,13 +43,13 @@ use games_platform::ir::toolchain;
 /// # Errors
 /// Rejects invalid files, unequal formats or any differing frame.
 pub fn check(
-    left: &Path,
-    right: &Path,
+    left: &OsStr,
+    right: &OsStr,
     limit: NonZeroU64,
 ) -> Result<(), String> {
-    let first = snapshot(left.as_os_str(), limit)
+    let first = snapshot(left, limit)
         .map_err(|error| format!("left audio: {error:?}"))?;
-    let second = snapshot(right.as_os_str(), limit)
+    let second = snapshot(right, limit)
         .map_err(|error| format!("right audio: {error:?}"))?;
     let first_wave = WavePcm::new(&first, limit)
         .map_err(|error| format!("left WAV: {error:?}"))?;

@@ -29,7 +29,12 @@
 // - Defaults:
 //   - Use unique local temporary directories.
 
+use std::num::NonZeroU64;
+use std::path::Path;
+
+use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::fixtures::TestRoot;
+use games_platform::ir::storage::{PathKind, path_kind};
 
 /// Create a unique directory for an isolated test.
 ///
@@ -49,4 +54,23 @@ pub fn require(condition: bool, message: &str) -> Result<(), String> {
     } else {
         Err(String::from(message))
     }
+}
+
+/// Read a small ordinary fixture through the bounded snapshot port.
+///
+/// # Errors
+/// Returns a storage or allocation error.
+pub fn read(path: &Path) -> Result<Vec<u8>, String> {
+    snapshot(path.as_os_str(), NonZeroU64::MIN.saturating_add(65535))
+        .map_err(|error| format!("{error:?}"))
+}
+
+/// Observe whether a fixture entry exists without following its final link.
+///
+/// # Errors
+/// Returns an observation error.
+pub fn exists(path: &Path) -> Result<bool, String> {
+    path_kind(path.as_os_str())
+        .map(|kind| kind != PathKind::Missing)
+        .map_err(|error| error.to_string())
 }

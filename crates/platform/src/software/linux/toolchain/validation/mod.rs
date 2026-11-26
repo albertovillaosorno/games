@@ -29,6 +29,8 @@
 // - Defaults:
 //   - Propagate launch errors and preserve unsuccessful completion.
 
+#[cfg(any(test, feature = "test-fixtures"))]
+mod fixtures;
 mod state;
 
 use std::ffi::OsStr;
@@ -75,8 +77,9 @@ mod tests {
 
     use super::command_for;
     use crate::ir::security::toolchain::validation::Request;
-    use crate::ir::storage::fixtures::TestRoot;
+    use crate::ir::storage::fixtures::FixtureStorage as _;
     use crate::ir::toolchain::validation::run;
+    use crate::software::linux::storage::fixtures::TestRoot;
 
     #[test]
     fn markdown_hash_name_is_checked_literally() -> Result<(), String> {

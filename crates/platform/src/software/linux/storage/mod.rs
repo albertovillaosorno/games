@@ -44,31 +44,18 @@ mod file;
     any(target_os = "linux", target_os = "android"),
     any(test, feature = "test-fixtures"),
 ))]
-pub mod fixtures;
-/// Explicitly unavailable native rejection-test fixtures.
+pub(super) mod fixtures;
 #[cfg(all(
     not(any(target_os = "linux", target_os = "android")),
     any(test, feature = "test-fixtures"),
 ))]
-pub mod fixtures {
-    use std::io;
-    use std::path::Path;
+impl crate::ir::storage::fixtures::FixtureFactory for () {
+    const AVAILABLE: bool = false;
 
-    /// Whether link and executable fixture operations are implemented.
-    pub const AVAILABLE: bool = false;
-
-    /// Reject unavailable fixture link creation.
-    /// # Errors
-    /// Always returns Unsupported.
-    pub fn file_link(_target: &Path, _link: &Path) -> io::Result<()> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
-
-    /// Reject unavailable fixture permission changes.
-    /// # Errors
-    /// Always returns Unsupported.
-    pub fn owner_executable(_path: &Path) -> io::Result<()> {
-        Err(io::ErrorKind::Unsupported.into())
+    fn open_fixture()
+    -> std::io::Result<Box<dyn crate::ir::storage::fixtures::FixtureStorage>>
+    {
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -247,8 +234,26 @@ impl PathObservation for () {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl PathResolution for () {
+    fn absolute(path: &OsStr) -> io::Result<bool> {
+        Ok(Path::new(path).is_absolute())
+    }
+
+    fn equivalent(left: &OsStr, right: &OsStr) -> io::Result<bool> {
+        Ok(Path::new(left) == Path::new(right))
+    }
+
+    fn has_prefix(path: &OsStr, prefix: &OsStr) -> io::Result<bool> {
+        Ok(Path::new(path).starts_with(prefix))
+    }
+
     fn join(base: &OsStr, child: &OsStr) -> io::Result<OsString> {
         Ok(Path::new(base).join(child).into_os_string())
+    }
+
+    fn leaf(path: &OsStr) -> io::Result<&OsStr> {
+        Path::new(path)
+            .file_name()
+            .ok_or_else(|| io::ErrorKind::InvalidInput.into())
     }
 
     fn parent(path: &OsStr) -> io::Result<&OsStr> {
@@ -261,7 +266,23 @@ impl PathResolution for () {
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl PathResolution for () {
+    fn absolute(_path: &OsStr) -> io::Result<bool> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn equivalent(_left: &OsStr, _right: &OsStr) -> io::Result<bool> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn has_prefix(_path: &OsStr, _prefix: &OsStr) -> io::Result<bool> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
     fn join(_base: &OsStr, _child: &OsStr) -> io::Result<OsString> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn leaf(_path: &OsStr) -> io::Result<&OsStr> {
         Err(io::ErrorKind::Unsupported.into())
     }
 
@@ -309,6 +330,28 @@ mod tests {
             && parent_path(OsStr::new("/")).is_err_and(|error| {
                 error.kind() == io::ErrorKind::InvalidInput
             });
+        valid
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn lexical_path_comparison_uses_components_not_text_prefixes()
+    -> io::Result<()> {
+        use crate::ir::storage::{
+            path_has_prefix, path_is_absolute, path_leaf, paths_equivalent,
+        };
+        let root = OsStr::new("/repo/crates");
+        let manifest = OsStr::new("/repo/crates/game/Cargo.toml");
+        let valid = path_is_absolute(root)?
+            && !path_is_absolute(OsStr::new("crates"))?
+            && path_has_prefix(manifest, root)?
+            && !path_has_prefix(OsStr::new("/repo/crates-other"), root)?
+            && paths_equivalent(root, OsStr::new("/repo/./crates/"))?
+            && !paths_equivalent(root, OsStr::new("/repo/crates/../crates"))?
+            && path_leaf(manifest)? == "Cargo.toml"
+            && path_leaf(OsStr::new("/")).is_err();
         valid
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())

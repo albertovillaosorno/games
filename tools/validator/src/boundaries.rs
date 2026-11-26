@@ -94,6 +94,7 @@ fn role(path: &str) -> Option<Role> {
 /// Whether a crate role must remain independent of native host APIs.
 pub(crate) fn host_independent(path: &str) -> bool {
     path.starts_with("tools/download/")
+        || path.starts_with("tools/build/")
         || matches!(
             role(path),
             Some(Role::Shared | Role::Runtime | Role::Importer | Role::Title)
@@ -690,7 +691,6 @@ pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::fs;
     use std::path::{Path, PathBuf};
 
     use games_platform::ir::storage::fixtures as platform_fixtures;
@@ -1072,8 +1072,9 @@ serde_json = "1""#;
     #[test]
     fn checks_both_repository_cargo_config_names() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::create_dir_all(root.join(".cargo"))
+        let root = Path::new(root_owner.location());
+        root_owner
+            .create_directories(".cargo")
             .map_err(|error| error.to_string())?;
         let authored =
             [".cargo/config", ".cargo/config.toml"].map(PathBuf::from);
@@ -1082,14 +1083,17 @@ serde_json = "1""#;
             "missing optional config",
         )?;
         for name in ["config", "config.toml"] {
-            let config = root.join(".cargo").join(name);
-            fs::write(&config, "paths = [\"../outside\"]")
+            let config = format!(".cargo/{name}");
+            root_owner
+                .write_file(&config, b"paths = [\"../outside\"]")
                 .map_err(|error| error.to_string())?;
             require(
                 repository_cargo_config(root, &authored).is_err(),
                 "both Cargo config names must reject local path overrides",
             )?;
-            fs::remove_file(config).map_err(|error| error.to_string())?;
+            root_owner
+                .remove_file(&config)
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -1130,19 +1134,25 @@ serde_json = "1""#;
     #[test]
     fn checks_nested_repository_cargo_includes() -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = fixture_owner.path();
+        let fixture = Path::new(fixture_owner.location());
         let root = fixture.join("repo");
-        let config = root.join(".cargo");
-        fs::create_dir_all(config.join("nested"))
+        fixture_owner
+            .create_directories("repo/.cargo/nested")
             .map_err(|error| error.to_string())?;
-        let primary = config.join("config.toml");
-        let first = config.join("nested/first.toml");
-        let shared = config.join("shared.toml");
-        fs::write(&primary, "include = [\"nested/first.toml\"]")
+        fixture_owner
+            .write_file(
+                "repo/.cargo/config.toml",
+                b"include = [\"nested/first.toml\"]",
+            )
             .map_err(|error| error.to_string())?;
-        fs::write(&first, "include = [\"../shared.toml\"]")
+        fixture_owner
+            .write_file(
+                "repo/.cargo/nested/first.toml",
+                b"include = [\"../shared.toml\"]",
+            )
             .map_err(|error| error.to_string())?;
-        fs::write(&shared, "[build]\njobs = 2")
+        fixture_owner
+            .write_file("repo/.cargo/shared.toml", b"[build]\njobs = 2")
             .map_err(|error| error.to_string())?;
         let authored = [
             ".cargo/config.toml",
@@ -1160,15 +1170,21 @@ serde_json = "1""#;
             repository_cargo_config(&root, &omitted).is_err(),
             "omitted from authored inventory",
         )?;
-        fs::write(&shared, "paths = [\"../outside\"]")
+        fixture_owner
+            .write_file("repo/.cargo/shared.toml", b"paths = [\"../outside\"]")
             .map_err(|error| error.to_string())?;
         require(
             repository_cargo_config(&root, &authored).is_err(),
             "nested path override must not bypass boundary check",
         )?;
-        fs::write(fixture.join("outside.toml"), "[build]\njobs = 2")
+        fixture_owner
+            .write_file("outside.toml", b"[build]\njobs = 2")
             .map_err(|error| error.to_string())?;
-        fs::write(&first, "include = [\"../../../outside.toml\"]")
+        fixture_owner
+            .write_file(
+                "repo/.cargo/nested/first.toml",
+                b"include = [\"../../../outside.toml\"]",
+            )
             .map_err(|error| error.to_string())?;
         require(
             repository_cargo_config(&root, &authored).is_err(),
@@ -1183,16 +1199,18 @@ serde_json = "1""#;
             return Err(String::from("native fixture capability unavailable"));
         }
         let root_owner = directory()?;
-        let root = root_owner.path();
-        let config = root.join(".cargo");
-        fs::create_dir_all(&config).map_err(|error| error.to_string())?;
-        let primary = config.join("config.toml");
-        let actual = config.join("actual.toml");
-        fs::write(&primary, "include = [\"alias.toml\"]")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .create_directories(".cargo")
             .map_err(|error| error.to_string())?;
-        fs::write(&actual, "[build]\njobs = 2")
+        root_owner
+            .write_file(".cargo/config.toml", b"include = [\"alias.toml\"]")
             .map_err(|error| error.to_string())?;
-        platform_fixtures::file_link(&actual, &config.join("alias.toml"))
+        root_owner
+            .write_file(".cargo/actual.toml", b"[build]\njobs = 2")
+            .map_err(|error| error.to_string())?;
+        root_owner
+            .link("actual.toml".as_ref(), ".cargo/alias.toml")
             .map_err(|error| error.to_string())?;
         let authored =
             [".cargo/actual.toml", ".cargo/config.toml"].map(PathBuf::from);

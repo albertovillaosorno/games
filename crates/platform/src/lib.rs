@@ -35,6 +35,3 @@ mod hardware;
 /// Portable platform and device capability interface.
 pub mod ir;
 mod software;
-
-#[cfg(any(test, feature = "test-fixtures"))]
-use software as selected;

@@ -63,9 +63,8 @@ pub mod title_build;
 /// Package the selected authored native executable.
 pub mod title_package;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::{Path, PathBuf};
 
 use games_assets::archive::ArchiveBudget;
 use games_assets::{
@@ -137,7 +136,7 @@ const USAGE: &str = concat!(
 struct Arguments {
     archive: ArchiveBudget,
     identity: SourceIdentity,
-    path: PathBuf,
+    path: OsString,
     source_limit: NonZeroU64,
 }
 
@@ -167,7 +166,7 @@ impl Arguments {
     }
 
     fn snapshot(&self) -> Result<Vec<u8>, String> {
-        snapshot(self.path.as_os_str(), self.source_limit)
+        snapshot(&self.path, self.source_limit)
             .map_err(|error| format!("source file: {error:?}"))
     }
 
@@ -184,7 +183,7 @@ impl Arguments {
                 parse_limit(&count)?,
             ),
             identity,
-            path: PathBuf::from(path),
+            path,
             source_limit: parse_limit(&source)?,
         })
     }
@@ -197,24 +196,24 @@ enum Command {
     AudioCheck(Machine, audio_check::Arguments),
     BackgroundCheck(Machine, reference_background::Arguments),
     BuildTitle(title_build::Title),
-    Check(ImportProfile, PathBuf, ContentHash),
+    Check(ImportProfile, OsString, ContentHash),
     Import(ImportProfile, Arguments),
-    ObjectCheck(Machine, PathBuf, PathBuf),
-    PackageTitle(title_build::Title, Option<PathBuf>),
-    PaletteCheck(Machine, PathBuf, PathBuf),
-    PriorityCheck(Machine, PathBuf, PathBuf),
-    Publish(ImportProfile, PathBuf, Arguments),
+    ObjectCheck(Machine, OsString, OsString),
+    PackageTitle(title_build::Title, Option<OsString>),
+    PaletteCheck(Machine, OsString, OsString),
+    PriorityCheck(Machine, OsString, OsString),
+    Publish(ImportProfile, OsString, Arguments),
     #[cfg(feature = "native-preview")]
     RenderCheck(Machine, render_check::Arguments),
     ReplaceMedia(publication::MediaReplacement),
-    SampleCheck(Machine, PathBuf, NonZeroU64, Arguments),
+    SampleCheck(Machine, OsString, NonZeroU64, Arguments),
     #[cfg(feature = "native-preview")]
     SceneSequence(Machine, reference_background::sequence::Sequence),
     StripPublish(Machine, reference_background::art::Strip),
-    TilemapCheck(Machine, PathBuf, PathBuf),
-    Upgrade(PathBuf, ContentHash, ManifestLimits),
+    TilemapCheck(Machine, OsString, OsString),
+    Upgrade(OsString, ContentHash, ManifestLimits),
     Verify(Verification, Arguments),
-    WaveCompare(PathBuf, PathBuf, NonZeroU64),
+    WaveCompare(OsString, OsString, NonZeroU64),
 }
 
 impl Command {
@@ -232,7 +231,7 @@ impl Command {
                 title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
             )),
             (Some("package"), Some(title)) => {
-                let output = args.next().map(PathBuf::from);
+                let output = args.next();
                 if args.next().is_some() {
                     return Err(String::from(USAGE));
                 }
@@ -263,11 +262,7 @@ impl Command {
                 let [left, right, limit] =
                     <[OsString; 3]>::try_from(args.collect::<Vec<_>>())
                         .map_err(|_args| String::from(USAGE))?;
-                Ok(Self::WaveCompare(
-                    left.into(),
-                    right.into(),
-                    parse_limit(&limit)?,
-                ))
+                Ok(Self::WaveCompare(left, right, parse_limit(&limit)?))
             },
             (Some("neo"), Some(operation)) => Self::parse_neo(operation, args),
             (Some("mame"), Some(operation)) => {
@@ -315,7 +310,7 @@ impl Command {
                 let parent = args.next().ok_or_else(|| String::from(USAGE))?;
                 Ok(Self::Publish(
                     selection,
-                    PathBuf::from(parent),
+                    parent,
                     Arguments::parse_profile(
                         selection.identity(),
                         args.collect(),
@@ -338,7 +333,7 @@ impl Command {
         let digest = text(&digest_argument)?
             .parse()
             .map_err(|_error| String::from("invalid manifest hash"))?;
-        Ok(Self::Check(selection, parent.into(), digest))
+        Ok(Self::Check(selection, parent, digest))
     }
 
     fn parse_import<Args>(
@@ -498,18 +493,12 @@ impl Command {
         let [raw, reference] = <[OsString; 2]>::try_from(args)
             .map_err(|_args| String::from(USAGE))?;
         match action {
-            "object-check" => {
-                Ok(Self::ObjectCheck(machine, raw.into(), reference.into()))
-            },
-            "palette-check" => {
-                Ok(Self::PaletteCheck(machine, raw.into(), reference.into()))
-            },
+            "object-check" => Ok(Self::ObjectCheck(machine, raw, reference)),
+            "palette-check" => Ok(Self::PaletteCheck(machine, raw, reference)),
             "priority-check" => {
-                Ok(Self::PriorityCheck(machine, raw.into(), reference.into()))
+                Ok(Self::PriorityCheck(machine, raw, reference))
             },
-            "tilemap-check" => {
-                Ok(Self::TilemapCheck(machine, raw.into(), reference.into()))
-            },
+            "tilemap-check" => Ok(Self::TilemapCheck(machine, raw, reference)),
             _ => Err(String::from(USAGE)),
         }
     }
@@ -526,8 +515,8 @@ impl Command {
             encoding,
             key: text(&key)?.to_owned(),
             limits: parse_manifest_limits([metadata, payload, total, count])?,
-            parent: parent.into(),
-            source: source.into(),
+            parent,
+            source,
         }))
     }
 
@@ -542,7 +531,7 @@ impl Command {
         let limit = args.next().ok_or_else(|| String::from(USAGE))?;
         Ok(Self::SampleCheck(
             machine,
-            raw.into(),
+            raw,
             parse_limit(&limit)?,
             Arguments::parse_profile(machine.identity(), args.collect())?,
         ))
@@ -553,7 +542,7 @@ impl Command {
             <[OsString; 6]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
         Ok(Self::Upgrade(
-            parent.into(),
+            parent,
             parse_manifest_digest(&raw_digest)?,
             parse_manifest_limits([metadata, payload, total, count])?,
         ))
@@ -734,7 +723,7 @@ fn verify_source(
 
 fn report_samples(
     machine: Machine,
-    raw: &Path,
+    raw: &OsStr,
     limit: NonZeroU64,
     args: &Arguments,
 ) -> Result<(), String> {
@@ -742,7 +731,7 @@ fn report_samples(
         let rom = machine
             .sample_rom(source, archive)
             .map_err(|error| format!("sample ROM: {error:?}"))?;
-        let bytes = snapshot(raw.as_os_str(), limit)
+        let bytes = snapshot(raw, limit)
             .map_err(|error| format!("observation: {error:?}"))?;
         let report = compare_observations(&rom, &bytes)
             .map_err(|error| format!("sample comparison: {error:?}"))?;

@@ -37,11 +37,10 @@ pub mod art;
 /// Bounded changing-scene reconstruction and presentation benchmark.
 pub mod sequence;
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
 #[cfg(feature = "native-preview")]
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::path::{Path, PathBuf};
 
 use games_assets::ContentHash;
 use games_assets::indexed::IndexedTiles;
@@ -68,21 +67,21 @@ use crate::{USAGE, reference_palette, text};
 #[derive(Debug)]
 pub struct Arguments {
     digest: ContentHash,
-    frame: PathBuf,
+    frame: OsString,
     #[cfg(feature = "native-preview")]
     native: bool,
-    palette: PathBuf,
-    parent: PathBuf,
-    ram: PathBuf,
-    registers: PathBuf,
-    scroll: PathBuf,
+    palette: OsString,
+    parent: OsString,
+    ram: OsString,
+    registers: OsString,
+    scroll: OsString,
     sprites: Option<SpritePaths>,
 }
 
 #[derive(Debug)]
 struct SpritePaths {
-    controls: PathBuf,
-    ram: PathBuf,
+    controls: OsString,
+    ram: OsString,
 }
 
 impl Arguments {
@@ -127,14 +126,14 @@ impl Arguments {
             digest: text(&digest)?
                 .parse()
                 .map_err(|_error| String::from("invalid manifest hash"))?,
-            frame: frame.into(),
+            frame,
             #[cfg(feature = "native-preview")]
             native: false,
-            palette: palette.into(),
-            parent: parent.into(),
-            ram: ram.into(),
-            registers: registers.into(),
-            scroll: scroll.into(),
+            palette,
+            parent,
+            ram,
+            registers,
+            scroll,
             sprites: None,
         })
     }
@@ -169,10 +168,7 @@ impl Arguments {
         let [ram, controls] = <[OsString; 2]>::try_from(args.split_off(7))
             .map_err(|_args| String::from(USAGE))?;
         let mut parsed = Self::parse(args)?;
-        parsed.sprites = Some(SpritePaths {
-            controls: controls.into(),
-            ram: ram.into(),
-        });
+        parsed.sprites = Some(SpritePaths { controls, ram });
         Ok(parsed)
     }
 
@@ -474,12 +470,12 @@ fn native_layout(raster: Raster, bytes: usize) -> Result<FrameLayout, String> {
         .map_err(|error| format!("frame layout: {error:?}"))
 }
 
-fn read(path: &Path, length: usize) -> Result<Vec<u8>, String> {
+fn read(path: &OsStr, length: usize) -> Result<Vec<u8>, String> {
     let limit = u64::try_from(length)
         .ok()
         .and_then(NonZeroU64::new)
         .ok_or_else(|| String::from("invalid observation length"))?;
-    let bytes = snapshot(path.as_os_str(), limit)
+    let bytes = snapshot(path, limit)
         .map_err(|error| format!("observation: {error:?}"))?;
     if bytes.len() != length {
         return Err(String::from("incorrect observation length"));

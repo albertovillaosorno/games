@@ -307,11 +307,12 @@ pub fn validate(root: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::path::Path;
-    use std::process::Command;
 
     use games_platform::ir::storage::fixtures as platform_fixtures;
+    use games_platform::ir::toolchain::validation::fixtures::{
+        FixtureGit, git,
+    };
 
     use super::{
         MAX_AUTHORED_BYTES, authored, line_width, local_storage_policy,
@@ -322,7 +323,7 @@ mod tests {
     #[test]
     fn authored_reads_are_bounded_and_reject_links() -> Result<(), String> {
         let fixture = directory()?;
-        let root = fixture.path();
+        let root = Path::new(fixture.location());
         fixture
             .write_file("source.rs", b"source")
             .map_err(|error| error.to_string())?;
@@ -330,8 +331,8 @@ mod tests {
             read_text(root, Path::new("source.rs"))? == "source",
             "exact snapshot",
         )?;
-        let link = root.join("alias.rs");
-        platform_fixtures::file_link(&root.join("source.rs"), &link)
+        fixture
+            .link(root.join("source.rs").as_os_str(), "alias.rs")
             .map_err(|error| error.to_string())?;
         require(
             read_authored(root, Path::new("alias.rs")).is_err(),
@@ -348,10 +349,11 @@ mod tests {
             read_authored(root, Path::new(".env")).is_err(),
             "reject private source",
         )?;
-        let oversized = fs::File::create(root.join("large"))
-            .map_err(|error| error.to_string())?;
-        oversized
-            .set_len(MAX_AUTHORED_BYTES.get().saturating_add(1))
+        fixture
+            .create_sized_file(
+                "large",
+                MAX_AUTHORED_BYTES.get().saturating_add(1),
+            )
             .map_err(|error| error.to_string())?;
         require(
             read_authored(root, Path::new("large")).is_err(),
@@ -362,19 +364,25 @@ mod tests {
     #[test]
     fn durable_ledgers_are_not_disposable() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::write(root.join(".gitignore"), "/.reference/\n/.cache/\n/.temp/\n")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file(".gitignore", b"/.reference/\n/.cache/\n/.temp/\n")
             .map_err(|error| error.to_string())?;
-        fs::create_dir_all(root.join(".reference/ledger"))
+        root_owner
+            .create_directories(".reference/ledger")
             .map_err(|error| error.to_string())?;
         require(local_storage_policy(root).is_ok(), "persistent ledger")?;
         for name in [".cache/ledger", ".temp/ledger"] {
-            let path = root.join(name);
-            fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+            root_owner
+                .create_directories(name)
+                .map_err(|error| error.to_string())?;
             require(local_storage_policy(root).is_err(), "disposable ledger")?;
-            fs::remove_dir(&path).map_err(|error| error.to_string())?;
+            root_owner
+                .remove_directory(name)
+                .map_err(|error| error.to_string())?;
         }
-        fs::write(root.join(".gitignore"), "/.cache/\n/.temp/\n")
+        root_owner
+            .write_file(".gitignore", b"/.cache/\n/.temp/\n")
             .map_err(|error| error.to_string())?;
         require(local_storage_policy(root).is_err(), "reference ignore")?;
         Ok(())
@@ -383,13 +391,16 @@ mod tests {
     #[test]
     fn private_configuration_is_not_authored() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::write(root.join(".gitignore"), "")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file(".gitignore", b"")
             .map_err(|error| error.to_string())?;
-        fs::write(root.join(".env.example"), "EXAMPLE=1\n")
+        root_owner
+            .write_file(".env.example", b"EXAMPLE=1\n")
             .map_err(|error| error.to_string())?;
         require(authored(root).is_ok(), "example template is authored")?;
-        fs::write(root.join(".env"), "LOCAL=1\n")
+        root_owner
+            .write_file(".env", b"LOCAL=1\n")
             .map_err(|error| error.to_string())?;
         require(authored(root).is_err(), "private configuration rejected")?;
         require(
@@ -462,16 +473,20 @@ mod tests {
     #[test]
     fn discovers_authored_files_without_local_media() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::write(root.join(".gitignore"), "/.reference/\n/target/\n")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file(".gitignore", b"/.reference/\n/target/\n")
             .map_err(|error| error.to_string())?;
         for name in [".reference", "target"] {
-            let path = root.join(name);
-            fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-            fs::write(path.join("hidden.py"), b"")
+            root_owner
+                .create_directories(name)
+                .map_err(|error| error.to_string())?;
+            root_owner
+                .write_file(&format!("{name}/hidden.py"), b"")
                 .map_err(|error| error.to_string())?;
         }
-        fs::write(root.join("lib.rs"), b"// source\n")
+        root_owner
+            .write_file("lib.rs", b"// source\n")
             .map_err(|error| error.to_string())?;
         let files = authored(root)?;
         require(
@@ -481,45 +496,55 @@ mod tests {
         Ok(())
     }
 
-    fn git(root: &Path, args: &[&str]) -> Result<(), String> {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .output()
-            .map_err(|error| error.to_string())?;
-        require(output.status.success(), "fixture Git command")
-    }
-
     #[test]
     fn rejects_git_paths_hidden_from_file_discovery() -> Result<(), String> {
         if !platform_fixtures::AVAILABLE {
             return Err(String::from("native fixture capability unavailable"));
         }
         let root_owner = directory()?;
-        let root = root_owner.path();
-        git(root, &["init", "--quiet"])?;
-        fs::write(root.join(".gitignore"), b"/private/\n")
+        let root = Path::new(root_owner.location());
+        git(&root_owner, FixtureGit::Initialize)
             .map_err(|error| error.to_string())?;
-        fs::write(root.join("source.rs"), b"// source\n")
+        root_owner
+            .write_file(".gitignore", b"/private/\n")
             .map_err(|error| error.to_string())?;
-        git(root, &["add", "source.rs"])?;
+        root_owner
+            .write_file("source.rs", b"// source\n")
+            .map_err(|error| error.to_string())?;
+        git(&root_owner, FixtureGit::Stage {
+            name: "source.rs",
+            force: false,
+        })
+        .map_err(|error| error.to_string())?;
         require(authored(root).is_ok(), "regular tracked source")?;
 
-        let link = root.join("link.rs");
-        platform_fixtures::file_link(Path::new("source.rs"), &link)
+        root_owner
+            .link("source.rs".as_ref(), "link.rs")
             .map_err(|error| error.to_string())?;
         require(authored(root).is_err(), "untracked source symlink")?;
-        git(root, &["add", "link.rs"])?;
+        git(&root_owner, FixtureGit::Stage {
+            name: "link.rs",
+            force: false,
+        })
+        .map_err(|error| error.to_string())?;
         require(authored(root).is_err(), "staged source symlink")?;
-        fs::remove_file(&link).map_err(|error| error.to_string())?;
+        root_owner
+            .remove_file("link.rs")
+            .map_err(|error| error.to_string())?;
         require(authored(root).is_ok(), "removed tracked link")?;
 
-        let hidden = root.join("private");
-        fs::create_dir_all(&hidden).map_err(|error| error.to_string())?;
-        fs::write(hidden.join("asset"), b"synthetic")
+        root_owner
+            .create_directories("private")
+            .map_err(|error| error.to_string())?;
+        root_owner
+            .write_file("private/asset", b"synthetic")
             .map_err(|error| error.to_string())?;
         require(authored(root).is_ok(), "ignored local media")?;
-        git(root, &["add", "-f", "private/asset"])?;
+        git(&root_owner, FixtureGit::Stage {
+            name: "private/asset",
+            force: true,
+        })
+        .map_err(|error| error.to_string())?;
         require(authored(root).is_err(), "tracked ignored file")?;
         Ok(())
     }

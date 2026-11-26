@@ -34,6 +34,9 @@
 pub mod bundle;
 /// Bounded ordinary and private file snapshots.
 pub mod file;
+/// Explicitly enabled private test storage.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures;
 /// Configured persistent asset and executable locations.
 pub mod layout;
 /// Portable display, audio and input preferences.
@@ -47,8 +50,6 @@ use std::ffi::{OsStr, OsString};
 use std::io::{ErrorKind, Result as IoResult};
 use std::num::NonZeroUsize;
 
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use crate::selected::fixtures;
 /// A direct entry in a bounded local directory observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryEntry {
@@ -92,7 +93,11 @@ pub(crate) trait PathObservation {
 
 /// Local path syntax, without access to the filesystem.
 pub(crate) trait PathResolution {
+    fn absolute(path: &OsStr) -> IoResult<bool>;
+    fn equivalent(left: &OsStr, right: &OsStr) -> IoResult<bool>;
+    fn has_prefix(path: &OsStr, prefix: &OsStr) -> IoResult<bool>;
     fn join(base: &OsStr, child: &OsStr) -> IoResult<OsString>;
+    fn leaf(path: &OsStr) -> IoResult<&OsStr>;
     fn parent(path: &OsStr) -> IoResult<&OsStr>;
 }
 
@@ -147,6 +152,37 @@ where
 /// Reports unavailable interpretation or a path with no parent.
 pub fn parent_path(path: &OsStr) -> IoResult<&OsStr> {
     <() as PathResolution>::parent(path)
+}
+
+/// Compare local paths by lexical component equality, not file identity.
+/// # Errors
+/// Reports unavailable local path interpretation.
+pub fn paths_equivalent(left: &OsStr, right: &OsStr) -> IoResult<bool> {
+    <() as PathResolution>::equivalent(left, right)
+}
+
+/// Test whether a path has the given lexical component prefix.
+///
+/// This is not a containment or access guarantee: no links or parent
+/// components are resolved.
+/// # Errors
+/// Reports unavailable local path interpretation.
+pub fn path_has_prefix(path: &OsStr, prefix: &OsStr) -> IoResult<bool> {
+    <() as PathResolution>::has_prefix(path, prefix)
+}
+
+/// Identify an absolute local path using host syntax.
+/// # Errors
+/// Reports unavailable local path interpretation.
+pub fn path_is_absolute(path: &OsStr) -> IoResult<bool> {
+    <() as PathResolution>::absolute(path)
+}
+
+/// Identify the final filename component without accessing storage.
+/// # Errors
+/// Reports unavailable interpretation or a path without a filename.
+pub fn path_leaf(path: &OsStr) -> IoResult<&OsStr> {
+    <() as PathResolution>::leaf(path)
 }
 
 /// Observe the final entry kind for preflight diagnostics.

@@ -275,8 +275,7 @@ pub fn preflight(root: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::{
         Counts, Inventory, adapter, manifest, neutral_ir, reject_coupling,
@@ -401,12 +400,16 @@ mod tests {
     fn real_inventory_rejects_previously_allowed_source() -> Result<(), String>
     {
         let root_owner = directory()?;
-        let root = root_owner.path();
+        let root = Path::new(root_owner.location());
         let source = PathBuf::from("crates/games/example/src/lib.rs");
-        let path = root.join(&source);
-        fs::create_dir_all(path.parent().ok_or("missing fixture parent")?)
+        root_owner
+            .create_directories("crates/games/example/src")
             .map_err(|error| error.to_string())?;
-        fs::write(&path, "#[cfg(unix)] fn run() {}")
+        root_owner
+            .write_file(
+                "crates/games/example/src/lib.rs",
+                b"#[cfg(unix)] fn run() {}",
+            )
             .map_err(|error| error.to_string())?;
         let result = validate(root, &[source], &toml::Table::new());
         require(
@@ -419,7 +422,7 @@ mod tests {
     fn linux_entrypoints_and_tools_never_receive_allowances()
     -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
+        let root = Path::new(root_owner.location());
         let authored = [
             "crates/games/example/src/lib.rs",
             "crates/games/example/src/main.rs",
@@ -428,14 +431,24 @@ mod tests {
         ]
         .map(PathBuf::from);
         for relative in &authored {
-            let path = root.join(relative);
-            fs::create_dir_all(path.parent().ok_or("fixture parent")?)
+            root_owner
+                .create_directories(
+                    relative
+                        .parent()
+                        .and_then(Path::to_str)
+                        .ok_or("fixture parent")?,
+                )
                 .map_err(|error| error.to_string())?;
             let predicate = concat!(
                 "#[cfg(all(target_os = \"linux\",",
                 " target_env = \"gnu\"))] fn run() {}"
             );
-            fs::write(path, predicate).map_err(|error| error.to_string())?;
+            root_owner
+                .write_file(
+                    relative.to_str().ok_or("fixture path")?,
+                    predicate.as_bytes(),
+                )
+                .map_err(|error| error.to_string())?;
         }
         let result = validate(root, &authored, &toml::Table::new());
         let error = result.err().ok_or("accepted target coupling")?;
@@ -451,7 +464,7 @@ mod tests {
     #[test]
     fn host_and_target_findings_are_reported_together() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
+        let root = Path::new(root_owner.location());
         let paths = [
             "crates/platform/src/ir/example/mod.rs",
             "crates/platform/src/lib.rs",
@@ -463,10 +476,20 @@ mod tests {
             "#[cfg(unix)] mod backend;",
             "#[cfg(target_os = \"linux\")] fn run() {}",
         ]) {
-            let path = root.join(relative);
-            fs::create_dir_all(path.parent().ok_or("fixture parent")?)
+            root_owner
+                .create_directories(
+                    relative
+                        .parent()
+                        .and_then(Path::to_str)
+                        .ok_or("fixture parent")?,
+                )
                 .map_err(|error| error.to_string())?;
-            fs::write(path, source).map_err(|error| error.to_string())?;
+            root_owner
+                .write_file(
+                    relative.to_str().ok_or("fixture path")?,
+                    source.as_bytes(),
+                )
+                .map_err(|error| error.to_string())?;
         }
         let result = validate(root, &paths, &toml::Table::new());
         let error = result.err().ok_or("accepted portability findings")?;
@@ -480,7 +503,7 @@ mod tests {
     fn portable_source_cannot_embed_host_files_or_environment()
     -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
+        let root = Path::new(root_owner.location());
         let authored = [
             "crates/engine/src/lib.rs",
             "crates/importer/src/lib.rs",
@@ -491,17 +514,23 @@ mod tests {
         ]
         .map(PathBuf::from);
         for relative in &authored {
-            let path = root.join(relative);
-            fs::create_dir_all(path.parent().ok_or("fixture parent")?)
+            root_owner
+                .create_directories(
+                    relative
+                        .parent()
+                        .and_then(Path::to_str)
+                        .ok_or("fixture parent")?,
+                )
                 .map_err(|error| error.to_string())?;
-            fs::write(
-                path,
-                r#"
+            root_owner
+                .write_file(
+                    relative.to_str().ok_or("fixture path")?,
+                    br#"
                 const SECRET: &str = env!("TOKEN");
                 const BYTES: &[u8] = include_bytes!("asset.zip");
                 "#,
-            )
-            .map_err(|error| error.to_string())?;
+                )
+                .map_err(|error| error.to_string())?;
         }
         let result = validate(root, &authored, &toml::Table::new());
         let error = result.err().ok_or("accepted compile-time host inputs")?;

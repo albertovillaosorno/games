@@ -29,7 +29,7 @@
 // - Defaults:
 //   - Reject missing or invalid bundles.
 
-use std::path::Path;
+use std::ffi::OsStr;
 
 use games_assets::ContentHash;
 use games_platform::ir::importer::ImportProfile;
@@ -41,7 +41,7 @@ use games_platform::ir::storage::bundle::CanonicalBundle;
 /// Rejects unexpected identities, invalid assets or output failures.
 pub fn check(
     selection: ImportProfile,
-    parent: &Path,
+    parent: &OsStr,
     digest: ContentHash,
 ) -> Result<(), String> {
     let limits = selection.limits();

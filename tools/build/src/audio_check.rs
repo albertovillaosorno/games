@@ -33,7 +33,6 @@
 
 use std::ffi::OsString;
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroUsize};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use games::audio::{Channels, Clip, Mixer, StereoGain};
@@ -58,7 +57,7 @@ pub struct Arguments {
     digest: ContentHash,
     frames: NonZeroU32,
     left: String,
-    parent: PathBuf,
+    parent: OsString,
     right: String,
 }
 
@@ -82,7 +81,7 @@ impl Arguments {
                 .map_err(|_error| String::from("invalid manifest hash"))?,
             frames: count,
             left: text(&left)?.to_owned(),
-            parent: parent.into(),
+            parent,
             right: text(&right)?.to_owned(),
         })
     }

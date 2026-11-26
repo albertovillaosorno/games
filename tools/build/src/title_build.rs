@@ -31,12 +31,12 @@
 
 //! Host-side selection of authored title executables.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
 use std::str;
 
 use games_platform::ir::storage::file::snapshot_secret;
+use games_platform::ir::storage::join_path;
 use games_platform::ir::storage::layout::Layout;
 use games_platform::ir::toolchain::{self, CargoTitle, Target};
 
@@ -57,11 +57,16 @@ impl Title {
         }
     }
 
-    pub(crate) fn compile(self, root: &Path) -> Result<PathBuf, String> {
+    pub(crate) fn compile(self, root: &OsStr) -> Result<OsString, String> {
         self.request()?
-            .compile(root.as_os_str())
-            .map(PathBuf::from)
+            .compile(root)
             .map_err(|error| error.to_string())
+    }
+
+    pub(crate) const fn manifest(self) -> &'static str {
+        match self {
+            Self::SimpsonsArcade => "crates/games/simpsons-arcade/Cargo.toml",
+        }
     }
 
     /// Admit a known title and the optional native target.
@@ -96,24 +101,32 @@ impl Title {
     /// Returns an error for an unsupported host or an unsuccessful build.
     pub fn run(self) -> Result<(), String> {
         let executable = self.compile(&workspace_root()?)?;
-        toolchain::write_line(&format!("Executable: {}", executable.display()))
-            .map_err(|error| error.to_string())
+        toolchain::write_line(&format!(
+            "Executable: {}",
+            executable.to_string_lossy()
+        ))
+        .map_err(|error| error.to_string())
     }
 }
 
-pub(crate) fn local_layout(root: &Path) -> Result<Layout, String> {
+pub(crate) fn local_path(
+    base: &OsStr,
+    child: &str,
+) -> Result<OsString, String> {
+    join_path(base, child).map_err(|error| error.to_string())
+}
+
+pub(crate) fn local_layout(root: &OsStr) -> Result<Layout, String> {
     let maximum = NonZeroU64::MIN.saturating_add(65_535);
-    let config = snapshot_secret(root.join(".env").as_os_str(), maximum)
+    let config = snapshot_secret(&local_path(root, ".env")?, maximum)
         .map_err(|error| format!("local configuration: {error:?}"))?;
     let text =
         str::from_utf8(&config).map_err(|_error| "invalid .env encoding")?;
     Layout::parse(text).map_err(str::to_owned)
 }
 
-pub(crate) fn workspace_root() -> Result<PathBuf, String> {
-    toolchain::workspace_root()
-        .map(PathBuf::from)
-        .map_err(|error| error.to_string())
+pub(crate) fn workspace_root() -> Result<OsString, String> {
+    toolchain::workspace_root().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

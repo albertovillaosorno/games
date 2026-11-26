@@ -111,8 +111,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use linux::storage::fixtures;
 
 use crate::ir::audio::{
     AudioDevices, PlaybackError, PlaybackFactory, PlaybackPort,
@@ -377,5 +375,32 @@ impl EnvironmentBackend for () {
 impl StateFactory for () {
     fn open_state(_root: &OsStr) -> io::Result<StatePort> {
         Err(ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(all(
+    not(target_os = "linux"),
+    any(test, feature = "test-fixtures")
+))]
+impl crate::ir::toolchain::validation::fixtures::FixtureBackend for () {
+    fn git(
+        _root: &crate::ir::storage::fixtures::TestRoot,
+        _args: &Arguments,
+    ) -> Result<(), ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn hook_syntax(
+        _hook: crate::ir::toolchain::validation::fixtures::FixtureHook,
+    ) -> Result<bool, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
+    fn run_hook(
+        _root: &crate::ir::storage::fixtures::TestRoot,
+        _hook: crate::ir::toolchain::validation::fixtures::FixtureHook,
+        _failure: crate::ir::toolchain::validation::fixtures::FixtureDelegate,
+    ) -> Result<bool, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
     }
 }

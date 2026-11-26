@@ -184,12 +184,15 @@ pub fn run(root: &Path, fresh: bool, check: Check) -> Result<(), String> {
     run_with(root, fresh || requested, check, fingerprint)
 }
 
-fn run_with(
+fn run_with<Operation>(
     root: &Path,
     fresh: bool,
-    check: Check,
+    check: Operation,
     identify: Fingerprint,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    Operation: FnOnce(&Path, &mut dyn Write) -> Result<(), String>,
+{
     let mut state = ValidationState::open(root.as_os_str())
         .map_err(|error| error.to_string())?;
     announce(&format!(
@@ -227,10 +230,12 @@ fn run_with(
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
-    use std::io::Write;
+    use std::io::{Error, Write};
+    use std::num::NonZeroUsize;
     use std::path::Path;
-    use std::{fs, thread};
 
+    use games_platform::ir::process::fixtures::with_worker;
+    use games_platform::ir::storage::directory_entries;
     use sha2::{Digest as _, Sha256};
 
     use super::{
@@ -238,11 +243,10 @@ mod tests {
         hash_build_overrides, hash_cargo_config_files, hash_environment,
         run_with,
     };
-    use crate::fixtures::{directory, require};
+    use crate::fixtures::{directory, exists, read, require};
 
     fn key(root: &Path) -> Result<ValidationKey, String> {
-        let bytes =
-            fs::read(root.join("input")).map_err(|error| error.to_string())?;
+        let bytes = read(&root.join("input"))?;
         Ok(Sha256::digest(bytes).into())
     }
 
@@ -251,49 +255,55 @@ mod tests {
     }
 
     fn fail(root: &Path, _log: &mut dyn Write) -> Result<(), String> {
-        fs::read(root.join("missing"))
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    fn mutate(root: &Path, _log: &mut dyn Write) -> Result<(), String> {
-        fs::write(root.join("input"), b"changed")
-            .map_err(|error| error.to_string())
+        read(&root.join("missing")).map(|_| ())
     }
 
     #[test]
     fn caches_only_unchanged_success() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        let input = root.join("input");
-        fs::write(&input, b"original").map_err(|error| error.to_string())?;
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file("input", b"original")
+            .map_err(|error| error.to_string())?;
         let marker = root.join(".cache/validate/success");
 
         run_with(root, false, pass, key)?;
-        require(marker.exists(), "successful result must be cached")?;
+        require(exists(&marker)?, "successful result must be cached")?;
         run_with(root, false, fail, key)?;
         require(
             run_with(root, true, fail, key).is_err(),
             "fresh validation must bypass the cache",
         )?;
-        require(!marker.exists(), "failure must invalidate the cache")?;
+        require(!exists(&marker)?, "failure must invalidate the cache")?;
 
         run_with(root, false, pass, key)?;
-        fs::write(&input, b"updated").map_err(|error| error.to_string())?;
+        root_owner
+            .write_file("input", b"updated")
+            .map_err(|error| error.to_string())?;
         require(
             run_with(root, false, fail, key).is_err(),
             "changed inputs must trigger checks",
         )?;
         require(
-            !marker.exists(),
+            !exists(&marker)?,
             "changed and failed input must not be cached",
         )?;
         require(
-            run_with(root, true, mutate, key).is_err(),
+            run_with(
+                root,
+                true,
+                |_, _| {
+                    root_owner
+                        .write_file("input", b"changed")
+                        .map_err(|error| error.to_string())
+                },
+                key,
+            )
+            .is_err(),
             "changing inputs during checks must invalidate the pass",
         )?;
         require(
-            !marker.exists(),
+            !exists(&marker)?,
             "concurrent modification must not be cached",
         )?;
 
@@ -304,39 +314,49 @@ mod tests {
     fn ignored_disposable_ledger_invalidates_cached_success()
     -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::write(root.join("input"), b"previously admitted")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file("input", b"previously admitted")
             .map_err(|error| error.to_string())?;
         run_with(root, false, pass, key)?;
         let marker = root.join(".cache/validate/success");
-        require(marker.exists(), "fixture success marker")?;
-        fs::create_dir_all(root.join(".temp/ledger"))
+        require(exists(&marker)?, "fixture success marker")?;
+        root_owner
+            .create_directories(".temp/ledger")
             .map_err(|error| error.to_string())?;
         let result = run_with(root, false, pass, fingerprint);
         require(
             result.is_err_and(|error| error.contains(".reference/ledger")),
             "durable ledger must fail before cache lookup",
         )?;
-        require(!marker.exists(), "stale marker must be removed")?;
+        require(!exists(&marker)?, "stale marker must be removed")?;
         Ok(())
     }
 
     #[test]
     fn forbidden_source_invalidates_cached_success() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        let source = root.join("crates/games/example/src");
-        fs::create_dir_all(&source).map_err(|error| error.to_string())?;
-        fs::write(root.join(".gitignore"), "/.cache/\n/.temp/\n")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .create_directories("crates/games/example/src")
             .map_err(|error| error.to_string())?;
-        fs::write(root.join("Cargo.toml"), "[workspace.dependencies]\n")
+        root_owner
+            .write_file(".gitignore", b"/.cache/\n/.temp/\n")
             .map_err(|error| error.to_string())?;
-        fs::write(root.join("input"), b"previously admitted")
+        root_owner
+            .write_file("Cargo.toml", b"[workspace.dependencies]\n")
+            .map_err(|error| error.to_string())?;
+        root_owner
+            .write_file("input", b"previously admitted")
             .map_err(|error| error.to_string())?;
         run_with(root, false, pass, key)?;
         let marker = root.join(".cache/validate/success");
-        require(marker.exists(), "fixture must have a success marker")?;
-        fs::write(source.join("main.rs"), "#[cfg(unix)] fn run() {}")
+        require(exists(&marker)?, "fixture must have a success marker")?;
+        root_owner
+            .write_file(
+                "crates/games/example/src/main.rs",
+                b"#[cfg(unix)] fn run() {}",
+            )
             .map_err(|error| error.to_string())?;
         let result = run_with(root, false, pass, fingerprint);
         let diagnostic = result.err().unwrap_or_default();
@@ -344,15 +364,16 @@ mod tests {
             diagnostic.contains("os:unix"),
             "portability must fail first",
         )?;
-        require(!marker.exists(), "stale marker must be invalidated")?;
+        require(!exists(&marker)?, "stale marker must be invalidated")?;
         Ok(())
     }
 
     #[test]
     fn fresh_requests_cannot_reuse_ordinary_cache() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::write(root.join("input"), b"unchanged")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file("input", b"unchanged")
             .map_err(|error| error.to_string())?;
         require(
             !Environment::new([], None).fresh_requested(),
@@ -469,12 +490,13 @@ mod tests {
     fn cargo_config_fingerprint_tracks_hierarchy_and_includes()
     -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = fixture_owner.path();
+        let fixture = Path::new(fixture_owner.location());
         let root = fixture.join("repo");
-        let parent = fixture.join(".cargo");
         let home = fixture.join("cargo-home");
-        for path in [&root, &parent, &home] {
-            fs::create_dir_all(path).map_err(|error| error.to_string())?;
+        for name in ["repo", ".cargo", "cargo-home"] {
+            fixture_owner
+                .create_directories(name)
+                .map_err(|error| error.to_string())?;
         }
         let fingerprint = || -> Result<_, String> {
             let mut hash = Sha256::new();
@@ -482,29 +504,38 @@ mod tests {
             Ok(hash.finalize())
         };
         let original = fingerprint()?;
-        let config = parent.join("config.toml");
-        let include = parent.join("child.toml");
-        fs::write(&config, "include = [{path=\"child.toml\", optional=true}]")
+        fixture_owner
+            .write_file(
+                ".cargo/config.toml",
+                b"include = [{path=\"child.toml\", optional=true}]",
+            )
             .map_err(|error| error.to_string())?;
         let missing = fingerprint()?;
         require(original != missing, "ancestor config added")?;
-        fs::write(&include, "[build]\njobs = 1")
+        fixture_owner
+            .write_file(".cargo/child.toml", b"[build]\njobs = 1")
             .map_err(|error| error.to_string())?;
         let present = fingerprint()?;
         require(missing != present, "optional include added")?;
-        fs::write(&include, "[build]\njobs = 2")
+        fixture_owner
+            .write_file(".cargo/child.toml", b"[build]\njobs = 2")
             .map_err(|error| error.to_string())?;
         require(present != fingerprint()?, "include content changed")?;
-        fs::remove_file(include).map_err(|error| error.to_string())?;
+        fixture_owner
+            .remove_file(".cargo/child.toml")
+            .map_err(|error| error.to_string())?;
         require(missing == fingerprint()?, "optional include removed")?;
-        fs::write(parent.join("config"), "[build]\njobs = 3")
+        fixture_owner
+            .write_file(".cargo/config", b"[build]\njobs = 3")
             .map_err(|error| error.to_string())?;
         let legacy = fingerprint()?;
         require(missing != legacy, "extensionless config added")?;
-        fs::write(config, "[build]\njobs = 4")
+        fixture_owner
+            .write_file(".cargo/config.toml", b"[build]\njobs = 4")
             .map_err(|error| error.to_string())?;
         require(legacy == fingerprint()?, "shadow config ignored")?;
-        fs::write(home.join("config.toml"), "[build]\njobs = 5")
+        fixture_owner
+            .write_file("cargo-home/config.toml", b"[build]\njobs = 5")
             .map_err(|error| error.to_string())?;
         require(legacy != fingerprint()?, "Cargo home config added")?;
         Ok(())
@@ -513,24 +544,25 @@ mod tests {
     #[test]
     fn concurrent_runs_have_distinct_logs() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
-        fs::write(root.join("input"), b"original")
+        let root = Path::new(root_owner.location());
+        root_owner
+            .write_file("input", b"original")
             .map_err(|error| error.to_string())?;
-        thread::scope(|scope| {
-            let first = scope.spawn(|| run_with(root, true, pass, key));
-            let second = scope.spawn(|| run_with(root, true, pass, key));
-            first.join().map_err(|_panic| "first worker panicked")??;
-            second.join().map_err(|_panic| "second worker panicked")?
-        })?;
-        let logs = fs::read_dir(root.join(".temp/validate"))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
+        with_worker(
+            || run_with(root, true, pass, key).map_err(Error::other),
+            || run_with(root, true, pass, key).map_err(Error::other),
+        )
+        .map_err(|error| error.to_string())?;
+        let log_dir = root.join(".temp/validate");
+        let logs = directory_entries(
+            log_dir.as_os_str(),
+            NonZeroUsize::MIN.saturating_add(2),
+        )
+        .map_err(|error| error.to_string())?;
         require(logs.len() == 2, "one unique log per validation")?;
         for entry in logs {
-            let log = fs::read_to_string(entry.path())
-                .map_err(|error| error.to_string())?;
-            require(log == "executed\nPASS\n", "complete independent log")?;
+            let log = read(&log_dir.join(entry.name))?;
+            require(log == b"executed\nPASS\n", "complete independent log")?;
         }
         Ok(())
     }

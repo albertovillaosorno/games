@@ -29,6 +29,9 @@
 // - Defaults:
 //   - Reject invalid inputs and unsupported host capabilities.
 
+/// Explicitly enabled contributor subprocess fixtures.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures;
 /// Exclusive validation cache and log state.
 pub mod state;
 

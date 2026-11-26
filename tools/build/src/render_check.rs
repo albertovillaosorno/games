@@ -33,7 +33,6 @@
 
 use std::ffi::OsString;
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -68,10 +67,10 @@ pub struct Arguments {
     digest: ContentHash,
     first: u32,
     key: String,
-    parent: PathBuf,
+    parent: OsString,
     pen_count: NonZeroUsize,
     pen_start: usize,
-    raw: PathBuf,
+    raw: OsString,
 }
 
 impl Arguments {
@@ -98,10 +97,10 @@ impl Arguments {
             digest: number(&digest)?,
             first: number(&first)?,
             key: text(&key)?.to_owned(),
-            parent: parent.into(),
+            parent,
             pen_count: number(&pens)?,
             pen_start: number(&start)?,
-            raw: raw.into(),
+            raw,
         };
         let _end = result.end()?;
         Ok(result)
@@ -180,11 +179,9 @@ impl Arguments {
             .map_err(|error| format!("asset: {error:?}"))?;
         let sheet = IndexedTiles::new(record, &bytes)
             .map_err(|error| format!("indexed asset: {error:?}"))?;
-        let raw = snapshot(
-            self.raw.as_os_str(),
-            reference_palette::byte_limit(machine, 2)?,
-        )
-        .map_err(|error| format!("palette RAM: {error:?}"))?;
+        let raw =
+            snapshot(&self.raw, reference_palette::byte_limit(machine, 2)?)
+                .map_err(|error| format!("palette RAM: {error:?}"))?;
         let colors = reference_palette::decode(machine, &raw)?;
         let atlas = self.prepare(&sheet, &colors)?;
         let execution = atlas

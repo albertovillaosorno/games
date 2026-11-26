@@ -388,17 +388,20 @@ fn main() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::path::Path;
-    use std::process::Command;
 
-    use games_platform::ir::storage::fixtures as platform_fixtures;
+    use games_platform::ir::storage::fixtures::{
+        self as platform_fixtures, TestRoot,
+    };
+    use games_platform::ir::toolchain::validation::fixtures::{
+        FixtureDelegate, FixtureHook, hook_syntax, run_hook,
+    };
 
     use super::{
         check_commit, check_deleted, check_history_bytes, check_message_file,
-        check_paths, check_worktree, root,
+        check_paths, check_worktree,
     };
-    use crate::fixtures::{directory, require};
+    use crate::fixtures::{directory, read, require};
 
     const SIGNED: &str = "Signed-off-by: Example <example@example.com>";
 
@@ -557,10 +560,10 @@ mod tests {
     #[test]
     fn rejects_restored_staged_deletions() -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = fixture_owner.path();
+        let fixture = Path::new(fixture_owner.location());
         let deleted = b"old.md\0";
         check_deleted(fixture, deleted)?;
-        write(&fixture.join("old.md"), b"restored")?;
+        write(&fixture_owner, "old.md", b"restored")?;
         require(
             check_deleted(fixture, deleted).is_err(),
             "restored deletion",
@@ -568,75 +571,82 @@ mod tests {
         Ok(())
     }
 
-    fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-        fs::write(path, bytes).map_err(|error| error.to_string())
+    fn write(root: &TestRoot, name: &str, bytes: &[u8]) -> Result<(), String> {
+        root.write_file(name, bytes)
+            .map_err(|error| error.to_string())
     }
 
     #[test]
     fn exercises_isolated_hook_fixtures() -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = fixture_owner.path();
+        let fixture = Path::new(fixture_owner.location());
         let message = fixture.join("COMMIT_MSG");
         write(
-            &message,
+            &fixture_owner,
+            "COMMIT_MSG",
             format!("feat(engine): change\n\n{SIGNED}").as_bytes(),
         )?;
         check_message_file(&message)?;
-        write(&message, b"feat(engine): change")?;
+        write(&fixture_owner, "COMMIT_MSG", b"feat(engine): change")?;
         require(
             check_message_file(&message).is_err(),
             "invalid commit message file",
         )?;
 
         let staged = fixture.join("staged-paths");
-        write(&staged, b"README.md\0crates/engine/src/lib.rs\0")?;
-        let valid = fs::read(&staged).map_err(|error| error.to_string())?;
+        write(
+            &fixture_owner,
+            "staged-paths",
+            b"README.md\0crates/engine/src/lib.rs\0",
+        )?;
+        let valid = read(&staged)?;
         check_paths(&valid)?;
-        write(&staged, b"README.md\0.reference/games/title/input\0")?;
-        let blocked = fs::read(&staged).map_err(|error| error.to_string())?;
+        write(
+            &fixture_owner,
+            "staged-paths",
+            b"README.md\0.reference/games/title/input\0",
+        )?;
+        let blocked = read(&staged)?;
         require(check_paths(&blocked).is_err(), "proprietary staged file")?;
 
-        for hook in ["pre-commit", "commit-msg"] {
-            let status = Command::new("sh")
-                .arg("-n")
-                .arg(root()?.join(".githooks").join(hook))
-                .status()
-                .map_err(|error| error.to_string())?;
-            require(status.success(), "hook dispatch shell syntax")?;
+        for hook in [FixtureHook::PreCommit, FixtureHook::CommitMessage] {
+            require(
+                hook_syntax(hook).map_err(|error| error.to_string())?,
+                "hook dispatch shell syntax",
+            )?;
         }
         Ok(())
     }
 
-    fn executable(path: &Path, bytes: &[u8]) -> Result<(), String> {
-        write(path, bytes)?;
-        platform_fixtures::owner_executable(path)
+    fn executable(
+        root: &TestRoot,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        write(root, name, bytes)?;
+        root.make_executable(name)
             .map_err(|error| error.to_string())
     }
 
     fn hook_dispatch(
-        fixture: &Path,
-        hook: &str,
-        failure: &str,
+        fixture: &TestRoot,
+        hook: FixtureHook,
+        failure: FixtureDelegate,
         expected: &str,
     ) -> Result<(), String> {
-        let calls = fixture.join("calls");
-        write(&calls, b"")?;
-        let status = Command::new("/bin/sh")
-            .arg(root()?.join(".githooks").join(hook))
-            .arg(fixture.join("COMMIT_MSG"))
-            .current_dir(fixture)
-            .env("PATH", fixture)
-            .env("HOOK_FIXTURE", fixture)
-            .env("HOOK_FAIL", failure)
-            .status()
+        let calls = Path::new(fixture.location()).join("calls");
+        write(fixture, "calls", b"")?;
+        let status = run_hook(fixture, hook, failure)
             .map_err(|error| error.to_string())?;
         require(
-            status.success() == failure.is_empty(),
+            status == (failure == FixtureDelegate::None),
             "hook must propagate delegate failure",
         )?;
-        let actual =
-            fs::read_to_string(calls).map_err(|error| error.to_string())?;
-        require(actual == expected, "hook delegate order or arguments")
+        let actual = read(&calls)?;
+        require(
+            actual == expected.as_bytes(),
+            "hook delegate order or arguments",
+        )
     }
 
     #[test]
@@ -645,13 +655,15 @@ mod tests {
             return Err(String::from("native fixture capability unavailable"));
         }
         let fixture_owner = directory()?;
-        let fixture = fixture_owner.path();
+        let fixture = Path::new(fixture_owner.location());
         executable(
-            &fixture.join("git"),
+            &fixture_owner,
+            "git",
             b"#!/bin/sh\nprintf '%s\\n' \"$HOOK_FIXTURE\"\n",
         )?;
         executable(
-            &fixture.join("cargo"),
+            &fixture_owner,
+            "cargo",
             concat!(
                 "#!/bin/sh\n",
                 "printf '%s\\n' \"$*\" >> \"$HOOK_FIXTURE/calls\"\n",
@@ -664,15 +676,40 @@ mod tests {
         let staged = "run --locked -q -p games-validator --bin games-hooks";
         let first = format!("{staged} -- staged\n");
         let both = format!("{first}validate\n");
-        hook_dispatch(fixture, "pre-commit", "", &both)?;
-        hook_dispatch(fixture, "pre-commit", "staged", &first)?;
-        hook_dispatch(fixture, "pre-commit", "validate", &both)?;
+        hook_dispatch(
+            &fixture_owner,
+            FixtureHook::PreCommit,
+            FixtureDelegate::None,
+            &both,
+        )?;
+        hook_dispatch(
+            &fixture_owner,
+            FixtureHook::PreCommit,
+            FixtureDelegate::Staged,
+            &first,
+        )?;
+        hook_dispatch(
+            &fixture_owner,
+            FixtureHook::PreCommit,
+            FixtureDelegate::Validate,
+            &both,
+        )?;
         let message = format!(
             "{staged} -- commit-message {}/COMMIT_MSG\n",
             fixture.display()
         );
-        hook_dispatch(fixture, "commit-msg", "", &message)?;
-        hook_dispatch(fixture, "commit-msg", "commit-message", &message)?;
+        hook_dispatch(
+            &fixture_owner,
+            FixtureHook::CommitMessage,
+            FixtureDelegate::None,
+            &message,
+        )?;
+        hook_dispatch(
+            &fixture_owner,
+            FixtureHook::CommitMessage,
+            FixtureDelegate::CommitMessage,
+            &message,
+        )?;
         Ok(())
     }
 }

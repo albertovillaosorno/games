@@ -179,7 +179,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::path::Path;
 
     use super::{MAX_CONFIG_BYTES, MAX_DOCUMENTS, visit};
     use crate::fixtures::{directory, require};
@@ -187,22 +187,27 @@ mod tests {
     #[test]
     fn rejects_cycles_and_missing_required_includes() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
+        let root = Path::new(root_owner.location());
         let config = root.join("config.toml");
-        let child = root.join("child.toml");
-        fs::write(&config, "include = [\"child.toml\"]")
+        root_owner
+            .write_file("config.toml", b"include = [\"child.toml\"]")
             .map_err(|error| error.to_string())?;
         require(
             visit(&config, false, &mut |_, _| Ok(())).is_err(),
             "missing required include",
         )?;
-        fs::write(&child, "include = [\"config.toml\"]")
+        root_owner
+            .write_file("child.toml", b"include = [\"config.toml\"]")
             .map_err(|error| error.to_string())?;
         require(
             visit(&config, false, &mut |_, _| Ok(())).is_err(),
             "configuration cycle",
         )?;
-        fs::write(&child, "include = [{path=\"absent.toml\", optional=true}]")
+        root_owner
+            .write_file(
+                "child.toml",
+                b"include = [{path=\"absent.toml\", optional=true}]",
+            )
             .map_err(|error| error.to_string())?;
         let mut absent = false;
         require(
@@ -221,10 +226,12 @@ mod tests {
     #[test]
     fn rejects_oversized_configuration() -> Result<(), String> {
         let fixture = directory()?;
-        let path = fixture.path().join("config.toml");
-        let file =
-            fs::File::create(&path).map_err(|error| error.to_string())?;
-        file.set_len(MAX_CONFIG_BYTES.get().saturating_add(1))
+        let path = Path::new(fixture.location()).join("config.toml");
+        fixture
+            .create_sized_file(
+                "config.toml",
+                MAX_CONFIG_BYTES.get().saturating_add(1),
+            )
             .map_err(|error| error.to_string())?;
         require(
             visit(&path, false, &mut |_, _| Ok(())).is_err(),
@@ -235,20 +242,25 @@ mod tests {
     #[test]
     fn bounds_repeated_optional_include_attempts() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = root_owner.path();
+        let root = Path::new(root_owner.location());
         let config = root.join("config.toml");
         let document = |count| {
             let entries =
                 vec!["{path=\"absent.toml\", optional=true}"; count].join(",");
             format!("include = [{entries}]")
         };
-        fs::write(&config, document(MAX_DOCUMENTS.saturating_sub(1)))
+        root_owner
+            .write_file(
+                "config.toml",
+                document(MAX_DOCUMENTS.saturating_sub(1)).as_bytes(),
+            )
             .map_err(|error| error.to_string())?;
         require(
             visit(&config, false, &mut |_, _| Ok(()))?,
             "exact configuration visit budget",
         )?;
-        fs::write(&config, document(MAX_DOCUMENTS))
+        root_owner
+            .write_file("config.toml", document(MAX_DOCUMENTS).as_bytes())
             .map_err(|error| error.to_string())?;
         require(
             visit(&config, false, &mut |_, _| Ok(())).is_err(),

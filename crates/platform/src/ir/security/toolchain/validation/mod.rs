@@ -100,6 +100,45 @@ pub enum GitRequest {
     Unstaged,
 }
 
+/// Fixed Git operations for an isolated temporary repository.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixtureGit<'name> {
+    /// Initialize an empty repository without user templates.
+    Initialize,
+    /// Stage one admitted relative file, optionally overriding ignore rules.
+    Stage {
+        /// Relative fixture name interpreted literally.
+        name: &'name str,
+        /// Whether the fixture deliberately stages an ignored file.
+        force: bool,
+    },
+}
+
+/// An authored repository hook, never a caller-selected script path.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixtureHook {
+    /// Commit message validation.
+    CommitMessage,
+    /// Staged file and full validation gate.
+    PreCommit,
+}
+
+/// Deliberately fail a fixed hook delegate in a private test repository.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixtureDelegate {
+    /// Reject a commit message.
+    CommitMessage,
+    /// All delegates succeed.
+    None,
+    /// Reject staged files.
+    Staged,
+    /// Reject validation.
+    Validate,
+}
+
 /// A dynamic validation argument did not meet the shared policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidRequest;
@@ -230,6 +269,60 @@ impl<'input> Request<'input> {
                 "--format-version",
                 "1",
             ]),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl FixtureGit<'_> {
+    pub(crate) fn admit(self) -> Result<Arguments, InvalidRequest> {
+        let args = match self {
+            Self::Initialize => vec!["init", "--quiet", "--template="],
+            Self::Stage { name, force } => {
+                validate_path(name).map_err(|_error| InvalidRequest)?;
+                if name
+                    .split('/')
+                    .any(|part| part.eq_ignore_ascii_case(".git"))
+                {
+                    return Err(InvalidRequest);
+                }
+                let mut args = vec!["--literal-pathspecs", "add"];
+                if force {
+                    args.push("--force");
+                }
+                args.extend(["--", name]);
+                args
+            },
+        };
+        Ok(Arguments {
+            args: args.into_iter().map(OsString::from).collect(),
+            program: "git",
+        })
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl FixtureHook {
+    /// Fixed authored hook filename.
+    #[must_use]
+    pub const fn filename(self) -> &'static str {
+        match self {
+            Self::PreCommit => "pre-commit",
+            Self::CommitMessage => "commit-msg",
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl FixtureDelegate {
+    /// The corresponding authored fixture delegate token.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Staged => "staged",
+            Self::Validate => "validate",
+            Self::CommitMessage => "commit-message",
         }
     }
 }
@@ -491,5 +584,27 @@ mod tests {
         assert!(admitted.is_ok_and(
             |args| args.args() == [":#review.md", ":docs/todo/open/a.mdc"]
         ));
+    }
+
+    #[test]
+    fn fixture_git_admits_only_literal_local_names()
+    -> Result<(), InvalidRequest> {
+        for name in ["../escape", "/root", ".git/config", "a/.GIT/b", ""] {
+            if (FixtureGit::Stage { name, force: false }).admit().is_ok() {
+                return Err(InvalidRequest);
+            }
+        }
+        let args = FixtureGit::Stage {
+            name: "-file",
+            force: true,
+        }
+        .admit()?;
+        if args.args()
+            == ["--literal-pathspecs", "add", "--force", "--", "-file"]
+        {
+            Ok(())
+        } else {
+            Err(InvalidRequest)
+        }
     }
 }

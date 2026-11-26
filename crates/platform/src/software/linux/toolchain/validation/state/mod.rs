@@ -184,8 +184,9 @@ fn state_directory(root: &Path, parent: &str) -> IoResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::storage::fixtures::{TestRoot, file_link};
+    use crate::ir::storage::fixtures::FixtureStorage as _;
     use crate::ir::toolchain::validation::state::ValidationState;
+    use crate::software::linux::storage::fixtures::{TestRoot, file_link};
 
     fn require(condition: bool) -> IoResult<()> {
         condition
