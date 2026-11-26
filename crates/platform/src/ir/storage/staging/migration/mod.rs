@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Verification and private staging of legacy canonical title stores.
+//   - Verification, staging and no-replace publication of title stores.
 // - Must-Not:
-//   - Delete originals, publish a migration or access native descriptors.
+//   - Delete originals, interpret catalogues or access native descriptors.
 // - Allows:
 //   - Inputs: Explicit legacy store, title, budgets and staging parent.
-//   - Outputs: Old-to-current manifest mapping and verified private store.
-//   - Side effects: Bounded reads and optional private staging.
+//   - Outputs: Verified mapping, private store or publication receipt.
+//   - Side effects: Bounded reads, staging and explicit publication.
 // - Split-When:
 //   - Cutover introduces independent consumer or retention policy.
 // - Merge-When:
@@ -25,11 +25,11 @@
 // - Description:
 //   - Normalize metadata and stage one verified object per content hash.
 // - Usage:
-//   - Audit a trusted legacy store or prepare a private rehearsal.
+//   - Audit, rehearse or publish a verified store without replacement.
 // - Defaults:
 //   - Reject incomplete inventories and leave source files untouched.
 
-//! Read-only migration planning and private shared-store rehearsal.
+//! Verified shared-store migration with explicit non-overwriting publication.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -39,8 +39,10 @@ use games_assets::archive::{ArchiveBudget, EntryKind};
 use games_assets::{AssetError, ContentHash, ManifestLimits};
 
 use super::{
-    ArchiveStaging, PreparedManifest, StagedArchive, StagingEntry, StagingError,
+    ArchiveStaging, PreparedManifest, PublishedDirectory, StagedArchive,
+    StagingEntry, StagingError,
 };
+use crate::ir::security::staging::PublicationName;
 use crate::ir::storage::bundle::{
     CanonicalBundle, MANIFEST_NAME, OBJECT_PAYLOAD, OBJECTS_DIRECTORY,
     PAYLOADS_DIRECTORY, bundle_name,
@@ -94,6 +96,26 @@ pub struct MigrationReport {
     pub source_bytes: u64,
 }
 
+/// Explicitly generated metadata to stage with the migrated content.
+///
+/// Names must be single portable components outside the object namespace.
+#[derive(Clone, Copy, Debug)]
+pub struct MigrationFile<'file> {
+    /// Generated catalogue or sidecar bytes, bounded by the staging budget.
+    pub bytes: &'file [u8],
+    /// Unreserved root-level filename.
+    pub name: &'file str,
+}
+
+/// Generated metadata paired with the audited source inventory.
+#[derive(Clone, Copy, Debug)]
+pub struct MigrationMetadata<'input> {
+    /// Exact inventory against which the metadata was generated.
+    pub expected: &'input MigrationReport,
+    /// Explicit bounded files included in the same private transaction.
+    pub files: &'input [MigrationFile<'input>],
+}
+
 /// A private, verified shared-store rehearsal; dropping it removes staging.
 #[derive(Debug)]
 pub struct StagedMigration {
@@ -118,23 +140,57 @@ impl StagedMigration {
         parent: &OsStr,
         budget: ArchiveBudget,
     ) -> Result<Self, StagingError> {
+        Self::prepare_inner(source, parent, budget, None)
+    }
+
+    fn prepare_inner(
+        source: LegacyStore<'_>,
+        parent: &OsStr,
+        budget: ArchiveBudget,
+        metadata: Option<MigrationMetadata<'_>>,
+    ) -> Result<Self, StagingError> {
         let mut transaction = ArchiveStaging::new(parent, budget)?;
         let report = visit(source, |path, bytes| {
-            let mut input = bytes;
-            transaction.write_entry(
-                StagingEntry {
-                    kind: EntryKind::File,
-                    path,
-                    size: u64::try_from(bytes.len())
-                        .map_err(|_error| AssetError::TooLarge)?,
-                },
-                &mut input,
-            )
+            stage_file(&mut transaction, path, bytes)
         })?;
+        if let Some(selection) = metadata {
+            stage_metadata(&mut transaction, &report, selection)?;
+        }
         let stage = transaction.finish()?;
         read_back(stage.path(), &report, source.limits.manifest)?;
         stage.verify()?;
         Ok(Self { report, stage })
+    }
+
+    /// Re-audit the source and stage generated metadata with the store.
+    ///
+    /// Metadata must be derived from the exact expected migration report.
+    /// All metadata uses the same byte and entry budgets as canonical data.
+    ///
+    /// # Errors
+    /// Rejects changed source inventory, reserved names and excess budgets.
+    pub fn prepare_with_metadata(
+        source: LegacyStore<'_>,
+        parent: &OsStr,
+        budget: ArchiveBudget,
+        metadata: MigrationMetadata<'_>,
+    ) -> Result<Self, StagingError> {
+        Self::prepare_inner(source, parent, budget, Some(metadata))
+    }
+
+    /// Publish the complete verified stage into a new sibling directory.
+    ///
+    /// The consumer must be verified before this operation. The original
+    /// store remains untouched; retirement requires separate verification.
+    ///
+    /// # Errors
+    /// Rejects changed storage, existing output or unavailable publication.
+    /// A post-rename sync failure is reported in the publication receipt.
+    pub fn publish(
+        self,
+        name: &OsStr,
+    ) -> Result<PublishedDirectory, StagingError> {
+        self.stage.publish(name)
     }
 
     /// Verified migration report, including every old manifest address.
@@ -317,6 +373,42 @@ fn read_back(
     Ok(())
 }
 
+fn stage_file(
+    transaction: &mut ArchiveStaging,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), StagingError> {
+    let mut input = bytes;
+    transaction.write_entry(
+        StagingEntry {
+            kind: EntryKind::File,
+            path,
+            size: u64::try_from(bytes.len())
+                .map_err(|_error| AssetError::TooLarge)?,
+        },
+        &mut input,
+    )
+}
+
+fn stage_metadata(
+    transaction: &mut ArchiveStaging,
+    report: &MigrationReport,
+    selection: MigrationMetadata<'_>,
+) -> Result<(), StagingError> {
+    if selection.expected != report {
+        return Err(StagingError::ChangedStorage);
+    }
+    for file in selection.files {
+        let _name = PublicationName::new(OsStr::new(file.name))?;
+        let folded = file.name.to_ascii_lowercase();
+        if folded == OBJECTS_DIRECTORY || folded.starts_with("bundle-") {
+            return Err(StagingError::UnsupportedPath);
+        }
+        stage_file(transaction, file.name, file.bytes)?;
+    }
+    Ok(())
+}
+
 fn visit<Write>(
     source: LegacyStore<'_>,
     mut write: Write,
@@ -352,6 +444,7 @@ where
 }
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
     use std::str::from_utf8;
 
     use games_assets::{
@@ -359,7 +452,9 @@ mod tests {
     };
 
     use super::*;
+    use crate::ir::storage::file::snapshot;
     use crate::ir::storage::fixtures::{AVAILABLE, TestRoot};
+    use crate::ir::storage::path_leaf;
 
     fn limits() -> MigrationLimits {
         MigrationLimits {
@@ -488,6 +583,149 @@ mod tests {
         }
         stage.verify()?;
         drop(stage);
+        require(parent.entry_count()? == 0)?;
+        require(legacy(&source).audit()? == report)
+    }
+
+    #[test]
+    fn migration_publishes_content_and_metadata_together_without_replacement()
+    -> Result<(), StagingError> {
+        if !AVAILABLE {
+            return Ok(());
+        }
+        let source = TestRoot::new()?;
+        let parent = TestRoot::new()?;
+        let digest = store_bundle(&source, &fixture_manifest("tiles/one")?)?;
+        let report = legacy(&source).audit()?;
+        let files = [MigrationFile {
+            bytes: b"parent=.\n",
+            name: "launch.local",
+        }];
+        let prepare = || {
+            StagedMigration::prepare_with_metadata(
+                legacy(&source),
+                parent.location(),
+                budget(),
+                MigrationMetadata {
+                    expected: &report,
+                    files: &files,
+                },
+            )
+        };
+        let stage = prepare()?;
+        let path = join_path(stage.path(), "launch.local")?;
+        let maximum = NonZeroU64::MIN.saturating_add(63);
+        require(
+            snapshot(&path, maximum).is_ok_and(|bytes| bytes == b"parent=.\n"),
+        )?;
+        let receipt = match stage.publish(OsStr::new("assets")) {
+            Ok(receipt) => receipt,
+            Err(StagingError::Io(ErrorKind::Unsupported)) => {
+                return require(parent.entry_count()? == 0);
+            },
+            Err(error) => return Err(error),
+        };
+        receipt.durability.map_err(StagingError::Io)?;
+        let output = join_path(parent.location(), "assets")?;
+        require(receipt.path == output)?;
+        let catalogue = join_path(&output, "launch.local")?;
+        require(
+            snapshot(&catalogue, maximum)
+                .is_ok_and(|bytes| bytes == b"parent=.\n"),
+        )?;
+        let bundle = CanonicalBundle::open(&output, digest, limits().manifest)?;
+        require(bundle.read_payload("tiles/one")? == b"tile")?;
+        require(matches!(
+            prepare()?.publish(OsStr::new("assets")),
+            Err(StagingError::Collision)
+        ))?;
+        require(
+            snapshot(&catalogue, maximum)
+                .is_ok_and(|bytes| bytes == b"parent=.\n"),
+        )?;
+        require(parent.entry_count()? == 1)?;
+        require(legacy(&source).audit()? == report)
+    }
+
+    #[test]
+    fn metadata_admission_rejects_reserved_duplicate_and_unbounded_files()
+    -> Result<(), StagingError> {
+        if !AVAILABLE {
+            return Ok(());
+        }
+        let source = TestRoot::new()?;
+        let parent = TestRoot::new()?;
+        let _digest = store_bundle(&source, &fixture_manifest("tiles/one")?)?;
+        let report = legacy(&source).audit()?;
+        let prepare = |expected, files: &[MigrationFile<'_>]| {
+            StagedMigration::prepare_with_metadata(
+                legacy(&source),
+                parent.location(),
+                budget(),
+                MigrationMetadata { expected, files },
+            )
+        };
+        let file = |name| MigrationFile { bytes: b"fixture", name };
+        for invalid in [
+            "objects",
+            "OBJECTS",
+            "bundle-example",
+            "BUNDLE-example",
+            "nested/file.txt",
+            "../outside.txt",
+        ] {
+            require(prepare(&report, &[file(invalid)]).is_err())?;
+            require(parent.entry_count()? == 0)?;
+        }
+        require(
+            prepare(&report, &[file("poses.txt"), file("POSES.txt")]).is_err(),
+        )?;
+        let oversize = vec![0; 4097];
+        require(
+            prepare(&report, &[MigrationFile {
+                bytes: &oversize,
+                name: "oversize.txt",
+            }])
+            .is_err(),
+        )?;
+        source.write_file("new-sidecar.txt", b"changed inventory")?;
+        require(matches!(
+            prepare(&report, &[file("launch.local")]),
+            Err(StagingError::ChangedStorage)
+        ))?;
+        require(parent.entry_count()? == 0)
+    }
+
+    #[test]
+    fn migration_refuses_publication_after_observed_metadata_change()
+    -> Result<(), StagingError> {
+        if !AVAILABLE {
+            return Ok(());
+        }
+        let source = TestRoot::new()?;
+        let parent = TestRoot::new()?;
+        let _digest = store_bundle(&source, &fixture_manifest("tiles/one")?)?;
+        let report = legacy(&source).audit()?;
+        let stage = StagedMigration::prepare_with_metadata(
+            legacy(&source),
+            parent.location(),
+            budget(),
+            MigrationMetadata {
+                expected: &report,
+                files: &[MigrationFile {
+                    bytes: b"parent=.\n",
+                    name: "launch.local",
+                }],
+            },
+        )?;
+        let leaf = path_leaf(stage.path())?
+            .to_str()
+            .ok_or(StagingError::UnsupportedPath)?;
+        parent.write_file(&format!("{leaf}/launch.local"), b"changed")?;
+        require(matches!(
+            stage.publish(OsStr::new("assets")),
+            Err(StagingError::ChangedStorage)
+        ))?;
         require(parent.entry_count()? == 0)?;
         require(legacy(&source).audit()? == report)
     }

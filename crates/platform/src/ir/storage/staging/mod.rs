@@ -143,6 +143,11 @@ pub(crate) trait ArchivePort: Debug {
 pub(crate) trait CompletedArchivePort: Debug {
     fn location(&self) -> &OsStr;
 
+    fn publish_complete(
+        self: Box<Self>,
+        name: PublicationName<'_>,
+    ) -> Result<PublishedDirectory, StagingError>;
+
     fn recheck(&self) -> Result<(), StagingError>;
 }
 
@@ -261,6 +266,13 @@ impl StagedArchive {
     #[must_use]
     pub fn path(&self) -> &OsStr {
         self.backend.location()
+    }
+
+    // Only verified canonical migration can expose this operation publicly.
+    fn publish(self, name: &OsStr) -> Result<PublishedDirectory, StagingError> {
+        let admitted = PublicationName::new(name)?;
+        self.backend.recheck()?;
+        self.backend.publish_complete(admitted)
     }
 
     /// Recheck the exact staged tree before subsequent trusted use.
@@ -593,6 +605,13 @@ mod tests {
     impl CompletedArchivePort for ArchiveFake {
         fn location(&self) -> &OsStr {
             OsStr::new("archive")
+        }
+
+        fn publish_complete(
+            self: Box<Self>,
+            _name: PublicationName<'_>,
+        ) -> Result<PublishedDirectory, StagingError> {
+            Err(StagingError::Aborted)
         }
 
         fn recheck(&self) -> Result<(), StagingError> {

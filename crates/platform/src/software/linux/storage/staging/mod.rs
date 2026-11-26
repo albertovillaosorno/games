@@ -59,7 +59,7 @@ use super::file::{
 };
 use crate::ir::security::staging::{
     AdmittedArchiveEntry, AdmittedManifest, AdmittedPayload, Namespace,
-    NamespacePlan, NamespaceStep,
+    NamespacePlan, NamespaceStep, PublicationName,
 };
 #[cfg(test)]
 use crate::ir::security::staging::{
@@ -73,7 +73,7 @@ use crate::ir::storage::staging::PublishedBundle;
 use crate::ir::storage::staging::{
     ArchiveFactory, ArchivePort, CanonicalFactory, CanonicalPort,
     CompletedArchive, CompletedArchivePort, CompletedBundle, OpenArchive,
-    OpenCanonical, StagingEntry, StagingError,
+    OpenCanonical, PublishedDirectory, StagingEntry, StagingError,
 };
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::{
@@ -659,6 +659,31 @@ impl ArchivePort for ArchiveTree {
 impl CompletedArchivePort for StagedArchive {
     fn location(&self) -> &OsStr {
         self.path().as_os_str()
+    }
+
+    fn publish_complete(
+        self: Box<Self>,
+        name: PublicationName<'_>,
+    ) -> Result<PublishedDirectory, StagingError> {
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            let mut complete = *self;
+            complete.temporary.verify_tree(
+                &complete.namespace,
+                &complete.stamps,
+                true,
+            )?;
+            complete.verify()?;
+            publication::publish_directory(
+                &mut complete.temporary,
+                name.value(),
+            )
+        }
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        {
+            let _name = name;
+            Err(StagingError::Io(io::ErrorKind::Unsupported))
+        }
     }
 
     fn recheck(&self) -> Result<(), StagingError> {
