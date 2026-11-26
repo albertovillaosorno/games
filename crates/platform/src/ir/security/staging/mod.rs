@@ -364,11 +364,10 @@ impl<'input> AdmittedAuthoredFile<'input> {
         executable: bool,
         namespace: &mut Namespace,
     ) -> Result<Self, StagingError> {
-        validate_path(path)?;
         let (parents, leaf) = staging_path(path)?;
         let size = u64::try_from(bytes.len())
             .map_err(|_error| StagingError::ChangedStorage)?;
-        let plan = namespace.admit((parents, leaf), EntryKind::File, None)?;
+        let plan = namespace.admit_authored_path(path)?;
         Ok(Self {
             bytes,
             executable,
@@ -465,6 +464,19 @@ impl Namespace {
             leaf: last,
             parents: steps,
         })
+    }
+
+    /// Admit an authored file path without accessing or publishing bytes.
+    ///
+    /// Discard the namespace after an admission failure.
+    /// # Errors
+    /// Rejects unsafe paths, case collisions and inconsistent entry kinds.
+    pub fn admit_authored_path<'path>(
+        &mut self,
+        path: &'path str,
+    ) -> Result<NamespacePlan<'path>, StagingError> {
+        validate_path(path)?;
+        self.admit(staging_path(path)?, EntryKind::File, None)
     }
 
     /// Number of distinct admitted file and directory identities.

@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Open native descriptors, inspect native permissions or decode files.
 // - Allows:
-//   - Inputs: Explicit path values and nonzero byte budgets.
+//   - Inputs: Explicit path values, byte budgets and authored access policy.
 //   - Outputs: Bounded ordinary or zeroizing secret bytes, typed failures.
 //   - Side effects: Explicit dispatch only.
 // - Split-When:
@@ -44,10 +44,24 @@ use crate::ir::security::file::admit_length;
 /// Owned credential bytes with zeroizing drop and redacted debug output.
 pub type SecretSnapshot = Zeroizing<Vec<u8>>;
 
+/// Expected access policy of an independently authored package file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthoredFileKind {
+    /// Owner-only readable and writable document, without execute access.
+    Document,
+    /// Owner-only readable, writable and executable authored program.
+    Executable,
+}
+
 pub(crate) trait SnapshotBackend {
     fn read(
         path: &OsStr,
         maximum: NonZeroU64,
+    ) -> Result<Vec<u8>, FileReadError>;
+    fn read_authored(
+        path: &OsStr,
+        maximum: NonZeroU64,
+        kind: AuthoredFileKind,
     ) -> Result<Vec<u8>, FileReadError>;
 
     fn read_secret(
@@ -69,6 +83,33 @@ pub fn snapshot(
     maximum: NonZeroU64,
 ) -> Result<Vec<u8>, FileReadError> {
     snapshot_with::<()>(path, maximum)
+}
+
+/// Read a bounded ordinary file with the exact authored publication mode.
+///
+/// Require one link, current ownership and the selected access policy.
+/// Ancestors must be trusted; the snapshot does not authenticate bytes.
+/// # Errors
+/// Rejects unsupported storage, unsafe files and exceeded byte budgets.
+pub fn snapshot_authored(
+    path: &OsStr,
+    maximum: NonZeroU64,
+    kind: AuthoredFileKind,
+) -> Result<Vec<u8>, FileReadError> {
+    authored_with::<()>(path, maximum, kind)
+}
+
+fn authored_with<Backend>(
+    path: &OsStr,
+    maximum: NonZeroU64,
+    kind: AuthoredFileKind,
+) -> Result<Vec<u8>, FileReadError>
+where
+    Backend: SnapshotBackend,
+{
+    let bytes = Backend::read_authored(path, maximum, kind)?;
+    admit_length(bytes.len(), maximum)?;
+    Ok(bytes)
 }
 
 fn snapshot_with<Backend>(
@@ -131,6 +172,20 @@ mod tests {
             }
         }
 
+        fn read_authored(
+            path: &OsStr,
+            maximum: NonZeroU64,
+            kind: AuthoredFileKind,
+        ) -> Result<Vec<u8>, FileReadError> {
+            if (path == OsStr::new("program"))
+                == (kind == AuthoredFileKind::Executable)
+            {
+                Self::read(path, maximum)
+            } else {
+                Err(FileReadError::UnsafeFile)
+            }
+        }
+
         fn read_secret(
             path: &OsStr,
             maximum: NonZeroU64,
@@ -153,6 +208,28 @@ mod tests {
                 == Err(FileReadError::TooLarge)
             && snapshot_with::<Fake>(OsStr::new("missing"), exact)
                 == Err(FileReadError::Io(ErrorKind::NotFound));
+        valid
+            .then_some(())
+            .ok_or(FileReadError::Io(ErrorKind::InvalidData))
+    }
+
+    #[test]
+    fn authored_snapshots_enforce_policy_and_byte_budget()
+    -> Result<(), FileReadError> {
+        let exact = NonZeroU64::MIN.saturating_add(3);
+        let executable = AuthoredFileKind::Executable;
+        let document = AuthoredFileKind::Document;
+        let program = OsStr::new("program");
+        let notice = OsStr::new("notice");
+        let valid = authored_with::<Fake>(program, exact, executable)?
+            == b"test"
+            && authored_with::<Fake>(notice, exact, document)? == b"test"
+            && authored_with::<Fake>(program, exact, document)
+                == Err(FileReadError::UnsafeFile)
+            && authored_with::<Fake>(notice, exact, executable)
+                == Err(FileReadError::UnsafeFile)
+            && authored_with::<Fake>(notice, NonZeroU64::MIN, document)
+                == Err(FileReadError::TooLarge);
         valid
             .then_some(())
             .ok_or(FileReadError::Io(ErrorKind::InvalidData))

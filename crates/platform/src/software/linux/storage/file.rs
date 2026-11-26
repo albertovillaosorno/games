@@ -48,7 +48,7 @@ use zeroize::Zeroizing;
 /// Admission failure shared by the portable facade and native readers.
 pub(super) use crate::ir::security::file::FileReadError;
 use crate::ir::security::file::{admit_size, read_exact_snapshot};
-use crate::ir::storage::file::SecretSnapshot;
+use crate::ir::storage::file::{AuthoredFileKind, SecretSnapshot};
 
 pub(super) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
@@ -108,6 +108,20 @@ pub(super) fn snapshot_secret(
     let mut bytes = Zeroizing::new(Vec::new());
     read_pinned_into(&pinned, maximum.get(), secret_regular, &mut bytes)?;
     Ok(bytes)
+}
+
+// Verify the same private access modes used by authored publication.
+pub(super) fn snapshot_authored(
+    path: &Path,
+    maximum: NonZeroU64,
+    kind: AuthoredFileKind,
+) -> Result<Vec<u8>, FileReadError> {
+    let pinned = open(path, PIN_FLAGS, Mode::empty())?;
+    let admitted: fn(&FileStat) -> bool = match kind {
+        AuthoredFileKind::Document => authored_document,
+        AuthoredFileKind::Executable => authored_executable,
+    };
+    read_pinned(&pinned, maximum.get(), admitted)
 }
 
 fn read_pinned(
@@ -253,6 +267,26 @@ where
     let result = decode(&mut file, file_size(&before)?)?;
     check_content_metadata(&file, &before, private_regular)?;
     Ok(result)
+}
+
+pub(super) const fn authored_mode(kind: AuthoredFileKind) -> Mode {
+    let document = Mode::S_IRUSR.union(Mode::S_IWUSR);
+    match kind {
+        AuthoredFileKind::Document => document,
+        AuthoredFileKind::Executable => document.union(Mode::S_IXUSR),
+    }
+}
+
+fn authored_document(stat: &FileStat) -> bool {
+    authored_regular(stat, AuthoredFileKind::Document)
+}
+
+fn authored_executable(stat: &FileStat) -> bool {
+    authored_regular(stat, AuthoredFileKind::Executable)
+}
+
+fn authored_regular(stat: &FileStat, kind: AuthoredFileKind) -> bool {
+    staged_regular(stat) && stat.st_mode & 0o7777 == authored_mode(kind).bits()
 }
 
 fn staged_regular(stat: &FileStat) -> bool {
@@ -526,6 +560,42 @@ mod tests {
             snapshot_secret(&link, limit) == Err(FileReadError::UnsafeFile),
         )?;
         require(snapshot_secret(&path, limit)?.as_slice() == b"key")
+    }
+
+    #[test]
+    fn authored_snapshot_requires_exact_mode_and_one_link()
+    -> Result<(), FileReadError> {
+        let root = TestRoot::new()?;
+        let path = root.path.join("authored");
+        let link = root.path.join("alias");
+        fs::write(&path, b"x")?;
+        let limit = NonZeroU64::MIN;
+        let document = AuthoredFileKind::Document;
+        let executable = AuthoredFileKind::Executable;
+        for mode in [0o600, 0o700, 0o644, 0o755, 0o400, 0o4700] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
+            require(
+                snapshot_authored(&path, limit, document).is_ok()
+                    == (mode == 0o600),
+            )?;
+            require(
+                snapshot_authored(&path, limit, executable).is_ok()
+                    == (mode == 0o700),
+            )?;
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        fs::hard_link(&path, &link)?;
+        require(
+            snapshot_authored(&path, limit, document)
+                == Err(FileReadError::UnsafeFile),
+        )?;
+        fs::remove_file(&link)?;
+        symlink(&path, &link)?;
+        require(
+            snapshot_authored(&link, limit, document)
+                == Err(FileReadError::UnsafeFile),
+        )?;
+        require(snapshot_authored(&path, limit, document)? == b"x")
     }
 
     #[test]

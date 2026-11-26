@@ -100,7 +100,7 @@ use nix::sys::stat::Mode;
 use crate::ir::storage::bundle::BundleError;
 use crate::ir::storage::bundle::{BundleFactory, OpenBundle};
 use crate::ir::storage::file::{
-    FileReadError, SecretSnapshot, SnapshotBackend,
+    AuthoredFileKind, FileReadError, SecretSnapshot, SnapshotBackend,
 };
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::save::SaveError;
@@ -136,6 +136,14 @@ impl SnapshotBackend for () {
         file::snapshot(Path::new(path), maximum)
     }
 
+    fn read_authored(
+        path: &OsStr,
+        maximum: NonZeroU64,
+        kind: AuthoredFileKind,
+    ) -> Result<Vec<u8>, FileReadError> {
+        file::snapshot_authored(Path::new(path), maximum, kind)
+    }
+
     fn read_secret(
         path: &OsStr,
         maximum: NonZeroU64,
@@ -149,6 +157,14 @@ impl SnapshotBackend for () {
     fn read(
         _path: &OsStr,
         _maximum: NonZeroU64,
+    ) -> Result<Vec<u8>, FileReadError> {
+        Err(FileReadError::Io(io::ErrorKind::Unsupported))
+    }
+
+    fn read_authored(
+        _path: &OsStr,
+        _maximum: NonZeroU64,
+        _kind: AuthoredFileKind,
     ) -> Result<Vec<u8>, FileReadError> {
         Err(FileReadError::Io(io::ErrorKind::Unsupported))
     }

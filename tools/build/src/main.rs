@@ -83,6 +83,7 @@ use games_platform::ir::toolchain;
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
     "games-build package TITLE [OUTPUT]\n",
+    "games-build package-check TITLE OUTPUT\n",
     "games-build bundle migration-audit TITLE PARENT STORE_ENTRIES ",
     "STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle migration-catalogue TITLE PARENT STORE_ENTRIES ",
@@ -224,6 +225,7 @@ enum Command {
     MigrationCatalogue(Box<store_migration::Catalogue>),
     MigrationRehearsal(Box<store_migration::rehearsal::Rehearsal>),
     ObjectCheck(Machine, OsString, OsString),
+    PackageCheck(title_build::Title, OsString),
     PackageTitle(title_build::Title, Option<OsString>),
     PaletteCheck(Machine, OsString, OsString),
     PriorityCheck(Machine, OsString, OsString),
@@ -255,6 +257,15 @@ impl Command {
             (Some("build"), Some(title)) => Ok(Self::BuildTitle(
                 title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
             )),
+            (Some("package-check"), Some(title)) => {
+                let [output] =
+                    <[OsString; 1]>::try_from(args.collect::<Vec<_>>())
+                        .map_err(|_args| String::from(USAGE))?;
+                Ok(Self::PackageCheck(
+                    title_build::Title::parse(title, &[])?,
+                    output,
+                ))
+            },
             (Some("package"), Some(title)) => {
                 let output = args.next();
                 if args.next().is_some() {
@@ -608,6 +619,9 @@ impl Command {
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
+            Self::PackageCheck(title, output) => {
+                title_package::check(title, &output)
+            },
             Self::PackageTitle(title, Some(output)) => {
                 title_package::run(title, &output)
             },
@@ -678,6 +692,7 @@ impl Command {
             | Self::BackgroundCheck(..)
             | Self::BuildTitle(..)
             | Self::ObjectCheck(..)
+            | Self::PackageCheck(..)
             | Self::PackageTitle(..)
             | Self::PaletteCheck(..)
             | Self::PriorityCheck(..)
@@ -871,6 +886,25 @@ mod tests {
             "out",
             "extra",
         ]];
+        for candidate in invalid {
+            assert!(
+                Command::parse(candidate.iter().map(OsString::from)).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn package_check_requires_a_title_and_explicit_directory() {
+        let args = ["package-check", "simpsons-arcade", "local-package"];
+        assert!(matches!(
+            Command::parse(args.into_iter().map(OsString::from)),
+            Ok(Command::PackageCheck(title_build::Title::SimpsonsArcade, _))
+        ));
+        let invalid: [&[&str]; 3] = [
+            &["package-check", "simpsons-arcade"],
+            &["package-check", "unknown", "local-package"],
+            &["package-check", "simpsons-arcade", "local-package", "extra"],
+        ];
         for candidate in invalid {
             assert!(
                 Command::parse(candidate.iter().map(OsString::from)).is_err()

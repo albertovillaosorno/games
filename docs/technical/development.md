@@ -71,6 +71,21 @@ The package includes the executable, project notices, selected Cargo
 dependency licence texts and an executable identity receipt. It requires
 compatible system libraries, excludes all game assets and is not yet a
 portable release. Supply a trusted output parent that already exists.
+The versioned receipt records the length and SHA-256 of every included
+file. Publication performs an independent bounded readback; repeat it
+without building or executing a package using:
+
+```sh
+cargo run --locked -p games-build -- package-check simpsons-arcade \
+  .temp/local-game
+```
+
+The checker requires a pristine package tree and rejects earlier receipt
+formats, missing or added files (including private launch catalogues),
+links, incorrect owner-only file modes and changed content. It reports
+a receipt SHA-256 for independent comparison. This checks consistency
+with the receipt, not provenance,
+licence sufficiency, concurrent filesystem isolation or runtime ABI.
 The title requires explicit local art bundles; see the
 [title TODO](../../docs/todo/open/games/simpsons-arcade.mdc).
 For persistent native packaging, set the owner-only local `.env` from

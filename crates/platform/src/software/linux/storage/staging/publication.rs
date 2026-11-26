@@ -53,6 +53,8 @@ use nix::{
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::super::bundle::bundle_name;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use super::super::file::authored_mode;
 use super::super::file::{
     DIRECTORY_FLAGS, FileReadError, same_inode, sync_regular,
     trusted_directory_stat, verify_staged_regular,
@@ -68,6 +70,8 @@ use crate::ir::security::staging::NamespaceDirectory;
 use crate::ir::security::staging::{
     AdmittedAuthoredFile, Namespace, PublicationName,
 };
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::ir::storage::file::AuthoredFileKind;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::{
     AuthoredFactory, AuthoredPort, OpenAuthored, PublishedDirectory,
@@ -233,16 +237,14 @@ impl AuthoredStaging {
         let descriptor = self.tree.descend(plan)?;
         let parent = descriptor.as_ref().unwrap_or(&self.tree.temporary.root);
         let leaf = plan.leaf();
-        let mode = Mode::S_IRUSR
-            | Mode::S_IWUSR
-            | if file.executable() {
-                Mode::S_IXUSR
-            } else {
-                Mode::empty()
-            };
+        let kind = if file.executable() {
+            AuthoredFileKind::Executable
+        } else {
+            AuthoredFileKind::Document
+        };
         let mut output = ArchiveTree::create_file(parent, leaf.name())?;
         output.write_all(file.bytes())?;
-        fchmod(&output, mode)?;
+        fchmod(&output, authored_mode(kind))?;
         self.tree
             .stamps
             .record_file(leaf.id(), &output, file.size())

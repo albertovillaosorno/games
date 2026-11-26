@@ -225,3 +225,54 @@ captures showed changes during movement and stable frames after release.
 Only ephemeral private credentials and settings were used; private
 keys were removed afterward. This establishes same-host package LAN
 integration, not physical multi-host network or controller acceptance.
+
+The native package receipt now identifies every included executable and
+licence file by exact relative path, byte length and SHA-256. The
+read-only package checker reuses the publication namespace and ELF
+admission, bounds file counts and lengths, and rejects old receipt
+formats, missing or additional files, links, case collisions, incorrect
+owner-only file modes and changed content. Publication also performs
+the readback. Tiny authored fixtures exercise intact packages, same-length
+licence edits, missing nested documents, unlisted files and directories,
+linked files, wrong access modes, malformed receipts and structurally
+invalid executables with matching hashes.
+The checker reports a receipt digest for independent comparison; it
+does not authenticate a replaced receipt or establish legal clearance,
+concurrent filesystem isolation, startup or cross-host compatibility.
+
+The earlier configured-store cutover is now complete; see the native
+packaging task for retirement and consumer evidence. A new read-only
+observation on 2026-11-26 counted 252 manifest directories, 660 declared
+payload references and 486 distinct digest-size pairs. The declared
+pairs exactly matched the 486 stored payloads, each with its own
+single-link inode (43,026,520 logical bytes). Independent SHA-256 checks
+matched every manifest and payload address. No symlinks or multiply
+linked files were observed. This establishes the current shared content
+inventory, not a filesystem allocation or concurrent-writer guarantee.
+No private catalogue or asset was changed.
+
+Fresh validation 1795674660401462496-2274488 passed the receipt and
+storage regressions and all six portable core targets. A new local
+package contained 109 files totalling 4,115,399 bytes, including a
+3,589,760-byte x86-64 executable. Its complete receipt SHA-256 was
+d0a5d6591f730cdb0705805dd4558221cb0c612fbd786713a7ea6648545819a5.
+Publication readback, an independent invocation from an unrelated
+directory and independent receipt hashing agreed. An extra file and
+removed executable permission were rejected; restoring the pristine
+tree restored the same receipt result. Repeat publication was refused.
+The three direct dynamic dependencies remained SDL2, libgcc and libc.
+
+Startup without a catalogue was rejected. With the separately
+configured shared-store catalogue, the packaged release passed hidden
+X11/OpenGL and dummy-audio Fill+touch smoke on the Fedora host and in
+an isolated Freedesktop Platform 25.08 userspace with its installed
+Mesa extension (glibc 2.44 on the host, 2.42 in the alternate runtime).
+The alternate userspace used read-only package and asset mounts,
+an isolated process and filesystem namespace and no network. Both
+runs verified 444 camera columns, all 48 synthetic axis directions,
+the protected 960x240 panel within a 1280x912 drawable, two cooperative
+pose families and six reinforcement meters. Both submitted 600
+movement and 20 combat frames with zero 16.667 ms host-work budget
+misses. The package receipt remained unchanged. This demonstrates
+one alternate local Linux userspace, not portable ABI compatibility
+across arbitrary hosts or physical display, input or audio acceptance.

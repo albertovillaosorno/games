@@ -30,13 +30,13 @@
 //   - Local GNU/Linux x86-64 package, no assets or portability claim.
 
 mod license_inventory;
+mod receipt;
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
 use std::str;
 
-use games_assets::ContentHash;
 use games_assets::archive::validate_path;
 use games_platform::ir::security::toolchain::artifact::admit_executable;
 use games_platform::ir::storage::file::snapshot;
@@ -48,6 +48,7 @@ use games_platform::ir::storage::{
 use games_platform::ir::toolchain::write_line;
 
 use self::license_inventory::Inventory;
+use self::receipt::Receipt;
 use crate::title_build::{
     NATIVE_TARGET, Title, local_layout, local_path, workspace_root,
 };
@@ -96,6 +97,14 @@ impl Prepared {
             .ok_or_else(|| String::from("package byte budget exceeded"))
     }
 
+    fn finish_receipt(&mut self, title: Title) -> Result<(), String> {
+        let mut receipt = Receipt::default();
+        for (path, file) in &self.files {
+            receipt.add(title, path, &file.bytes)?;
+        }
+        self.add(RECEIPT.into(), receipt.encode(title)?.into_bytes(), false)
+    }
+
     fn prepare(
         root: &OsStr,
         title: Title,
@@ -106,20 +115,7 @@ impl Prepared {
             .map_err(|error| format!("authored executable: {error:?}"))?;
         admit_executable(NATIVE_TARGET, &bytes)
             .map_err(|error| error.to_string())?;
-        let receipt = format!(
-            "Title: {}\nTarget: {}\nExecutable bytes: {}\n\
-             Executable SHA-256: {}\n\
-             Requires compatible GNU/Linux system libraries and SDL2.\n\
-             No system libraries, original media or assets included.\n\
-             Obtain and import lawful original assets locally.\n\
-             This is a local prototype package, not a portable release.\n",
-            title.binary(),
-            NATIVE_TARGET.triple(),
-            bytes.len(),
-            ContentHash::calculate(&bytes),
-        );
         let mut prepared = Self::default();
-        prepared.add(RECEIPT.into(), receipt.into_bytes(), false)?;
         prepared.add(title.binary().into(), bytes, true)?;
         for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
             prepared.add(
@@ -136,6 +132,7 @@ impl Prepared {
             inventory.report.into_bytes(),
             false,
         )?;
+        prepared.finish_receipt(title)?;
         Ok(prepared)
     }
 
@@ -240,23 +237,37 @@ pub fn run(title: Title, output: &OsStr) -> Result<(), String> {
     let prepared = Prepared::prepare(&root, title, &executable, inventory)?;
     prepared.publish(output)?;
     write_line(&format!("Package: {}", output.to_string_lossy()))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    check(title, output).map_err(|error| {
+        format!("package published, but readback failed: {error}")
+    })
+}
+
+/// Verify an untouched package without executing or modifying any file.
+///
+/// # Errors
+/// Rejects unsupported receipts, inconsistent identities and extra entries.
+pub fn check(title: Title, output: &OsStr) -> Result<(), String> {
+    let report = Receipt::verify(title, output)?;
+    write_line(&report).map_err(|error| error.to_string())
 }
 
 fn document(path: &OsStr) -> Result<Vec<u8>, String> {
     let bytes = snapshot(path, MAX_DOCUMENT).map_err(|error| {
         format!("licence {}: {error:?}", path.to_string_lossy())
     })?;
-    let text = str::from_utf8(&bytes).map_err(|error| {
+    admit_document(&bytes).map_err(|error| {
         format!("licence {}: {error}", path.to_string_lossy())
     })?;
-    if text.trim().is_empty() || text.contains('\0') {
-        return Err(format!(
-            "empty or nontext licence: {}",
-            path.to_string_lossy()
-        ));
-    }
     Ok(bytes)
+}
+
+fn admit_document(bytes: &[u8]) -> Result<(), String> {
+    let text = str::from_utf8(bytes).map_err(|error| error.to_string())?;
+    if text.trim().is_empty() || text.contains('\0') {
+        return Err(String::from("empty or nontext licence"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

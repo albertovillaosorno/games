@@ -31,6 +31,46 @@
 
 //! Host-independent structural admission of authored build artifacts.
 
+/// Authored structural fixtures, never executable programs.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures {
+    /// Construct a minimal structurally admitted x86-64 ELF snapshot.
+    /// # Errors
+    /// Reports an invalid fixture field.
+    pub fn executable_fixture() -> Result<[u8; 128], String> {
+        let mut elf = [0u8; 128];
+        write_field(&mut elf, 0, *b"\x7fELF\x02\x01\x01")?;
+        write_field(&mut elf, 16, 3u16.to_le_bytes())?;
+        write_field(&mut elf, 18, 62u16.to_le_bytes())?;
+        write_field(&mut elf, 20, 1u32.to_le_bytes())?;
+        write_field(&mut elf, 24, 0x1078u64.to_le_bytes())?;
+        write_field(&mut elf, 32, 64u64.to_le_bytes())?;
+        write_field(&mut elf, 52, 64u16.to_le_bytes())?;
+        write_field(&mut elf, 54, 56u16.to_le_bytes())?;
+        write_field(&mut elf, 56, 1u16.to_le_bytes())?;
+        write_field(&mut elf, 64, 1u32.to_le_bytes())?;
+        write_field(&mut elf, 68, 5u32.to_le_bytes())?;
+        write_field(&mut elf, 72, 120u64.to_le_bytes())?;
+        write_field(&mut elf, 80, 0x1078u64.to_le_bytes())?;
+        write_field(&mut elf, 96, 8u64.to_le_bytes())?;
+        write_field(&mut elf, 104, 16u64.to_le_bytes())?;
+        write_field(&mut elf, 112, 4096u64.to_le_bytes())?;
+        Ok(elf)
+    }
+
+    pub(super) fn write_field<const N: usize>(
+        bytes: &mut [u8],
+        offset: usize,
+        value: [u8; N],
+    ) -> Result<(), String> {
+        bytes
+            .get_mut(offset..offset.saturating_add(N))
+            .ok_or("invalid ELF fixture field")?
+            .copy_from_slice(&value);
+        Ok(())
+    }
+}
+
 use std::fmt;
 
 use crate::ir::toolchain::Target;
@@ -155,43 +195,11 @@ fn native_entry(bytes: &[u8]) -> Option<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::fixtures::{executable_fixture, write_field};
     use super::*;
 
     fn native_elf(bytes: &[u8]) -> bool {
         admit_executable(Target::LinuxX86_64Gnu, bytes).is_ok()
-    }
-
-    fn write_field<const N: usize>(
-        bytes: &mut [u8],
-        offset: usize,
-        value: [u8; N],
-    ) -> Result<(), String> {
-        bytes
-            .get_mut(offset..offset.saturating_add(N))
-            .ok_or("invalid ELF fixture field")?
-            .copy_from_slice(&value);
-        Ok(())
-    }
-
-    fn executable_fixture() -> Result<[u8; 128], String> {
-        let mut elf = [0u8; 128];
-        write_field(&mut elf, 0, *b"\x7fELF\x02\x01\x01")?;
-        write_field(&mut elf, 16, 3u16.to_le_bytes())?;
-        write_field(&mut elf, 18, 62u16.to_le_bytes())?;
-        write_field(&mut elf, 20, 1u32.to_le_bytes())?;
-        write_field(&mut elf, 24, 0x1078u64.to_le_bytes())?;
-        write_field(&mut elf, 32, 64u64.to_le_bytes())?;
-        write_field(&mut elf, 52, 64u16.to_le_bytes())?;
-        write_field(&mut elf, 54, 56u16.to_le_bytes())?;
-        write_field(&mut elf, 56, 1u16.to_le_bytes())?;
-        write_field(&mut elf, 64, 1u32.to_le_bytes())?;
-        write_field(&mut elf, 68, 5u32.to_le_bytes())?;
-        write_field(&mut elf, 72, 120u64.to_le_bytes())?;
-        write_field(&mut elf, 80, 0x1078u64.to_le_bytes())?;
-        write_field(&mut elf, 96, 8u64.to_le_bytes())?;
-        write_field(&mut elf, 104, 16u64.to_le_bytes())?;
-        write_field(&mut elf, 112, 4096u64.to_le_bytes())?;
-        Ok(elf)
     }
 
     #[test]
