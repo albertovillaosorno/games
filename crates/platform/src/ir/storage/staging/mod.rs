@@ -34,18 +34,16 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{Error, ErrorKind, Read};
 
-use games_assets::archive::{
-    ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
-};
+use games_assets::archive::{ArchiveBudget, ArchiveError, EntryKind};
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 
 use super::bundle::{BundleError, CanonicalBundle};
+pub use crate::ir::security::staging::AdmittedArchiveEntry;
 use crate::ir::security::staging::{
     AdmittedAuthoredFile, AdmittedManifest, AdmittedPayload,
-    CanonicalAdmission, Namespace, NamespacePlan, PublicationName,
-    staging_path,
+    CanonicalAdmission, Namespace, PublicationName,
 };
 
 /// A staging operation failed and the result must not be published.
@@ -104,109 +102,6 @@ pub struct StagingEntry<'path> {
     pub path: &'path str,
     /// Exact decoded length.
     pub size: u64,
-}
-
-/// One member admitted against the portable archive budget and namespace.
-#[derive(Debug)]
-pub struct AdmittedArchiveEntry<'path> {
-    budget: Option<EntryBudget>,
-    leaf: &'path str,
-    metadata: StagingEntry<'path>,
-    parents: &'path str,
-    plan: NamespacePlan<'path>,
-    verified: bool,
-}
-
-impl<'path> AdmittedArchiveEntry<'path> {
-    /// Stream exactly the reserved byte count without buffering the member.
-    ///
-    /// # Errors
-    /// Rejects truncation, excess decoded bytes and read or write errors.
-    pub fn copy_to(
-        &mut self,
-        input: &mut dyn Read,
-        output: &mut dyn Write,
-    ) -> Result<(), StagingError> {
-        self.verified = false;
-        let mut budget = self.budget.take().ok_or(StagingError::Aborted)?;
-        let mut buffer = [0; 8192];
-        loop {
-            match input.read(&mut buffer) {
-                Ok(0) => {
-                    budget.finish()?;
-                    self.verified = true;
-                    return Ok(());
-                },
-                Ok(count) => {
-                    let chunk = buffer
-                        .get(..count)
-                        .ok_or(ArchiveError::InvalidEntry)?;
-                    budget.record(chunk.len())?;
-                    output.write_all(chunk)?;
-                },
-                Err(error) if error.kind() == ErrorKind::Interrupted => {},
-                Err(error) => return Err(error.into()),
-            }
-        }
-    }
-
-    /// Require successful exact streaming before accepting the backend result.
-    ///
-    /// # Errors
-    /// Rejects a skipped or unsuccessfully consumed entry.
-    pub fn finish(self) -> Result<(), StagingError> {
-        self.verified
-            .then_some(())
-            .ok_or(StagingError::Safety(ArchiveError::InvalidEntry))
-    }
-
-    /// The admitted entry's original metadata.
-    #[must_use]
-    pub const fn metadata(&self) -> StagingEntry<'path> {
-        self.metadata
-    }
-
-    /// Reserve declared resources before opening the member output.
-    ///
-    /// # Errors
-    /// Rejects unsafe metadata, exhausted budgets and nonportable paths.
-    /// Any rejection requires discarding the namespace and transaction.
-    pub(crate) fn new(
-        metadata: StagingEntry<'path>,
-        budget: &mut ArchiveBudget,
-        namespace: &mut Namespace,
-    ) -> Result<Self, StagingError> {
-        let mut available = *budget;
-        let entry =
-            available.admit(metadata.path, metadata.kind, metadata.size)?;
-        let (parents, leaf) = staging_path(metadata.path)?;
-        let plan = namespace.admit(
-            (parents, leaf),
-            metadata.kind,
-            Some(&mut available),
-        )?;
-        *budget = available;
-        Ok(Self {
-            budget: Some(entry),
-            leaf,
-            metadata,
-            parents,
-            plan,
-            verified: false,
-        })
-    }
-
-    /// The admitted parent path and final component.
-    #[must_use]
-    pub const fn parts(&self) -> (&'path str, &'path str) {
-        (self.parents, self.leaf)
-    }
-
-    /// Admitted exact traversal with stable node identities.
-    #[must_use]
-    pub const fn plan(&self) -> &NamespacePlan<'path> {
-        &self.plan
-    }
 }
 
 /// Publication succeeded; the directory is visible and is not auto-deleted.
@@ -884,40 +779,6 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_archive_path_does_not_charge_the_portable_budget()
-    -> Result<(), StagingError> {
-        let four = NonZeroU64::MIN.saturating_add(3);
-        let initial = ArchiveBudget::new(four, four, NonZeroU64::MIN);
-        let mut budget = initial;
-        let mut namespace = Namespace::default();
-        let metadata = StagingEntry {
-            kind: EntryKind::File,
-            path: "caf\u{e9}",
-            size: 4,
-        };
-        if AdmittedArchiveEntry::new(metadata, &mut budget, &mut namespace)
-            .err()
-            != Some(StagingError::UnsupportedPath)
-            || budget != initial
-        {
-            return Err(StagingError::ChangedStorage);
-        }
-        let mut entry = AdmittedArchiveEntry::new(
-            StagingEntry {
-                path: "asset",
-                ..metadata
-            },
-            &mut budget,
-            &mut namespace,
-        )?;
-        let mut output = Vec::new();
-        entry.copy_to(&mut b"tile".as_slice(), &mut output)?;
-        (entry.finish().is_ok() && output == b"tile")
-            .then_some(())
-            .ok_or(StagingError::ChangedStorage)
-    }
-
-    #[test]
     fn portable_archive_rejects_metadata_before_backend_dispatch()
     -> Result<(), StagingError> {
         for (path, kind, size, error) in [
@@ -937,58 +798,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn namespace_plans_reopen_implicit_directories_without_duplicate_nodes()
-    -> Result<(), StagingError> {
-        let mut namespace = Namespace::default();
-        let maximum = NonZeroU64::MIN.saturating_add(15);
-        let mut budget = ArchiveBudget::new(maximum, maximum, maximum);
-        let plan = namespace.admit(
-            ("dir/nested", "asset"),
-            EntryKind::File,
-            Some(&mut budget),
-        )?;
-        if budget.remaining_entries() != 14 {
-            return Err(StagingError::ChangedStorage);
-        }
-        let mut parents = plan.parents().iter();
-        let outer = parents.next().ok_or(StagingError::ChangedStorage)?;
-        let inner = parents.next().ok_or(StagingError::ChangedStorage)?;
-        if !outer.created()
-            || !inner.created()
-            || !plan.leaf().created()
-            || outer.name() != "dir"
-            || inner.name() != "nested"
-            || outer.id() != 0
-            || inner.id() != 1
-            || plan.leaf().id() != 2
-        {
-            return Err(StagingError::ChangedStorage);
-        }
-        let explicit = namespace.admit(
-            ("dir", "nested"),
-            EntryKind::Directory,
-            Some(&mut budget),
-        )?;
-        if explicit.leaf().created()
-            || explicit.leaf().id() != inner.id()
-            || budget.remaining_entries() != 14
-        {
-            return Err(StagingError::ChangedStorage);
-        }
-        let sibling = namespace.admit(
-            ("dir/nested", "other"),
-            EntryKind::File,
-            Some(&mut budget),
-        )?;
-        (sibling.leaf().id() == 3
-            && budget.remaining_entries() == 14
-            && namespace.root().children().len() == 1
-            && namespace.entry_count() == 4)
-            .then_some(())
-            .ok_or(StagingError::ChangedStorage)
     }
 
     #[test]

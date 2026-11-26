@@ -13,8 +13,8 @@
 //   - Open storage, choose native paths or publish assets.
 // - Allows:
 //   - Inputs: Explicit budgets, verified manifests and immutable bytes.
-//   - Outputs: Admitted payload and exact manifest values.
-//   - Side effects: Portable accounting only.
+//   - Outputs: Admitted members, traversal plans and exact manifest values.
+//   - Side effects: Portable accounting and caller-owned stream access.
 // - Split-When:
 //   - Independent staging policies require different accounting.
 // - Merge-When:
@@ -33,14 +33,17 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::ffi::OsStr;
+use std::io::{ErrorKind, Read, Write};
 
 use games_assets::archive::{
-    ArchiveBudget, ArchiveError, EntryKind, validate_path,
+    ArchiveBudget, ArchiveError, EntryBudget, EntryKind, validate_path,
 };
 use games_assets::{AssetError, ContentHash};
 
 use crate::ir::storage::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
-use crate::ir::storage::staging::{PreparedManifest, StagingError};
+use crate::ir::storage::staging::{
+    PreparedManifest, StagingEntry, StagingError,
+};
 
 /// Portable accounting and integrity admission for canonical staging.
 #[derive(Debug)]
@@ -113,6 +116,109 @@ impl CanonicalAdmission {
             reserve_payload(&mut budget, digest, size, index == 0)?;
         }
         Ok(())
+    }
+}
+
+/// One member admitted against the portable archive budget and namespace.
+#[derive(Debug)]
+pub struct AdmittedArchiveEntry<'path> {
+    budget: Option<EntryBudget>,
+    leaf: &'path str,
+    metadata: StagingEntry<'path>,
+    parents: &'path str,
+    plan: NamespacePlan<'path>,
+    verified: bool,
+}
+
+impl<'path> AdmittedArchiveEntry<'path> {
+    /// Stream exactly the reserved byte count without buffering the member.
+    ///
+    /// # Errors
+    /// Rejects truncation, excess decoded bytes and read or write errors.
+    pub fn copy_to(
+        &mut self,
+        input: &mut dyn Read,
+        output: &mut dyn Write,
+    ) -> Result<(), StagingError> {
+        self.verified = false;
+        let mut budget = self.budget.take().ok_or(StagingError::Aborted)?;
+        let mut buffer = [0; 8192];
+        loop {
+            match input.read(&mut buffer) {
+                Ok(0) => {
+                    budget.finish()?;
+                    self.verified = true;
+                    return Ok(());
+                },
+                Ok(count) => {
+                    let chunk = buffer
+                        .get(..count)
+                        .ok_or(ArchiveError::InvalidEntry)?;
+                    budget.record(chunk.len())?;
+                    output.write_all(chunk)?;
+                },
+                Err(error) if error.kind() == ErrorKind::Interrupted => {},
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Require successful exact streaming before accepting the backend result.
+    ///
+    /// # Errors
+    /// Rejects a skipped or unsuccessfully consumed entry.
+    pub fn finish(self) -> Result<(), StagingError> {
+        self.verified
+            .then_some(())
+            .ok_or(StagingError::Safety(ArchiveError::InvalidEntry))
+    }
+
+    /// The admitted entry's original metadata.
+    #[must_use]
+    pub const fn metadata(&self) -> StagingEntry<'path> {
+        self.metadata
+    }
+
+    /// Reserve declared resources before opening the member output.
+    ///
+    /// # Errors
+    /// Rejects unsafe metadata, exhausted budgets and nonportable paths.
+    /// Any rejection requires discarding the namespace and transaction.
+    pub(crate) fn new(
+        metadata: StagingEntry<'path>,
+        budget: &mut ArchiveBudget,
+        namespace: &mut Namespace,
+    ) -> Result<Self, StagingError> {
+        let mut available = *budget;
+        let entry =
+            available.admit(metadata.path, metadata.kind, metadata.size)?;
+        let (parents, leaf) = staging_path(metadata.path)?;
+        let plan = namespace.admit(
+            (parents, leaf),
+            metadata.kind,
+            Some(&mut available),
+        )?;
+        *budget = available;
+        Ok(Self {
+            budget: Some(entry),
+            leaf,
+            metadata,
+            parents,
+            plan,
+            verified: false,
+        })
+    }
+
+    /// The admitted parent path and final component.
+    #[must_use]
+    pub const fn parts(&self) -> (&'path str, &'path str) {
+        (self.parents, self.leaf)
+    }
+
+    /// Admitted exact traversal with stable node identities.
+    #[must_use]
+    pub const fn plan(&self) -> &NamespacePlan<'path> {
+        &self.plan
     }
 }
 
@@ -493,7 +599,7 @@ type AdmittedChild<'node, 'path> =
 
 type PathParts<'path> = (&'path str, &'path str);
 
-pub(crate) fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
+fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
     const MAX_DEPTH: usize = 64;
     if !path.is_ascii() || path.split('/').count() > MAX_DEPTH {
         return Err(StagingError::UnsupportedPath);
@@ -523,4 +629,140 @@ fn reserve_payload(
             .finish()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, sink};
+    use std::num::NonZeroU64;
+
+    use super::*;
+
+    #[test]
+    fn unsupported_archive_path_does_not_charge_the_portable_budget()
+    -> Result<(), StagingError> {
+        let four = NonZeroU64::MIN.saturating_add(3);
+        let initial = ArchiveBudget::new(four, four, NonZeroU64::MIN);
+        let mut budget = initial;
+        let mut namespace = Namespace::default();
+        let metadata = StagingEntry {
+            kind: EntryKind::File,
+            path: "caf\u{e9}",
+            size: 4,
+        };
+        if AdmittedArchiveEntry::new(metadata, &mut budget, &mut namespace)
+            .err()
+            != Some(StagingError::UnsupportedPath)
+            || budget != initial
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let mut entry = AdmittedArchiveEntry::new(
+            StagingEntry {
+                path: "asset",
+                ..metadata
+            },
+            &mut budget,
+            &mut namespace,
+        )?;
+        let mut output = Vec::new();
+        entry.copy_to(&mut b"tile".as_slice(), &mut output)?;
+        (entry.finish().is_ok() && output == b"tile")
+            .then_some(())
+            .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn namespace_plans_reopen_implicit_directories_without_duplicate_nodes()
+    -> Result<(), StagingError> {
+        let mut namespace = Namespace::default();
+        let maximum = NonZeroU64::MIN.saturating_add(15);
+        let mut budget = ArchiveBudget::new(maximum, maximum, maximum);
+        let plan = namespace.admit(
+            ("dir/nested", "asset"),
+            EntryKind::File,
+            Some(&mut budget),
+        )?;
+        if budget.remaining_entries() != 14 {
+            return Err(StagingError::ChangedStorage);
+        }
+        let mut parents = plan.parents().iter();
+        let outer = parents.next().ok_or(StagingError::ChangedStorage)?;
+        let inner = parents.next().ok_or(StagingError::ChangedStorage)?;
+        if !outer.created()
+            || !inner.created()
+            || !plan.leaf().created()
+            || outer.name() != "dir"
+            || inner.name() != "nested"
+            || outer.id() != 0
+            || inner.id() != 1
+            || plan.leaf().id() != 2
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let explicit = namespace.admit(
+            ("dir", "nested"),
+            EntryKind::Directory,
+            Some(&mut budget),
+        )?;
+        if explicit.leaf().created()
+            || explicit.leaf().id() != inner.id()
+            || budget.remaining_entries() != 14
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let sibling = namespace.admit(
+            ("dir/nested", "other"),
+            EntryKind::File,
+            Some(&mut budget),
+        )?;
+        (sibling.leaf().id() == 3
+            && budget.remaining_entries() == 14
+            && namespace.root().children().len() == 1
+            && namespace.entry_count() == 4)
+            .then_some(())
+            .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn exact_archive_copy_cannot_reuse_failed_or_consumed_admission()
+    -> Result<(), StagingError> {
+        let four = NonZeroU64::MIN.saturating_add(3);
+        let initial = ArchiveBudget::new(four, four, NonZeroU64::MIN);
+        let metadata = StagingEntry {
+            kind: EntryKind::File,
+            path: "asset",
+            size: 4,
+        };
+        let mut budget = initial;
+        let mut namespace = Namespace::default();
+        let mut entry =
+            AdmittedArchiveEntry::new(metadata, &mut budget, &mut namespace)?;
+        let mut empty = [0u8; 0];
+        let mut output = Cursor::new(empty.as_mut_slice());
+        if entry.copy_to(&mut b"tile".as_slice(), &mut output)
+            != Err(StagingError::Io(ErrorKind::WriteZero))
+            || entry.copy_to(&mut b"tile".as_slice(), &mut sink())
+                != Err(StagingError::Aborted)
+            || entry.finish() != Err(ArchiveError::InvalidEntry.into())
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+
+        let mut second_budget = initial;
+        let mut second_namespace = Namespace::default();
+        let mut consumed = AdmittedArchiveEntry::new(
+            metadata,
+            &mut second_budget,
+            &mut second_namespace,
+        )?;
+        let mut copied = Vec::new();
+        consumed.copy_to(&mut b"tile".as_slice(), &mut copied)?;
+        (copied == b"tile"
+            && consumed.copy_to(&mut b"tile".as_slice(), &mut sink())
+                == Err(StagingError::Aborted)
+            && consumed.finish() == Err(ArchiveError::InvalidEntry.into()))
+        .then_some(())
+        .ok_or(StagingError::ChangedStorage)
+    }
 }

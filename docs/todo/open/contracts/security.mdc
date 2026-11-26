@@ -495,3 +495,12 @@ synthetic rename regression verifies that both the moved original fixture
 and the unrelated replacement directory retain their contents.
 Fresh native validation 1795657110629996850-2971554 passed 1,626
 aggregate test executions and all six portable core checks.
+
+Exact decoded archive streaming and its single-use admission now reside
+with the portable staging security policy. The storage facade retains
+transaction dispatch; the native adapter consumes the same admitted
+member. Regressions cover writer failure and attempted reuse of both
+failed and consumed entries, retaining all existing namespace and budget
+checks. Fresh Xvfb/X11 and dummy-audio validation
+1795657484423431822-3063812 passed 1,636 aggregate test executions and
+all six portable core checks.

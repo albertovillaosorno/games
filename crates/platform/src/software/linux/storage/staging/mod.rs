@@ -58,7 +58,8 @@ use super::file::{
     DIRECTORY_FLAGS, same_inode, trusted_directory, trusted_directory_stat,
 };
 use crate::ir::security::staging::{
-    AdmittedManifest, AdmittedPayload, Namespace, NamespacePlan, NamespaceStep,
+    AdmittedArchiveEntry, AdmittedManifest, AdmittedPayload, Namespace,
+    NamespacePlan, NamespaceStep,
 };
 #[cfg(test)]
 use crate::ir::security::staging::{
@@ -72,9 +73,9 @@ use crate::ir::storage::staging::PreparedManifest;
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::PublishedBundle;
 use crate::ir::storage::staging::{
-    AdmittedArchiveEntry, ArchiveFactory, ArchivePort, CanonicalFactory,
-    CanonicalPort, CompletedArchive, CompletedArchivePort, CompletedBundle,
-    OpenArchive, OpenCanonical, StagingEntry, StagingError,
+    ArchiveFactory, ArchivePort, CanonicalFactory, CanonicalPort,
+    CompletedArchive, CompletedArchivePort, CompletedBundle, OpenArchive,
+    OpenCanonical, StagingEntry, StagingError,
 };
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::{
