@@ -50,50 +50,59 @@ prerequisites, builds and local packages.
 ## Catalogue
 
 Preferred source editions are planning choices, not guarantees of support. Exact
-revisions will be selected when onboarding each title.
+revisions will be selected when onboarding each title. Status describes the
+independent reconstruction, not the original game's release status. Local media
+is not proof of provenance, successful conversion or playable parity.
 
-| # | Title | Original edition |
-| --- | --- | --- |
-| 01 | The Simpsons Arcade Game | Arcade (4P) |
-| 02 | Metal Slug | Neo Geo |
-| 03 | Metal Slug 2 | Neo Geo |
-| 04 | Metal Slug X | Neo Geo |
-| 05 | Metal Slug 3 | Neo Geo |
-| 06 | Metal Slug 4 | Neo Geo |
-| 07 | Metal Slug 5 | Neo Geo |
-| 08 | Metal Slug 6 | Atomiswave |
-| 09 | Metal Slug 7 | Nintendo DS |
-| 10 | Metal Slug XX | Steam PC |
-| 11 | Super Mario Bros. | NES |
-| 12 | Super Mario Bros. 2 | NES (Western) |
-| 13 | Super Mario Bros. 3 | NES |
-| 14 | Angry Birds Space | Android |
-| 15 | Angry Birds Star Wars (2012) | Android |
-| 16 | Angry Birds Star Wars II | Android |
-| 17 | SUSH | Android |
-| 18 | Plants vs. Zombies: Replanted | PC Replanted |
-| 19 | Bugs Bunny: Lost in Time | Windows PC |
-| 20 | Bugs Bunny & Taz: Time Busters | Windows PC |
-| 21 | Luigi's Mansion | GameCube |
-| 22 | The Simpsons: Road Rage | Xbox |
-| 23 | Taz: Wanted | Windows PC |
-| 24 | SpongeBob: Revenge of the Flying Dutchman | GameCube |
-| 25 | The Simpsons: Hit & Run | Windows PC |
-| 26 | Crash Twinsanity | Xbox |
-| 27 | Sly Cooper and the Thievius Raccoonus | PS3 HD |
-| 28 | Sly 2: Band of Thieves | PS3 HD |
-| 29 | Sly 3: Honor Among Thieves | PS3 HD |
-| 30 | The Simpsons Game | PS3 |
-| 31 | El Chavo Kart | Xbox 360 |
-| 32 | Sly Cooper: Thieves in Time | PS3 |
-| 33 | Crash Team Racing Nitro-Fueled | PS4 |
-| 34 | Plants vs. Zombies 2 | Android |
-| 35 | Plants vs. Zombies 3: Evolved | Android Evolved |
-| 36 | SimCity BuildIt | Android |
-| 37 | Hytale | PC |
-| 38 | Minecraft Java Edition | Latest stable PC |
-| 39 | LEGO Star Wars: The Skywalker Saga | PC |
-| 40 | Grand Theft Auto VI | PS5 |
+| # | Title | Original edition | Status |
+| --- | --- | --- | --- |
+| 01 | The Simpsons Arcade Game | Arcade (4P) | Playable preview |
+| 02 | Metal Slug | Neo Geo | Graphics imported |
+| 03 | Metal Slug 2 | Neo Geo | Media present |
+| 04 | Metal Slug X | Neo Geo | Media present |
+| 05 | Metal Slug 3 | Neo Geo | Media present |
+| 06 | Metal Slug 4 | Neo Geo | Media present |
+| 07 | Metal Slug 5 | Neo Geo | Media present |
+| 08 | Metal Slug 6 | Atomiswave | Media present |
+| 09 | Metal Slug 7 | Nintendo DS | Media present |
+| 10 | Metal Slug XX | Steam PC | Media present |
+| 11 | Super Mario Bros. | NES | Awaiting media |
+| 12 | Super Mario Bros. 2 | NES (Western) | Awaiting media |
+| 13 | Super Mario Bros. 3 | NES | Awaiting media |
+| 14 | Angry Birds Space | Android | Awaiting media |
+| 15 | Angry Birds Star Wars (2012) | Android | Awaiting media |
+| 16 | Angry Birds Star Wars II | Android | Awaiting media |
+| 17 | SUSH | Android | Awaiting media |
+| 18 | Plants vs. Zombies: Replanted | PC Replanted | Awaiting media |
+| 19 | Bugs Bunny: Lost in Time | Windows PC | Awaiting media |
+| 20 | Bugs Bunny & Taz: Time Busters | Windows PC | Awaiting media |
+| 21 | Luigi's Mansion | GameCube | Awaiting media |
+| 22 | The Simpsons: Road Rage | Xbox | Awaiting media |
+| 23 | Taz: Wanted | Windows PC | Awaiting media |
+| 24 | SpongeBob: Revenge of the Flying Dutchman | GameCube | Awaiting media |
+| 25 | The Simpsons: Hit & Run | Windows PC | Reference present |
+| 26 | Crash Twinsanity | Xbox | Awaiting media |
+| 27 | Sly Cooper and the Thievius Raccoonus | PS3 HD | Awaiting media |
+| 28 | Sly 2: Band of Thieves | PS3 HD | Awaiting media |
+| 29 | Sly 3: Honor Among Thieves | PS3 HD | Awaiting media |
+| 30 | The Simpsons Game | PS3 | Awaiting media |
+| 31 | El Chavo Kart | Xbox 360 | Awaiting media |
+| 32 | Sly Cooper: Thieves in Time | PS3 | Awaiting media |
+| 33 | Crash Team Racing Nitro-Fueled | PS4 | Awaiting media |
+| 34 | Plants vs. Zombies 2 | Android | Awaiting media |
+| 35 | Plants vs. Zombies 3: Evolved | Android Evolved | Awaiting media |
+| 36 | SimCity BuildIt | Android | Awaiting media |
+| 37 | CamScanner | Android | Awaiting media |
+| 38 | Hytale | PC | Conditional |
+| 39 | Minecraft | Latest stable PC | Conditional |
+| 40 | LEGO Star Wars: The Skywalker Saga | PC | Conditional |
+| 41 | Grand Theft Auto VI | PS5 | Conditional |
+
+Status definitions: playable preview is incomplete gameplay; graphics
+imported is verified conversion, not gameplay; media/reference present
+means local inputs await further admission; awaiting media means no
+suitable input is recorded; conditional means future P5 activation.
+No title is marked complete without its canonical task acceptance.
 
 ## Contributions
 

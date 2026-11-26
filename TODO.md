@@ -378,6 +378,14 @@ recoverable from the APK.
 
 [TODO - SimCity BuildIt](docs/todo/open/games/simcity-buildit.mdc)
 
+### TODO - CamScanner
+
+Android document scanner; offline capture, perspective correction, multipage
+PDF export, local OCR and private document management. Extend shared camera
+and image processing capabilities.
+
+[TODO - CamScanner](docs/todo/open/apps/camscanner.mdc)
+
 ## P5 - Future experiments
 
 These conditional tasks stay last. Do not activate them before the
@@ -395,7 +403,9 @@ and server.
 Latest stable Java Edition native Rust client/server and independent launcher
 with legitimate Microsoft account and entitlement verification. Support
 historical official installations and pursue native Java mod compatibility
-with tested version/loader combinations.
+with tested version/loader combinations. Optionally evaluate a unified
+Java/Bedrock runtime and version IR; discard the experiment if impractical.
+This does not replace the Java-first acceptance contract.
 
 [TODO - Minecraft Java Edition](docs/todo/open/games/minecraft.mdc)
 

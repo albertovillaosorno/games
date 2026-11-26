@@ -56,8 +56,30 @@ version, world and Java mod compatibility as an explicit long-term goal.
   distributions. Respect official terms and branding requirements.
 - Check authorized local input in `.reference/games/minecraft/`.
 
+### Optional experiment - edition and version IR
+
+- Evaluate a unified native Rust runtime combining independently
+  implemented Java and Bedrock Edition capabilities where compatible.
+  Preserve edition-specific rules through explicit profiles rather than
+  silently changing either edition's behaviour.
+- Prototype a version/edition IR for world schemas, block and entity
+  identities, gameplay rules, network protocols, registries and mod APIs.
+  Aim to support any historical or future version through admitted
+  adapters; compatibility must be demonstrated for each version, not
+  inferred from the existence of the IR.
+- Evaluate cross-edition interoperability, lossless world migration,
+  version-specific mechanics and legitimate edition entitlements.
+  Keep separate version adapters where semantics cannot be reconciled.
+- This is a discardable research hypothesis, not a mandatory acceptance
+  criterion. Compare a minimal prototype against the Java-first approach.
+  Simplify, defer or abandon the unified IR and Bedrock integration if
+  complexity, licensing, performance or fidelity make it impractical.
+  Do not block the baseline Java implementation or the preceding catalogue.
+
 ## Evidence
 
 Blocked: required original media is not present in the reference directory.
 No native implementation or universal mod compatibility is established.
 Historical launcher profiles and native mod compatibility are distinct.
+The optional Java/Bedrock edition and version IR is unimplemented; no
+cross-edition compatibility is established.

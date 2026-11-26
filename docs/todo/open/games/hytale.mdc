@@ -6,7 +6,7 @@ priority: "p5"
 area: "games"
 task: "TODO - Hytale"
 depends_on:
-  - "simcity-buildit"
+  - "camscanner"
 validation:
   - "cargo validate"
 ---

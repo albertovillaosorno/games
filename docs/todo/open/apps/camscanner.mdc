@@ -1,0 +1,49 @@
+---
+id: "camscanner"
+status: "open"
+lane: "4"
+priority: "p4"
+area: "apps"
+task: "TODO - CamScanner"
+depends_on:
+  - "simcity-buildit"
+validation:
+  - "cargo validate"
+---
+# TODO - CamScanner
+
+## Objective
+
+Android reference; independently implement a private, offline-first document
+scanner in Rust. Preserve practical scanning and document management without
+requiring commercial services, subscriptions or proprietary runtime code.
+
+## Acceptance
+
+- Select a lawfully accessible official Android edition for behaviour
+  comparisons; record its revision and observable feature scope.
+- Support camera capture and image import, document edge detection,
+  perspective correction, rotation, crop and readable image enhancement.
+- Support multipage documents, page ordering, local OCR, search and
+  export to PDF and images with user-controlled quality and storage.
+- Reuse shared image processing, geometry, presentation, input, storage
+  and camera capabilities. Extend the platform IR for Android camera
+  access and the shared engine for reusable image processing.
+- Keep captured documents, OCR text and metadata private by default.
+  Bound image decoding, processing memory and PDF generation; verify
+  malformed-input rejection and explicit camera permission failures.
+- Provide offline operation without ads, subscription gates, cloud
+  dependence or compulsory accounts. Optional sharing is user initiated.
+- Verify scan quality, page ordering, save/load and export using small
+  synthetic documents; do not use personal documents as test fixtures.
+- Verify actual Android ARM64 behaviour; evaluate other targets through
+  available platform capabilities rather than assuming camera support.
+- Check lawful reference input under
+  `.reference/games/camscanner/`. Never ship original app binaries,
+  proprietary assets or trademarks as official branding.
+- Run `cargo validate` and record remaining feature or platform limits.
+
+## Evidence
+
+No implementation or selected official reference revision is established.
+Verify availability of lawful original media before onboarding.
