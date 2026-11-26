@@ -187,6 +187,65 @@ pub enum SendProgress {
     Pending,
 }
 
+/// Portable admission of the single outstanding application frame.
+///
+/// A successful queue must retain one frame; only its completed submission
+/// may release that capacity. This checks adapter receipts independently of
+/// native transport framing and deadlines.
+#[derive(Debug, Default)]
+pub(crate) struct SendAdmission {
+    pending: bool,
+}
+
+impl SendAdmission {
+    pub(crate) fn check(&self, observed: bool) -> Result<()> {
+        if self.pending == observed {
+            Ok(())
+        } else {
+            Err(ErrorKind::InvalidData.into())
+        }
+    }
+
+    pub(crate) const fn pending(&self) -> bool {
+        self.pending
+    }
+
+    pub(crate) fn progressed(
+        &mut self,
+        progress: SendProgress,
+        observed: bool,
+    ) -> Result<()> {
+        let expected = match (self.pending, progress) {
+            (false, SendProgress::Idle) | (true, SendProgress::Complete) => {
+                false
+            },
+            (true, SendProgress::Pending) => true,
+            _ => return Err(ErrorKind::InvalidData.into()),
+        };
+        if observed != expected {
+            return Err(ErrorKind::InvalidData.into());
+        }
+        self.pending = expected;
+        Ok(())
+    }
+
+    pub(crate) fn queued(&mut self, observed: bool) -> Result<()> {
+        if self.pending || !observed {
+            return Err(ErrorKind::InvalidData.into());
+        }
+        self.pending = true;
+        Ok(())
+    }
+
+    pub(crate) fn require_idle(&self) -> Result<()> {
+        if self.pending {
+            Err(ErrorKind::AlreadyExists.into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Incremental encoder retaining one admitted owned or borrowed payload.
 #[derive(Debug)]
 pub struct FrameWriter<Payload> {

@@ -802,3 +802,12 @@ bindings, IPv6 scope, disconnect and rejoin, and reply rejection. Native
 scheduling retains its bounded operation queue. Fresh native validation
 1795660931495701582-3992274 passed 1691 aggregate test executions and
 all six portable core checks. Physical multi-device play remains open.
+
+The portable client stream now retains the single admitted send reservation
+until consistent backend completion. Duplicate queue and blocking send
+requests reject before dispatch. Impossible queue or progress observations
+withdraw the stream, and transfer failures clear the reservation. Synthetic
+ports verify valid pending, completion and idle transitions, duplicate
+rejection and contradictory receipts. Fresh Xvfb/X11 and dummy-audio
+validation 1795661749789943477-4193882 passed 1,710 aggregate test executions
+and all six portable core checks.

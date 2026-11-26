@@ -50,6 +50,7 @@ use sha2::{Digest as _, Sha256};
 
 use self::identity::IdentityPort;
 use self::pump::PumpPort;
+use super::security::lan::framing::SendAdmission;
 pub use super::security::lan::framing::SendProgress;
 use super::security::lan::host_binding::HostBindRequest;
 use super::security::lan::{LanAdmissionError, LanLimits, admit_endpoint};
@@ -236,6 +237,7 @@ pub struct SecureFrameStream {
     backend: Option<FramePort>,
     limits: LanLimits,
     peer: PeerFingerprint,
+    send_admission: SendAdmission,
 }
 
 impl Debug for SecureFrameStream {
@@ -255,10 +257,13 @@ impl SecureFrameStream {
         if backend.peer_fingerprint() != approved {
             return Err(ErrorKind::PermissionDenied.into());
         }
+        let send_admission = SendAdmission::default();
+        send_admission.check(backend.has_pending_send())?;
         Ok(Self {
             backend: Some(backend),
             limits: config.limits(),
             peer: approved,
+            send_admission,
         })
     }
 
@@ -267,10 +272,26 @@ impl SecureFrameStream {
             .map_err(|_error| LanAdmissionError::InboundLength)
             .and_then(|length| self.limits.inbound_length(length));
         if let Err(error) = admitted {
-            self.backend = None;
+            self.withdraw();
             return Err(error.into());
         }
         Ok(bytes)
+    }
+
+    fn admit_send_observation(
+        &mut self,
+        admit: impl FnOnce(&mut SendAdmission, bool) -> Result<()>,
+    ) -> Result<()> {
+        let observed = self
+            .backend
+            .as_ref()
+            .ok_or(ErrorKind::NotConnected)?
+            .has_pending_send();
+        let result = admit(&mut self.send_admission, observed);
+        if result.is_err() {
+            self.withdraw();
+        }
+        result
     }
 
     fn backend_mut(&mut self) -> Result<&mut FramePort> {
@@ -295,12 +316,26 @@ impl SecureFrameStream {
         Self::admit_backend(backend, config, tls.approved)
     }
 
+    fn finish_transfer<Value>(
+        &mut self,
+        result: Result<Value>,
+    ) -> Result<Value> {
+        match result {
+            Ok(value) => {
+                self.verify_pending()?;
+                Ok(value)
+            },
+            Err(error) => {
+                self.withdraw();
+                Err(error)
+            },
+        }
+    }
+
     /// Whether an outgoing frame is queued or partially transmitted.
     #[must_use]
-    pub fn has_pending_send(&self) -> bool {
-        self.backend
-            .as_ref()
-            .is_some_and(|backend| backend.has_pending_send())
+    pub const fn has_pending_send(&self) -> bool {
+        self.send_admission.pending()
     }
 
     /// Get the authenticated peer's leaf certificate fingerprint.
@@ -314,8 +349,9 @@ impl SecureFrameStream {
     /// # Errors
     /// Reports a disconnected, malformed or expired transport.
     pub fn poll_receive(&mut self) -> Result<Option<Vec<u8>>> {
-        self.backend_mut()?
-            .poll_receive()?
+        self.verify_pending()?;
+        let received = self.backend_mut()?.poll_receive();
+        self.finish_transfer(received)?
             .map(|bytes| self.admit_received(bytes))
             .transpose()
     }
@@ -325,7 +361,18 @@ impl SecureFrameStream {
     /// # Errors
     /// Reports a disconnected or expired transport.
     pub fn poll_send(&mut self) -> Result<SendProgress> {
-        self.backend_mut()?.poll_send()
+        self.verify_pending()?;
+        let progress = match self.backend_mut()?.poll_send() {
+            Ok(progress) => progress,
+            Err(error) => {
+                self.withdraw();
+                return Err(error);
+            },
+        };
+        self.admit_send_observation(|admission, observed| {
+            admission.progressed(progress, observed)
+        })?;
+        Ok(progress)
     }
 
     /// Queue one complete payload without performing network I/O.
@@ -334,7 +381,18 @@ impl SecureFrameStream {
     /// Rejects oversized frames, a closed connection or a pending send.
     pub fn queue_send(&mut self, bytes: Vec<u8>) -> Result<()> {
         let _length = self.limits.outbound_length(bytes.len())?;
-        self.backend_mut()?.queue_send(bytes)
+        self.verify_pending()?;
+        self.send_admission.require_idle()?;
+        match self.backend_mut()?.queue_send(bytes) {
+            Ok(()) => self.admit_send_observation(SendAdmission::queued),
+            Err(error) => {
+                self.verify_pending()?;
+                if error.kind() == ErrorKind::NotConnected {
+                    self.withdraw();
+                }
+                Err(error)
+            },
+        }
     }
 
     /// Receive one complete frame within the configured deadline.
@@ -342,7 +400,9 @@ impl SecureFrameStream {
     /// # Errors
     /// Reports malformed, disconnected or expired transport.
     pub fn receive(&mut self) -> Result<Vec<u8>> {
-        let bytes = self.backend_mut()?.receive()?;
+        self.verify_pending()?;
+        let received = self.backend_mut()?.receive();
+        let bytes = self.finish_transfer(received)?;
         self.admit_received(bytes)
     }
 
@@ -352,12 +412,27 @@ impl SecureFrameStream {
     /// Rejects oversized frames, pending sends or failed transport.
     pub fn send(&mut self, bytes: &[u8]) -> Result<()> {
         let _length = self.limits.outbound_length(bytes.len())?;
-        self.backend_mut()?.send(bytes)
+        self.verify_pending()?;
+        self.send_admission.require_idle()?;
+        let result = self.backend_mut()?.send(bytes);
+        self.finish_transfer(result)
+    }
+
+    fn verify_pending(&mut self) -> Result<()> {
+        self.admit_send_observation(|admission, observed| {
+            admission.check(observed)
+        })
+    }
+
+    fn withdraw(&mut self) {
+        self.backend = None;
+        self.send_admission = SendAdmission::default();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::io::{Error, ErrorKind, Result};
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::sync::Arc;
@@ -375,12 +450,37 @@ mod tests {
     struct ObservedFrame {
         dispatched: Arc<AtomicBool>,
         peer: PeerFingerprint,
+        pending: bool,
+        progress: VecDeque<(SendProgress, bool)>,
+        queue_pending: bool,
         received: Vec<u8>,
+    }
+
+    impl ObservedFrame {
+        fn admit(self, approved: PeerFingerprint) -> Result<SecureFrameStream> {
+            let config = LanConfig::new(session(true), Duration::from_secs(1))?;
+            SecureFrameStream::admit_backend(Box::new(self), config, approved)
+        }
+
+        fn new(
+            peer: PeerFingerprint,
+            received: Vec<u8>,
+            dispatched: Arc<AtomicBool>,
+        ) -> Self {
+            Self {
+                dispatched,
+                peer,
+                pending: false,
+                progress: VecDeque::new(),
+                queue_pending: true,
+                received,
+            }
+        }
     }
 
     impl FrameBackend for ObservedFrame {
         fn has_pending_send(&self) -> bool {
-            false
+            self.pending
         }
 
         fn peer_fingerprint(&self) -> PeerFingerprint {
@@ -392,11 +492,19 @@ mod tests {
         }
 
         fn poll_send(&mut self) -> Result<SendProgress> {
-            Ok(SendProgress::Idle)
+            let (progress, pending) =
+                self.progress.pop_front().unwrap_or(if self.pending {
+                    (SendProgress::Complete, false)
+                } else {
+                    (SendProgress::Idle, false)
+                });
+            self.pending = pending;
+            Ok(progress)
         }
 
         fn queue_send(&mut self, _bytes: Vec<u8>) -> Result<()> {
             self.dispatched.store(true, Ordering::Release);
+            self.pending = self.queue_pending;
             Ok(())
         }
 
@@ -416,13 +524,7 @@ mod tests {
         received: Vec<u8>,
         dispatched: Arc<AtomicBool>,
     ) -> Result<SecureFrameStream> {
-        let config = LanConfig::new(session(true), Duration::from_secs(1))?;
-        let backend = Box::new(ObservedFrame {
-            dispatched,
-            peer,
-            received,
-        });
-        SecureFrameStream::admit_backend(backend, config, approved)
+        ObservedFrame::new(peer, received, dispatched).admit(approved)
     }
 
     #[test]
@@ -463,6 +565,96 @@ mod tests {
         dispatched.store(false, Ordering::Release);
         stream.queue_send(vec![])?;
         require(dispatched.load(Ordering::Acquire))?;
+        Ok(())
+    }
+
+    #[test]
+    fn queued_frames_reserve_capacity_until_admitted_completion() -> Result<()>
+    {
+        let peer = PeerFingerprint::from_bytes([1; 32]);
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let mut backend =
+            ObservedFrame::new(peer, vec![], Arc::clone(&dispatched));
+        backend.progress.push_back((SendProgress::Pending, true));
+        let mut stream = backend.admit(peer)?;
+        require(!stream.has_pending_send())?;
+        stream.queue_send(vec![1])?;
+        require(stream.has_pending_send())?;
+        dispatched.store(false, Ordering::Release);
+        require(stream.poll_receive()? == Some(vec![]))?;
+        require(stream.poll_send()? == SendProgress::Pending)?;
+        require(stream.has_pending_send())?;
+        require(
+            stream.queue_send(vec![]).err().map(|error| error.kind())
+                == Some(ErrorKind::AlreadyExists),
+        )?;
+        require(
+            stream.send(&[]).err().map(|error| error.kind())
+                == Some(ErrorKind::AlreadyExists),
+        )?;
+        require(!dispatched.load(Ordering::Acquire))?;
+        require(stream.poll_send()? == SendProgress::Complete)?;
+        require(!stream.has_pending_send())?;
+        require(stream.poll_send()? == SendProgress::Idle)?;
+        stream.send(&[])?;
+        require(dispatched.load(Ordering::Acquire))
+    }
+
+    #[test]
+    fn inconsistent_queue_receipts_withdraw_the_stream() -> Result<()> {
+        let peer = PeerFingerprint::from_bytes([1; 32]);
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let mut initially_busy =
+            ObservedFrame::new(peer, vec![], Arc::clone(&dispatched));
+        initially_busy.pending = true;
+        require(
+            initially_busy.admit(peer).err().map(|error| error.kind())
+                == Some(ErrorKind::InvalidData),
+        )?;
+        let mut backend =
+            ObservedFrame::new(peer, vec![], Arc::clone(&dispatched));
+        backend.queue_pending = false;
+        let mut stream = backend.admit(peer)?;
+        require(
+            stream.queue_send(vec![]).err().map(|error| error.kind())
+                == Some(ErrorKind::InvalidData),
+        )?;
+        dispatched.store(false, Ordering::Release);
+        require(!stream.has_pending_send())?;
+        require(
+            stream.send(&[]).err().map(|error| error.kind())
+                == Some(ErrorKind::NotConnected),
+        )?;
+        require(!dispatched.load(Ordering::Acquire))
+    }
+
+    #[test]
+    fn inconsistent_send_progress_withdraws_the_stream() -> Result<()> {
+        let peer = PeerFingerprint::from_bytes([1; 32]);
+        for (queued, progress, pending) in [
+            (false, SendProgress::Pending, true),
+            (false, SendProgress::Complete, false),
+            (true, SendProgress::Idle, false),
+            (true, SendProgress::Complete, true),
+            (true, SendProgress::Pending, false),
+        ] {
+            let dispatched = Arc::new(AtomicBool::new(false));
+            let mut backend = ObservedFrame::new(peer, vec![], dispatched);
+            backend.progress.push_back((progress, pending));
+            let mut stream = backend.admit(peer)?;
+            if queued {
+                stream.queue_send(vec![])?;
+            }
+            require(
+                stream.poll_send().err().map(|error| error.kind())
+                    == Some(ErrorKind::InvalidData),
+            )?;
+            require(!stream.has_pending_send())?;
+            require(
+                stream.poll_receive().err().map(|error| error.kind())
+                    == Some(ErrorKind::NotConnected),
+            )?;
+        }
         Ok(())
     }
 
