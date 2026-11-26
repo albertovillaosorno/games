@@ -35,10 +35,12 @@ use js_sys::Promise;
 use js_sys::futures::spawn_local;
 use wasm_bindgen::JsValue;
 
+use super::{BrowserAudio, create_audio};
 use crate::ir::audio::{
-    NativeAudio, PlaybackControl, PlaybackError, PlaybackSpec,
+    NativeAudio, PlaybackBackend, PlaybackControl, PlaybackError, PlaybackSpec,
 };
 use crate::ir::process::{write_diagnostic, write_status};
+use crate::ir::security::audio::{PlaybackRequest, PlaybackState};
 
 const SILENCE: [i16; 512] = [0; 512];
 const ATTEMPTS: u16 = 300;
@@ -58,9 +60,11 @@ async fn delay() -> Result<(), PlaybackError> {
     Ok(())
 }
 
-async fn drain(audio: &NativeAudio) -> Result<(), PlaybackError> {
+async fn drain(
+    mut queued: impl FnMut() -> Result<u32, PlaybackError>,
+) -> Result<(), PlaybackError> {
     for _attempt in 0..ATTEMPTS {
-        if audio.queued_frames()? == 0 {
+        if queued()? == 0 {
             return Ok(());
         }
         delay().await?;
@@ -73,8 +77,8 @@ fn failure(message: &str) -> PlaybackError {
 }
 
 async fn finish(audio: NativeAudio) -> Result<(), PlaybackError> {
-    settle(&audio).await?;
-    drain(&audio).await?;
+    settle(|| audio.poll_control()).await?;
+    drain(|| audio.queued_frames()).await?;
     audio.queue_samples(&SILENCE)?;
     require(audio.queued_frames()? == 256, "running submission charge")?;
     audio.clear()?;
@@ -86,7 +90,7 @@ async fn finish(audio: NativeAudio) -> Result<(), PlaybackError> {
         audio.pause()? == PlaybackControl::Pending,
         "pause not pending",
     )?;
-    settle(&audio).await?;
+    settle(|| audio.poll_control()).await?;
     audio.queue_samples(&SILENCE)?;
     for _attempt in 0..10u8 {
         delay().await?;
@@ -99,8 +103,8 @@ async fn finish(audio: NativeAudio) -> Result<(), PlaybackError> {
         audio.resume()? == PlaybackControl::Pending,
         "resume not pending",
     )?;
-    settle(&audio).await?;
-    drain(&audio).await?;
+    settle(|| audio.poll_control()).await?;
+    drain(|| audio.queued_frames()).await?;
     drop(audio);
     Ok(())
 }
@@ -113,14 +117,70 @@ fn require(condition: bool, message: &str) -> Result<(), PlaybackError> {
     }
 }
 
-async fn settle(audio: &NativeAudio) -> Result<(), PlaybackError> {
+async fn settle(
+    mut poll: impl FnMut() -> Result<PlaybackControl, PlaybackError>,
+) -> Result<(), PlaybackError> {
     for _attempt in 0..ATTEMPTS {
-        if audio.poll_control()? == PlaybackControl::Complete {
+        if poll()? == PlaybackControl::Complete {
             return Ok(());
         }
         delay().await?;
     }
     Err(failure("browser audio control did not settle"))
+}
+
+fn submit_silence(audio: &BrowserAudio) -> Result<(), PlaybackError> {
+    audio
+        .layout
+        .admit_observation(audio.observe_playback(), PlaybackState::Running)?;
+    let admitted =
+        audio.layout.admit_samples(&SILENCE, audio.queued_bytes())?;
+    audio.queue_samples(admitted)?;
+    audio
+        .layout
+        .admit_submission(admitted, audio.queued_bytes(), audio.state())
+}
+
+fn scheduled_tail(audio: &BrowserAudio) -> Result<(f64, f64), PlaybackError> {
+    audio
+        .queue
+        .borrow()
+        .back()
+        .and_then(|chunk| {
+            chunk
+                .source
+                .as_ref()
+                .map(|source| (source.end, chunk.buffer.duration()))
+        })
+        .ok_or_else(|| failure("missing scheduled audio tail"))
+}
+
+async fn verify_refill(audio: BrowserAudio) -> Result<(), PlaybackError> {
+    settle(|| audio.poll_control()).await?;
+    submit_silence(&audio)?;
+    let (end, duration) = scheduled_tail(&audio)?;
+    let spec = audio.layout.spec();
+    let lead =
+        f64::from(spec.buffer_frames.get()) / f64::from(spec.sample_rate.get());
+    // Enter a real-clock interval in which applying a second startup lead
+    // would introduce a gap. Leave headroom for host dispatch jitter.
+    for _attempt in 0..ATTEMPTS {
+        let remaining = end - audio.context.current_time();
+        require(remaining > lead * 0.25, "missed near-tail refill window")?;
+        if remaining < lead * 0.75 {
+            submit_silence(&audio)?;
+            let (next_end, next_duration) = scheduled_tail(&audio)?;
+            require(
+                next_duration.to_bits() == duration.to_bits()
+                    && next_end.to_bits() == (end + duration).to_bits(),
+                "near-tail refill introduced a discontinuity",
+            )?;
+            drain(|| Ok(audio.queued_bytes())).await?;
+            return Ok(());
+        }
+        delay().await?;
+    }
+    Err(failure("browser audio clock did not reach refill window"))
 }
 
 pub(in crate::software) fn verify_fixture() -> Result<(), PlaybackError> {
@@ -172,10 +232,37 @@ pub(in crate::software) fn verify_fixture() -> Result<(), PlaybackError> {
         audio.pause() == Err(PlaybackError::TransitionPending),
         "pending pause admitted",
     )?;
+    // A longer diagnostic period gives the real browser a wide observation
+    // interval without changing the title's normal PCM queue policy.
+    let period = NonZeroU16::MIN.saturating_add(8191);
+    let request = PlaybackRequest::new(
+        PlaybackSpec {
+            buffer_frames: period,
+            max_queued_frames: NonZeroU32::from(period),
+            ..spec
+        },
+        None,
+    )?;
+    let refill = create_audio(request)?;
+    request.admit_opened(
+        refill.observe_playback(),
+        refill.output().1,
+        refill.queued_bytes(),
+    )?;
+    require(
+        refill.request_control(PlaybackState::Running)?
+            == PlaybackControl::Pending,
+        "refill resume not pending",
+    )?;
     write_status(format_args!("Browser audio diagnostic pending"))
         .map_err(|_error| failure("browser audio status unavailable"))?;
     spawn_local(async move {
-        match finish(audio).await {
+        let result = async {
+            finish(audio).await?;
+            verify_refill(refill).await
+        }
+        .await;
+        match result {
             Ok(()) => {
                 let _status = write_status(format_args!(
                     "Browser audio diagnostic passed"

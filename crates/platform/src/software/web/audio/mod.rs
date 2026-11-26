@@ -394,22 +394,9 @@ fn backend_error(message: &str) -> PlaybackError {
     PlaybackError::Backend(message.to_owned())
 }
 
-pub(in crate::software) fn devices() -> Result<AudioDevices, PlaybackError> {
-    let constructor =
-        Reflect::get(&global(), &JsValue::from_str("AudioContext"))
-            .map_err(|_error| backend_error("browser audio lookup failed"))?;
-    if !constructor.is_function() {
-        return Err(PlaybackError::Unsupported);
-    }
-    Ok(AudioDevices {
-        driver: "web-audio",
-        names: None,
-    })
-}
-
-pub(in crate::software) fn open_audio(
+fn create_audio(
     request: PlaybackRequest<'_>,
-) -> Result<PlaybackPort, PlaybackError> {
+) -> Result<BrowserAudio, PlaybackError> {
     if request.name().is_some() {
         return Err(PlaybackError::InvalidDevice);
     }
@@ -433,7 +420,26 @@ pub(in crate::software) fn open_audio(
     {
         return Err(PlaybackError::FormatMismatch);
     }
-    Ok(Box::new(audio))
+    Ok(audio)
+}
+
+pub(in crate::software) fn devices() -> Result<AudioDevices, PlaybackError> {
+    let constructor =
+        Reflect::get(&global(), &JsValue::from_str("AudioContext"))
+            .map_err(|_error| backend_error("browser audio lookup failed"))?;
+    if !constructor.is_function() {
+        return Err(PlaybackError::Unsupported);
+    }
+    Ok(AudioDevices {
+        driver: "web-audio",
+        names: None,
+    })
+}
+
+pub(in crate::software) fn open_audio(
+    request: PlaybackRequest<'_>,
+) -> Result<PlaybackPort, PlaybackError> {
+    Ok(Box::new(create_audio(request)?))
 }
 
 fn sample_rate(value: u32) -> Result<f32, PlaybackError> {

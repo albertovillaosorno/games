@@ -1569,3 +1569,37 @@ and 109 native files (4,150,657 bytes), respectively:
 `d580ac143860c0fe9206e3f684075c915ec95486b261e0c831c976574094fb00`
 and
 `f2c5477bc339cf935d3d7f301f8f3a34241b4c379958f045fa5ebd5264ca2f47`.
+
+A separate scheduling regression showed that applying the startup lead to
+an already scheduled future tail inserts a gap even though the queue has
+not run out. The pre-fix host test failed in validation
+1795735162150123816-7225. Commit 35c9f30 selects the exact future tail
+instead; idle or expired tails still receive the requested startup lead,
+and invalid clock values are rejected. This does not recover audio
+missed during a host stall. One asset-backed isolated Wayland Firefox
+run of that commit scheduled all 156 blocks contiguously, read the same
+616 entries and finished normally after 226 callbacks and 132 blits.
+It had one peak pending frame and closed its audio context, with no
+remaining picker or canvas. That run did not exercise a near-tail
+refill. Independent readback verified 88 files (1,545,609 bytes):
+`43e7c01c8c0f223b0df3bdfdafba9f9348b53a801821c5a9b11315570f9bd53e`.
+
+The silent browser diagnostic now exercises a real-clock near-tail
+refill in a separate temporary audio context. Its 8,192-frame diagnostic
+period permits a wide observation window without increasing the title's
+queue or changing its buffer period. Isolated X11 Firefox with a private
+48 kHz stereo null sink reported six 256-frame silent submissions and
+six trusted completion events. The two dedicated submissions were
+scheduled at 0.3333333333333333 and 0.33866666666666667 seconds, with
+122.7 ms remaining at the refill observation against a 170.7 ms lead.
+The second start exactly equaled the first end. All six listeners were
+removed and both contexts closed. An injected untrusted completion for
+each submission did not alter this result. An injected second-source
+start failure rejected the diagnostic, removed both installed listeners,
+stopped the first source and closed both contexts. The first attempts
+were affected by isolated X11 vendor selection, sound-server readiness
+and input activation timing; the final runs passed with Mesa and fresh
+private runtime directories. These are silent scheduling and teardown
+observations, not physical output or mobile-device acceptance.
+Fresh integrated validation 1795735623022254336-40362 passed 1,968
+test executions.
