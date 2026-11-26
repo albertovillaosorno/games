@@ -775,3 +775,13 @@ selection of the secondary physical slot, confirmation and normal
 exit. Its new owner-only 4,031-byte settings envelope recorded
 `touch 1 primary=secondary` and `touch 1 secondary=primary`, with
 keyboard and controller bindings unchanged.
+
+A clean package at c6e8232, including the launch admission fix at
+0a94e4d, verified 109 files and 4,150,873 bytes. The receipt digest was
+`2e3f412251b7b088c54dcf9b9ca1afc494eed204fef3e52eb2aa3a1bbe90c607`.
+Two malformed invocations exited with status 1 and distinct option
+and missing-value diagnostics, without creating a settings file.
+The correctly ordered invocation of the same 3,625,200-byte binary
+on the disposable Wayland monitor exited normally by touch alone.
+It submitted 11,200 gameplay frames with zero work-budget misses
+(maximum 8.325 ms) and seven applied local input samples.
