@@ -60,6 +60,25 @@ ledger and account for sidecars and every consumer catalogue before
 cutover. The private migration staging capability is tested with tiny
 fixtures; it does not yet publish a migrated store.
 
+Translate explicitly selected catalogue addresses without writing to the
+source file or trusting an externally supplied address map:
+
+```text
+bundle migration-catalogue TITLE LEGACY_ROOT STORE_ENTRIES STORE_BYTES \
+  MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT CATALOGUE \
+  CATALOGUE_BYTES last-token|fields:KEY,...
+```
+
+The command re-audits the legacy store and verifies every selected
+address against the resulting map. Use `last-token` for records ending
+in a manifest digest, or `fields:KEY,...` for explicit key-value fields.
+Other fields and whitespace remain intact; output ends with a newline.
+Redirect output only to a distinct private candidate file. Never
+redirect over the input. This operation does not infer catalogue
+schemas, change paths, interpret settings or migrate credentials.
+The title must still admit the translated catalogue and verify its
+assets; relative paths require explicit attention when relocating it.
+
 Downloaded originals and tools remain in `.reference/games/` and
 `.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
 Do not store reference data in disposable `.cache/` or `.temp/`.

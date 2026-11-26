@@ -173,3 +173,18 @@ reduction, not actual disk savings or full native consumer acceptance.
 Fresh validation 1795665448043786584-573434 passed 1,749 aggregate test
 executions. No real assets were staged, moved, deleted or copied; actual
 consumer catalogue migration and configured-store cutover remain open.
+
+Read-only reference inventory on 2026-11-25 found 255 explicit asset
+references across 41 historical diagnostic launch catalogues; 29
+addresses change and none are absent from the verified map. The three
+legacy pose sidecars contain 118 references (including repetitions);
+all 118 change and none are absent. The bounded catalogue command
+translated the three sidecars and a recent five-reference launch
+catalogue into disposable private text candidates. All translated
+addresses were present in the normalized inventory; the launch
+catalogue's unselected fields were byte-identical. Inline regressions
+reject malformed, duplicate or missing selected addresses, preserve
+unselected values and support key-value and final-token records.
+No original catalogue was edited and no assets were copied. These
+checks establish reference translation, not consumer execution with
+the new store. Actual relocation and retirement remain open.

@@ -85,6 +85,9 @@ const USAGE: &str = concat!(
     "games-build package TITLE [OUTPUT]\n",
     "games-build bundle migration-audit TITLE PARENT STORE_ENTRIES ",
     "STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
+    "games-build bundle migration-catalogue TITLE PARENT STORE_ENTRIES ",
+    "STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT ",
+    "CATALOGUE CATALOGUE_BYTES last-token|fields:KEY,...\n",
     "games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle replace-media PARENT BASE_SHA256 KEY ",
@@ -203,6 +206,7 @@ enum Command {
     Check(ImportProfile, OsString, ContentHash),
     Import(ImportProfile, Arguments),
     MigrationAudit(store_migration::Audit),
+    MigrationCatalogue(Box<store_migration::Catalogue>),
     ObjectCheck(Machine, OsString, OsString),
     PackageTitle(title_build::Title, Option<OsString>),
     PaletteCheck(Machine, OsString, OsString),
@@ -249,6 +253,11 @@ impl Command {
                 Ok(Self::MigrationAudit(store_migration::Audit::parse(
                     args.collect(),
                 )?))
+            },
+            (Some("bundle"), Some("migration-catalogue")) => {
+                Ok(Self::MigrationCatalogue(Box::new(
+                    store_migration::Catalogue::parse(args.collect())?,
+                )))
             },
             (Some("bundle"), Some("upgrade")) => {
                 Self::parse_upgrade(args.collect())
@@ -611,6 +620,7 @@ impl Command {
     fn run_assets(self) -> Result<(), String> {
         match self {
             Self::MigrationAudit(audit) => audit.run(),
+            Self::MigrationCatalogue(catalogue) => catalogue.run(),
             Self::Upgrade(parent, digest, limits) => {
                 publication::upgrade(&parent, digest, limits)
             },
