@@ -143,7 +143,12 @@ impl EventQueue {
         sample
     }
 
-    fn push(&mut self, sample: InputSample, scope: u64) {
+    fn push(
+        &mut self,
+        stamp: Option<Duration>,
+        transition: InputTransition,
+        scope: u64,
+    ) {
         if self.overflow {
             return;
         }
@@ -151,12 +156,16 @@ impl EventQueue {
             self.samples.clear();
             self.overflow = true;
             self.samples.push_back(InputSample::new(
-                None,
+                stamp,
                 focus_lost(),
                 Some(scope),
             ));
         } else {
-            self.samples.push_back(sample);
+            self.samples.push_back(InputSample::new(
+                stamp,
+                transition,
+                Some(scope),
+            ));
         }
     }
 }
@@ -175,10 +184,7 @@ impl EventSource {
                 if let Some(transition) = transition(kind, &event) {
                     let stamp =
                         super::performance::timestamp(event.time_stamp()).ok();
-                    sink.borrow_mut().push(
-                        InputSample::new(stamp, transition, Some(scope)),
-                        scope,
-                    );
+                    sink.borrow_mut().push(stamp, transition, scope);
                 }
             });
             target
@@ -308,19 +314,27 @@ fn next_key(
     Ok(input.translate(&sample))
 }
 
+fn key_event(
+    kind: &str,
+    code: &str,
+    repeat: bool,
+) -> Result<KeyboardEvent, RenderError> {
+    let init = KeyboardEventInit::new();
+    init.set_code(code);
+    init.set_key("different-layout-label");
+    init.set_repeat(repeat);
+    init.set_cancelable(true);
+    KeyboardEvent::new_with_keyboard_event_init_dict(kind, &init)
+        .map_err(dom_error)
+}
+
 fn send_key(
     target: &EventTarget,
     kind: &str,
     code: &str,
     repeat: bool,
 ) -> Result<bool, RenderError> {
-    let init = KeyboardEventInit::new();
-    init.set_code(code);
-    init.set_key("different-layout-label");
-    init.set_repeat(repeat);
-    init.set_cancelable(true);
-    let event = KeyboardEvent::new_with_keyboard_event_init_dict(kind, &init)
-        .map_err(dom_error)?;
+    let event = key_event(kind, code, repeat)?;
     target.dispatch_event(&event).map_err(dom_error)
 }
 
@@ -405,11 +419,21 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
             == Some(HostEvent::Input(InputEvent::FocusLost)),
         "blur",
     )?;
-    for _ in 0..4 {
-        let _sent = send_key(&target, "keydown", "KeyA", false)?;
+    let mut expected_stamp = None;
+    for index in 0..4 {
+        let event = key_event("keydown", "KeyA", false)?;
+        if index == cap.get() {
+            expected_stamp =
+                super::performance::timestamp(event.time_stamp()).ok();
+        }
+        let _sent = target.dispatch_event(&event).map_err(dom_error)?;
     }
     let overflow = source.pop().ok_or(RenderError::InvalidLength)?;
-    verify(input.event_elapsed(&overflow).is_none(), "overflow clock")?;
+    verify(input.event_elapsed(&overflow).is_some(), "overflow clock")?;
+    verify(
+        overflow.elapsed_since(Duration::ZERO) == expected_stamp,
+        "overflow triggering timestamp",
+    )?;
     verify(
         input.translate(&overflow)
             == Some(HostEvent::Input(InputEvent::FocusLost)),

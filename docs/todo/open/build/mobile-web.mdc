@@ -310,3 +310,20 @@ output or realtime playback was attempted. The synchronous PCM queue
 contract still needs a browser adapter that respects asynchronous
 activation, backpressure, suspension and teardown. No audio
 distribution or physical playback acceptance is inferred.
+
+The browser keyboard queue now preserves the exact triggering observation
+timestamp when replacing a saturated queue with one focus-loss cancellation.
+The prior untimestamped cancellation could not pass the gameplay runtime's
+event clock admission. The browser fixture checks both the session-relative
+clock and the triggering timestamp before translating the cancellation,
+then verifies recovery with a fresh event.
+
+Fresh validation 1795678961365636903-3004281 linked the updated diagnostic.
+Two normal isolated Firefox launches each dispatched 54 DOM events, with
+eight listener registrations and removals; the injected invalid performance
+clock was rejected before any dispatch. A separate negative control set
+only the queue-overflow triggering event timestamp to NaN. Both invocations
+rejected it, removed all eight listeners and dispatched 50 events in total;
+the following normal launch passed. The independently hashed bound module
+was 87,617 bytes. All five screenshot indicators were green. This verifies
+fixture cancellation timing, not integration with the title's runtime.
