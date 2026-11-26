@@ -660,6 +660,11 @@ fn route_contact(event: &Event) -> Option<HostEvent> {
     } else {
         return None;
     };
+    // SDL_MOUSE_TOUCHID denotes a mouse-generated contact, not a touch
+    // device. Keep physical mouse bindings independent of touch controls.
+    if device == -1 {
+        return None;
+    }
     Some(HostEvent::Input(InputEvent::Contact {
         id: ContactId { device, finger },
         phase,
@@ -945,6 +950,47 @@ mod tests {
                 }))
             );
             assert_eq!(route(&event, 1), None);
+        }
+    }
+
+    #[test]
+    fn mouse_generated_contacts_are_not_admitted() {
+        for event in [
+            Event::FingerDown {
+                timestamp: 1,
+                touch_id: -1,
+                finger_id: 0,
+                x: 0.5,
+                y: 0.5,
+                dx: 0.0,
+                dy: 0.0,
+                pressure: 1.0,
+            },
+            Event::FingerMotion {
+                timestamp: 2,
+                touch_id: -1,
+                finger_id: 0,
+                x: 0.6,
+                y: 0.5,
+                dx: 0.1,
+                dy: 0.0,
+                pressure: 1.0,
+            },
+            Event::FingerUp {
+                timestamp: 3,
+                touch_id: -1,
+                finger_id: 0,
+                x: 0.6,
+                y: 0.5,
+                dx: 0.0,
+                dy: 0.0,
+                pressure: 0.0,
+            },
+        ] {
+            assert_eq!(
+                sample(&event, 1, 3).transition(),
+                InputTransition::Ignored
+            );
         }
     }
 

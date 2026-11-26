@@ -830,3 +830,42 @@ input-device inventory exposed no keyboard, pointer, touchscreen or
 gamepad event device during these tests. Physical interaction, audible
 output, independent-host ABI and the owner's maximized desktop remain
 unverified.
+
+The same upstream SDL2 package passed touch-only admission, movement
+chords, contact motion, attack, pause and menu exit in all five fullscreen
+presentation modes on a private Wayland monitor at 2x scale. SDL window
+resize events reported 960x540 and the gameplay reports confirmed
+1920x1080 drawables. Adaptive admitted 368x304 logical pixels including
+48 additional verified street columns; the other modes used 320x304.
+All five runs recorded seven applied local input samples each and a
+combined 60,303 gameplay submissions without a work-budget miss
+(maximum 8.647 ms). The harness warmed up virtual touch delivery and
+required a gameplay receipt, not merely a successful process exit.
+
+With upstream SDL2 on private X11, setting SDL_MOUSE_TOUCH_EVENTS=1
+exposed an input isolation defect: a left mouse click also generated
+finger events with the reserved SDL_MOUSE_TOUCHID (-1). Even with the
+stored primary mouse binding cleared, clicking the displayed touch
+pause button paused gameplay. The regression first failed integrated
+validation 1795701389704307299-3097506 on the admitted synthetic contact.
+The native input adapter now discards all three mouse-generated contact
+phases, complementing its existing rejection of touch-generated mouse
+button edges. Genuine touch identifiers and physical mouse bindings
+remain independently admitted. Fresh upstream SDL2 validation
+1795701419389375306-3105158 passed with 1,960 test executions and no
+failures, including render and dummy audio smoke.
+
+The rebuilt package verified 109 files and 4,151,033 bytes; its receipt
+SHA-256 was
+`2cf6a54238488ae55536f9798a0454cb7291a43922f15f8f3327e1a00f098e05`.
+With the same cleared mouse binding and the same SDL2 synthetic finger
+and pointer event sequence, gameplay remained active until explicit
+Escape, then exited normally. All 1,419 gameplay submissions met the
+work budget. The stored profile remained byte-identical before and
+after both runs. The installed SDL2 compatibility library also passed
+normal mouse and keyboard exit without a premature pause; its SDL3
+event trace did not expose a synthetic finger in that run. A separate
+upstream SDL2 2x Wayland touch-only regression with mouse emulation
+still enabled passed with seven applied local samples and 11,540
+submissions without a work-budget miss. All evidence uses virtual
+inputs and does not establish physical-device or audible acceptance.
