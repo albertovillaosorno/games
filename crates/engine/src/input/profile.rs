@@ -40,9 +40,6 @@ use super::physical::{
     ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
 };
 
-/// Maximum UTF-8 profile size, in bytes.
-pub const MAX_PROFILE_BYTES: usize = 8192;
-
 /// One signed axis's digital action slots and hysteresis thresholds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AxisProfile {
@@ -139,6 +136,15 @@ pub struct DigitalProfiles<const PLAYERS: usize, const ACTIONS: usize> {
     pub touch_slots: [[usize; ACTIONS]; PLAYERS],
 }
 
+/// Bounded UTF-8 text submitted for profile admission.
+#[derive(Clone, Copy, Debug)]
+pub struct ProfileText<'text> {
+    /// Maximum bytes admitted, including whitespace.
+    pub max_bytes: usize,
+    /// Complete version-one profile text.
+    pub text: &'text str,
+}
+
 impl<const PLAYERS: usize, const ACTIONS: usize>
     DigitalProfiles<PLAYERS, ACTIONS>
 {
@@ -179,16 +185,18 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
     /// Player numbers start at one; touch slots use the action names.
     /// Optional `touch-player=N` or `touch-players=N,M` selects stations.
     /// The selection is nonempty, unique and ordered by station number.
-    /// The first nonempty line must be `version=1`.
+    /// The first nonempty line must be `version=1`. The caller supplies
+    /// the maximum UTF-8 byte length, including ignored whitespace.
     /// # Errors
     /// Rejects oversized, ambiguous, unknown or invalid mappings.
     pub fn configured(
         mut self,
         actions: [&str; ACTIONS],
-        text: &str,
+        source: ProfileText<'_>,
         resolve_key: KeyResolver,
     ) -> Result<Self, String> {
-        if text.len() > MAX_PROFILE_BYTES {
+        let ProfileText { max_bytes, text } = source;
+        if text.len() > max_bytes {
             return Err(String::from("control profile exceeds byte limit"));
         }
         let mut lines =
@@ -471,7 +479,11 @@ mod tests {
     const ACTIONS: [&str; 2] = ["primary", "secondary"];
 
     fn configure(text: &str) -> Result<DigitalProfiles<2, 2>, String> {
-        DEFAULT.configured(ACTIONS, text, resolve_key)
+        DEFAULT.configured(
+            ACTIONS,
+            ProfileText { max_bytes: 8192, text },
+            resolve_key,
+        )
     }
 
     fn resolve_key(name: &str) -> Option<KeyboardKey> {
@@ -571,6 +583,56 @@ mod tests {
         assert_eq!(
             configure("version=1\ntouch-players=2"),
             configure("version=1\ntouch-player=2")
+        );
+    }
+
+    #[test]
+    fn profile_byte_budget_belongs_to_the_caller() {
+        let text = format!("version=1\n{}", " ".repeat(8192));
+        let admitted = DEFAULT.configured(
+            ACTIONS,
+            ProfileText {
+                max_bytes: text.len(),
+                text: &text,
+            },
+            resolve_key,
+        );
+        assert_eq!(admitted, Ok(DEFAULT));
+        assert!(
+            DEFAULT
+                .configured(
+                    ACTIONS,
+                    ProfileText {
+                        max_bytes: text.len() - 1,
+                        text: &text
+                    },
+                    resolve_key
+                )
+                .is_err()
+        );
+        let unicode = "version=1\n\u{2003}";
+        assert_eq!(
+            DEFAULT.configured(
+                ACTIONS,
+                ProfileText {
+                    max_bytes: unicode.len(),
+                    text: unicode
+                },
+                resolve_key
+            ),
+            Ok(DEFAULT)
+        );
+        assert!(
+            DEFAULT
+                .configured(
+                    ACTIONS,
+                    ProfileText {
+                        max_bytes: unicode.chars().count(),
+                        text: unicode
+                    },
+                    resolve_key,
+                )
+                .is_err()
         );
     }
 

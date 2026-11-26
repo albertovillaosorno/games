@@ -636,3 +636,12 @@ native adapter fallback. Portable round-trip and rejection tests, plus
 native name and extended-key fallback conformance, passed fresh X11
 rendering and dummy audio validation 1795661350177103436-4105345
 (1,702 aggregate test executions and all six portable core checks).
+
+Digital profile admission now receives an explicit UTF-8 byte budget
+from the caller. The Simpsons keeps its existing 8 KiB policy across
+file snapshot, preference storage and parsing; the engine no longer
+imposes this title-specific ceiling. Regression coverage admits a larger
+caller-selected profile and checks exact byte boundaries, including
+multibyte whitespace. Fresh native validation
+1795661485885644571-4151665 passed 1,704 aggregate test executions and
+all six portable core checks.

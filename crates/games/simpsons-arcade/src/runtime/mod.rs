@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use games::audio::MasterVolume;
 use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
-use games::input::profile::{AxisProfile, DigitalProfiles, MAX_PROFILE_BYTES};
+use games::input::profile::{AxisProfile, DigitalProfiles, ProfileText};
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
 use games::performance::{
@@ -96,6 +96,8 @@ use crate::remote::{HostedCabinet, HostedInput};
 const EVENT_BUDGET: usize = 32;
 // Keep fixed updates and LAN polling responsive on static screens.
 const IDLE_EVENT_WAIT_MS: u32 = 8;
+// Apply the same title-owned budget to snapshot, storage and parsing.
+const MAX_PROFILE_BYTES: usize = 8192;
 
 const KEYS: [&str; 4] =
     ["actor/marge", "actor/homer", "actor/bart", "actor/lisa"];
@@ -1089,7 +1091,14 @@ impl<'preferences> Interactive<'preferences> {
 type LocalAdmission<Input> = Result<Option<u64>, RejectedInput<Input>>;
 
 fn configured_profiles(text: &str) -> Result<Profiles, String> {
-    DEFAULT_PROFILES.configured(ACTION_NAMES, text, key_from_name)
+    DEFAULT_PROFILES.configured(
+        ACTION_NAMES,
+        ProfileText {
+            max_bytes: MAX_PROFILE_BYTES,
+            text,
+        },
+        key_from_name,
+    )
 }
 
 fn load_actors(
