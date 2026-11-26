@@ -968,3 +968,50 @@ combat submissions met the 16.667 ms work budget (maximum 5.841 ms).
 The private settings directory remained empty throughout. These are
 hidden X11/OpenGL checks with upstream SDL2 and dummy audio, not new
 physical-device evidence. The configured catalogue was read only.
+
+Further controller-only live checks on the retained native package with
+upstream SDL 2.32.10 and a disposable X11 display verified trigger
+hysteresis through actual virtual joystick events. A positive left
+trigger mapped to right movement used press/release thresholds of
+20,000/10,000. Observations of 16,383, 25,383, 16,383, 8,383 and
+16,383 produced respectively no movement, movement, continued movement,
+release and no new movement. A live SDL controller mapping update
+remapped a held stick from physical axis 0 to axis 2. The remap event
+released movement, the stationary captures matched, and the new axis
+then moved and released the character. Both runs exited through the
+controller menu; debugger pauses exclude timing or latency conclusions.
+
+The fixed mixed-binding smoke package also admitted a previously edited
+4,053-byte saved control profile, with all gameplay keyboard and mouse
+bindings removed except Escape. Complete original-backed touch smokes
+from an unrelated working directory passed on upstream SDL 2.32.10 and
+the installed SDL compatibility backend in all five presentation modes.
+The ten runs submitted 6,200 movement and combat frames without a
+16.667 ms budget miss (maximum 10.052 ms), and each retained the exact
+profile bytes. Both Fill runs verified the protected touch panel on a
+1,280x912 drawable. An additional upstream run with a mixed-binding
+explicit override left the saved profile unchanged. These are
+controlled software observations, not physical-device acceptance.
+
+Two further upstream smokes requested fullscreen with Fill and adaptive
+presentation and retained the saved profile. All 1,240 submissions met
+the frame budget (maximum 11.503 ms). Their hidden drawable observations
+are not a physical fullscreen geometry check. The fixed executable's
+ELF dynamic dependencies remain SDL2, libgcc and libc; its highest
+required GLIBC symbol version is 2.34. No independent host was tested.
+
+A separate live adaptive fullscreen run initially observed windowed
+geometry because the disposable window manager had not registered.
+Waiting for the manager before launch produced an actual 1,920x1,080
+fullscreen window and drawable, with a 398x224 adaptive scene. The
+persisted controller-only profile admitted two stations and exited via
+the remapped primary button. Its saved bytes remained unchanged. The
+run used debugger-injected virtual joystick events and a virtual screen,
+so neither its timings nor geometry establish physical acceptance.
+
+A subsequent debugger-free live keyboard run with dummy audio on the
+same disposable display measured 716 gameplay submissions (398x224
+logical, 1,920x1,080 drawable), two work-budget misses and one
+submission-interval miss. Five local applied-input samples had a
+mean age of 18.4 ms. This is local software-rendered evidence only,
+not a physical latency or hardware performance measurement.
