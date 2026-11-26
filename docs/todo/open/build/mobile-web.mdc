@@ -225,3 +225,33 @@ window manager close request, submitting 1,024 gameplay frames
 without a work-budget miss. These runs used injected keyboard input
 and dummy audio. The browser still needs resident scene resources,
 host event scheduling, rendering and input adapters.
+
+The existing browser save diagnostic now exercises the shared
+DisplayStore, VolumeStore and ControlStore wrappers over one explicit
+origin-local preference namespace. It alternates integer/windowed and
+fill/fullscreen preference values, 75% and 50% volume, and bounded ASCII
+and UTF-8 control text. Each publication reports unsupported crash
+durability. Separate incompatible typed payloads are rejected by every
+wrapper on both load and replacement, preserving their exact raw bytes.
+Empty and oversized control text is rejected without changing the
+saved settings. These are persisted values, not applied browser
+fullscreen, audio or control bindings.
+
+Fresh validation 1795677851760510125-2823651 passed the workspace gate,
+six portable library targets and WebAssembly linkage. The pinned
+wasm-bindgen CLI generated 89,890 bytes of WebAssembly and 11,348 bytes
+of binding JavaScript. The exact module embedded in the browser
+diagnostic matched SHA-256
+92a786d407fa23f4cd5c0d38cf4cb64f826d6cdbeac718b18b60d3eb15825687.
+
+Thirteen independent Firefox 160.0 launches in an isolated network
+namespace and private profile verified the previous eight storage/clock
+cases (including first publication and reload) and five preference cases.
+The harness independently encoded the complete save envelopes
+and checked all three preference slots before and after both
+initialization and explicit main invocation. Invalid display version,
+wrong volume payload type, malformed control UTF-8 and a missing
+control slot in the populated diagnostic preset returned failure
+without replacing any preference bytes. Restoring the three original
+values restored success. All thirteen screenshot indicators were
+green. Browser graphics, touch and distribution acceptance remain open.

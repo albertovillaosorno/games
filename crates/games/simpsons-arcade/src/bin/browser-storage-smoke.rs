@@ -9,19 +9,19 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - An explicitly invoked storage and clock capability smoke.
+//   - An explicitly invoked storage, preference and clock smoke.
 // - Must-Not:
 //   - Open native or browser APIs, use real saves or interpret game data.
 // - Allows:
-//   - Inputs: Synthetic payloads in a dedicated smoke-only namespace.
-//   - Outputs: Success or a storage or clock invariant failure.
-//   - Side effects: Replacement of a bounded diagnostic save slot.
+//   - Inputs: Synthetic payloads in dedicated smoke-only namespaces.
+//   - Outputs: Success or a storage, preference or clock invariant failure.
+//   - Side effects: Replacement of bounded diagnostic save slots.
 // - Split-When:
 //   - Another capability scenario needs independent diagnostic setup.
 // - Merge-When:
 //   - A shared executable covers equivalent capability acceptance.
 // - Summary:
-//   - Check monotonic observations and save-slot publication and reload.
+//   - Check monotonic observations and save publication and reload.
 // - Description:
 //   - Exercise the platform's selected clock and persistence implementations.
 // - Usage:
@@ -35,21 +35,179 @@ use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
+use games::audio::MasterVolume;
+use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 use games::safety::SafetyError;
 use games_platform::ir::measurement::{elapsed_between, now};
 use games_platform::ir::storage::file::FileReadError;
-use games_platform::ir::storage::save::{SaveError, SaveStore};
+use games_platform::ir::storage::preferences::{
+    ControlStore, DisplayStore, PreferenceError, VolumeStore,
+};
+use games_platform::ir::storage::save::{SaveError, SaveReceipt, SaveStore};
 
+const FIRST: Settings = Settings {
+    display: DisplaySettings {
+        presentation: PresentationMode::Integer,
+        window: WindowMode::Windowed,
+    },
+    profile: "move-left=A",
+    volume: MasterVolume::ThreeQuarters,
+};
+const INVALID_PREFERENCES: &str = "browser-invalid-preference-smoke";
 const MAXIMUM: NonZeroU64 = NonZeroU64::MIN.saturating_add(3);
 const NAMESPACE: &str = "browser-storage-smoke";
+const PREFERENCES: &str = "browser-preference-smoke";
+const PROFILE_MAXIMUM: NonZeroU64 = NonZeroU64::MIN.saturating_add(15);
+const SECOND: Settings = Settings {
+    display: DisplaySettings {
+        presentation: PresentationMode::Fill,
+        window: WindowMode::Fullscreen,
+    },
+    profile: "move-left=\u{e9}",
+    volume: MasterVolume::Half,
+};
 const SLOT: u32 = 0;
+
+struct PreferenceStores {
+    control: ControlStore,
+    display: DisplayStore,
+    volume: VolumeStore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Settings {
+    display: DisplaySettings,
+    profile: &'static str,
+    volume: MasterVolume,
+}
+
+impl PreferenceStores {
+    fn load(&self) -> Result<Option<Settings>, &'static str> {
+        let display = self.display.load().map_err(preference_error)?;
+        let volume = self.volume.load().map_err(preference_error)?;
+        let profile = self.control.load().map_err(preference_error)?;
+        if (display, volume, profile.as_deref()) == (None, None, None) {
+            return Ok(None);
+        }
+        [FIRST, SECOND]
+            .into_iter()
+            .find(|settings| {
+                (display, volume, profile.as_deref())
+                    == (
+                        Some(settings.display),
+                        Some(settings.volume),
+                        Some(settings.profile),
+                    )
+            })
+            .map(Some)
+            .ok_or("unexpected saved preferences")
+    }
+
+    fn open(name: &str) -> Result<Self, &'static str> {
+        let location = OsStr::new(name);
+        Ok(Self {
+            control: ControlStore::open(location, PROFILE_MAXIMUM)
+                .map_err(preference_error)?,
+            display: DisplayStore::open(location).map_err(preference_error)?,
+            volume: VolumeStore::open(location).map_err(preference_error)?,
+        })
+    }
+
+    fn reject_incompatible(&self) -> Result<(), &'static str> {
+        let expected = Err(PreferenceError::InvalidPayload);
+        if self.display.load() != expected
+            || self.volume.load() != Err(PreferenceError::InvalidPayload)
+            || self.control.load() != Err(PreferenceError::InvalidPayload)
+        {
+            return Err("incompatible preference read accepted");
+        }
+        for result in [
+            self.display.store(FIRST.display),
+            self.volume.store(FIRST.volume),
+            self.control.store(FIRST.profile),
+        ] {
+            if result != Err(PreferenceError::InvalidPayload) {
+                return Err("incompatible preference replaced");
+            }
+        }
+        Ok(())
+    }
+
+    fn store(&self, settings: Settings) -> Result<(), &'static str> {
+        check_receipt(self.display.store(settings.display))?;
+        check_receipt(self.volume.store(settings.volume))?;
+        check_receipt(self.control.store(settings.profile))
+    }
+}
+
+fn check_receipt(
+    receipt: Result<SaveReceipt, PreferenceError>,
+) -> Result<(), &'static str> {
+    if receipt.map_err(preference_error)?.durability
+        != Err(ErrorKind::Unsupported)
+    {
+        return Err("preference durability mismatch");
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), &'static str> {
+    smoke_slots()?;
+    smoke_preferences()?;
+    smoke_incompatible_preferences()
+}
 
 fn open(name: &str) -> Result<SaveStore, &'static str> {
     SaveStore::open(OsStr::new(name), MAXIMUM)
         .map_err(|_error| "storage unavailable")
 }
 
-fn main() -> Result<(), &'static str> {
+const fn preference_error(_error: PreferenceError) -> &'static str {
+    "preference operation failed"
+}
+
+fn smoke_incompatible_preferences() -> Result<(), &'static str> {
+    let raw = SaveStore::open(
+        OsStr::new(INVALID_PREFERENCES),
+        NonZeroU64::MIN.saturating_add(63),
+    )
+    .map_err(|_error| "invalid preference fixture unavailable")?;
+    for slot in [0, 1, 2] {
+        let _receipt = raw
+            .store(slot, b"incompatible-v1")
+            .map_err(|_error| "invalid preference fixture failed")?;
+    }
+    PreferenceStores::open(INVALID_PREFERENCES)?.reject_incompatible()?;
+    for slot in [0, 1, 2] {
+        if raw.load(slot).as_deref() != Ok(b"incompatible-v1") {
+            return Err("invalid preference fixture changed");
+        }
+    }
+    Ok(())
+}
+
+fn smoke_preferences() -> Result<(), &'static str> {
+    let stores = PreferenceStores::open(PREFERENCES)?;
+    let next = match stores.load()? {
+        None | Some(SECOND) => FIRST,
+        Some(FIRST) => SECOND,
+        Some(_) => return Err("unknown preference preset"),
+    };
+    stores.store(next)?;
+    if PreferenceStores::open(PREFERENCES)?.load()? != Some(next) {
+        return Err("preference reload mismatch");
+    }
+    if stores.control.store("") != Err(PreferenceError::InvalidPayload)
+        || stores.control.store("0123456789abcdefg")
+            != Err(PreferenceError::InvalidPayload)
+        || stores.load()? != Some(next)
+    {
+        return Err("invalid control text altered preferences");
+    }
+    Ok(())
+}
+
+fn smoke_slots() -> Result<(), &'static str> {
     let first = now().map_err(|_error| "clock unavailable or invalid")?;
     let second = now().map_err(|_error| "clock unavailable or invalid")?;
     let _interval =

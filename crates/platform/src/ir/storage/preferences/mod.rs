@@ -11,10 +11,10 @@
 // - Owns:
 //   - Portable persistence of shared display, audio and input preferences.
 // - Must-Not:
-//   - Select a title's settings directory or change its display.
+//   - Select a title's settings location or change its display.
 // - Allows:
-//   - Inputs: Dedicated trusted directory and portable settings.
-//   - Outputs: Verified preferences or durable publication receipt.
+//   - Inputs: Explicit trusted location and portable settings.
+//   - Outputs: Verified preferences or publication receipt.
 //   - Side effects: Atomic local save publication through SaveStore.
 // - Split-When:
 //   - A platform requires a different persistence mechanism.
@@ -25,7 +25,7 @@
 // - Description:
 //   - Use a bounded versioned payload in an existing atomic save envelope.
 // - Usage:
-//   - Open a dedicated settings directory and load or store preferences.
+//   - Open a dedicated settings location and load or store preferences.
 // - Defaults:
 //   - Missing preferences return None; malformed data is rejected.
 
@@ -75,7 +75,7 @@ impl From<InvalidPreference> for PreferenceError {
     }
 }
 
-/// Display preferences in a dedicated, caller-selected directory.
+/// Display preferences in a dedicated, caller-selected save location.
 #[derive(Debug)]
 pub struct DisplayStore {
     store: SaveStore,
@@ -95,13 +95,13 @@ impl DisplayStore {
             .transpose()
     }
 
-    /// Pin an existing dedicated settings directory.
+    /// Open a dedicated location as described by [`SaveStore::open`].
     ///
     /// # Errors
-    /// Rejects missing, linked, non-directory or writable-by-others paths.
-    pub fn open(directory: &OsStr) -> Result<Self, PreferenceError> {
+    /// Rejects unavailable or unsafe storage locations.
+    pub fn open(location: &OsStr) -> Result<Self, PreferenceError> {
         Ok(Self {
-            store: SaveStore::open(directory, MAX_BYTES)?,
+            store: SaveStore::open(location, MAX_BYTES)?,
         })
     }
 
@@ -109,9 +109,9 @@ impl DisplayStore {
     ///
     /// # Errors
     /// Rejects unsafe storage, malformed existing preferences or failures
-    /// before publication. The receipt reports directory sync status.
-    /// The caller must dedicate the directory to preferences; this check
-    /// is not a compare-and-swap against other same-user writers.
+    /// before publication. The receipt reports crash durability separately.
+    /// The caller must dedicate the location to preferences; this check
+    /// is not a compare-and-swap against other writers.
     pub fn store(
         &self,
         settings: DisplaySettings,
@@ -123,7 +123,7 @@ impl DisplayStore {
     }
 }
 
-/// Master audio volume in the same dedicated preferences directory.
+/// Master audio volume in the same dedicated preferences location.
 #[derive(Debug)]
 pub struct VolumeStore {
     store: SaveStore,
@@ -139,12 +139,12 @@ impl VolumeStore {
             .transpose()
     }
 
-    /// Pin an existing dedicated settings directory.
+    /// Open a dedicated location as described by [`SaveStore::open`].
     /// # Errors
-    /// Rejects missing, linked, non-directory or writable-by-others paths.
-    pub fn open(directory: &OsStr) -> Result<Self, PreferenceError> {
+    /// Rejects unavailable or unsafe storage locations.
+    pub fn open(location: &OsStr) -> Result<Self, PreferenceError> {
         Ok(Self {
-            store: SaveStore::open(directory, MAX_BYTES)?,
+            store: SaveStore::open(location, MAX_BYTES)?,
         })
     }
 
@@ -161,7 +161,7 @@ impl VolumeStore {
     }
 }
 
-/// Input profile preferences in a dedicated settings directory.
+/// Input profile preferences in a dedicated settings location.
 ///
 /// The caller validates the profile's title-specific bindings before use.
 #[derive(Debug)]
@@ -185,18 +185,18 @@ impl ControlStore {
             .transpose()
     }
 
-    /// Pin an existing settings directory with a caller-selected byte bound.
+    /// Open a settings location with a caller-selected byte bound.
     ///
     /// # Errors
-    /// Rejects unsafe directories and an overflowing payload bound.
+    /// Rejects unsafe locations and an overflowing payload bound.
     pub fn open(
-        directory: &OsStr,
+        location: &OsStr,
         maximum: NonZeroU64,
     ) -> Result<Self, PreferenceError> {
         let bound = control_payload_limit(maximum)?;
         Ok(Self {
             maximum,
-            store: SaveStore::open(directory, bound)?,
+            store: SaveStore::open(location, bound)?,
         })
     }
 
