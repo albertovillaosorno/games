@@ -26,13 +26,6 @@ Protect the host from malformed or malicious user-supplied data.
 
 [TODO - Host and asset safety](docs/todo/open/contracts/security.mdc)
 
-### TODO - Performance regression contracts
-
-Measure useful throughput without degrading fidelity.
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - Performance regression contracts](docs/todo/open/contracts/performance.mdc)
-
 ### TODO - Portable capability IR and platform isolation
 
 Eliminate existing platform coupling through one platform crate: public

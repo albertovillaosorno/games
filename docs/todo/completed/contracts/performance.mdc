@@ -1,6 +1,6 @@
 ---
 id: "performance"
-status: "open"
+status: "completed"
 lane: "1"
 priority: "p1"
 area: "contracts"
@@ -24,7 +24,7 @@ Measure useful throughput without degrading fidelity.
 
 ## Evidence
 
-Partial evidence, 2026-11-24: fresh validation passed in run
+Initial evidence, 2026-11-24: fresh validation passed in run
 1795575501611655948-2483905 (72 tests).
 
 `games::performance::PerformanceCollector` aggregates frame durations, FPS,
@@ -579,3 +579,16 @@ submission. Combined native rendering and dummy-audio validation passed
 in run 1795652074702689158-1538152 with 1,501 aggregate test executions
 and all six portable core target checks. These are measurement integrity
 and virtual-device checks, not physical display or input latency evidence.
+
+Acceptance review, 2026-11-25: the reusable performance contract is
+satisfied for the implemented native workload. The frame collector
+reports bounded work and submission cadence separately; input age
+measures local and remote host-side intervals. Repeated comparable
+native trials record memory, startup and executable size, and exercise
+GPU submission and explicit cache and processing budgets. The latest
+validated measurement-integrity changes are in 78c8ee9. Preserve these
+regressions for subsequent titles. Physical input-to-photon latency,
+GPU completion, physical playback latency and target-specific hardware
+benchmarks are not established and must be verified where applicable
+in each title and platform acceptance. Closing this shared measurement
+contract does not complete a title or certify its performance.
