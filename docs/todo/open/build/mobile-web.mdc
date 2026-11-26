@@ -284,3 +284,29 @@ with all eight listeners removed and no dispatched events. All three
 acceptance indicators were green. The source is not yet connected
 to a browser game window; physical keyboard, mouse, touch, gamepad,
 visibility lifecycle and gameplay acceptance remain open.
+
+A further isolated negative control on the committed keyboard module
+rejected the third listener registration. Each invocation failed
+before dispatching events and removed the two already installed
+listeners. The subsequent unmodified run passed. The injected error
+checks partial subscription cleanup, not a naturally failing browser.
+
+Read-only browser capability probes on 2026-11-26 inform subsequent
+adapter work. Firefox 160.0 created Canvas2D and WebGL2 contexts and
+returned the expected pixel samples, including a WebGL2 context
+requested with failIfMajorPerformanceCaveat. The renderer identified
+llvmpipe rather than physical GPU acceleration. A separate DOM probe
+observed two synthetic touch identities, inclusive edge and centre
+positions, motion beyond the canvas rectangle, cancellation and
+release. The canvas had a 180 by 90 CSS rectangle and 360 by 180
+backing pixels; synthetic pointer capture threw NotFoundError.
+This is host API availability only, not Rust rendering or touch
+admission, trusted capture, high-DPI hardware or gameplay evidence.
+
+An isolated OfflineAudioContext probe rendered 128 frames of synthetic
+stereo samples at 48 kHz and independently compared both output
+channels to the inputs. The samples matched exactly. No audible
+output or realtime playback was attempted. The synchronous PCM queue
+contract still needs a browser adapter that respects asynchronous
+activation, backpressure, suspension and teardown. No audio
+distribution or physical playback acceptance is inferred.
