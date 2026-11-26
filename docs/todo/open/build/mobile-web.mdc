@@ -713,3 +713,22 @@ listener registration/removal and no remaining surface. The first
 observer pass underestimated dispatch counts but the Rust diagnostic
 returned success in all three non-fault paths. These are synthetic DOM
 input checks, not physical mouse or touchscreen acceptance.
+
+Two asset-backed Firefox title sessions exercised the real touch panel
+using synthesized DOM contacts derived from the observed WebGL blit
+rectangles. Both selected the same 743 files through the trusted native
+chooser, admitted 740 reads totalling 43,211,303 bytes, and delivered
+376 callbacks with 346 blits and 75 touch transitions. Each verified
+directional movement and release in Aspect Fit, Integer, Fill, Stretch
+and Adaptive modes, switching modes via the touch-operated settings.
+Each verified the uncropped 320-by-80 Fill control region and an
+Adaptive logical expansion to 486-by-304, followed by resize to
+390-by-304. Resize while moving neutralized the old contact; subsequent
+motion on that contact did not move the actor, whereas a new contact
+did. The first run used DPR 1 and the second DPR 2; an 800-by-500 CSS
+canvas produced 800-by-500 and 1600-by-1000 backing surfaces, respectively.
+Both completed once with no pending frame, picker or canvas.
+The observer's preliminary runs encountered chooser coordinate and
+resize sequencing issues before the successful runs. This is synthetic
+touch input with Xvfb software rendering and dummy audio, not physical
+touchscreen, display or audio acceptance.
