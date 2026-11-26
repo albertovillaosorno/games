@@ -466,3 +466,44 @@ and named Dummy Output. Fresh dummy-driver validation
 1795676362701607577-2577570 also passed. This verifies the running SDL
 software queue rather than merely queue admission; it cannot establish
 sound reaching speakers, headphones or the owner's current audio sink.
+
+Four remapped touch panels were also exercised together using the current
+3,590,320-byte release. The private profile enabled every seat, swapped
+seat two's horizontal slots and seat four's primary/secondary slots.
+Eight hidden Fill runs with dummy audio completed all synthetic contacts,
+444 camera columns, 48 axis directions, two cooperative pose families,
+six reinforcement meters and 600 movement plus 20 combat submissions
+per run without missed host-work budgets. Despite different virtual
+screen settings, the hidden drawable was always 1280x912, with a
+536x536 protected panel; these repetitions are not a geometry matrix.
+
+Three separate visible Xvfb/X11 runs with the same profile entered all
+four seats through synthetic keyboard input and exited normally. The
+windowed run resized from 960x912 to 900x600 and 520x760. Fullscreen
+runs reported 1920x1080 and 720x1280 drawables. All five captured
+surfaces retained the expected background and button pixels in every
+panel row. Across 4,042 live submissions, three exceeded the 16.667 ms
+host-work budget (maximum 41.833 ms). Physical touch remains unverified.
+
+A title-level regression routes all 32 simultaneously held contacts
+through the five presentation modes at eight landscape and portrait
+surface sizes. It composes the actual shared display layout, its
+forward and inverse projection, centered panel mapping and the remapped
+router. Every expected per-station press and reverse-order release must
+survive the composed mapping, including protected Fill and adaptive
+width expansion.
+
+The same rebuilt binary and four-seat profile also passed hidden Fill
+smoke in the installed Freedesktop Platform 25.08 x86-64 userspace,
+with its SDL2 and Mesa extension, no network, read-only binary and
+asset mounts, and isolated private settings. All 600 movement and
+20 combat submissions met the host-work budget. This is a second
+local userspace, not physical multi-host compatibility.
+
+Four further host smokes using aspect-fit, integer, stretch and adaptive
+passed with the same four-seat profile, each with zero budget misses
+among 600 movement and 20 combat submissions. Adaptive extended the
+logical frame from 320x544 to 512x544, verifying 192 added columns.
+The same alternate SDL2 userspace passed a separate visible
+Escape/Delete modal-close reproduction and a normal menu exit without
+creating a control save, repeating the earlier Fedora race fix check.

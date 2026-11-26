@@ -429,6 +429,7 @@ pub(super) fn to_scene(point: TouchPoint, width: u32) -> Option<TouchPoint> {
 mod tests {
     use games::input::touch::{ContactId, ContactPhase};
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
+    use games::presentation::PresentationLayout;
     use games_platform::ir::frame::RenderError;
 
     use super::super::DEFAULT_PROFILES;
@@ -527,6 +528,99 @@ mod tests {
         let mut router = InputRouter::new(mapping);
         for width in [320u32, 362, 512] {
             verify_panel_contacts(&mut router, &profiles, width)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn four_panels_route_all_contacts_across_display_modes()
+    -> Result<(), RenderError> {
+        use games::presentation::{Dimensions, PresentationMode};
+
+        use super::super::{configured_profiles, dimension};
+
+        let profiles = configured_profiles(concat!(
+            "version=1\ntouch-players=1,2,3,4\n",
+            "touch 2 left=right\ntouch 2 right=left\n",
+            "touch 4 primary=secondary\ntouch 4 secondary=primary\n",
+        ))
+        .map_err(RenderError::Backend)?;
+        let base = Dimensions::new(
+            dimension(u32::from(super::WIDTH))?,
+            dimension(u32::from(super::height(&profiles)?))?,
+        );
+        let bottom = dimension(u32::from(
+            super::height(&profiles)?.saturating_sub(super::PANEL_TOP),
+        ))?;
+        for mode in PresentationMode::ALL {
+            for (width, height) in [
+                (480, 360),
+                (520, 760),
+                (900, 600),
+                (960, 912),
+                (1280, 912),
+                (1920, 1080),
+                (720, 1280),
+                (2560, 720),
+            ] {
+                let surface =
+                    Dimensions::new(dimension(width)?, dimension(height)?);
+                let design =
+                    mode.design_for_surface(surface, base, dimension(512)?);
+                let layout = mode
+                    .layout_with_protected_bottom(surface, design, Some(bottom))
+                    .ok_or(RenderError::InvalidDimensions)?;
+                verify_all_projected_contacts(&profiles, layout)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_all_projected_contacts(
+        profiles: &super::Profiles,
+        layout: PresentationLayout,
+    ) -> Result<(), RenderError> {
+        let mut mapping = InputMapping::new();
+        install(&mut mapping, profiles, PanelRole::Cabinet)?;
+        let mut router = InputRouter::new(mapping);
+        let mut held = Vec::new();
+        let width = layout.design.width.get();
+        for (player, button) in Player::ALL
+            .into_iter()
+            .flat_map(|player| BUTTONS.map(|button| (player, button)))
+        {
+            let action = Action {
+                control: button.control,
+                player,
+            };
+            let point =
+                to_scene(center(player, button.control, profiles)?, width)
+                    .and_then(|point| point.on_presentation(layout))
+                    .and_then(|point| point.in_presentation(layout))
+                    .and_then(|point| to_panel(point, width))
+                    .ok_or(RenderError::InvalidDimensions)?;
+            let id = ContactId {
+                device: 1,
+                finger: i64::try_from(held.len())
+                    .map_err(|_error| RenderError::TooLarge)?,
+            };
+            if router.handle(InputEvent::Contact {
+                id,
+                phase: ContactPhase::Down(point),
+            }) != [LogicalAction { action, down: true }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
+            held.push((id, action));
+        }
+        for (id, action) in held.into_iter().rev() {
+            if router.handle(InputEvent::Contact {
+                id,
+                phase: ContactPhase::Up,
+            }) != [LogicalAction { action, down: false }]
+            {
+                return Err(RenderError::InvalidSprite);
+            }
         }
         Ok(())
     }
