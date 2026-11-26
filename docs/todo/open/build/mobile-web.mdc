@@ -91,3 +91,34 @@ during browser startup because the sandbox did not permit access to
 /dev/null. No browser execution or graphics, touch or storage acceptance
 is inferred. Android linking, device execution and distribution remain
 open; the title still cannot be packaged for Android or browsers.
+
+Follow-up headless Firefox 160.0 execution succeeded after supplying an
+isolated device filesystem and process filesystem to the sandbox. The
+sandbox had no network access and used a fresh local profile. The HTML
+embedded exactly the optimized 75,597-byte smoke module; SHA-256 of
+the decoded bytes matched the linked module. The successful main return
+produced a green screenshot (240 by 160; centre pixel 0,255,0).
+A negative-control page calling a nonexistent export produced a red
+screenshot (centre pixel 255,0,0). This proves the same asset-free
+simulation smoke executed in a browser engine, not that the title has
+browser rendering, audio, input, persistent storage or packaging support.
+
+The existing featureless title executable now also exercises the shared
+engine's RGBA row bounds, uncropped bottom-panel presentation, landscape
+and portrait touch projection, bounded contact admission and cancellation,
+and portable display-preference save encoding. It rejects an out-of-row
+and overflowing pixel request, contacts in the panel bars, duplicate or
+excess contacts, stale motion after cancellation and corrupt or oversized
+save payloads. It reuses the native engine contracts without a browser
+adapter, original assets or a new runtime dependency.
+
+Fresh validation 1795675823751135383-2460781 passed 1,859 aggregate
+test executions, all six portable library targets and the extended
+WebAssembly executable. The resulting optimized module was 168,140
+bytes. Node.js execution and an isolated Firefox 160.0 headless
+execution returned success. The browser smoke and negative control
+embedded the exact rebuilt module, verified by independent SHA-256
+comparison; their 240 by 160 screenshots had green and red centre
+pixels, respectively. This is execution of portable engine behavior,
+not browser API, physical touch, persistent storage, graphics
+presentation or distribution acceptance.
