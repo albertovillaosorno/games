@@ -869,3 +869,20 @@ upstream SDL2 2x Wayland touch-only regression with mouse emulation
 still enabled passed with seven applied local samples and 11,540
 submissions without a work-budget miss. All evidence uses virtual
 inputs and does not establish physical-device or audible acceptance.
+
+At 267b77e, the second byte-identical package publication also passed
+live audio checks with upstream SDL2 2.32.10's native PipeWire driver,
+rather than the SDL2 compatibility library or PulseAudio driver. A
+private PipeWire server, policy-only WirePlumber, private PulseAudio
+monitor socket and virtual null sink isolated all test audio. The
+backend enumerated GamesValidation; the first two launches requested
+the default device, and the restored-mute launch selected that name
+explicitly. An attack on the same scene produced full-volume stereo
+channel peaks of 5386 and 2414, and restored 50% peaks of 2693 and
+1207. RMS levels fell by 6.023 and 6.027 dB. Restored mute had zero
+minima and maxima in both channels across 102,400 observed samples.
+Only aggregate PCM statistics were retained. The private half-volume
+and mute preference bytes remained unchanged. All three launches
+exited through the menu, submitting 4,663, 4,696 and 3,992 frames
+respectively without a host-work budget miss (maximum 9.736 ms).
+No physical sink was monitored; audible output remains unverified.

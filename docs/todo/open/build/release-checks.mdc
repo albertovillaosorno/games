@@ -441,3 +441,28 @@ both cases. Independent package copies remained byte-identical after
 all six startup observations. The WebKitGTK portal and accessibility
 warnings did not prevent these checks, but actual directory selection
 in WebKitGTK and physical-device acceptance remain open.
+
+At 267b77e, a second native package publication after the synthetic
+mouse-contact fix matched the first byte-for-byte. Both contained 109
+files and 4,151,033 bytes (108 mode-0600 files and one mode-0700
+executable). Independent SHA-256 readback matched all receipt entries,
+and the project licence and notices matched the workspace. Receipt
+SHA-256 was
+`2cf6a54238488ae55536f9798a0454cb7291a43922f15f8f3327e1a00f098e05`;
+the 3,625,360-byte executable digest was
+`96757101f12ea48bc31bc891bbec82f337318f50dda395de508f83041f88324f`.
+The direct dependencies remained SDL2, libgcc_s and libc; the highest
+referenced glibc symbol version was 2.34, not a portability guarantee.
+
+The exact second publication passed the configured Fill/touch smoke
+in the locally installed Freedesktop Platform 25.08 runtime with its
+Mesa extension. The private process and filesystem namespace had no
+network, read-only executable and asset mounts, and separate settings.
+The smoke verified 444 street camera columns, 48 synthetic controller
+axis directions, two cooperative pose families, six reinforcement
+meters and the protected 960x240 panel in the 1280x912 drawable.
+All 620 movement and combat submissions met the host-work budget
+(maximum 4.971 ms). A package check from an unrelated directory and
+independent comparison afterward confirmed unchanged bytes. This is
+host-local repeated publication and alternate userspace execution,
+not an independently built or tested release on another host.
