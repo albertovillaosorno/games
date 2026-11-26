@@ -824,3 +824,23 @@ response both displayed "Preview unavailable", with no picker or canvas.
 The intact package displayed "Preview ready", with the directory picker
 present and no canvas. The receipt hash was unchanged. These are
 asset-free startup checks, not additional gameplay or device acceptance.
+
+Two isolated asset-backed Firefox runs used the exact packaged JavaScript
+and Wasm from ddfab70 and the trusted canonical directory chooser. Both
+admitted the same 740 reads. The first verified that Enter joined only
+station one at logical x=110; explicit start keys then joined the
+remaining three stations. The four rendered actor centres began at
+x=88, 110, 132 and 154, moved together to 102, 124, 146 and 168, and
+settled after release at 104, 126, 148 and 170 across two observations.
+The second moved the four actors left from the same starting positions
+to 62, 84, 106 and 128. Browser-generated trusted canvas blur and focus
+events occurred consecutively without key releases. The actors settled
+at 58, 80, 102 and 124 across two observations, then accepted fresh
+rightward presses and reached 82, 104, 126 and 148. Both runs exited
+through the menu exactly once, with 64 and 69 callbacks respectively,
+no pending callback, removed picker and canvas, and a closed audio
+context. The preliminary observer filtered only one spawn height; a
+later focus run was confounded by nearby enemy movement. The corrected
+checks isolate all four initial actor positions and move away from the
+enemy for the focus test. Synthetic keys, Xvfb software rendering and
+dummy output do not establish physical-device operation.
