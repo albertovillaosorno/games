@@ -430,3 +430,14 @@ The published 1,041,496-byte module digest was
 The package and its isolated copies verified unchanged after
 asset-backed keyboard, mouse and simulated controller gameplay.
 Independent-host and physical-device acceptance remain open.
+
+The exact c1cfce6 browser package was independently served over
+isolated loopback to Firefox and WebKitGTK on 2026-11-26. The original
+index page reported readiness, presented the asset picker and did not
+create a canvas before selection. Two negative controls returned HTTP
+404 for the JavaScript and Wasm resources respectively. Both browsers
+reported unavailability and presented neither picker nor canvas in
+both cases. Independent package copies remained byte-identical after
+all six startup observations. The WebKitGTK portal and accessibility
+warnings did not prevent these checks, but actual directory selection
+in WebKitGTK and physical-device acceptance remain open.
