@@ -18,12 +18,6 @@ Completed. See `docs/todo/completed/contracts/`.
 
 ## P2 - Asset importer
 
-### TODO - Shared dependency selection
-
-Evaluate reusable Rust libraries before creating new mechanisms.
-
-[TODO - Shared dependency selection](docs/todo/open/assets/dependency-audit.mdc)
-
 ### TODO - Canonical asset contract
 
 Define the shared asset format and manifest consumed by runtimes.

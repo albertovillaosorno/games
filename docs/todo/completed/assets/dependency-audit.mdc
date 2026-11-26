@@ -1,0 +1,125 @@
+---
+id: "dependency-audit"
+status: "completed"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Shared dependency selection"
+depends_on:
+  - "contract-gate"
+validation:
+  - "cargo validate"
+---
+# TODO - Shared dependency selection
+
+## Objective
+
+Evaluate reusable Rust libraries before creating new mechanisms.
+
+## Acceptance
+
+- Evaluate storytold/craft-libs and other necessary ecosystem crates.
+- Verify licensing, provenance, portability, performance and maintenance.
+- Centralise adopted versions and update third-party notices.
+
+## Evidence
+
+Inspected Craft Libraries snapshot
+`a9949872bd91ecf6bcec4e86339e3f50ad007fb9`, its NOTICE and ZIP interfaces.
+The upstream offers MIT or Apache-2.0. Its archive convenience layer
+loads decoded entries into memory and does not expose Unix file modes.
+The newer upstream ZIP backend provides header
+consistency checks. The indexed archive API detects
+duplicates, overlap and mismatched headers. The iterable reader is exposed
+through an explicitly unstable API; the workspace now pins ZIP exactly to
+9.8.2 to use it for incremental metadata and raw entry-count admission.
+The indexed archive retains the global consistency checks. ZIP 9.8.2
+is adopted with only stored and pure-Rust Deflate support. No Craft source
+was incorporated. Native staging uses Nix
+instead of Rustix and tempfile to avoid duplicate dependency versions.
+The asset contract reuses the existing SHA-2 and Serde ecosystem.
+Serde 1.0.228 and the wasm-bindgen 0.2.127 family are retained to use one
+compatible syn major version with the ZIP backend and TLS dependencies.
+The pins must be revisited as upstream dependencies converge.
+The later current-scope review below supersedes that initial audit limit.
+
+Native graphics evaluation found no suitable Craft Libraries window or
+GPU presentation backend in the inspected snapshot. Rust-SDL2 0.39.0
+(MIT; its sys crate MIT and Zlib) provides a safe interface to accelerated
+2D textures, scaling and native events. Adopted with pkg-config dynamic
+linking to the installed Linux SDL2 2.32.74 interface; no bundled C source
+or optional image, audio or font libraries. The lockfile adds no duplicate
+dependency versions. A software read-back and an opt-in accelerated
+window smoke test passed in run 1795582311633882091-3468901.
+The interactive feature of the unified platform crate keeps this native
+dependency out of independent headless engine and importer graphs. Native
+Android, browser and distribution acceptance remain open; later performance
+evidence is recorded below.
+
+The inspected Craft Libraries audio crate exposes WAV PCM extraction,
+but that operation intentionally accepts truncated payloads and its
+decode-native feature enables unrelated codecs. The reference capture
+reader needs exact RIFF and data extents and borrowed signed PCM16 bytes.
+A narrow allocation-free canonical-header reader therefore admits only
+the observed 44-byte RIFF PCM16 layout, not general WAV files. No new
+dependency or codec implementation was added.
+
+Current-scope dependency review, 2026-11-25: `cargo download craft-libs`
+resolved the same upstream revision, and `cargo download dependencies`
+materialised all 107 exact registry package versions in the locked
+all-feature metadata. Each downloaded registry package includes its VCS
+source receipt and declares a repository and licence. The 104 distinct
+package names and their licence expressions exactly match
+THIRD_PARTY_NOTICES.md. This inventory covers declarations, not legal
+clearance. The native package command separately follows the selected
+normal and build dependency graph, includes required licence texts and
+rejects unreviewed licence expressions. Native and release-checks own
+system library portability and final distribution acceptance.
+
+Further Craft review: craft-window supplies desktop decorations and
+window lists, craft-ui/menu target egui controls, and craft-platform owns
+application lifecycle services rather than a game texture renderer or
+controller event pump. Craft-keymap models desktop command chords,
+whereas the existing game input router preserves independently held
+physical sources and timed controller, touch and keyboard transitions.
+Craft-atomic resolves destination symlinks, while the shared game store
+requires descriptor-relative, no-follow admission and an explicit
+post-rename durability outcome. Craft-settings builds on that different
+storage policy. None replaces an existing game mechanism without losing
+required semantics or adding an unrelated UI/backend dependency.
+
+Direct dependency versions, optional features and native target tables
+remain centralised in the root and platform manifests respectively. The
+registry sources include recent maintenance evidence: ZIP 9.8.2
+(2026-11-23) fixes end-record validation; Nix 0.31.3 (2026-05-11) adds
+and corrects platform support; SHA-2 0.11.1 (2026-10-12) corrects ARM64
+round-constant loading; zeroize 1.9.2 (2026-11-17) optimises clearing and
+updates its fallback barrier. Rust-SDL2 0.39.0's changelog documents
+soundness and native compatibility fixes. Rustls uses the explicit Ring
+backend, Rcgen is test-only, and SHA-2, Serde, JSON, TOML and proc-macro2
+serve the existing integrity, manifest and validation contracts. No new
+dependency, code copy or source override is proposed.
+
+The current validator checks six portable core targets, independent
+all-feature graphs, native dependency placement and source-decoder
+exclusion from runtimes. The completed performance record demonstrates
+actual accelerated SDL presentation on the RTX 4060, authenticated
+loopback and bounded native audio; it also records measured graphics
+import times, including ZIP decoding, and exact output identities.
+These are integrated workload observations, not isolated comparative
+library benchmarks or universal performance guarantees. Full native
+backend, physical-device and distribution acceptance stay in their
+existing records. The exact ZIP pin and current transitive version
+constraints remain upgrade considerations rather than completed audits
+of future upstream revisions.
+
+Acceptance recheck, 2026-11-25: both download commands succeeded again.
+The current Cargo.lock contains 107 registry package entries; all 107
+VCS receipts exist in the local source inventory. Locked all-feature
+metadata has no missing repository or licence declaration and its 104
+unique name/licence pairs exactly match the tracked notice table.
+The upstream revision is unchanged. The P1 acceptance gate and signed
+hook passed fresh validation 1795664853443815169-476326 and
+1795664875242096638-481939 with all six portable-core targets. The
+current-scope selection is accepted; final distribution, future
+versions and workload-specific native measurements remain separate work.
