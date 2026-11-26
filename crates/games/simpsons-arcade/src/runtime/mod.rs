@@ -49,7 +49,9 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::time::Duration;
 
 use games::audio::MasterVolume;
-use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
+use games::input::physical::{
+    ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
+};
 use games::input::profile::editor::{
     ControlEditor, EditorEffect, EditorNavigation,
 };
@@ -966,6 +968,13 @@ struct Interactive<'preferences> {
 }
 
 impl<'preferences> Interactive<'preferences> {
+    const fn acknowledge_edit(&mut self, candidate: Option<&Profiles>) {
+        self.editor.acknowledge(candidate.is_some());
+        if let Some(profiles) = candidate {
+            self.next_profiles = *profiles;
+        }
+    }
+
     fn advance_measurement(
         &mut self,
         next_tick: u64,
@@ -976,6 +985,23 @@ impl<'preferences> Interactive<'preferences> {
                 meter.finish()?;
             }
         }
+        Ok(())
+    }
+
+    fn edit_axis(
+        &mut self,
+        axis: ControllerAxis,
+        profile: AxisProfile,
+    ) -> Result<(), RenderError> {
+        let candidate = self
+            .control_preferences
+            .persist_axis_edit(
+                &self.next_profiles,
+                (self.editor.station(), axis),
+                profile,
+            )
+            .map_err(failure)?;
+        self.acknowledge_edit(candidate.as_ref());
         Ok(())
     }
 
@@ -991,10 +1017,7 @@ impl<'preferences> Interactive<'preferences> {
                 binding,
             )
             .map_err(failure)?;
-        self.editor.acknowledge(candidate.is_some());
-        if let Some(profiles) = candidate {
-            self.next_profiles = profiles;
-        }
+        self.acknowledge_edit(candidate.as_ref());
         Ok(())
     }
 
@@ -1014,6 +1037,9 @@ impl<'preferences> Interactive<'preferences> {
         };
         match effect {
             EditorEffect::Propose(binding) => self.edit_binding(binding)?,
+            EditorEffect::ProposeAxis { axis, profile } => {
+                self.edit_axis(axis, profile)?;
+            },
             EditorEffect::Close => self.controls.close_editor(&mut releases)?,
             EditorEffect::None => {},
         }

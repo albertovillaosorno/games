@@ -293,6 +293,29 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         Ok(candidate)
     }
 
+    /// Replace one physical axis while preserving every other binding.
+    ///
+    /// # Errors
+    /// Rejects invalid stations, action slots and hysteresis thresholds,
+    /// including a negative direction on either trigger.
+    pub fn edited_axis(
+        &self,
+        station: usize,
+        axis: ControllerAxis,
+        profile: AxisProfile,
+    ) -> Result<Self, String> {
+        self.validate()?;
+        let mut candidate = *self;
+        let target = candidate
+            .axes
+            .get_mut(station)
+            .and_then(|row| row.get_mut(usize::from(axis.code())))
+            .ok_or_else(|| String::from("invalid axis edit"))?;
+        *target = profile;
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
     /// Encode all bindings using the version-one persisted profile format.
     ///
     /// The existing decoder must recover the identical profile using the

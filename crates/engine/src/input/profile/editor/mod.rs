@@ -32,13 +32,22 @@
 
 //! Portable next-launch digital binding editor.
 
-use super::{DigitalBinding, DigitalProfiles};
+mod axis;
+
+use axis::AxisEditor;
+pub use axis::{AxisEditorView, AxisField};
+
+use super::{AxisProfile, DigitalBinding, DigitalProfiles};
 use crate::input::InputEvent;
-use crate::input::physical::{ControllerButton, KeyboardKey, PointerButton};
+use crate::input::physical::{
+    ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
+};
 
 /// Editable digital source, in menu cycle order.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BindingFamily {
+    /// Signed controller axis directions and thresholds.
+    Axis,
     /// Standard controller button.
     Controller,
     /// Physical keyboard key.
@@ -56,6 +65,7 @@ impl BindingFamily {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Keyboard => "KEYBOARD",
+            Self::Axis => "CONTROLLER AXIS",
             Self::Mouse => "MOUSE",
             Self::Controller => "CONTROLLER",
             Self::Touch => "TOUCH SLOT",
@@ -67,7 +77,8 @@ impl BindingFamily {
             Self::Keyboard => Self::Mouse,
             Self::Mouse => Self::Controller,
             Self::Controller => Self::Touch,
-            Self::Touch => Self::Keyboard,
+            Self::Touch => Self::Axis,
+            Self::Axis => Self::Keyboard,
         }
     }
 }
@@ -97,6 +108,13 @@ pub enum EditorEffect {
     None,
     /// Validate and persist this selected binding.
     Propose(DigitalBinding),
+    /// Validate and persist the selected complete axis profile.
+    ProposeAxis {
+        /// Physical axis to replace.
+        axis: ControllerAxis,
+        /// Complete staged profile.
+        profile: AxisProfile,
+    },
 }
 
 /// Menu command, independent of physical binding capture.
@@ -166,6 +184,7 @@ impl EditorNavigation {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ControlEditor {
     action: usize,
+    axes: AxisEditor,
     family: BindingFamily,
     station: usize,
     status: EditorStatus,
@@ -176,6 +195,7 @@ impl ControlEditor {
     /// Record a host-confirmed outcome, never implying successful storage
     /// before the complete profile is admitted and persisted.
     pub const fn acknowledge(&mut self, saved: bool) {
+        self.axes.cancel();
         self.status = if saved {
             EditorStatus::Saved
         } else {
@@ -189,6 +209,36 @@ impl ControlEditor {
         self.action
     }
 
+    /// Current or staged axis values for the axis-specific editor mode.
+    #[must_use]
+    pub fn axis_view<const PLAYERS: usize, const ACTIONS: usize>(
+        self,
+        profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
+    ) -> Option<AxisEditorView> {
+        if self.family != BindingFamily::Axis {
+            return None;
+        }
+        self.axes.view(profiles.axes.get(self.station)?)
+    }
+
+    fn begin_capture<const PLAYERS: usize, const ACTIONS: usize>(
+        &mut self,
+        profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
+    ) {
+        if self.family == BindingFamily::Axis {
+            if let Some(axes) = profiles.axes.get(self.station)
+                && self.axes.begin(axes)
+            {
+                self.status = EditorStatus::Capturing;
+            }
+            return;
+        }
+        if let Some(DigitalBinding::TouchSlot(slot)) = self.current(profiles) {
+            self.touch_slot = slot;
+        }
+        self.status = EditorStatus::Capturing;
+    }
+
     fn capture(&mut self, event: InputEvent, actions: usize) -> EditorEffect {
         let key = pressed_key(event);
         let gamepad = pressed_button(event);
@@ -199,6 +249,7 @@ impl ControlEditor {
             || (self.family != BindingFamily::Controller
                 && navigation == Some(EditorNavigation::Cancel))
         {
+            self.axes.cancel();
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
         }
@@ -221,7 +272,7 @@ impl ControlEditor {
                 }
                 None
             },
-            (BindingFamily::Touch, _) => {
+            (BindingFamily::Touch | BindingFamily::Axis, _) => {
                 return navigation.map_or(EditorEffect::None, |command| {
                     self.capture_navigation(command, actions)
                 });
@@ -240,8 +291,16 @@ impl ControlEditor {
         actions: usize,
     ) -> EditorEffect {
         if command == EditorNavigation::Cancel {
+            self.axes.cancel();
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
+        }
+        if self.family == BindingFamily::Axis {
+            let effect = self.axes.capture(command, actions);
+            if matches!(effect, EditorEffect::ProposeAxis { .. }) {
+                self.status = EditorStatus::Ready;
+            }
+            return effect;
         }
         if self.family != BindingFamily::Touch {
             return EditorEffect::None;
@@ -275,6 +334,7 @@ impl ControlEditor {
         let station = self.station;
         let action = self.action;
         Some(match self.family {
+            BindingFamily::Axis => return None,
             BindingFamily::Keyboard => {
                 DigitalBinding::Key(*profiles.keys.get(station)?.get(action)?)
             },
@@ -304,17 +364,21 @@ impl ControlEditor {
     /// buttons; the east face, back or start button cancels.
     /// Confirm a captured controller button before saving it.
     /// During touch capture, arrows select a physical slot and Enter applies
-    /// it. Other families capture the next pressed physical binding.
+    /// it. Axis mode stages both directions and thresholds; other families
+    /// capture the next pressed physical binding.
     pub fn input<const PLAYERS: usize, const ACTIONS: usize>(
         &mut self,
         event: InputEvent,
         profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
     ) -> EditorEffect {
-        if self.current(profiles).is_none() {
+        if self.current(profiles).is_none()
+            && self.axis_view(profiles).is_none()
+        {
             return EditorEffect::None;
         }
         if matches!(event, InputEvent::FocusLost | InputEvent::Detached { .. })
         {
+            self.axes.cancel();
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
         }
@@ -334,7 +398,9 @@ impl ControlEditor {
         command: EditorNavigation,
         profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
     ) -> EditorEffect {
-        if self.current(profiles).is_none() {
+        if self.current(profiles).is_none()
+            && self.axis_view(profiles).is_none()
+        {
             return EditorEffect::None;
         }
         match self.status {
@@ -356,27 +422,20 @@ impl ControlEditor {
             EditorNavigation::Right => {
                 self.station = cycle(self.station, PLAYERS, true);
             },
-            EditorNavigation::Up => {
-                self.action = cycle(self.action, ACTIONS, false);
-            },
-            EditorNavigation::Down => {
-                self.action = cycle(self.action, ACTIONS, true);
-            },
+            EditorNavigation::Up => self.select_action(ACTIONS, false),
+            EditorNavigation::Down => self.select_action(ACTIONS, true),
             EditorNavigation::Family => self.family = self.family.next(),
             EditorNavigation::Confirm => {
-                if let Some(DigitalBinding::TouchSlot(slot)) =
-                    self.current(profiles)
-                {
-                    self.touch_slot = slot;
-                }
-                self.status = EditorStatus::Capturing;
+                self.begin_capture(profiles);
                 return EditorEffect::None;
             },
             EditorNavigation::Clear => {
                 let binding = match self.family {
                     BindingFamily::Keyboard => DigitalBinding::Key(None),
                     BindingFamily::Mouse => DigitalBinding::Mouse(None),
-                    BindingFamily::Controller | BindingFamily::Touch => {
+                    BindingFamily::Controller
+                    | BindingFamily::Touch
+                    | BindingFamily::Axis => {
                         return EditorEffect::None;
                     },
                 };
@@ -407,6 +466,14 @@ impl ControlEditor {
             | EditorNavigation::Left
             | EditorNavigation::Right
             | EditorNavigation::Up => EditorEffect::None,
+        }
+    }
+
+    fn select_action(&mut self, actions: usize, forward: bool) {
+        if self.family == BindingFamily::Axis {
+            self.axes.select(forward);
+        } else {
+            self.action = cycle(self.action, actions, forward);
         }
     }
 
@@ -467,7 +534,6 @@ fn cycle(index: usize, count: usize, forward: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::profile::AxisProfile;
 
     const PROFILE: DigitalProfiles<2, 2> = DigitalProfiles {
         axes: [[AxisProfile::UNBOUND; 6]; 2],
@@ -672,6 +738,66 @@ mod tests {
         assert_eq!(editor.status(), EditorStatus::Capturing);
         assert_eq!(editor.navigate(Cancel, &PROFILE), EditorEffect::None);
         assert_eq!(editor.status(), EditorStatus::Ready);
+    }
+
+    #[test]
+    fn axis_mode_stages_and_commits_both_directions_and_thresholds() {
+        use EditorNavigation::{Confirm, Down, Family, Right};
+        let mut editor = ControlEditor::default();
+        for command in [Family, Family, Family, Family] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        assert_eq!(editor.family(), BindingFamily::Axis);
+        assert_eq!(editor.navigate(Right, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.navigate(Down, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.navigate(Confirm, &PROFILE), EditorEffect::None);
+        stage_axis(&mut editor);
+    }
+
+    fn stage_axis(editor: &mut ControlEditor) {
+        use EditorNavigation::{Confirm, Down, Right};
+        for command in [Right, Down, Right, Right, Down, Right] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        let expected = AxisProfile {
+            negative: Some(0),
+            positive: Some(1),
+            press: 17_000,
+            ..AxisProfile::UNBOUND
+        };
+        assert_eq!(
+            editor.navigate(Confirm, &PROFILE),
+            EditorEffect::ProposeAxis {
+                axis: ControllerAxis::LeftY,
+                profile: expected,
+            }
+        );
+        assert_eq!(editor.station(), 1);
+        let candidate = PROFILE.edited_axis(1, ControllerAxis::LeftY, expected);
+        assert!(candidate.is_ok());
+        assert_eq!(
+            editor.axis_view(&PROFILE).map(|view| view.profile),
+            Some(AxisProfile::UNBOUND)
+        );
+    }
+
+    #[test]
+    fn axis_draft_is_discarded_on_focus_loss() {
+        use EditorNavigation::{Confirm, Family, Right};
+        let mut editor = ControlEditor::default();
+        for command in [Family, Family, Family, Family, Confirm, Right] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        assert_eq!(editor.status(), EditorStatus::Capturing);
+        assert_eq!(
+            editor.input(InputEvent::FocusLost, &PROFILE),
+            EditorEffect::None
+        );
+        assert_eq!(editor.status(), EditorStatus::Ready);
+        assert_eq!(
+            editor.axis_view(&PROFILE).map(|view| view.profile),
+            Some(AxisProfile::UNBOUND)
+        );
     }
 
     fn capture_touch(editor: &mut ControlEditor) {

@@ -36,7 +36,7 @@
 use std::num::NonZeroUsize;
 
 use games::input::profile::editor::{
-    BindingFamily, ControlEditor, EditorStatus,
+    AxisEditorView, AxisField, BindingFamily, ControlEditor, EditorStatus,
 };
 use games::input::profile::{DigitalBinding, DigitalProfiles, KeyNamer};
 
@@ -160,37 +160,11 @@ impl ControlEditorArt {
             actions,
             key_name,
         } = view;
-        let action = actions
-            .get(editor.action())
-            .ok_or(RenderError::InvalidSprite)?;
-        let binding =
-            editor.current(profiles).ok_or(RenderError::InvalidSprite)?;
-        let name = binding_name(binding, &actions, key_name)
-            .ok_or(RenderError::InvalidSprite)?;
-        let status = status_label(editor.status(), editor.family());
-        let lines = [
-            format!("PLAYER {}", editor.station().saturating_add(1)),
-            format!("ACTION: {action}"),
-            format!("SOURCE: {}", editor.family().label()),
-            format!("CURRENT: {name}"),
-            match editor.status() {
-                EditorStatus::Capturing
-                    if editor.family() == BindingFamily::Touch =>
-                {
-                    let slot = actions
-                        .get(editor.touch_slot())
-                        .ok_or(RenderError::InvalidSprite)?;
-                    format!("NEXT SLOT: {slot}")
-                },
-                EditorStatus::Reviewing(button) => {
-                    format!("NEXT: {} - A/ENTER SAVE", button.profile_name())
-                },
-                EditorStatus::Capturing
-                | EditorStatus::Ready
-                | EditorStatus::Rejected
-                | EditorStatus::Saved => status.to_owned(),
-            },
-        ];
+        let lines = if let Some(axis) = editor.axis_view(profiles) {
+            axis_lines(axis, &actions, editor)?
+        } else {
+            digital_lines(editor, profiles, &actions, key_name)?
+        };
         draws.push(self.panel.draw(0, origin.0, origin.1)?);
         for (index, line) in lines.iter().enumerate() {
             let top = i32::try_from(index)
@@ -251,6 +225,50 @@ impl ControlEditorArt {
     }
 }
 
+fn axis_lines(
+    view: AxisEditorView,
+    actions: &[&str],
+    editor: ControlEditor,
+) -> Result<[String; DYNAMIC_LINES], RenderError> {
+    let AxisEditorView { axis, field, profile } = view;
+    let name = |slot: Option<usize>| {
+        slot.map_or(Some("NONE"), |index| actions.get(index).copied())
+            .ok_or(RenderError::InvalidSprite)
+    };
+    let mark = |selected: AxisField| {
+        if field == Some(selected) {
+            ">"
+        } else {
+            " "
+        }
+    };
+    Ok([
+        format!(
+            "PLAYER {} / AXIS: {}",
+            editor.station().saturating_add(1),
+            axis.profile_name()
+        ),
+        format!(
+            "{}NEGATIVE: {}",
+            mark(AxisField::Negative),
+            name(profile.negative)?
+        ),
+        format!(
+            "{}POSITIVE: {}",
+            mark(AxisField::Positive),
+            name(profile.positive)?
+        ),
+        format!(
+            "{}PRESS: {} {}RELEASE: {}",
+            mark(AxisField::Press),
+            profile.press,
+            mark(AxisField::Release),
+            profile.release
+        ),
+        status_label(editor.status(), BindingFamily::Axis).to_owned(),
+    ])
+}
+
 fn binding_name<'name>(
     binding: DigitalBinding,
     actions: &[&'name str],
@@ -266,6 +284,44 @@ fn binding_name<'name>(
     })
 }
 
+fn digital_lines<const PLAYERS: usize, const ACTIONS: usize>(
+    editor: ControlEditor,
+    profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
+    actions: &[&str; ACTIONS],
+    key_name: KeyNamer,
+) -> Result<[String; DYNAMIC_LINES], RenderError> {
+    let action = actions
+        .get(editor.action())
+        .ok_or(RenderError::InvalidSprite)?;
+    let binding = editor.current(profiles).ok_or(RenderError::InvalidSprite)?;
+    let name = binding_name(binding, actions, key_name)
+        .ok_or(RenderError::InvalidSprite)?;
+    let status = status_label(editor.status(), editor.family());
+    Ok([
+        format!("PLAYER {}", editor.station().saturating_add(1)),
+        format!("ACTION: {action}"),
+        format!("SOURCE: {}", editor.family().label()),
+        format!("CURRENT: {name}"),
+        match editor.status() {
+            EditorStatus::Capturing
+                if editor.family() == BindingFamily::Touch =>
+            {
+                let slot = actions
+                    .get(editor.touch_slot())
+                    .ok_or(RenderError::InvalidSprite)?;
+                format!("NEXT SLOT: {slot}")
+            },
+            EditorStatus::Reviewing(button) => {
+                format!("NEXT: {} - A/ENTER SAVE", button.profile_name())
+            },
+            EditorStatus::Capturing
+            | EditorStatus::Ready
+            | EditorStatus::Rejected
+            | EditorStatus::Saved => status.to_owned(),
+        },
+    ])
+}
+
 const fn status_label(
     status: EditorStatus,
     family: BindingFamily,
@@ -274,6 +330,7 @@ const fn status_label(
         EditorStatus::Ready => "ENTER / A TO CHANGE",
         EditorStatus::Capturing => match family {
             BindingFamily::Keyboard => "PRESS A KEY",
+            BindingFamily::Axis => "ARROWS: FIELD / VALUE",
             BindingFamily::Mouse => "CLICK A MOUSE BUTTON",
             BindingFamily::Controller => "PRESS A GAMEPAD BUTTON",
             BindingFamily::Touch => "CHOOSE SLOT / CONFIRM",
@@ -290,9 +347,9 @@ fn panel_lines(
 ) -> Vec<TextLine<'_>> {
     let lines = [
         (8, "EDIT CONTROLS - NEXT LAUNCH"),
-        (120, "ARROWS / DPAD: PLAYER AND ACTION"),
+        (120, "ARROWS / DPAD: PLAYER AND ITEM"),
         (132, "TAB / RB: SOURCE - ENTER / A: EDIT"),
-        (144, "DEL / X: CLEAR KEY OR MOUSE"),
+        (144, "DEL / X: CLEAR / RESET FIELD"),
         (156, "ESC / B: CANCEL OR RETURN"),
     ];
     lines

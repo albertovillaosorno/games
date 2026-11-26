@@ -310,3 +310,25 @@ tests exercise all eight commands through the actual remapped panel
 geometry, with no gameplay edges on taps, motion or release. The
 existing fixed panel atlas budget is retained. Physical touchscreen
 and analogue editing acceptance remain open.
+
+The shared next-launch editor also supports signed controller axes.
+The axis-specific mode stages negative and positive logical actions
+and both hysteresis thresholds as one candidate. Triggers cannot
+select a negative action; the ordered thresholds remain within the
+admitted signed range. Up/Down selects the physical axis, then the
+draft field after confirmation; Left/Right adjusts its value, and
+confirmation saves all four fields together. Cancel, focus loss and
+controller removal discard the draft. Both digital and axis edits
+use the same atomic persistence and title admission path.
+
+A visible virtual X11/OpenGL release run on 2026-11-25 selected the
+first station's Right X axis, assigned left/right actions and adjusted
+press/release to 17000/9000. No settings file appeared before the
+confirmation. The confirmed full profile contained the expected
+axis records; a subsequent cancelled edit left its SHA-256 unchanged.
+The profile passed a touch-enabled hidden relaunch smoke with 444
+camera columns, two cooperative pose families, six reinforcement
+meters, 600 movement and 20 combat submissions, and zero movement
+work-budget misses. Its saved hash remained unchanged. This verifies
+keyboard-driven axis editing and persistence, not physical analogue
+controller operation or audible output.

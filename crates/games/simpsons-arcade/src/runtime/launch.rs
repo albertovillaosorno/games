@@ -36,8 +36,8 @@ use std::num::NonZeroU64;
 use std::{str, vec};
 
 use games::audio::MasterVolume;
-use games::input::physical::{ControllerButton, PointerButton};
-use games::input::profile::DigitalBinding;
+use games::input::physical::{ControllerAxis, ControllerButton, PointerButton};
+use games::input::profile::{AxisProfile, DigitalBinding};
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
 use games_platform::ir::input::{key_from_name, key_name};
@@ -358,6 +358,35 @@ impl ResolvedControls {
         Ok(())
     }
 
+    pub(super) fn persist_axis_edit(
+        &self,
+        current: &Profiles,
+        selection: (usize, ControllerAxis),
+        profile: AxisProfile,
+    ) -> Result<Option<Profiles>, String> {
+        self.persist_candidate(
+            current
+                .edited_axis(selection.0, selection.1, profile)
+                .ok()
+                .as_ref(),
+        )
+    }
+
+    fn persist_candidate(
+        &self,
+        proposed: Option<&Profiles>,
+    ) -> Result<Option<Profiles>, String> {
+        let store = self.store.as_ref().ok_or("control store unavailable")?;
+        let Some(profile) = proposed else {
+            return Ok(None);
+        };
+        let Ok((candidate, encoded)) = admit_candidate(profile) else {
+            return Ok(None);
+        };
+        Self::store_profile(store, &encoded)?;
+        Ok(Some(candidate))
+    }
+
     pub(super) fn persist_defaults(&self) -> Result<(), String> {
         let store = self.store.as_ref().ok_or("control store unavailable")?;
         Self::store_profile(store, DEFAULT_PROFILE)
@@ -369,14 +398,12 @@ impl ResolvedControls {
         selection: (usize, usize),
         binding: DigitalBinding,
     ) -> Result<Option<Profiles>, String> {
-        let store = self.store.as_ref().ok_or("control store unavailable")?;
-        let Ok((candidate, encoded)) =
-            admit_edit(current, selection.0, selection.1, binding)
-        else {
-            return Ok(None);
-        };
-        Self::store_profile(store, &encoded)?;
-        Ok(Some(candidate))
+        self.persist_candidate(
+            current
+                .edited(selection.0, selection.1, binding)
+                .ok()
+                .as_ref(),
+        )
     }
 
     fn store_profile(store: &ControlStore, text: &str) -> Result<(), String> {
@@ -545,14 +572,17 @@ fn admit_edit(
     action: usize,
     binding: DigitalBinding,
 ) -> Result<AdmittedEdit, String> {
-    let candidate = current.edited(station, action, binding)?;
-    validate_keyboard_pause(&candidate)?;
+    admit_candidate(&current.edited(station, action, binding)?)
+}
+
+fn admit_candidate(candidate: &Profiles) -> Result<AdmittedEdit, String> {
+    validate_keyboard_pause(candidate)?;
     let encoded = candidate.encoded(
         ACTION_NAMES,
         MAX_PROFILE_BYTES,
         (key_name, key_from_name),
     )?;
-    Ok((candidate, encoded))
+    Ok((*candidate, encoded))
 }
 
 fn action_index(name: &str) -> Result<usize, String> {
@@ -1298,6 +1328,67 @@ mod tests {
             || resolved.profiles != original
         {
             return Err("edit changed an active or admitted profile".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn axis_edit_round_trips_and_rejects_invalid_candidates()
+    -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let resolved = fixture.resolve(&[])?;
+        let original = resolved.profiles;
+        let profile = AxisProfile {
+            negative: Some(action_index("left")?),
+            positive: Some(action_index("right")?),
+            press: 20_000,
+            release: 8_000,
+        };
+        let next = resolved
+            .persist_axis_edit(&original, (2, ControllerAxis::RightX), profile)?
+            .ok_or("valid axis edit rejected")?;
+        let expected =
+            original.edited_axis(2, ControllerAxis::RightX, profile)?;
+        if next != expected
+            || fixture.resolve(&[])?.profiles != expected
+            || resolved.profiles != original
+        {
+            return Err(
+                "axis edit modified unrelated or active mappings".into()
+            );
+        }
+        verify_invalid_axis_edit(&fixture, &resolved, &next, profile)
+    }
+
+    fn verify_invalid_axis_edit(
+        fixture: &ProfileFixture,
+        resolved: &ResolvedControls,
+        next: &Profiles,
+        profile: AxisProfile,
+    ) -> Result<(), String> {
+        let store = fixture.store()?;
+        let before = store.load().map_err(|error| format!("{error:?}"))?;
+        if resolved
+            .persist_axis_edit(next, (2, ControllerAxis::TriggerLeft), profile)?
+            .is_some()
+            || resolved
+                .persist_axis_edit(
+                    next,
+                    (2, ControllerAxis::RightX),
+                    AxisProfile {
+                        release: profile.press,
+                        ..profile
+                    },
+                )?
+                .is_some()
+            || resolved
+                .persist_axis_edit(next, (4, ControllerAxis::RightX), profile)?
+                .is_some()
+            || store.load().map_err(|error| format!("{error:?}"))? != before
+        {
+            return Err(
+                "invalid axis edit changed the persisted profile".into()
+            );
         }
         Ok(())
     }
