@@ -143,3 +143,14 @@ rejection, and projection after stretch and adaptive target redraws.
 Fresh validation with Xvfb, software GL, dummy audio and portable core
 checks passed in run 1795620220187553166-3438625. Physical touch hardware
 and high-DPI display acceptance remain open.
+
+After the shared path and executable-admission migration, the authored
+package command at commit 69b6e99 produced a 3,454,824-byte Linux x86-64
+ELF and 108 additional files. The independent executable hash matched
+its receipt. The package contains all three reviewed constant_time_eq
+0.6.1 licence alternatives and the zlib-rs 0.6.8 Zlib text. No original
+media or system libraries were included; the three direct dynamic
+libraries remain SDL2, libgcc and libc. The size exceeds the previous
+3,224,528-byte local package; the cause and performance impact are
+unmeasured. This establishes publication, not portable ABI support or
+new gameplay parity. The package remains in ignored local storage.

@@ -378,3 +378,10 @@ host error-state reads. Alias matching is conservative and file-local,
 not full Rust name resolution. Fresh validation
 1795651537512300811-1218789 passed 1,493 aggregate test executions and
 all six portable core checks. No native target support is added.
+
+The coordinated validator migration in cc6ebd8 also moves local path
+interpretation through shared storage and enables strict host API checks
+for the validator. Fresh validation 1795651684295749253-1313136 passed
+1,495 aggregate test executions and six portable core target checks.
+This remains a parsed source policy rather than compiler-grade semantic
+analysis; native backend and physical device conformance remain open.
