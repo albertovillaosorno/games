@@ -41,6 +41,7 @@ use games::presentation::PresentationLayout;
 
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::keyboard::KeyboardReportError;
+use crate::ir::hardware::sensor::{MotionError, MotionReading, MotionSensor};
 use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
 
 /// Session-relative time and window scope over raw monotonic observations.
@@ -275,6 +276,32 @@ pub(crate) fn admit_boot_keyboard(
         }
     }
     Ok(report)
+}
+
+/// Admit an optional sensor request before any device dispatch.
+pub(crate) const fn admit_motion_request(
+    connected: bool,
+    foreground: bool,
+) -> Result<(), MotionError> {
+    if !connected {
+        return Err(MotionError::Disconnected);
+    }
+    if !foreground {
+        return Err(MotionError::Background);
+    }
+    Ok(())
+}
+
+/// Bind a finite reading to its admitted device and measurement kind.
+pub(crate) fn admit_motion_reading(
+    device: u64,
+    sensor: MotionSensor,
+    values: [f32; 3],
+) -> Result<MotionReading, MotionError> {
+    if !values.into_iter().all(f32::is_finite) {
+        return Err(MotionError::InvalidReading);
+    }
+    Ok(MotionReading { device, sensor, values })
 }
 
 #[cfg(test)]

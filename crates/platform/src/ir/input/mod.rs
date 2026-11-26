@@ -40,6 +40,7 @@ use games::presentation::PresentationLayout;
 
 use super::frame::RenderError;
 pub use super::hardware::HostEvent;
+use super::hardware::sensor::{MotionError, MotionReading, MotionSensor};
 use super::hardware::{
     HapticCommand, HapticError, HapticSupport, Haptics, InputEvent,
     InputSample, InputTransition,
@@ -47,6 +48,7 @@ use super::hardware::{
 use super::security::haptics::FeedbackRequest;
 use super::security::input::{
     ControllerAdmission, FeedbackFocus, InputClock, TouchGeometry,
+    admit_motion_reading, admit_motion_request,
 };
 
 pub(crate) type InputPort = Box<dyn InputBackend>;
@@ -58,6 +60,11 @@ pub(crate) trait InputBackend: Debug {
     fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn feedback_support(&self, device: u64) -> Option<HapticSupport>;
     fn initial_feedback_allowed(&self) -> bool;
+    fn read_motion(
+        &mut self,
+        device: u64,
+        sensor: MotionSensor,
+    ) -> Result<[f32; 3], MotionError>;
     fn submit_feedback(
         &mut self,
         request: FeedbackRequest,
@@ -165,6 +172,27 @@ impl NativeInput {
             return None;
         }
         self.clock.event_elapsed(event, self.elapsed().ok()?)
+    }
+
+    /// Read one explicitly requested motion sensor on an admitted controller.
+    ///
+    /// Readings describe the adapter's latest observation, not a guaranteed
+    /// fresh sample. Ordinary gameplay does not acquire motion sensors.
+    ///
+    /// # Errors
+    /// Rejects unknown devices, background sessions, unavailable sensors
+    /// and non-finite observations.
+    pub fn read_motion(
+        &mut self,
+        device: u64,
+        sensor: MotionSensor,
+    ) -> Result<MotionReading, MotionError> {
+        admit_motion_request(
+            self.controllers.contains(device),
+            self.focus.allows_feedback(),
+        )?;
+        let values = self.backend.read_motion(device, sensor)?;
+        admit_motion_reading(device, sensor, values)
     }
 
     /// Cancel existing contacts when the actually presented layout changes.
@@ -282,6 +310,8 @@ mod tests {
     use super::TouchGeometry;
     use crate::ir::check;
 
+    type MotionReceipt = Rc<Cell<Option<(u64, super::MotionSensor)>>>;
+
     #[derive(Debug, Default)]
     struct TestInput {
         after_drain: Vec<super::InputEvent>,
@@ -289,6 +319,7 @@ mod tests {
         clock: Rc<Cell<Duration>>,
         feedback: Rc<Cell<Option<super::HapticCommand>>>,
         initial_feedback_allowed: bool,
+        motion: MotionReceipt,
         scope: u64,
         suppress_cancellation: bool,
     }
@@ -324,6 +355,19 @@ mod tests {
 
         fn initial_feedback_allowed(&self) -> bool {
             self.initial_feedback_allowed
+        }
+
+        fn read_motion(
+            &mut self,
+            device: u64,
+            sensor: super::MotionSensor,
+        ) -> Result<[f32; 3], super::MotionError> {
+            self.motion.set(Some((device, sensor)));
+            match device {
+                1 => Ok([1.0, 2.0, 3.0]),
+                2 => Ok([0.0, f32::NAN, 0.0]),
+                _ => Err(super::MotionError::Unsupported),
+            }
         }
 
         fn submit_feedback(
@@ -846,5 +890,68 @@ mod tests {
             let stamps = [None, Some(at(1)), Some(at(4)), Some(at(8))];
             assert_eq!(stamps.map(|stamp| geometry.accepts(stamp)), accepted);
         }
+    }
+    #[test]
+    fn motion_reads_require_foreground_and_admitted_device()
+    -> Result<(), super::RenderError> {
+        use super::{MotionError, MotionReading, MotionSensor};
+        let receipt = Rc::new(Cell::new(None));
+        let adapter = TestInput {
+            attachments: vec![
+                super::InputEvent::Attached { device: 1 },
+                super::InputEvent::Attached { device: 2 },
+                super::InputEvent::Attached { device: 3 },
+            ],
+            initial_feedback_allowed: true,
+            motion: Rc::clone(&receipt),
+            ..TestInput::default()
+        };
+        let mut input = super::InputStartup::new(
+            Box::new(adapter),
+            NonZeroUsize::MIN.saturating_add(2),
+        )?
+        .input;
+        let sensor = MotionSensor::Gyroscope;
+        check(
+            &input.read_motion(4, sensor),
+            &Err(MotionError::Disconnected),
+        )?;
+        check(&receipt.get(), &None)?;
+        check(
+            &input.read_motion(1, sensor),
+            &Ok(MotionReading {
+                device: 1,
+                sensor,
+                values: [1.0, 2.0, 3.0],
+            }),
+        )?;
+        check(
+            &input.read_motion(2, sensor),
+            &Err(MotionError::InvalidReading),
+        )?;
+        check(
+            &input.read_motion(3, sensor),
+            &Err(MotionError::Unsupported),
+        )?;
+        let lost = super::InputSample::new(
+            None,
+            super::InputTransition::Event(super::HostEvent::Input(
+                super::InputEvent::FocusLost,
+            )),
+            None,
+        );
+        let _event = input.translate(&lost);
+        check(&input.read_motion(1, sensor), &Err(MotionError::Background))?;
+        check(&receipt.get(), &Some((3, sensor)))?;
+        let detached = super::InputSample::new(
+            None,
+            super::InputTransition::Disconnected(1),
+            None,
+        );
+        let _detached = input.translate(&detached);
+        check(
+            &input.read_motion(1, sensor),
+            &Err(MotionError::Disconnected),
+        )
     }
 }

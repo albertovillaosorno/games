@@ -45,10 +45,12 @@ use sdl2::controller::{Axis, Button, GameController};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::keyboard::Scancode;
 use sdl2::mouse::MouseButton;
+use sdl2::sensor::SensorType;
 use sdl2::video::Window;
 use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 
 use crate::ir::frame::RenderError;
+use crate::ir::hardware::sensor::{MotionError, MotionSensor};
 use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
 use crate::ir::input::{InputBackend, InputPort};
 use crate::ir::security::haptics::FeedbackRequest;
@@ -131,6 +133,32 @@ impl InputBackend for LinuxInput {
 
     fn initial_feedback_allowed(&self) -> bool {
         self.initial_feedback_allowed
+    }
+
+    fn read_motion(
+        &mut self,
+        device: u64,
+        sensor: MotionSensor,
+    ) -> Result<[f32; 3], MotionError> {
+        let controller = self
+            .controllers
+            .get(&device)
+            .filter(|controller| controller.attached())
+            .ok_or(MotionError::Disconnected)?;
+        let native = sensor_type(sensor);
+        if !controller.has_sensor(native) {
+            return Err(MotionError::Unsupported);
+        }
+        controller
+            .sensor_set_enabled(native, true)
+            .map_err(|_error| MotionError::Unavailable)?;
+        let mut values = [0.0; 3];
+        let observation = controller.sensor_get_data(native, &mut values);
+        controller
+            .sensor_set_enabled(native, false)
+            .map_err(|_error| MotionError::Unavailable)?;
+        observation.map_err(|_error| MotionError::Unavailable)?;
+        Ok(values)
     }
 
     fn submit_feedback(
@@ -261,11 +289,28 @@ fn deliver_feedback(
     }
 }
 
+const fn sensor_type(sensor: MotionSensor) -> SensorType {
+    match sensor {
+        MotionSensor::Accelerometer => SensorType::Accelerometer,
+        MotionSensor::Gyroscope => SensorType::Gyroscope,
+        MotionSensor::LeftAccelerometer => SensorType::LeftAccelerometer,
+        MotionSensor::LeftGyroscope => SensorType::LeftGyroscope,
+        MotionSensor::RightAccelerometer => SensorType::RightAccelerometer,
+        MotionSensor::RightGyroscope => SensorType::RightGyroscope,
+    }
+}
+
 fn stop_feedback(controller: &mut GameController) {
     if controller.attached() && controller.has_rumble() {
         // Loss of the native device can race with cleanup. Effects have
         // finite duration even if a stop fails or the device disappears.
         let _result = controller.set_rumble(0, 0, 0);
+    }
+    for sensor in MotionSensor::ALL {
+        let native = sensor_type(sensor);
+        if controller.sensor_enabled(native) {
+            let _stopped = controller.sensor_set_enabled(native, false);
+        }
     }
 }
 

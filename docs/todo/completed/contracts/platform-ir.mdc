@@ -1,6 +1,6 @@
 ---
 id: "platform-ir"
-status: "open"
+status: "completed"
 lane: "1"
 priority: "p1"
 area: "contracts"
@@ -658,3 +658,31 @@ passed. See the official specification:
 <https://www.usb.org/sites/default/files/hid1_11.pdf>.
 No raw device transport, general HID descriptor parser, motion sensor
 support or actual physical device conformance is claimed.
+
+The optional motion sensor capability normalizes accelerometer and
+gyroscope kinds, including left and right sensors, into typed three-axis
+observations in SI units. A shared request policy rejects unknown devices
+and background sessions before dispatch; result admission rejects
+non-finite components. The existing SDL controller adapter enables,
+reads and disables the explicitly requested sensor, with additional
+best-effort cleanup on focus loss, detach and drop. No continuous sensor
+acquisition is enabled by default. Synthetic adapter tests verify
+valid readings, absence, invalid data, focus loss and disconnection.
+Scoped all-feature tests and strict Clippy passed. Samples describe the
+adapter's latest observation, not a calibrated or guaranteed fresh
+measurement. No sensor-capable physical controller was verified.
+
+Acceptance review, 2026-11-25: the shared platform boundary is implemented
+for the current supported runtime and contributor tools. The mandatory
+zero-allowance gate covers authored source and manifests; shared typed
+ports own capability admission and the private platform implementation
+owns host access. The physical boot keyboard protocol and motion sensor
+contract have synthetic conformance coverage. The existing Linux
+runtime and package evidence, six portable core targets, and positive
+and negative controls demonstrate the current integration contract.
+Physical controller and sensor testing, raw device transport for new
+families, native Windows, Android and browser backends, and complete
+title-specific device profiles remain downstream work. This acceptance
+does not claim hardware or backend support not actually verified.
+Retain the architecture, shared security and reuse requirements for
+every future capability and title.

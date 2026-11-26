@@ -33,6 +33,8 @@
 
 /// Portable boot keyboard report capability.
 pub mod keyboard;
+/// Portable motion sensor observations.
+pub mod sensor;
 
 use std::time::Duration;
 

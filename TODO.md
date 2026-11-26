@@ -14,18 +14,6 @@ Completed. See `docs/todo/completed/foundation/`.
 
 ## P1 - Contracts
 
-### TODO - Portable capability IR and platform isolation
-
-Eliminate existing platform coupling through one platform crate: public
-capability IR, private OS software backends and independent physical device
-protocols. Require the OS/device bridge in platform/src/ir/hardware/,
-shared IR security and strict structural/dependency tests.
-
-See the [input device contract](docs/technical/input-device-ir.md).
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - Portable capability IR and platform isolation](docs/todo/open/contracts/platform-ir.mdc)
-
 ### TODO - Integrate architecture checks
 
 Make the P1 contracts a required part of the existing validator.
