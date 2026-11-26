@@ -468,3 +468,13 @@ remain outside its proof. Fresh Xvfb/X11 and dummy-audio validation
 1795664506404809950-412744 passed 1,731 test executions and all six
 portable core checks. An initial Xvfb invocation without explicit X11
 selection failed display admission; no rendering gate was suppressed.
+
+Foreign calling conventions, explicit target-feature attributes and
+native C or packed representation attributes are now rejected outside
+software adapters, including conditional attributes and macro bodies.
+Fixed-width enum representation, explicit allocation alignment, ordinary
+Rust calling conventions and unrelated function names remain admissible.
+Fresh Xvfb/X11 and dummy-audio validation
+1795664741989356043-456509 passed 1,733 test executions and six portable
+core targets. These checks reject explicit declarations; they do not
+prove every memory-layout assumption or resolve arbitrary macro expansion.

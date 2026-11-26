@@ -129,9 +129,82 @@ fn wire_layout(
     .then_some("pointer-width-layout")
 }
 
-fn wire_layout_counts(words: &[&str], result: &mut Counts) {
+fn foreign_abi(next: &str) -> bool {
+    if matches!(next, "fn" | "{") {
+        return true;
+    }
+    let literal = next
+        .strip_prefix('r')
+        .map_or(next, |raw| raw.trim_matches('#'));
+    literal.starts_with('"') && literal != "\"Rust\""
+}
+
+fn inside_attribute(words: &[&str], index: usize) -> bool {
+    let Some(prefix) = words.get(..index) else {
+        return false;
+    };
+    let mut depth = 0usize;
+    for (position, word) in prefix.iter().copied().enumerate().rev() {
+        match word {
+            "]" => depth = depth.saturating_add(1),
+            "[" if depth == 0 => {
+                let before = prefix.get(..position).unwrap_or_default();
+                return before.ends_with(&["#"])
+                    || before.ends_with(&["#", "!"]);
+            },
+            "[" => depth = depth.saturating_sub(1),
+            _ => {},
+        }
+    }
+    false
+}
+
+fn native_repr(tail: &[&str]) -> bool {
+    let ["(", members @ ..] = tail else {
+        return false;
+    };
+    let mut depth = 0usize;
+    for member in members.iter().copied() {
+        match member {
+            "C" | "packed" if depth == 0 => return true,
+            ")" if depth == 0 => return false,
+            "(" => depth = depth.saturating_add(1),
+            ")" => depth = depth.saturating_sub(1),
+            _ => {},
+        }
+    }
+    false
+}
+
+fn native_declaration(
+    words: &[&str],
+    index: usize,
+    word: &str,
+) -> Option<&'static str> {
+    let tail = words.get(index.checked_add(1)?..)?;
+    let next = tail.first().copied()?;
+    if word == "extern" && foreign_abi(next) {
+        return Some("foreign-abi");
+    }
+    if !matches!(word, "target_feature" | "repr")
+        || next != "("
+        || !inside_attribute(words, index)
+    {
+        return None;
+    }
+    match word {
+        "target_feature" => Some("target-feature-attribute"),
+        "repr" if native_repr(tail) => Some("native-representation"),
+        _ => None,
+    }
+}
+
+fn layout_counts(words: &[&str], result: &mut Counts) {
     for (index, word) in words.iter().copied().enumerate() {
         if let Some(rule) = wire_layout(words, index, word) {
+            record(result, rule);
+        }
+        if let Some(rule) = native_declaration(words, index, word) {
             record(result, rule);
         }
     }
@@ -142,7 +215,7 @@ fn rust(source: &str) -> Counts {
     let words: Vec<_> =
         parsed.iter().map(|token| token.text.as_str()).collect();
     let mut result = Counts::new();
-    wire_layout_counts(&words, &mut result);
+    layout_counts(&words, &mut result);
     for (index, word) in words.iter().copied().enumerate() {
         let next = words.get(index.saturating_add(1)).copied();
         let prev = index.checked_sub(1).and_then(|i| words.get(i)).copied();
@@ -422,6 +495,44 @@ mod tests {
             "let _ = usize::MAX;",
             "let _ = \"usize::BITS and from_ne_bytes\";",
             "/* isize::from_be_bytes(bytes) */",
+        );
+        assert!(rust(admitted).is_empty());
+    }
+
+    #[test]
+    fn native_abi_and_target_attributes_are_not_portable() {
+        for source in [
+            r#"extern "C" fn callback() {}"#,
+            r#"type Callback = extern "system" fn();"#,
+            r##"extern r#"C"# fn callback() {}"##,
+            "extern fn callback() {}",
+            r#"macro_rules! m { () => { extern "C" fn f() {} } }"#,
+        ] {
+            assert_eq!(rust(source).get("foreign-abi"), Some(&1));
+        }
+        for source in [
+            r#"#[target_feature(enable = "avx2")] fn calculate() {}"#,
+            r#"#[cfg_attr(test, target_feature(enable = "neon"))] fn f() {}"#,
+        ] {
+            assert_eq!(rust(source).get("target-feature-attribute"), Some(&1));
+        }
+        for source in [
+            "#[repr(C)] struct Packet(u32);",
+            "#[repr(align(8), C)] struct Packet(u32);",
+            "#[cfg_attr(test, repr(packed(2)))] struct Packet(u32);",
+        ] {
+            assert_eq!(rust(source).get("native-representation"), Some(&1));
+        }
+        let admitted = concat!(
+            "extern crate serde;",
+            r#"extern "Rust" fn callback() {}"#,
+            "#[repr(u8)] enum Flag { A }",
+            "#[repr(transparent)] struct Count(u32);",
+            "#[repr(align(16))] struct Buffer([u8; 16]);",
+            "fn target_feature() {} fn repr(value: u8) {}",
+            "fn run() { target_feature(); repr(1); }",
+            r#"let _ = "extern C and repr(C)";"#,
+            "/* #[target_feature(enable = \"neon\")] */",
         );
         assert!(rust(admitted).is_empty());
     }
