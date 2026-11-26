@@ -910,3 +910,35 @@ native gates active. It drained the 1,024-frame queue using the
 system default and named GamesDefault, verified the two mapped
 surface sizes and passed 1,960 aggregate test executions without
 failure.
+
+The retained 267b77e package also passed controller-only gameplay on
+isolated Xvfb/X11 with upstream SDL2 2.32.10 and the installed SDL2
+compatibility library. A debugger invoked the library's virtual joystick
+API in the private title process; no native input events or simulation
+states were fabricated by the title. The first four of five attached
+virtual controllers were opened by the runtime. A Start press on the
+fifth left the menu capture unchanged, whereas the four admitted Start
+presses joined gameplay. With seat two's left horizontal axis disabled
+and its right horizontal axis mapped to movement, the first axis left
+its capture unchanged and the second changed it. The first seat's held
+reversed horizontal axis was then disconnected. Successive gameplay
+captures after removal were identical, and instance 4 was subsequently
+opened and routed using the vacant first seat. A new axis press changed
+the capture, which settled after release. Both sessions exited using
+controller buttons alone and saved byte-identical private profiles.
+Upstream SDL2 additionally recorded the native controller axis,
+button and device-removal events. A separate relaunch without an
+explicit profile reproduced the disabled and remapped axes and retained
+the profile bytes unchanged.
+
+On the upstream library, controller-only settings navigation, source
+selection, capture and confirmation changed seat one's primary binding
+from south to north, preserving the prior axis and seat two bindings.
+The new owner-only profile was 4,031 bytes. A relaunch ignored the old
+south button in the main menu and started play using north instead.
+Controller-only reset wrote the 67-byte default envelope; on the next
+launch, north left the menu unchanged and south started play. All
+sessions exited normally. The package receipt remained unchanged.
+Debugger stops affected the measured frame intervals; these runs do not
+establish performance, physical gamepad input, haptics or device-specific
+mapping. No owner settings, display or physical devices were accessed.
