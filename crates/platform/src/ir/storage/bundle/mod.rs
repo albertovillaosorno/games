@@ -33,52 +33,17 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Debug;
-use std::io::{Error as IoError, ErrorKind};
 use std::num::NonZeroUsize;
 
 use games_assets::{
     AssetError, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
 
-use crate::ir::security::file::FileReadError;
+pub use crate::ir::security::bundle::BundleError;
+use crate::ir::security::bundle::{VerifiedManifest, admit_overlay};
 
 pub(crate) const MANIFEST_NAME: &str = "manifest.json";
 pub(crate) const PAYLOADS_DIRECTORY: &str = "payloads";
-
-/// A canonical bundle could not be safely read.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BundleError {
-    /// Canonical metadata or payload integrity failed.
-    Asset(AssetError),
-    /// The host storage rejected an operation.
-    Io(ErrorKind),
-    /// The requested logical key is absent from the pinned manifest.
-    MissingKey,
-    /// The backing storage failed its security checks.
-    UnsafeStorage,
-}
-
-impl From<AssetError> for BundleError {
-    fn from(error: AssetError) -> Self {
-        Self::Asset(error)
-    }
-}
-
-impl From<FileReadError> for BundleError {
-    fn from(error: FileReadError) -> Self {
-        match error {
-            FileReadError::Io(kind) => Self::Io(kind),
-            FileReadError::TooLarge => Self::Asset(AssetError::TooLarge),
-            FileReadError::UnsafeFile => Self::UnsafeStorage,
-        }
-    }
-}
-
-impl From<IoError> for BundleError {
-    fn from(error: IoError) -> Self {
-        Self::Io(error.kind())
-    }
-}
 
 pub(crate) type OpenBundle = Result<Box<dyn BundlePort>, BundleError>;
 pub(crate) type OpenPayloads = Result<Box<dyn PayloadSource>, BundleError>;
@@ -109,30 +74,15 @@ pub(crate) trait PayloadSource: Debug {
 /// Each payload is verified independently on every read.
 #[derive(Debug)]
 pub struct CanonicalBundle {
-    digest: ContentHash,
-    manifest: AssetManifest,
+    manifest: VerifiedManifest,
     source: Box<dyn PayloadSource>,
 }
 
 impl CanonicalBundle {
-    fn admit_manifest(
-        bytes: &[u8],
-        digest: ContentHash,
-        limits: ManifestLimits,
-    ) -> Result<AssetManifest, BundleError> {
-        if bytes.len() > limits.manifest_bytes.get() {
-            return Err(AssetError::TooLarge.into());
-        }
-        if ContentHash::calculate(bytes) != digest {
-            return Err(AssetError::PayloadMismatch.into());
-        }
-        Ok(AssetManifest::parse_canonical(bytes, limits)?)
-    }
-
     /// The exact pinned manifest address, including for legacy bundles.
     #[must_use]
     pub const fn digest(&self) -> ContentHash {
-        self.digest
+        self.manifest.digest()
     }
 
     /// Admit an exact canonical bundle supplied entirely in memory.
@@ -147,22 +97,9 @@ impl CanonicalBundle {
         limits: ManifestLimits,
         payloads: BTreeMap<ContentHash, Vec<u8>>,
     ) -> Result<Self, BundleError> {
-        let manifest = Self::admit_manifest(bytes, digest, limits)?;
-        let expected = manifest.payload_sizes();
-        if payloads.len() != expected.len() {
-            return Err(AssetError::PayloadMismatch.into());
-        }
-        for (identity, size) in expected {
-            let payload =
-                payloads.get(&identity).ok_or(BundleError::MissingKey)?;
-            if u64::try_from(payload.len()).ok() != Some(size)
-                || ContentHash::calculate(payload) != identity
-            {
-                return Err(AssetError::PayloadMismatch.into());
-            }
-        }
+        let manifest = VerifiedManifest::new(bytes, digest, limits)?;
+        manifest.admit_payloads(&payloads)?;
         Ok(Self {
-            digest,
             manifest,
             source: Box::new(MemorySource(payloads)),
         })
@@ -174,15 +111,16 @@ impl CanonicalBundle {
         limits: ManifestLimits,
     ) -> Result<Self, BundleError> {
         let bytes = port.read_manifest(limits.manifest_bytes)?;
-        let manifest = Self::admit_manifest(&bytes, digest, limits)?;
-        let source = port.open_payloads(!manifest.records().is_empty())?;
-        Ok(Self { digest, manifest, source })
+        let manifest = VerifiedManifest::new(&bytes, digest, limits)?;
+        let source =
+            port.open_payloads(!manifest.metadata().records().is_empty())?;
+        Ok(Self { manifest, source })
     }
 
     /// Access admitted metadata for title-specific interpretation.
     #[must_use]
     pub const fn manifest(&self) -> &AssetManifest {
-        &self.manifest
+        self.manifest.metadata()
     }
 
     /// Open a manifest-addressed bundle beneath a trusted parent.
@@ -212,7 +150,7 @@ impl CanonicalBundle {
     /// any mismatch against the pinned descriptor.
     pub fn read_payload(&self, key: &str) -> Result<Vec<u8>, BundleError> {
         let record =
-            self.manifest.record(key).ok_or(BundleError::MissingKey)?;
+            self.manifest().record(key).ok_or(BundleError::MissingKey)?;
         let bytes = self.source.read(record)?;
         record.verify(&bytes)?;
         Ok(bytes)
@@ -225,10 +163,14 @@ struct MemorySource(BTreeMap<ContentHash, Vec<u8>>);
 
 impl PayloadSource for MemorySource {
     fn read(&self, record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
-        self.0
-            .get(&record.digest)
-            .cloned()
-            .ok_or(BundleError::MissingKey)
+        let payload =
+            self.0.get(&record.digest).ok_or(BundleError::MissingKey)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(payload.len())
+            .map_err(|_error| AssetError::TooLarge)?;
+        bytes.extend_from_slice(payload);
+        Ok(bytes)
     }
 }
 
@@ -266,15 +208,7 @@ impl<'bundle> MediaOverlay<'bundle> {
         replacement: &'bundle CanonicalBundle,
         allowed_keys: &[&str],
     ) -> Result<Self, BundleError> {
-        if base.manifest().source().title
-            != replacement.manifest().source().title
-        {
-            return Err(AssetError::InvalidIdentity.into());
-        }
-        for record in replacement.manifest().records() {
-            base.manifest()
-                .validate_media_replacement(allowed_keys, record)?;
-        }
+        admit_overlay(base.manifest(), replacement.manifest(), allowed_keys)?;
         Ok(Self { base, replacement })
     }
 
@@ -566,11 +500,12 @@ mod tests {
         {
             return Err(BundleError::UnsafeStorage);
         }
-        let rejected = CanonicalBundle {
-            digest: replacement.digest(),
-            manifest: replacement.manifest().clone(),
-            source: Box::new(IncorrectPayload),
-        };
+        let encoded = replacement.manifest().encode(limits())?;
+        let rejected = CanonicalBundle::from_port(
+            port(&encoded, true, None),
+            replacement.digest(),
+            limits(),
+        )?;
         let rejected_overlay = MediaOverlay::new(&base, &rejected, &allowed)?;
         if rejected_overlay.read_payload("media/hero")
             != Err(AssetError::PayloadMismatch.into())

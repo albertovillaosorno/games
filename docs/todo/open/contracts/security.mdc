@@ -522,3 +522,13 @@ the canonical header, and rejection of excessive bytes.
 Fresh Xvfb/X11 and dummy-audio validation
 1795658234886303432-3246198 passed 1,650 aggregate test executions
 and all six portable core checks.
+
+Canonical bundle and passive-media overlay admission now share a security
+owner. The verified manifest retains its exact original wire identity,
+including legacy manifests, and admits the complete distinct payload
+inventory before memory-backed dispatch. In-memory reads reserve their
+copy fallibly. A shared-content fixture rejects wrong identities, lengths,
+bytes and additional payloads; existing native corruption and legacy
+fixtures remain active. Fresh Xvfb/X11 and dummy-audio validation
+1795658409829745779-3291153 passed 1,652 aggregate test executions
+and all six portable core checks.

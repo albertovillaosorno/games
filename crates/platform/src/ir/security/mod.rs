@@ -33,6 +33,8 @@
 
 /// Bounded audio playback admission.
 pub mod audio;
+/// Canonical bundle and passive-media overlay admission.
+pub mod bundle;
 /// Bounded file snapshot admission.
 pub mod file;
 /// Bounded frame layout and rendering errors.
