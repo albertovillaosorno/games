@@ -199,6 +199,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// # Errors
     /// Reports transport, worker or internal correlation failures.
     pub fn poll(&mut self) -> Result<PumpProgress<Message>> {
+        self.admission.close_reply_window();
         let progress = self.backend.poll()?;
         if let PumpProgress::Event(event) = &progress {
             self.admission.admit_event(event)?;
@@ -206,13 +207,17 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         Ok(progress)
     }
 
-    /// Schedule a bounded reply before the next receive for this peer.
+    /// Schedule one bounded reply to the most recent connected peer or
+    /// message event, before polling again.
     ///
     /// # Errors
-    /// Rejects oversized replies and unavailable or already busy peers.
+    /// Rejects oversized replies, absent reply opportunities and backend
+    /// failures. A rejected reply does not consume the opportunity.
     pub fn queue_reply(&mut self, peer: u64, bytes: Vec<u8>) -> Result<()> {
         self.admission.admit_reply(peer, bytes.len())?;
-        self.backend.queue_reply(peer, bytes)
+        self.backend.queue_reply(peer, bytes)?;
+        self.admission.close_reply_window();
+        Ok(())
     }
 
     /// Close the listener, cancel queued work and join the I/O worker.
@@ -247,6 +252,7 @@ mod tests {
     struct ObservedPump {
         address: SocketAddr,
         events: VecDeque<RemoteEvent<()>>,
+        reject_next_reply: bool,
         replies: Arc<AtomicUsize>,
     }
 
@@ -264,6 +270,10 @@ mod tests {
 
         fn queue_reply(&mut self, _peer: u64, _bytes: Vec<u8>) -> Result<()> {
             let _previous = self.replies.fetch_add(1, Ordering::Relaxed);
+            if self.reject_next_reply {
+                self.reject_next_reply = false;
+                return Err(ErrorKind::WouldBlock.into());
+            }
             Ok(())
         }
 
@@ -305,6 +315,7 @@ mod tests {
             Box::new(ObservedPump {
                 address,
                 events: events.into(),
+                reject_next_reply: false,
                 replies,
             }),
         )
@@ -413,12 +424,74 @@ mod tests {
         require(replies.load(Ordering::Relaxed) == 0)?;
         pump.queue_reply(1, vec![0])?;
         require(replies.load(Ordering::Relaxed) == 1)?;
+        require(
+            pump.queue_reply(1, vec![0]).err().map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock),
+        )?;
+        require(replies.load(Ordering::Relaxed) == 1)?;
         require(matches!(pump.poll()?, PumpProgress::Event(_)))?;
         require(
             pump.queue_reply(1, vec![]).err().map(|error| error.kind())
                 == Some(ErrorKind::WouldBlock),
         )?;
         require(replies.load(Ordering::Relaxed) == 1)
+    }
+
+    #[test]
+    fn reply_opportunities_expire_on_any_subsequent_poll() -> Result<()> {
+        let replies = Arc::new(AtomicUsize::new(0));
+        let mut pump = observed_pump(
+            loopback(42),
+            vec![RemoteEvent::Connected(1), message(0, 0), message(1, 1)],
+            Arc::clone(&replies),
+        )?;
+        require(matches!(pump.poll()?, PumpProgress::Event(_)))?;
+        require(
+            pump.poll().err().map(|error| error.kind())
+                == Some(ErrorKind::InvalidData),
+        )?;
+        require(
+            pump.queue_reply(1, vec![]).err().map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock),
+        )?;
+        require(matches!(pump.poll()?, PumpProgress::Event(_)))?;
+        require(matches!(pump.poll()?, PumpProgress::Idle))?;
+        require(
+            pump.queue_reply(1, vec![]).err().map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock),
+        )?;
+        require(replies.load(Ordering::Relaxed) == 0)
+    }
+
+    #[test]
+    fn rejected_backend_reply_can_retry_the_same_opportunity() -> Result<()> {
+        let replies = Arc::new(AtomicUsize::new(0));
+        let mut pump = HostInputPump::admit_backend(
+            admission(loopback(0))?,
+            Box::new(ObservedPump {
+                address: loopback(42),
+                events: VecDeque::from([
+                    RemoteEvent::Connected(1),
+                    message(1, 1),
+                ]),
+                reject_next_reply: true,
+                replies: Arc::clone(&replies),
+            }),
+        )?;
+        require(matches!(pump.poll()?, PumpProgress::Event(_)))?;
+        require(
+            pump.queue_reply(1, vec![]).err().map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock),
+        )?;
+        pump.queue_reply(1, vec![])?;
+        require(replies.load(Ordering::Relaxed) == 2)?;
+        require(
+            pump.queue_reply(1, vec![]).err().map(|error| error.kind())
+                == Some(ErrorKind::WouldBlock),
+        )?;
+        require(matches!(pump.poll()?, PumpProgress::Event(_)))?;
+        pump.queue_reply(1, vec![])?;
+        require(replies.load(Ordering::Relaxed) == 3)
     }
 
     #[test]

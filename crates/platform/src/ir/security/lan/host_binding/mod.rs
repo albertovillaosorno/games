@@ -262,6 +262,7 @@ pub(crate) struct PumpAdmission {
     address: SocketAddr,
     limits: LanLimits,
     peers: BTreeMap<u64, RemoteObservation>,
+    reply_peer: Option<u64>,
 }
 
 impl PumpAdmission {
@@ -320,6 +321,9 @@ impl PumpAdmission {
                 return Err(HostObservationError::UnexpectedEvent);
             },
         }
+        if state.active {
+            self.reply_peer = Some(peer);
+        }
         Ok(())
     }
 
@@ -332,10 +336,14 @@ impl PumpAdmission {
             .limits
             .outbound_length(length)
             .map_err(HostObservationError::Lan)?;
-        if !self.peers.get(&peer).is_some_and(|state| state.active) {
+        if self.reply_peer != Some(peer) {
             return Err(HostObservationError::UnavailablePeer);
         }
         Ok(())
+    }
+
+    pub(crate) const fn close_reply_window(&mut self) {
+        self.reply_peer = None;
     }
 
     pub(crate) fn new(request: &HostBindRequest) -> Self {
@@ -350,6 +358,7 @@ impl PumpAdmission {
             address: request.address(),
             limits: request.transport().limits(),
             peers,
+            reply_peer: None,
         }
     }
 }

@@ -811,3 +811,11 @@ ports verify valid pending, completion and idle transitions, duplicate
 rejection and contradictory receipts. Fresh Xvfb/X11 and dummy-audio
 validation 1795661749789943477-4193882 passed 1,710 aggregate test executions
 and all six portable core checks.
+
+The portable host pump now admits one reply opportunity for each connected
+peer or message event. A successful reply consumes that opportunity, and
+any subsequent poll expires it. Rejected requests can retry before polling;
+synthetic ports verify the dispatch boundary and stale opportunity rejection.
+Fresh Xvfb/X11 and dummy-audio validation
+1795661858975411200-18526 passed 1,714 aggregate test executions and all
+six portable core checks.
