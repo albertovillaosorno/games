@@ -70,7 +70,7 @@ const INDEX_HTML: &str = concat!(
     "<script type=\"module\">\n",
     "const status = document.getElementById('status');\n",
     "try { const {default: init} = await import('./game.js');\n",
-    "await init(); status.textContent = 'Preview ready.'; }\n",
+    "await init(); }\n",
     "catch (error) { status.textContent = 'Preview unavailable.'; ",
     "console.error(error); }\n",
     "</script>\n</body></html>\n",

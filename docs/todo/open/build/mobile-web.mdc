@@ -883,3 +883,20 @@ control semantics interoperability, not a shipped save-transfer UI or
 browser crash durability. No owner settings, installed package or assets
 were changed. Synthetic input, Xvfb and dummy audio do not establish
 physical-device acceptance.
+
+A further package startup check exposed a synchronous picker-setup
+failure: with the directory-selection capability absent, the Wasm
+initializer resolved, the package reported "Preview ready", and no
+picker existed. The title entry now owns the readiness message after
+successful picker creation and reports immediate startup failures through
+the same status capability as asynchronous completion. The JavaScript
+bootstrap handles only module import and initialization rejection.
+Publication and independent verification agreed on 88 files and
+1,506,682 bytes; receipt SHA-256
+4ca51f37aad85ba5726c48c0b6b949700d55fd5953da372e3c039cb5d7bf3d10.
+Isolated Firefox and WebKitGTK launches of the rebuilt package each
+passed intact startup, missing JavaScript, missing Wasm and an injected
+missing directory-selection API. The latter retained the explicit
+Unsupported diagnostic with no picker or canvas rather than reporting
+readiness. The capability injection changed only the test response's
+HTML; the packaged JavaScript and Wasm remained unchanged.

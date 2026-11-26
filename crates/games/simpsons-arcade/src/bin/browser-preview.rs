@@ -36,7 +36,14 @@ use games_platform::ir::process::{write_diagnostic, write_status};
 use games_simpsons_arcade::runtime::browser_preview::start;
 
 fn main() -> Result<(), RenderError> {
-    start(true, complete)
+    let result = start(true, complete);
+    match &result {
+        Ok(()) => {
+            let _reported = write_status(format_args!("Preview ready."));
+        },
+        Err(error) => report_failure(error),
+    }
+    result
 }
 
 fn complete(result: Result<(), RenderError>) {
@@ -45,10 +52,11 @@ fn complete(result: Result<(), RenderError>) {
             let _reported =
                 write_status(format_args!("browser-preview: ended"));
         },
-        Err(error) => {
-            let _reported = write_diagnostic(format_args!(
-                "browser-preview: failed: {error:?}"
-            ));
-        },
+        Err(error) => report_failure(&error),
     }
+}
+
+fn report_failure(error: &RenderError) {
+    let _reported =
+        write_diagnostic(format_args!("browser-preview: failed: {error:?}"));
 }
