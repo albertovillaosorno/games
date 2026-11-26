@@ -1,6 +1,6 @@
 ---
 id: "importer"
-status: "open"
+status: "completed"
 lane: "2"
 priority: "p2"
 area: "assets"
@@ -199,3 +199,27 @@ Local unified imports reproduced the pinned Simpsons graphics and audio
 manifests and the Metal Slug graphics manifest; independent pinned bundle
 read-back verified all three without modifying the original sources.
 This does not complete unadmitted formats or later encrypted layouts.
+
+Acceptance review, 2026-11-25: the existing unified import facade admits
+explicit format, family, title and revision, then delegates to one pure
+profile implementation. The public verify, import, publication and
+manifest-validation paths all consume that facade. Tools use the separate
+IR reference surface for diagnostic observations; gameplay does not
+receive a source decoder. The mandatory runtime dependency graph gate
+checks that separation for every title and the engine.
+
+The selected original Simpsons MAME World four-player set 1 graphics
+and audio, and the admitted NEO graphics profiles, demonstrate bounded
+local extraction, canonical integrity and deterministic conversion with
+no original-media fingerprint requirement or execution during import.
+Exact source budgets, rejected unsupported layouts and repeat read-back
+observations are recorded above. The shared content-addressed store now
+also passes synthetic publication and duplicate-object admission tests;
+see the open release-checks record for remaining physical migration.
+
+The shared import interface is established. Each subsequent title must
+select and verify its preferred edition and extend this same interface
+for any unsupported layout or format, before claiming title acceptance.
+Later encrypted NEO layouts, other source families and incomplete audio
+or scene reconstruction remain explicit title/import-profile work, not
+supported capabilities of this checkpoint.

@@ -1,6 +1,6 @@
 ---
 id: "asset-contract"
-status: "open"
+status: "completed"
 lane: "2"
 priority: "p2"
 area: "assets"
@@ -107,3 +107,28 @@ contains only title and layout provenance, and its records and payload bytes
 match the previous bundle. Repeated publication and attempts to upgrade
 already-current metadata were rejected. Synthetic tests exercise duplicate
 payload deduplication, source preservation and corrupted payload rejection.
+
+Acceptance review, 2026-11-25: the existing Simpsons title records the
+selected MAME World four-player set 1 edition and supported source lane
+layout. The NEO graphics profiles separately admit the selected Metal
+Slug, Metal Slug 2 and Metal Slug X layouts. Original-media checksums
+are not required for extraction or written into new canonical manifests.
+The legacy reader verifies its pinned original manifest bytes before
+normalizing metadata; payload integrity and canonical bundle addresses
+remain distinct from source admission.
+
+The runtime consumes the canonical asset records and verified payloads,
+not archive or chip layouts. The mandatory architecture check rejects
+source decoder dependencies in the normal and build runtime graphs,
+including transitive all-feature activation across Cargo targets. The
+existing synthetic manifest, indexed tile, atlas, PCM, payload inventory
+and storage tests cover integrity, format compatibility and explicit
+resource bounds without requiring original media. The native Simpsons
+preview also consumes locally published assets and verifies actual scene
+readback and attack sample admission, as recorded in its title task.
+
+This establishes the shared canonical asset contract. Physical device
+conformance, native execution on other targets, persistent legacy-store
+migration, additional source formats and complete original gameplay are
+separate outstanding importer, build, release or title obligations.
+No proprietary source data or canonical payload is distributed.

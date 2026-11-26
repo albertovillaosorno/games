@@ -18,24 +18,6 @@ Completed. See `docs/todo/completed/contracts/`.
 
 ## P2 - Asset importer
 
-### TODO - Canonical asset contract
-
-Define the shared asset format and manifest consumed by runtimes.
-
-[TODO - Canonical asset contract](docs/todo/open/assets/asset-contract.mdc)
-
-### TODO - Universal asset importer
-
-Provide one shared import and conversion interface.
-
-[TODO - Universal asset importer](docs/todo/open/assets/importer.mdc)
-
-### TODO - Reference behaviour fixtures
-
-Establish reproducible behaviour comparisons from lawful local references.
-
-[TODO - Reference behaviour fixtures](docs/todo/open/assets/reference-tests.mdc)
-
 ### TODO - Title onboarding
 
 Create title packages linked to their existing canonical task records.

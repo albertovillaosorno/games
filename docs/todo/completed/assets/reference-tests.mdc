@@ -1,6 +1,6 @@
 ---
 id: "reference-tests"
-status: "open"
+status: "completed"
 lane: "2"
 priority: "p2"
 area: "assets"
@@ -83,3 +83,19 @@ intervals of 811 frames and one of 812. Tests compare that partition with
 one combined duration, verify zero-duration behavior, and check that a
 rejected overflow does not discard fractional time. No native device
 clock, output latency, original event timing or audio parity is implied.
+
+Acceptance review, 2026-11-25: the Simpsons title records the exact
+MAME version, two repeatable 30-second scripted runs, six raw screen
+checkpoints and an independent no-input control, plus repeatable PCM
+observations. The shared reference diagnostics also compare the selected
+palette, mixer and tile observations; the synthetic replay tests compare
+public fixed-step actions and observations across render partitions.
+The original inputs and captured buffers remain in ignored local
+reference storage, with only authored synthetic fixtures and permitted
+summary evidence in the repository.
+
+These are reproducible reference comparison mechanisms and controlled
+observations for the first admitted title. Complete remake gameplay,
+all original event sequences, physical timing and audio parity are not
+established. Each subsequent title must select lawful reference inputs
+and record independent behaviour comparisons in its canonical record.
