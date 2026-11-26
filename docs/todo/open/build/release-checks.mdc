@@ -466,3 +466,31 @@ All 620 movement and combat submissions met the host-work budget
 independent comparison afterward confirmed unchanged bytes. This is
 host-local repeated publication and alternate userspace execution,
 not an independently built or tested release on another host.
+
+At 346609a, repeat publications of both the native and WebAssembly
+packages matched their initial outputs byte-for-byte. The native
+package contained 109 files and 4,150,657 bytes, including one
+mode-0700 executable and 108 mode-0600 files. The browser package
+contained 88 mode-0600 files and 1,545,420 bytes. Every receipt entry
+also passed independent SHA-256 readback. The native receipt was
+`f2c5477bc339cf935d3d7f301f8f3a34241b4c379958f045fa5ebd5264ca2f47`;
+its 3,624,984-byte executable digest was
+`de7738464b8d70b413e0ac5a67cb9d93aaaa1fe8dd3f24371d4618ca90fd4876`.
+The browser receipt was
+`d580ac143860c0fe9206e3f684075c915ec95486b261e0c831c976574094fb00`;
+its 1,041,496-byte module digest was
+`e0cf1e750aa8847d7bbaa356500b54e74dfe5e153aabea5c080cada480ae529c`.
+
+The exact repeated browser publication also completed the unmodified
+entry workflow with Firefox under isolated 1600x1200 Xvfb and a
+private null audio sink. Loopback HTTP served the 576-byte index,
+45,123-byte JavaScript and bound Wasm without injection. Trusted
+keyboard and mouse input selected the external directory, joined,
+moved and exited through the menu. Ready, menu, joined and terminal
+captures matched the preceding accepted entry run within 0.0025%
+normalized mean absolute error; movement changed the joined capture
+by 0.829%. The first attempt with an isolated desktop portal did not
+complete directory selection; explicit local GTK chooser configuration
+resolved it. Post-exit package verification and comparison confirmed
+unchanged bytes. These are repeated publications on the same host,
+not independent-host qualification, physical input or audible output.
