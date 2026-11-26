@@ -54,6 +54,11 @@ const TOOLS: &[ReferenceTool] = &[
     ),
     release("jadx-release", "skylot/jadx", "jadx-[0-9]*.zip"),
     release("apktool-release", "iBotPeaches/Apktool", "apktool_*.jar"),
+    release(
+        "wasm-bindgen-release",
+        "wasm-bindgen/wasm-bindgen",
+        "wasm-bindgen-*-x86_64-unknown-linux-musl.tar.gz*",
+    ),
 ];
 
 /// A known reference download, admitted from the fixed catalogue.
@@ -193,6 +198,7 @@ mod tests {
             "ghidra-release",
             "jadx-release",
             "apktool-release",
+            "wasm-bindgen-release",
         ]);
         for tool in ReferenceTool::all() {
             assert_eq!(ReferenceTool::parse(tool.name()), Some(*tool));
