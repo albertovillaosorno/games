@@ -103,7 +103,10 @@ use std::env::consts::{ARCH, OS};
 #[cfg(not(target_os = "linux"))]
 use std::ffi::OsStr;
 use std::ffi::OsString;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(
+    target_os = "linux",
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
 use std::fmt::Arguments as StatusMessage;
 use std::io;
 #[cfg(not(target_os = "linux"))]
@@ -125,7 +128,10 @@ use crate::ir::input::InputNames;
 #[cfg(any(test, feature = "test-fixtures"))]
 use crate::ir::input::fixtures::EventFixturePort;
 use crate::ir::measurement::MeasurementSource;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(
+    target_os = "linux",
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
 use crate::ir::process::ProcessPort;
 #[cfg(all(
     not(target_os = "linux"),
@@ -293,7 +299,10 @@ impl ExecutableLocation for () {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(
+    target_os = "linux",
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
 impl ProcessPort for () {
     fn arguments() -> io::Result<Vec<OsString>> {
         Err(ErrorKind::Unsupported.into())

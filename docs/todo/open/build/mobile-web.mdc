@@ -360,3 +360,42 @@ subsequent normal cases passed their expected outcomes. Synthetic
 events do not exercise trusted pointer capture; real touch, actual
 browser scene geometry, mouse/gamepad and visibility integration remain
 open.
+
+The browser process adapter now routes portable status and diagnostic
+messages to the corresponding console methods. It checks availability
+and callability, preserves formatted Unicode and the console receiver,
+and translates thrown lookups and calls into typed I/O errors. Native
+argument discovery and blocking retry waits remain unsupported in the
+browser. The title reports the selected audio backend without assuming
+SDL, and disabled-audio startup can now report its status on the browser.
+
+Fresh validation 1795679462713814181-3124580 passed 1,872 aggregate
+test executions and all six portable target checks. The pinned bindings
+produced a 95,091-byte storage/clock/output smoke module with SHA-256
+f03708f0b92b928a8203401b52e7044c4f27d0bf3428ef756343559244bb37fe.
+A baseline harness on the previous module detected both missing output
+observations. Ten isolated Firefox runs on the new module verified two
+normal runs and eight negative controls: missing, noncallable, throwing
+lookup and throwing invocation for each output method. Both invocations
+in every negative case failed before changing any diagnostic storage.
+The normal runs observed the exact messages and receivers and successful
+storage. All thirteen earlier storage, preference and clock cases also
+passed on the new module. The first console harness needed an explicit
+UTF-8 document declaration to compare the Unicode message correctly.
+No browser game launch or native physical-device acceptance is inferred.
+
+An independent visible Firefox audio host probe confirmed the asynchronous
+control boundary. In a private X11 virtual display, a synthetic native
+Return event was received as a trusted DOM activation. Before activation
+the 48 kHz audio context's resume promise remained pending. The activation
+allowed both resume requests to settle and a silent 128-frame stereo
+buffer to drain. Resume and suspend still reported their previous state
+immediately after request; the new state was observable after settlement.
+The suspended clock remained unchanged, close settled and subsequent
+resume failed with InvalidStateError. The selected PipeWire route was
+the dummy output. Two isolated headless runs without trusted activation
+remained suspended within the bounded observation period, including one
+with permissive autoplay preferences. This is host API behavior, not an
+authored PCM queue, actual physical input or audible playback. Browser
+audio must represent asynchronous transition receipts instead of
+reporting immediate success.

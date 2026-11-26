@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - An explicitly invoked storage, preference and clock smoke.
+//   - An explicitly invoked storage, preference, clock and output smoke.
 // - Must-Not:
 //   - Open native or browser APIs, use real saves or interpret game data.
 // - Allows:
 //   - Inputs: Synthetic payloads in dedicated smoke-only namespaces.
-//   - Outputs: Success or a storage, preference or clock invariant failure.
+//   - Outputs: Success or a host capability invariant failure.
 //   - Side effects: Replacement of bounded diagnostic save slots.
 // - Split-When:
 //   - Another capability scenario needs independent diagnostic setup.
@@ -39,6 +39,7 @@ use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 use games::safety::SafetyError;
 use games_platform::ir::measurement::{elapsed_between, now};
+use games_platform::ir::process::{write_diagnostic, write_status};
 use games_platform::ir::storage::file::FileReadError;
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, PreferenceError, VolumeStore,
@@ -152,6 +153,7 @@ fn check_receipt(
 }
 
 fn main() -> Result<(), &'static str> {
+    smoke_output()?;
     smoke_slots()?;
     smoke_preferences()?;
     smoke_incompatible_preferences()
@@ -184,6 +186,13 @@ fn smoke_incompatible_preferences() -> Result<(), &'static str> {
         }
     }
     Ok(())
+}
+
+fn smoke_output() -> Result<(), &'static str> {
+    write_status(format_args!("Browser status smoke: {}", 7u8))
+        .map_err(|_error| "status output failed")?;
+    write_diagnostic(format_args!("Browser diagnostic smoke: {}", "\u{e9}"))
+        .map_err(|_error| "diagnostic output failed")
 }
 
 fn smoke_preferences() -> Result<(), &'static str> {

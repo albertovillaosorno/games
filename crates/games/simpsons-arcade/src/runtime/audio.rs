@@ -196,7 +196,7 @@ impl<'samples> Playback<'samples> {
         let device = NativeAudio::open_on(spec, name).map_err(failure)?;
         let (driver, requested) = device.output();
         write_status(format_args!(
-            "Audio: SDL {driver}, requested output: {}",
+            "Audio: {driver}, requested output: {}",
             requested.unwrap_or("system default").escape_debug(),
         ))
         .map_err(failure)?;
@@ -421,7 +421,7 @@ impl<'samples> Playback<'samples> {
 
 pub(super) fn list_devices() -> Result<(), RenderError> {
     let devices = NativeAudio::playback_devices().map_err(failure)?;
-    write_status(format_args!("SDL audio backend: {}", devices.driver))
+    write_status(format_args!("Audio backend: {}", devices.driver))
         .map_err(failure)?;
     if let Some(names) = devices.names {
         for name in names {

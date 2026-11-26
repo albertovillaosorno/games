@@ -23,7 +23,8 @@
 // - Summary:
 //   - Platform integration outside the transport-neutral engine.
 // - Description:
-//   - Exposes origin-local storage and timing behind a private boundary.
+//   - Exposes origin-local storage, output and timing behind a private
+//     boundary.
 // - Usage:
 //   - Compose adapters with the engine in a host application.
 // - Defaults:
@@ -38,4 +39,6 @@
 ))]
 pub(super) mod input;
 pub(super) mod performance;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod process;
 mod storage;
