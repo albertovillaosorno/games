@@ -686,3 +686,13 @@ when no compatible browser output was available. The successful
 software-rendered runs used the existing dummy output, not physical
 audio hardware. Browser publication still makes no crash-durability
 claim.
+
+Standard-mapped browser gamepads now enter the shared physical input
+route through bounded snapshots. Connection identities are session-local;
+disconnect releases precede slot reuse, and focus loss neutralizes held
+controls. A separate bounded queue preserves controller transitions when
+the DOM input queue is pressured. Native registry fixtures exercise
+mapping, connection identity, release and focus behavior. Fresh validation
+1795687641278104835-290116 passed 1,927 aggregate test executions and
+linked the browser preview. The commit hook also passed. Physical browser
+controller operation, latency and vibration remain unverified.
