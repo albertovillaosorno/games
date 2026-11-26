@@ -575,3 +575,16 @@ observed before committing it. Drift invalidates presentation receipts,
 and a successful admitted resize can recover an inconsistent extent.
 Fresh native validation 1795657228495677731-2999073 passed 1,634 aggregate
 test executions and all six portable core checks.
+
+Window sessions now retain the requested presentation policy in the
+portable window facade. Native window transitions receive only the
+requested window mode, while frame and scene construction receive the
+admitted presentation policy explicitly. A backend mode mismatch
+rejects construction or frame submission; a successfully applied scene
+policy survives callback completion, including a later callback error.
+Portable fixtures verify dispatch, rejected transitions and mode drift.
+The opt-in X11 smoke reopens a public scene after a callback error and
+verifies the updated aspect-fit geometry after initial stretch.
+Fresh validation 1795657753691193803-3126486 passed 1,640 aggregate test
+executions and all six portable core checks with native rendering and
+dummy audio.

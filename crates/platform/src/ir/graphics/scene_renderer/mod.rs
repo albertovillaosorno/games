@@ -291,15 +291,19 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         self.view().logical_touch(point)
     }
 
+    pub(crate) const fn mode(&self) -> PresentationMode {
+        self.mode
+    }
+
     pub(crate) fn new(
         backend: &'session mut (dyn SceneBackend + 'backend),
         base: FrameLayout,
         limits: SceneLimits,
+        mode: PresentationMode,
     ) -> Result<Self, RenderError> {
-        if backend.layout() != base {
+        if backend.layout() != base || backend.presentation_mode() != mode {
             return Err(RenderError::InvalidDimensions);
         }
-        let mode = backend.presentation_mode();
         Ok(Self {
             admission: SceneAdmission::new(limits),
             backend,
@@ -583,7 +587,12 @@ mod tests {
         backend.surface = Some(Dimensions::new(width, height));
         backend.mode = PresentationMode::Adaptive;
         {
-            let mut scene = SceneSession::new(&mut backend, base, limits())?;
+            let mut scene = SceneSession::new(
+                &mut backend,
+                base,
+                limits(),
+                PresentationMode::Adaptive,
+            )?;
             for invalid in [short, wrong_height] {
                 check(
                     &scene.fit_adaptive_width(invalid),
@@ -616,7 +625,23 @@ mod tests {
             NonZeroUsize::MAX,
         )?;
         check(
-            &SceneSession::new(&mut backend, maximum, limits()).err(),
+            &SceneSession::new(
+                &mut backend,
+                maximum,
+                limits(),
+                PresentationMode::AspectFit,
+            )
+            .err(),
+            &Some(RenderError::InvalidDimensions),
+        )?;
+        check(
+            &SceneSession::new(
+                &mut backend,
+                base,
+                limits(),
+                PresentationMode::Adaptive,
+            )
+            .err(),
             &Some(RenderError::InvalidDimensions),
         )?;
         for (outcome, expected) in [
@@ -628,14 +653,23 @@ mod tests {
                 Some(Dimensions::new(maximum.width(), maximum.height()));
             backend.resize_outcome = outcome;
             {
-                let mut scene =
-                    SceneSession::new(&mut backend, base, limits())?;
+                let mut scene = SceneSession::new(
+                    &mut backend,
+                    base,
+                    limits(),
+                    PresentationMode::Adaptive,
+                )?;
                 check(&scene.fit_adaptive_width(maximum), &Err(expected))?;
                 check(&scene.layout(), &base)?;
             }
         }
         backend.resize_outcome = Ok(true);
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::Adaptive,
+        )?;
         check(&scene.fit_adaptive_width(maximum), &Ok(maximum))?;
         Ok(())
     }
@@ -657,7 +691,12 @@ mod tests {
         backend.presentations = VecDeque::from([Ok(Some(expected))]);
         let observation = Rc::clone(&backend.reported_layout);
         {
-            let mut scene = SceneSession::new(&mut backend, base, limits())?;
+            let mut scene = SceneSession::new(
+                &mut backend,
+                base,
+                limits(),
+                PresentationMode::AspectFit,
+            )?;
             check(&scene.present([0; 3], &[]), &Ok(true))?;
             observation.set(Some(wider));
             check(&scene.layout(), &base)?;
@@ -704,7 +743,12 @@ mod tests {
         ]);
         backend.readback_layout = Some(wider);
         {
-            let mut scene = SceneSession::new(&mut backend, base, limits())?;
+            let mut scene = SceneSession::new(
+                &mut backend,
+                base,
+                limits(),
+                PresentationMode::AspectFit,
+            )?;
             check(
                 &scene.present([0; 3], &[]),
                 &Err(RenderError::InvalidDimensions),
@@ -726,7 +770,9 @@ mod tests {
         let mut backend = TestScene::new(0)?;
         backend.fail_upload = true;
         let layout = backend.layout;
-        let mut scene = SceneSession::new(&mut backend, layout, limits())?;
+        let mode = PresentationMode::AspectFit;
+        let mut scene =
+            SceneSession::new(&mut backend, layout, limits(), mode)?;
         check(
             &scene.load_atlas(layout, &[0; 3]),
             &Err(RenderError::InvalidLength),
@@ -762,22 +808,21 @@ mod tests {
             &scene.present([0; 3], &[sprite, sprite]),
             &Err(RenderError::TooLarge),
         )?;
-        let invalid = SpriteDraw {
-            source: SpriteRect { x: 1, ..rectangle },
-            ..sprite
-        };
-        check(
-            &scene.present([0; 3], &[invalid]),
-            &Err(RenderError::InvalidSprite),
-        )?;
-        let invalid_origin = SpriteDraw {
-            destination: SpriteRect { x: i32::MAX, ..rectangle },
-            ..sprite
-        };
-        check(
-            &scene.present([0; 3], &[invalid_origin]),
-            &Err(RenderError::InvalidSprite),
-        )?;
+        for invalid in [
+            SpriteDraw {
+                source: SpriteRect { x: 1, ..rectangle },
+                ..sprite
+            },
+            SpriteDraw {
+                destination: SpriteRect { x: i32::MAX, ..rectangle },
+                ..sprite
+            },
+        ] {
+            check(
+                &scene.present([0; 3], &[invalid]),
+                &Err(RenderError::InvalidSprite),
+            )?;
+        }
         check(&scene.present([0; 3], &[sprite]), &Ok(false))?;
         check(&backend.uploads, &[(AtlasId(0), layout, vec![1, 2, 3, 4])])?;
         check(&backend.draws, &1)?;
@@ -791,7 +836,12 @@ mod tests {
         let mut delivered = Vec::new();
         let budget = NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN);
         let base = backend.layout;
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         for (expected, count) in [
             (EventBatch::Limited, 2),
             (EventBatch::Limited, 4),
@@ -822,7 +872,12 @@ mod tests {
         let mut backend = TestScene::new(3)?;
         let budget = NonZeroUsize::new(3).unwrap_or(NonZeroUsize::MIN);
         let base = backend.layout;
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         check(
             &scene.dispatch_events(budget, 0, |_, _| Ok(false))?,
             &EventBatch::Stopped,
@@ -870,7 +925,12 @@ mod tests {
             Ok(Some(expected)),
             Ok(None),
         ]);
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         check(&scene.last_presented_layout(), &None)?;
         check(&scene.visible_layout()?, &None)?;
         check(&scene.present([0; 3], &[]), &Ok(true))?;
@@ -917,7 +977,12 @@ mod tests {
         backend.presentations =
             VecDeque::from([Ok(Some(expected)), Ok(Some(expected))]);
         backend.settings_applied = false;
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         check(&scene.present([0; 3], &[]), &Ok(true))?;
         check(
             &scene.apply_display_settings(DisplaySettings {
@@ -951,7 +1016,12 @@ mod tests {
             Ok(Some(adaptive)),
             Ok(Some(expected)),
         ]);
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
         check(&scene.present([0; 3], &[]), &Ok(true))?;
         check(&scene.visible_layout()?, &Some(expected))?;
         scene.apply_display_settings(DisplaySettings {
@@ -994,7 +1064,12 @@ mod tests {
         backend.resize_outcome = Err(RenderError::Unsupported);
         backend.presentations =
             VecDeque::from([Ok(Some(expected)), Ok(Some(expected))]);
-        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::Adaptive,
+        )?;
         let settings = DisplaySettings {
             presentation: PresentationMode::Adaptive,
             ..DisplaySettings::default()

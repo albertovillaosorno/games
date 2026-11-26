@@ -37,7 +37,7 @@ pub mod scene_renderer;
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use games::presentation::{DisplaySettings, PresentationMode};
+use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 
 use self::scene_renderer::{SceneBackend, SceneSession};
 use super::frame::{AdmittedRgba, FrameLayout, RenderError, validate_extent};
@@ -54,21 +54,22 @@ pub(crate) type WindowPort = Box<dyn WindowBackend>;
 
 /// Private window adapter. Frame and scene callbacks are scoped to this port.
 pub(crate) trait WindowBackend: Debug {
-    fn apply_display_settings(
+    fn apply_window_mode(
         &mut self,
-        settings: DisplaySettings,
+        mode: WindowMode,
     ) -> Result<(), RenderError>;
     fn input(&self, limit: NonZeroUsize) -> Result<InputPort, RenderError>;
     fn renderer_name(&self) -> String;
-    fn set_presentation_mode(&mut self, mode: PresentationMode);
     fn with_frame(
         &mut self,
         layout: FrameLayout,
+        mode: PresentationMode,
         run: &mut FrameRun<'_>,
     ) -> Result<(), RenderError>;
     fn with_scene(
         &mut self,
         layout: FrameLayout,
+        mode: PresentationMode,
         run: &mut SceneRun<'_>,
     ) -> Result<(), RenderError>;
 }
@@ -88,6 +89,7 @@ pub(crate) trait WindowFactory {
 /// A window and its selected accelerated rendering capability.
 pub struct NativeWindow {
     backend: WindowPort,
+    mode: PresentationMode,
 }
 
 impl Debug for NativeWindow {
@@ -104,7 +106,9 @@ impl NativeWindow {
         &mut self,
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
-        self.backend.apply_display_settings(settings)
+        self.backend.apply_window_mode(settings.window)?;
+        self.mode = settings.presentation;
+        Ok(())
     }
 
     /// Open input for this window with an explicit controller capacity.
@@ -129,7 +133,10 @@ impl NativeWindow {
         validate_extent(width, height)?;
         let backend =
             <() as WindowFactory>::open(title, width, height, hidden)?;
-        Ok(Self { backend })
+        Ok(Self {
+            backend,
+            mode: PresentationMode::default(),
+        })
     }
 
     /// Diagnostic name of the selected renderer.
@@ -139,8 +146,8 @@ impl NativeWindow {
     }
 
     /// Set a presentation policy without changing logical design dimensions.
-    pub fn set_presentation_mode(&mut self, mode: PresentationMode) {
-        self.backend.set_presentation_mode(mode);
+    pub const fn set_presentation_mode(&mut self, mode: PresentationMode) {
+        self.mode = mode;
     }
 
     /// Whether the selected host implements window presentation.
@@ -161,9 +168,10 @@ impl NativeWindow {
     where
         Run: FnOnce(&mut FrameSession<'_, '_>) -> Result<Output, RenderError>,
     {
+        let mode = self.mode;
         run_once(run, |once| {
-            self.backend.with_frame(layout, &mut |backend| {
-                let mut session = FrameSession::new(backend, layout)?;
+            self.backend.with_frame(layout, mode, &mut |backend| {
+                let mut session = FrameSession::new(backend, layout, mode)?;
                 once.call(|callback| callback(&mut session))
             })
         })
@@ -181,10 +189,14 @@ impl NativeWindow {
     where
         Run: FnOnce(&mut SceneSession<'_, '_>) -> Result<Output, RenderError>,
     {
+        let mode = &mut self.mode;
         run_once(run, |once| {
-            self.backend.with_scene(layout, &mut |backend| {
-                let mut session = SceneSession::new(backend, layout, limits)?;
-                once.call(|callback| callback(&mut session))
+            self.backend.with_scene(layout, *mode, &mut |backend| {
+                let mut session =
+                    SceneSession::new(backend, layout, limits, *mode)?;
+                let result = once.call(|callback| callback(&mut session));
+                *mode = session.mode();
+                result
             })
         })
     }
@@ -214,12 +226,14 @@ pub(crate) trait FrameBackend: Debug {
     fn poll_event(&mut self) -> Option<InputSample>;
     fn present(&mut self, frame: AdmittedRgba<'_>)
     -> Result<bool, RenderError>;
+    fn presentation_mode(&self) -> PresentationMode;
 }
 
 /// Persistent frame resources borrowed for one rendering session.
 pub struct FrameSession<'session, 'backend> {
     backend: &'session mut (dyn FrameBackend + 'backend),
     layout: FrameLayout,
+    mode: PresentationMode,
 }
 
 impl Debug for FrameSession<'_, '_> {
@@ -234,11 +248,12 @@ impl<'session, 'backend> FrameSession<'session, 'backend> {
     pub(crate) fn new(
         backend: &'session mut (dyn FrameBackend + 'backend),
         layout: FrameLayout,
+        mode: PresentationMode,
     ) -> Result<Self, RenderError> {
-        if backend.layout() != layout {
+        if backend.layout() != layout || backend.presentation_mode() != mode {
             return Err(RenderError::InvalidDimensions);
         }
-        Ok(Self { backend, layout })
+        Ok(Self { backend, layout, mode })
     }
 
     /// Poll a normalized observation, without exposing a native event type.
@@ -252,11 +267,15 @@ impl<'session, 'backend> FrameSession<'session, 'backend> {
     /// Rejects incorrect byte extent or backend presentation failure.
     pub fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
         let admitted = self.layout.admit(pixels)?;
-        if self.backend.layout() != self.layout {
+        if self.backend.layout() != self.layout
+            || self.backend.presentation_mode() != self.mode
+        {
             return Err(RenderError::InvalidDimensions);
         }
         let result = self.backend.present(admitted);
-        if self.backend.layout() != self.layout {
+        if self.backend.layout() != self.layout
+            || self.backend.presentation_mode() != self.mode
+        {
             return Err(RenderError::InvalidDimensions);
         }
         result
@@ -281,11 +300,15 @@ fn run_once<Output, Run>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::num::{NonZeroU32, NonZeroUsize};
+    use std::rc::Rc;
 
     use super::{
-        AdmittedRgba, FrameBackend, FrameLayout, FrameSession, InputSample,
-        NativeWindow, RenderError, callback_error, run_once,
+        AdmittedRgba, DisplaySettings, FrameBackend, FrameLayout, FrameRun,
+        FrameSession, InputPort, InputSample, NativeWindow, PresentationMode,
+        RenderError, SceneRun, WindowBackend, WindowMode, callback_error,
+        run_once,
     };
     use crate::ir::check;
 
@@ -294,6 +317,9 @@ mod tests {
         layout: FrameLayout,
         layout_after_poll: Option<FrameLayout>,
         layout_after_present: Option<FrameLayout>,
+        mode: PresentationMode,
+        mode_after_poll: Option<PresentationMode>,
+        mode_after_present: Option<PresentationMode>,
         presented: Vec<u8>,
     }
 
@@ -303,6 +329,9 @@ mod tests {
         }
 
         fn poll_event(&mut self) -> Option<InputSample> {
+            if let Some(mode) = self.mode_after_poll.take() {
+                self.mode = mode;
+            }
             if let Some(layout) = self.layout_after_poll.take() {
                 self.layout = layout;
             }
@@ -314,11 +343,124 @@ mod tests {
             frame: AdmittedRgba<'_>,
         ) -> Result<bool, RenderError> {
             self.presented = frame.pixels().to_vec();
+            if let Some(mode) = self.mode_after_present.take() {
+                self.mode = mode;
+            }
             if let Some(layout) = self.layout_after_present.take() {
                 self.layout = layout;
             }
             Ok(true)
         }
+
+        fn presentation_mode(&self) -> PresentationMode {
+            self.mode
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestWindow {
+        observed: Rc<Cell<PresentationMode>>,
+    }
+
+    impl WindowBackend for TestWindow {
+        fn apply_window_mode(
+            &mut self,
+            mode: WindowMode,
+        ) -> Result<(), RenderError> {
+            if mode == WindowMode::Fullscreen {
+                Err(RenderError::Unsupported)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn input(
+            &self,
+            _limit: NonZeroUsize,
+        ) -> Result<InputPort, RenderError> {
+            Err(RenderError::Unsupported)
+        }
+
+        fn renderer_name(&self) -> String {
+            String::from("test")
+        }
+
+        fn with_frame(
+            &mut self,
+            layout: FrameLayout,
+            mode: PresentationMode,
+            run: &mut FrameRun<'_>,
+        ) -> Result<(), RenderError> {
+            self.observed.set(mode);
+            run(&mut TestFrame {
+                layout,
+                layout_after_poll: None,
+                layout_after_present: None,
+                mode,
+                mode_after_poll: None,
+                mode_after_present: None,
+                presented: Vec::new(),
+            })
+        }
+
+        fn with_scene(
+            &mut self,
+            _layout: FrameLayout,
+            mode: PresentationMode,
+            _run: &mut SceneRun<'_>,
+        ) -> Result<(), RenderError> {
+            self.observed.set(mode);
+            Err(RenderError::Unsupported)
+        }
+    }
+
+    #[test]
+    fn window_dispatches_only_admitted_presentation_mode()
+    -> Result<(), RenderError> {
+        let observed = Rc::new(Cell::new(PresentationMode::Adaptive));
+        let mut window = NativeWindow {
+            backend: Box::new(TestWindow {
+                observed: Rc::clone(&observed),
+            }),
+            mode: PresentationMode::default(),
+        };
+        let layout = FrameLayout::new(
+            NonZeroU32::MIN,
+            NonZeroU32::MIN,
+            NonZeroUsize::MAX,
+        )?;
+        for mode in [PresentationMode::AspectFit, PresentationMode::Integer] {
+            window.set_presentation_mode(mode);
+            check(
+                &window.with_frame(layout, |frame| frame.present(&[0; 4])),
+                &Ok(true),
+            )?;
+            check(&observed.get(), &mode)?;
+        }
+        check(
+            &window.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::Fill,
+                window: WindowMode::Fullscreen,
+            }),
+            &Err(RenderError::Unsupported),
+        )?;
+        window.with_frame(layout, |_| Ok(()))?;
+        check(&observed.get(), &PresentationMode::Integer)?;
+        window.apply_display_settings(DisplaySettings {
+            presentation: PresentationMode::Stretch,
+            window: WindowMode::Windowed,
+        })?;
+        let limits = super::SceneLimits {
+            atlas_bytes: NonZeroUsize::MIN,
+            atlases: NonZeroUsize::MIN,
+            sprites: NonZeroUsize::MIN,
+        };
+        check(
+            &window.with_scene(layout, limits, |_| Ok(())),
+            &Err(RenderError::Unsupported),
+        )?;
+        check(&observed.get(), &PresentationMode::Stretch)?;
+        Ok(())
     }
 
     #[test]
@@ -332,18 +474,28 @@ mod tests {
             layout: wrong,
             layout_after_poll: None,
             layout_after_present: None,
+            mode: PresentationMode::AspectFit,
+            mode_after_poll: None,
+            mode_after_present: None,
             presented: Vec::new(),
         };
         check(
-            &FrameSession::new(&mut frame, layout).err(),
+            &FrameSession::new(&mut frame, layout, PresentationMode::AspectFit)
+                .err(),
             &Some(RenderError::InvalidDimensions),
         )?;
         check(&frame.presented.is_empty(), &true)?;
+        frame.layout = layout;
+        check(
+            &FrameSession::new(&mut frame, layout, PresentationMode::Stretch)
+                .err(),
+            &Some(RenderError::InvalidDimensions),
+        )?;
         Ok(())
     }
 
     #[test]
-    fn frame_extent_changes_do_not_admit_presentation()
+    fn frame_geometry_changes_do_not_admit_presentation()
     -> Result<(), RenderError> {
         let layout = FrameLayout::new(
             NonZeroU32::MIN,
@@ -355,17 +507,28 @@ mod tests {
             NonZeroU32::MIN,
             NonZeroUsize::MAX,
         )?;
-        for (after_poll, after_present) in
-            [(Some(wider), None), (None, Some(wider))]
-        {
+        let changed = Some(PresentationMode::Stretch);
+        for (after_poll, after_present, mode_poll, mode_present) in [
+            (Some(wider), None, None, None),
+            (None, Some(wider), None, None),
+            (None, None, changed, None),
+            (None, None, None, changed),
+        ] {
             let mut frame = TestFrame {
                 layout,
                 layout_after_poll: after_poll,
                 layout_after_present: after_present,
+                mode: PresentationMode::AspectFit,
+                mode_after_poll: mode_poll,
+                mode_after_present: mode_present,
                 presented: Vec::new(),
             };
             {
-                let mut session = FrameSession::new(&mut frame, layout)?;
+                let mut session = FrameSession::new(
+                    &mut frame,
+                    layout,
+                    PresentationMode::AspectFit,
+                )?;
                 check(&session.poll_event(), &None)?;
                 check(
                     &session.present(&[0; 4]),
@@ -376,7 +539,8 @@ mod tests {
                     &Err(RenderError::InvalidDimensions),
                 )?;
             }
-            let expected: &[u8] = if after_poll.is_some() {
+            let expected: &[u8] = if after_poll.is_some() || mode_poll.is_some()
+            {
                 &[]
             } else {
                 &[0; 4]
@@ -397,16 +561,28 @@ mod tests {
             layout,
             layout_after_poll: None,
             layout_after_present: None,
+            mode: PresentationMode::AspectFit,
+            mode_after_poll: None,
+            mode_after_present: None,
             presented: Vec::new(),
         };
         {
-            let mut session = FrameSession::new(&mut frame, layout)?;
+            let mut session = FrameSession::new(
+                &mut frame,
+                layout,
+                PresentationMode::AspectFit,
+            )?;
             check(&session.present(&[0; 3]), &Err(RenderError::InvalidLength))?;
             check(&session.poll_event(), &None)?;
         }
         check(&frame.presented.is_empty(), &true)?;
         check(
-            &FrameSession::new(&mut frame, layout)?.present(&[1, 2, 3, 4]),
+            &FrameSession::new(
+                &mut frame,
+                layout,
+                PresentationMode::AspectFit,
+            )?
+            .present(&[1, 2, 3, 4]),
             &Ok(true),
         )?;
         check(&frame.presented, &[1, 2, 3, 4])?;

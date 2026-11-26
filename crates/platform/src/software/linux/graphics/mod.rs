@@ -38,8 +38,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::presentation::{
-    Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
-    Viewport, WindowMode,
+    Dimensions, PresentationLayout, PresentationMode, Viewport, WindowMode,
 };
 #[cfg(test)]
 use sdl2::event::Event;
@@ -55,7 +54,6 @@ use sdl2::{EventPump, Sdl, TimerSubsystem};
 use self::scene_renderer::{LinuxScene, SceneTextures};
 use super::input::{open_input, sample};
 use crate::ir::frame::{AdmittedRgba, FrameLayout, RenderError};
-use crate::ir::graphics::scene_renderer::SceneBackend as _;
 use crate::ir::graphics::{
     FrameBackend, FrameRun, SceneRun, WindowBackend, WindowPort,
 };
@@ -72,7 +70,6 @@ const MINIMIZED_FLAG: u32 = 64;
 struct LinuxWindow {
     canvas: WindowCanvas,
     diagnostic_hidden: bool,
-    mode: PresentationMode,
     sdl: Sdl,
 }
 
@@ -87,13 +84,11 @@ impl WindowBackend for LinuxWindow {
     /// Fullscreen uses the desktop mode, not a resolution change.
     /// # Errors
     /// Reports a native window mode transition failure.
-    fn apply_display_settings(
+    fn apply_window_mode(
         &mut self,
-        settings: DisplaySettings,
+        mode: WindowMode,
     ) -> Result<(), RenderError> {
-        apply_window_mode(&mut self.canvas, settings.window)?;
-        self.set_presentation_mode(settings.presentation);
-        Ok(())
+        apply_window_mode(&mut self.canvas, mode)
     }
 
     /// Open native input and return initial controller attachment events.
@@ -112,12 +107,6 @@ impl WindowBackend for LinuxWindow {
         self.canvas.info().name.to_owned()
     }
 
-    /// Select the presentation mode for subsequent frame and scene sessions.
-    /// Does not change the logical design dimensions.
-    fn set_presentation_mode(&mut self, mode: PresentationMode) {
-        self.mode = mode;
-    }
-
     /// Reuse one texture and event pump for the caller's presentation loop.
     ///
     /// The texture never escapes its owning canvas, so a frame session
@@ -128,6 +117,7 @@ impl WindowBackend for LinuxWindow {
     fn with_frame(
         &mut self,
         layout: FrameLayout,
+        mode: PresentationMode,
         run: &mut FrameRun<'_>,
     ) -> Result<(), RenderError> {
         let creator = self.canvas.texture_creator();
@@ -137,7 +127,7 @@ impl WindowBackend for LinuxWindow {
             canvas: &mut self.canvas,
             diagnostic_hidden: self.diagnostic_hidden,
             events,
-            presentation: FramePresentation { layout, mode: self.mode },
+            presentation: FramePresentation { layout, mode },
             texture,
             timer: self.sdl.timer().map_err(RenderError::Backend)?,
         };
@@ -153,20 +143,19 @@ impl WindowBackend for LinuxWindow {
     fn with_scene(
         &mut self,
         layout: FrameLayout,
+        mode: PresentationMode,
         run: &mut SceneRun<'_>,
     ) -> Result<(), RenderError> {
         let creator = self.canvas.texture_creator();
         let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
-        let textures = SceneTextures::new(&creator, layout, self.mode)?;
+        let textures = SceneTextures::new(&creator, layout, mode)?;
         let mut backend = LinuxScene::new(
             (&mut self.canvas, self.diagnostic_hidden),
             events,
             textures,
             self.sdl.timer().map_err(RenderError::Backend)?,
         )?;
-        let result = run(&mut backend);
-        self.mode = backend.presentation_mode();
-        result
+        run(&mut backend)
     }
 }
 
@@ -208,7 +197,6 @@ impl LinuxWindow {
         Ok(Self {
             canvas,
             diagnostic_hidden: hidden,
-            mode: PresentationMode::default(),
             sdl,
         })
     }
@@ -282,6 +270,10 @@ impl FrameBackend for LinuxFrame<'_, '_> {
             self.canvas.present();
         }
         Ok(drawn)
+    }
+
+    fn presentation_mode(&self) -> PresentationMode {
+        self.presentation.mode
     }
 }
 
@@ -455,8 +447,8 @@ mod tests {
         MINIMIZED_FLAG, RenderError, WindowBackend as _, create_texture,
         draw_frame, drawable_allowed, sample,
     };
-    use crate::ir::graphics::FrameSession;
     use crate::ir::graphics::scene_renderer::SceneSession;
+    use crate::ir::graphics::{FrameSession, NativeWindow};
     use crate::ir::hardware::{InputSample, InputTransition};
     use crate::ir::input::{
         HostEvent, InputStartup, NativeInput, key_from_name,
@@ -731,34 +723,94 @@ mod tests {
         let renderer_name = window.renderer_name();
         require(!renderer_name.is_empty(), "missing renderer name")?;
         let expected_name = renderer_name.clone();
-        window.with_frame(extent()?, &mut |backend| {
-            let mut frame = FrameSession::new(backend, extent()?)?;
-            let pixels = [RED, GREEN, BLUE, WHITE];
-            require(frame.present(pixels.as_flattened())?, "no drawable")?;
-            let replacement = [BLUE; 4];
-            require(
-                frame.present(replacement.as_flattened())?,
-                "second frame not drawn",
-            )
-        })?;
+        verify_frame_session(&mut window)?;
         let events = window.sdl.event().map_err(RenderError::Backend)?;
         let timer = window.sdl.timer().map_err(RenderError::Backend)?;
         let window_id = window.canvas.window().id();
         let mut touch_input =
             InputStartup::new(window.input(budget(1))?, budget(1))?.input;
         touch_input.enable_touch();
-        window.with_scene(extent()?, &mut |backend| {
-            let mut scene =
-                SceneSession::new(backend, extent()?, SceneLimits {
-                    atlas_bytes: budget(16),
-                    atlases: budget(1),
-                    sprites: budget(2),
-                })?;
-            verify_native_batches(&mut scene, &events, window_id)?;
-            verify_sprite_scene(&mut scene, &mut touch_input, &timer, window_id)
-        })?;
+        window.with_scene(
+            extent()?,
+            PresentationMode::AspectFit,
+            &mut |backend| {
+                let mut scene = SceneSession::new(
+                    backend,
+                    extent()?,
+                    SceneLimits {
+                        atlas_bytes: budget(16),
+                        atlases: budget(1),
+                        sprites: budget(2),
+                    },
+                    PresentationMode::AspectFit,
+                )?;
+                verify_native_batches(&mut scene, &events, window_id)?;
+                verify_sprite_scene(
+                    &mut scene,
+                    &mut touch_input,
+                    &timer,
+                    window_id,
+                )
+            },
+        )?;
         drop(window);
-        require(renderer_name == expected_name, "renderer name changed")
+        require(renderer_name == expected_name, "renderer name changed")?;
+        verify_public_window_mode()
+    }
+
+    fn verify_frame_session(
+        window: &mut LinuxWindow,
+    ) -> Result<(), RenderError> {
+        window.with_frame(
+            extent()?,
+            PresentationMode::AspectFit,
+            &mut |backend| {
+                let mut frame = FrameSession::new(
+                    backend,
+                    extent()?,
+                    PresentationMode::AspectFit,
+                )?;
+                let pixels = [RED, GREEN, BLUE, WHITE];
+                require(frame.present(pixels.as_flattened())?, "no drawable")?;
+                let replacement = [BLUE; 4];
+                require(
+                    frame.present(replacement.as_flattened())?,
+                    "second frame not drawn",
+                )
+            },
+        )
+    }
+
+    fn verify_public_window_mode() -> Result<(), RenderError> {
+        let mut window =
+            NativeWindow::open("games mode smoke", nz(96), nz(48), true)?;
+        window.set_presentation_mode(PresentationMode::Stretch);
+        let limits = SceneLimits {
+            atlas_bytes: budget(16),
+            atlases: budget(1),
+            sprites: budget(1),
+        };
+        let edge = TouchPoint { x: 0, y: 32_768 };
+        let result = window.with_scene(extent()?, limits, |scene| {
+            require(scene.present([0; 3], &[])?, "no stretched scene")?;
+            require(
+                scene.logical_touch(edge)? == Some(edge),
+                "initial requested mode was lost",
+            )?;
+            scene.apply_display_settings(DisplaySettings::default())?;
+            Err::<(), _>(RenderError::InvalidLength)
+        });
+        require(
+            result == Err(RenderError::InvalidLength),
+            "callback failure was not propagated",
+        )?;
+        window.with_scene(extent()?, limits, |scene| {
+            require(scene.present([0; 3], &[])?, "no fitted scene")?;
+            require(
+                scene.logical_touch(edge)?.is_none(),
+                "successful mode change was lost after callback failure",
+            )
+        })
     }
 
     fn verify_sprite_scene(
@@ -979,16 +1031,13 @@ mod tests {
             (WindowMode::Fullscreen, FullscreenType::Desktop),
             (WindowMode::Windowed, FullscreenType::Off),
         ] {
-            window.apply_display_settings(DisplaySettings {
-                presentation: PresentationMode::Integer,
-                window: mode,
-            })?;
+            window.apply_window_mode(mode)?;
             require(
                 window.canvas.window().fullscreen_state() == expected,
                 "wrong fullscreen state",
             )?;
         }
-        window.apply_display_settings(DisplaySettings::default())
+        window.apply_window_mode(WindowMode::default())
     }
 
     fn observed_key(event: &InputSample) -> Option<KeyboardKey> {
