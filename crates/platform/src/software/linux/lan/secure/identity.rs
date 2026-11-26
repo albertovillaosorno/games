@@ -23,7 +23,7 @@
 // - Summary:
 //   - Import independent LAN identities and assemble explicit trust stores.
 // - Description:
-//   - Verifies the role, root, leaf and key before creating TLS configs.
+//   - Verifies certificate purpose, root, leaf and key before configuration.
 // - Usage:
 //   - Exchange public roots and fingerprints through a trusted channel.
 // - Defaults:
@@ -49,12 +49,6 @@ use crate::ir::lan::identity::PublicIdentity;
 use crate::ir::security::lan::CredentialKind;
 use crate::ir::security::lan::host::ClientApprovals;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Role {
-    Client,
-    Host,
-}
-
 /// Local private leaf credentials with no private-key export operation.
 ///
 /// Accepts a leaf directly signed by an independent local root, with no
@@ -62,13 +56,11 @@ enum Role {
 pub(super) struct LocalIdentity {
     certified: Arc<CertifiedKey>,
     public: PublicIdentity,
-    role: Role,
 }
 
 impl Debug for LocalIdentity {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalIdentity")
-            .field("role", &self.role)
             .field("fingerprint", &self.public.fingerprint())
             .finish_non_exhaustive()
     }
@@ -86,7 +78,7 @@ impl LocalIdentity {
         leaf_der: &[u8],
         key_der: &[u8],
     ) -> io::Result<Self> {
-        let identity = Self::import(Role::Client, root_der, leaf_der, key_der)?;
+        let identity = Self::import(root_der, leaf_der, key_der)?;
         let verifier = WebPkiClientVerifier::builder_with_provider(
             Arc::new(root_store(identity.public.root_der())?),
             Arc::new(default_provider()),
@@ -109,14 +101,11 @@ impl LocalIdentity {
     /// Configure a client to accept only the separately approved host.
     ///
     /// # Errors
-    /// Rejects host-role credentials or invalid TLS configuration.
+    /// Rejects invalid TLS configuration; the IR admits the credential role.
     pub(super) fn client_tls(
         &self,
         host: &PublicIdentity,
     ) -> io::Result<ClientTls> {
-        if self.role != Role::Client {
-            return Err(ErrorKind::InvalidInput.into());
-        }
         ClientTls::from_identity(
             root_store(host.root_der())?,
             Arc::clone(&self.certified),
@@ -137,7 +126,7 @@ impl LocalIdentity {
         leaf_der: &[u8],
         key_der: &[u8],
     ) -> io::Result<Self> {
-        let identity = Self::import(Role::Host, root_der, leaf_der, key_der)?;
+        let identity = Self::import(root_der, leaf_der, key_der)?;
         let server_name =
             ServerName::try_from(name).map_err(io::Error::other)?;
         let verifier = WebPkiServerVerifier::builder_with_provider(
@@ -162,7 +151,6 @@ impl LocalIdentity {
     }
 
     fn import(
-        role: Role,
         root_der: &[u8],
         leaf_der: &[u8],
         key_der: &[u8],
@@ -182,7 +170,6 @@ impl LocalIdentity {
         Ok(Self {
             certified: Arc::new(checked),
             public,
-            role,
         })
     }
 
@@ -198,15 +185,12 @@ impl LocalIdentity {
     /// its `HostSession` before admitting any game messages.
     ///
     /// # Errors
-    /// Rejects wrong role or invalid TLS configuration; portable approval
-    /// admission has already checked the client list.
+    /// Rejects invalid TLS configuration; the portable facade
+    /// has already admitted the role and client list.
     pub(super) fn server_tls(
         &self,
         approvals: &ClientApprovals<'_>,
     ) -> io::Result<ServerTls> {
-        if self.role != Role::Host {
-            return Err(ErrorKind::InvalidInput.into());
-        }
         let mut roots = RootCertStore::empty();
         for client in approvals.clients() {
             roots
@@ -252,6 +236,7 @@ mod tests {
     use super::super::{PeerFingerprint, SecureLanListener};
     use super::{ClientApprovals, LocalIdentity, PublicIdentity, ServerTls};
     use crate::ir::lan::FrameBackend as _;
+    use crate::ir::lan::identity::LocalIdentity as PortableIdentity;
 
     const HOST: &str = "games.test";
 
@@ -267,7 +252,10 @@ mod tests {
         KeyPair::generate().map_err(io::Error::other)
     }
 
-    fn device(host: bool) -> io::Result<LocalIdentity> {
+    fn device<Identity>(
+        host: bool,
+        import: impl FnOnce(&[u8], &[u8], &[u8]) -> io::Result<Identity>,
+    ) -> io::Result<Identity> {
         let root = authority()?;
         let key = key()?;
         let mut params = if host {
@@ -283,28 +271,35 @@ mod tests {
         }];
         let cert = params.signed_by(&key, &root).map_err(io::Error::other)?;
         let encoded = key.serialize_der();
-        if host {
-            LocalIdentity::host(
-                HOST,
-                root.der().as_ref(),
-                cert.der().as_ref(),
-                &encoded,
-            )
-        } else {
-            LocalIdentity::client(
-                root.der().as_ref(),
-                cert.der().as_ref(),
-                &encoded,
-            )
-        }
+        import(root.der().as_ref(), cert.der().as_ref(), &encoded)
+    }
+
+    fn native_device(host: bool) -> io::Result<LocalIdentity> {
+        device(host, |root, leaf, key| {
+            if host {
+                LocalIdentity::host(HOST, root, leaf, key)
+            } else {
+                LocalIdentity::client(root, leaf, key)
+            }
+        })
+    }
+
+    fn portable_device(host: bool) -> io::Result<PortableIdentity> {
+        device(host, |root, leaf, key| {
+            if host {
+                PortableIdentity::host(HOST, root, leaf, key)
+            } else {
+                PortableIdentity::client(root, leaf, key)
+            }
+        })
     }
 
     #[test]
     fn independent_device_credentials_enable_verified_local_play()
     -> io::Result<()> {
-        let host = device(true)?;
-        let client = device(false)?;
-        let stranger = device(false)?;
+        let host = native_device(true)?;
+        let client = native_device(false)?;
+        let stranger = native_device(false)?;
         require(
             client.public() != stranger.public(),
             "independent clients reused credentials",
@@ -351,20 +346,20 @@ mod tests {
 
     #[test]
     fn wrong_roles_and_duplicate_approvals_fail_closed() -> io::Result<()> {
-        let host = device(true)?;
-        let client = device(false)?;
+        let host = portable_device(true)?;
+        let client = portable_device(false)?;
         let approved = from_ref(client.public());
         let duplicate = [client.public().clone(), client.public().clone()];
         let session = session_config(true);
         require(
             host.client_tls(host.public()).is_err()
-                && server_tls(&client, session, approved).is_err()
-                && server_tls(&host, session, &[]).is_err()
-                && server_tls(&host, session, &duplicate).is_err(),
+                && client.server_tls(session, approved).is_err()
+                && host.server_tls(session, &[]).is_err()
+                && host.server_tls(session, &duplicate).is_err(),
             "invalid role or approval list accepted",
         )?;
         require(
-            server_tls(&host, session_config(false), approved)
+            host.server_tls(session_config(false), approved)
                 .err()
                 .is_some_and(|error| {
                     error.kind() == ErrorKind::PermissionDenied

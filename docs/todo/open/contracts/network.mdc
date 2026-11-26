@@ -749,3 +749,14 @@ reverses its station. Fresh validation passed in run
 1795653536950945801-1989943 (1,541 aggregate test executions) with native
 rendering, dummy audio and six portable core targets. This does not verify
 separate physical devices, physical controllers or real network partitions.
+
+Local identity handles now admit their verified client or host role before
+calling the credential configuration port. Native import still verifies
+certificate purpose, validity, chain, key and host name; the portable
+contract owns selection of the admitted role. Synthetic port tests verify
+that opposite-role requests never dispatch and valid client requests do.
+The real credential test exercises role and approval rejection through the
+public facade. Fresh validation passed in run
+1795653669351514168-2041456 (1,545 aggregate test executions), including
+native mutual TLS, the four-station regression, rendering, dummy audio
+and all six portable core targets. Physical LAN acceptance remains open.

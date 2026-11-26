@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable public identity and opaque private credential handles.
+//   - Portable public identity, credential roles and opaque private handles.
 // - Must-Not:
 //   - Expose signing keys, generate credentials or establish implicit trust.
 // - Allows:
@@ -23,7 +23,7 @@
 // - Summary:
 //   - Explicit local enrolment without exposing a backend or private key.
 // - Description:
-//   - Separates portable public bytes from opaque verified credentials.
+//   - Admits role-specific use of opaque verified credentials.
 // - Usage:
 //   - Provision identities out of band and admit approved trust explicitly.
 // - Defaults:
@@ -95,16 +95,33 @@ pub(crate) trait IdentityBackend: Send + Sync {
 
 pub(crate) type IdentityPort = Box<dyn IdentityBackend>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdentityRole {
+    Client,
+    Host,
+}
+
+impl IdentityRole {
+    fn admit(self, expected: Self) -> Result<()> {
+        if self != expected {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        Ok(())
+    }
+}
+
 /// Locally provisioned private identity with no private-key export operation.
 /// Certificate issuance and storage remain external.
 pub struct LocalIdentity {
     backend: IdentityPort,
+    role: IdentityRole,
 }
 
 impl Debug for LocalIdentity {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalIdentity")
             .field("fingerprint", &self.public().fingerprint())
+            .field("role", &self.role)
             .finish_non_exhaustive()
     }
 }
@@ -124,7 +141,10 @@ impl LocalIdentity {
         admit_credentials(root_der, leaf_der, key_der)?;
         let backend =
             <() as LanFactory>::client_identity(root_der, leaf_der, key_der)?;
-        Ok(Self { backend })
+        Ok(Self {
+            backend,
+            role: IdentityRole::Client,
+        })
     }
 
     /// Configure a client to accept only the separately approved host.
@@ -132,6 +152,7 @@ impl LocalIdentity {
     /// # Errors
     /// Rejects host-role credentials or invalid TLS configuration.
     pub fn client_tls(&self, host: &PublicIdentity) -> Result<ClientTls> {
+        self.role.admit(IdentityRole::Client)?;
         self.backend.client_credentials(host)
     }
 
@@ -151,7 +172,10 @@ impl LocalIdentity {
         let backend = <() as LanFactory>::host_identity(
             name, root_der, leaf_der, key_der,
         )?;
-        Ok(Self { backend })
+        Ok(Self {
+            backend,
+            role: IdentityRole::Host,
+        })
     }
 
     /// Public trust material; never contains either private key.
@@ -171,6 +195,7 @@ impl LocalIdentity {
         clients: &[PublicIdentity],
     ) -> Result<ServerTls> {
         let approvals = ClientApprovals::new(config, clients)?;
+        self.role.admit(IdentityRole::Host)?;
         let backend = self.backend.server_credentials(&approvals)?;
         Ok(ServerTls {
             approved: Arc::new(approvals.into_pins()),
@@ -211,7 +236,8 @@ mod tests {
             &self,
             _host: &PublicIdentity,
         ) -> Result<ClientTls> {
-            Err(ErrorKind::Unsupported.into())
+            self.dispatched.store(true, Ordering::Release);
+            Ok(ClientTls(Arc::new(())))
         }
 
         fn public_material(&self) -> &PublicIdentity {
@@ -235,13 +261,13 @@ mod tests {
         }
     }
 
-    fn fixture() -> (LocalIdentity, Arc<AtomicBool>) {
+    fn fixture(role: IdentityRole) -> (LocalIdentity, Arc<AtomicBool>) {
         let dispatched = Arc::new(AtomicBool::new(false));
         let backend = Box::new(ObservedIdentity {
             dispatched: Arc::clone(&dispatched),
             public: public(0),
         });
-        (LocalIdentity { backend }, dispatched)
+        (LocalIdentity { backend, role }, dispatched)
     }
 
     fn config() -> SessionConfig {
@@ -253,8 +279,35 @@ mod tests {
     }
 
     #[test]
+    fn opposite_credential_roles_never_dispatch() {
+        let (host, host_dispatch) = fixture(IdentityRole::Host);
+        let (client, client_dispatch) = fixture(IdentityRole::Client);
+        let approved = public(1);
+        assert_eq!(
+            host.client_tls(&approved).err().map(|error| error.kind()),
+            Some(ErrorKind::InvalidInput)
+        );
+        assert_eq!(
+            client
+                .server_tls(config(), &[approved])
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::InvalidInput)
+        );
+        assert!(!host_dispatch.load(Ordering::Acquire));
+        assert!(!client_dispatch.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn client_credentials_dispatch_only_for_a_client_identity() {
+        let (client, dispatched) = fixture(IdentityRole::Client);
+        assert!(client.client_tls(&public(1)).is_ok());
+        assert!(dispatched.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn duplicate_or_excessive_approvals_never_dispatch() {
-        let (identity, dispatched) = fixture();
+        let (identity, dispatched) = fixture(IdentityRole::Host);
         for approvals in [vec![], vec![public(1), public(1)], vec![
             public(1),
             public(2),
@@ -273,7 +326,7 @@ mod tests {
 
     #[test]
     fn disabled_approval_never_dispatches() {
-        let (identity, dispatched) = fixture();
+        let (identity, dispatched) = fixture(IdentityRole::Host);
         let mut disabled = config();
         disabled.allow_lan = false;
         assert_eq!(
@@ -288,7 +341,7 @@ mod tests {
 
     #[test]
     fn admitted_credential_handle_retains_only_approved_pins() -> Result<()> {
-        let (identity, dispatched) = fixture();
+        let (identity, dispatched) = fixture(IdentityRole::Host);
         let tls = identity.server_tls(config(), &[public(1), public(2)])?;
         let expected =
             BTreeSet::from([public(1).fingerprint(), public(2).fingerprint()]);
