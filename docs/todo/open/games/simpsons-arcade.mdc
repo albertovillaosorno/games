@@ -106,8 +106,11 @@ Using the same verified source and limits, the GNU/Linux host command
 `mame check` read both declared payloads and verified
 the manifest identity above. Repeating publication returned a collision;
 read-back still succeeded, and no staging directory remained.
-No assets are tracked. Palette reconstruction, audio, rendering and remake
-gameplay remain unverified.
+No assets are tracked. This historical derived bundle root was later
+migrated to the configured shared asset namespace; see the native
+packaging task for cutover and retirement evidence. Palette
+reconstruction, audio, rendering and remake gameplay were unverified
+at this checkpoint.
 
 Reference execution is now available locally. The official Fedora 45
 MAME 0.289-1.x86_64 RPM and seven dependency RPMs passed signature and

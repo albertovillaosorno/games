@@ -206,3 +206,38 @@ media, legacy bundle or catalogue was changed. This establishes
 consumer compatibility for the selected catalogues; persistent
 configured-store cutover, catalogue retirement and physical devices
 remain open.
+
+Configured Simpsons cutover passed on 2026-11-25. The atomic migration
+command verified the authored release consumer before and after
+no-replace publication. Independent readback admitted 252 normalized
+manifests, 486 objects (43,026,520 object bytes) and all five published
+catalogue files. The three legacy sidecars and the selected 189-record
+pose catalogue were translated into the same asset namespace.
+
+A broader inventory accounted for 59 private operational launch
+catalogues, 410 manifest references and 17 distinct pose catalogues
+containing 2,408 records. All addresses resolved to the published
+store. The original launch text, 321 exact legacy manifests and three
+legacy sidecars were archived in the ignored reference ledger and
+verified byte-for-byte. The 59 operational launch files were relocated;
+unselected fields were preserved. A fresh audit and independent byte
+comparisons verified all 955 old physical payload files against the
+shared objects. After quarantining the old derived tree, both the
+existing packaged executable's default local catalogue and a relocated
+diagnostic catalogue passed hidden native smoke from an unrelated
+working directory. Only the verified redundant payloads and archived
+metadata were retired. The original ROM and published file hashes
+were unchanged. The old derived store is absent; the configured
+asset store is the sole operational Simpsons content namespace.
+Original private diagnostic evidence remains in the ledger.
+
+The existing package's new executable-adjacent local catalogue uses
+relative paths to shared assets. A repeat configured package request
+was rejected without changing any asset hash. Each staged, relocated
+and packaged smoke verified 444 camera columns, two cooperative pose
+families, six reinforcement meters, 600 movement and 20 combat
+submissions with no 16.667 ms host-work budget misses. These hidden
+X11/OpenGL runs used dummy audio; no new physical device, visible
+maximized display or audible output acceptance is claimed. Other
+titles' legacy stores, native control remapping, physical input and
+audio, portable ABI and gameplay parity remain separate open work.

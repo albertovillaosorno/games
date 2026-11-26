@@ -41,7 +41,8 @@ The legacy per-bundle payload layout remains readable, but cannot be
 used for new publication. Migrate existing bundles without creating a
 second asset store, verify all pinned manifests and update their launch
 catalogues before removing redundant files. A legacy root is rejected
-rather than automatically copied. The physical migration remains open.
+rather than automatically copied. Physical cutover and retirement are
+verified per title; see the native task for actual deployment evidence.
 
 Run a bounded read-only audit before cutover:
 
