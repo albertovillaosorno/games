@@ -1583,7 +1583,7 @@ const fn settings_hint(
     if hidden {
         "SMOKE DOES NOT SAVE SETTINGS"
     } else if !persistent {
-        "USE --SETTINGS DIR TO SAVE"
+        "SETTINGS ARE SESSION ONLY"
     } else if editor {
         "CONTROL EDITS APPLY NEXT LAUNCH"
     } else {
@@ -1615,7 +1615,8 @@ fn desktop_hint(
 ) -> String {
     let keyboard = key.map(|code| {
         let label = key_label(code);
-        if label.len() > 12 {
+        // Two 13-character keys with mouse labels fit the pause plate.
+        if label.len() > 13 {
             "PROFILE"
         } else {
             label
@@ -3692,7 +3693,7 @@ mod tests {
         );
         assert_eq!(
             settings_hint(false, false, false),
-            "USE --SETTINGS DIR TO SAVE"
+            "SETTINGS ARE SESSION ONLY"
         );
         assert_eq!(
             settings_hint(false, true, false),
@@ -3756,6 +3757,31 @@ mod tests {
         assert_eq!(combat, "ATTACK: F JUMP: MOUSE MIDDLE");
         assert!(resume.contains("MOUSE X1"));
         assert!(resume.contains("START RESUMES"));
+    }
+
+    #[test]
+    fn pause_hints_fit_extended_keyboard_and_mouse_labels() {
+        use games_platform::ir::ui::TextLine;
+
+        use super::{MENU_WIDTH, PointerButton, desktop_hint};
+
+        let binding = desktop_hint(
+            Some(KeyboardKey::from_code(100)),
+            Some(PointerButton::Middle),
+        );
+        assert_eq!(binding, "IntlBackslash/MOUSE MIDDLE");
+        let text = format!("P4 LEFT: {binding} RIGHT: {binding}");
+        assert!(
+            TextLine {
+                color: [255; 4],
+                scale: 2,
+                text: &text,
+                top: 0,
+            }
+            .fit_width(MENU_WIDTH)
+            .scale
+                > 0
+        );
     }
 
     #[test]
