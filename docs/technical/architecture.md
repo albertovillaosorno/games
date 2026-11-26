@@ -101,7 +101,7 @@ docs/todo task record. Do not add another TODO.md inside a crate, tool
 or documentation directory.
 
 The canonical migration remains the
-[P1 platform task](../todo/open/contracts/platform-ir.mdc).
+[P1 platform task](../todo/completed/contracts/platform-ir.mdc).
 No new title work may bypass that prerequisite.
 
 ## Shared engine and platform contracts

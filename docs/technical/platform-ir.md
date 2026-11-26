@@ -131,7 +131,7 @@ WebAssembly, Windows and macOS are planned and require runtime and packaging
 adapters. Every target must use the same portable contracts, not a
 separate game engine. No native Windows runtime is verified here.
 
-The [P1 isolation task](../todo/open/contracts/platform-ir.mdc) is the
+The [P1 isolation task](../todo/completed/contracts/platform-ir.mdc) is the
 canonical migration and acceptance record. The original validator inventory
 recorded 253 occurrences in 27 files. The migration baseline has been removed:
 the preflight rejects every detected occurrence outside its authorized
