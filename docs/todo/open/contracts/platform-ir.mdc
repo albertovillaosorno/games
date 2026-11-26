@@ -447,3 +447,13 @@ Synthetic regressions cover inclusive signed limits, both axes, rejected
 commands without backend calls and exact admitted order. Fresh X11 and
 dummy-audio validation 1795654497995277316-2294362 passed 1,563 aggregate
 test executions and all six portable core checks.
+
+The portable scene session now records the exact admitted receipt of each
+completed presentation. It verifies the returned logical extent, source,
+destination and surface against the shared presentation policy, then admits
+touch geometry only while the observed drawable remains available and matches
+that receipt. The adapter reports actual presentation and surface observations;
+it no longer owns the stale-geometry policy. Synthetic controls exercise
+invalid receipts, native failures, retries, unavailable surfaces and stale
+geometry. Fresh X11 and dummy-audio validation 1795654793324438808-2367535
+passed 1,571 aggregate test executions and all six portable core checks.

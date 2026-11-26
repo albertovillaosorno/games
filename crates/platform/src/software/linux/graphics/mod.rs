@@ -375,19 +375,9 @@ fn drawable_viewport<Target>(
 where
     Target: RenderTarget,
 {
-    let (output_width, output_height) =
-        canvas.output_size().map_err(RenderError::Backend)?;
-    let (Some(width), Some(height)) = (
-        NonZeroU32::new(output_width),
-        NonZeroU32::new(output_height),
-    ) else {
-        return Ok(None);
-    };
-    validate_dimensions(width, height)?;
-    Ok(Some(mode.layout(
-        Dimensions::new(width, height),
-        Dimensions::new(layout.width(), layout.height()),
-    )))
+    output_dimensions(canvas)?
+        .map(|surface| layout.presentation(mode, surface))
+        .transpose()
 }
 
 fn native_rect(viewport: Viewport) -> Result<Rect, RenderError> {
@@ -396,6 +386,18 @@ fn native_rect(viewport: Viewport) -> Result<Rect, RenderError> {
     let top = i32::try_from(viewport.y)
         .map_err(|_error| RenderError::InvalidDimensions)?;
     Ok(Rect::new(left, top, viewport.width, viewport.height))
+}
+
+fn output_dimensions<Target>(
+    canvas: &Canvas<Target>,
+) -> Result<Option<Dimensions>, RenderError>
+where
+    Target: RenderTarget,
+{
+    let (width, height) = canvas.output_size().map_err(RenderError::Backend)?;
+    Ok(NonZeroU32::new(width)
+        .zip(NonZeroU32::new(height))
+        .map(|(columns, rows)| Dimensions::new(columns, rows)))
 }
 
 fn validate_dimensions(

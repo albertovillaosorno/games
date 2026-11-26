@@ -32,7 +32,6 @@
 //! Ordered native sprite composition over persistent texture atlases.
 
 use std::fmt::{self, Debug, Formatter};
-use std::num::NonZeroU32;
 
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
@@ -49,7 +48,7 @@ use sdl2::{EventPump, TimerSubsystem};
 use super::super::input::sample;
 use super::{
     apply_window_mode, copy_to_viewport, drawable_allowed, drawable_viewport,
-    validate_dimensions,
+    output_dimensions, validate_dimensions,
 };
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend;
@@ -206,7 +205,6 @@ pub(super) struct LinuxScene<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
     diagnostic_hidden: bool,
     events: EventPump,
-    last_presented: Option<PresentationLayout>,
     textures: SceneTextures<'texture, WindowContext>,
     timer: TimerSubsystem,
 }
@@ -233,10 +231,11 @@ impl SceneBackend for LinuxScene<'_, '_> {
         Ok(())
     }
 
-    /// Exact layout of the last completed presentation attempt.
-    /// None before presentation or when no drawable was available.
-    fn last_presented_layout(&self) -> Option<PresentationLayout> {
-        self.last_presented
+    fn drawable_available(&self) -> bool {
+        drawable_allowed(
+            self.canvas.window().window_flags(),
+            self.diagnostic_hidden,
+        )
     }
 
     /// Current logical target, including any admitted adaptive extension.
@@ -276,21 +275,16 @@ impl SceneBackend for LinuxScene<'_, '_> {
         &mut self,
         background: [u8; 3],
         sprites: AdmittedDraws<'_>,
-    ) -> Result<bool, RenderError> {
-        if !drawable_allowed(
-            self.canvas.window().window_flags(),
-            self.diagnostic_hidden,
-        ) {
+    ) -> Result<Option<PresentationLayout>, RenderError> {
+        if !self.drawable_available() {
             self.textures.atlases.validate(sprites.as_slice())?;
-            self.last_presented = None;
-            return Ok(false);
+            return Ok(None);
         }
         let drawable = self.textures.draw(self.canvas, background, sprites)?;
         if drawable.is_some() {
             self.canvas.present();
         }
-        self.last_presented = drawable;
-        Ok(drawable.is_some())
+        Ok(drawable)
     }
 
     fn presentation_mode(&self) -> PresentationMode {
@@ -317,35 +311,7 @@ impl SceneBackend for LinuxScene<'_, '_> {
     }
 
     fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError> {
-        let (width, height) =
-            self.canvas.output_size().map_err(RenderError::Backend)?;
-        Ok(NonZeroU32::new(width)
-            .zip(NonZeroU32::new(height))
-            .map(|(columns, rows)| Dimensions::new(columns, rows)))
-    }
-
-    /// Observe the last presented layout if it matches current geometry.
-    /// # Errors
-    /// Reports failure to query the drawable dimensions.
-    fn visible_layout(
-        &self,
-    ) -> Result<Option<PresentationLayout>, RenderError> {
-        if !drawable_allowed(
-            self.canvas.window().window_flags(),
-            self.diagnostic_hidden,
-        ) {
-            return Ok(None);
-        }
-        let current = drawable_viewport(
-            self.canvas,
-            self.textures.layout,
-            self.textures.mode,
-        )?;
-        // A resize or policy change can precede the next completed draw.
-        // Never interpret a touch against controls not yet presented.
-        Ok(self
-            .last_presented
-            .filter(|layout| Some(*layout) == current))
+        output_dimensions(self.canvas)
     }
 }
 
@@ -365,7 +331,6 @@ impl<'canvas, 'texture> LinuxScene<'canvas, 'texture> {
             canvas,
             diagnostic_hidden,
             events,
-            last_presented: None,
             textures,
             timer,
         })

@@ -9,12 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Backend-independent RGBA frame layout and rendering error values.
+//   - Portable RGBA frame layout, presentation geometry and rendering errors.
 // - Must-Not:
 //   - Allocate native resources or choose a rendering backend.
 // - Allows:
 //   - Inputs: Explicit dimensions and caller-provided byte budget.
-//   - Outputs: Checked pixel dimensions, stride and byte count.
+//   - Outputs: Checked pixel dimensions, stride, byte count and presentation
+//     layout.
 //   - Side effects: None.
 // - Split-When:
 //   - Additional pixel formats need independent layout policies.
@@ -33,7 +34,9 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use games::presentation::{Dimensions, PresentationMode, SpriteRect};
+use games::presentation::{
+    Dimensions, PresentationLayout, PresentationMode, SpriteRect,
+};
 
 // Keep both ends of a signed rectangle representable.
 const MAX_RECTANGLE_EXTENT: u32 = 1_073_741_823;
@@ -115,6 +118,18 @@ impl FrameLayout {
         self.pitch
     }
 
+    /// Select the checked portable geometry of a drawable surface.
+    /// # Errors
+    /// Rejects dimensions outside the portable rectangle range.
+    pub fn presentation(
+        self,
+        mode: PresentationMode,
+        surface: Dimensions,
+    ) -> Result<PresentationLayout, RenderError> {
+        validate_extent(surface.width, surface.height)?;
+        Ok(mode.layout(surface, Dimensions::new(self.width, self.height)))
+    }
+
     /// Logical width of the frame.
     #[must_use]
     pub const fn width(self) -> NonZeroU32 {
@@ -161,9 +176,14 @@ impl AdaptiveWidthRequest {
         surface: Option<Dimensions>,
     ) -> Result<FrameLayout, RenderError> {
         let base = Dimensions::new(self.base.width(), self.base.height());
-        let design = surface.map_or(base, |extent| {
+        let design = if let Some(extent) =
+            surface.filter(|_| self.needs_surface(mode))
+        {
+            validate_extent(extent.width, extent.height)?;
             mode.design_for_surface(extent, base, self.maximum.width())
-        });
+        } else {
+            base
+        };
         if design.width == base.width {
             return Ok(self.base);
         }
@@ -223,6 +243,13 @@ mod tests {
         let base = layout(6)?;
         let maximum = layout(10)?;
         let request = AdaptiveWidthRequest::new(base, maximum)?;
+        check(
+            &request.select(
+                PresentationMode::Adaptive,
+                Some(Dimensions::new(NonZeroU32::MAX, size(4))),
+            ),
+            &Err(RenderError::InvalidDimensions),
+        )?;
         for mode in PresentationMode::ALL {
             let adaptive = mode == PresentationMode::Adaptive;
             check(&request.needs_surface(mode), &adaptive)?;
