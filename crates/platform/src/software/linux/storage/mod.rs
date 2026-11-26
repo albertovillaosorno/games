@@ -86,7 +86,7 @@ use std::path::{Component, Path};
 use games_assets::ContentHash;
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
+use crate::ir::storage::bundle::BundleError;
 use crate::ir::storage::bundle::{BundleFactory, OpenBundle};
 use crate::ir::storage::file::{
     FileReadError, SecretSnapshot, SnapshotBackend,
@@ -521,8 +521,7 @@ use games_assets::archive::ArchiveBudget;
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::staging::{
-    ArchiveFactory, CanonicalFactory, CompletedBundle, OpenArchive,
-    OpenCanonical, PreparedManifest,
+    ArchiveFactory, CanonicalFactory, OpenArchive, OpenCanonical,
 };
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 use crate::ir::storage::staging::{
@@ -538,15 +537,6 @@ impl ArchiveFactory for () {
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl CanonicalFactory for () {
-    fn copy_bundle(
-        _parent: &OsStr,
-        _budget: ArchiveBudget,
-        _source: &CanonicalBundle,
-        _manifest: &PreparedManifest,
-    ) -> CompletedBundle {
-        Err(StagingError::Io(io::ErrorKind::Unsupported))
-    }
-
     fn open_canonical(
         _parent: &OsStr,
         _budget: ArchiveBudget,

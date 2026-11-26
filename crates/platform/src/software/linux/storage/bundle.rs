@@ -40,13 +40,13 @@ use nix::fcntl::{open, openat};
 use nix::sys::stat::Mode;
 
 use super::file::{DIRECTORY_FLAGS, read_regular, trusted_directory};
-pub(super) use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
+#[cfg(test)]
+pub(super) use crate::ir::storage::bundle::CanonicalBundle;
+pub(super) use crate::ir::storage::bundle::{BundleError, PAYLOADS_DIRECTORY};
 use crate::ir::storage::bundle::{
-    BundlePort, OpenBundle, OpenPayloads, PayloadSource,
+    BundlePort, MANIFEST_NAME, OpenBundle, OpenPayloads, PayloadSource,
 };
 
-pub(super) const MANIFEST_NAME: &str = "manifest.json";
-pub(super) const PAYLOADS_DIRECTORY: &str = "payloads";
 pub(super) const OBJECTS_DIRECTORY: &str = "objects";
 pub(super) const OBJECT_PAYLOAD: &str = "payload";
 

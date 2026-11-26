@@ -42,6 +42,9 @@ use games_assets::{
 
 use crate::ir::security::file::FileReadError;
 
+pub(crate) const MANIFEST_NAME: &str = "manifest.json";
+pub(crate) const PAYLOADS_DIRECTORY: &str = "payloads";
+
 /// A canonical bundle could not be safely read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BundleError {

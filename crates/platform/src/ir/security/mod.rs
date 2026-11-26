@@ -47,5 +47,7 @@ pub mod lan;
 pub mod preferences;
 /// Bounded atlas and ordered scene admission.
 pub mod scene;
+/// Shared canonical staging admission.
+pub mod staging;
 /// Fixed authored toolchain argument admission.
 pub mod toolchain;

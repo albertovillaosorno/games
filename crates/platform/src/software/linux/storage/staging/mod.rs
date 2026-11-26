@@ -45,9 +45,8 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use games_assets::archive::{ArchiveBudget, ArchiveError, EntryKind};
-use games_assets::{AssetError, ContentHash};
 #[cfg(test)]
-use games_assets::{AssetManifest, ManifestLimits};
+use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{FileStat, Mode, fstat, mkdirat};
@@ -56,11 +55,20 @@ use publication::AuthoredStaging;
 use publication::StagedBundle;
 
 #[cfg(test)]
-use super::bundle::BundleError;
-use super::bundle::{CanonicalBundle, MANIFEST_NAME, PAYLOADS_DIRECTORY};
+use super::bundle::{BundleError, CanonicalBundle};
 use super::file::{
     DIRECTORY_FLAGS, same_inode, trusted_directory, trusted_directory_stat,
 };
+use crate::ir::security::staging::{AdmittedManifest, AdmittedPayload};
+#[cfg(test)]
+use crate::ir::security::staging::{
+    CanonicalAdmission, manifest_size, payload_path,
+};
+use crate::ir::storage::bundle::MANIFEST_NAME;
+#[cfg(test)]
+use crate::ir::storage::bundle::PAYLOADS_DIRECTORY;
+#[cfg(test)]
+use crate::ir::storage::staging::PreparedManifest;
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::PublishedBundle;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -68,7 +76,11 @@ use crate::ir::storage::staging::staging_path;
 use crate::ir::storage::staging::{
     AdmittedArchiveEntry, ArchiveFactory, ArchivePort, CanonicalFactory,
     CanonicalPort, CompletedArchive, CompletedArchivePort, CompletedBundle,
-    OpenArchive, OpenCanonical, PreparedManifest, StagingEntry, StagingError,
+    OpenArchive, OpenCanonical, StagingEntry, StagingError,
+};
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+use crate::ir::storage::staging::{
+    CanonicalStaging as IrCanonicalStaging, StagedBundle as IrStagedBundle,
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -472,8 +484,6 @@ impl ArchiveStaging {
     }
 }
 
-type PayloadSizes = BTreeMap<ContentHash, u64>;
-
 /// A private canonical bundle, built from content-addressed payloads.
 ///
 /// Only hashes become paths; completion requires an exact manifest match.
@@ -481,57 +491,28 @@ type PayloadSizes = BTreeMap<ContentHash, u64>;
 #[derive(Debug)]
 struct CanonicalStaging {
     #[cfg(test)]
+    admission: CanonicalAdmission,
+    #[cfg(test)]
     legacy: bool,
-    payloads: PayloadSizes,
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     pool: Option<pool::SharedPool>,
     stage: ArchiveStaging,
 }
 
 impl CanonicalStaging {
-    /// Re-publish a pinned bundle in the same shared content store.
-    ///
-    /// Verify each distinct payload and reuse the existing verified object.
-    /// Legacy roots must be migrated before re-publication.
-    /// # Errors
-    /// Rejects unsafe, corrupted or oversized input and staging failures.
-    fn copy_bundle(
-        parent: &Path,
-        budget: ArchiveBudget,
-        source: &CanonicalBundle,
-        manifest: &PreparedManifest,
-    ) -> Result<StagedBundle, StagingError> {
-        admit_copy(budget, manifest.bytes(), manifest.payload_sizes())?;
-        let stage = Self::new(parent, budget)?;
-        Self::copy_into(stage, source, manifest)
-    }
-
-    fn copy_into(
-        mut stage: Self,
-        source: &CanonicalBundle,
-        manifest: &PreparedManifest,
-    ) -> Result<StagedBundle, StagingError> {
-        for record in source.manifest().records() {
-            if stage.payloads.contains_key(&record.digest) {
-                continue;
-            }
-            let payload = source.read_payload(&record.key)?;
-            stage.write_payload(record.digest, &payload)?;
-        }
-        stage.finish_encoded(manifest)
-    }
-
     #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
     fn copy_legacy_bundle(
         parent: &Path,
         budget: ArchiveBudget,
         source: &CanonicalBundle,
         limits: ManifestLimits,
-    ) -> Result<StagedBundle, StagingError> {
-        let manifest = PreparedManifest::new(source.manifest(), limits)?;
-        admit_copy(budget, manifest.bytes(), manifest.payload_sizes())?;
-        let stage = Self::new_legacy(parent, budget)?;
-        Self::copy_into(stage, source, &manifest)
+    ) -> Result<IrStagedBundle, StagingError> {
+        IrCanonicalStaging::copy_with::<LegacyFactory>(
+            parent.as_os_str(),
+            budget,
+            source,
+            limits,
+        )
     }
 
     /// Finish a bundle only if every staged payload is declared and present.
@@ -547,24 +528,21 @@ impl CanonicalStaging {
         if self.stage.failed {
             return Err(StagingError::Aborted);
         }
-        self.finish_encoded(&PreparedManifest::new(manifest, limits)?)
+        let prepared = PreparedManifest::new(manifest, limits)?;
+        let admitted = self.admission.complete(&prepared)?;
+        self.finish_encoded(&admitted)
     }
 
     fn finish_encoded(
         mut self,
-        manifest: &PreparedManifest,
+        manifest: &AdmittedManifest<'_>,
     ) -> Result<StagedBundle, StagingError> {
-        if self.stage.failed {
-            return Err(StagingError::Aborted);
-        }
-        if manifest.payload_sizes() != &self.payloads {
-            return Err(AssetError::PayloadMismatch.into());
-        }
         let mut bytes = manifest.bytes();
-        let size = manifest_size(bytes)?;
-        let mut budget = self.stage.budget;
-        let _entry = budget.admit(MANIFEST_NAME, EntryKind::File, size)?;
-        self.stage.record_file(MANIFEST_NAME, size, &mut bytes)?;
+        self.stage
+            .record_file(MANIFEST_NAME, manifest.size(), &mut bytes)?;
+        if self.stage.budget != manifest.budget() {
+            return Err(StagingError::ChangedStorage);
+        }
         let finished = publication::finish(self.stage, manifest.digest())?;
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         let staged = finished.with_pool(self.pool);
@@ -586,8 +564,9 @@ impl CanonicalStaging {
         let pool = pool::SharedPool::open(&stage.tree.temporary)?;
         Ok(Self {
             #[cfg(test)]
+            admission: CanonicalAdmission::new(budget),
+            #[cfg(test)]
             legacy: false,
-            payloads: BTreeMap::new(),
             pool: Some(pool),
             stage,
         })
@@ -616,8 +595,8 @@ impl CanonicalStaging {
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         pool::reject_shared(parent)?;
         Ok(Self {
+            admission: CanonicalAdmission::new(budget),
             legacy: true,
-            payloads: BTreeMap::new(),
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             pool: None,
             stage: ArchiveStaging::new(parent, budget)?,
@@ -626,47 +605,42 @@ impl CanonicalStaging {
 
     fn stage_payload(
         &mut self,
-        digest: ContentHash,
-        bytes: &[u8],
-        budget: ArchiveBudget,
+        payload: &AdmittedPayload<'_>,
     ) -> Result<(), StagingError> {
         #[cfg(test)]
         if self.legacy {
-            let path = payload_path(digest);
-            let size = manifest_size(bytes)?;
-            let mut input = bytes;
-            return self.stage.record_file(&path, size, &mut input);
+            let path = payload_path(payload.digest());
+            let mut input = payload.bytes();
+            self.stage.record_file(&path, payload.size(), &mut input)?;
+            if self.stage.budget != payload.budget() {
+                return Err(StagingError::ChangedStorage);
+            }
+            return Ok(());
         }
-        self.stage_shared_payload(digest, bytes, budget)
+        self.stage_shared_payload(payload)
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn stage_shared_payload(
         &mut self,
-        digest: ContentHash,
-        bytes: &[u8],
-        budget: ArchiveBudget,
+        payload: &AdmittedPayload<'_>,
     ) -> Result<(), StagingError> {
         let pool = self.pool.as_mut().ok_or(StagingError::Aborted)?;
-        pool.put(digest, bytes)?;
-        self.stage.budget = budget;
+        pool.put(payload.digest(), payload.bytes())?;
+        self.stage.budget = payload.budget();
         Ok(())
     }
 
     #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
     fn stage_shared_payload(
         &mut self,
-        _digest: ContentHash,
-        _bytes: &[u8],
-        _budget: ArchiveBudget,
+        _payload: &AdmittedPayload<'_>,
     ) -> Result<(), StagingError> {
         Err(StagingError::Aborted)
     }
 
-    /// Verify and stage one unique canonical payload.
-    ///
-    /// # Errors
-    /// Rejects hash mismatch, duplicate content, exhausted budgets or I/O.
+    /// Exercise the same admission for legacy and native staging fixtures.
+    #[cfg(test)]
     fn write_payload(
         &mut self,
         digest: ContentHash,
@@ -675,33 +649,12 @@ impl CanonicalStaging {
         if self.stage.failed {
             return Err(StagingError::Aborted);
         }
-        if self.payloads.contains_key(&digest) {
-            self.stage.failed = true;
-            return Err(StagingError::Collision);
-        }
-        let Ok(size) = u64::try_from(bytes.len()) else {
-            self.stage.failed = true;
-            return Err(AssetError::TooLarge.into());
-        };
-        let path = payload_path(digest);
-        // Preflight on a copy; write_entry consumes the actual budget.
-        let mut budget = self.stage.budget;
-        if let Err(error) =
-            admit_payload(&mut budget, &path, size, self.payloads.is_empty())
-        {
-            self.stage.failed = true;
-            return Err(error);
-        }
-        if ContentHash::calculate(bytes) != digest {
-            self.stage.failed = true;
-            return Err(AssetError::PayloadMismatch.into());
-        }
-        if let Err(error) = self.stage_payload(digest, bytes, budget) {
-            self.stage.failed = true;
-            return Err(error);
-        }
-        let _previous = self.payloads.insert(digest, size);
-        Ok(())
+        let result = self
+            .admission
+            .payload(digest, bytes)
+            .and_then(|payload| self.stage_payload(&payload));
+        self.stage.failed = result.is_err();
+        result
     }
 }
 
@@ -759,21 +712,20 @@ impl CompletedArchivePort for StagedArchive {
     }
 }
 
-impl CanonicalFactory for () {
-    fn copy_bundle(
-        parent: &OsStr,
-        budget: ArchiveBudget,
-        source: &CanonicalBundle,
-        manifest: &PreparedManifest,
-    ) -> CompletedBundle {
-        Ok(Box::new(CanonicalStaging::copy_bundle(
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+struct LegacyFactory;
+
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+impl CanonicalFactory for LegacyFactory {
+    fn open_canonical(parent: &OsStr, budget: ArchiveBudget) -> OpenCanonical {
+        Ok(Box::new(CanonicalStaging::new_legacy(
             Path::new(parent),
             budget,
-            source,
-            manifest,
         )?))
     }
+}
 
+impl CanonicalFactory for () {
     fn open_canonical(parent: &OsStr, budget: ArchiveBudget) -> OpenCanonical {
         Ok(Box::new(CanonicalStaging::new(Path::new(parent), budget)?))
     }
@@ -782,54 +734,17 @@ impl CanonicalFactory for () {
 impl CanonicalPort for CanonicalStaging {
     fn complete(
         self: Box<Self>,
-        manifest: &PreparedManifest,
+        manifest: &AdmittedManifest<'_>,
     ) -> CompletedBundle {
         Ok(Box::new((*self).finish_encoded(manifest)?))
     }
 
     fn write_verified(
         &mut self,
-        digest: ContentHash,
-        bytes: &[u8],
+        payload: &AdmittedPayload<'_>,
     ) -> Result<(), StagingError> {
-        self.write_payload(digest, bytes)
+        self.stage_payload(payload)
     }
-}
-
-fn admit_copy(
-    mut budget: ArchiveBudget,
-    bytes: &[u8],
-    payloads: &PayloadSizes,
-) -> Result<(), StagingError> {
-    let _manifest =
-        budget.admit(MANIFEST_NAME, EntryKind::File, manifest_size(bytes)?)?;
-    for (index, (&digest, &size)) in payloads.iter().enumerate() {
-        admit_payload(&mut budget, &payload_path(digest), size, index == 0)?;
-    }
-    Ok(())
-}
-
-fn admit_payload(
-    budget: &mut ArchiveBudget,
-    path: &str,
-    size: u64,
-    first: bool,
-) -> Result<(), StagingError> {
-    let _payload = budget.admit(path, EntryKind::File, size)?;
-    if first {
-        budget
-            .admit(PAYLOADS_DIRECTORY, EntryKind::Directory, 0)?
-            .finish()?;
-    }
-    Ok(())
-}
-
-fn manifest_size(bytes: &[u8]) -> Result<u64, AssetError> {
-    u64::try_from(bytes.len()).map_err(|_error| AssetError::TooLarge)
-}
-
-fn payload_path(digest: ContentHash) -> String {
-    format!("{PAYLOADS_DIRECTORY}/{digest}")
 }
 
 fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
@@ -1959,7 +1874,9 @@ mod tests {
         )?;
         require(copied.digest() == source.digest())?;
         require(
-            fs::read_dir(copied.path().join(PAYLOADS_DIRECTORY))?.count() == 1,
+            fs::read_dir(Path::new(copied.path()).join(PAYLOADS_DIRECTORY))?
+                .count()
+                == 1,
         )?;
         drop(copied);
         fs::write(
@@ -2030,8 +1947,10 @@ mod tests {
             &source,
             canonical_limits(),
         )?;
-        require(fs::read(copied.path().join(MANIFEST_NAME))? == bytes)?;
-        require(!copied.path().join(PAYLOADS_DIRECTORY).exists())
+        require(
+            fs::read(Path::new(copied.path()).join(MANIFEST_NAME))? == bytes,
+        )?;
+        require(!Path::new(copied.path()).join(PAYLOADS_DIRECTORY).exists())
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]

@@ -42,6 +42,9 @@ use games_assets::archive::{
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 
 use super::bundle::{BundleError, CanonicalBundle};
+use crate::ir::security::staging::{
+    AdmittedManifest, AdmittedPayload, CanonicalAdmission,
+};
 
 /// A staging operation failed and the result must not be published.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -398,26 +401,18 @@ pub(crate) type CompletedBundle =
     Result<Box<dyn CompletedBundlePort>, StagingError>;
 
 pub(crate) trait CanonicalFactory {
-    fn copy_bundle(
-        parent: &OsStr,
-        budget: ArchiveBudget,
-        source: &CanonicalBundle,
-        manifest: &PreparedManifest,
-    ) -> CompletedBundle;
-
     fn open_canonical(parent: &OsStr, budget: ArchiveBudget) -> OpenCanonical;
 }
 
 pub(crate) trait CanonicalPort: Debug {
     fn complete(
         self: Box<Self>,
-        manifest: &PreparedManifest,
+        manifest: &AdmittedManifest<'_>,
     ) -> CompletedBundle;
 
     fn write_verified(
         &mut self,
-        digest: ContentHash,
-        bytes: &[u8],
+        payload: &AdmittedPayload<'_>,
     ) -> Result<(), StagingError>;
 }
 
@@ -434,6 +429,7 @@ pub(crate) trait CompletedBundlePort: Debug {
 /// Incomplete manifest transaction with verified unique payloads.
 #[derive(Debug)]
 pub struct CanonicalStaging {
+    admission: CanonicalAdmission,
     transaction: Transaction<dyn CanonicalPort>,
 }
 
@@ -454,7 +450,7 @@ impl CanonicalStaging {
         Self::copy_with::<()>(parent.as_ref(), budget, source, limits)
     }
 
-    fn copy_with<Factory>(
+    pub(crate) fn copy_with<Factory>(
         parent: &OsStr,
         budget: ArchiveBudget,
         source: &CanonicalBundle,
@@ -464,8 +460,16 @@ impl CanonicalStaging {
         Factory: CanonicalFactory,
     {
         let manifest = PreparedManifest::new(source.manifest(), limits)?;
-        let backend = Factory::copy_bundle(parent, budget, source, &manifest)?;
-        StagedBundle::admit(backend, manifest.digest())
+        CanonicalAdmission::preflight(budget, &manifest)?;
+        let mut stage = Self::open_with::<Factory>(parent, budget)?;
+        for record in source.manifest().records() {
+            if stage.admission.contains(record.digest) {
+                continue;
+            }
+            let payload = source.read_payload(&record.key)?;
+            stage.write_payload(record.digest, &payload)?;
+        }
+        stage.finish_prepared(&manifest)
     }
 
     /// Complete only a bundle with an exact match to its manifest.
@@ -477,10 +481,20 @@ impl CanonicalStaging {
         manifest: &AssetManifest,
         limits: ManifestLimits,
     ) -> Result<StagedBundle, StagingError> {
+        if self.transaction.failed {
+            return Err(StagingError::Aborted);
+        }
+        self.finish_prepared(&PreparedManifest::new(manifest, limits)?)
+    }
+
+    fn finish_prepared(
+        self,
+        prepared: &PreparedManifest,
+    ) -> Result<StagedBundle, StagingError> {
         let port = self.transaction.finish()?;
-        let prepared = PreparedManifest::new(manifest, limits)?;
-        let backend = port.complete(&prepared)?;
-        StagedBundle::admit(backend, prepared.digest())
+        let manifest = self.admission.complete(prepared)?;
+        let backend = port.complete(&manifest)?;
+        StagedBundle::admit(backend, manifest.digest())
     }
 
     /// Create a private canonical transaction for the shared object store.
@@ -494,13 +508,21 @@ impl CanonicalStaging {
     where
         Parent: AsRef<OsStr> + ?Sized,
     {
+        Self::open_with::<()>(parent.as_ref(), budget)
+    }
+
+    fn open_with<Factory>(
+        parent: &OsStr,
+        budget: ArchiveBudget,
+    ) -> Result<Self, StagingError>
+    where
+        Factory: CanonicalFactory,
+    {
         Ok(Self {
-            transaction: Transaction::new(
-                <() as CanonicalFactory>::open_canonical(
-                    parent.as_ref(),
-                    budget,
-                )?,
-            ),
+            admission: CanonicalAdmission::new(budget),
+            transaction: Transaction::new(Factory::open_canonical(
+                parent, budget,
+            )?),
         })
     }
 
@@ -513,8 +535,10 @@ impl CanonicalStaging {
         digest: ContentHash,
         bytes: &[u8],
     ) -> Result<(), StagingError> {
-        self.transaction
-            .apply(|backend| backend.write_verified(digest, bytes))
+        self.transaction.apply(|backend| {
+            let payload = self.admission.payload(digest, bytes)?;
+            backend.write_verified(&payload)
+        })
     }
 }
 
@@ -652,9 +676,10 @@ pub(crate) fn staging_path(path: &str) -> Result<PathParts<'_>, StagingError> {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::replace;
     use std::num::{NonZeroU64, NonZeroUsize};
 
-    use games_assets::SourceIdentity;
+    use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
 
     use super::*;
 
@@ -706,39 +731,35 @@ mod tests {
 
     #[derive(Debug)]
     struct CanonicalFake {
+        payload_seen: bool,
         wrong_identity: bool,
     }
 
     impl CanonicalFactory for CanonicalFake {
-        fn copy_bundle(
+        fn open_canonical(
             parent: &OsStr,
             _budget: ArchiveBudget,
-            source: &CanonicalBundle,
-            manifest: &PreparedManifest,
-        ) -> CompletedBundle {
-            if manifest.payload_sizes() != &source.manifest().payload_sizes() {
-                return Err(StagingError::ChangedStorage);
-            }
-            if parent == OsStr::new("wrong") {
-                Ok(Box::new(BundleFake(ContentHash::calculate(b"wrong"))))
-            } else {
-                Ok(Box::new(BundleFake(manifest.digest())))
-            }
-        }
-
-        fn open_canonical(
-            _parent: &OsStr,
-            _budget: ArchiveBudget,
         ) -> OpenCanonical {
-            Err(StagingError::Io(ErrorKind::Unsupported))
+            if parent == OsStr::new("unavailable") {
+                return Err(StagingError::Io(ErrorKind::Unsupported));
+            }
+            Ok(Box::new(Self {
+                payload_seen: false,
+                wrong_identity: parent == OsStr::new("wrong"),
+            }))
         }
     }
 
     impl CanonicalPort for CanonicalFake {
         fn complete(
             self: Box<Self>,
-            manifest: &PreparedManifest,
+            manifest: &AdmittedManifest<'_>,
         ) -> CompletedBundle {
+            if u64::try_from(manifest.bytes().len()).ok()
+                != Some(manifest.size())
+            {
+                return Err(StagingError::ChangedStorage);
+            }
             if self.wrong_identity {
                 Ok(Box::new(BundleFake(ContentHash::calculate(b"wrong"))))
             } else {
@@ -748,12 +769,15 @@ mod tests {
 
         fn write_verified(
             &mut self,
-            digest: ContentHash,
-            bytes: &[u8],
+            payload: &AdmittedPayload<'_>,
         ) -> Result<(), StagingError> {
-            (digest == ContentHash::calculate(bytes))
+            let repeated = replace(&mut self.payload_seen, true);
+            (!repeated
+                && payload.bytes() == b"tile"
+                && payload.digest() == ContentHash::calculate(b"tile")
+                && payload.size() == 4)
                 .then_some(())
-                .ok_or(StagingError::Asset(AssetError::PayloadMismatch))
+                .ok_or(StagingError::ChangedStorage)
         }
     }
 
@@ -975,6 +999,11 @@ mod tests {
         .ok_or(StagingError::ChangedStorage)
     }
 
+    fn canonical_budget() -> ArchiveBudget {
+        let maximum = NonZeroU64::MIN.saturating_add(8191);
+        ArchiveBudget::new(maximum, maximum, NonZeroU64::MIN.saturating_add(7))
+    }
+
     fn fixture_limits() -> ManifestLimits {
         ManifestLimits {
             manifest_bytes: NonZeroUsize::MIN.saturating_add(4095),
@@ -1003,7 +1032,9 @@ mod tests {
         let limits = fixture_limits();
         let manifest = fixture_manifest(limits)?;
         let mut rejected = CanonicalStaging {
+            admission: CanonicalAdmission::new(canonical_budget()),
             transaction: Transaction::new(Box::new(CanonicalFake {
+                payload_seen: false,
                 wrong_identity: false,
             })),
         };
@@ -1017,7 +1048,9 @@ mod tests {
                 Err(StagingError::Aborted)
             );
         let stage = CanonicalStaging {
+            admission: CanonicalAdmission::new(canonical_budget()),
             transaction: Transaction::new(Box::new(CanonicalFake {
+                payload_seen: false,
                 wrong_identity: false,
             })),
         };
@@ -1040,7 +1073,9 @@ mod tests {
         let limits = fixture_limits();
         let manifest = fixture_manifest(limits)?;
         let stage = CanonicalStaging {
+            admission: CanonicalAdmission::new(canonical_budget()),
             transaction: Transaction::new(Box::new(CanonicalFake {
+                payload_seen: false,
                 wrong_identity: true,
             })),
         };
@@ -1050,7 +1085,9 @@ mod tests {
             return Err(StagingError::ChangedStorage);
         }
         let strict_stage = CanonicalStaging {
+            admission: CanonicalAdmission::new(canonical_budget()),
             transaction: Transaction::new(Box::new(CanonicalFake {
+                payload_seen: false,
                 wrong_identity: true,
             })),
         };
@@ -1077,11 +1114,12 @@ mod tests {
             limits,
             BTreeMap::new(),
         )?;
-        let budget = ArchiveBudget::new(
-            limits.total_bytes,
-            limits.total_bytes,
-            NonZeroU64::MIN,
-        );
+        let size = NonZeroU64::new(
+            u64::try_from(bytes.len())
+                .map_err(|_error| AssetError::TooLarge)?,
+        )
+        .ok_or(AssetError::TooLarge)?;
+        let budget = ArchiveBudget::new(size, size, NonZeroU64::MIN);
         let accepted = CanonicalStaging::copy_with::<CanonicalFake>(
             OsStr::new("good"),
             budget,
@@ -1096,6 +1134,128 @@ mod tests {
         );
         (accepted.digest() == digest
             && rejected.err() == Some(AssetError::PayloadMismatch.into()))
+        .then_some(())
+        .ok_or(StagingError::ChangedStorage)
+    }
+
+    fn payload_manifest(
+        limits: ManifestLimits,
+    ) -> Result<AssetManifest, StagingError> {
+        let digest = ContentHash::calculate(b"tile");
+        let records = ["first", "second"]
+            .into_iter()
+            .map(|key| AssetRecord {
+                digest,
+                format: AssetFormat::Data,
+                key: String::from(key),
+                size: 4,
+            })
+            .collect();
+        Ok(AssetManifest::new(
+            SourceIdentity {
+                revision: String::from("fixture"),
+                title: String::from("test"),
+            },
+            records,
+            limits,
+        )?)
+    }
+
+    #[test]
+    fn canonical_copy_preflights_and_dispatches_each_distinct_payload_once()
+    -> Result<(), StagingError> {
+        let limits = fixture_limits();
+        let manifest = payload_manifest(limits)?;
+        let bytes = manifest.encode(limits)?;
+        let digest = ContentHash::calculate(&bytes);
+        let payload = ContentHash::calculate(b"tile");
+        let source = CanonicalBundle::from_memory(
+            &bytes,
+            digest,
+            limits,
+            BTreeMap::from([(payload, b"tile".to_vec())]),
+        )?;
+        let maximum = NonZeroU64::new(
+            u64::try_from(bytes.len())
+                .map_err(|_error| AssetError::TooLarge)?,
+        )
+        .ok_or(AssetError::TooLarge)?;
+        let total = maximum.saturating_add(4);
+        let exact = ArchiveBudget::new(
+            maximum,
+            total,
+            NonZeroU64::MIN.saturating_add(2),
+        );
+        let deficient = ArchiveBudget::new(
+            maximum,
+            total,
+            NonZeroU64::MIN.saturating_add(1),
+        );
+        let accepted = CanonicalStaging::copy_with::<CanonicalFake>(
+            OsStr::new("good"),
+            exact,
+            &source,
+            limits,
+        )?;
+        let rejected = CanonicalStaging::copy_with::<CanonicalFake>(
+            OsStr::new("unavailable"),
+            deficient,
+            &source,
+            limits,
+        );
+        (accepted.digest() == digest
+            && rejected.err() == Some(ArchiveError::TooLarge.into()))
+        .then_some(())
+        .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn canonical_staging_rejects_budget_duplicates_and_incomplete_inventory()
+    -> Result<(), StagingError> {
+        let limits = fixture_limits();
+        let manifest = payload_manifest(limits)?;
+        let empty = fixture_manifest(limits)?;
+        let digest = ContentHash::calculate(b"tile");
+        let four = NonZeroU64::MIN.saturating_add(3);
+        let tight = ArchiveBudget::new(four, four, NonZeroU64::MIN);
+        let mut stage = CanonicalStaging::open_with::<CanonicalFake>(
+            OsStr::new("good"),
+            tight,
+        )?;
+        if stage.write_payload(digest, b"wrong")
+            != Err(ArchiveError::TooLarge.into())
+            || stage.write_payload(digest, b"tile")
+                != Err(StagingError::Aborted)
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let budget = canonical_budget();
+        let missing = CanonicalStaging::open_with::<CanonicalFake>(
+            OsStr::new("good"),
+            budget,
+        )?;
+        if missing.finish(&manifest, limits).err()
+            != Some(AssetError::PayloadMismatch.into())
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let mut duplicate = CanonicalStaging::open_with::<CanonicalFake>(
+            OsStr::new("good"),
+            budget,
+        )?;
+        duplicate.write_payload(digest, b"tile")?;
+        if duplicate.write_payload(digest, b"tile")
+            != Err(StagingError::Collision)
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let mut extra = CanonicalStaging::open_with::<CanonicalFake>(
+            OsStr::new("good"),
+            budget,
+        )?;
+        extra.write_payload(digest, b"tile")?;
+        (extra.finish(&empty, limits).err()
+            == Some(AssetError::PayloadMismatch.into()))
         .then_some(())
         .ok_or(StagingError::ChangedStorage)
     }
