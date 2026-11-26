@@ -1506,3 +1506,29 @@ exactly 616 entries (24,937,054 bytes). Package verification still
 matched the 88-file c1cfce6 receipt recorded above. This establishes
 visibility-loss cancellation and renewed keyboard input under trusted
 virtual browser input, not physical keyboard or mobile acceptance.
+
+Three successive Wayland Firefox processes at the same isolated
+loopback origin and profile exercised touch-only control editing and
+persistence. The first selected seat one's left action, cycled three
+binding families, staged a right-slot selection and cancelled it
+without a write. Repeating and confirming the selection produced one
+4,031-byte control envelope with left and right swapped. The active
+session retained its original mapping: the physical left slot moved
+the actor from x=110 to x=74 and settled at x=70 after release.
+
+The second process restored the identical saved envelope without
+injection. It reset controls using the touch settings menu and wrote
+one 67-byte default envelope. Its active swapped mapping remained:
+the physical left slot moved the actor from x=110 to x=144 and
+settled at x=148. The third process restored that exact default
+envelope, made no writes, moved from x=110 to x=76 with the same slot
+and settled at x=72. Both envelope lengths and SHA-256 payload
+digests were independently verified. The three sessions completed
+normally after 743, 368 and 218 callbacks (154, 119 and 101 blits),
+with 28, 13 and seven trusted touch downs and one fewer capture and
+release in each final exit. None emitted a mouse alias. Each selected
+743 files, read exactly 616 entries (24,937,054 bytes), peaked at one
+pending frame, closed its audio context and removed the picker and
+canvas. The unchanged package again verified the c1cfce6 receipt.
+This verifies virtual touch-only edit, cancellation, next-launch
+persistence and reset, not physical touchscreen operation.
