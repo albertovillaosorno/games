@@ -85,7 +85,10 @@ impl PublicIdentity {
 
 /// Private verified identity port; never exposes a private key.
 pub(crate) trait IdentityBackend: Send + Sync {
-    fn client_credentials(&self, host: &PublicIdentity) -> Result<ClientTls>;
+    fn client_credentials(
+        &self,
+        host: &PublicIdentity,
+    ) -> Result<CredentialPort>;
     fn public_material(&self) -> &PublicIdentity;
     fn server_credentials(
         &self,
@@ -153,7 +156,11 @@ impl LocalIdentity {
     /// Rejects host-role credentials or invalid TLS configuration.
     pub fn client_tls(&self, host: &PublicIdentity) -> Result<ClientTls> {
         self.role.admit(IdentityRole::Client)?;
-        self.backend.client_credentials(host)
+        let backend = self.backend.client_credentials(host)?;
+        Ok(ClientTls {
+            approved: host.fingerprint(),
+            backend,
+        })
     }
 
     /// Import a host key and currently valid leaf for the given DNS or IP name.
@@ -235,9 +242,9 @@ mod tests {
         fn client_credentials(
             &self,
             _host: &PublicIdentity,
-        ) -> Result<ClientTls> {
+        ) -> Result<CredentialPort> {
             self.dispatched.store(true, Ordering::Release);
-            Ok(ClientTls(Arc::new(())))
+            Ok(Arc::new(()))
         }
 
         fn public_material(&self) -> &PublicIdentity {
@@ -299,10 +306,16 @@ mod tests {
     }
 
     #[test]
-    fn client_credentials_dispatch_only_for_a_client_identity() {
+    fn client_credentials_dispatch_only_for_a_client_identity() -> Result<()> {
         let (client, dispatched) = fixture(IdentityRole::Client);
-        assert!(client.client_tls(&public(1)).is_ok());
-        assert!(dispatched.load(Ordering::Acquire));
+        let approved = public(1);
+        let tls = client.client_tls(&approved)?;
+        if tls.approved != approved.fingerprint()
+            || !dispatched.load(Ordering::Acquire)
+        {
+            return Err(Error::other("client host approval not retained"));
+        }
+        Ok(())
     }
 
     #[test]

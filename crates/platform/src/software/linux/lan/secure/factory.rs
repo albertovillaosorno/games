@@ -88,7 +88,7 @@ impl LanFactory for () {
         name: &str,
     ) -> Result<FramePort> {
         let native =
-            NativeClient(selected::<ClientConfig>(Arc::clone(&tls.0))?);
+            NativeClient(selected::<ClientConfig>(Arc::clone(&tls.backend))?);
         Ok(Box::new(SecureFrameStream::connect(
             address, config, &native, name,
         )?))
@@ -111,9 +111,12 @@ impl LanFactory for () {
 }
 
 impl IdentityBackend for LocalIdentity {
-    fn client_credentials(&self, host: &PublicIdentity) -> Result<ClientTls> {
+    fn client_credentials(
+        &self,
+        host: &PublicIdentity,
+    ) -> Result<CredentialPort> {
         let native = self.client_tls(host)?;
-        Ok(ClientTls(native.0))
+        Ok(native.0)
     }
 
     fn public_material(&self) -> &PublicIdentity {

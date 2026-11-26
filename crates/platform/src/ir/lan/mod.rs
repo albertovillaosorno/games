@@ -179,7 +179,10 @@ pub(crate) trait LanFactory {
 pub(crate) type CredentialPort = Arc<dyn Any + Send + Sync>;
 
 /// Client credentials and an explicitly approved host, privately configured.
-pub struct ClientTls(pub(crate) CredentialPort);
+pub struct ClientTls {
+    approved: PeerFingerprint,
+    pub(crate) backend: CredentialPort,
+}
 
 /// Host credentials and immutable approved client leaf fingerprints.
 pub struct ServerTls {
@@ -189,11 +192,15 @@ pub struct ServerTls {
 
 impl Clone for ClientTls {
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self {
+            approved: self.approved,
+            backend: Arc::clone(&self.backend),
+        }
     }
 
     fn clone_from(&mut self, source: &Self) {
-        self.0.clone_from(&source.0);
+        self.approved = source.approved;
+        self.backend.clone_from(&source.backend);
     }
 }
 
@@ -226,7 +233,9 @@ impl Debug for ServerTls {
 /// An encrypted framed connection with a verified peer certificate.
 /// Blocking transfers belong on I/O workers, not the simulation thread.
 pub struct SecureFrameStream {
-    backend: FramePort,
+    backend: Option<FramePort>,
+    limits: LanLimits,
+    peer: PeerFingerprint,
 }
 
 impl Debug for SecureFrameStream {
@@ -238,6 +247,38 @@ impl Debug for SecureFrameStream {
 }
 
 impl SecureFrameStream {
+    fn admit_backend(
+        backend: FramePort,
+        config: LanConfig,
+        approved: PeerFingerprint,
+    ) -> Result<Self> {
+        if backend.peer_fingerprint() != approved {
+            return Err(ErrorKind::PermissionDenied.into());
+        }
+        Ok(Self {
+            backend: Some(backend),
+            limits: config.limits(),
+            peer: approved,
+        })
+    }
+
+    fn admit_received(&mut self, bytes: Vec<u8>) -> Result<Vec<u8>> {
+        let admitted = u32::try_from(bytes.len())
+            .map_err(|_error| LanAdmissionError::InboundLength)
+            .and_then(|length| self.limits.inbound_length(length));
+        if let Err(error) = admitted {
+            self.backend = None;
+            return Err(error.into());
+        }
+        Ok(bytes)
+    }
+
+    fn backend_mut(&mut self) -> Result<&mut FramePort> {
+        self.backend
+            .as_mut()
+            .ok_or_else(|| ErrorKind::NotConnected.into())
+    }
+
     /// Connect to the explicitly approved host with one handshake deadline.
     ///
     /// # Errors
@@ -251,19 +292,21 @@ impl SecureFrameStream {
     ) -> Result<Self> {
         admit_endpoint(address)?;
         let backend = <() as LanFactory>::connect(address, config, tls, name)?;
-        Ok(Self { backend })
+        Self::admit_backend(backend, config, tls.approved)
     }
 
     /// Whether an outgoing frame is queued or partially transmitted.
     #[must_use]
     pub fn has_pending_send(&self) -> bool {
-        self.backend.has_pending_send()
+        self.backend
+            .as_ref()
+            .is_some_and(|backend| backend.has_pending_send())
     }
 
     /// Get the authenticated peer's leaf certificate fingerprint.
     #[must_use]
-    pub fn peer_fingerprint(&self) -> PeerFingerprint {
-        self.backend.peer_fingerprint()
+    pub const fn peer_fingerprint(&self) -> PeerFingerprint {
+        self.peer
     }
 
     /// Poll for a complete frame without waiting for network I/O.
@@ -271,7 +314,10 @@ impl SecureFrameStream {
     /// # Errors
     /// Reports a disconnected, malformed or expired transport.
     pub fn poll_receive(&mut self) -> Result<Option<Vec<u8>>> {
-        self.backend.poll_receive()
+        self.backend_mut()?
+            .poll_receive()?
+            .map(|bytes| self.admit_received(bytes))
+            .transpose()
     }
 
     /// Advance one queued frame without waiting for network I/O.
@@ -279,7 +325,7 @@ impl SecureFrameStream {
     /// # Errors
     /// Reports a disconnected or expired transport.
     pub fn poll_send(&mut self) -> Result<SendProgress> {
-        self.backend.poll_send()
+        self.backend_mut()?.poll_send()
     }
 
     /// Queue one complete payload without performing network I/O.
@@ -287,7 +333,8 @@ impl SecureFrameStream {
     /// # Errors
     /// Rejects oversized frames, a closed connection or a pending send.
     pub fn queue_send(&mut self, bytes: Vec<u8>) -> Result<()> {
-        self.backend.queue_send(bytes)
+        let _length = self.limits.outbound_length(bytes.len())?;
+        self.backend_mut()?.queue_send(bytes)
     }
 
     /// Receive one complete frame within the configured deadline.
@@ -295,7 +342,8 @@ impl SecureFrameStream {
     /// # Errors
     /// Reports malformed, disconnected or expired transport.
     pub fn receive(&mut self) -> Result<Vec<u8>> {
-        self.backend.receive()
+        let bytes = self.backend_mut()?.receive()?;
+        self.admit_received(bytes)
     }
 
     /// Send one complete frame within the configured deadline.
@@ -303,7 +351,8 @@ impl SecureFrameStream {
     /// # Errors
     /// Rejects oversized frames, pending sends or failed transport.
     pub fn send(&mut self, bytes: &[u8]) -> Result<()> {
-        self.backend.send(bytes)
+        let _length = self.limits.outbound_length(bytes.len())?;
+        self.backend_mut()?.send(bytes)
     }
 }
 
@@ -311,12 +360,162 @@ impl SecureFrameStream {
 mod tests {
     use std::io::{Error, ErrorKind, Result};
     use std::num::{NonZeroU32, NonZeroUsize};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use games::network::SessionConfig;
 
     use super::identity::{LocalIdentity, PublicIdentity};
-    use super::{AVAILABLE, LanConfig, PeerFingerprint};
+    use super::{
+        AVAILABLE, FrameBackend, LanConfig, PeerFingerprint, SecureFrameStream,
+        SendProgress,
+    };
+
+    struct ObservedFrame {
+        dispatched: Arc<AtomicBool>,
+        peer: PeerFingerprint,
+        received: Vec<u8>,
+    }
+
+    impl FrameBackend for ObservedFrame {
+        fn has_pending_send(&self) -> bool {
+            false
+        }
+
+        fn peer_fingerprint(&self) -> PeerFingerprint {
+            self.peer
+        }
+
+        fn poll_receive(&mut self) -> Result<Option<Vec<u8>>> {
+            Ok(Some(self.received.clone()))
+        }
+
+        fn poll_send(&mut self) -> Result<SendProgress> {
+            Ok(SendProgress::Idle)
+        }
+
+        fn queue_send(&mut self, _bytes: Vec<u8>) -> Result<()> {
+            self.dispatched.store(true, Ordering::Release);
+            Ok(())
+        }
+
+        fn receive(&mut self) -> Result<Vec<u8>> {
+            Ok(self.received.clone())
+        }
+
+        fn send(&mut self, _bytes: &[u8]) -> Result<()> {
+            self.dispatched.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    fn observed_stream(
+        peer: PeerFingerprint,
+        approved: PeerFingerprint,
+        received: Vec<u8>,
+        dispatched: Arc<AtomicBool>,
+    ) -> Result<SecureFrameStream> {
+        let config = LanConfig::new(session(true), Duration::from_secs(1))?;
+        let backend = Box::new(ObservedFrame {
+            dispatched,
+            peer,
+            received,
+        });
+        SecureFrameStream::admit_backend(backend, config, approved)
+    }
+
+    #[test]
+    fn mismatched_host_observation_never_exposes_a_stream() {
+        let observed = observed_stream(
+            PeerFingerprint::from_bytes([1; 32]),
+            PeerFingerprint::from_bytes([2; 32]),
+            vec![],
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert_eq!(
+            observed.err().map(|error| error.kind()),
+            Some(ErrorKind::PermissionDenied),
+        );
+    }
+
+    #[test]
+    fn client_frame_budget_is_admitted_before_dispatch() -> Result<()> {
+        let peer = PeerFingerprint::from_bytes([1; 32]);
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let mut stream =
+            observed_stream(peer, peer, vec![], Arc::clone(&dispatched))?;
+        require(stream.peer_fingerprint() == peer)?;
+        require(
+            stream.send(&[0; 65]).err().map(|error| error.kind())
+                == Some(ErrorKind::InvalidInput),
+        )?;
+        require(
+            stream
+                .queue_send(vec![0; 65])
+                .err()
+                .map(|error| error.kind())
+                == Some(ErrorKind::InvalidInput),
+        )?;
+        require(!dispatched.load(Ordering::Acquire))?;
+        stream.send(&[0; 64])?;
+        require(dispatched.load(Ordering::Acquire))?;
+        dispatched.store(false, Ordering::Release);
+        stream.queue_send(vec![])?;
+        require(dispatched.load(Ordering::Acquire))?;
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_inbound_observation_withdraws_the_stream() -> Result<()> {
+        let peer = PeerFingerprint::from_bytes([1; 32]);
+        for poll in [false, true] {
+            let dispatched = Arc::new(AtomicBool::new(false));
+            let mut stream = observed_stream(
+                peer,
+                peer,
+                vec![0; 65],
+                Arc::clone(&dispatched),
+            )?;
+            let failure = if poll {
+                stream.poll_receive().err()
+            } else {
+                stream.receive().err()
+            };
+            require(
+                failure.map(|error| error.kind())
+                    == Some(ErrorKind::InvalidData),
+            )?;
+            require(
+                stream.send(&[]).err().map(|error| error.kind())
+                    == Some(ErrorKind::NotConnected),
+            )?;
+            require(!dispatched.load(Ordering::Acquire))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inbound_observations_preserve_empty_and_exact_frames() -> Result<()> {
+        let peer = PeerFingerprint::from_bytes([1; 32]);
+        for received in [vec![], vec![5; 64]] {
+            let mut stream = observed_stream(
+                peer,
+                peer,
+                received.clone(),
+                Arc::new(AtomicBool::new(false)),
+            )?;
+            require(stream.receive()? == received)?;
+            require(stream.poll_receive()? == Some(received))?;
+        }
+        Ok(())
+    }
+
+    fn require(condition: bool) -> Result<()> {
+        condition
+            .then_some(())
+            .ok_or_else(|| Error::other("stream observation mismatch"))
+    }
 
     fn session(allow_lan: bool) -> SessionConfig {
         SessionConfig {

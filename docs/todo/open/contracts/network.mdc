@@ -783,3 +783,13 @@ A further process run rejected a controller configured with the wrong
 host name, while an existing controller remained responsive. Two
 initial runs used superseded visual or keyboard assumptions; the
 corrected legacy-art diagnostic passed its observable gameplay checks.
+
+Client credentials retain the explicitly approved host fingerprint, and
+portable stream admission verifies that identity before exposing the
+transport. Frame budgets are admitted before dispatch and received frames
+are checked before publication; oversized observations withdraw the
+stream. Synthetic ports cover identity mismatch, empty and exact-limit
+frames, and rejection without dispatch. Native TLS remains responsible
+for certificate and wire authentication. Fresh native-enabled validation
+1795660768109552625-3969552 passed 1683 aggregate test executions and
+all six portable core checks.
