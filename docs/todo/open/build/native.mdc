@@ -520,3 +520,21 @@ override reproduced the edited settings screen pixel-for-pixel at
 960x672 and left both save hashes unchanged. The installed catalogue,
 package, owner settings and original media were untouched. Physical
 input, screen and audible output remain unverified.
+
+The d4921e0 native package passed a visible next-launch reset check on
+2026-11-26. Readback verified 109 files and 4,148,889 bytes. An isolated
+control slot remapped the first seat's primary and right movement keys
+from Z and D to E and Q. In Xvfb/X11 with software OpenGL, Z did not
+confirm the selected main-menu item; E opened settings. Selecting reset
+left the saved profile unchanged until confirmation, which wrote the
+67-byte owner-only default save. The running profile still ignored Z
+and accepted E to open the control editor. A clean relaunch ignored E
+and accepted Z to open settings. Exact framebuffer comparisons verified
+the ignored keys and changed menu screens. Both launches exited normally.
+A subsequent hidden Fill+touch smoke loaded the reset slot, verified 80
+street-camera columns, 48 synthetic axis directions and the protected
+960x240 panel in a 1280x912 drawable. All 600 movement and 20 combat
+submissions met the 16.667 ms host-work budget. The saved default hash
+remained unchanged through both exits and smoke. The package, existing
+asset catalogue and owner preferences were not modified. Dummy audio
+and injected X11 keys do not establish physical-device acceptance.
