@@ -959,3 +959,24 @@ context closed successfully; one completion, 252 callbacks, 177 blits
 and no pending callback, picker or canvas remained. This confirms
 browser capture and release with virtual X11 keyboard and mouse input,
 not physical controls, hardware graphics or audible output.
+
+The package at 1ce354b passed independent readback with 88 files and
+1,506,682 bytes (receipt SHA-256
+4ca51f37aad85ba5726c48c0b6b949700d55fd5953da372e3c039cb5d7bf3d10).
+Three isolated asset-backed Firefox launches on the same origin then
+verified actual master-volume attenuation. Each selected the canonical
+directory through the trusted picker, admitted 740 file reads, joined
+station one, moved away from the enemy and triggered the same attack.
+No audio source or PCM submission occurred before the attack. A
+private observer measured only aggregate values from the first 64
+submitted 256-frame buffers per channel, not retained sample data.
+At full volume, signed-16-equivalent channel peaks were 5386 and 2414;
+at the restored 50% setting they were 2693 and 1207. The corresponding
+half/full sum-of-squares ratios were 0.249859 and 0.249682. At the
+restored 0% setting all 16,384 observed samples per channel were zero
+while Web Audio sources still started. The pause settings wrote 75%
+and 50% in the first run, 25% and 0% in the second, and the final
+launch made no preference writes. All three ended once, closed the
+audio context and removed their picker and canvas with no pending
+frame callback. This verifies live mixer attenuation and persistence
+using synthetic DOM keys and a null audio sink, not audible output.
