@@ -56,9 +56,8 @@ impl crate::ir::storage::fixtures::FixtureFactory for () {
     const AVAILABLE: bool = false;
 
     fn open_fixture()
-    -> std::io::Result<Box<dyn crate::ir::storage::fixtures::FixtureStorage>>
-    {
-        Err(std::io::ErrorKind::Unsupported.into())
+    -> io::Result<Box<dyn crate::ir::storage::fixtures::FixtureStorage>> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 }
 

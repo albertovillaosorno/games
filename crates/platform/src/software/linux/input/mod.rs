@@ -77,8 +77,8 @@ impl Debug for LinuxInput {
 }
 
 impl InputBackend for LinuxInput {
-    fn clock(&self) -> Duration {
-        Duration::from_millis(self.timer.ticks64())
+    fn clock(&self) -> Result<Duration, RenderError> {
+        Ok(Duration::from_millis(self.timer.ticks64()))
     }
 
     /// Discover controllers after a native poll returns no event.

@@ -31,5 +31,11 @@
 
 //! Browser implementations behind the portable capability interface.
 
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "test-fixtures"
+))]
+pub(super) mod input;
 pub(super) mod performance;
 mod storage;

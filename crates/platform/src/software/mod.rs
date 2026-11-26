@@ -122,6 +122,8 @@ use crate::ir::frame::RenderError;
 use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::identification::IdentificationPort;
 use crate::ir::input::InputNames;
+#[cfg(any(test, feature = "test-fixtures"))]
+use crate::ir::input::fixtures::EventFixturePort;
 use crate::ir::measurement::MeasurementSource;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::process::ProcessPort;
@@ -221,6 +223,24 @@ impl InputNames for () {
 
     fn key_name(_key: KeyboardKey) -> &'static str {
         "UNKNOWN"
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl EventFixturePort for () {
+    fn verify_event_source() -> Result<(), RenderError> {
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "test-fixtures"
+        ))]
+        return web::input::verify_event_source();
+        #[cfg(not(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "test-fixtures"
+        )))]
+        Err(RenderError::Unsupported)
     }
 }
 

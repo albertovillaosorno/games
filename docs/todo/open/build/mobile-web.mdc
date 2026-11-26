@@ -255,3 +255,32 @@ control slot in the populated diagnostic preset returned failure
 without replacing any preference bytes. Restoring the three original
 values restored success. All thirteen screenshot indicators were
 green. Browser graphics, touch and distribution acceptance remain open.
+
+A test-fixture-only browser keyboard source now subscribes to an explicit
+DOM target, maps physical KeyboardEvent.code values through the shared
+keyboard identity contract, ignores unknown codes and autorepeat, and
+passes window-scoped timestamped observations through the input session.
+A bounded queue emits one untimestamped focus-loss cancellation on
+overflow and resumes after that cancellation is drained. Listeners are
+removed on drop. Input startup and elapsed observations now propagate
+clock failures instead of requiring an infallible host clock.
+
+Fresh validation 1795678430302023230-2915646 passed the complete gate
+including linkage of the dedicated browser input smoke. The pinned
+wasm-bindgen CLI generated an 86,625-byte WebAssembly module and 14,929
+bytes of binding JavaScript. The isolated Firefox harness embedded
+module SHA-256
+a65692fdb5f2322bf7e65d7a5183c9a21ba0d454c90377869dbbeb17fd01bc73.
+
+Two successful isolated launches each dispatched 54 synthetic DOM
+events, covering both startup and explicit invocation, and observed
+eight listener registrations and eight removals. The smoke checked
+layout-independent letter, arrow, keypad, digit, space and enter
+identities, key releases, repeat suppression, default cancellation,
+unknown-code rejection, event scope and monotonic timestamps, focus
+transitions, queue overflow, recovery and listener removal. An
+injected NaN performance clock returned failure in both invocations,
+with all eight listeners removed and no dispatched events. All three
+acceptance indicators were green. The source is not yet connected
+to a browser game window; physical keyboard, mouse, touch, gamepad,
+visibility lifecycle and gameplay acceptance remain open.

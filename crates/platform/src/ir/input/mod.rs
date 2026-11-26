@@ -31,6 +31,10 @@
 
 //! Host-neutral input sessions and keyboard profile names.
 
+#[cfg(any(test, feature = "test-fixtures"))]
+/// Explicit isolated host input diagnostics.
+pub mod fixtures;
+
 use std::fmt::{self, Debug, Formatter};
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -55,7 +59,7 @@ pub(crate) type InputPort = Box<dyn InputBackend>;
 
 /// Private device adapter port.
 pub(crate) trait InputBackend: Debug {
-    fn clock(&self) -> Duration;
+    fn clock(&self) -> Result<Duration, RenderError>;
     fn discover_after_drain(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn feedback_support(&self, device: u64) -> Option<HapticSupport>;
@@ -93,7 +97,7 @@ impl InputStartup {
         mut backend: InputPort,
         limit: NonZeroUsize,
     ) -> Result<Self, RenderError> {
-        let clock = InputClock::new(backend.clock(), backend.window_scope());
+        let clock = InputClock::new(backend.clock()?, backend.window_scope());
         let focus = FeedbackFocus::new(backend.initial_feedback_allowed());
         let mut controllers = ControllerAdmission::new(limit);
         let attached = controllers.admit(backend.discover_available()?)?;
@@ -153,9 +157,9 @@ impl NativeInput {
     /// Monotonic elapsed time since input startup.
     ///
     /// # Errors
-    /// Rejects a reversed adapter clock without advancing its observation.
+    /// Rejects an unavailable or reversed clock without advancing observation.
     pub fn elapsed(&self) -> Result<Duration, RenderError> {
-        self.clock.elapsed(self.backend.clock())
+        self.clock.elapsed(self.backend.clock()?)
     }
 
     /// Enable normalized touch observations for this window session.
@@ -325,8 +329,8 @@ mod tests {
     }
 
     impl super::InputBackend for TestInput {
-        fn clock(&self) -> Duration {
-            self.clock.get()
+        fn clock(&self) -> Result<Duration, super::RenderError> {
+            Ok(self.clock.get())
         }
 
         fn discover_after_drain(

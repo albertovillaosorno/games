@@ -42,7 +42,7 @@ pub(in crate::software) fn now() -> io::Result<Duration> {
     timestamp(clock.now())
 }
 
-fn timestamp(milliseconds: f64) -> io::Result<Duration> {
+pub(super) fn timestamp(milliseconds: f64) -> io::Result<Duration> {
     if milliseconds < 0.0f64 {
         return Err(ErrorKind::InvalidData.into());
     }
