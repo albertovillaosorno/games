@@ -1600,48 +1600,63 @@ const fn main_menu_hints(hosted: bool) -> &'static [&'static str] {
     } else {
         &[
             "LEFT/RIGHT CHOOSE YOUR CHARACTER",
-            "PRESS YOUR START KEY TO JOIN",
+            "PRESS YOUR START CONTROL TO JOIN",
             "GAMEPAD / TOUCH: USE JOIN CONTROL",
             "UP/DOWN SELECT - PRIMARY CONFIRM",
         ]
     }
 }
 
-fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 3] {
+fn desktop_hint(
+    key: Option<KeyboardKey>,
+    mouse: Option<PointerButton>,
+) -> String {
+    let keyboard = key.map(|code| {
+        let label = key_label(code);
+        if label.len() > 12 {
+            "PROFILE"
+        } else {
+            label
+        }
+    });
+    match (keyboard, mouse) {
+        (Some(label), Some(button)) => {
+            format!("{label}/MOUSE {}", mouse_label(button))
+        },
+        (None, Some(button)) => format!("MOUSE {}", mouse_label(button)),
+        (Some(label), None) => String::from(label),
+        (None, None) => String::from("NONE"),
+    }
+}
+
+fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 4] {
     let index = reserved.iter().position(|remote| !remote).unwrap_or(0);
     let [pause, ..] = profiles.keys.first().copied().unwrap_or([None; 8]);
     let [_, _, primary, secondary, left, right, up, down] =
         profiles.keys.get(index).copied().unwrap_or([None; 8]);
-    let [_, _, mouse, ..] =
+    let [mouse_pause, _, attack, jump, m_left, m_right, m_up, m_down] =
         profiles.mouse.get(index).copied().unwrap_or([None; 8]);
-    let key = |binding: Option<KeyboardKey>| {
-        binding.map_or("NONE", |code| {
-            let label = key_label(code);
-            if label.len() > 12 {
-                "PROFILE"
-            } else {
-                label
-            }
-        })
-    };
-    let mouse_name = mouse.map_or_else(String::new, |button| {
-        format!(" / MOUSE {}", mouse_label(button))
-    });
     [
         format!(
-            "P{} MOVE: {} {} {} {}",
+            "P{} LEFT: {} RIGHT: {}",
             index.saturating_add(1),
-            key(left),
-            key(right),
-            key(up),
-            key(down)
+            desktop_hint(left, m_left),
+            desktop_hint(right, m_right)
         ),
         format!(
-            "ATTACK: {}{mouse_name} - JUMP: {}",
-            key(primary),
-            key(secondary)
+            "UP: {} DOWN: {}",
+            desktop_hint(up, m_up),
+            desktop_hint(down, m_down)
         ),
-        format!("{} OR START RESUMES - JOIN BELOW", key(pause)),
+        format!(
+            "ATTACK: {} JUMP: {}",
+            desktop_hint(primary, attack),
+            desktop_hint(secondary, jump)
+        ),
+        format!(
+            "{} OR START RESUMES - JOIN BELOW",
+            desktop_hint(pause, mouse_pause)
+        ),
     ]
 }
 
@@ -3700,13 +3715,45 @@ mod tests {
             main_menu_hints(true).contains(&"REMOTE START JOINS DURING PLAY")
         );
         assert!(
-            main_menu_hints(false).contains(&"PRESS YOUR START KEY TO JOIN")
+            main_menu_hints(false)
+                .contains(&"PRESS YOUR START CONTROL TO JOIN")
         );
         assert!(
             !main_menu_hints(false)
                 .iter()
                 .any(|hint| hint.contains("REMOTE"))
         );
+    }
+
+    #[test]
+    fn pause_hints_include_mouse_only_and_combined_desktop_bindings() {
+        use super::{PointerButton, pause_hints};
+
+        let mut profiles = DEFAULT_PROFILES;
+        let [_, keys, ..] = &mut profiles.keys;
+        let [_, mouse, ..] = &mut profiles.mouse;
+        let [_, _, _, jump, left, ..] = keys;
+        *jump = None;
+        *left = None;
+        *mouse = [
+            Some(PointerButton::X1),
+            None,
+            None,
+            Some(PointerButton::Middle),
+            Some(PointerButton::Right),
+            Some(PointerButton::X2),
+            None,
+            None,
+        ];
+        let [first, ..] = &mut profiles.mouse;
+        *first = [None; 8];
+        let [horizontal, vertical, combat, resume] =
+            pause_hints(&profiles, [true, false, false, false]);
+        assert_eq!(horizontal, "P2 LEFT: MOUSE RIGHT RIGHT: Right/MOUSE X2");
+        assert_eq!(vertical, "UP: Up DOWN: Down");
+        assert_eq!(combat, "ATTACK: F JUMP: MOUSE MIDDLE");
+        assert!(resume.contains("MOUSE X1"));
+        assert!(resume.contains("START RESUMES"));
     }
 
     #[test]
