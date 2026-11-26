@@ -118,6 +118,8 @@ use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+use crate::ir::audio::fixtures::AudioFixturePort;
 use crate::ir::audio::{
     AudioDevices, PlaybackError, PlaybackFactory, PlaybackPort,
 };
@@ -171,7 +173,30 @@ impl PlaybackFactory for () {
     }
 }
 
-#[cfg(not(all(feature = "interactive", target_os = "linux")))]
+#[cfg(all(
+    feature = "interactive",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+impl PlaybackFactory for () {
+    fn devices() -> Result<AudioDevices, PlaybackError> {
+        web::audio::devices()
+    }
+
+    fn open(
+        request: PlaybackRequest<'_>,
+    ) -> Result<PlaybackPort, PlaybackError> {
+        web::audio::open_audio(request)
+    }
+}
+
+#[cfg(not(all(
+    feature = "interactive",
+    any(
+        target_os = "linux",
+        all(target_arch = "wasm32", target_os = "unknown")
+    )
+)))]
 impl PlaybackFactory for () {
     fn devices() -> Result<AudioDevices, PlaybackError> {
         Err(PlaybackError::Unsupported)
@@ -180,6 +205,26 @@ impl PlaybackFactory for () {
     fn open(
         _request: PlaybackRequest<'_>,
     ) -> Result<PlaybackPort, PlaybackError> {
+        Err(PlaybackError::Unsupported)
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl AudioFixturePort for () {
+    fn verify_playback() -> Result<(), PlaybackError> {
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "interactive",
+            feature = "test-fixtures"
+        ))]
+        return web::audio::verify_fixture();
+        #[cfg(not(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "interactive",
+            feature = "test-fixtures"
+        )))]
         Err(PlaybackError::Unsupported)
     }
 }

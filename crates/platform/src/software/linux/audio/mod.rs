@@ -57,8 +57,9 @@ impl Debug for AudioBackend {
 }
 
 impl PlaybackBackend for AudioBackend {
-    fn clear(&self) {
+    fn clear(&self) -> Result<(), PlaybackError> {
         self.device.clear();
+        Ok(())
     }
 
     fn observe_playback(&self) -> PlaybackObservation {

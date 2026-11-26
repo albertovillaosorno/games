@@ -463,3 +463,31 @@ both invocations, registered and removed twenty-eight listeners, and
 removed both attached canvases. Injected missing Canvas2D context and
 throwing draw cases returned failure without leaked attached surfaces
 or listeners. All four independent screenshot indicators were green.
+
+The portable audio handle distinguishes pending and completed pause and
+resume receipts, rejects queue operations during an unresolved control
+and admits the settled state and non-growing queue charge before
+committing the transition. Native SDL remains synchronous. The browser
+adapter admits the exact context rate, converts interleaved signed PCM
+into planar Web Audio buffers and retains conservative whole-block
+charges until trusted source-end events. It connects no source before
+an explicit resume settles. Named browser outputs, physical latency
+and exact partially consumed-frame occupancy are not exposed. The
+native title still requires immediate control receipts; integration
+with asynchronous browser playback remains open.
+
+Fresh validation 1795680488438401269-3330756 passed 1882 aggregate test
+executions, six portable target checks and the enabled native dummy
+audio smoke. The bound browser audio module was 120,332 bytes; binding
+JavaScript was 19,782 bytes. Module SHA-256 was
+69d7d07dda1df7724867a4cb8515102e510e27ab7a65d6d215e8b75277a1747d.
+Three isolated Firefox cases returned their expected outcomes. An
+injected X11 Return generated a trusted activation, after which four
+silent 256-frame stereo sources at 48 kHz ran with trusted end events.
+The fixture checked signed PCM conversion, queue capacity, pending
+control exclusion, draining, pause, clear, resume and context closure.
+Without activation the resume remained pending and the fixture closed
+the context without starting a source. An injected resume rejection
+also reported failure, started no source and closed the context.
+The output was a dummy sink, not evidence of physical audibility,
+continuous low-latency playback or a running browser title.

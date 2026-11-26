@@ -19,6 +19,11 @@ games-platform = { workspace = true, optional = true }
 workspace = true
 
 [features]
+browser-audio-smoke = [
+    "dep:games-platform",
+    "games-platform/interactive",
+    "games-platform/test-fixtures",
+]
 browser-input-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 browser-scene-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 browser-storage-smoke = ["dep:games-platform"]
@@ -56,3 +61,8 @@ required-features = ["browser-input-smoke"]
 name = "simpsons-arcade-browser-scene-smoke"
 path = "src/bin/browser-scene-smoke.rs"
 required-features = ["browser-scene-smoke"]
+
+[[bin]]
+name = "simpsons-arcade-browser-audio-smoke"
+path = "src/bin/browser-audio-smoke.rs"
+required-features = ["browser-audio-smoke"]

@@ -42,7 +42,17 @@ web-sys = { workspace = true, features = [
 
 [features]
 importer = ["dep:games-importer"]
-interactive = ["dep:sdl2"]
+interactive = [
+    "dep:sdl2",
+    "web-sys/AudioBuffer",
+    "web-sys/AudioBufferSourceNode",
+    "web-sys/AudioContext",
+    "web-sys/AudioContextOptions",
+    "web-sys/AudioContextState",
+    "web-sys/AudioDestinationNode",
+    "web-sys/AudioNode",
+    "web-sys/AudioScheduledSourceNode",
+]
 secure-lan = ["dep:rustls"]
 test-fixtures = []
 

@@ -31,6 +31,70 @@
 
 //! Portable PCM playback requests and outcomes.
 
+#[cfg(any(test, feature = "test-fixtures"))]
+/// Isolated host diagnostics and synthetic PCM test fixtures.
+pub mod fixtures {
+    #[cfg(test)]
+    use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
+
+    #[cfg(test)]
+    use games_assets::{
+        AssetFormat, AssetRecord, ContentHash, pcm::PcmSamples,
+    };
+
+    use super::PlaybackError;
+    #[cfg(test)]
+    use super::PlaybackSpec;
+
+    pub(crate) trait AudioFixturePort {
+        fn verify_playback() -> Result<(), PlaybackError>;
+    }
+
+    /// Start an isolated asynchronous host playback diagnostic.
+    /// # Errors
+    /// Reports unavailable diagnostics or synchronous admission failure.
+    pub fn verify_playback() -> Result<(), PlaybackError> {
+        <() as AudioFixturePort>::verify_playback()
+    }
+
+    #[cfg(test)]
+    const PAYLOAD: [u8; 12] = [0, 128, 255, 127, 1, 0, 255, 255, 0, 0, 2, 0];
+
+    #[cfg(test)]
+    /// Small bounded stereo playback request.
+    #[must_use]
+    pub fn configuration() -> PlaybackSpec {
+        PlaybackSpec {
+            buffer_frames: NonZeroU16::new(2).unwrap_or(NonZeroU16::MIN),
+            channels: NonZeroU8::new(2).unwrap_or(NonZeroU8::MIN),
+            max_queued_frames: NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
+            sample_rate: NonZeroU32::new(48_000).unwrap_or(NonZeroU32::MIN),
+        }
+    }
+
+    #[cfg(test)]
+    /// Verify a tiny canonical stereo sample fixture.
+    /// # Errors
+    /// Reports invalid fixture format or digest.
+    pub fn pcm() -> Result<PcmSamples<'static>, PlaybackError> {
+        let spec = configuration();
+        PcmSamples::new(
+            &AssetRecord {
+                digest: ContentHash::calculate(&PAYLOAD),
+                format: AssetFormat::PcmS16Le {
+                    channels: spec.channels,
+                    frames: NonZeroU64::new(3).unwrap_or(NonZeroU64::MIN),
+                    sample_rate: spec.sample_rate,
+                },
+                key: String::from("test/audio"),
+                size: 12,
+            },
+            &PAYLOAD,
+        )
+        .map_err(|_error| PlaybackError::InvalidFrames)
+    }
+}
+
 use std::cell::Cell;
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32};
@@ -103,7 +167,7 @@ pub struct AudioDevices {
 /// Adapter port for an admitted, exact-format playback queue.
 pub(crate) trait PlaybackBackend: Debug {
     /// Clear pending frames without changing pause state.
-    fn clear(&self);
+    fn clear(&self) -> Result<(), PlaybackError>;
     /// Observe the application-facing format and current device state.
     fn observe_playback(&self) -> PlaybackObservation;
     /// Backend and requested device diagnostics.
@@ -143,8 +207,9 @@ struct PendingControl {
 
 /// An exact-format playback handle, initially paused, with a bounded queue.
 ///
-/// The backend and device are private. The reported queue size excludes
-/// samples already transferred to the physical device or audio server.
+/// The backend and device are private. The reported queue charge excludes
+/// samples no longer tracked by the adapter. A backend may retain an entire
+/// block charge until its consumption is observable.
 /// A failed receipt reports an inconsistent device; it cannot retract
 /// samples already copied by the adapter or played by the device.
 pub struct NativeAudio {
@@ -221,7 +286,7 @@ impl NativeAudio {
     /// Rejects unexpected device state or a nonempty queue receipt.
     pub fn clear(&self) -> Result<(), PlaybackError> {
         self.observe_state()?;
-        self.backend.clear();
+        self.backend.clear()?;
         self.observe_state()?;
         self.layout
             .admit_queue_receipt(0, self.backend.queued_bytes(), false)
@@ -341,7 +406,7 @@ impl NativeAudio {
         )
     }
 
-    /// Number of complete sample frames pending in the software queue.
+    /// Number of complete sample frames charged to the software queue.
     /// # Errors
     /// Rejects malformed or out-of-budget backend observations.
     pub fn queued_frames(&self) -> Result<u32, PlaybackError> {
@@ -385,49 +450,6 @@ impl NativeAudio {
 }
 
 #[cfg(test)]
-/// Shared synthetic PCM fixtures for hardware contract and backend tests.
-pub mod fixtures {
-    use std::num::NonZeroU64;
-
-    use games_assets::{AssetFormat, AssetRecord, ContentHash};
-
-    use super::*;
-    const PAYLOAD: [u8; 12] = [0, 128, 255, 127, 1, 0, 255, 255, 0, 0, 2, 0];
-
-    /// Small bounded stereo playback request.
-    #[must_use]
-    pub fn configuration() -> PlaybackSpec {
-        PlaybackSpec {
-            buffer_frames: NonZeroU16::new(2).unwrap_or(NonZeroU16::MIN),
-            channels: NonZeroU8::new(2).unwrap_or(NonZeroU8::MIN),
-            max_queued_frames: NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
-            sample_rate: NonZeroU32::new(48_000).unwrap_or(NonZeroU32::MIN),
-        }
-    }
-
-    /// Verify a tiny canonical stereo sample fixture.
-    /// # Errors
-    /// Reports invalid fixture format or digest.
-    pub fn pcm() -> Result<PcmSamples<'static>, PlaybackError> {
-        let spec = configuration();
-        PcmSamples::new(
-            &AssetRecord {
-                digest: ContentHash::calculate(&PAYLOAD),
-                format: AssetFormat::PcmS16Le {
-                    channels: spec.channels,
-                    frames: NonZeroU64::new(3).unwrap_or(NonZeroU64::MIN),
-                    sample_rate: spec.sample_rate,
-                },
-                key: String::from("test/audio"),
-                size: 12,
-            },
-            &PAYLOAD,
-        )
-        .map_err(|_error| PlaybackError::InvalidFrames)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -453,10 +475,11 @@ mod tests {
     }
 
     impl PlaybackBackend for Rc<FakeBackend> {
-        fn clear(&self) {
+        fn clear(&self) -> Result<(), PlaybackError> {
             if !self.control_ignored.get() {
                 self.samples.borrow_mut().clear();
             }
+            Ok(())
         }
 
         fn observe_playback(&self) -> PlaybackObservation {
