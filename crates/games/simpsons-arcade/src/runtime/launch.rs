@@ -45,7 +45,9 @@ use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, PublicationPolicy, VolumeStore,
 };
-use games_platform::ir::storage::{executable_path, join_path, parent_path};
+use games_platform::ir::storage::{
+    canonical_path, executable_path, join_path, parent_path, paths_overlap,
+};
 
 use super::{
     ACTION_NAMES, DEFAULT_PROFILES, MAX_PROFILE_BYTES, Profiles,
@@ -582,6 +584,7 @@ impl Launch {
             assets.audio.is_some(),
         )?;
         let settings = explicit_settings.or(paths.settings);
+        admit_settings_location(settings.as_deref(), &assets.directory)?;
         let preferences = settings
             .as_deref()
             .map(DisplayStore::open)
@@ -720,6 +723,27 @@ fn selected_audio_device(
         return Err("audio device requires an audio bundle".into());
     }
     Ok(device.filter(|name| name != "default"))
+}
+
+fn admit_settings_location(
+    settings: Option<&OsStr>,
+    assets: &OsStr,
+) -> Result<(), String> {
+    let Some(selected) = settings else {
+        return Ok(());
+    };
+    // Resolve only for comparison. The stores still open the original
+    // selected path and perform their own trust and link checks.
+    let resolved_settings = canonical_path(selected)
+        .map_err(|error| format!("settings location: {error}"))?;
+    let resolved_assets = canonical_path(assets)
+        .map_err(|error| format!("asset location: {error}"))?;
+    if paths_overlap(&resolved_settings, &resolved_assets)
+        .map_err(|error| format!("settings location: {error}"))?
+    {
+        return Err("settings and asset directories overlap".into());
+    }
+    Ok(())
 }
 
 fn load_volume(settings: Option<&OsStr>) -> Result<VolumePreferences, String> {
@@ -900,7 +924,7 @@ mod tests {
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[derive(Debug)]
-    struct ProfileFixture(TestRoot);
+    struct ProfileFixture(TestRoot, TestRoot);
 
     impl ProfileFixture {
         fn edit(
@@ -920,11 +944,18 @@ mod tests {
         }
 
         fn new() -> Result<Self, String> {
-            let fixture =
-                Self(TestRoot::new().map_err(|error| error.to_string())?);
+            let fixture = Self(
+                TestRoot::new().map_err(|error| error.to_string())?,
+                TestRoot::new().map_err(|error| error.to_string())?,
+            );
+            let assets =
+                fixture.1.location().to_str().ok_or("invalid test path")?;
             fixture.write(
                 "launch.local",
-                &format!("{}controls=fallback.txt\nsettings=.\n", catalogue()),
+                &format!(
+                    "{}controls=fallback.txt\nsettings=.\n",
+                    catalogue_with_parent(assets)
+                ),
             )?;
             fixture.write("fallback.txt", FALLBACK_PROFILE)?;
             fixture.write("explicit.txt", EXPLICIT_PROFILE)?;
@@ -956,10 +987,70 @@ mod tests {
     }
 
     fn catalogue() -> String {
+        catalogue_with_parent("../local assets")
+    }
+
+    fn catalogue_with_parent(parent: &str) -> String {
         format!(
-            "version=1\nparent=../local assets\nmarge={DIGEST}\n\
+            "version=1\nparent={parent}\nmarge={DIGEST}\n\
              homer={DIGEST}\nbart={DIGEST}\nlisa={DIGEST}\n"
         )
+    }
+
+    #[test]
+    fn launch_rejects_overlapping_settings_and_asset_locations()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        for directory in ["assets/nested", "settings"] {
+            root.create_directories(directory)
+                .map_err(|error| error.to_string())?;
+        }
+        let assets = resolve_local(root.location(), "assets")?;
+        let settings = resolve_local(root.location(), "settings")?;
+        root.link(&assets, "alias")
+            .map_err(|error| error.to_string())?;
+        let config = resolve_local(root.location(), "launch.local")?;
+        let catalogue = catalogue_with_parent("assets");
+        for overlapping in [".", "assets", "assets/nested", "alias/nested"] {
+            root.write_file(
+                "launch.local",
+                format!("{catalogue}settings={overlapping}\n").as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
+            if !Launch::parse(vec!["--config".into(), config.clone()])
+                .is_err_and(|error| error.contains("directories overlap"))
+            {
+                return Err(format!(
+                    "accepted overlapping path: {overlapping}"
+                ));
+            }
+            // An explicit valid directory overrides the catalogue.
+            let launch = Launch::parse(vec![
+                "--settings".into(),
+                settings.clone(),
+                "--config".into(),
+                config.clone(),
+            ])?;
+            if launch.preferences.is_none() || launch.volume_store.is_none() {
+                return Err("explicit settings override ignored".into());
+            }
+        }
+        // Explicit asset and settings arguments obey the same boundary.
+        let invalid = vec![
+            "--settings".into(),
+            assets.clone(),
+            assets,
+            "m".into(),
+            "h".into(),
+            "b".into(),
+            "l".into(),
+        ];
+        if !Launch::parse(invalid)
+            .is_err_and(|error| error.contains("directories overlap"))
+        {
+            return Err("explicit overlapping paths accepted".into());
+        }
+        Ok(())
     }
 
     #[test]

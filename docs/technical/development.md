@@ -184,6 +184,10 @@ For persistent display, volume and control profiles, create an existing
 owner-only settings directory outside the package and asset store. Set
 `settings=DIR` in the private local launch catalogue, or launch with
 `--settings DIR`. Relative catalogue paths are anchored to that file.
+Native launch rejects
+settings and asset directories that overlap after path resolution. This is
+a preflight for the selected locations, not an isolation guarantee against
+concurrent filesystem changes.
 Without this selection, display and volume changes are session-only and
 control editing/reset is unavailable. A normal launch with the directory
 selected enables the next-launch control editor; smoke never writes it.

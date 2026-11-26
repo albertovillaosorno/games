@@ -1015,3 +1015,11 @@ logical, 1,920x1,080 drawable), two work-budget misses and one
 submission-interval miss. Five local applied-input samples had a
 mean age of 18.4 ms. This is local software-rendered evidence only,
 not a physical latency or hardware performance measurement.
+
+Native launch now rejects settings paths that overlap the selected
+asset directory after resolving both paths. A fixture exercises the
+same directory, an ancestor, a descendant and a linked descendant
+through a catalogue, plus an overlapping explicit asset argument.
+A separate settings directory remains usable through the explicit
+override. The comparison does not replace the storage backend's
+trust checks or promise isolation against concurrent path changes.
