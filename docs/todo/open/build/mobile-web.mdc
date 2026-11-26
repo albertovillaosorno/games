@@ -1397,3 +1397,43 @@ establish a usable directory-drop alternative on this host. Do not
 substitute local path strings for browser-granted file objects or relax
 the canonical relative-path admission. The browser directory blocker
 remains open; no original media was read during these checks.
+
+Three independent asset-backed Firefox sessions exercised the published
+c1cfce6 JavaScript and Wasm with trusted virtual touchscreen input from
+an isolated Mutter Wayland compositor rather than synthetic DOM events.
+The harness first created virtual touch, keyboard and mouse devices;
+initializing touch only after Firefox startup had exposed zero touch
+points. A native chooser admitted the 743-file canonical directory
+through a trusted selection. Earlier chooser attempts missed focus or
+the browser confirmation; an isolated host without an output device
+then rejected the audio format. A private two-channel 48 kHz null sink
+resolved audio negotiation without accessing physical output.
+
+At DPR 1 and 1.5, the same title joined through the touch panel and
+held direction and attack with distinct contacts. Each observer saw
+nine trusted touch downs, eight releases, eight capture acquisitions,
+eight capture losses and a captured outside-canvas motion. No
+compatibility mouse transitions were observed. The actor moved from
+x=110 to x=158 or x=160, settled at x=164 after dragging the direction
+contact outside, moved back to x=120 or x=118 on a fresh contact, and
+settled at x=114 after release. The final menu action removed the canvas
+before its corresponding contact release. Both runs completed normally
+with 315 callbacks and 221 or 223 blits. The fractional-scale CSS
+surface was approximately 853.33 by 567.33, with a 1280-by-851 backing.
+
+The third session toggled the compositor's maximized window state at
+DPR 1.5 while a direction contact remained held. The initial F11
+attempt did not resize the window; the compositor shortcut did.
+The backing surface changed from 1280-by-851 to 1203-by-808. The
+actor settled at x=162; a trusted, captured move of the old contact
+into the newly projected direction control left it stationary. Releasing
+it and acquiring a new contact moved the actor to x=194. The run
+observed 444 callbacks, 351 blits, 11 trusted touch downs, 10 releases
+and 10 matched capture acquisitions/losses, without mouse aliases.
+All three runs read 616 entries (24,937,054 bytes), peaked at one pending
+frame, completed once, closed the stereo context and removed the picker
+and canvas. Package verification still matched 88 files, 1,545,420
+bytes and receipt SHA-256
+`5e9ebd8cf362b390f7d71733c6ffc2c5616c11cb7ad39c8c0afa18509cee78e3`.
+These are browser-trusted compositor events, not physical touchscreen,
+audio or GPU acceptance. Android and broader browser gates remain open.
