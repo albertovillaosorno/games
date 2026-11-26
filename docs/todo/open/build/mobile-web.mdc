@@ -1259,3 +1259,26 @@ context close and one completion. The stored profile was read once,
 never rewritten and remained byte-identical. Both package readbacks
 matched their original receipts. These tests verify profile portability
 and virtual keyboard/mouse gameplay, not physical controller operation.
+
+Browser pointer capture can synchronously focus the canvas and dispatch
+a nested lifecycle observation. When the DOM queue is already full, the
+nested callback must cancel mouse holds without borrowing state that the
+outer pointer callback still owns. The shared browser input adapter now
+keeps its bounded button bitset in a Cell, allowing cancellation during
+capture and clearing a press rejected by the overflowed queue.
+
+Fresh validation 1795699141852633682-2590784 passed 1,956 aggregate test
+executions and linked the browser input fixture. The bound 155,061-byte
+diagnostic was executed in network-isolated headless Firefox. Its
+nested capture fixture fills the DOM queue and dispatches a focus event
+during pointer admission. It verifies one focus-loss cancellation,
+no admitted pointer press or stale release, and successful subsequent
+press and release. Three success cases (visible, hidden and repeat)
+removed every canvas and balanced 26 canvas listener registrations and
+removals, including the new fixture listener. Three negative controls
+(invalid clock, canvas listener failure and lifecycle registration
+failure) returned the expected diagnostic failure and removed all
+installed fixture listeners and canvases. The first observer used
+outdated dispatch expectations; after correction all six passed.
+These are synthetic browser lifecycle checks, not physical input
+acceptance.

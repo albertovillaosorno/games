@@ -29,7 +29,6 @@
 // - Defaults:
 //   - Ignore other pointer types and presses outside the client rectangle.
 
-use std::cell::RefCell;
 #[cfg(feature = "test-fixtures")]
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
@@ -133,9 +132,9 @@ pub(super) fn subscribe(
         source.listen(element, kind, move |event| {
             let changes = match event.dyn_ref::<PointerEvent>() {
                 Some(pointer) => match pointer.pointer_type().as_str() {
-                    "mouse" => {
-                        mouse.borrow_mut().transition(&canvas, kind, pointer)
-                    },
+                    "mouse" => mouse.transition(&canvas, kind, pointer, || {
+                        capture(&canvas, pointer)
+                    }),
                     "touch" => [
                         touch_transition(&canvas, kind, pointer),
                         None,
@@ -152,7 +151,7 @@ pub(super) fn subscribe(
     }
     let element_mouse = Rc::clone(&mouse);
     source.listen(element, "blur", move |_| {
-        element_mouse.borrow_mut().clear();
+        element_mouse.clear();
         None
     })?;
     source.listen(element, "contextmenu", |event| {
@@ -165,7 +164,7 @@ pub(super) fn subscribe(
 fn subscribe_lifecycle(
     source: &mut EventSource,
     element: &Element,
-    mouse: Rc<RefCell<mouse::MouseButtons>>,
+    mouse: Rc<mouse::MouseButtons>,
 ) -> Result<(), RenderError> {
     let document = element.owner_document().ok_or(RenderError::Unsupported)?;
     let window = document.default_view().ok_or(RenderError::Unsupported)?;
@@ -173,14 +172,14 @@ fn subscribe_lifecycle(
     let visibility_mouse = Rc::clone(&mouse);
     source.listen(&document, "visibilitychange", move |_| {
         if visibility.hidden() {
-            visibility_mouse.borrow_mut().clear();
+            visibility_mouse.clear();
             Some(focus_lost())
         } else {
             None
         }
     })?;
     source.listen(&window, "blur", move |_| {
-        mouse.borrow_mut().clear();
+        mouse.clear();
         Some(focus_lost())
     })
 }
@@ -254,7 +253,7 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
     let surface = Surface::new()?;
     let canvas = &surface.0;
     let capacity = NonZeroUsize::MIN.saturating_add(7);
-    let source = EventSource::for_element(canvas, SCOPE, capacity)?;
+    let mut source = EventSource::for_element(canvas, SCOPE, capacity)?;
     let mut input =
         InputStartup::new(browser_input(SCOPE), NonZeroUsize::MIN)?.input;
     input.enable_touch();
@@ -314,7 +313,7 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
         "foreign touch surface",
     )?;
     verify_lifecycle(&source, canvas, &mut input, layout)?;
-    mouse::verify_source(&source, canvas, &mut input)?;
+    mouse::verify_source(&mut source, canvas, &mut input)?;
     verify(
         !send_pointer(canvas, "contextmenu", "mouse", 1, [110, 55])?
             && next_event(&source, &mut input)?.is_none(),

@@ -29,7 +29,13 @@
 // - Defaults:
 //   - Ignore unsupported buttons, ordinary motion and unadmitted chords.
 
+use std::cell::Cell;
+#[cfg(feature = "test-fixtures")]
+use std::rc::Rc;
+
 use games::input::physical::PointerButton;
+#[cfg(feature = "test-fixtures")]
+use wasm_bindgen::JsCast as _;
 #[cfg(feature = "test-fixtures")]
 use web_sys::PointerEventInit;
 use web_sys::{Element, PointerEvent};
@@ -56,23 +62,26 @@ pub(super) type Transitions = [Option<InputTransition>; BUTTONS.len()];
 
 #[derive(Default)]
 pub(super) struct MouseButtons {
-    held: u16,
+    // Focus acquisition can dispatch a nested lifecycle callback. Keep the
+    // small bitset independently accessible, with no borrow across DOM calls.
+    held: Cell<u16>,
 }
 
 impl MouseButtons {
-    pub(super) fn clear(&mut self) {
-        self.held = 0;
+    pub(super) fn clear(&self) {
+        self.held.set(0);
     }
 
     pub(super) fn transition(
-        &mut self,
+        &self,
         element: &Element,
         kind: &str,
         event: &PointerEvent,
+        capture: impl FnOnce() -> bool,
     ) -> Transitions {
         match kind {
             "pointerdown" | "pointermove" | "pointerup" => {
-                let change = self.button_change(element, kind, event);
+                let change = self.button_change(element, kind, event, capture);
                 if change.is_some() {
                     event.prevent_default();
                 }
@@ -84,7 +93,7 @@ impl MouseButtons {
                 [None; BUTTONS.len()]
             },
             "pointercancel" | "lostpointercapture" | "pointerleave" => {
-                let held = std::mem::take(&mut self.held);
+                let held = self.held.replace(0);
                 BUTTONS.map(|(button, mask)| {
                     (held & mask != 0).then(|| change(button, false))
                 })
@@ -94,10 +103,11 @@ impl MouseButtons {
     }
 
     fn button_change(
-        &mut self,
+        &self,
         element: &Element,
         kind: &str,
         event: &PointerEvent,
+        capture: impl FnOnce() -> bool,
     ) -> Option<InputTransition> {
         let index = usize::try_from(event.button()).ok()?;
         let &(button, mask) = BUTTONS.get(index)?;
@@ -108,21 +118,22 @@ impl MouseButtons {
         if down {
             if kind == "pointerdown" {
                 let _point = pointer::point(element, event)?;
-                if !pointer::capture(element, event) {
+                if !capture() {
                     return None;
                 }
-            } else if self.held == 0
+            } else if self.held.get() == 0
                 || (event.is_trusted()
                     && !element.has_pointer_capture(event.pointer_id()))
             {
                 return None;
             }
-            self.held |= mask;
+            self.held.set(self.held.get() | mask);
         } else {
-            if self.held & mask == 0 {
+            let held = self.held.get();
+            if held & mask == 0 {
                 return None;
             }
-            self.held &= !mask;
+            self.held.set(held & !mask);
         }
         Some(change(button, down))
     }
@@ -159,7 +170,7 @@ fn send(
 
 #[cfg(feature = "test-fixtures")]
 pub(super) fn verify_source(
-    source: &EventSource,
+    source: &mut EventSource,
     element: &Element,
     input: &mut NativeInput,
 ) -> Result<(), RenderError> {
@@ -213,7 +224,8 @@ pub(super) fn verify_source(
     )?;
     let _sent = send(element, "lostpointercapture", -1, 0)?;
     verify(next_event(source, input)?.is_none(), "stale mouse capture")?;
-    verify_overflow(source, element, input)
+    verify_overflow(source, element, input)?;
+    verify_reentrant_capture(source, element, input)
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -290,6 +302,58 @@ fn verify_cancellation(
             )?;
         }
         verify(next_event(source, input)?.is_none(), "extra mouse release")?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "test-fixtures")]
+fn verify_reentrant_capture(
+    source: &mut EventSource,
+    element: &Element,
+    input: &mut NativeInput,
+) -> Result<(), RenderError> {
+    let mouse = Rc::clone(&source.mouse);
+    let canvas = element.clone();
+    // Simulate focus dispatch during pointer capture, using the same
+    // translation and queue listeners as an admitted real pointer press.
+    source.listen(element, "fixturecapture", move |event| {
+        let changes = event.dyn_ref::<PointerEvent>().map_or(
+            [None; BUTTONS.len()],
+            |pointer| {
+                mouse.transition(&canvas, "pointerdown", pointer, || {
+                    web_sys::Event::new("focus").is_ok_and(|focus| {
+                        canvas.dispatch_event(&focus).is_ok()
+                    })
+                })
+            },
+        );
+        changes.into_iter().flatten()
+    })?;
+    let capacity = source.queue.borrow().capacity.get();
+    for _ in 0..capacity {
+        let _sent = super::send_key(element, "keydown", "KeyA", false)?;
+    }
+    verify(
+        !send(element, "fixturecapture", 0, 1)?
+            && next_event(source, input)?
+                == Some(HostEvent::Input(InputEvent::FocusLost))
+            && next_event(source, input)?.is_none(),
+        "nested focus overflow discards pointer press",
+    )?;
+    verify(
+        send(element, "pointerup", 0, 0)?
+            && next_event(source, input)?.is_none(),
+        "nested overflow discards adapter hold",
+    )?;
+    for (kind, mask, down) in
+        [("pointerdown", 1, true), ("pointerup", 0, false)]
+    {
+        verify(
+            !send(element, kind, 0, mask)?
+                && next_event(source, input)?
+                    == Some(event(PointerButton::Left, down)),
+            "fresh mouse after nested focus overflow",
+        )?;
     }
     Ok(())
 }

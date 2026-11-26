@@ -84,7 +84,7 @@ pub(super) struct EventSource {
     #[cfg(feature = "interactive")]
     controller_events: Events,
     listeners: Vec<Listener>,
-    mouse: Rc<RefCell<mouse::MouseButtons>>,
+    mouse: Rc<mouse::MouseButtons>,
     queue: Rc<RefCell<EventQueue>>,
     scope: u64,
 }
@@ -221,7 +221,7 @@ impl EventSource {
                 scope,
             ))),
             listeners: Vec::new(),
-            mouse: Rc::new(RefCell::new(mouse::MouseButtons::default())),
+            mouse: Rc::new(mouse::MouseButtons::default()),
             queue: Rc::new(RefCell::new(EventQueue::new(capacity)?)),
             scope,
         };
@@ -260,7 +260,7 @@ impl EventSource {
             // Overflow cancels logical holds. Discard adapter holds too,
             // including presses observed while the queue rejects events.
             if queue.overflow {
-                mouse.borrow_mut().clear();
+                mouse.clear();
             }
         });
         target
