@@ -136,8 +136,15 @@ Select the local canonical assets directory containing `launch.local`.
 The catalogue must use `parent=.`, windowed presentation, no native
 settings/control/device paths, and `launch-poses.txt` if poses are used.
 No original assets are included in the package or automatically uploaded.
-Browser preferences remain session-only; physical device acceptance and
-broader browser compatibility are not established.
+Display mode, master volume and admitted control edits use a fixed
+origin-local preference namespace. Control edits take effect on the next
+launch; fullscreen remains unavailable. If storage is unavailable at
+startup, display and volume remain session-only and control editing is
+not offered. Incompatible stored values are rejected rather than replaced.
+Successful browser writes do not guarantee crash durability. Preferences
+are isolated by browser origin and profile, and contain no game assets.
+Physical device acceptance and broader browser compatibility are not
+established.
 
 For persistent packaging, set the owner-only local `.env` from
 `.env.example`. Use absolute asset and output roots and

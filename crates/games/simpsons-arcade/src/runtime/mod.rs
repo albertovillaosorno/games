@@ -96,7 +96,9 @@ use games_platform::ir::scene::{
 };
 use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
 use games_platform::ir::storage::file::snapshot;
-use games_platform::ir::storage::preferences::{DisplayStore, VolumeStore};
+use games_platform::ir::storage::preferences::{
+    DisplayStore, PublicationPolicy, VolumeStore,
+};
 use games_platform::ir::ui::PlateLayout;
 use games_platform::ir::ui::editor::{ControlEditorArt, ControlEditorView};
 
@@ -936,6 +938,7 @@ struct PreviewOptions<'profiles> {
     hidden: bool,
     measure: bool,
     preferences: Option<&'profiles Rc<DisplayStore>>,
+    publication: PublicationPolicy,
     touch_enabled: bool,
     volume: MasterVolume,
     volume_store: Option<&'profiles Rc<VolumeStore>>,
@@ -1001,6 +1004,7 @@ struct Interactive {
     preferences: Option<Rc<DisplayStore>>,
     presented: Option<HostedCabinet>,
     previous: Duration,
+    publication: PublicationPolicy,
     requested: DisplaySettings,
     reset_persisted: bool,
     simulation: LiveSimulation<HostedCabinet>,
@@ -1170,6 +1174,7 @@ impl Interactive {
             preferences: options.preferences.map(Rc::clone),
             presented: None,
             previous: Duration::ZERO,
+            publication: options.publication,
             requested: cabinet.session().display(),
             reset_persisted: false,
             simulation,
@@ -1194,12 +1199,20 @@ impl Interactive {
     ) -> Result<(), RenderError> {
         let requested = session.display();
         if requested != self.requested {
-            save_display(self.preferences.as_deref(), requested)?;
+            save_display(
+                self.preferences.as_deref(),
+                requested,
+                self.publication,
+            )?;
             self.requested = requested;
         }
         let volume = session.volume();
         if volume != self.volume {
-            save_volume(self.volume_store.as_deref(), volume)?;
+            save_volume(
+                self.volume_store.as_deref(),
+                volume,
+                self.publication,
+            )?;
             self.volume = volume;
         }
         if session.control_reset() != ControlReset::Requested {
@@ -1513,10 +1526,11 @@ const fn presentation_wait(
 fn save_display(
     store: Option<&DisplayStore>,
     settings: DisplaySettings,
+    publication: PublicationPolicy,
 ) -> Result<(), RenderError> {
     if let Some(preferences) = store {
         let receipt = preferences.store(settings).map_err(failure)?;
-        receipt.durability.map_err(failure)?;
+        publication.confirm(receipt).map_err(failure)?;
     }
     Ok(())
 }
@@ -1524,10 +1538,11 @@ fn save_display(
 fn save_volume(
     store: Option<&VolumeStore>,
     volume: MasterVolume,
+    publication: PublicationPolicy,
 ) -> Result<(), RenderError> {
     if let Some(preferences) = store {
         let receipt = preferences.store(volume).map_err(failure)?;
-        receipt.durability.map_err(failure)?;
+        publication.confirm(receipt).map_err(failure)?;
     }
     Ok(())
 }
@@ -1935,6 +1950,7 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
                 hidden: smoke,
                 measure,
                 preferences: display_store.as_ref(),
+                publication: PublicationPolicy::Durable,
                 touch_enabled,
                 volume,
                 volume_store: shared_volume_store.as_ref(),

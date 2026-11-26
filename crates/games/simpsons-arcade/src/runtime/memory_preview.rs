@@ -40,6 +40,9 @@ use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::{NativeWindow, frame_loop};
 use games_platform::ir::storage::bundle::{BundleSource, MemoryBundleStore};
+use games_platform::ir::storage::preferences::{
+    DisplayStore, PublicationPolicy, VolumeStore,
+};
 
 pub use super::audio::AudioSelection;
 use super::{
@@ -69,6 +72,29 @@ pub struct Selection<'text> {
     pub world: Option<ContentHash>,
 }
 
+#[derive(Debug)]
+pub(super) struct Preferences {
+    pub(super) controls: Rc<launch::ResolvedControls>,
+    pub(super) display: DisplaySettings,
+    pub(super) display_store: Option<Rc<DisplayStore>>,
+    pub(super) publication: PublicationPolicy,
+    pub(super) volume: MasterVolume,
+    pub(super) volume_store: Option<Rc<VolumeStore>>,
+}
+
+impl Preferences {
+    pub(super) fn transient(display: DisplaySettings) -> Self {
+        Self {
+            controls: Rc::new(launch::ResolvedControls::transient()),
+            display,
+            display_store: None,
+            publication: PublicationPolicy::Durable,
+            volume: MasterVolume::Full,
+            volume_store: None,
+        }
+    }
+}
+
 /// Open the live title and yield to the host between bounded frame steps.
 ///
 /// The memory snapshot is needed only during initialization. The same title
@@ -81,6 +107,23 @@ pub struct Selection<'text> {
 pub fn start<Complete>(
     store: &MemoryBundleStore,
     selection: &Selection<'_>,
+    complete: Complete,
+) -> Result<(), RenderError>
+where
+    Complete: FnOnce(Result<(), RenderError>) + 'static,
+{
+    start_with_preferences(
+        store,
+        selection,
+        &Preferences::transient(selection.display),
+        complete,
+    )
+}
+
+pub(super) fn start_with_preferences<Complete>(
+    store: &MemoryBundleStore,
+    selection: &Selection<'_>,
+    preferences: &Preferences,
     complete: Complete,
 ) -> Result<(), RenderError>
 where
@@ -101,21 +144,22 @@ where
             world: selection.world,
         },
     )?;
-    let controls = Rc::new(launch::ResolvedControls::transient());
     let options = PreviewOptions {
         audio_device: None,
-        controls: &controls,
-        display: selection.display,
+        controls: &preferences.controls,
+        display: preferences.display,
         hidden: false,
         measure: false,
-        preferences: None,
+        preferences: preferences.display_store.as_ref(),
+        publication: preferences.publication,
         touch_enabled: selection.touch_enabled,
-        volume: MasterVolume::Full,
-        volume_store: None,
+        volume: preferences.volume,
+        volume_store: preferences.volume_store.as_ref(),
         window_switching: WindowSwitching::Fixed,
     };
     let reserved = [false; 4];
-    let layout = preview_layout(options.touch_enabled, &controls.profiles)?;
+    let layout =
+        preview_layout(options.touch_enabled, &preferences.controls.profiles)?;
     let limits = scene_limits(&source, options, reserved)?;
     let mut window = NativeWindow::open(
         "The Simpsons Arcade - movement prototype",

@@ -212,6 +212,32 @@ impl ControlStore {
     }
 }
 
+/// Required assurance for an already published preference value.
+///
+/// This never converts a rejected write into a successful publication.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PublicationPolicy {
+    /// Accept successful publication when durability is unsupported.
+    BestEffort,
+    /// Require the backend to confirm crash durability.
+    #[default]
+    Durable,
+}
+
+impl PublicationPolicy {
+    /// Verify the publication receipt against the caller's requirements.
+    ///
+    /// # Errors
+    /// Reports a durability failure unless this policy explicitly admits
+    /// an unsupported durability guarantee.
+    pub const fn confirm(self, receipt: SaveReceipt) -> Result<(), ErrorKind> {
+        match (self, receipt.durability) {
+            (Self::BestEffort, Err(ErrorKind::Unsupported)) => Ok(()),
+            (_, durability) => durability,
+        }
+    }
+}
+
 fn load_optional(
     store: &SaveStore,
     slot: u32,
@@ -222,5 +248,29 @@ fn load_optional(
             Ok(None)
         },
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preference_publication_distinguishes_durability() {
+        let durable = PublicationPolicy::Durable;
+        let best_effort = PublicationPolicy::BestEffort;
+        let confirmed = SaveReceipt { durability: Ok(()) };
+        let unsupported = SaveReceipt {
+            durability: Err(ErrorKind::Unsupported),
+        };
+        assert_eq!(durable.confirm(confirmed), Ok(()));
+        assert_eq!(best_effort.confirm(confirmed), Ok(()));
+        assert_eq!(durable.confirm(unsupported), Err(ErrorKind::Unsupported));
+        assert_eq!(best_effort.confirm(unsupported), Ok(()));
+        for error in [ErrorKind::PermissionDenied, ErrorKind::Other] {
+            let receipt = SaveReceipt { durability: Err(error) };
+            assert_eq!(durable.confirm(receipt), Err(error));
+            assert_eq!(best_effort.confirm(receipt), Err(error));
+        }
     }
 }

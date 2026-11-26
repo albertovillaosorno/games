@@ -43,7 +43,7 @@ use games_assets::ContentHash;
 use games_platform::ir::input::{key_from_name, key_name};
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
-    ControlStore, DisplayStore, VolumeStore,
+    ControlStore, DisplayStore, PublicationPolicy, VolumeStore,
 };
 use games_platform::ir::storage::{executable_path, join_path, parent_path};
 
@@ -320,6 +320,7 @@ impl ControlOptions {
 pub(super) struct ControlSelection {
     explicit: Option<OsString>,
     fallback: Option<OsString>,
+    publication: PublicationPolicy,
     reset: bool,
     smoke: bool,
     store: Option<ControlStore>,
@@ -336,6 +337,7 @@ impl ControlSelection {
         Ok(Self {
             explicit: options.explicit,
             fallback,
+            publication: PublicationPolicy::Durable,
             reset: options.reset,
             smoke,
             store,
@@ -346,6 +348,7 @@ impl ControlSelection {
         let Self {
             explicit,
             fallback,
+            publication,
             reset,
             smoke,
             store,
@@ -378,6 +381,7 @@ impl ControlSelection {
         Ok(ResolvedControls {
             pending,
             profiles,
+            publication,
             store: persistent_store,
         })
     }
@@ -387,6 +391,7 @@ impl ControlSelection {
 pub(super) struct ResolvedControls {
     pending: Option<String>,
     pub(super) profiles: Profiles,
+    publication: PublicationPolicy,
     store: Option<ControlStore>,
 }
 
@@ -395,9 +400,24 @@ impl ResolvedControls {
         self.store.is_some()
     }
 
+    pub(super) fn from_store(
+        store: ControlStore,
+        publication: PublicationPolicy,
+    ) -> Result<Self, String> {
+        ControlSelection {
+            explicit: None,
+            fallback: None,
+            publication,
+            reset: false,
+            smoke: false,
+            store: Some(store),
+        }
+        .resolve()
+    }
+
     pub(super) fn persist(&self) -> Result<(), String> {
         if let (Some(store), Some(text)) = (&self.store, &self.pending) {
-            Self::store_profile(store, text)?;
+            Self::store_profile(store, text, self.publication)?;
         }
         Ok(())
     }
@@ -427,13 +447,13 @@ impl ResolvedControls {
         let Ok((candidate, encoded)) = admit_candidate(profile) else {
             return Ok(None);
         };
-        Self::store_profile(store, &encoded)?;
+        Self::store_profile(store, &encoded, self.publication)?;
         Ok(Some(candidate))
     }
 
     pub(super) fn persist_defaults(&self) -> Result<(), String> {
         let store = self.store.as_ref().ok_or("control store unavailable")?;
-        Self::store_profile(store, DEFAULT_PROFILE)
+        Self::store_profile(store, DEFAULT_PROFILE, self.publication)
     }
 
     pub(super) fn persist_edit(
@@ -450,11 +470,15 @@ impl ResolvedControls {
         )
     }
 
-    fn store_profile(store: &ControlStore, text: &str) -> Result<(), String> {
+    fn store_profile(
+        store: &ControlStore,
+        text: &str,
+        publication: PublicationPolicy,
+    ) -> Result<(), String> {
         let receipt = store
             .store(text)
             .map_err(|error| format!("control preferences: {error:?}"))?;
-        receipt.durability.map_err(|error| {
+        publication.confirm(receipt).map_err(|error| {
             format!("control preferences durability: {error:?}")
         })
     }
@@ -463,6 +487,7 @@ impl ResolvedControls {
         Self {
             pending: None,
             profiles: DEFAULT_PROFILES,
+            publication: PublicationPolicy::Durable,
             store: None,
         }
     }
@@ -613,7 +638,11 @@ pub(super) fn edit_control(args: &[OsString]) -> Result<(), String> {
         configured_profiles(stored.as_deref().unwrap_or(DEFAULT_PROFILE))?;
     let (_candidate, encoded) =
         admit_edit(&current, station, action_slot, binding)?;
-    ResolvedControls::store_profile(&store, &encoded)
+    ResolvedControls::store_profile(
+        &store,
+        &encoded,
+        PublicationPolicy::Durable,
+    )
 }
 
 fn admit_edit(

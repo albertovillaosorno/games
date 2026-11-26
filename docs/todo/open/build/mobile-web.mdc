@@ -642,3 +642,23 @@ JavaScript and a 568-byte bootstrap. Receipt SHA-256:
 This checks package contents, not complete runtime ABI or release
 acceptance. Android SDK/NDK, Android packages, physical-device checks,
 durable title preferences and broader browser acceptance remain open.
+
+The browser title now opens the same bounded display, volume and control
+preference slots under the fixed origin-local Simpsons namespace. Saved
+values take precedence over catalogue defaults; shared profile admission
+still checks conflicts and the sole Escape pause binding. Browser control
+edits use the existing next-launch editor and reset. The diagnostic memory
+launcher remains transient. Window switching remains unavailable, and a
+saved fullscreen value is rejected. If the storage capability cannot be
+opened because access is denied or unsupported, the title retains
+session-only display and volume with no control editor. Malformed saved
+values and other storage failures remain explicit errors.
+
+The shared publication policy now distinguishes confirmed crash durability
+from best-effort publication. The browser accepts a successful save receipt
+with unsupported durability only; native preferences continue to require
+confirmed durability. Regression fixtures verify both policies, default
+and restored preferences, control reset, invalid profiles, and unsupported
+fullscreen. Fresh validation 1795686346595146470-82044 passed 1,923
+aggregate test executions and the browser launcher link. Actual browser
+menu edits and relaunch acceptance remain to be exercised.
