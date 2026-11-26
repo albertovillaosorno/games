@@ -2790,3 +2790,12 @@ host work budget. Whole-smoke peak RSS was 101,892,096 and 100,794,368
 bytes respectively. Native validation 1795653139586277029-1875658
 passed 1,527 aggregate test executions and six portable core checks.
 Physical input, display, audio and gameplay parity remain unverified.
+
+The same optimized preview also passed hidden integer and stretch
+smokes with touch and fill without touch. Fill with touch rejected the
+configuration before play because cropping can hide touch controls.
+Each admitted mode verified 600 movement and 20 combat submissions
+without exceeding the host-work budget, and the same cooperative and
+restraint recovery checks. Whole-smoke peak RSS was 100,605,952,
+100,659,200 and 100,892,672 bytes respectively. These are individual
+native diagnostic observations, not physical display acceptance.

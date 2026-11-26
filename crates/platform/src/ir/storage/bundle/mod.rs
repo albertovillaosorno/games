@@ -274,14 +274,59 @@ impl<'bundle> MediaOverlay<'bundle> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::num::{NonZeroU64, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
     use games_assets::{
-        AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
-        SourceIdentity,
+        AssetError, AssetFormat, AssetManifest, AssetRecord, ContentHash,
+        ManifestLimits, SourceIdentity,
     };
 
-    use super::{BundleError, CanonicalBundle};
+    use super::{BundleError, CanonicalBundle, MediaOverlay, PayloadSource};
+
+    #[derive(Debug)]
+    struct IncorrectPayload;
+
+    impl PayloadSource for IncorrectPayload {
+        fn read(&self, _record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
+            Ok(b"oops".to_vec())
+        }
+    }
+
+    type FixtureRecord<'record> = (&'record str, AssetFormat, &'record [u8; 4]);
+
+    fn fixture_bundle(
+        title: &str,
+        records: &[FixtureRecord<'_>],
+    ) -> Result<CanonicalBundle, BundleError> {
+        let entries = records.iter().map(|(key, format, data)| {
+            let digest = ContentHash::calculate(*data);
+            (
+                AssetRecord {
+                    digest,
+                    format: *format,
+                    key: String::from(*key),
+                    size: 4,
+                },
+                (digest, data.to_vec()),
+            )
+        });
+        let (descriptors, payloads): (Vec<_>, BTreeMap<_, _>) = entries.unzip();
+        let manifest = AssetManifest::new(
+            SourceIdentity {
+                revision: String::from("fixture"),
+                title: String::from(title),
+            },
+            descriptors,
+            limits(),
+        )?;
+        let encoded = manifest.encode(limits())?;
+        CanonicalBundle::from_memory(
+            &encoded,
+            ContentHash::calculate(&encoded),
+            limits(),
+            payloads,
+        )
+    }
 
     fn limits() -> ManifestLimits {
         ManifestLimits {
@@ -335,6 +380,66 @@ mod tests {
             .is_ok()
         {
             return Err(BundleError::MissingKey);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn passive_overlay_admission_is_portable() -> Result<(), BundleError> {
+        let rgba = AssetFormat::Rgba8 {
+            height: NonZeroU32::MIN,
+            width: NonZeroU32::MIN,
+        };
+        let base = fixture_bundle("test", &[
+            ("media/hero", rgba, b"base"),
+            ("stage/rules", AssetFormat::Data, b"rule"),
+        ])?;
+        let replacement =
+            fixture_bundle("test", &[("media/hero", rgba, b"swap")])?;
+        let foreign =
+            fixture_bundle("other", &[("media/hero", rgba, b"swap")])?;
+        let rules = fixture_bundle("test", &[(
+            "media/hero",
+            AssetFormat::Data,
+            b"rule",
+        )])?;
+        let allowed = ["media/hero"];
+        let overlay = MediaOverlay::new(&base, &replacement, &allowed)?;
+        if overlay.read_payload("media/hero")? != b"swap"
+            || base.read_payload("media/hero")? != b"base"
+            || overlay.read_payload("stage/rules")? != b"rule"
+            || overlay.record("media/hero")
+                != replacement.manifest().record("media/hero")
+            || overlay.record("stage/rules")
+                != base.manifest().record("stage/rules")
+            || overlay.read_payload("media/missing")
+                != Err(BundleError::MissingKey)
+            || !matches!(
+                MediaOverlay::new(&base, &foreign, &allowed),
+                Err(BundleError::Asset(AssetError::InvalidIdentity))
+            )
+            || !matches!(
+                MediaOverlay::new(&base, &replacement, &[]),
+                Err(BundleError::Asset(AssetError::InvalidIdentity))
+            )
+            || !matches!(
+                MediaOverlay::new(&rules, &rules, &allowed),
+                Err(BundleError::Asset(AssetError::InvalidFormat))
+            )
+        {
+            return Err(BundleError::UnsafeStorage);
+        }
+        let rejected = CanonicalBundle::with_source(
+            replacement.digest(),
+            replacement.manifest().clone(),
+            IncorrectPayload,
+        );
+        let rejected_overlay = MediaOverlay::new(&base, &rejected, &allowed)?;
+        if rejected_overlay.read_payload("media/hero")
+            != Err(AssetError::PayloadMismatch.into())
+            || rejected_overlay.read_payload("stage/rules")? != b"rule"
+        {
+            return Err(BundleError::UnsafeStorage);
         }
         Ok(())
     }

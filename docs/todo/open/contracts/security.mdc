@@ -408,3 +408,11 @@ inventory. Executable package files become executable only after their
 bytes are written. Fresh validation passed in run
 1795618770839674777-3065299. This still relies on the trusted parent and
 does not isolate concurrent same-user writers.
+
+Passive-media overlay admission has a portable in-memory regression
+independent of the Linux filesystem adapter. It verifies approved media,
+untouched base data and descriptors, absent keys, identity and format
+rejections, and a fake backend returning incorrect payload bytes without
+fallback to the base asset. Fresh validation passed in run
+1795653536950945801-1989943 with 1,541 aggregate test executions and
+six portable core checks.
