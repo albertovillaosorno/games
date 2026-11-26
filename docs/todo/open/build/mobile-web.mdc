@@ -1089,3 +1089,35 @@ by 0.0025% normalized mean absolute error, and the movement capture
 differed from the joined capture by 0.837%. Package readback after
 exit was unchanged. Neither this entry check nor the overlay tests
 establish physical input, accelerated graphics or audible playback.
+
+The browser selector now admits origin-local preferences with the
+sidecars and carries the admitted caller state across manifest and
+object transfer. It does not reread display, controls or volume during
+title startup. Storage-unavailable fallback and rejection of invalid
+or unsupported saved values retain their existing semantics.
+
+The rebuilt package contained 88 files and 1,542,991 bytes; its receipt
+SHA-256 was
+`56fb21b6d99fe1911ed80057ebe4bcfaf8dad91eaa014ac2cfdeb1886a31b42b`.
+In private Firefox profiles, the same malformed display slot produced
+the same InvalidSave diagnostic in both packages. The prior package
+transferred all 616 selected files (24,937,054 bytes) before rejection.
+The new package transferred just the two sidecars (16,004 bytes), with
+one display-slot observation, no writes, no manifest or object reads,
+no frames, one completion and removed picker and canvas. The malformed
+slot remained unchanged. An initial observer instrumented getItem
+rather than the adapter's named property read; the corrected observer
+counted the actual Reflect.get operation.
+
+A separate observer changed the scratch display slot to malformed bytes
+at the first manifest read, after initial preference admission. The
+running title retained its admitted windowed settings, read the exact
+616-file closure, joined and moved the first actor from x=110 through
+x=92 to x=48, accepted trusted pointer capture and outside release,
+started 130 Web Audio sources and completed once through the menu.
+There was one display-slot observation, the later malformed value
+remained intact, and no picker, canvas or frame callback remained.
+This is an injected concurrent preference change, not proof of
+cross-tab write coordination or durability. Package readback after
+both controls remained unchanged; no owner assets or preferences were
+modified.

@@ -502,18 +502,26 @@ impl<Error> From<BundleError> for DirectorySelectionError<Error> {
     }
 }
 
-pub(crate) type DirectoryComplete<Error> =
-    Box<dyn FnOnce(Result<SelectedDirectory, DirectorySelectionError<Error>>)>;
-pub(crate) type DirectorySelector<Error> =
-    Box<dyn FnOnce(&SidecarSnapshot) -> Result<Vec<ManifestRequest>, Error>>;
+/// A pinned manifest selection and the caller state admitted with it.
+pub type DirectoryChoice<State, Error> =
+    Result<(Vec<ManifestRequest>, State), Error>;
+
+/// The transferred directory and the caller state, or one rejection.
+pub type DirectoryOutcome<State, Error> =
+    Result<(SelectedDirectory, State), DirectorySelectionError<Error>>;
+pub(crate) type DirectoryComplete<State, Error> =
+    Box<dyn FnOnce(DirectoryOutcome<State, Error>)>;
+pub(crate) type DirectorySelector<State, Error> =
+    Box<dyn FnOnce(&SidecarSnapshot) -> DirectoryChoice<State, Error>>;
 
 pub(crate) trait DirectoryPicker {
-    fn select<Error>(
+    fn select<State, Error>(
         plan: DirectoryPlan,
-        choose: DirectorySelector<Error>,
-        complete: DirectoryComplete<Error>,
+        choose: DirectorySelector<State, Error>,
+        complete: DirectoryComplete<State, Error>,
     ) -> Result<(), BundleError>
     where
+        State: 'static,
         Error: 'static;
 }
 
@@ -530,21 +538,21 @@ fn intersect(first: ManifestLimits, second: ManifestLimits) -> ManifestLimits {
 ///
 /// The complete namespace is preflighted. Only named sidecars, the caller's
 /// pinned manifests and their verified payload closure are transferred.
-/// Completion is asynchronous and runs once after selection, cancellation
+/// Completion receives the caller state only after successful admission.
+/// It is asynchronous and runs once after selection, cancellation
 /// or read failure. Immediate admission failures do not call it.
 /// # Errors
 /// Rejects unsupported hosts, invalid budgets or picker setup failure.
-pub fn select<Choose, Complete, Error>(
+pub fn select<Choose, Complete, State, Error>(
     limits: DirectoryLimits,
     sidecars: &[&str],
     choose: Choose,
     complete: Complete,
 ) -> Result<(), BundleError>
 where
-    Choose: FnOnce(&SidecarSnapshot) -> Result<Vec<ManifestRequest>, Error>
-        + 'static,
-    Complete: FnOnce(Result<SelectedDirectory, DirectorySelectionError<Error>>)
-        + 'static,
+    Choose: FnOnce(&SidecarSnapshot) -> DirectoryChoice<State, Error> + 'static,
+    Complete: FnOnce(DirectoryOutcome<State, Error>) + 'static,
+    State: 'static,
     Error: 'static,
 {
     let plan = DirectoryPlan::new(limits, sidecars)?;

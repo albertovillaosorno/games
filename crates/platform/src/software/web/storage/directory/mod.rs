@@ -42,8 +42,8 @@ use web_sys::{Element, Event, File, FileList, HtmlInputElement};
 use crate::ir::security::file::allocation_length;
 use crate::ir::storage::bundle::BundleError;
 use crate::ir::storage::bundle::directory::{
-    DirectoryComplete, DirectoryPicker, DirectoryPlan, DirectoryRead,
-    DirectorySelectionError, DirectorySelector, PlannedFile, SelectedDirectory,
+    DirectoryComplete, DirectoryOutcome, DirectoryPicker, DirectoryPlan,
+    DirectoryRead, DirectorySelectionError, DirectorySelector, PlannedFile,
 };
 
 type Transfer = (File, PlannedFile);
@@ -130,12 +130,13 @@ impl Drop for Picker {
 }
 
 impl DirectoryPicker for () {
-    fn select<Error>(
+    fn select<State, Error>(
         plan: DirectoryPlan,
-        choose: DirectorySelector<Error>,
-        complete: DirectoryComplete<Error>,
+        choose: DirectorySelector<State, Error>,
+        complete: DirectoryComplete<State, Error>,
     ) -> Result<(), BundleError>
     where
+        State: 'static,
         Error: 'static,
     {
         let (picker, event) = Picker::new()?;
@@ -147,12 +148,12 @@ impl DirectoryPicker for () {
     }
 }
 
-async fn drive<Error>(
+async fn drive<State, Error>(
     picker: Picker,
     event_promise: Promise,
     plan: DirectoryPlan,
-    choose: DirectorySelector<Error>,
-) -> Result<SelectedDirectory, DirectorySelectionError<Error>> {
+    choose: DirectorySelector<State, Error>,
+) -> DirectoryOutcome<State, Error> {
     let event = event_promise
         .await
         .map_err(host_failure)?
@@ -172,13 +173,13 @@ async fn drive<Error>(
     let (mut reader, transfers) = preflight(plan, &files)?;
     drop(picker);
     read_pending(&mut reader, &transfers).await?;
-    let requests = choose(reader.sidecars()?)
+    let (requests, state) = choose(reader.sidecars()?)
         .map_err(DirectorySelectionError::Selection)?;
     reader.request_manifests(&requests)?;
     read_pending(&mut reader, &transfers).await?;
     reader.request_objects()?;
     read_pending(&mut reader, &transfers).await?;
-    Ok(reader.finish()?)
+    Ok((reader.finish()?, state))
 }
 
 async fn read_pending(

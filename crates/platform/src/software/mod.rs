@@ -636,12 +636,13 @@ impl FrameLoopPort for () {
     target_os = "unknown"
 )))]
 impl DirectoryPicker for () {
-    fn select<Error>(
+    fn select<State, Error>(
         plan: DirectoryPlan,
-        choose: DirectorySelector<Error>,
-        complete: DirectoryComplete<Error>,
+        choose: DirectorySelector<State, Error>,
+        complete: DirectoryComplete<State, Error>,
     ) -> Result<(), BundleError>
     where
+        State: 'static,
         Error: 'static,
     {
         drop((plan, choose, complete));

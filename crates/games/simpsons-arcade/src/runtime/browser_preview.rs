@@ -124,7 +124,9 @@ pub fn start(
         &[CATALOGUE, POSES],
         move |sidecars| {
             let options = selection_from(sidecars, touch_enabled)?;
-            manifest_requests(&options)
+            let requests = manifest_requests(&options)?;
+            let admitted = preferences(options.display)?;
+            Ok((requests, admitted))
         },
         move |result| {
             let opened = result
@@ -132,8 +134,13 @@ pub fn start(
                     DirectorySelectionError::Bundle(error) => failure(error),
                     DirectorySelectionError::Selection(error) => error,
                 })
-                .and_then(|directory| {
-                    start_selected(&directory, touch_enabled, complete)
+                .and_then(|(directory, admitted)| {
+                    start_selected(
+                        &directory,
+                        touch_enabled,
+                        &admitted,
+                        complete,
+                    )
                 });
             if let Err(error) = opened {
                 complete(Err(error));
@@ -263,16 +270,11 @@ fn manifest_requests(
 fn start_selected(
     directory: &SelectedDirectory,
     touch_enabled: bool,
+    admitted: &Preferences,
     complete: Completion,
 ) -> Result<(), RenderError> {
     let options = selection_from(directory.sidecars(), touch_enabled)?;
-    let preferences = preferences(options.display)?;
-    start_with_preferences(
-        directory.bundles(),
-        &options,
-        &preferences,
-        complete,
-    )
+    start_with_preferences(directory.bundles(), &options, admitted, complete)
 }
 
 fn preferences(defaults: DisplaySettings) -> Result<Preferences, RenderError> {
@@ -365,6 +367,30 @@ mod tests {
         loaded.controls.persist_defaults().map_err(failure)?;
         if open()?.load(defaults)?.controls.profiles != DEFAULT_PROFILES {
             return Err(failure("stored browser control reset lost"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_preferences_survive_later_storage_changes()
+    -> Result<(), RenderError> {
+        use games_platform::ir::storage::fixtures::TestRoot;
+
+        let root = TestRoot::new().map_err(failure)?;
+        let maximum = profile_limit().map_err(failure)?;
+        let open = || Stores::open(root.location(), maximum).map_err(failure);
+        let defaults = DisplaySettings::default();
+        let admitted = open()?.load(defaults)?;
+        let changed = open()?;
+        let _unsupported = changed
+            .display
+            .store(DisplaySettings {
+                presentation: defaults.presentation,
+                window: WindowMode::Fullscreen,
+            })
+            .map_err(failure)?;
+        if admitted.display != defaults || open()?.load(defaults).is_ok() {
+            return Err(failure("admitted preference snapshot changed"));
         }
         Ok(())
     }
