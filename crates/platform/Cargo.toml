@@ -13,7 +13,7 @@ categories.workspace = true
 games.workspace = true
 games-assets.workspace = true
 games-importer = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
+sha2.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -31,7 +31,7 @@ nix.workspace = true
 [features]
 importer = ["dep:games-importer"]
 interactive = ["dep:sdl2"]
-secure-lan = ["dep:rustls", "dep:sha2"]
+secure-lan = ["dep:rustls"]
 test-fixtures = []
 
 [lints]

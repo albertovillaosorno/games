@@ -119,8 +119,8 @@ impl IdentityBackend for LocalIdentity {
         Ok(native.0)
     }
 
-    fn public_material(&self) -> &PublicIdentity {
-        self.public()
+    fn public_material(&self) -> Arc<PublicIdentity> {
+        self.public_receipt()
     }
 
     fn server_credentials(

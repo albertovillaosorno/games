@@ -55,7 +55,7 @@ use crate::ir::security::lan::host_binding::ClientApprovals;
 /// intermediate chain. Certificate issuance and storage remain external.
 pub(super) struct LocalIdentity {
     certified: Arc<CertifiedKey>,
-    public: PublicIdentity,
+    public: Arc<PublicIdentity>,
 }
 
 impl Debug for LocalIdentity {
@@ -169,14 +169,19 @@ impl LocalIdentity {
         checked.keys_match().map_err(io::Error::other)?;
         Ok(Self {
             certified: Arc::new(checked),
-            public,
+            public: Arc::new(public),
         })
     }
 
     /// Public trust material; never contains either private key.
+    #[cfg(test)]
     #[must_use]
-    pub(super) const fn public(&self) -> &PublicIdentity {
+    pub(super) fn public(&self) -> &PublicIdentity {
         &self.public
+    }
+
+    pub(super) fn public_receipt(&self) -> Arc<PublicIdentity> {
+        Arc::clone(&self.public)
     }
 
     /// Configure mandatory client verification using approved device roots.

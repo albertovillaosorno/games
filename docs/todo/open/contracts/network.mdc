@@ -819,3 +819,12 @@ synthetic ports verify the dispatch boundary and stale opportunity rejection.
 Fresh Xvfb/X11 and dummy-audio validation
 1795661858975411200-18526 passed 1,714 aggregate test executions and all
 six portable core checks.
+
+Local identity admission now checks the returned public root bytes and leaf
+SHA-256 fingerprint against the requested certificate material. The portable
+facade retains one immutable shared receipt rather than repeatedly querying
+the adapter. Synthetic ports cover mismatched roots, mismatched fingerprints
+and both admitted credential roles; certificate and private-key verification
+remain native responsibilities. Fresh Xvfb/X11 and dummy-audio validation
+1795662334733150647-94792 passed 1,721 aggregate test executions and all six
+portable core checks. Physical credential provisioning remains unverified.

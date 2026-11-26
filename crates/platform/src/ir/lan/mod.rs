@@ -45,7 +45,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use games::network::{MessageSchema, SessionConfig};
-#[cfg(feature = "secure-lan")]
 use sha2::{Digest as _, Sha256};
 
 use self::identity::IdentityPort;
@@ -115,7 +114,6 @@ impl PeerFingerprint {
     }
 
     /// Derive the fingerprint of a certificate supplied for local enrolment.
-    #[cfg(feature = "secure-lan")]
     #[must_use]
     pub fn from_der(certificate: &[u8]) -> Self {
         Self(Sha256::digest(certificate).into())

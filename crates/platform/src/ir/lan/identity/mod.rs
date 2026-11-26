@@ -89,7 +89,7 @@ pub(crate) trait IdentityBackend: Send + Sync {
         &self,
         host: &PublicIdentity,
     ) -> Result<CredentialPort>;
-    fn public_material(&self) -> &PublicIdentity;
+    fn public_material(&self) -> Arc<PublicIdentity>;
     fn server_credentials(
         &self,
         approvals: &ClientApprovals<'_>,
@@ -117,6 +117,7 @@ impl IdentityRole {
 /// Certificate issuance and storage remain external.
 pub struct LocalIdentity {
     backend: IdentityPort,
+    public: Arc<PublicIdentity>,
     role: IdentityRole,
 }
 
@@ -130,6 +131,21 @@ impl Debug for LocalIdentity {
 }
 
 impl LocalIdentity {
+    fn admit_backend(
+        backend: IdentityPort,
+        role: IdentityRole,
+        root_der: &[u8],
+        leaf_der: &[u8],
+    ) -> Result<Self> {
+        let public = backend.public_material();
+        if public.root_der() != root_der
+            || public.fingerprint() != PeerFingerprint::from_der(leaf_der)
+        {
+            return Err(ErrorKind::InvalidData.into());
+        }
+        Ok(Self { backend, public, role })
+    }
+
     /// Import a distinct client key and currently valid client-auth leaf.
     /// The encoded key is borrowed; callers own its memory lifetime.
     ///
@@ -144,10 +160,7 @@ impl LocalIdentity {
         admit_credentials(root_der, leaf_der, key_der)?;
         let backend =
             <() as LanFactory>::client_identity(root_der, leaf_der, key_der)?;
-        Ok(Self {
-            backend,
-            role: IdentityRole::Client,
-        })
+        Self::admit_backend(backend, IdentityRole::Client, root_der, leaf_der)
     }
 
     /// Configure a client to accept only the separately approved host.
@@ -179,16 +192,13 @@ impl LocalIdentity {
         let backend = <() as LanFactory>::host_identity(
             name, root_der, leaf_der, key_der,
         )?;
-        Ok(Self {
-            backend,
-            role: IdentityRole::Host,
-        })
+        Self::admit_backend(backend, IdentityRole::Host, root_der, leaf_der)
     }
 
     /// Public trust material; never contains either private key.
     #[must_use]
     pub fn public(&self) -> &PublicIdentity {
-        self.backend.public_material()
+        &self.public
     }
 
     /// Configure mandatory client verification with approved device roots.
@@ -229,13 +239,14 @@ mod tests {
     use std::collections::BTreeSet;
     use std::io::Error;
     use std::num::{NonZeroU32, NonZeroUsize};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
 
     struct ObservedIdentity {
         dispatched: Arc<AtomicBool>,
-        public: PublicIdentity,
+        observations: Arc<AtomicUsize>,
+        public: Arc<PublicIdentity>,
     }
 
     impl IdentityBackend for ObservedIdentity {
@@ -247,8 +258,9 @@ mod tests {
             Ok(Arc::new(()))
         }
 
-        fn public_material(&self) -> &PublicIdentity {
-            &self.public
+        fn public_material(&self) -> Arc<PublicIdentity> {
+            let _previous = self.observations.fetch_add(1, Ordering::Relaxed);
+            Arc::clone(&self.public)
         }
 
         fn server_credentials(
@@ -270,11 +282,13 @@ mod tests {
 
     fn fixture(role: IdentityRole) -> (LocalIdentity, Arc<AtomicBool>) {
         let dispatched = Arc::new(AtomicBool::new(false));
+        let public = Arc::new(public(0));
         let backend = Box::new(ObservedIdentity {
             dispatched: Arc::clone(&dispatched),
-            public: public(0),
+            observations: Arc::new(AtomicUsize::new(0)),
+            public: Arc::clone(&public),
         });
-        (LocalIdentity { backend, role }, dispatched)
+        (LocalIdentity { backend, public, role }, dispatched)
     }
 
     fn config() -> SessionConfig {
@@ -283,6 +297,64 @@ mod tests {
             max_message_bytes: NonZeroUsize::MIN,
             max_players: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
         }
+    }
+
+    #[test]
+    fn local_identity_retains_only_the_requested_public_material() -> Result<()>
+    {
+        let root = [1u8, 2];
+        let leaf = [3u8, 4];
+        let expected = PublicIdentity {
+            fingerprint: PeerFingerprint::from_der(&leaf),
+            root: root.to_vec(),
+        };
+        for observed in [
+            PublicIdentity {
+                fingerprint: expected.fingerprint(),
+                root: vec![0],
+            },
+            PublicIdentity {
+                fingerprint: PeerFingerprint::from_der(b"other"),
+                root: root.to_vec(),
+            },
+        ] {
+            let backend = Box::new(ObservedIdentity {
+                dispatched: Arc::new(AtomicBool::new(false)),
+                observations: Arc::new(AtomicUsize::new(0)),
+                public: Arc::new(observed),
+            });
+            if LocalIdentity::admit_backend(
+                backend,
+                IdentityRole::Client,
+                &root,
+                &leaf,
+            )
+            .err()
+            .map(|error| error.kind())
+                != Some(ErrorKind::InvalidData)
+            {
+                return Err(Error::other("unexpected identity was admitted"));
+            }
+        }
+        for role in [IdentityRole::Client, IdentityRole::Host] {
+            let observations = Arc::new(AtomicUsize::new(0));
+            let backend = Box::new(ObservedIdentity {
+                dispatched: Arc::new(AtomicBool::new(false)),
+                observations: Arc::clone(&observations),
+                public: Arc::new(expected.clone()),
+            });
+            let identity =
+                LocalIdentity::admit_backend(backend, role, &root, &leaf)?;
+            let first = identity.public();
+            let second = identity.public();
+            if first != &expected
+                || second != &expected
+                || observations.load(Ordering::Relaxed) != 1
+            {
+                return Err(Error::other("identity receipt was not retained"));
+            }
+        }
+        Ok(())
     }
 
     #[test]
