@@ -192,7 +192,8 @@ impl NativeInput {
         {
             return None;
         }
-        self.controllers.route(self.backend.translate(event)?)
+        self.controllers
+            .route(event.transition(), self.backend.translate(event)?)
     }
 }
 

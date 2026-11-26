@@ -36,7 +36,7 @@ use std::num::NonZeroUsize;
 use games::input::InputEvent;
 
 use crate::ir::frame::RenderError;
-use crate::ir::hardware::HostEvent;
+use crate::ir::hardware::{HostEvent, InputTransition};
 
 #[derive(Debug)]
 pub(crate) struct ControllerAdmission {
@@ -82,7 +82,26 @@ impl ControllerAdmission {
         }
     }
 
-    pub(crate) fn route(&mut self, event: HostEvent) -> Option<HostEvent> {
+    pub(crate) fn route(
+        &mut self,
+        observed: InputTransition,
+        event: HostEvent,
+    ) -> Option<HostEvent> {
+        let expected = match observed {
+            InputTransition::Disconnected(device) => {
+                HostEvent::Input(InputEvent::Detached { device })
+            },
+            InputTransition::Event(HostEvent::Input(
+                InputEvent::Detached { .. },
+            ))
+            | InputTransition::DiscoveryHint
+            | InputTransition::FocusGained
+            | InputTransition::Ignored => return None,
+            InputTransition::Event(routed) => routed,
+        };
+        if event != expected {
+            return None;
+        }
         match event {
             HostEvent::Input(InputEvent::Attached { .. }) => None,
             HostEvent::Input(InputEvent::Detached { device }) => {
@@ -135,6 +154,45 @@ mod tests {
             &Err(RenderError::TooLarge),
         )?;
         check(&admission.admit(vec![third, second])?, &vec![third, second])?;
+        Ok(())
+    }
+
+    #[test]
+    fn translation_must_preserve_observed_identity() -> Result<(), RenderError>
+    {
+        let mut admission = ControllerAdmission::new(NonZeroUsize::MIN);
+        let attached = InputEvent::Attached { device: 1 };
+        check(&admission.admit(vec![attached])?, &vec![attached])?;
+        let detach = HostEvent::Input(InputEvent::Detached { device: 1 });
+        let button = HostEvent::Input(InputEvent::Button {
+            device: 1,
+            code: 1,
+            down: true,
+        });
+        for observed in [
+            InputTransition::Disconnected(2),
+            InputTransition::Event(button),
+            InputTransition::Event(detach),
+            InputTransition::DiscoveryHint,
+            InputTransition::FocusGained,
+            InputTransition::Ignored,
+        ] {
+            check(&admission.route(observed, detach), &None)?;
+            check(&admission.contains(1), &true)?;
+        }
+        check(
+            &admission.route(InputTransition::Disconnected(1), button),
+            &None,
+        )?;
+        check(
+            &admission.route(InputTransition::Event(button), button),
+            &Some(button),
+        )?;
+        check(
+            &admission.route(InputTransition::Disconnected(1), detach),
+            &Some(detach),
+        )?;
+        check(&admission.contains(1), &false)?;
         Ok(())
     }
 }

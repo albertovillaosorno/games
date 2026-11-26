@@ -478,3 +478,10 @@ Synthetic regressions exercise malformed batches, preserved order, unknown
 identity filtering, detach and rediscovery. Fresh X11 and dummy-audio
 validation 1795655381182031058-2515004 passed 1,591 aggregate test executions
 and six portable core checks.
+
+Input translation receipts must also match their normalized observation.
+Discovery, focus-gain and ignored transitions cannot fabricate routed
+input; a disconnect can release only its observed identity. Malformed
+receipts leave the admitted controller state unchanged. Fresh native
+validation 1795655626873272355-2554153 passed 1,593 aggregate test
+executions and all six portable core checks.
