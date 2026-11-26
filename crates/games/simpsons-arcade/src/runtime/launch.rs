@@ -258,6 +258,14 @@ impl Assets {
         let [directory, marge, homer, bart, lisa] =
             <[OsString; 5]>::try_from(args.collect::<Vec<_>>())
                 .map_err(|_error| String::from(USAGE))?;
+        for argument in [&directory, &marge, &homer, &bart, &lisa] {
+            if option_token(argument) {
+                return Err(format!(
+                    "unexpected or misplaced launch option: {}\n{USAGE}",
+                    argument.to_string_lossy()
+                ));
+            }
+        }
         Ok(Self {
             actors: [marge, homer, bart, lisa],
             audio,
@@ -806,7 +814,18 @@ fn measurement_flag(args: &mut Arguments, smoke: bool) -> Result<bool, String> {
 }
 
 fn next(args: &mut Arguments) -> Result<OsString, String> {
-    args.next().ok_or_else(|| String::from(USAGE))
+    let value = args.next().ok_or_else(|| String::from(USAGE))?;
+    if option_token(&value) {
+        return Err(format!(
+            "expected a value before option: {}\n{USAGE}",
+            value.to_string_lossy()
+        ));
+    }
+    Ok(value)
+}
+
+fn option_token(argument: &OsStr) -> bool {
+    argument.as_encoded_bytes().starts_with(b"--")
 }
 
 pub(super) fn optional_catalogue_path(
@@ -1257,6 +1276,74 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn misplaced_options_cannot_be_explicit_asset_arguments() {
+        for args in [
+            ["parent", "m", "h", "b", "--world"],
+            ["parent", "m", "--touch", "b", "l"],
+            ["--unknown", "m", "h", "b", "l"],
+        ] {
+            assert!(Launch::parse(args.map(OsString::from).into()).is_err_and(
+                |error| error.contains("unexpected or misplaced launch option")
+            ));
+        }
+        let misplaced = [
+            "--measure",
+            "--display",
+            "fill",
+            "--window",
+            "fullscreen",
+            "--touch",
+            "--settings",
+            "preferences",
+            "--config",
+            "assets.local",
+        ];
+        assert!(
+            Launch::parse(misplaced.map(OsString::from).into())
+                .is_err_and(|error| error.contains(
+                    "unexpected or misplaced launch option: --touch"
+                ))
+        );
+    }
+
+    #[test]
+    fn missing_option_values_cannot_consume_another_option() {
+        for args in [
+            ["--config", "--touch"],
+            ["--display", "--window"],
+            ["--settings", "--config"],
+            ["--poses", "--enemy"],
+        ] {
+            assert!(Launch::parse(args.map(OsString::from).into()).is_err_and(
+                |error| error.contains("expected a value before option")
+            ));
+        }
+        assert!(
+            ControllerLaunch::parse(
+                ["--lan-controller", "--settings"]
+                    .map(OsString::from)
+                    .into()
+            )
+            .is_err_and(
+                |error| error.contains("expected a value before option")
+            )
+        );
+    }
+
+    #[test]
+    fn explicit_paths_can_name_files_with_option_like_prefixes()
+    -> Result<(), String> {
+        let args = ["--poses", "./--poses", "./--parent", "m", "h", "b", "l"];
+        let launch = Launch::parse(args.map(OsString::from).into())?;
+        if launch.assets.directory != OsStr::new("./--parent")
+            || launch.assets.poses.as_deref() != Some(OsStr::new("./--poses"))
+        {
+            return Err("explicit option-like path was not preserved".into());
+        }
+        Ok(())
     }
 
     #[test]
