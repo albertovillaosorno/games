@@ -29,6 +29,9 @@
 // - Defaults:
 //   - Read only; never remove or publish source assets.
 
+/// Private migration rehearsal against the selected authored title.
+pub mod rehearsal;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::num::{NonZeroU64, NonZeroUsize};

@@ -349,6 +349,14 @@ impl ToolchainFactory for () {
         Err(ToolchainError::UnsupportedHost)
     }
 
+    fn smoke(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _catalogue: &OsStr,
+    ) -> Result<(), ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
     fn workspace_root() -> Result<OsString, ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
     }

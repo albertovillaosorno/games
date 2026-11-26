@@ -62,8 +62,12 @@ impl<'name> CargoArguments<'name> {
     /// Locked release-build arguments for the selected binary.
     #[must_use]
     pub const fn build(self) -> [&'name str; 11] {
+        self.invocation("build")
+    }
+
+    const fn invocation(self, command: &'name str) -> [&'name str; 11] {
         [
-            "build",
+            command,
             "--locked",
             "--release",
             "--target",
@@ -117,6 +121,12 @@ impl<'name> CargoArguments<'name> {
             package,
             target,
         })
+    }
+
+    /// Locked run arguments for the same authored title selection.
+    #[must_use]
+    pub const fn smoke(self) -> [&'name str; 11] {
+        self.invocation("run")
     }
 }
 

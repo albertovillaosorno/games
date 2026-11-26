@@ -88,6 +88,11 @@ const USAGE: &str = concat!(
     "games-build bundle migration-catalogue TITLE PARENT STORE_ENTRIES ",
     "STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT ",
     "CATALOGUE CATALOGUE_BYTES last-token|fields:KEY,...\n",
+    "games-build bundle migration-rehearse TITLE LEGACY_ROOT ",
+    "STORE_ENTRIES STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES ",
+    "TOTAL_BYTES COUNT TEMPLATE TEMPLATE_BYTES fields:KEY,... ",
+    "STAGING_PARENT STAGE_ENTRY STAGE_TOTAL STAGE_COUNT ",
+    "[POSE_FILE POSE_BYTES]\n",
     "games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle replace-media PARENT BASE_SHA256 KEY ",
@@ -207,6 +212,7 @@ enum Command {
     Import(ImportProfile, Arguments),
     MigrationAudit(store_migration::Audit),
     MigrationCatalogue(Box<store_migration::Catalogue>),
+    MigrationRehearsal(Box<store_migration::rehearsal::Rehearsal>),
     ObjectCheck(Machine, OsString, OsString),
     PackageTitle(title_build::Title, Option<OsString>),
     PaletteCheck(Machine, OsString, OsString),
@@ -249,30 +255,8 @@ impl Command {
                     output,
                 ))
             },
-            (Some("bundle"), Some("migration-audit")) => {
-                Ok(Self::MigrationAudit(store_migration::Audit::parse(
-                    args.collect(),
-                )?))
-            },
-            (Some("bundle"), Some("migration-catalogue")) => {
-                Ok(Self::MigrationCatalogue(Box::new(
-                    store_migration::Catalogue::parse(args.collect())?,
-                )))
-            },
-            (Some("bundle"), Some("upgrade")) => {
-                Self::parse_upgrade(args.collect())
-            },
-            (Some("bundle"), Some("replace-media")) => {
-                Self::parse_replace_media(
-                    args.collect(),
-                    publication::MediaEncoding::Raw,
-                )
-            },
-            (Some("bundle"), Some("replace-wave")) => {
-                Self::parse_replace_media(
-                    args.collect(),
-                    publication::MediaEncoding::Wave,
-                )
+            (Some("bundle"), Some(operation)) => {
+                Self::parse_bundle(operation, args.collect())
             },
             (Some(kind @ ("zip" | "neo")), Some("verify")) => {
                 Self::parse_verification(kind, args.collect())
@@ -339,6 +323,32 @@ impl Command {
             "check" | "audio-check" => {
                 Self::parse_check(selection, args.collect())
             },
+            _ => Err(String::from(USAGE)),
+        }
+    }
+
+    fn parse_bundle(
+        operation: &str,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        match operation {
+            "migration-audit" => {
+                Ok(Self::MigrationAudit(store_migration::Audit::parse(args)?))
+            },
+            "migration-catalogue" => Ok(Self::MigrationCatalogue(Box::new(
+                store_migration::Catalogue::parse(args)?,
+            ))),
+            "migration-rehearse" => Ok(Self::MigrationRehearsal(Box::new(
+                store_migration::rehearsal::Rehearsal::parse(args)?,
+            ))),
+            "upgrade" => Self::parse_upgrade(args),
+            "replace-media" => {
+                Self::parse_replace_media(args, publication::MediaEncoding::Raw)
+            },
+            "replace-wave" => Self::parse_replace_media(
+                args,
+                publication::MediaEncoding::Wave,
+            ),
             _ => Err(String::from(USAGE)),
         }
     }
@@ -621,6 +631,7 @@ impl Command {
         match self {
             Self::MigrationAudit(audit) => audit.run(),
             Self::MigrationCatalogue(catalogue) => catalogue.run(),
+            Self::MigrationRehearsal(rehearsal) => rehearsal.run(),
             Self::Upgrade(parent, digest, limits) => {
                 publication::upgrade(&parent, digest, limits)
             },

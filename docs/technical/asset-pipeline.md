@@ -79,6 +79,27 @@ schemas, change paths, interpret settings or migrate credentials.
 The title must still admit the translated catalogue and verify its
 assets; relative paths require explicit attention when relocating it.
 
+Rehearse the authored native consumer without persistent publication:
+
+```text
+bundle migration-rehearse TITLE LEGACY_ROOT STORE_ENTRIES STORE_BYTES \
+  MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT TEMPLATE TEMPLATE_BYTES \
+  fields:KEY,... STAGING_PARENT STAGE_ENTRY STAGE_TOTAL STAGE_COUNT \
+  [POSE_FILE POSE_BYTES]
+```
+
+Use a private launch template containing `parent=@store` and, if a
+pose sidecar is selected, `poses=@sidecar`. Select all manifest fields
+explicitly. Existing parent, pose, settings and controls paths are
+rejected. The tool stages normalized manifests and unique objects,
+re-opens all staged manifests, translates the catalogue and optional
+pose sidecar against that exact map, and invokes the selected authored
+release title's fixed smoke command. It rechecks the store afterward
+and removes both temporary stages on ordinary completion or error.
+The caller provides a compatible native graphics and audio environment.
+This is consumer compatibility evidence, not a persistent cutover or
+physical-device acceptance.
+
 Downloaded originals and tools remain in `.reference/games/` and
 `.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
 Do not store reference data in disposable `.cache/` or `.temp/`.

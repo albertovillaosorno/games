@@ -149,6 +149,33 @@ impl ToolchainFactory for () {
         })
     }
 
+    fn smoke(
+        args: CargoArguments<'_>,
+        root: &OsStr,
+        catalogue: &OsStr,
+    ) -> Result<(), ToolchainError> {
+        let workspace = Path::new(root);
+        let status = Command::new("cargo")
+            .current_dir(workspace)
+            .args(args.smoke())
+            .arg("--target-dir")
+            .arg(workspace.join("target"))
+            .args(["--", "--smoke", "--config"])
+            .arg(catalogue)
+            .status()
+            .map_err(|source| ToolchainError::Io {
+                operation: "launch authored smoke",
+                source,
+            })?;
+        if !status.success() {
+            return Err(ToolchainError::Failed {
+                operation: "authored title smoke",
+                diagnostic: status.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn workspace_root() -> Result<OsString, ToolchainError> {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")

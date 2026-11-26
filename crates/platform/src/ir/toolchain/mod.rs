@@ -187,6 +187,11 @@ pub(crate) trait ToolchainFactory {
         root: &OsStr,
         tool: ValidationTool,
     ) -> Result<ToolVersion, ToolchainError>;
+    fn smoke(
+        args: CargoArguments<'_>,
+        root: &OsStr,
+        catalogue: &OsStr,
+    ) -> Result<(), ToolchainError>;
     fn workspace_root() -> Result<OsString, ToolchainError>;
 }
 
@@ -259,6 +264,34 @@ impl<'name> CargoTitle<'name> {
             CargoArguments::new(package, binary, feature, target.triple())
                 .map_err(|_error| ToolchainError::InvalidIdentifier)?;
         Ok(Self { args, target })
+    }
+
+    /// Run the admitted authored title with a finite smoke catalogue.
+    ///
+    /// # Errors
+    /// The catalogue path must resolve from the trusted workspace root.
+    ///
+    /// Rejects unsupported hosts or an unsuccessful smoke process.
+    pub fn smoke(
+        self,
+        root: &OsStr,
+        catalogue: &OsStr,
+    ) -> Result<(), ToolchainError> {
+        self.smoke_with::<()>(root, catalogue)
+    }
+
+    fn smoke_with<Factory>(
+        self,
+        root: &OsStr,
+        catalogue: &OsStr,
+    ) -> Result<(), ToolchainError>
+    where
+        Factory: ToolchainFactory,
+    {
+        if !Factory::available(self.target) {
+            return Err(ToolchainError::UnsupportedHost);
+        }
+        Factory::smoke(self.args, root, catalogue)
     }
 }
 
@@ -366,6 +399,33 @@ mod tests {
             Err(ToolchainError::UnsupportedHost)
         }
 
+        fn smoke(
+            args: CargoArguments<'_>,
+            root: &OsStr,
+            catalogue: &OsStr,
+        ) -> Result<(), ToolchainError> {
+            if root != OsStr::new("workspace")
+                || catalogue != OsStr::new("catalogue")
+                || args.smoke()
+                    != [
+                        "run",
+                        "--locked",
+                        "--release",
+                        "--target",
+                        Target::LinuxX86_64Gnu.triple(),
+                        "--package",
+                        "games-example",
+                        "--bin",
+                        "example",
+                        "--features",
+                        "native-preview",
+                    ]
+            {
+                return Err(ToolchainError::InvalidValidationRequest);
+            }
+            Ok(())
+        }
+
         fn workspace_root() -> Result<OsString, ToolchainError> {
             Err(ToolchainError::UnsupportedHost)
         }
@@ -399,6 +459,9 @@ mod tests {
         ) || !matches!(
             title.metadata_with::<Recording<false>>(root, manifest),
             Err(ToolchainError::UnsupportedHost)
+        ) || !matches!(
+            title.smoke_with::<Recording<false>>(root, OsStr::new("catalogue")),
+            Err(ToolchainError::UnsupportedHost)
         ) {
             return Err("unavailable adapter dispatched".into());
         }
@@ -415,6 +478,9 @@ mod tests {
             .map_err(|error| error.to_string())?;
         let metadata = title
             .metadata_with::<Recording<true>>(root, manifest)
+            .map_err(|error| error.to_string())?;
+        title
+            .smoke_with::<Recording<true>>(root, OsStr::new("catalogue"))
             .map_err(|error| error.to_string())?;
         if executable != OsStr::new("example") || metadata != b"example" {
             return Err("inconsistent selected title".into());
