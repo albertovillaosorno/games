@@ -212,7 +212,59 @@ pub(super) fn verify_source(
         "mouse blur cancellation",
     )?;
     let _sent = send(element, "lostpointercapture", -1, 0)?;
-    verify(next_event(source, input)?.is_none(), "stale mouse capture")
+    verify(next_event(source, input)?.is_none(), "stale mouse capture")?;
+    verify_overflow(source, element, input)
+}
+
+#[cfg(feature = "test-fixtures")]
+fn verify_overflow(
+    source: &EventSource,
+    element: &Element,
+    input: &mut NativeInput,
+) -> Result<(), RenderError> {
+    let capacity = source.queue.borrow().capacity.get();
+    for dropped_press in [false, true] {
+        let _sent = send(element, "pointerdown", 0, 1)?;
+        verify(
+            next_event(source, input)?
+                == Some(event(PointerButton::Left, true)),
+            "mouse overflow setup",
+        )?;
+        for _index in 0..=capacity {
+            let _sent = super::send_key(element, "keydown", "KeyA", false)?;
+        }
+        if dropped_press {
+            let _sent = send(element, "pointerdown", 1, 4)?;
+        }
+        verify(
+            next_event(source, input)?
+                == Some(HostEvent::Input(InputEvent::FocusLost)),
+            "mouse overflow cancellation",
+        )?;
+        verify(next_event(source, input)?.is_none(), "overflow drain")?;
+        for (kind, index, mask) in [
+            ("pointermove", 2, 3),
+            ("pointerup", 0, 0),
+            ("pointerup", 1, 0),
+        ] {
+            verify(
+                send(element, kind, index, mask)?
+                    && next_event(source, input)?.is_none(),
+                "stale mouse chord after overflow",
+            )?;
+        }
+        for (kind, mask, down) in
+            [("pointerdown", 1, true), ("pointerup", 0, false)]
+        {
+            verify(!send(element, kind, 0, mask)?, "fresh mouse default")?;
+            verify(
+                next_event(source, input)?
+                    == Some(event(PointerButton::Left, down)),
+                "fresh mouse after overflow",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "test-fixtures")]

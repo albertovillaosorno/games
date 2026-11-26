@@ -77,6 +77,7 @@ pub(super) struct EventSource {
     #[cfg(feature = "interactive")]
     controller_samples: Samples,
     listeners: Vec<Listener>,
+    mouse: Rc<RefCell<mouse::MouseButtons>>,
     queue: Rc<RefCell<EventQueue>>,
     scope: u64,
 }
@@ -211,6 +212,7 @@ impl EventSource {
             #[cfg(feature = "interactive")]
             controller_samples: Rc::new(RefCell::new(VecDeque::new())),
             listeners: Vec::new(),
+            mouse: Rc::new(RefCell::new(mouse::MouseButtons::default())),
             queue: Rc::new(RefCell::new(EventQueue::new(capacity)?)),
             scope,
         };
@@ -228,6 +230,7 @@ impl EventSource {
         mut translate: impl FnMut(&Event) -> Transitions + 'static,
     ) -> Result<(), RenderError> {
         let sink = Rc::clone(&self.queue);
+        let mouse = Rc::clone(&self.mouse);
         let scope = self.scope;
         let callback = Closure::<dyn FnMut(Event)>::new(move |event| {
             let mut transitions = translate(&event).into_iter();
@@ -238,6 +241,11 @@ impl EventSource {
             let mut queue = sink.borrow_mut();
             for transition in std::iter::once(first).chain(transitions) {
                 queue.push(stamp, transition, scope);
+            }
+            // Overflow cancels logical holds. Discard adapter holds too,
+            // including presses observed while the queue rejects events.
+            if queue.overflow {
+                mouse.borrow_mut().clear();
             }
         });
         target

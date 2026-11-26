@@ -119,7 +119,7 @@ pub(super) fn subscribe(
     source: &mut EventSource,
     element: &Element,
 ) -> Result<(), RenderError> {
-    let mouse = Rc::new(RefCell::new(mouse::MouseButtons::default()));
+    let mouse = Rc::clone(&source.mouse);
     for kind in [
         "pointerdown",
         "pointermove",

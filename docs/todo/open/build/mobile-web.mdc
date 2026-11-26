@@ -696,3 +696,20 @@ mapping, connection identity, release and focus behavior. Fresh validation
 1795687641278104835-290116 passed 1,927 aggregate test executions and
 linked the browser preview. The commit hook also passed. Physical browser
 controller operation, latency and vibration remain unverified.
+
+Browser DOM queue overflow now clears the shared mouse observation state
+as well as publishing the logical focus-loss cancellation. Button presses
+observed while the queue rejects events cannot revive a cancelled chord.
+The browser input diagnostic checks an existing hold, a discarded press,
+stale chord motion and release, and a fresh press/release after draining.
+
+Fresh validation 1795687929623640335-322206 passed 1,927 aggregate test
+executions and linked the browser diagnostic. Six isolated headless
+Firefox executions of its bound Wasm passed visible, hidden, invalid
+clock, listener registration failure, lifecycle registration failure and
+repeat-visible outcomes. The successful visible and hidden paths observed
+156 and 162 canvas event dispatches respectively, with balanced canvas
+listener registration/removal and no remaining surface. The first
+observer pass underestimated dispatch counts but the Rust diagnostic
+returned success in all three non-fault paths. These are synthetic DOM
+input checks, not physical mouse or touchscreen acceptance.
