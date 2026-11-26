@@ -38,6 +38,7 @@ pub mod pump;
 
 use core::any::Any;
 use core::net::SocketAddr;
+use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
@@ -180,8 +181,11 @@ pub(crate) type CredentialPort = Arc<dyn Any + Send + Sync>;
 /// Client credentials and an explicitly approved host, privately configured.
 pub struct ClientTls(pub(crate) CredentialPort);
 
-/// Host credentials and explicitly supplied trusted client roots.
-pub struct ServerTls(pub(crate) CredentialPort);
+/// Host credentials and immutable approved client leaf fingerprints.
+pub struct ServerTls {
+    approved: Arc<BTreeSet<PeerFingerprint>>,
+    pub(crate) backend: CredentialPort,
+}
 
 impl Clone for ClientTls {
     fn clone(&self) -> Self {
@@ -195,11 +199,15 @@ impl Clone for ClientTls {
 
 impl Clone for ServerTls {
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self {
+            approved: Arc::clone(&self.approved),
+            backend: Arc::clone(&self.backend),
+        }
     }
 
     fn clone_from(&mut self, source: &Self) {
-        self.0.clone_from(&source.0);
+        self.approved.clone_from(&source.approved);
+        self.backend.clone_from(&source.backend);
     }
 }
 

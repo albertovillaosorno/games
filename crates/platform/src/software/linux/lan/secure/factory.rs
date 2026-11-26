@@ -35,7 +35,7 @@ use std::io::{ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use games::network::{MessageSchema, SessionConfig};
+use games::network::MessageSchema;
 use rustls::{ClientConfig, ServerConfig};
 
 use super::identity::{LocalIdentity, validate_root};
@@ -49,7 +49,7 @@ use crate::ir::lan::{
     ClientTls, CredentialPort, FramePort, LanAvailability, LanConfig,
     LanFactory, ServerTls,
 };
-use crate::ir::security::lan::host::HostBindRequest;
+use crate::ir::security::lan::host::{ClientApprovals, HostBindRequest};
 
 impl LanAvailability for () {
     const SUPPORTED: bool = true;
@@ -65,7 +65,7 @@ impl LanFactory for () {
         Message: Send + 'static,
         Codec: MessageSchema<Message = Message> + Send + 'static,
     {
-        let native = NativeServer(selected::<ServerConfig>(tls.0)?);
+        let native = NativeServer(selected::<ServerConfig>(tls.backend)?);
         Ok(Box::new(HostInputPump::bind(config, native, codec)?))
     }
 
@@ -120,11 +120,10 @@ impl IdentityBackend for LocalIdentity {
 
     fn server_credentials(
         &self,
-        config: SessionConfig,
-        clients: &[PublicIdentity],
-    ) -> Result<ServerTls> {
-        let native = self.server_tls(config, clients)?;
-        Ok(ServerTls(native.0))
+        approvals: &ClientApprovals<'_>,
+    ) -> Result<CredentialPort> {
+        let native = self.server_tls(approvals)?;
+        Ok(native.0)
     }
 }
 

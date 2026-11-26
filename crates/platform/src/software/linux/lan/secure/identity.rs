@@ -31,12 +31,10 @@
 
 //! Independent locally provisioned LAN identities for manual enrolment.
 
-use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 use std::io::{self, ErrorKind};
 use std::sync::Arc;
 
-use games::network::SessionConfig;
 use rustls::RootCertStore;
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::ServerCertVerifier as _;
@@ -49,6 +47,7 @@ use rustls::sign::CertifiedKey;
 use super::{ClientTls, PeerFingerprint, ServerTls};
 use crate::ir::lan::identity::PublicIdentity;
 use crate::ir::security::lan::CredentialKind;
+use crate::ir::security::lan::host::ClientApprovals;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Role {
@@ -199,28 +198,17 @@ impl LocalIdentity {
     /// its `HostSession` before admitting any game messages.
     ///
     /// # Errors
-    /// Rejects disabled LAN, wrong role, empty or excessive approval lists,
-    /// duplicate fingerprints and invalid TLS configuration.
+    /// Rejects wrong role or invalid TLS configuration; portable approval
+    /// admission has already checked the client list.
     pub(super) fn server_tls(
         &self,
-        config: SessionConfig,
-        clients: &[PublicIdentity],
+        approvals: &ClientApprovals<'_>,
     ) -> io::Result<ServerTls> {
-        if !config.allow_lan {
-            return Err(ErrorKind::PermissionDenied.into());
-        }
-        if self.role != Role::Host
-            || clients.is_empty()
-            || !config.admits_players(clients.len())
-        {
+        if self.role != Role::Host {
             return Err(ErrorKind::InvalidInput.into());
         }
         let mut roots = RootCertStore::empty();
-        let mut fingerprints = BTreeSet::new();
-        for client in clients {
-            if !fingerprints.insert(client.fingerprint()) {
-                return Err(ErrorKind::InvalidInput.into());
-            }
+        for client in approvals.clients() {
             roots
                 .add(CertificateDer::from(client.root_der()))
                 .map_err(io::Error::other)?;
@@ -253,6 +241,7 @@ mod tests {
     use std::io::{self, ErrorKind};
     use std::slice::from_ref;
 
+    use games::network::SessionConfig;
     use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair};
 
     use super::super::super::tests::{
@@ -261,10 +250,18 @@ mod tests {
     use super::super::host::HostSession;
     use super::super::tests::{authority, pair};
     use super::super::{PeerFingerprint, SecureLanListener};
-    use super::{LocalIdentity, PublicIdentity};
+    use super::{ClientApprovals, LocalIdentity, PublicIdentity, ServerTls};
     use crate::ir::lan::FrameBackend as _;
 
     const HOST: &str = "games.test";
+
+    fn server_tls(
+        identity: &LocalIdentity,
+        config: SessionConfig,
+        clients: &[PublicIdentity],
+    ) -> io::Result<ServerTls> {
+        identity.server_tls(&ClientApprovals::new(config, clients)?)
+    }
 
     fn key() -> io::Result<KeyPair> {
         KeyPair::generate().map_err(io::Error::other)
@@ -322,9 +319,10 @@ mod tests {
         )?;
         let settings = config()?;
         let session = session_config(true);
-        let server_tls =
-            host.server_tls(session, from_ref(&imported_client))?;
-        let listener = SecureLanListener::bind(LOOPBACK, settings, server_tls)?;
+        let admitted_tls =
+            server_tls(&host, session, from_ref(&imported_client))?;
+        let listener =
+            SecureLanListener::bind(LOOPBACK, settings, admitted_tls)?;
         let client_tls = client.client_tls(&imported_host)?;
         let mut roster =
             HostSession::new(session, &[(imported_client.fingerprint(), 2)])
@@ -360,13 +358,13 @@ mod tests {
         let session = session_config(true);
         require(
             host.client_tls(host.public()).is_err()
-                && client.server_tls(session, approved).is_err()
-                && host.server_tls(session, &[]).is_err()
-                && host.server_tls(session, &duplicate).is_err(),
+                && server_tls(&client, session, approved).is_err()
+                && server_tls(&host, session, &[]).is_err()
+                && server_tls(&host, session, &duplicate).is_err(),
             "invalid role or approval list accepted",
         )?;
         require(
-            host.server_tls(session_config(false), approved)
+            server_tls(&host, session_config(false), approved)
                 .err()
                 .is_some_and(|error| {
                     error.kind() == ErrorKind::PermissionDenied

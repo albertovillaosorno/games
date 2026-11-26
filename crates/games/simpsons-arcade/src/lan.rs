@@ -190,7 +190,7 @@ impl HostLan {
     ///
     /// # Errors
     /// Rejects no remote seats, all remote seats, duplicate identities,
-    /// invalid transport settings or listener/worker creation failure.
+    /// unapproved credentials, invalid limits or listener/worker failure.
     pub fn bind(
         address: SocketAddr,
         tls: ServerTls,
@@ -445,6 +445,30 @@ mod tests {
 
     fn host() -> IoResult<(HostLan, ClientTls)> {
         host_with_idle(IDLE_TIMEOUT)
+    }
+
+    #[test]
+    fn different_credential_approval_cannot_reserve_a_player() -> IoResult<()> {
+        let server = identity(true)?;
+        let approved = identity(false)?;
+        let other = identity(false)?;
+        let tls =
+            server.server_tls(session_config(), from_ref(approved.public()))?;
+        let rejected =
+            HostLan::bind(SocketAddr::from(([127, 0, 0, 1], 0)), tls, &[
+                None,
+                Some(other.public().fingerprint()),
+                None,
+                None,
+            ]);
+        if rejected.err().map(|error| error.kind())
+            != Some(ErrorKind::PermissionDenied)
+        {
+            return Err(Error::other(
+                "unapproved credential reserved a player",
+            ));
+        }
+        Ok(())
     }
 
     fn host_with_idle(

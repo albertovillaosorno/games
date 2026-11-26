@@ -474,7 +474,16 @@ mod tests {
         tls: ServerTls,
         codec: TestCodec,
     ) -> io::Result<HostInputPump<u8>> {
-        HostInputPump::bind(HostBindRequest::new(config)?, tls, codec)
+        let approved = config
+            .enrolments
+            .iter()
+            .map(|&(fingerprint, _peer)| fingerprint)
+            .collect();
+        HostInputPump::bind(
+            HostBindRequest::new(config, &approved)?,
+            tls,
+            codec,
+        )
     }
 
     fn next_event(pump: &mut HostInputPump<u8>) -> io::Result<RemoteEvent<u8>> {

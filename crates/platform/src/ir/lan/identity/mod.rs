@@ -33,11 +33,15 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::io::{ErrorKind, Result};
+use std::sync::Arc;
 
 use games::network::SessionConfig;
 
-use super::{ClientTls, LanFactory, PeerFingerprint, ServerTls};
+use super::{
+    ClientTls, CredentialPort, LanFactory, PeerFingerprint, ServerTls,
+};
 use crate::ir::security::lan::CredentialKind;
+use crate::ir::security::lan::host::ClientApprovals;
 
 /// Public material to exchange and verify through a trusted local channel.
 /// Receiving this value does not establish trust or enrol a player.
@@ -85,9 +89,8 @@ pub(crate) trait IdentityBackend: Send + Sync {
     fn public_material(&self) -> &PublicIdentity;
     fn server_credentials(
         &self,
-        config: SessionConfig,
-        clients: &[PublicIdentity],
-    ) -> Result<ServerTls>;
+        approvals: &ClientApprovals<'_>,
+    ) -> Result<CredentialPort>;
 }
 
 pub(crate) type IdentityPort = Box<dyn IdentityBackend>;
@@ -167,7 +170,12 @@ impl LocalIdentity {
         config: SessionConfig,
         clients: &[PublicIdentity],
     ) -> Result<ServerTls> {
-        self.backend.server_credentials(config, clients)
+        let approvals = ClientApprovals::new(config, clients)?;
+        let backend = self.backend.server_credentials(&approvals)?;
+        Ok(ServerTls {
+            approved: Arc::new(approvals.into_pins()),
+            backend,
+        })
     }
 }
 
@@ -182,4 +190,113 @@ fn admit_credentials(root: &[u8], leaf: &[u8], key: &[u8]) -> Result<()> {
         .admit(key)
         .map_err(|_error| ErrorKind::InvalidInput)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::io::Error;
+    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+
+    struct ObservedIdentity {
+        dispatched: Arc<AtomicBool>,
+        public: PublicIdentity,
+    }
+
+    impl IdentityBackend for ObservedIdentity {
+        fn client_credentials(
+            &self,
+            _host: &PublicIdentity,
+        ) -> Result<ClientTls> {
+            Err(ErrorKind::Unsupported.into())
+        }
+
+        fn public_material(&self) -> &PublicIdentity {
+            &self.public
+        }
+
+        fn server_credentials(
+            &self,
+            approvals: &ClientApprovals<'_>,
+        ) -> Result<CredentialPort> {
+            self.dispatched
+                .store(!approvals.clients().is_empty(), Ordering::Release);
+            Ok(Arc::new(()))
+        }
+    }
+
+    fn public(tag: u8) -> PublicIdentity {
+        PublicIdentity {
+            fingerprint: PeerFingerprint::from_bytes([tag; 32]),
+            root: vec![tag],
+        }
+    }
+
+    fn fixture() -> (LocalIdentity, Arc<AtomicBool>) {
+        let dispatched = Arc::new(AtomicBool::new(false));
+        let backend = Box::new(ObservedIdentity {
+            dispatched: Arc::clone(&dispatched),
+            public: public(0),
+        });
+        (LocalIdentity { backend }, dispatched)
+    }
+
+    fn config() -> SessionConfig {
+        SessionConfig {
+            allow_lan: true,
+            max_message_bytes: NonZeroUsize::MIN,
+            max_players: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+        }
+    }
+
+    #[test]
+    fn duplicate_or_excessive_approvals_never_dispatch() {
+        let (identity, dispatched) = fixture();
+        for approvals in [vec![], vec![public(1), public(1)], vec![
+            public(1),
+            public(2),
+            public(3),
+        ]] {
+            assert_eq!(
+                identity
+                    .server_tls(config(), &approvals)
+                    .err()
+                    .map(|error| error.kind()),
+                Some(ErrorKind::InvalidInput)
+            );
+        }
+        assert!(!dispatched.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn disabled_approval_never_dispatches() {
+        let (identity, dispatched) = fixture();
+        let mut disabled = config();
+        disabled.allow_lan = false;
+        assert_eq!(
+            identity
+                .server_tls(disabled, &[public(1)])
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::PermissionDenied)
+        );
+        assert!(!dispatched.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn admitted_credential_handle_retains_only_approved_pins() -> Result<()> {
+        let (identity, dispatched) = fixture();
+        let tls = identity.server_tls(config(), &[public(1), public(2)])?;
+        let expected =
+            BTreeSet::from([public(1).fingerprint(), public(2).fingerprint()]);
+        if !dispatched.load(Ordering::Acquire)
+            || tls.approved.as_ref() != &expected
+        {
+            return Err(Error::other("admitted credential pins changed"));
+        }
+        Ok(())
+    }
 }

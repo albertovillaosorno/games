@@ -63,7 +63,8 @@ impl From<HostAdmissionError> for Error {
     fn from(error: HostAdmissionError) -> Self {
         match error {
             HostAdmissionError::Lan(reason) => reason.into(),
-            HostAdmissionError::Session(SessionError::LanDisabled) => {
+            HostAdmissionError::Session(SessionError::LanDisabled)
+            | HostAdmissionError::UnapprovedIdentity => {
                 ErrorKind::PermissionDenied.into()
             },
             HostAdmissionError::DuplicateEnrollment
@@ -141,8 +142,8 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// Local and approved remote identities reserve distinct roster capacity.
     ///
     /// # Errors
-    /// Rejects disabled LAN, empty or excess enrolments, invalid identities,
-    /// unrepresentable limits, or listener and worker creation failures.
+    /// Rejects disabled LAN, unapproved, duplicate or excessive enrolments,
+    /// invalid identities, limits, or listener and worker creation failures.
     pub fn bind<Codec>(
         config: HostInputConfig<'_>,
         tls: ServerTls,
@@ -151,7 +152,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     where
         Codec: MessageSchema<Message = Message> + Send + 'static,
     {
-        let request = HostBindRequest::new(config)?;
+        let request = HostBindRequest::new(config, &tls.approved)?;
         let backend = <() as LanFactory>::bind(request, tls, codec)?;
         Ok(Self { backend })
     }
@@ -194,6 +195,7 @@ impl<Message: Send + 'static> HostInputPump<Message> {
 #[cfg(test)]
 mod tests {
     use core::net::{IpAddr, Ipv4Addr};
+    use std::collections::BTreeSet;
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::sync::Arc;
 
@@ -211,7 +213,12 @@ mod tests {
 
     #[test]
     fn invalid_host_requests_are_rejected_before_backend_dispatch() {
-        let tls = ServerTls(Arc::new(()));
+        let tls = ServerTls {
+            approved: Arc::new(BTreeSet::from([PeerFingerprint::from_bytes(
+                [1; 32],
+            )])),
+            backend: Arc::new(()),
+        };
         let mut config = HostInputConfig {
             address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             enrolments: &[(PeerFingerprint::from_bytes([1; 32]), 1)],
@@ -232,10 +239,19 @@ mod tests {
         config.session.allow_lan = true;
         config.local_peers = &[1];
         assert_eq!(
-            HostInputPump::bind(config, tls, Codec)
+            HostInputPump::bind(config, tls.clone(), Codec)
                 .err()
                 .map(|error| error.kind()),
             Some(ErrorKind::InvalidInput),
+        );
+        config.local_peers = &[0];
+        let unapproved = [(PeerFingerprint::from_bytes([2; 32]), 1)];
+        config.enrolments = &unapproved;
+        assert_eq!(
+            HostInputPump::bind(config, tls, Codec)
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::PermissionDenied),
         );
     }
 }

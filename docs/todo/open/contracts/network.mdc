@@ -727,3 +727,15 @@ invalid requests even when authenticated transport is unavailable. The
 fresh native smoke and six portable core targets passed in run
 1795652914607528188-1822059. Physical multi-device LAN acceptance remains
 open.
+
+The portable credential boundary now admits a unique, nonempty client
+approval list within the configured player budget before delegating TLS
+configuration. The opaque server credentials retain those exact leaf
+fingerprints. A host roster may select a subset, but cannot reserve a
+seat for an identity outside the credential approvals. Native certificate
+verification remains with the transport. Synthetic port tests verify that
+invalid lists never reach the backend; a title-level regression uses two
+independent client credentials and rejects a mismatched reservation.
+Fresh native smoke and six portable core targets passed in run
+1795653317927704378-1930893 (1,538 aggregate test executions).
+Physical multi-device acceptance remains open.

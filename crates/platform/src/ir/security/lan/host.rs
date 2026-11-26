@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable host binding and initial roster admission.
+//   - Portable client approval, host binding and initial roster admission.
 // - Must-Not:
 //   - Acquire sockets, authenticate credentials or read native clocks.
 // - Allows:
@@ -25,7 +25,7 @@
 // - Description:
 //   - Reserve capacity for remote approvals and distinct local identities.
 // - Usage:
-//   - Admit a request before passing it to a native host factory.
+//   - Admit credential approvals and the roster before native dispatch.
 // - Defaults:
 //   - No anonymous peers, duplicate identities or implicit LAN permission.
 
@@ -38,6 +38,7 @@ use std::time::Duration;
 use games::network::{PeerKind, Session, SessionConfig, SessionError};
 
 use super::{LanAdmissionError, admit_endpoint};
+use crate::ir::lan::identity::PublicIdentity;
 use crate::ir::lan::pump::HostInputConfig;
 use crate::ir::lan::{LanConfig, PeerFingerprint};
 
@@ -56,6 +57,8 @@ pub enum HostAdmissionError {
     Session(SessionError),
     /// Local identities and remote approvals exceed the session capacity.
     TooManyEnrollments,
+    /// A requested peer is not in the credential approval list.
+    UnapprovedIdentity,
 }
 
 impl From<LanAdmissionError> for HostAdmissionError {
@@ -75,6 +78,52 @@ pub type EnrolledPeers = BTreeMap<PeerFingerprint, u64>;
 
 type PlayerIds = BTreeSet<u64>;
 type EnrolmentIndex = (EnrolledPeers, PlayerIds);
+
+/// Bounded, unique client approvals admitted before TLS configuration.
+#[derive(Debug)]
+pub struct ClientApprovals<'clients> {
+    clients: &'clients [PublicIdentity],
+    pins: BTreeSet<PeerFingerprint>,
+}
+
+impl<'clients> ClientApprovals<'clients> {
+    /// Explicitly approved public identities and trust roots.
+    #[must_use]
+    pub const fn clients(&self) -> &'clients [PublicIdentity] {
+        self.clients
+    }
+
+    /// Transfer the exact leaf approvals to the opaque TLS handle.
+    #[must_use]
+    pub fn into_pins(self) -> BTreeSet<PeerFingerprint> {
+        self.pins
+    }
+
+    /// Admit a nonempty unique list within the selected session budget.
+    /// # Errors
+    /// Rejects disabled LAN, empty, excessive or duplicate approvals.
+    pub fn new(
+        config: SessionConfig,
+        clients: &'clients [PublicIdentity],
+    ) -> Result<Self, HostAdmissionError> {
+        if !config.allow_lan {
+            return Err(LanAdmissionError::Disabled.into());
+        }
+        if clients.is_empty() {
+            return Err(HostAdmissionError::EmptyEnrollment);
+        }
+        if !config.admits_players(clients.len()) {
+            return Err(HostAdmissionError::TooManyEnrollments);
+        }
+        let mut pins = BTreeSet::new();
+        for client in clients {
+            if !pins.insert(client.fingerprint()) {
+                return Err(HostAdmissionError::DuplicateEnrollment);
+            }
+        }
+        Ok(Self { clients, pins })
+    }
+}
 
 /// Initial local membership and unique remote identity approvals.
 #[derive(Debug)]
@@ -151,10 +200,13 @@ impl HostBindRequest {
     }
 
     /// Admit all transport-independent host bind requirements.
+    /// Every enrolled remote leaf must have an explicit credential approval.
+    /// A subset may be selected without granting additional identities.
     /// # Errors
     /// Rejects disabled LAN, invalid endpoints, limits and roster approvals.
     pub fn new(
         config: HostInputConfig<'_>,
+        approved: &BTreeSet<PeerFingerprint>,
     ) -> Result<Self, HostAdmissionError> {
         admit_endpoint(config.address)?;
         let transport = LanConfig::from_limits(super::LanLimits::new(
@@ -172,6 +224,9 @@ impl HostBindRequest {
             config.enrolments,
             config.local_peers,
         )?;
+        if !roster.enrolled.keys().all(|pin| approved.contains(pin)) {
+            return Err(HostAdmissionError::UnapprovedIdentity);
+        }
         Ok(Self {
             address: config.address,
             idle_timeout: config.idle_timeout,
@@ -244,6 +299,10 @@ mod tests {
         }
     }
 
+    fn approved() -> BTreeSet<PeerFingerprint> {
+        BTreeSet::from([FIRST, SECOND])
+    }
+
     fn request(enrolments: &[(PeerFingerprint, u64)]) -> HostInputConfig<'_> {
         HostInputConfig {
             address: LOOPBACK,
@@ -258,9 +317,11 @@ mod tests {
     #[test]
     fn admission_owns_only_active_local_membership_and_remote_approvals()
     -> Result<(), String> {
-        let admitted =
-            HostBindRequest::new(request(&[(FIRST, 1), (SECOND, 2)]))
-                .map_err(|error| format!("{error:?}"))?;
+        let admitted = HostBindRequest::new(
+            request(&[(FIRST, 1), (SECOND, 2)]),
+            &approved(),
+        )
+        .map_err(|error| format!("{error:?}"))?;
         if admitted.address() != LOOPBACK
             || admitted.idle_timeout() != Some(TIMEOUT)
             || admitted.transport().limits().max_bytes() != 8
@@ -325,13 +386,13 @@ mod tests {
     #[test]
     fn host_request_rejects_unapproved_or_disabled_lan() {
         assert_eq!(
-            HostBindRequest::new(request(&[])).err(),
+            HostBindRequest::new(request(&[]), &approved()).err(),
             Some(HostAdmissionError::EmptyEnrollment),
         );
         let mut disabled = request(&[(FIRST, 1)]);
         disabled.session.allow_lan = false;
         assert_eq!(
-            HostBindRequest::new(disabled).err(),
+            HostBindRequest::new(disabled, &approved()).err(),
             Some(HostAdmissionError::Lan(LanAdmissionError::Disabled)),
         );
     }
@@ -341,15 +402,34 @@ mod tests {
         let mut invalid = request(&[(FIRST, 1)]);
         invalid.timeout = Duration::ZERO;
         assert_eq!(
-            HostBindRequest::new(invalid).err(),
+            HostBindRequest::new(invalid, &approved()).err(),
             Some(HostAdmissionError::Lan(LanAdmissionError::ZeroTimeout)),
         );
         invalid.timeout = TIMEOUT;
         invalid.idle_timeout = Some(Duration::ZERO);
         assert_eq!(
-            HostBindRequest::new(invalid).err(),
+            HostBindRequest::new(invalid, &approved()).err(),
             Some(HostAdmissionError::Lan(LanAdmissionError::ZeroTimeout)),
         );
+    }
+
+    #[test]
+    fn host_request_cannot_enrol_a_leaf_without_credential_approval() {
+        let approved = BTreeSet::from([FIRST]);
+        assert_eq!(
+            HostBindRequest::new(request(&[(SECOND, 1)]), &approved).err(),
+            Some(HostAdmissionError::UnapprovedIdentity)
+        );
+        assert!(
+            HostBindRequest::new(request(&[(FIRST, 1)]), &approved).is_ok()
+        );
+    }
+
+    #[test]
+    fn host_request_accepts_a_subset_of_the_approved_client_pins() {
+        let accepted =
+            HostBindRequest::new(request(&[(FIRST, 1)]), &approved());
+        assert!(accepted.is_ok());
     }
 
     #[test]
@@ -357,7 +437,7 @@ mod tests {
         let mut invalid = request(&[(FIRST, 1)]);
         invalid.address.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         assert_eq!(
-            HostBindRequest::new(invalid).err(),
+            HostBindRequest::new(invalid, &approved()).err(),
             Some(HostAdmissionError::Lan(LanAdmissionError::PublicEndpoint)),
         );
     }
