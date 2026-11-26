@@ -193,3 +193,14 @@ failure before changing the stored value: a NaN timestamp and a
 reported green acceptance indicators. This establishes a browser
 clock observation adapter, not a browser game loop, graphics,
 touch or distribution acceptance.
+
+Additional isolated Firefox host-failure acceptance used the same
+clock-and-storage diagnostic module. After creating a valid slot, three
+independent launches injected a storage getter SecurityError, an absent
+storage object, and a setItem QuotaExceededError. Each returned failure
+on both startup and explicit invocation without replacing the valid
+slot. A subsequent unmodified reload succeeded. A separate fresh
+profile with Firefox's dom.storage.enabled preference set to false
+returned no local storage object, and the diagnostic returned failure.
+All six acceptance indicators were green. The injected exception tests
+do not measure a real browser quota or establish crash durability.
