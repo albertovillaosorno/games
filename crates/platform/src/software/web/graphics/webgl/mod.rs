@@ -30,6 +30,8 @@
 //   - Windowed, nearest sampling, no silent Canvas2D fallback.
 
 mod resources;
+#[cfg(feature = "interactive")]
+mod window;
 
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
@@ -42,12 +44,18 @@ use wasm_bindgen::JsCast as _;
 use web_sys::{
     HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlContextAttributes,
 };
+#[cfg(feature = "interactive")]
+pub(in crate::software) use window::open_window;
 
 use self::resources::{
     Limits, Program, Target, Texture, checked, dimensions, signed,
 };
+use super::dom_error;
+#[cfg(feature = "test-fixtures")]
+use super::surface;
 use super::surface::BrowserSurface;
-use super::{dom_error, surface};
+#[cfg(feature = "test-fixtures")]
+use super::surface::SurfaceKind;
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend;
 use crate::ir::hardware::InputSample;
@@ -73,6 +81,7 @@ impl Debug for WebGlScene {
 }
 
 impl WebGlScene {
+    #[cfg(feature = "test-fixtures")]
     pub(super) fn new(
         layout: FrameLayout,
         size: Dimensions,
@@ -86,8 +95,13 @@ impl WebGlScene {
         let _viewport = limits.viewport(size)?;
         let target = Target::new(&gl, limits, layout)?;
         let program = Program::new(&gl)?;
-        let surface =
-            BrowserSurface::attach(document, canvas, scope, capacity)?;
+        let surface = BrowserSurface::attach(
+            document,
+            canvas,
+            scope,
+            capacity,
+            SurfaceKind::Diagnostic,
+        )?;
         let scene = Self {
             atlases: Vec::new(),
             target,
@@ -105,12 +119,36 @@ impl WebGlScene {
         Ok(scene)
     }
 
+    #[cfg(feature = "test-fixtures")]
     pub(super) const fn canvas(&self) -> &HtmlCanvasElement {
         self.surface.element()
     }
 
+    #[cfg(feature = "test-fixtures")]
     pub(super) const fn context(&self) -> &Gl {
         &self.gl
+    }
+
+    #[cfg(feature = "interactive")]
+    fn from_window(
+        surface: BrowserSurface,
+        gl: Gl,
+        limits: Limits,
+        layout: FrameLayout,
+        mode: PresentationMode,
+    ) -> Result<Self, RenderError> {
+        let target = Target::new(&gl, limits, layout)?;
+        let program = Program::new(&gl)?;
+        Ok(Self {
+            atlases: Vec::new(),
+            target,
+            program,
+            gl,
+            limits,
+            layout,
+            mode,
+            surface,
+        })
     }
 
     fn render(
@@ -275,21 +313,7 @@ impl SceneBackend for WebGlScene {
     }
 
     fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError> {
-        if self.gl.is_context_lost() {
-            return Err(RenderError::Backend(
-                "browser WebGL context lost".to_owned(),
-            ));
-        }
-        let Some(canvas) = self.surface.dimensions() else {
-            return Ok(None);
-        };
-        let [width, height] = self.limits.viewport(canvas)?;
-        if self.gl.drawing_buffer_width() != width
-            || self.gl.drawing_buffer_height() != height
-        {
-            return Err(RenderError::InvalidDimensions);
-        }
-        Ok(Some(canvas))
+        observed_dimensions(&self.gl, self.limits, &self.surface)
     }
 }
 
@@ -386,4 +410,44 @@ pub(super) fn read_rgba(
         first.swap_with_slice(last);
     }
     Ok(pixels)
+}
+
+fn observed_dimensions(
+    gl: &Gl,
+    limits: Limits,
+    surface: &BrowserSurface,
+) -> Result<Option<Dimensions>, RenderError> {
+    checked(gl)?;
+    let Some(size) = surface.dimensions()? else {
+        return Ok(None);
+    };
+    let [width, height] = limits.viewport(size)?;
+    // Bound the default drawing buffer independently of logical atlas bytes.
+    // A drawable can be smaller than the CSS extent on a limited device.
+    let max_bytes = NonZeroUsize::new(64 * 1024 * 1024)
+        .ok_or(RenderError::InvalidDimensions)?;
+    let _layout = FrameLayout::new(size.width, size.height, max_bytes)?;
+    let canvas = surface.element();
+    let width_changed = canvas.width() != size.width.get();
+    let height_changed = canvas.height() != size.height.get();
+    if width_changed && size.width.get() < canvas.width() {
+        canvas.set_width(size.width.get());
+        if height_changed {
+            canvas.set_height(size.height.get());
+        }
+    } else {
+        if height_changed {
+            canvas.set_height(size.height.get());
+        }
+        if width_changed {
+            canvas.set_width(size.width.get());
+        }
+    }
+    checked(gl)?;
+    if gl.drawing_buffer_width() != width
+        || gl.drawing_buffer_height() != height
+    {
+        return Err(RenderError::InvalidDimensions);
+    }
+    Ok(Some(size))
 }

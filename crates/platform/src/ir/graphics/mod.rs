@@ -34,6 +34,8 @@
 #[cfg(any(test, feature = "test-fixtures"))]
 /// Explicit isolated host scene diagnostics.
 pub mod fixtures;
+/// Host animation frame scheduling without a blocking render loop.
+pub mod frame_loop;
 /// Ordered scene presentation and portable geometry observations.
 pub mod scene_renderer;
 

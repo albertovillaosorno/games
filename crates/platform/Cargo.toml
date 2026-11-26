@@ -41,8 +41,18 @@ web-sys = { workspace = true, features = [
 ] }
 
 [features]
+browser-graphics = [
+    "web-sys/WebGl2RenderingContext",
+    "web-sys/WebGlContextAttributes",
+    "web-sys/WebGlFramebuffer",
+    "web-sys/WebGlProgram",
+    "web-sys/WebGlShader",
+    "web-sys/WebGlTexture",
+    "web-sys/WebGlUniformLocation",
+]
 importer = ["dep:games-importer"]
 interactive = [
+    "browser-graphics",
     "dep:sdl2",
     "web-sys/AudioBuffer",
     "web-sys/AudioBufferSourceNode",
@@ -54,15 +64,7 @@ interactive = [
     "web-sys/AudioScheduledSourceNode",
 ]
 secure-lan = ["dep:rustls"]
-test-fixtures = [
-    "web-sys/WebGl2RenderingContext",
-    "web-sys/WebGlContextAttributes",
-    "web-sys/WebGlFramebuffer",
-    "web-sys/WebGlProgram",
-    "web-sys/WebGlShader",
-    "web-sys/WebGlTexture",
-    "web-sys/WebGlUniformLocation",
-]
+test-fixtures = ["browser-graphics"]
 
 [lints]
 workspace = true

@@ -30,11 +30,17 @@
 //   - Ignore unsupported buttons, ordinary motion and unadmitted chords.
 
 use games::input::physical::PointerButton;
-use web_sys::{Element, PointerEvent, PointerEventInit};
+#[cfg(feature = "test-fixtures")]
+use web_sys::PointerEventInit;
+use web_sys::{Element, PointerEvent};
 
-use super::{EventSource, next_event, pointer, verify};
+use super::pointer;
+#[cfg(feature = "test-fixtures")]
+use super::{EventSource, next_event, verify};
+#[cfg(feature = "test-fixtures")]
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputEvent, InputTransition};
+#[cfg(feature = "test-fixtures")]
 use crate::ir::input::NativeInput;
 
 // The DOM button index and buttons bitmask are different for middle/right.
@@ -133,6 +139,7 @@ fn change(button: PointerButton, down: bool) -> InputTransition {
     InputTransition::Event(event(button, down))
 }
 
+#[cfg(feature = "test-fixtures")]
 fn send(
     element: &Element,
     kind: &str,
@@ -150,6 +157,7 @@ fn send(
     pointer::dispatch(element, kind, &init)
 }
 
+#[cfg(feature = "test-fixtures")]
 pub(super) fn verify_source(
     source: &EventSource,
     element: &Element,
@@ -207,6 +215,7 @@ pub(super) fn verify_source(
     verify(next_event(source, input)?.is_none(), "stale mouse capture")
 }
 
+#[cfg(feature = "test-fixtures")]
 fn verify_cancellation(
     source: &EventSource,
     element: &Element,

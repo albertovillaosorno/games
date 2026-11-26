@@ -30,20 +30,24 @@
 //   - Ignore other pointer types and presses outside the client rectangle.
 
 use std::cell::RefCell;
+#[cfg(feature = "test-fixtures")]
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
+#[cfg(feature = "test-fixtures")]
 use games::presentation::{Dimensions, PresentationLayout, PresentationMode};
 use wasm_bindgen::JsCast as _;
-use web_sys::{Element, Event, PointerEvent, PointerEventInit};
+use web_sys::{Element, HtmlElement, PointerEvent};
+#[cfg(feature = "test-fixtures")]
+use web_sys::{Event, PointerEventInit};
 
-use super::{
-    BrowserInput, EventSource, SCOPE, dom_error, focus_lost, mouse, next_event,
-    verify,
-};
+#[cfg(feature = "test-fixtures")]
+use super::{BrowserInput, SCOPE, dom_error, next_event, verify};
+use super::{EventSource, focus_lost, mouse};
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputEvent, InputTransition};
+#[cfg(feature = "test-fixtures")]
 use crate::ir::input::{InputStartup, NativeInput};
 
 fn contact(id: i32, phase: ContactPhase) -> HostEvent {
@@ -77,6 +81,11 @@ pub(super) fn point(
 }
 
 pub(super) fn capture(element: &Element, event: &PointerEvent) -> bool {
+    if event.is_trusted()
+        && let Some(html) = element.dyn_ref::<HtmlElement>()
+    {
+        let _result = html.focus();
+    }
     !event.is_trusted()
         || element.has_pointer_capture(event.pointer_id())
         || element.set_pointer_capture(event.pointer_id()).is_ok()
@@ -178,14 +187,17 @@ fn subscribe_lifecycle(
 
 // The diagnostic owns a real, attached CSS-sized surface independently of
 // the game or user document. Removal is guaranteed on normal error returns.
+#[cfg(feature = "test-fixtures")]
 struct Surface(Element);
 
+#[cfg(feature = "test-fixtures")]
 impl Drop for Surface {
     fn drop(&mut self) {
         self.0.remove();
     }
 }
 
+#[cfg(feature = "test-fixtures")]
 impl Surface {
     fn new() -> Result<Self, RenderError> {
         let document = web_sys::window()
@@ -209,6 +221,7 @@ impl Surface {
     }
 }
 
+#[cfg(feature = "test-fixtures")]
 fn send_pointer(
     element: &Element,
     kind: &str,
@@ -225,6 +238,7 @@ fn send_pointer(
     dispatch(element, kind, &init)
 }
 
+#[cfg(feature = "test-fixtures")]
 pub(super) fn dispatch(
     element: &Element,
     kind: &str,
@@ -235,6 +249,7 @@ pub(super) fn dispatch(
     element.dispatch_event(&event).map_err(dom_error)
 }
 
+#[cfg(feature = "test-fixtures")]
 pub(super) fn verify_touch_source() -> Result<(), RenderError> {
     let surface = Surface::new()?;
     let canvas = &surface.0;
@@ -315,6 +330,7 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
     )
 }
 
+#[cfg(feature = "test-fixtures")]
 fn verify_lifecycle(
     source: &EventSource,
     canvas: &Element,
@@ -341,6 +357,7 @@ fn verify_lifecycle(
     verify_withdrawn_geometry(source, canvas, input, layout)
 }
 
+#[cfg(feature = "test-fixtures")]
 fn verify_withdrawn_geometry(
     source: &EventSource,
     canvas: &Element,

@@ -37,8 +37,9 @@ use games::presentation::{
 };
 use web_sys::{HtmlCanvasElement, PointerEvent, PointerEventInit};
 
+use super::canvas::CanvasScene;
+use super::dom_error;
 use super::webgl::{WebGlScene, read_rgba};
-use super::{CanvasScene, dom_error};
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::{SceneBackend, SceneSession};
 use crate::ir::hardware::{HostEvent, InputEvent};

@@ -35,6 +35,36 @@ mod linux;
 #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
 mod web;
 
+#[cfg(all(
+    test,
+    not(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "interactive"
+    ))
+))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_host_does_not_call_application() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::ir::graphics::frame_loop::start;
+        let called = Rc::new(Cell::new(false));
+        let completion = Rc::clone(&called);
+        assert_eq!(
+            start(
+                |_| Err(RenderError::InvalidTimestamp),
+                move |_| completion.set(true),
+            ),
+            Err(RenderError::Unsupported)
+        );
+        assert!(!called.get());
+    }
+}
+
 /// Explicit absence of authenticated LAN; no backend handles can exist.
 #[cfg(any(not(feature = "secure-lan"), target_arch = "wasm32"))]
 mod unavailable_lan {
@@ -126,6 +156,9 @@ use crate::ir::audio::{
 use crate::ir::frame::RenderError;
 #[cfg(any(test, feature = "test-fixtures"))]
 use crate::ir::graphics::fixtures::SceneFixturePort;
+use crate::ir::graphics::frame_loop::{
+    FrameComplete, FrameLoopPort, FrameStep,
+};
 use crate::ir::graphics::{WindowFactory, WindowPort};
 use crate::ir::identification::IdentificationPort;
 use crate::ir::input::InputNames;
@@ -243,7 +276,31 @@ impl WindowFactory for () {
     }
 }
 
-#[cfg(not(all(feature = "interactive", target_os = "linux")))]
+#[cfg(all(
+    feature = "interactive",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+impl WindowFactory for () {
+    const SUPPORTED: bool = true;
+
+    fn open(
+        title: &str,
+        width: NonZeroU32,
+        height: NonZeroU32,
+        hidden: bool,
+    ) -> Result<WindowPort, RenderError> {
+        web::graphics::open_window(title, width, height, hidden)
+    }
+}
+
+#[cfg(not(all(
+    feature = "interactive",
+    any(
+        target_os = "linux",
+        all(target_arch = "wasm32", target_os = "unknown")
+    )
+)))]
 impl WindowFactory for () {
     const SUPPORTED: bool = false;
 
@@ -527,5 +584,30 @@ impl SceneFixturePort for () {
             feature = "test-fixtures"
         )))]
         Err(RenderError::Unsupported)
+    }
+}
+
+impl FrameLoopPort for () {
+    fn start(
+        step: FrameStep,
+        complete: FrameComplete,
+    ) -> Result<(), RenderError> {
+        #[cfg(all(
+            feature = "interactive",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        ))]
+        {
+            web::frame_loop::start(step, complete)
+        }
+        #[cfg(not(all(
+            feature = "interactive",
+            target_arch = "wasm32",
+            target_os = "unknown"
+        )))]
+        {
+            drop((step, complete));
+            Err(RenderError::Unsupported)
+        }
     }
 }

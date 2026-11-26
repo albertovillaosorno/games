@@ -220,6 +220,11 @@ fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
         ("simpsons-arcade-browser-input-smoke", "browser-input-smoke"),
         ("simpsons-arcade-browser-scene-smoke", "browser-scene-smoke"),
         ("simpsons-arcade-browser-webgl-smoke", "browser-webgl-smoke"),
+        (
+            "simpsons-arcade-browser-window-smoke",
+            "browser-window-smoke",
+        ),
+        ("simpsons-arcade-browser-frame-smoke", "browser-frame-smoke"),
         ("simpsons-arcade-browser-audio-smoke", "browser-audio-smoke"),
     ] {
         execute(

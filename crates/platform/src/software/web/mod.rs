@@ -38,17 +38,23 @@
     feature = "interactive"
 ))]
 pub(super) mod audio;
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "interactive"
+))]
+pub(super) mod frame_loop;
 
 #[cfg(all(
     target_arch = "wasm32",
     target_os = "unknown",
-    feature = "test-fixtures"
+    any(feature = "interactive", feature = "test-fixtures")
 ))]
 pub(super) mod graphics;
 #[cfg(all(
     target_arch = "wasm32",
     target_os = "unknown",
-    feature = "test-fixtures"
+    any(feature = "interactive", feature = "test-fixtures")
 ))]
 pub(super) mod input;
 pub(super) mod performance;

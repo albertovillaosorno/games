@@ -528,3 +528,29 @@ shadow, enemy and audio loaders select the same local or memory source;
 pose text applies its local byte limit even when supplied in memory.
 This is path-independent source admission, not a browser file-picker,
 asset package, live title or persistent storage implementation.
+
+The ordinary interactive browser window now selects WebGL 2 without
+fixture features, owns one scoped input queue and transfers the same
+canvas and context into a resident scene. Actual CSS and device-pixel
+geometry drive drawable observations and bounded backing-store resize.
+Hidden windows, fullscreen transitions and blocking borrowed callbacks
+remain explicitly unsupported. The shared animation-frame capability
+schedules one callback at a time, admits monotonic host timestamps and
+drops the owned step before terminal completion. The procedural title
+smoke advances the existing fixed clock and four-player simulation to
+16 ticks across real host callbacks, then checks each station's
+participation and 16-pixel displacement.
+
+Fresh validation 1795681984041340138-3511013 passed 1,892 aggregate tests
+and linked both production-feature browser executables. Firefox window
+tests passed two ordinary cases, a DPR-two resize from 480 by 320 to
+240 by 160, and rejection of missing context, shader failure, upload
+failure, observed context loss and oversize geometry. All cases
+balanced acquired GL resources and registered listeners and left no
+attached canvas. The visible callback run delivered four animation
+frames with at most one outstanding, 12 sprite draws and four blits;
+initial and later scheduling rejection, backward time and NaN also
+followed the expected completion and cleanup contracts. Bound modules
+were 158,647 bytes for the window and 208,600 for the frame smoke.
+Firefox used llvmpipe or similar; no hardware acceleration, full
+asset-backed browser gameplay or browser packaging claim is made.

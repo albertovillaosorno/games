@@ -41,7 +41,9 @@ use std::time::Duration;
 use games::input::physical::KeyboardKey;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
-use web_sys::{Event, EventTarget, KeyboardEvent, KeyboardEventInit};
+#[cfg(feature = "test-fixtures")]
+use web_sys::KeyboardEventInit;
+use web_sys::{Event, EventTarget, KeyboardEvent};
 
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::sensor::{MotionError, MotionSensor};
@@ -49,9 +51,12 @@ use crate::ir::hardware::{
     HapticError, HapticSupport, HostEvent, InputEvent, InputSample,
     InputTransition,
 };
-use crate::ir::input::{InputBackend, InputStartup, NativeInput};
+use crate::ir::input::InputBackend;
+#[cfg(feature = "test-fixtures")]
+use crate::ir::input::{InputStartup, NativeInput};
 use crate::ir::security::haptics::FeedbackRequest;
 
+#[cfg(feature = "test-fixtures")]
 const SCOPE: u64 = 7;
 
 #[derive(Debug)]
@@ -335,6 +340,7 @@ fn key_code(code: &str) -> Option<KeyboardKey> {
     KeyboardKey::from_profile_name(name)
 }
 
+#[cfg(feature = "test-fixtures")]
 fn next_event(
     source: &EventSource,
     input: &mut NativeInput,
@@ -348,6 +354,7 @@ fn next_event(
     Ok(input.translate(&sample))
 }
 
+#[cfg(feature = "test-fixtures")]
 fn key_event(
     kind: &str,
     code: &str,
@@ -362,6 +369,7 @@ fn key_event(
         .map_err(dom_error)
 }
 
+#[cfg(feature = "test-fixtures")]
 fn send_key(
     target: &EventTarget,
     kind: &str,
@@ -393,6 +401,7 @@ fn transition(kind: &str, event: &Event) -> Option<InputTransition> {
     }
 }
 
+#[cfg(feature = "test-fixtures")]
 fn verify(condition: bool, message: &str) -> Result<(), RenderError> {
     if condition {
         Ok(())
@@ -401,6 +410,7 @@ fn verify(condition: bool, message: &str) -> Result<(), RenderError> {
     }
 }
 
+#[cfg(feature = "test-fixtures")]
 pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
     let target = EventTarget::new().map_err(dom_error)?;
     let cap = NonZeroUsize::MIN.saturating_add(1);
