@@ -751,3 +751,18 @@ runs removed all surfaces and balanced all registered listeners. The
 initial harness launch lacked its temporary profile directory; the
 corrected runs all passed. These checks do not establish physical
 controller operation, latency or vibration.
+
+Three further asset-backed Firefox runs used independent private profiles.
+With Firefox DOM storage disabled, the title admitted the same 740 reads,
+changed aspect-fit to integer in memory, navigated the three-row settings
+menu without a control editor, joined a station and moved from logical
+x=110 to x=148 before exiting normally. No save was available or written.
+A malformed display slot (two non-hexadecimal characters) produced
+an explicit invalid-save error before any frame callback or blit and
+preserved the value. A fixture-injected quota exception on the first
+display write produced an explicit storage I/O error after 18 callbacks,
+with one attempted write and no published display value. Each case
+completed exactly once and removed its picker and canvas, with no
+outstanding frame callback. These are actual browser storage-disabled
+and malformed-value observations plus a synthetic write failure; they
+do not demonstrate real quota exhaustion or crash durability.
