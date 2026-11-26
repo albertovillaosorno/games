@@ -45,16 +45,15 @@ use super::hardware::{
     InputSample, InputTransition,
 };
 use super::security::haptics::FeedbackRequest;
-use super::security::input::ControllerAdmission;
+use super::security::input::{ControllerAdmission, InputClock};
 
 pub(crate) type InputPort = Box<dyn InputBackend>;
 
 /// Private device adapter port.
 pub(crate) trait InputBackend: Debug {
+    fn clock(&self) -> Duration;
     fn discover_after_drain(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError>;
-    fn elapsed(&self) -> Duration;
-    fn event_elapsed(&self, event: &InputSample) -> Option<Duration>;
     fn feedback_allowed(&self) -> bool;
     fn feedback_support(&self, device: u64) -> Option<HapticSupport>;
     fn submit_feedback(
@@ -62,6 +61,7 @@ pub(crate) trait InputBackend: Debug {
         request: FeedbackRequest,
     ) -> Result<(), HapticError>;
     fn translate(&mut self, event: &InputSample) -> Option<HostEvent>;
+    fn window_scope(&self) -> u64;
 }
 
 /// Platform-specific resolution of existing physical keyboard names.
@@ -84,12 +84,14 @@ impl InputStartup {
         mut backend: InputPort,
         limit: NonZeroUsize,
     ) -> Result<Self, RenderError> {
+        let clock = InputClock::new(backend.clock(), backend.window_scope());
         let mut controllers = ControllerAdmission::new(limit);
         let attached = controllers.admit(backend.discover_available()?)?;
         Ok(Self {
             attached,
             input: NativeInput {
                 backend,
+                clock,
                 controllers,
                 touch_enabled: false,
                 touch_geometry: TouchGeometry::default(),
@@ -101,6 +103,7 @@ impl InputStartup {
 /// An input capability with private native device ownership.
 pub struct NativeInput {
     backend: InputPort,
+    clock: InputClock,
     controllers: ControllerAdmission,
     touch_enabled: bool,
     touch_geometry: TouchGeometry,
@@ -136,9 +139,11 @@ impl NativeInput {
     }
 
     /// Monotonic elapsed time since input startup.
-    #[must_use]
-    pub fn elapsed(&self) -> Duration {
-        self.backend.elapsed()
+    ///
+    /// # Errors
+    /// Rejects a reversed adapter clock without advancing its observation.
+    pub fn elapsed(&self) -> Result<Duration, RenderError> {
+        self.clock.elapsed(self.backend.clock())
     }
 
     /// Enable normalized touch observations for this window session.
@@ -147,9 +152,14 @@ impl NativeInput {
     }
 
     /// Map a sample to the session clock without inventing missing time.
+    ///
+    /// Foreign windows, reversed clocks and future samples are rejected.
     #[must_use]
     pub fn event_elapsed(&self, event: &InputSample) -> Option<Duration> {
-        self.backend.event_elapsed(event)
+        if !self.clock.matches(event) {
+            return None;
+        }
+        self.clock.event_elapsed(event, self.elapsed().ok()?)
     }
 
     /// Cancel existing contacts when the actually presented layout changes.
@@ -168,7 +178,7 @@ impl NativeInput {
             return Ok(None);
         }
         let layout = observe()?;
-        let elapsed = self.elapsed();
+        let elapsed = self.elapsed()?;
         Ok(self
             .touch_geometry
             .observe(layout, elapsed)
@@ -182,6 +192,9 @@ impl NativeInput {
     /// a timestamp at or after its observation before routing.
     #[must_use]
     pub fn translate(&mut self, event: &InputSample) -> Option<HostEvent> {
+        if !self.clock.matches(event) {
+            return None;
+        }
         if matches!(
             event.transition(),
             InputTransition::Event(HostEvent::Input(
@@ -272,11 +285,16 @@ mod tests {
         after_drain: Vec<super::InputEvent>,
         allowed: Rc<Cell<bool>>,
         attachments: Vec<super::InputEvent>,
-        elapsed: Duration,
+        clock: Rc<Cell<Duration>>,
         feedback: Rc<Cell<Option<super::HapticCommand>>>,
+        scope: u64,
     }
 
     impl super::InputBackend for TestInput {
+        fn clock(&self) -> Duration {
+            self.clock.get()
+        }
+
         fn discover_after_drain(
             &mut self,
         ) -> Result<Vec<super::InputEvent>, super::RenderError> {
@@ -287,17 +305,6 @@ mod tests {
             &mut self,
         ) -> Result<Vec<super::InputEvent>, super::RenderError> {
             Ok(mem::take(&mut self.attachments))
-        }
-
-        fn elapsed(&self) -> Duration {
-            self.elapsed
-        }
-
-        fn event_elapsed(
-            &self,
-            event: &super::InputSample,
-        ) -> Option<Duration> {
-            event.elapsed_since(Duration::ZERO)
         }
 
         fn feedback_allowed(&self) -> bool {
@@ -344,6 +351,10 @@ mod tests {
                 | super::InputTransition::FocusGained
                 | super::InputTransition::Ignored => None,
             }
+        }
+
+        fn window_scope(&self) -> u64 {
+            self.scope
         }
     }
 
@@ -410,14 +421,16 @@ mod tests {
         use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 
         let clock = Duration::from_millis(20);
+        let observation = Rc::new(Cell::new(Duration::ZERO));
         let mut session = super::InputStartup::new(
             Box::new(TestInput {
-                elapsed: clock,
+                clock: Rc::clone(&observation),
                 ..TestInput::default()
             }),
             NonZeroUsize::MIN,
         )?
         .input;
+        observation.set(clock);
         let contact = super::HostEvent::Input(super::InputEvent::Contact {
             id: ContactId { device: 1, finger: 1 },
             phase: ContactPhase::Down(TouchPoint { x: 10, y: 10 }),
@@ -441,6 +454,10 @@ mod tests {
         check(&session.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
         check(&session.translate(&sample(None)), &None)?;
         check(
+            &session.translate(&sample(Some(Duration::from_millis(21)))),
+            &None,
+        )?;
+        check(
             &session.translate(&sample(Some(Duration::from_millis(19)))),
             &None,
         )?;
@@ -454,6 +471,55 @@ mod tests {
         check(&session.translate(&sample(None)), &None)?;
         check(&session.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
         check(&session.translate(&sample(Some(clock))), &Some(contact))?;
+        Ok(())
+    }
+
+    #[test]
+    fn session_admits_scoped_elapsed_observations()
+    -> Result<(), super::RenderError> {
+        use super::{HostEvent, InputSample, InputTransition, RenderError};
+
+        let ms = Duration::from_millis;
+        let clock = Rc::new(Cell::new(ms(100)));
+        let event = HostEvent::Input(super::InputEvent::FocusLost);
+        let sample = |stamp, scope| {
+            InputSample::new(stamp, InputTransition::Event(event), scope)
+        };
+        let mut input = super::InputStartup::new(
+            Box::new(TestInput {
+                clock: Rc::clone(&clock),
+                scope: 7,
+                ..TestInput::default()
+            }),
+            NonZeroUsize::MIN,
+        )?
+        .input;
+        check(&input.elapsed(), &Ok(Duration::ZERO))?;
+        clock.set(ms(120));
+        check(&input.elapsed(), &Ok(ms(20)))?;
+        for (stamp, scope, expected) in [
+            (Some(ms(90)), Some(7), Some(Duration::ZERO)),
+            (Some(ms(100)), None, Some(Duration::ZERO)),
+            (Some(ms(110)), Some(7), Some(ms(10))),
+            (Some(ms(120)), None, Some(ms(20))),
+            (Some(ms(121)), Some(7), None),
+            (Some(ms(110)), Some(8), None),
+            (None, Some(7), None),
+        ] {
+            check(&input.event_elapsed(&sample(stamp, scope)), &expected)?;
+        }
+        check(&input.translate(&sample(Some(ms(110)), Some(8))), &None)?;
+        check(
+            &input.translate(&sample(Some(ms(110)), Some(7))),
+            &Some(event),
+        )?;
+        clock.set(ms(119));
+        check(&input.elapsed(), &Err(RenderError::InvalidTimestamp))?;
+        check(&input.event_elapsed(&sample(Some(ms(110)), None)), &None)?;
+        clock.set(ms(120));
+        check(&input.elapsed(), &Ok(ms(20)))?;
+        clock.set(ms(121));
+        check(&input.elapsed(), &Ok(ms(21)))?;
         Ok(())
     }
 

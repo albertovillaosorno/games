@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded controller identity admission and routing.
+//   - Bounded controller identity, window and clock admission.
 // - Must-Not:
 //   - Enumerate devices or manage native controller resources.
 // - Allows:
-//   - Inputs: Discovered attachments and translated host events.
-//   - Outputs: Admitted attachment batches and controller transitions.
-//   - Side effects: Portable session identity bookkeeping only.
+//   - Inputs: Discovered attachments, scoped events and clock observations.
+//   - Outputs: Admitted attachment batches, transitions and elapsed time.
+//   - Side effects: Portable session identity and clock bookkeeping only.
 // - Split-When:
 //   - Another device family requires distinct admission semantics.
 // - Merge-When:
@@ -29,14 +29,65 @@
 // - Defaults:
 //   - No controller is admitted before discovery.
 
-//! Bounded admission of controller observations.
+//! Bounded admission of controller, scope and clock observations.
 
+use std::cell::Cell;
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use games::input::InputEvent;
 
 use crate::ir::frame::RenderError;
-use crate::ir::hardware::{HostEvent, InputTransition};
+use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
+
+/// Session-relative time and window scope over raw monotonic observations.
+#[derive(Debug)]
+pub(crate) struct InputClock {
+    origin: Duration,
+    previous: Cell<Duration>,
+    scope: u64,
+}
+
+impl InputClock {
+    pub(crate) fn elapsed(
+        &self,
+        now: Duration,
+    ) -> Result<Duration, RenderError> {
+        if now < self.previous.get() {
+            return Err(RenderError::InvalidTimestamp);
+        }
+        let elapsed = now
+            .checked_sub(self.origin)
+            .ok_or(RenderError::InvalidTimestamp)?;
+        self.previous.set(now);
+        Ok(elapsed)
+    }
+
+    pub(crate) fn event_elapsed(
+        &self,
+        event: &InputSample,
+        elapsed: Duration,
+    ) -> Option<Duration> {
+        if !self.matches(event) {
+            return None;
+        }
+        event
+            .elapsed_since(self.origin)
+            .filter(|timestamp| *timestamp <= elapsed)
+    }
+
+    pub(crate) fn matches(&self, event: &InputSample) -> bool {
+        event.matches_window(self.scope)
+    }
+
+    pub(crate) const fn new(origin: Duration, scope: u64) -> Self {
+        Self {
+            origin,
+            previous: Cell::new(origin),
+            scope,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct ControllerAdmission {

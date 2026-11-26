@@ -58,7 +58,6 @@ struct LinuxInput {
     controllers: BTreeMap<u64, GameController>,
     feedback_allowed: bool,
     limit: NonZeroUsize,
-    origin: u64,
     rediscover: bool,
     subsystem: GameControllerSubsystem,
     timer: TimerSubsystem,
@@ -76,6 +75,10 @@ impl Debug for LinuxInput {
 }
 
 impl InputBackend for LinuxInput {
+    fn clock(&self) -> Duration {
+        Duration::from_millis(self.timer.ticks64())
+    }
+
     /// Discover controllers after a native poll returns no event.
     ///
     /// A device change in an earlier limited batch remains pending until the
@@ -120,20 +123,6 @@ impl InputBackend for LinuxInput {
         )?;
         self.rediscover = retry && self.controllers.len() < self.limit.get();
         Ok(attached)
-    }
-
-    /// Time since the input session began, using SDL's millisecond clock.
-    ///
-    /// Use successive elapsed samples to advance a simulation clock.
-    fn elapsed(&self) -> Duration {
-        Duration::from_millis(self.timer.ticks64().saturating_sub(self.origin))
-    }
-
-    fn event_elapsed(&self, event: &InputSample) -> Option<Duration> {
-        if !event.matches_window(u64::from(self.window)) {
-            return None;
-        }
-        event.elapsed_since(Duration::from_millis(self.origin))
     }
 
     fn feedback_allowed(&self) -> bool {
@@ -208,6 +197,10 @@ impl InputBackend for LinuxInput {
         }
         routed
     }
+
+    fn window_scope(&self) -> u64 {
+        u64::from(self.window)
+    }
 }
 
 impl LinuxInput {
@@ -223,7 +216,6 @@ impl LinuxInput {
             feedback_allowed: window.has_input_focus()
                 && !window.is_minimized(),
             limit,
-            origin: timer.ticks64(),
             rediscover: false,
             subsystem,
             timer,
@@ -356,17 +348,14 @@ where
     Ok(attached)
 }
 
-fn event_elapsed(origin: u64, now: u64, stamp: u32) -> Option<Duration> {
-    if now < origin {
-        return None;
-    }
+fn absolute_event_time(now: u64, stamp: u32) -> Option<Duration> {
     let low = u32::try_from(now & u64::from(u32::MAX)).ok()?;
     let age = low.wrapping_sub(stamp);
     if age > 0x7fff_ffff {
         return None;
     }
     let absolute = now.checked_sub(u64::from(age))?;
-    Some(Duration::from_millis(absolute.saturating_sub(origin)))
+    Some(Duration::from_millis(absolute))
 }
 
 /// Resolve a legacy keyboard profile name at the native boundary.
@@ -485,17 +474,9 @@ pub(super) fn sample(event: &Event, window: u32, now: u64) -> InputSample {
             .or_else(|| route(event, window))
             .map_or(InputTransition::Ignored, InputTransition::Event)
     };
-    let scope = matches!(
-        event,
-        Event::Window { .. }
-            | Event::KeyDown { .. }
-            | Event::KeyUp { .. }
-            | Event::MouseButtonDown { .. }
-            | Event::MouseButtonUp { .. }
-    )
-    .then_some(u64::from(window));
+    let scope = event.get_window_id().map(u64::from);
     InputSample::new(
-        event_elapsed(0, now, event.get_timestamp()),
+        absolute_event_time(now, event.get_timestamp()),
         transition,
         scope,
     )
@@ -677,11 +658,13 @@ mod tests {
     use sdl2::mouse::MouseButton;
 
     use super::{
-        Axis, Button, HostEvent, Scancode, admit_discovery, axis_code,
-        button_code, deliver_feedback, event_elapsed, key_from_name, key_name,
-        mouse_code, open_candidate, route, route_contact,
+        Axis, Button, HostEvent, Scancode, absolute_event_time,
+        admit_discovery, axis_code, button_code, deliver_feedback,
+        key_from_name, key_name, mouse_code, open_candidate, route,
+        route_contact, sample,
     };
     use crate::ir::frame::RenderError;
+    use crate::ir::hardware::InputTransition;
 
     #[test]
     fn keyboard_profile_names_preserve_routing_identities() {
@@ -938,24 +921,22 @@ mod tests {
     }
 
     #[test]
-    fn event_time_reconstructs_wrap_and_pre_start_events() {
+    fn event_time_reconstructs_unambiguous_absolute_observations() {
         let wrap = u64::from(u32::MAX).saturating_add(1);
-        let origin = wrap.saturating_sub(10);
         let now = wrap.saturating_add(8);
         for (stamp, millis) in [
-            (u32::MAX, 9),
-            (0, 10),
-            (8, 18),
-            (u32::MAX.saturating_sub(20), 0),
+            (u32::MAX, wrap.saturating_sub(1)),
+            (0, wrap),
+            (8, now),
+            (u32::MAX.saturating_sub(20), wrap.saturating_sub(21)),
         ] {
             assert_eq!(
-                event_elapsed(origin, now, stamp),
+                absolute_event_time(now, stamp),
                 Some(Duration::from_millis(millis))
             );
         }
-        assert_eq!(event_elapsed(origin, now, 9), None);
-        assert_eq!(event_elapsed(10, 9, 9), None);
-        assert_eq!(event_elapsed(0, 3, u32::MAX), None);
+        assert_eq!(absolute_event_time(now, 9), None);
+        assert_eq!(absolute_event_time(3, u32::MAX), None);
     }
 
     fn key(window_id: u32, repeat: bool) -> Event {
@@ -967,6 +948,21 @@ mod tests {
             keymod: Mod::NOMOD,
             repeat,
         }
+    }
+
+    #[test]
+    fn observations_retain_the_actual_window_scope() {
+        let foreign = sample(&key(3, false), 2, 0);
+        assert!(!foreign.matches_window(2));
+        assert!(foreign.matches_window(3));
+        assert_eq!(foreign.transition(), InputTransition::Ignored);
+        let local = sample(&key(2, false), 2, 0);
+        assert!(local.matches_window(2));
+        assert!(!local.matches_window(3));
+        let quit = sample(&Event::Quit { timestamp: 0 }, 2, 0);
+        assert!(quit.matches_window(2));
+        assert!(quit.matches_window(3));
+        assert_eq!(quit.transition(), InputTransition::Event(HostEvent::Quit));
     }
 
     #[test]

@@ -52,6 +52,8 @@ pub enum RenderError {
     InvalidLength,
     /// An atlas or sprite rectangle is absent or outside its source.
     InvalidSprite,
+    /// A session observation clock moved backwards.
+    InvalidTimestamp,
     /// The frame requires more bytes than permitted.
     TooLarge,
     /// The selected platform has no implementation of this capability.

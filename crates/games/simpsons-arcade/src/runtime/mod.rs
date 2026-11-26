@@ -885,7 +885,7 @@ impl<'preferences> Interactive<'preferences> {
             meter.observe(measurement::FrameSample {
                 completed,
                 display: self.applied,
-                elapsed: self.input.elapsed(),
+                elapsed: self.input.elapsed()?,
                 layout: submitted,
                 work: elapsed_between(beginning, completed).map_err(failure)?,
             })?;
@@ -933,6 +933,15 @@ impl<'preferences> Interactive<'preferences> {
         })
     }
 
+    fn next_delta(&mut self) -> Result<Duration, RenderError> {
+        let elapsed = self.input.elapsed()?;
+        let delta = elapsed
+            .checked_sub(self.previous)
+            .ok_or(RenderError::InvalidTimestamp)?;
+        self.previous = elapsed;
+        Ok(delta)
+    }
+
     fn poll(
         &mut self,
         scene: &mut SceneSession<'_, '_>,
@@ -975,7 +984,7 @@ impl<'preferences> Interactive<'preferences> {
         }
         if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
             let attached = self.input.discover_after_drain()?;
-            let elapsed = self.input.elapsed();
+            let elapsed = self.input.elapsed()?;
             for event in attached {
                 self.controls.route(event, elapsed, &mut self.simulation)?;
             }
@@ -1036,9 +1045,7 @@ impl<'preferences> Interactive<'preferences> {
                 break;
             }
             self.poll_host()?;
-            let elapsed = self.input.elapsed();
-            let delta = elapsed.saturating_sub(self.previous);
-            self.previous = elapsed;
+            let delta = self.next_delta()?;
             let advanced = self.simulation.advance(delta).map_err(failure)?;
             self.advance_measurement(advanced.next_tick)?;
             let hosted = self.simulation.state();

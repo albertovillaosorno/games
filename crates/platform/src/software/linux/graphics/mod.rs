@@ -513,7 +513,7 @@ mod tests {
         let timestamp = adapter.event_elapsed(native).ok_or_else(|| {
             RenderError::Backend(String::from("invalid queued input timestamp"))
         })?;
-        require(timestamp <= adapter.elapsed(), "future event")?;
+        require(timestamp <= adapter.elapsed()?, "future event")?;
         let interval = Duration::from_secs(1);
         let clock = StepClock::new(interval, nz(128))
             .map_err(|error| RenderError::Backend(format!("{error:?}")))?;
