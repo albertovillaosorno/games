@@ -135,3 +135,34 @@ manifests, fail-closed changed objects and rejection of legacy directories
 inserted before or during staging. Legacy readers remain supported. The
 actual owner asset store and launch catalogue have not been migrated;
 configured package execution on the owner's data remains open.
+
+Configured package publication now rejects overlapping resolved asset and
+binary paths before building. Two tiny fixture tests read a real private
+.env, exercise a common deployment root, publish a package with separate
+asset bytes, reject repeat publication and verify the asset bytes remain
+unchanged. Unsupported target, absent bin parent and both containment
+orders fail before publication. These are lexical checks; trusted local
+ancestors remain required.
+
+On 2026-11-25 the owner-configured GNU/Linux x86-64 output was created
+under its existing trusted parent. The 3,529,168-byte executable and
+108 supporting files totalled 4,043,088 bytes; the independent SHA-256
+matched the receipt. File modes were 0700 for the executable and 0600
+for all other files. Direct dependencies were SDL2, libgcc and libc.
+Repeat publication refused the existing output, with matching file
+inventory and executable hash. The configured asset store remained absent
+and no original media, game assets or private catalogue were packaged.
+
+From an unrelated working directory, the actual configured executable
+accepted an explicitly selected existing legacy catalogue. Xvfb/X11
+OpenGL and dummy-audio smokes passed aspect-fit, integer, stretch and
+adaptive with touch; fill passed without touch and was rejected with
+touch. All five admitted windowed runs verified 444 camera columns,
+600 movement and 20 combat submissions with zero 16.667 ms host-work
+budget misses. Adaptive extended the touch scene to 426 by 304.
+A fullscreen adaptive run passed functional checks with four movement
+budget misses (maximum 21.012 ms). This is not a controlled performance
+comparison. Startup without an adjacent or explicit catalogue was
+rejected. The legacy store and catalogue remain unchanged. Physical
+screen, touch, controller and audible playback acceptance, actual
+shared-store cutover and cross-host compatibility remain open.

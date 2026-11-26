@@ -73,6 +73,25 @@ compatible system libraries, excludes all game assets and is not yet a
 portable release. Supply a trusted output parent that already exists.
 The title requires explicit local art bundles; see the
 [title TODO](../../docs/todo/open/games/simpsons-arcade.mdc).
+For persistent native packaging, set the owner-only local `.env` from
+`.env.example`. Use absolute asset and output roots and
+`GAMES_TARGET=linux-x86-64`. Create the trusted private
+`<output-root>/simpsons-arcade/bin/` parent, then omit the explicit
+output argument:
+
+```sh
+cargo run --locked -p games-build -- package simpsons-arcade
+```
+
+The resulting package is at
+`<output-root>/simpsons-arcade/bin/linux-x86-64/`. Asset and executable
+roots may be equal, but the resolved asset and package locations must
+not overlap. Packaging does not import, search, copy or modify assets.
+An existing package is rejected rather than overwritten. Supply a local
+launch catalogue pointing at independently verified assets; see the
+[asset pipeline](asset-pipeline.md) for shared content storage and
+migration limitations.
+
 Keep the engine modular, dependency versions centralised and game code
 limited to unique behaviour.
 Runtime and title crates live under `crates/`; contributor tools live

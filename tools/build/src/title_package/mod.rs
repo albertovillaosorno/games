@@ -42,7 +42,8 @@ use games_platform::ir::security::toolchain::artifact::admit_executable;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::AuthoredStaging;
 use games_platform::ir::storage::{
-    PathKind, parent_path, path_is_absolute, path_kind, path_leaf,
+    PathKind, parent_path, path_has_prefix, path_is_absolute, path_kind,
+    path_leaf,
 };
 use games_platform::ir::toolchain::write_line;
 
@@ -176,7 +177,20 @@ impl Prepared {
 /// Rejects missing or invalid local settings and unavailable output parents.
 pub fn configured(title: Title) -> Result<(), String> {
     let root = workspace_root()?;
-    let layout = local_layout(&root)?;
+    let assets = configured_with(&root, title, run)?;
+    write_line(&format!("Shared assets: {}", assets.to_string_lossy()))
+        .map_err(|error| error.to_string())
+}
+
+fn configured_with<Publish>(
+    root: &OsStr,
+    title: Title,
+    publish: Publish,
+) -> Result<OsString, String>
+where
+    Publish: FnOnce(Title, &OsStr) -> Result<(), String>,
+{
+    let layout = local_layout(root)?;
     if layout.target() != NATIVE_TARGET {
         return Err(String::from("configured package target is unsupported"));
     }
@@ -187,15 +201,20 @@ pub fn configured(title: Title) -> Result<(), String> {
     {
         return Err(String::from("persistent roots must be absolute"));
     }
+    if path_has_prefix(&output, &assets).map_err(|error| error.to_string())?
+        || path_has_prefix(&assets, &output)
+            .map_err(|error| error.to_string())?
+    {
+        return Err(String::from("package and asset paths overlap"));
+    }
     let parent = parent_path(&output).map_err(|error| error.to_string())?;
     if path_kind(parent).map_err(|error| error.to_string())?
         != PathKind::Directory
     {
         return Err(String::from("create the configured bin directory first"));
     }
-    run(title, &output)?;
-    write_line(&format!("Shared assets: {}", assets.to_string_lossy()))
-        .map_err(|error| error.to_string())
+    publish(title, &output)?;
+    Ok(assets)
 }
 
 /// Build and package one admitted native title in a new local directory.
@@ -327,6 +346,103 @@ mod tests {
                 == PathKind::Missing,
         )?;
         require(root.entry_count().map_err(|error| error.to_string())? == 0)
+    }
+
+    fn fixture_configuration(
+        root: &TestRoot,
+        assets: &str,
+        output: &str,
+        target: &str,
+    ) -> Result<(), String> {
+        let base = root.location().to_str().ok_or("fixture path encoding")?;
+        let config = format!(
+            "GAMES_ASSET_ROOT={base}/{assets}\n\
+             GAMES_OUTPUT_ROOT={base}/{output}\nGAMES_TARGET={target}\n"
+        );
+        root.write_file(".env", config.as_bytes())
+            .map_err(|error| error.to_string())
+    }
+
+    fn fixture_package(title: Title, output: &OsStr) -> Result<(), String> {
+        let mut prepared = Prepared::default();
+        prepared.add(title.binary().into(), b"executable".to_vec(), true)?;
+        prepared.add(RECEIPT.into(), b"receipt".to_vec(), false)?;
+        prepared.publish(output)
+    }
+
+    #[test]
+    fn configured_publication_preserves_the_shared_asset_namespace()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        fixture_configuration(&root, "deploy", "deploy", "linux-x86-64")?;
+        let title = Title::SimpsonsArcade;
+        let assets = "deploy/simpsons-arcade/assets";
+        let bin = "deploy/simpsons-arcade/bin";
+        for directory in [assets, bin] {
+            root.create_directories(directory)
+                .map_err(|error| error.to_string())?;
+        }
+        root.write_file(&format!("{assets}/payload"), b"asset")
+            .map_err(|error| error.to_string())?;
+        let expected_assets = local_path(root.location(), assets)?;
+        let package =
+            local_path(root.location(), &format!("{bin}/linux-x86-64"))?;
+        require(
+            configured_with(root.location(), title, fixture_package)?
+                == expected_assets,
+        )?;
+        require(
+            configured_with(root.location(), title, fixture_package).is_err(),
+        )?;
+        require(
+            snapshot(&local_path(&package, title.binary())?, MAX_DOCUMENT)
+                .map_err(|error| format!("{error:?}"))?
+                == b"executable",
+        )?;
+        require(
+            path_kind(&local_path(&package, "assets")?)
+                .map_err(|error| error.to_string())?
+                == PathKind::Missing,
+        )?;
+        require(
+            snapshot(&local_path(&expected_assets, "payload")?, MAX_DOCUMENT)
+                .map_err(|error| format!("{error:?}"))?
+                == b"asset",
+        )
+    }
+
+    #[test]
+    fn configured_publication_rejects_overlapping_or_unsupported_paths()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let title = Title::SimpsonsArcade;
+        let unexpected =
+            |_, _: &OsStr| Err(String::from("unexpected publication"));
+        for (assets, output) in [
+            ("deploy", "deploy/simpsons-arcade/assets"),
+            ("deploy/simpsons-arcade/bin/linux-x86-64", "deploy"),
+        ] {
+            fixture_configuration(&root, assets, output, "linux-x86-64")?;
+            require(
+                configured_with(root.location(), title, unexpected)
+                    == Err(String::from("package and asset paths overlap")),
+            )?;
+        }
+        fixture_configuration(&root, "assets", "output", "android-arm64")?;
+        require(
+            configured_with(root.location(), title, unexpected)
+                == Err(String::from(
+                    "configured package target is unsupported",
+                )),
+        )?;
+        fixture_configuration(&root, "assets", "output", "linux-x86-64")?;
+        require(
+            configured_with(root.location(), title, unexpected)
+                == Err(String::from(
+                    "create the configured bin directory first",
+                )),
+        )?;
+        require(root.entry_count().map_err(|error| error.to_string())? == 1)
     }
 
     fn require(condition: bool) -> Result<(), String> {
