@@ -394,3 +394,13 @@ Tests reject nonportable staged names and malformed records while
 preserving cleanup and partial-staging protection. Fresh validation
 1795651948369546316-1468249 passed 1497 aggregate test executions
 and six portable core target checks.
+
+The private input adapter now receives a typed admitted feedback request
+from the shared IR. Capability and focus checks and single-channel
+adaptation precede dispatch; Linux retains focus-loss, detach and
+shutdown stops and native delivery. Fake-backend regressions exercise
+rejection without dispatch, finite effects, safety stops and delivery
+errors. Native conversion preserves the maximum duration. Fresh native
+X11 and dummy audio validation 1795652720063938322-1773839 passed
+1,514 aggregate test executions and six portable core checks. Physical
+haptic operation and native conformance on other targets remain open.

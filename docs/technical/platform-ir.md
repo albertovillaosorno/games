@@ -114,9 +114,12 @@ monotonic clock contract. Launch arguments and status output share a process
 port. Bounded snapshots, directory observations, saves, preferences, private
 staging and publication receipts use storage contracts. Contributor validation
 uses typed toolchain requests, environment observations and a private lease,
-log and cache-state port. Remaining contributor test fixtures and title host
-scheduling still require migration. Do not infer additional native support
-from a portable type or successful compilation of the featureless core.
+log and cache-state port. Contributor test fixtures use shared storage and
+process ports; title host scheduling uses the shared cooperative wait.
+Input feedback passes through shared capability and focus admission before
+dispatch to the selected device adapter. Do not infer additional native
+support from a portable type or successful compilation of the featureless
+core.
 
 Exercise typed contracts with deterministic in-memory adapters before adding
 new native backends. Verify event ordering, resource lifetime, capability

@@ -35,9 +35,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
-use games::capability::{
-    HapticCommand, HapticEffect, HapticError, HapticSupport, Haptics,
-};
+use games::capability::{HapticEffect, HapticError, HapticSupport};
 use games::input::InputEvent;
 use games::input::physical::{
     ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
@@ -53,7 +51,7 @@ use sdl2::{GameControllerSubsystem, Sdl, TimerSubsystem};
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
 use crate::ir::input::{InputBackend, InputPort};
-use crate::ir::security::haptics::admit_feedback;
+use crate::ir::security::haptics::FeedbackRequest;
 
 /// Owns the opened native controllers for one host window.
 struct LinuxInput {
@@ -136,6 +134,30 @@ impl InputBackend for LinuxInput {
             return None;
         }
         event.elapsed_since(Duration::from_millis(self.origin))
+    }
+
+    fn feedback_allowed(&self) -> bool {
+        self.feedback_allowed
+    }
+
+    fn feedback_support(&self, device: u64) -> Option<HapticSupport> {
+        self.controllers.get(&device).and_then(controller_support)
+    }
+
+    fn submit_feedback(
+        &mut self,
+        request: FeedbackRequest,
+    ) -> Result<(), HapticError> {
+        let command = request.command();
+        let controller = self
+            .controllers
+            .get_mut(&command.device)
+            .ok_or(HapticError::Disconnected)?;
+        deliver_feedback(command.effect, |low, high, milliseconds| {
+            controller
+                .set_rumble(low, high, milliseconds)
+                .map_err(|_error| HapticError::Unavailable)
+        })
     }
 
     /// Translate one polled native event, recording device changes.
@@ -223,29 +245,6 @@ impl Drop for LinuxInput {
     }
 }
 
-impl Haptics for LinuxInput {
-    fn submit(&mut self, command: HapticCommand) -> Result<(), HapticError> {
-        let controller = self
-            .controllers
-            .get_mut(&command.device)
-            .ok_or(HapticError::Disconnected)?;
-        deliver_feedback(
-            controller_support(controller),
-            self.feedback_allowed,
-            command.effect,
-            |low, high, milliseconds| {
-                controller
-                    .set_rumble(low, high, milliseconds)
-                    .map_err(|_error| HapticError::Unavailable)
-            },
-        )
-    }
-
-    fn support(&self, device: u64) -> Option<HapticSupport> {
-        self.controllers.get(&device).and_then(controller_support)
-    }
-}
-
 type Discovered<Handle> = Result<Option<(u64, Handle)>, RenderError>;
 
 fn controller_support(controller: &GameController) -> Option<HapticSupport> {
@@ -262,12 +261,10 @@ fn controller_support(controller: &GameController) -> Option<HapticSupport> {
 }
 
 fn deliver_feedback(
-    support: Option<HapticSupport>,
-    allowed: bool,
     effect: HapticEffect,
     deliver: impl FnOnce(u16, u16, u32) -> Result<(), HapticError>,
 ) -> Result<(), HapticError> {
-    match admit_feedback(support, allowed, effect)? {
+    match effect {
         HapticEffect::Stop => deliver(0, 0, 0),
         HapticEffect::Rumble { low, high, milliseconds } => {
             deliver(low, high, NonZeroU32::from(milliseconds).get())
@@ -669,7 +666,7 @@ mod tests {
     use std::num::{NonZeroU16, NonZeroUsize};
     use std::time::Duration;
 
-    use games::capability::{HapticEffect, HapticError, HapticSupport};
+    use games::capability::{HapticEffect, HapticError};
     use games::input::physical::{
         ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
     };
@@ -731,10 +728,10 @@ mod tests {
     }
 
     #[test]
-    fn feedback_delivers_only_bounded_supported_foreground_effects() {
+    fn feedback_encodes_bounded_effects_and_stops() {
         let mut deliveries = Vec::new();
-        let mut send = |support, allowed, effect| {
-            deliver_feedback(support, allowed, effect, |low, high, time| {
+        let mut send = |effect| {
+            deliver_feedback(effect, |low, high, time| {
                 deliveries.push((low, high, time));
                 Ok(())
             })
@@ -744,27 +741,19 @@ mod tests {
             high: 7,
             milliseconds: NonZeroU16::MAX,
         };
-        let dual = Some(HapticSupport::DualMotor);
-        let single = Some(HapticSupport::SingleMotor);
-        assert_eq!(send(None, true, effect), Err(HapticError::Disconnected));
-        assert_eq!(
-            send(Some(HapticSupport::Unsupported), true, effect),
-            Err(HapticError::Unsupported),
-        );
-        assert_eq!(send(dual, false, effect), Err(HapticError::Unavailable));
-        assert_eq!(send(dual, true, effect), Ok(()));
-        assert_eq!(send(single, true, effect), Ok(()));
-        assert_eq!(send(dual, false, HapticEffect::Stop), Ok(()));
+        assert_eq!(send(effect), Ok(()));
+        assert_eq!(send(effect.single_motor()), Ok(()));
+        assert_eq!(send(HapticEffect::Stop), Ok(()));
         assert_eq!(deliveries, [
             (u16::MAX, 7, 65_535),
             (u16::MAX, u16::MAX, 65_535),
             (0, 0, 0)
-        ],);
+        ]);
         assert_eq!(
-            deliver_feedback(dual, true, effect, |_, _, _| {
+            deliver_feedback(effect, |_, _, _| {
                 Err(HapticError::Unavailable)
             }),
-            Err(HapticError::Unavailable),
+            Err(HapticError::Unavailable)
         );
     }
 

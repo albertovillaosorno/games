@@ -36,7 +36,8 @@ use std::num::NonZeroU16;
 /// Device feedback exposed by a host adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HapticSupport {
-    /// Independently addressable low and high frequency actuators.
+    /// Low and high frequency command channels; physical motor count is
+    /// not implied by this capability.
     DualMotor,
     /// One actuator; combine motor intensities with their maximum.
     SingleMotor,

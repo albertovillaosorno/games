@@ -43,15 +43,22 @@ use super::hardware::{
     HapticCommand, HapticError, HapticSupport, Haptics, InputEvent,
     InputSample, InputTransition,
 };
+use super::security::haptics::FeedbackRequest;
 
 pub(crate) type InputPort = Box<dyn InputBackend>;
 
 /// Private device adapter port.
-pub(crate) trait InputBackend: Debug + Haptics {
+pub(crate) trait InputBackend: Debug {
     fn discover_after_drain(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError>;
     fn elapsed(&self) -> Duration;
     fn event_elapsed(&self, event: &InputSample) -> Option<Duration>;
+    fn feedback_allowed(&self) -> bool;
+    fn feedback_support(&self, device: u64) -> Option<HapticSupport>;
+    fn submit_feedback(
+        &mut self,
+        request: FeedbackRequest,
+    ) -> Result<(), HapticError>;
     fn translate(&mut self, event: &InputSample) -> Option<HostEvent>;
 }
 
@@ -183,11 +190,16 @@ impl NativeInput {
 
 impl Haptics for NativeInput {
     fn submit(&mut self, command: HapticCommand) -> Result<(), HapticError> {
-        self.backend.submit(command)
+        let request = FeedbackRequest::new(
+            command,
+            self.backend.feedback_support(command.device),
+            self.backend.feedback_allowed(),
+        )?;
+        self.backend.submit_feedback(request)
     }
 
     fn support(&self, device: u64) -> Option<HapticSupport> {
-        self.backend.support(device)
+        self.backend.feedback_support(device)
     }
 }
 
@@ -232,7 +244,9 @@ pub fn key_name(key: KeyboardKey) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::cell::Cell;
+    use std::num::{NonZeroU16, NonZeroU32};
+    use std::rc::Rc;
     use std::time::Duration;
 
     use games::presentation::{Dimensions, PresentationMode};
@@ -240,22 +254,11 @@ mod tests {
     use super::TouchGeometry;
     use crate::ir::check;
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     struct TestInput {
+        allowed: Rc<Cell<bool>>,
         elapsed: Duration,
-    }
-
-    impl super::Haptics for TestInput {
-        fn submit(
-            &mut self,
-            _command: super::HapticCommand,
-        ) -> Result<(), super::HapticError> {
-            Err(super::HapticError::Disconnected)
-        }
-
-        fn support(&self, _device: u64) -> Option<super::HapticSupport> {
-            None
-        }
+        feedback: Rc<Cell<Option<super::HapticCommand>>>,
     }
 
     impl super::InputBackend for TestInput {
@@ -282,6 +285,35 @@ mod tests {
             event.elapsed_since(Duration::ZERO)
         }
 
+        fn feedback_allowed(&self) -> bool {
+            self.allowed.get()
+        }
+
+        fn feedback_support(
+            &self,
+            device: u64,
+        ) -> Option<super::HapticSupport> {
+            match device {
+                1 => Some(super::HapticSupport::SingleMotor),
+                2 | 4 => Some(super::HapticSupport::DualMotor),
+                3 => Some(super::HapticSupport::Unsupported),
+                _ => None,
+            }
+        }
+
+        fn submit_feedback(
+            &mut self,
+            request: super::FeedbackRequest,
+        ) -> Result<(), super::HapticError> {
+            let command = request.command();
+            self.feedback.set(Some(command));
+            if command.device == 4 {
+                Err(super::HapticError::Unavailable)
+            } else {
+                Ok(())
+            }
+        }
+
         fn translate(
             &mut self,
             event: &super::InputSample,
@@ -295,14 +327,64 @@ mod tests {
     }
 
     #[test]
+    fn feedback_admission_precedes_backend_dispatch()
+    -> Result<(), super::RenderError> {
+        use games::capability::HapticEffect;
+
+        use super::{HapticCommand, HapticError, Haptics as _};
+
+        let backend = TestInput::default();
+        let feedback = Rc::clone(&backend.feedback);
+        let allowed = Rc::clone(&backend.allowed);
+        let mut input = super::InputStartup::new(Box::new(backend))?.input;
+        let effect = HapticEffect::Rumble {
+            low: 7,
+            high: u16::MAX,
+            milliseconds: NonZeroU16::MAX,
+        };
+        for (device, expected) in [
+            (0, HapticError::Disconnected),
+            (3, HapticError::Unsupported),
+            (1, HapticError::Unavailable),
+        ] {
+            check(
+                &input.submit(HapticCommand { device, effect }),
+                &Err(expected),
+            )?;
+            check(&feedback.get(), &None)?;
+        }
+        let stop = HapticCommand {
+            device: 1,
+            effect: HapticEffect::Stop,
+        };
+        check(&input.submit(stop), &Ok(()))?;
+        check(&feedback.get(), &Some(stop))?;
+        allowed.set(true);
+        for (device, admitted, result) in [
+            (1, effect.single_motor(), Ok(())),
+            (2, effect, Ok(())),
+            (4, effect, Err(HapticError::Unavailable)),
+        ] {
+            check(&input.submit(HapticCommand { device, effect }), &result)?;
+            check(
+                &feedback.get(),
+                &Some(HapticCommand { device, effect: admitted }),
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn session_does_not_route_disabled_or_invalidated_touch()
     -> Result<(), super::RenderError> {
         use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 
         let clock = Duration::from_millis(20);
-        let mut session =
-            super::InputStartup::new(Box::new(TestInput { elapsed: clock }))?
-                .input;
+        let mut session = super::InputStartup::new(Box::new(TestInput {
+            elapsed: clock,
+            ..TestInput::default()
+        }))?
+        .input;
         let contact = super::HostEvent::Input(super::InputEvent::Contact {
             id: ContactId { device: 1, finger: 1 },
             phase: ContactPhase::Down(TouchPoint { x: 10, y: 10 }),

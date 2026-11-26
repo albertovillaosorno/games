@@ -31,7 +31,33 @@
 
 //! Shared admission of finite device feedback requests.
 
-use games::capability::{HapticEffect, HapticError, HapticSupport};
+use games::capability::{
+    HapticCommand, HapticEffect, HapticError, HapticSupport,
+};
+
+/// A feedback command admitted against the current device and permission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeedbackRequest(HapticCommand);
+
+impl FeedbackRequest {
+    /// Return the admitted command, including any single-channel adaptation.
+    #[must_use]
+    pub const fn command(self) -> HapticCommand {
+        self.0
+    }
+
+    /// Admit one bounded command against an observed capability and permission.
+    /// # Errors
+    /// Rejects unavailable, unsupported or disconnected devices.
+    pub fn new(
+        command: HapticCommand,
+        support: Option<HapticSupport>,
+        allowed: bool,
+    ) -> Result<Self, HapticError> {
+        let effect = admit_feedback(support, allowed, command.effect)?;
+        Ok(Self(HapticCommand { effect, ..command }))
+    }
+}
 
 /// Admit feedback according to the current device and focus permission.
 ///
