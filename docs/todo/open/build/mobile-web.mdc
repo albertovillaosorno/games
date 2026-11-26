@@ -1131,3 +1131,42 @@ screens within 0.0017% normalized mean absolute error. The joined
 capture differed by 0.102% and the subsequent movement capture
 differed from it by 0.837%. Package readback remained unchanged.
 This is current-package virtual gameplay, not physical acceptance.
+
+Browser keyboard profile admission now uses the same correspondence as
+physical DOM event translation. Native profile aliases are preserved;
+the portable names for international backslash and keypad comma are
+`IntlBackslash` and `Keypad ,`. Unmapped browser profile bindings are
+rejected rather than silently accepting unreachable controls.
+
+Fresh validation 1795697386265392364-2307669 passed 1,949 aggregate test
+executions. The bound input diagnostic from 1b78667 (150,809 bytes,
+SHA-256
+c073aa2d61ce7833c8640276dbbc8fee33f1f2edec3edbd138a24a2c7dddc550)
+passed six isolated Firefox scenarios: visible, hidden, invalid clock,
+canvas-listener failure, lifecycle-listener failure and repeated visible.
+Successful runs observed 78 synthetic event dispatches (12 more than
+the preceding fixture), balanced all registered listeners and removed
+every diagnostic canvas. An initial observer used obsolete dispatch
+counts; the updated lifecycle observer passed every scenario.
+
+Two further isolated asset-backed Firefox runs used the linked browser
+preview from 1b78667 with test-only observer pages and independent
+profiles. An integrity-valid stored profile containing `Power` in the
+first seat's right binding failed with an unknown-keyboard-binding
+diagnostic after two sidecar reads (16,004 bytes). No asset manifest,
+object or frame was requested, the value was preserved, and both
+surfaces were removed. A first chooser attempt did not complete; after
+waiting for the dialog to paint, the expected rejection was observed.
+
+A second profile bound `IntlBackslash` to right and `Keypad ,` to left.
+The title selected 743 files through a trusted chooser, admitted 616
+reads (24,937,054 bytes), and joined the first seat at x=110. Ordinary
+backslash and comma did not move it. Injected physical DOM codes moved
+it to x=132, settled at x=134 after release, then moved left to x=112
+and settled at x=110. The observed layout-dependent key labels differed
+from the physical codes. All injected keyboard transitions canceled
+their default behavior. Normal menu exit completed once, with 127
+frame callbacks, 107 blits, no outstanding callback or canvas, one
+control-slot observation, no writes and the stored envelope unchanged.
+These checks establish profile admission and synthetic DOM gameplay,
+not physical keyboard, display or audible-output acceptance.

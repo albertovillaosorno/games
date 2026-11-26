@@ -143,6 +143,9 @@ origin-local preference namespace. Control edits take effect on the next
 launch; fullscreen remains unavailable. If storage is unavailable at
 startup, display and volume remain session-only and control editing is
 not offered. Incompatible stored values are rejected rather than replaced.
+Browser control profiles reject keyboard names the adapter cannot translate.
+International backslash and keypad comma are portable physical bindings
+(`IntlBackslash` and `Keypad ,`).
 Successful browser writes do not guarantee crash durability. Preferences
 are isolated by browser origin and profile, and contain no game assets.
 Physical device acceptance and broader browser compatibility are not
