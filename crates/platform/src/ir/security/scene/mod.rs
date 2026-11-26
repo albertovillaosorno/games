@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable atlas capacity and sprite source admission.
+//   - Portable atlas, sprite and presentation receipt admission.
 // - Must-Not:
 //   - Allocate textures, select renderers or submit native commands.
 // - Allows:
-//   - Inputs: Scene limits, loaded layouts and requested draw commands.
-//   - Outputs: Checked remaining capacity or explicit admission failure.
+//   - Inputs: Scene limits, loaded layouts, draw commands and receipts.
+//   - Outputs: Checked resource capacity and current presentation geometry.
 //   - Side effects: Retains admitted scene metadata in bounded memory.
 // - Split-When:
 //   - Another rendering resource requires independent budget admission.
@@ -29,7 +29,11 @@
 // - Defaults:
 //   - Reject invalid data or exceeded resource budgets before drawing.
 
-//! Bounded scene resource and draw admission.
+//! Bounded scene resource, draw and presentation admission.
+
+use std::cell::Cell;
+
+use games::presentation::{Dimensions, PresentationLayout, PresentationMode};
 
 use crate::ir::frame::{
     AdmittedRgba, FrameLayout, RenderError, validate_rectangle,
@@ -125,6 +129,71 @@ impl SceneAdmission {
             limits,
             remaining_bytes: limits.atlas_bytes.get(),
         }
+    }
+}
+
+/// A receipt remains current only until an observed or dispatched change.
+#[derive(Debug, Default)]
+pub(crate) struct PresentationAdmission {
+    last: Cell<Option<PresentationLayout>>,
+}
+
+impl PresentationAdmission {
+    pub(crate) fn complete(
+        &self,
+        receipt: Option<PresentationLayout>,
+        layout: FrameLayout,
+        mode: PresentationMode,
+    ) -> Result<bool, RenderError> {
+        self.invalidate();
+        if let Some(presented) = receipt
+            && presented != layout.presentation(mode, presented.surface)?
+        {
+            return Err(RenderError::InvalidDimensions);
+        }
+        self.last.set(receipt);
+        Ok(receipt.is_some())
+    }
+
+    pub(crate) fn invalidate(&self) {
+        self.last.set(None);
+    }
+
+    pub(crate) const fn last(&self) -> Option<PresentationLayout> {
+        self.last.get()
+    }
+
+    pub(crate) fn observe_surface(
+        &self,
+        surface: Result<Option<Dimensions>, RenderError>,
+    ) -> Result<Option<Dimensions>, RenderError> {
+        if self.last().is_some_and(|layout| {
+            surface.as_ref().ok().copied().flatten() != Some(layout.surface)
+        }) {
+            self.invalidate();
+        }
+        surface
+    }
+
+    pub(crate) fn visible<Observe>(
+        &self,
+        observe: Observe,
+    ) -> Result<Option<PresentationLayout>, RenderError>
+    where
+        Observe: FnOnce() -> Result<Option<PresentationLayout>, RenderError>,
+    {
+        let Some(last) = self.last() else {
+            return Ok(None);
+        };
+        let observed = observe();
+        if observed
+            .as_ref()
+            .is_ok_and(|current| *current == Some(last))
+        {
+            return observed;
+        }
+        self.invalidate();
+        observed.map(|_layout| None)
     }
 }
 

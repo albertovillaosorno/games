@@ -518,3 +518,12 @@ Fake and native regressions exercise unsafe names, nested executable files
 and aborted transaction precedence. Fresh native validation
 1795656170216363487-2757491 passed 1,604 aggregate test executions and all
 six portable core checks.
+
+Scene presentation receipts now remain invalidated after a dispatched
+presentation, display or resize failure, or an observed stale or absent
+surface, until a new presentation succeeds. Pre-dispatch draw rejection
+preserves the last admitted receipt. Portable tests cover mode changes,
+failed native transitions, changed and unavailable geometry, and subsequent
+successful presentation. Fresh X11 and dummy-audio validation
+1795656308654803759-2791903 passed 1,610 aggregate test executions and all
+six portable core checks.
