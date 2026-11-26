@@ -95,7 +95,7 @@ impl WorldArt {
         if record.size > u64::from(atlas_budget()) {
             return Err(RenderError::TooLarge);
         }
-        let pixels = extension.read_payload(key).map_err(failure)?;
+        let pixels = extension.view_payload(key).map_err(failure)?;
         validate_prefix(original, &pixels, width.get())?;
         Ok(Self {
             art: Art::upload(scene, (width, height), &pixels)?,
@@ -294,7 +294,7 @@ pub(super) fn smoke(
         return Err(RenderError::InvalidSprite);
     };
     let expected = bundle
-        .read_payload("scene/world-background")
+        .view_payload("scene/world-background")
         .map_err(failure)?;
     let actual = scene.readback()?;
     verify_extension(layout, &actual, width.get(), &expected)?;

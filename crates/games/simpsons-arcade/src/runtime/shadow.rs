@@ -72,7 +72,7 @@ impl ShadowArt {
         if width.get() > MAX_EDGE || height.get() > MAX_EDGE {
             return Err(failure("unexpected shadow extent"));
         }
-        let pixels = bundle.read_payload(KEY).map_err(failure)?;
+        let pixels = bundle.view_payload(KEY).map_err(failure)?;
         if !valid_mask(&pixels) {
             return Err(failure("unexpected shadow coverage"));
         }

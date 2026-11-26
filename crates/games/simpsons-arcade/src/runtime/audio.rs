@@ -148,8 +148,8 @@ impl Samples {
         let mut clips = Vec::with_capacity(CLIPS.len());
         for (key, frames) in CLIPS {
             let (descriptor, payload) = overlay.as_ref().map_or_else(
-                || (bundle.manifest().record(key), bundle.read_payload(key)),
-                |changes| (changes.record(key), changes.read_payload(key)),
+                || (bundle.manifest().record(key), bundle.view_payload(key)),
+                |changes| (changes.record(key), changes.view_payload(key)),
             );
             let record =
                 descriptor.ok_or_else(|| failure("missing attack PCM"))?;

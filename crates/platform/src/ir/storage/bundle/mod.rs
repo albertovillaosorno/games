@@ -33,6 +33,7 @@
 /// Explicit selected canonical directory admission.
 pub mod directory;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Debug;
@@ -55,6 +56,9 @@ pub(crate) type OpenBundle = Result<Box<dyn BundlePort>, BundleError>;
 pub(crate) type OpenPayloads = Result<Box<dyn PayloadSource>, BundleError>;
 type MemoryObjects = Rc<BTreeMap<ContentHash, Vec<u8>>>;
 
+/// Verified payload bytes, borrowed from memory or owned from storage.
+pub type PayloadView<'bundle> = Cow<'bundle, [u8]>;
+
 /// Selected backend pins the manifest namespace without admitting metadata.
 pub(crate) trait BundleFactory {
     fn open(parent: &OsStr, digest: ContentHash) -> OpenBundle;
@@ -72,7 +76,10 @@ pub(crate) trait BundlePort: Debug {
 
 /// A selected backend reads only the descriptor supplied by the IR.
 pub(crate) trait PayloadSource: Debug {
-    fn read(&self, record: &AssetRecord) -> Result<Vec<u8>, BundleError>;
+    fn read(
+        &self,
+        record: &AssetRecord,
+    ) -> Result<PayloadView<'_>, BundleError>;
 }
 
 /// Read-only handle to a pinned canonical asset manifest.
@@ -150,12 +157,36 @@ impl CanonicalBundle {
         )
     }
 
-    /// Read the declared payload and verify its bytes after backend dispatch.
+    /// Read the declared payload into independent owned storage.
+    ///
+    /// # Errors
+    /// Rejects verification failures and unavailable allocation capacity.
+    pub fn read_payload(&self, key: &str) -> Result<Vec<u8>, BundleError> {
+        match self.view_payload(key)? {
+            Cow::Owned(bytes) => Ok(bytes),
+            Cow::Borrowed(payload) => {
+                let mut bytes = Vec::new();
+                bytes
+                    .try_reserve_exact(payload.len())
+                    .map_err(|_error| AssetError::TooLarge)?;
+                bytes.extend_from_slice(payload);
+                Ok(bytes)
+            },
+        }
+    }
+
+    /// View declared bytes, verifying the payload after backend dispatch.
+    ///
+    /// Immutable memory stores lend their bytes. File-backed reads own
+    /// their bounded snapshots. Both verify the pinned record on every read.
     ///
     /// # Errors
     /// Rejects unknown keys, invalid storage, short or oversized files and
     /// any mismatch against the pinned descriptor.
-    pub fn read_payload(&self, key: &str) -> Result<Vec<u8>, BundleError> {
+    pub fn view_payload(
+        &self,
+        key: &str,
+    ) -> Result<PayloadView<'_>, BundleError> {
         let record =
             self.manifest().record(key).ok_or(BundleError::MissingKey)?;
         let bytes = self.source.read(record)?;
@@ -271,15 +302,13 @@ impl BundleSource<'_> {
 struct MemorySource(MemoryObjects);
 
 impl PayloadSource for MemorySource {
-    fn read(&self, record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
+    fn read(
+        &self,
+        record: &AssetRecord,
+    ) -> Result<PayloadView<'_>, BundleError> {
         let payload =
             self.0.get(&record.digest).ok_or(BundleError::MissingKey)?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(payload.len())
-            .map_err(|_error| AssetError::TooLarge)?;
-        bytes.extend_from_slice(payload);
-        Ok(bytes)
+        Ok(Cow::Borrowed(payload))
     }
 }
 
@@ -335,6 +364,17 @@ impl<'bundle> MediaOverlay<'bundle> {
     pub fn record(&self, key: &str) -> Option<&AssetRecord> {
         self.bundle_for(key).manifest().record(key)
     }
+
+    /// View selected bytes with the selected bundle's integrity checks.
+    ///
+    /// # Errors
+    /// Rejects absent keys and verification failures without fallback.
+    pub fn view_payload(
+        &self,
+        key: &str,
+    ) -> Result<PayloadView<'_>, BundleError> {
+        self.bundle_for(key).view_payload(key)
+    }
 }
 
 pub(crate) fn bundle_name(digest: ContentHash) -> String {
@@ -343,6 +383,7 @@ pub(crate) fn bundle_name(digest: ContentHash) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::BTreeMap;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
@@ -354,14 +395,18 @@ mod tests {
     use super::{
         BundleError, BundlePort, BundleSource, CanonicalBundle, MediaOverlay,
         MemoryBundleLimits, MemoryBundleStore, OpenPayloads, PayloadSource,
+        PayloadView,
     };
 
     #[derive(Debug)]
     struct IncorrectPayload;
 
     impl PayloadSource for IncorrectPayload {
-        fn read(&self, _record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
-            Ok(b"oops".to_vec())
+        fn read(
+            &self,
+            _record: &AssetRecord,
+        ) -> Result<PayloadView<'_>, BundleError> {
+            Ok(Cow::Borrowed(b"oops"))
         }
     }
 
@@ -605,10 +650,32 @@ mod tests {
         let one = selected.open(first.digest(), limits())?;
         let two = selected.open(second.digest(), limits())?;
         drop(store);
-        if one.read_payload("one")? != b"tile"
-            || two.read_payload("two")? != b"tile"
+        if !matches!(one.view_payload("one")?, Cow::Borrowed(b"tile"))
+            || !matches!(two.view_payload("two")?, Cow::Borrowed(b"tile"))
             || one.read_payload("two") != Err(BundleError::MissingKey)
             || two.read_payload("one") != Err(BundleError::MissingKey)
+        {
+            return Err(BundleError::UnsafeStorage);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn borrowed_payloads_preserve_integrity_and_independent_owned_reads()
+    -> Result<(), BundleError> {
+        let base =
+            fixture_bundle("test", &[("one", AssetFormat::Data, b"tile")])?;
+        let replacement =
+            fixture_bundle("test", &[("two", AssetFormat::Data, b"more")])?;
+        let mut owned = base.read_payload("one")?;
+        owned.clear();
+        if !matches!(base.view_payload("one")?, Cow::Borrowed(b"tile"))
+            || !owned.is_empty()
+            || !matches!(
+                replacement.view_payload("two")?,
+                Cow::Borrowed(b"more")
+            )
+            || base.view_payload("two") != Err(BundleError::MissingKey)
         {
             return Err(BundleError::UnsafeStorage);
         }
@@ -718,6 +785,39 @@ mod tests {
             == Some(AssetError::TooLarge.into()))
         .then_some(())
         .ok_or(BundleError::UnsafeStorage)
+    }
+
+    #[test]
+    fn borrowed_overlay_selects_verified_replacement_and_base()
+    -> Result<(), BundleError> {
+        let rgba = AssetFormat::Rgba8 {
+            height: NonZeroU32::MIN,
+            width: NonZeroU32::MIN,
+        };
+        let base = fixture_bundle("test", &[
+            ("hero", rgba, b"base"),
+            ("rules", AssetFormat::Data, b"rule"),
+        ])?;
+        let replacement = fixture_bundle("test", &[("hero", rgba, b"swap")])?;
+        let overlay = MediaOverlay::new(&base, &replacement, &["hero"])?;
+        if !matches!(overlay.view_payload("hero")?, Cow::Borrowed(b"swap"))
+            || !matches!(overlay.view_payload("rules")?, Cow::Borrowed(b"rule"))
+        {
+            return Err(BundleError::UnsafeStorage);
+        }
+        let encoded = replacement.manifest().encode(limits())?;
+        let rejected = CanonicalBundle::from_port(
+            port(&encoded, true, None),
+            replacement.digest(),
+            limits(),
+        )?;
+        let rejected_overlay = MediaOverlay::new(&base, &rejected, &["hero"])?;
+        if rejected_overlay.view_payload("hero")
+            != Err(AssetError::PayloadMismatch.into())
+        {
+            return Err(BundleError::UnsafeStorage);
+        }
+        Ok(())
     }
 
     #[test]

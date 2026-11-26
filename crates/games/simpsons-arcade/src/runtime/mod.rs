@@ -94,7 +94,9 @@ use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
 };
-use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
+use games_platform::ir::storage::bundle::{
+    BundleSource, CanonicalBundle, PayloadView,
+};
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
     DisplayStore, PublicationPolicy, VolumeStore,
@@ -452,7 +454,7 @@ struct Art {
     rect: SpriteRect,
 }
 
-type LoadedArt = (Art, Vec<u8>);
+type LoadedArt<'bundle> = (Art, PayloadView<'bundle>);
 
 impl Art {
     const fn draw(self, destination: SpriteRect, flip: bool) -> SpriteDraw {
@@ -473,11 +475,11 @@ impl Art {
         Self::load_with_pixels(scene, bundle, key).map(|(art, _pixels)| art)
     }
 
-    fn load_with_pixels(
+    fn load_with_pixels<'bundle>(
         scene: &mut SceneSession<'_, '_>,
-        bundle: &CanonicalBundle,
+        bundle: &'bundle CanonicalBundle,
         key: &str,
-    ) -> Result<LoadedArt, RenderError> {
+    ) -> Result<LoadedArt<'bundle>, RenderError> {
         let record = bundle
             .manifest()
             .record(key)
@@ -485,7 +487,7 @@ impl Art {
         let AssetFormat::Rgba8 { height, width } = record.format else {
             return Err(failure("art must be RGBA8"));
         };
-        let pixels = bundle.read_payload(key).map_err(failure)?;
+        let pixels = bundle.view_payload(key).map_err(failure)?;
         let art = Self::upload(scene, (width, height), &pixels)
             .map_err(|error| failure(format!("load {key}: {error:?}")))?;
         Ok((art, pixels))

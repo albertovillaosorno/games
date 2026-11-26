@@ -29,6 +29,7 @@
 // - Defaults:
 //   - Reject untrusted directories, special files and mismatched content.
 
+use std::borrow::Cow;
 use std::io;
 use std::num::NonZeroUsize;
 use std::os::fd::OwnedFd;
@@ -48,6 +49,7 @@ pub(super) use crate::ir::storage::bundle::{
 };
 use crate::ir::storage::bundle::{
     BundlePort, MANIFEST_NAME, OpenBundle, OpenPayloads, PayloadSource,
+    PayloadView,
 };
 
 impl From<Errno> for BundleError {
@@ -65,16 +67,23 @@ enum DirectorySource {
 }
 
 impl PayloadSource for DirectorySource {
-    fn read(&self, record: &AssetRecord) -> Result<Vec<u8>, BundleError> {
+    fn read(
+        &self,
+        record: &AssetRecord,
+    ) -> Result<PayloadView<'_>, BundleError> {
         let name = record.digest.to_string();
         match self {
             Self::Empty => Err(BundleError::MissingKey),
             Self::Legacy(directory) => {
-                Ok(read_regular(directory, &name, record.size)?)
+                Ok(Cow::Owned(read_regular(directory, &name, record.size)?))
             },
             Self::Shared(directory) => {
                 let object = open_directory(directory, &name)?;
-                Ok(read_regular(&object, OBJECT_PAYLOAD, record.size)?)
+                Ok(Cow::Owned(read_regular(
+                    &object,
+                    OBJECT_PAYLOAD,
+                    record.size,
+                )?))
             },
         }
     }
@@ -377,13 +386,14 @@ mod tests {
         let fixture = Fixture::new()?;
         let bundle = fixture.open()?;
         require(bundle.manifest() == &fixture.manifest)?;
-        require(bundle.read_payload("tiles/hero")? == b"tile")?;
+        let payload = bundle.view_payload("tiles/hero")?;
+        require(matches!(payload, Cow::Owned(bytes) if bytes == b"tile"))?;
         for key in ["../manifest.json", "tiles/unknown", ""] {
             require(bundle.read_payload(key) == Err(BundleError::MissingKey))?;
         }
         fs::write(&fixture.payload, b"evil")?;
         require(
-            bundle.read_payload("tiles/hero")
+            bundle.view_payload("tiles/hero")
                 == Err(AssetError::PayloadMismatch.into()),
         )?;
         fs::write(&fixture.payload, b"tiles")?;
