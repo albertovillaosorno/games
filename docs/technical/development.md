@@ -144,6 +144,8 @@ launch; fullscreen remains unavailable. If storage is unavailable at
 startup, display and volume remain session-only and control editing is
 not offered. Incompatible stored values are rejected rather than replaced.
 Browser control profiles reject keyboard names the adapter cannot translate.
+They also reject controller buttons outside the standard Gamepad mapping;
+extended native paddles, miscellaneous and touchpad buttons remain native-only.
 International backslash and keypad comma are portable physical bindings
 (`IntlBackslash` and `Keypad ,`).
 Successful browser writes do not guarantee crash durability. Preferences

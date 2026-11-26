@@ -1227,3 +1227,35 @@ via synthetic touch and exited. The run observed 96 callbacks,
 canvas and no storage write attempts. Both runs used virtual
 presentation and injected input; physical-device acceptance remains
 open.
+
+The browser's standard Gamepad button mapping is now shared by profile
+admission and event translation. Extended native miscellaneous, paddle
+and touchpad button bindings are rejected instead of silently leaving
+unreachable actions. Native profile admission remains unchanged. The
+mapping regression checks every portable controller button identity;
+validation 1795698324734684085-2470539 passed with the optional native
+rendering and dummy-audio gates, and the commit hook passed.
+
+The independently built b5b1b5b browser package verified 88 files and
+1,545,538 bytes, with receipt SHA-256
+`d2f386717c7777c364e5b0be0dd4123d82056994aad51c080062baf420aad701`.
+The native package verified 109 files and 4,148,929 bytes, with receipt
+SHA-256
+`988d5e3ea4aa5144e9f910fdfdb04e97c64b27f586e57a94674a560e34001f0c`.
+The native executable saved two valid profiles in independent private
+settings directories: first-seat right bound to `paddle1` or to
+`rightshoulder`. Each exact envelope was supplied to a separate private
+Firefox profile. The first failed with the unsupported-controller-button
+binding diagnostic after two sidecar reads (16,004 bytes), with no
+manifest, object or frame requests, one completion, no remaining
+picker or canvas, one preference read, no writes and preserved bytes.
+
+The second profile admitted the exact selected 616-file closure
+(24,937,054 bytes), joined at x=110, moved left through x=92 and settled
+at x=48. Trusted keyboard and pointer input, outside pointer release,
+attack and menu exit passed; the observer counted 248 callbacks, 178
+blits, at most one pending callback, 133 audio source starts, one audio
+context close and one completion. The stored profile was read once,
+never rewritten and remained byte-identical. Both package readbacks
+matched their original receipts. These tests verify profile portability
+and virtual keyboard/mouse gameplay, not physical controller operation.
