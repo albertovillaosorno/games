@@ -39,6 +39,7 @@ use std::time::Duration;
 
 #[cfg(all(feature = "interactive", feature = "test-fixtures"))]
 use games::input::physical::ControllerAxis;
+#[cfg(feature = "test-fixtures")]
 use games::input::physical::KeyboardKey;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -51,6 +52,7 @@ use super::gamepad::{
     ControllerEvents,
     browser::{Events, Gamepads},
 };
+use super::keyboard::key_code;
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::sensor::{MotionError, MotionSensor};
 use crate::ir::hardware::{
@@ -325,80 +327,6 @@ fn focus_lost() -> InputTransition {
     InputTransition::Event(HostEvent::Input(InputEvent::FocusLost))
 }
 
-fn key_code(code: &str) -> Option<KeyboardKey> {
-    if let Some(letter) = code.strip_prefix("Key") {
-        if letter.len() == 1 && letter.as_bytes().first()?.is_ascii_uppercase()
-        {
-            return KeyboardKey::from_profile_name(letter);
-        }
-    }
-    if let Some(digit) = code.strip_prefix("Digit") {
-        if digit.len() == 1 && digit.as_bytes().first()?.is_ascii_digit() {
-            return KeyboardKey::from_profile_name(digit);
-        }
-    }
-    if let Some(digit) = code.strip_prefix("Numpad") {
-        let name = match digit {
-            "0" => "Keypad 0",
-            "1" => "Keypad 1",
-            "2" => "Keypad 2",
-            "3" => "Keypad 3",
-            "4" => "Keypad 4",
-            "5" => "Keypad 5",
-            "6" => "Keypad 6",
-            "7" => "Keypad 7",
-            "8" => "Keypad 8",
-            "9" => "Keypad 9",
-            "Add" => "Keypad +",
-            "Subtract" => "Keypad -",
-            "Multiply" => "Keypad *",
-            "Divide" => "Keypad /",
-            "Decimal" => "Keypad .",
-            "Enter" => "Keypad Enter",
-            "Equal" => "Keypad =",
-            _ => return None,
-        };
-        return KeyboardKey::from_profile_name(name);
-    }
-    let name = match code {
-        "ArrowDown" => "Down",
-        "ArrowLeft" => "Left",
-        "ArrowRight" => "Right",
-        "ArrowUp" => "Up",
-        "Enter" => "Return",
-        "Minus" => "-",
-        "Equal" => "=",
-        "BracketLeft" => "[",
-        "BracketRight" => "]",
-        "Backslash" => "\\",
-        "Semicolon" => ";",
-        "Quote" => "'",
-        "Backquote" => "`",
-        "Comma" => ",",
-        "Period" => ".",
-        "Slash" => "/",
-        "ControlLeft" => "Left Ctrl",
-        "ControlRight" => "Right Ctrl",
-        "ShiftLeft" => "Left Shift",
-        "ShiftRight" => "Right Shift",
-        "AltLeft" => "Left Alt",
-        "AltRight" => "Right Alt",
-        "MetaLeft" => "Left GUI",
-        "MetaRight" => "Right GUI",
-        "ContextMenu" => "Application",
-        "NumLock" => "Numlock",
-        "IntlBackslash" => return Some(KeyboardKey::from_code(100)),
-        "Escape" | "Backspace" | "Tab" | "Space" | "CapsLock"
-        | "PrintScreen" | "ScrollLock" | "Pause" | "Insert" | "Home"
-        | "PageUp" | "Delete" | "End" | "PageDown" | "F1" | "F2" | "F3"
-        | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10" | "F11" | "F12"
-        | "F13" | "F14" | "F15" | "F16" | "F17" | "F18" | "F19" | "F20"
-        | "F21" | "F22" | "F23" | "F24" => code,
-        _ => return None,
-    };
-    KeyboardKey::from_profile_name(name)
-}
-
 #[cfg(feature = "test-fixtures")]
 fn next_event(
     source: &EventSource,
@@ -559,6 +487,8 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
         ("Digit6", KeyboardKey::NUM_6),
         ("Space", KeyboardKey::SPACE),
         ("Enter", KeyboardKey::ENTER),
+        ("IntlBackslash", KeyboardKey::from_code(100)),
+        ("NumpadComma", KeyboardKey::from_code(133)),
     ] {
         verify(!send_key(&target, "keydown", code, false)?, "key default")?;
         verify(!send_key(&target, "keydown", code, true)?, "repeat default")?;

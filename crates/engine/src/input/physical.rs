@@ -93,6 +93,7 @@ const KEYBOARD_NAMES: &[KeyNameRange] = &[
         "Keypad 0",
         "Keypad .",
     ]),
+    (100, &["IntlBackslash"]),
     (101, &[
         "Application",
         "Power",
@@ -124,6 +125,7 @@ const KEYBOARD_NAMES: &[KeyNameRange] = &[
         "VolumeUp",
         "VolumeDown",
     ]),
+    (133, &["Keypad ,"]),
     (224, &[
         "Left Ctrl",
         "Left Shift",
@@ -548,7 +550,7 @@ mod tests {
 
     #[test]
     fn keyboard_names_round_trip_without_a_platform() {
-        for code in (4..=99).chain(101..=129).chain(224..=231) {
+        for code in (4..=129).chain([133]).chain(224..=231) {
             let key = KeyboardKey::from_code(code);
             assert!(key.profile_name().is_some());
             if let Some(name) = key.profile_name() {
@@ -573,7 +575,7 @@ mod tests {
 
     #[test]
     fn keyboard_unknown_names_and_codes_are_not_admitted() {
-        for code in [0, 3, 100, 130, 223, 232, u32::MAX] {
+        for code in [0, 3, 130, 223, 232, u32::MAX] {
             assert_eq!(KeyboardKey::from_code(code).profile_name(), None);
         }
         for name in ["", "none", "UNKNOWN", " A", "A ", "A\0"] {

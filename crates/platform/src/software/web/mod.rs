@@ -53,6 +53,7 @@ pub(super) mod frame_loop;
     )
 ))]
 mod gamepad;
+pub(super) mod keyboard;
 
 #[cfg(all(
     target_arch = "wasm32",

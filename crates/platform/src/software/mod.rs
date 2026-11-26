@@ -327,7 +327,8 @@ impl WindowFactory for () {
 #[cfg(all(feature = "interactive", target_os = "linux"))]
 impl InputNames for () {
     fn key_from_name(name: &str) -> Option<KeyboardKey> {
-        linux::input::key_from_name(name)
+        KeyboardKey::from_profile_name(name)
+            .or_else(|| linux::input::key_from_name(name))
     }
 
     fn key_name(key: KeyboardKey) -> &'static str {
@@ -335,10 +336,24 @@ impl InputNames for () {
     }
 }
 
-#[cfg(not(all(feature = "interactive", target_os = "linux")))]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 impl InputNames for () {
-    fn key_from_name(_name: &str) -> Option<KeyboardKey> {
-        None
+    fn key_from_name(name: &str) -> Option<KeyboardKey> {
+        web::keyboard::profile_key(name)
+    }
+
+    fn key_name(_key: KeyboardKey) -> &'static str {
+        "UNKNOWN"
+    }
+}
+
+#[cfg(not(any(
+    all(feature = "interactive", target_os = "linux"),
+    all(target_arch = "wasm32", target_os = "unknown")
+)))]
+impl InputNames for () {
+    fn key_from_name(name: &str) -> Option<KeyboardKey> {
+        KeyboardKey::from_profile_name(name)
     }
 
     fn key_name(_key: KeyboardKey) -> &'static str {

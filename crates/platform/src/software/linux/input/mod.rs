@@ -692,7 +692,7 @@ mod tests {
 
     use super::{
         Axis, Button, HostEvent, Scancode, absolute_event_time,
-        admit_discovery, axis_code, button_code, deliver_feedback,
+        admit_discovery, axis_code, button_code, deliver_feedback, key_code,
         key_from_name, key_name, mouse_code, open_candidate, route,
         route_contact, sample,
     };
@@ -731,10 +731,21 @@ mod tests {
                 assert_eq!(portable_key_name(key), name);
             }
         }
+    }
+
+    #[test]
+    fn extended_portable_keyboard_names_match_native_codes() {
         let extended = KeyboardKey::from_code(133);
-        assert_eq!(extended.profile_name(), None);
+        assert_eq!(extended.profile_name(), Some("Keypad ,"));
         assert_eq!(portable_key_from_name("Keypad ,"), Some(extended));
         assert_eq!(portable_key_name(extended), "Keypad ,");
+        let international = KeyboardKey::from_code(100);
+        assert_eq!(key_code(Scancode::NonUsBackslash), international.code());
+        assert_eq!(
+            portable_key_from_name("IntlBackslash"),
+            Some(international)
+        );
+        assert_eq!(portable_key_name(international), "IntlBackslash");
     }
 
     #[test]
