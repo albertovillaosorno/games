@@ -30,6 +30,8 @@
 //   - Reject empty names, option-like names and path components.
 
 //! Host-independent authored Cargo argument admission.
+/// Structural admission of authored executable artifacts.
+pub mod artifact;
 /// Validation environment admission.
 pub mod environment;
 /// Allowlisted reference request and revision admission.
