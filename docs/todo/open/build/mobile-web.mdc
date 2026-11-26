@@ -660,5 +660,29 @@ with unsupported durability only; native preferences continue to require
 confirmed durability. Regression fixtures verify both policies, default
 and restored preferences, control reset, invalid profiles, and unsupported
 fullscreen. Fresh validation 1795686346595146470-82044 passed 1,923
-aggregate test executions and the browser launcher link. Actual browser
-menu edits and relaunch acceptance remain to be exercised.
+aggregate test executions and the browser launcher link. Subsequent browser
+acceptance is recorded below.
+
+The browser package of cfb4879 passed independent readback: 88 files,
+1,481,699 bytes, receipt
+`0ec4242392364270055d8e2ac22168048cf4ebb1c26b9f76b05891e784ec6df8`.
+Two Firefox launches on one isolated origin used the unmodified
+packaged JavaScript and Wasm with a test-only observer page, trusted GTK
+directory selection, Xvfb software rendering and the dummy PipeWire
+output. Each selected 743 files and admitted 740 reads totalling
+43,211,303 bytes. The first launch made exactly three origin-local
+save writes through the visible menus: integer/windowed display, 75%
+volume and station-one right movement remapped to Q. The second launch
+made no writes and rendered the same selected settings framebuffer
+hash (1111782472). Both returned one successful completion, with at
+most one outstanding frame callback, no remaining picker or canvas
+and no pending callback. The first launch delivered 93 callbacks and
+the second 38. The remapped profile was present on relaunch; its
+gameplay effect was not observed because an extended second-launch
+chooser automation timed out. Physical device acceptance remains open.
+
+The isolated setup also demonstrated an explicit audio format refusal
+when no compatible browser output was available. The successful
+software-rendered runs used the existing dummy output, not physical
+audio hardware. Browser publication still makes no crash-durability
+claim.
