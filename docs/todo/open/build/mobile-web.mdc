@@ -1282,3 +1282,19 @@ installed fixture listeners and canvases. The first observer used
 outdated dispatch expectations; after correction all six passed.
 These are synthetic browser lifecycle checks, not physical input
 acceptance.
+
+The independently published 25aff85 browser package completed an
+asset-backed visible Firefox run on a private 1600x1200 Xvfb display
+with virtual audio and loopback-only networking. Its trusted chooser
+selection listed 743 files and imported exactly 616 selected reads
+(24,937,054 bytes). The first actor moved from x=110 through x=92 and
+settled at x=50 on two observations after release. Trusted pointer
+capture, release outside the canvas, a fresh attack and menu exit
+passed. The observer counted 271 callbacks, 177 blits, at most one
+pending callback, 163 audio source starts, one audio context close
+without error and one terminal completion. The picker and canvas
+were removed. Package verification before and after the run matched
+88 files, 1,544,741 bytes and receipt SHA-256
+`2442759025ed7b761777eb4d121601ac531624366cbab9e17ce34bce0fea3b99`.
+This confirms the current nested-focus fix did not regress virtual
+browser gameplay; physical-device and audible-output gates remain open.

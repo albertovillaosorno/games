@@ -410,3 +410,12 @@ budget on all 620 submissions. Package readback remained unchanged.
 These are host-local reproducibility and virtual presentation checks;
 physical input, accelerated presentation, audible output, independent
 host compatibility and Android distribution are not established.
+
+At 25aff85, two independent WebAssembly publications of the nested-focus
+fix matched byte-for-byte, including every package file and the receipt.
+Both contained 88 mode-0600 files and 1,544,741 bytes; independent
+SHA-256 checks matched every receipt entry. Receipt SHA-256 was
+`2442759025ed7b761777eb4d121601ac531624366cbab9e17ce34bce0fea3b99`.
+The first publication completed the asset-backed browser gameplay
+recorded in mobile-web, and its receipt verified unchanged afterward.
+This is host-local reproducibility, not independent-host qualification.
