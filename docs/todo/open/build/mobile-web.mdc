@@ -980,3 +980,28 @@ launch made no preference writes. All three ended once, closed the
 audio context and removed their picker and canvas with no pending
 frame callback. This verifies live mixer attenuation and persistence
 using synthetic DOM keys and a null audio sink, not audible output.
+
+The compatible display and volume slots also passed a native-browser
+round trip using disposable settings. Native menu-generated
+integer/windowed and 75% envelopes were encoded as origin-local hex
+without changing their bytes. An asset-backed Firefox run of the
+1ce354b package admitted 740 reads and rendered a 320x304 integer
+region at (240,98) in an 800x500 drawable. The first 16,384 attack
+samples per channel had peaks 4039 and 1810, consistent with 75% of
+the independent full-volume observation. No preference was written
+on admission. The pause settings made exactly two writes, selecting
+Fill/windowed and 50%. On resuming, the browser produced two blits,
+including a protected 320x80 source panel mapped to a 524x131 region.
+It exited normally with 89 audio source starts, one successful close,
+163 callbacks and no outstanding callback, picker or canvas.
+
+Independently changing the same seed slots through the packaged native
+menu produced byte-identical envelopes (65-byte display, 59-byte volume)
+to the decoded browser saves. The imported saves then passed a native
+Fill+touch smoke without command-line display or volume overrides:
+444 camera columns, 48 synthetic axis directions, a protected 960x240
+panel in a 1280x912 drawable, two cooperative pose families and six
+reinforcement meters. All 620 measured movement/combat submissions met
+the 16.667 ms host-work budget and both save hashes remained unchanged.
+These observations cover compatible settings envelopes, not a shipped
+transfer UI, browser fullscreen support, physical input or audibility.
