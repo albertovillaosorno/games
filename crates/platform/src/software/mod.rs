@@ -139,7 +139,6 @@ use std::ffi::OsString;
 )))]
 use std::fmt::Arguments as StatusMessage;
 use std::io;
-#[cfg(not(target_os = "linux"))]
 use std::io::ErrorKind;
 use std::num::NonZeroU32;
 #[cfg(not(target_arch = "wasm32"))]
@@ -181,6 +180,15 @@ use crate::ir::security::toolchain::CargoArguments;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::security::toolchain::validation::{Arguments, Completion};
 use crate::ir::storage::ExecutableLocation;
+#[cfg(not(all(
+    feature = "interactive",
+    target_arch = "wasm32",
+    target_os = "unknown"
+)))]
+use crate::ir::storage::bundle::{
+    BundleError,
+    directory::{DirectoryComplete, DirectoryPicker, DirectoryPlan},
+};
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::environment::{Environment, EnvironmentBackend};
 #[cfg(not(target_os = "linux"))]
@@ -609,5 +617,20 @@ impl FrameLoopPort for () {
             drop((step, complete));
             Err(RenderError::Unsupported)
         }
+    }
+}
+
+#[cfg(not(all(
+    feature = "interactive",
+    target_arch = "wasm32",
+    target_os = "unknown"
+)))]
+impl DirectoryPicker for () {
+    fn select(
+        plan: DirectoryPlan,
+        complete: DirectoryComplete,
+    ) -> Result<(), BundleError> {
+        drop((plan, complete));
+        Err(BundleError::Io(ErrorKind::Unsupported))
     }
 }

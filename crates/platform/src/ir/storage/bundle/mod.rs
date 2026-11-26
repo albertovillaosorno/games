@@ -30,6 +30,9 @@
 
 //! Portable canonical bundle capability.
 
+/// Explicit selected canonical directory admission.
+pub mod directory;
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt::Debug;

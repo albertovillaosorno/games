@@ -29,6 +29,13 @@
 // - Defaults:
 //   - Reject unavailable storage, malformed values and excessive lengths.
 
+#[cfg(all(
+    feature = "interactive",
+    target_arch = "wasm32",
+    target_os = "unknown"
+))]
+mod directory;
+
 use std::ffi::OsStr;
 use std::num::NonZeroU64;
 use std::str::from_utf8;

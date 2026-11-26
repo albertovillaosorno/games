@@ -62,6 +62,10 @@ interactive = [
     "web-sys/AudioDestinationNode",
     "web-sys/AudioNode",
     "web-sys/AudioScheduledSourceNode",
+    "web-sys/Blob",
+    "web-sys/File",
+    "web-sys/FileList",
+    "web-sys/HtmlInputElement",
 ]
 secure-lan = ["dep:rustls"]
 test-fixtures = ["browser-graphics"]
