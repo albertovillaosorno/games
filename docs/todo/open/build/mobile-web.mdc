@@ -811,3 +811,16 @@ The initial movement-only run reached the same teardown outcome but
 did not start an audio source, so it could not establish teardown after
 audio playback had started. These runs used the bound lifecycle-fixed
 preview, synthetic DOM keys, software rendering and dummy audio.
+
+The package bootstrap now catches rejection of the JavaScript module
+import as well as the subsequent Wasm initialization. Previously a missing
+`game.js` stopped static module evaluation before the status handler ran,
+leaving the page at "Loading preview". Publication and independent readback
+verified 88 files and 1,506,356 bytes; receipt SHA-256
+b1fc5122b915d41bee2a21c21da470e9d557631e7aeca24a3043a660c99e7c67.
+Three isolated headless Firefox launches observed the exact new packaged
+page over loopback HTTP. A missing JavaScript response and a missing Wasm
+response both displayed "Preview unavailable", with no picker or canvas.
+The intact package displayed "Preview ready", with the directory picker
+present and no canvas. The receipt hash was unchanged. These are
+asset-free startup checks, not additional gameplay or device acceptance.
