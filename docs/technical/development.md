@@ -146,8 +146,11 @@ not offered. Incompatible stored values are rejected rather than replaced.
 Browser control profiles reject keyboard names the adapter cannot translate.
 They also reject controller buttons outside the standard Gamepad mapping;
 extended native paddles, miscellaneous and touchpad buttons remain native-only.
-International backslash and keypad comma are portable physical bindings
+International backslash and keypad comma have portable profile identities
 (`IntlBackslash` and `Keypad ,`).
+Native SDL may report keypad comma as keypad decimal; the observed X11
+and Wayland backends cannot distinguish them. Preserve the distinct
+identities and verify the actual device before relying on that binding.
 Successful browser writes do not guarantee crash durability. Preferences
 are isolated by browser origin and profile, and contain no game assets.
 Physical device acceptance and broader browser compatibility are not

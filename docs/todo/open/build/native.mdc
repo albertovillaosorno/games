@@ -679,3 +679,33 @@ The locked SDL source corroborates this distinction: its XFree86
 keycode table maps index 121 to keypad period, while its Linux
 scancode table maps index 121 to keypad comma. Preserve the two
 canonical profile identities rather than aliasing these keys.
+
+The same package receipt at a1f5865 was rechecked after separate
+visible actor-only runs on a disposable headless Mutter 51.1 Wayland
+compositor. An isolated virtual keyboard session delivered evdev codes
+86 (international backslash), 121 (keypad comma) and 83 (keypad decimal).
+Wayland protocol traces preserved all three distinct codes, but Fedora's
+SDL2 compatibility library 2.32.74 with SDL3 3.4.20 translated them to
+SDL scancodes 100, 99 and 99. Four normal-exit controls with the copied
+native profile reported respectively two, four, two and two applied
+local input samples for no movement key, international backslash,
+keypad comma and keypad decimal. Thus the two keypad inputs did not
+activate the binding to scancode 133. The profile bytes stayed unchanged.
+All 21,404 gameplay submissions met the 16.667 ms work budget; maximum
+work was 8.683 ms. A combined run also passed normal exit with all
+11,609 submissions within budget. Two initial runs missed the first
+join while the virtual keyboard acquired focus and were terminated;
+those runs do not establish gameplay acceptance.
+
+The installed Freedesktop Platform 25.08 userspace with its Mesa
+extension reproduced the same distinct Wayland codes and SDL mapping
+in an isolated namespace with read-only executable and asset mounts
+and no network. It required an explicit Mesa EGL vendor and OpenGL ES
+renderer selection after the first sandbox attempt failed renderer
+admission. The corrected combined run exited normally and recorded
+four applied local input samples, 929 gameplay submissions and zero
+work-budget misses (maximum 12.962 ms). The original package and
+profile remained unchanged. The locked SDL2 reference also uses the
+XFree86 table for non-virtual Wayland keyboards, where entry 121 maps
+to keypad period. This is an observed backend limitation on two local
+userspaces, not a universal Linux mapping or a physical-device test.
