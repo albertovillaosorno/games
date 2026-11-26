@@ -54,7 +54,7 @@ use games::input::physical::{
     ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
 };
 use games::input::profile::editor::{
-    ControlEditor, EditorEffect, EditorNavigation,
+    ControlEditor, EditorEffect, EditorNavigation, EditorStatus,
 };
 use games::input::profile::{
     AxisProfile, DigitalBinding, DigitalProfiles, ProfileText,
@@ -347,11 +347,17 @@ impl Controls {
     fn modal_actions(
         &mut self,
         event: InputEvent,
+        closing: bool,
     ) -> Result<ModalActions, RenderError> {
         // Release only holds already delivered to the running simulation.
         // Modal capture itself must not emit gameplay presses or releases.
         let releases = self.router.release_holds();
         let actions = self.actions(event)?;
+        if closing {
+            // Do not let a new contact outlive a pending modal exit.
+            drop(self.router.release_all());
+            return Ok((releases, None));
+        }
         drop(self.router.release_holds());
         let navigation = if matches!(
             event,
@@ -1024,7 +1030,9 @@ impl<'preferences> Interactive<'preferences> {
         &mut self,
         event: InputEvent,
     ) -> Result<LocalActions, RenderError> {
-        let (mut releases, navigation) = self.controls.modal_actions(event)?;
+        let closing = self.editor.status() == EditorStatus::Closing;
+        let (mut releases, navigation) =
+            self.controls.modal_actions(event, closing)?;
         let effect = if let Some(command) = navigation {
             self.editor.navigate(command, &self.next_profiles)
         } else if matches!(event, InputEvent::Button { device, .. }
@@ -3150,10 +3158,13 @@ mod tests {
         {
             return Err(failure("initial key not routed"));
         }
-        let (modal, navigation) = controls.modal_actions(InputEvent::Key {
-            code: KeyboardKey::LETTER_D.code(),
-            down: true,
-        })?;
+        let (modal, navigation) = controls.modal_actions(
+            InputEvent::Key {
+                code: KeyboardKey::LETTER_D.code(),
+                down: true,
+            },
+            false,
+        )?;
         if navigation.is_some() {
             return Err(failure("non-touch event produced touch command"));
         }
@@ -3172,11 +3183,13 @@ mod tests {
     }
 
     fn verify_editor_close(controls: &mut Controls) -> Result<(), RenderError> {
-        let (mut close, navigation) =
-            controls.modal_actions(InputEvent::Key {
+        let (mut close, navigation) = controls.modal_actions(
+            InputEvent::Key {
                 code: KeyboardKey::ESCAPE.code(),
                 down: true,
-            })?;
+            },
+            false,
+        )?;
         if navigation.is_some() {
             return Err(failure("non-touch event produced touch command"));
         }
@@ -3212,12 +3225,14 @@ mod tests {
                 true, false, true, true,
             ])?;
         drop(controls.actions(InputEvent::Attached { device: 1 })?);
-        let (mut close, navigation) =
-            controls.modal_actions(InputEvent::Button {
+        let (mut close, navigation) = controls.modal_actions(
+            InputEvent::Button {
                 code: ControllerButton::East.code(),
                 device: 1,
                 down: true,
-            })?;
+            },
+            false,
+        )?;
         if navigation.is_some() {
             return Err(failure("non-touch event produced touch command"));
         }
@@ -3278,8 +3293,8 @@ mod tests {
             (ContactPhase::Down(point), Some(command)),
             (ContactPhase::Up, None),
         ] {
-            let (edges, navigation) =
-                controls.modal_actions(InputEvent::Contact { id, phase })?;
+            let (edges, navigation) = controls
+                .modal_actions(InputEvent::Contact { id, phase }, false)?;
             if !edges.is_empty() || navigation != expected {
                 return Err(failure(
                     "touch editor routed unexpected command or edge",
@@ -3300,11 +3315,13 @@ mod tests {
             &controls.profiles,
         )?;
         let id = ContactId { device: 1, finger: 1 };
-        let (mut edges, navigation) =
-            controls.modal_actions(InputEvent::Contact {
+        let (mut edges, navigation) = controls.modal_actions(
+            InputEvent::Contact {
                 id,
                 phase: ContactPhase::Down(point),
-            })?;
+            },
+            false,
+        )?;
         if !edges.is_empty() || navigation != Some(EditorNavigation::Cancel) {
             return Err(failure("touch close did not produce cancel"));
         }
@@ -3906,6 +3923,47 @@ mod tests {
         let [_, moved, ..] = advance(simulation)?;
         if moved.position.x <= waiting.position.x {
             return Err(failure("replacement did not inherit profile"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pending_editor_close_rejects_new_touch_lifetimes()
+    -> Result<(), RenderError> {
+        use games::input::touch::{ContactId, ContactPhase};
+        let mut controls = Controls::new(true)?;
+        let point = super::touch::center(
+            Player::Marge,
+            Control::Primary,
+            &controls.profiles,
+        )?;
+        let id = ContactId { device: 1, finger: 2 };
+        let event = InputEvent::Contact {
+            id,
+            phase: ContactPhase::Down(point),
+        };
+        let (edges, navigation) = controls.modal_actions(event, true)?;
+        if !edges.is_empty() || navigation.is_some() {
+            return Err(failure("pending close admitted touch input"));
+        }
+        for phase in [ContactPhase::Motion(Some(point)), ContactPhase::Up] {
+            if !controls
+                .actions(InputEvent::Contact { id, phase })?
+                .is_empty()
+            {
+                return Err(failure("pending close left a stale contact"));
+            }
+        }
+        if controls.actions(event)?
+            != [LogicalAction {
+                action: Action {
+                    control: Control::Primary,
+                    player: Player::Marge,
+                },
+                down: true,
+            }]
+        {
+            return Err(failure("fresh gameplay contact was not admitted"));
         }
         Ok(())
     }

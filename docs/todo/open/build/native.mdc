@@ -406,3 +406,23 @@ The protected panel owns the exact internal split boundary in both
 projection directions. A contact on the split row outside the panel
 is rejected instead of falling through to the upper scene. A regression
 covers the split, adjacent visible points and the inclusive outer edge.
+
+The previous native release reproduced a delayed modal-exit race on
+2026-11-26: an Escape/Delete burst while editing Right closed the editor
+but persisted an unintended removal of the right-movement binding. The
+shared editor now treats a close request as terminal until the next entry.
+Queued keyboard, controller and touch commands cannot change selection,
+submit edits or request a second close; focus loss cannot reopen the
+closing state. Native routing discards newly admitted touch contacts
+while the fixed-step exit is pending. Inline regressions check these
+transitions and admission of a fresh contact after the exit.
+
+Two visible Xvfb/X11 OpenGL release reproductions with empty private
+settings created no control slot, and a third with an existing custom
+binding preserved its SHA-256. All three exited through the menu. The
+unchanged saved profile then passed hidden Fill/touch smoke with the
+configured shared asset catalogue, 444 camera columns, 48 synthetic axis
+directions, two cooperative pose families and six reinforcement meters.
+All 600 movement and 20 combat submissions met the 16.667 ms host-work
+budget. The original installed package and owner settings were untouched;
+physical input, screen and audible output remain unverified.

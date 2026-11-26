@@ -315,6 +315,7 @@ fn digital_lines<const PLAYERS: usize, const ACTIONS: usize>(
                 format!("NEXT: {} - A/ENTER SAVE", button.profile_name())
             },
             EditorStatus::Capturing
+            | EditorStatus::Closing
             | EditorStatus::Ready
             | EditorStatus::Rejected
             | EditorStatus::Saved => status.to_owned(),
@@ -328,6 +329,7 @@ const fn status_label(
 ) -> &'static str {
     match status {
         EditorStatus::Ready => "ENTER / A TO CHANGE",
+        EditorStatus::Closing => "CLOSING",
         EditorStatus::Capturing => match family {
             BindingFamily::Keyboard => "PRESS A KEY",
             BindingFamily::Axis => "ARROWS: FIELD / VALUE",

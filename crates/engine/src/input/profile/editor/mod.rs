@@ -88,6 +88,8 @@ impl BindingFamily {
 pub enum EditorStatus {
     /// Waiting for the selected source to be assigned.
     Capturing,
+    /// The host has been asked to leave; ignore further editor commands.
+    Closing,
     /// No capture is active.
     #[default]
     Ready,
@@ -181,6 +183,7 @@ impl EditorNavigation {
 }
 
 /// Shared editor selection, independent of title names and storage.
+/// A close request is terminal; create a fresh editor on the next entry.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ControlEditor {
     action: usize,
@@ -195,6 +198,9 @@ impl ControlEditor {
     /// Record a host-confirmed outcome, never implying successful storage
     /// before the complete profile is admitted and persisted.
     pub const fn acknowledge(&mut self, saved: bool) {
+        if matches!(self.status, EditorStatus::Closing) {
+            return;
+        }
         self.axes.cancel();
         self.status = if saved {
             EditorStatus::Saved
@@ -371,8 +377,9 @@ impl ControlEditor {
         event: InputEvent,
         profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
     ) -> EditorEffect {
-        if self.current(profiles).is_none()
-            && self.axis_view(profiles).is_none()
+        if self.status == EditorStatus::Closing
+            || (self.current(profiles).is_none()
+                && self.axis_view(profiles).is_none())
         {
             return EditorEffect::None;
         }
@@ -404,6 +411,7 @@ impl ControlEditor {
             return EditorEffect::None;
         }
         match self.status {
+            EditorStatus::Closing => return EditorEffect::None,
             EditorStatus::Capturing => {
                 return self.capture_navigation(command, ACTIONS);
             },
@@ -415,7 +423,10 @@ impl ControlEditor {
             | EditorStatus::Saved => {},
         }
         match command {
-            EditorNavigation::Cancel => return EditorEffect::Close,
+            EditorNavigation::Cancel => {
+                self.status = EditorStatus::Closing;
+                return EditorEffect::Close;
+            },
             EditorNavigation::Left => {
                 self.station = cycle(self.station, PLAYERS, false);
             },
@@ -818,5 +829,70 @@ mod tests {
             key(editor, KeyboardKey::ENTER),
             EditorEffect::Propose(DigitalBinding::TouchSlot(1))
         );
+    }
+
+    #[test]
+    fn close_request_ignores_queued_editor_commands() {
+        let mut keyboard = ControlEditor::default();
+        assert_eq!(
+            key(&mut keyboard, KeyboardKey::ESCAPE),
+            EditorEffect::Close
+        );
+        assert_eq!(keyboard.status(), EditorStatus::Closing);
+        verify_closing(&mut keyboard);
+
+        let mut controller = ControlEditor::default();
+        assert_eq!(
+            button(&mut controller, ControllerButton::East),
+            EditorEffect::Close
+        );
+        verify_closing(&mut controller);
+
+        let mut touch = ControlEditor::default();
+        assert_eq!(
+            touch.navigate(EditorNavigation::Cancel, &PROFILE),
+            EditorEffect::Close
+        );
+        verify_closing(&mut touch);
+    }
+
+    fn verify_closing(editor: &mut ControlEditor) {
+        let closed = *editor;
+        for keypress in [
+            KeyboardKey::DELETE,
+            KeyboardKey::ENTER,
+            KeyboardKey::LETTER_A,
+            KeyboardKey::ESCAPE,
+        ] {
+            assert_eq!(key(editor, keypress), EditorEffect::None);
+        }
+        for buttonpress in [
+            ControllerButton::West,
+            ControllerButton::South,
+            ControllerButton::East,
+        ] {
+            assert_eq!(button(editor, buttonpress), EditorEffect::None);
+        }
+        verify_closing_navigation(editor, closed);
+    }
+
+    fn verify_closing_navigation(
+        editor: &mut ControlEditor,
+        closed: ControlEditor,
+    ) {
+        for command in [
+            EditorNavigation::Clear,
+            EditorNavigation::Confirm,
+            EditorNavigation::Cancel,
+            EditorNavigation::Family,
+        ] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        for event in [InputEvent::FocusLost, InputEvent::Detached { device: 1 }]
+        {
+            assert_eq!(editor.input(event, &PROFILE), EditorEffect::None);
+        }
+        editor.acknowledge(true);
+        assert_eq!(*editor, closed);
     }
 }
