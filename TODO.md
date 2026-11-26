@@ -14,12 +14,7 @@ Completed. See `docs/todo/completed/foundation/`.
 
 ## P1 - Contracts
 
-### TODO - Integrate architecture checks
-
-Make the P1 contracts a required part of the existing validator.
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - Integrate architecture checks](docs/todo/open/contracts/contract-gate.mdc)
+Completed. See `docs/todo/completed/contracts/`.
 
 ## P2 - Asset importer
 

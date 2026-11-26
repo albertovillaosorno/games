@@ -1,6 +1,6 @@
 ---
 id: "contract-gate"
-status: "open"
+status: "completed"
 lane: "1"
 priority: "p1"
 area: "contracts"
@@ -62,7 +62,7 @@ Make the P1 contracts a required part of the existing validator.
 
 ## Evidence
 
-Partial evidence, 2026-11-24: the mandatory boundary gate uses Cargo's
+Initial evidence, 2026-11-24: the mandatory boundary gate uses Cargo's
 resolved workspace membership and targets. It rejects packages outside
 direct crate directories, excluded crates, orphan Rust source, separate
 integration test targets (including explicit targets outside tests/), and
@@ -478,3 +478,22 @@ Fresh Xvfb/X11 and dummy-audio validation
 1795664741989356043-456509 passed 1,733 test executions and six portable
 core targets. These checks reject explicit declarations; they do not
 prove every memory-layout assumption or resolve arbitrary macro expansion.
+
+Acceptance review, 2026-11-25: all seven prerequisite contracts are now
+accepted at their implemented scope. The required gate composes task,
+workspace, ownership, clone, strict layout, IR-only dependency, host API,
+SDK and target admission checks. The former per-file migration inventory
+is removed. Positive and negative fixtures run on synthetic inputs
+without original media and include actual authored-file inventories.
+The platform record demonstrates typed capability ports, shared request
+and result admission, a pure HID boot keyboard protocol and opt-in
+controller sensor observations. The mandatory portable-core matrix
+compiles AArch64 and x86-64 on Linux and Windows, Android ARM64 and
+WebAssembly; deterministic fixtures execute on the native development
+host. The latest fresh gate 1795664781370325446-463835 and signed hook
+1795664803802935963-469578 both passed with 1,733 test executions, all
+six portable targets and no failures. The gate is accepted as an
+implemented, zero-allowance regression contract; it is not a full
+semantic Rust analyzer. Real physical devices, native execution on
+additional architectures and OS backends, and title parity remain
+separate acceptance requirements in their existing downstream records.
