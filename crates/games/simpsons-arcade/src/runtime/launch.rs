@@ -1304,6 +1304,91 @@ mod tests {
     }
 
     #[test]
+    fn reloaded_edits_route_physical_inputs() -> Result<(), String> {
+        use games::input::InputEvent;
+
+        use super::super::Controls;
+
+        let fixture = ProfileFixture::new()?;
+        fixture.edit("1", "right", ("key", "Q"))?;
+        fixture.edit("1", "primary", ("mouse", "right"))?;
+        fixture.edit("2", "right", ("button", "x"))?;
+        fixture.edit("1", "right", ("touch", "left"))?;
+        let profiles = fixture.resolve(&[])?.profiles;
+        let mut controls = Controls::with_profiles(true, &profiles)
+            .map_err(|error| format!("{error:?}"))?;
+        for device in [1, 2] {
+            let attached = controls
+                .actions(InputEvent::Attached { device })
+                .map_err(|error| format!("{error:?}"))?;
+            if !attached.is_empty() {
+                return Err("attachment generated an unexpected edge".into());
+            }
+        }
+        verify_reloaded_edges(&mut controls)
+    }
+
+    fn verify_reloaded_edges(
+        controls: &mut super::super::Controls,
+    ) -> Result<(), String> {
+        use games::input::touch::{ContactId, ContactPhase};
+        use games::input::{InputEvent, LogicalAction};
+
+        use super::super::{Action, Control, Player, touch};
+
+        let point =
+            touch::center(Player::Marge, Control::Left, &DEFAULT_PROFILES)
+                .map_err(|error| format!("{error:?}"))?;
+        let key = key_from_name("Q").ok_or("missing key")?;
+        let id = ContactId { device: 1, finger: 1 };
+        let mut verify =
+            |events: [InputEvent; 2], player, control| -> Result<(), String> {
+                for (event, down) in events.into_iter().zip([true, false]) {
+                    let expected = [LogicalAction {
+                        action: Action { control, player },
+                        down,
+                    }];
+                    let actual = controls
+                        .actions(event)
+                        .map_err(|error| format!("{error:?}"))?;
+                    (actual == expected)
+                        .then_some(())
+                        .ok_or("reloaded profile routed the wrong action")?;
+                }
+                Ok(())
+            };
+        verify(
+            [true, false]
+                .map(|down| InputEvent::Key { code: key.code(), down }),
+            Player::Marge,
+            Control::Right,
+        )?;
+        verify(
+            [true, false].map(|down| InputEvent::Mouse {
+                code: PointerButton::Right.code(),
+                down,
+            }),
+            Player::Marge,
+            Control::Primary,
+        )?;
+        verify(
+            [true, false].map(|down| InputEvent::Button {
+                device: 2,
+                code: ControllerButton::West.code(),
+                down,
+            }),
+            Player::Homer,
+            Control::Right,
+        )?;
+        verify(
+            [ContactPhase::Down(point), ContactPhase::Up]
+                .map(|phase| InputEvent::Contact { id, phase }),
+            Player::Marge,
+            Control::Right,
+        )
+    }
+
+    #[test]
     fn next_launch_reset_preserves_current_controls() -> Result<(), String> {
         let fixture = ProfileFixture::new()?;
         let resolved = fixture.resolve(&[])?;
