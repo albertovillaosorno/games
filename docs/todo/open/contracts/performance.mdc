@@ -565,3 +565,17 @@ shared frame meter. Fresh combined native rendering, dummy audio and six
 portable-core target validation passed in run 1795644432750821019-4162270
 with 1,338 test executions. Physical timing and other native backends
 remain unverified.
+
+The shared measurement IR now rejects reversed host timestamps rather than
+turning them into zero-duration work or input observations. The movement
+smoke requires successful drawable submission for every measured frame;
+combat and audio diagnostic intervals use the same checked clock policy.
+Live instrumentation closes its cadence segment when presentation is
+unavailable, without dropping admitted input already applied by simulation.
+The next actual submission starts a new cadence interval and retains the
+observed input ages. Synthetic regressions cover local and remote clock
+reversal, measured zero, and an interrupted drawable followed by a new
+submission. Combined native rendering and dummy-audio validation passed
+in run 1795652074702689158-1538152 with 1,501 aggregate test executions
+and all six portable core target checks. These are measurement integrity
+and virtual-device checks, not physical display or input latency evidence.

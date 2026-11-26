@@ -114,9 +114,9 @@ impl<T: MeasurementTimestamp> FrameMeter<T> {
         input_received: Option<T>,
         resident_bytes: Option<u64>,
     ) -> Result<(), MeasurementError> {
-        let frame_time = elapsed(self.previous, completed)?;
+        let frame_time = elapsed_between(self.previous, completed)?;
         let input_latency = input_received
-            .map(|received| elapsed(received, completed))
+            .map(|received| elapsed_between(received, completed))
             .transpose()?;
         self.collector.observe(FrameObservation {
             frame_time,
@@ -139,7 +139,7 @@ impl<T: MeasurementTimestamp> FrameMeter<T> {
         completed: T,
     ) -> Result<(), MeasurementError> {
         self.collector
-            .observe_input(elapsed(received, completed)?)?;
+            .observe_input(elapsed_between(received, completed)?)?;
         Ok(())
     }
 
@@ -157,12 +157,22 @@ impl<T: MeasurementTimestamp> FrameMeter<T> {
         started: T,
         completed: T,
     ) -> Result<(), MeasurementError> {
-        self.collector.record_load(elapsed(started, completed)?);
+        self.collector
+            .record_load(elapsed_between(started, completed)?);
         Ok(())
     }
 }
 
-fn elapsed<T>(started: T, completed: T) -> Result<Duration, MeasurementError>
+/// Calculate a duration without turning reversed timestamps into zero.
+///
+/// Both points must belong to the same observation clock.
+///
+/// # Errors
+/// Rejects an end timestamp preceding its start.
+pub fn elapsed_between<T>(
+    started: T,
+    completed: T,
+) -> Result<Duration, MeasurementError>
 where
     T: MeasurementTimestamp,
 {
@@ -215,7 +225,7 @@ mod tests {
     use games::performance::{PerformanceCollector, QualityProfile};
     use games::presentation::FramePacing;
 
-    use super::{FrameMeter, MeasurementError};
+    use super::{FrameMeter, MeasurementError, elapsed_between};
 
     fn meter(started: Duration) -> FrameMeter<Duration> {
         FrameMeter::new(
@@ -244,6 +254,22 @@ mod tests {
         started
             .checked_add(Duration::from_millis(milliseconds))
             .ok_or_else(|| String::from("test timestamp overflow"))
+    }
+
+    #[test]
+    fn elapsed_distinguishes_reversal_from_measured_zero() -> Result<(), String>
+    {
+        let earlier = Duration::from_millis(1);
+        let later = Duration::from_millis(3);
+        check(
+            elapsed_between(earlier, later),
+            Ok(Duration::from_millis(2)),
+        )?;
+        check(elapsed_between(earlier, earlier), Ok(Duration::ZERO))?;
+        check(
+            elapsed_between(later, earlier),
+            Err(MeasurementError::TimestampOrder),
+        )
     }
 
     #[test]

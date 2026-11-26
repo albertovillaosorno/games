@@ -41,7 +41,7 @@ use games_assets::pcm::PcmSamples;
 use games_platform::ir::audio::{NativeAudio, PlaybackSpec};
 use games_platform::ir::importer::reference::Machine;
 use games_platform::ir::importer::{AssetFamily, ImportProfile, SourceFormat};
-use games_platform::ir::measurement::now;
+use games_platform::ir::measurement::{elapsed_between, now};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::toolchain;
 
@@ -213,9 +213,11 @@ fn verify_mix(
         whole.render(block);
         mixing = mixing
             .checked_add(
-                now()
-                    .map_err(|error| error.to_string())?
-                    .saturating_sub(started),
+                elapsed_between(
+                    started,
+                    now().map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| format!("mix timing: {error:?}"))?,
             )
             .ok_or_else(|| String::from("mix timing overflow"))?;
         for segment in partition.chunks_mut(113) {

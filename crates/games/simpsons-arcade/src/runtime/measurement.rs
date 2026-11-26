@@ -37,7 +37,9 @@ use games::performance::{
 };
 use games::presentation::{DisplaySettings, FramePacing, PresentationLayout};
 use games_platform::ir::frame::RenderError;
-use games_platform::ir::measurement::{FrameMeter, resident_bytes};
+use games_platform::ir::measurement::{
+    FrameMeter, elapsed_between, resident_bytes,
+};
 use games_platform::ir::process::write_status;
 
 use super::failure;
@@ -83,6 +85,37 @@ impl Segment {
             display,
             layout,
         }
+    }
+
+    fn observe(
+        &mut self,
+        sample: FrameSample,
+        input_latency: Option<Duration>,
+        remote_received: Option<Duration>,
+    ) -> Result<(), RenderError> {
+        let frames = self.collector.report().frame_time.samples();
+        if frames == 0 {
+            if let Some(received) = remote_received {
+                self.cadence
+                    .observe_input(received, sample.completed)
+                    .map_err(failure)?;
+            }
+        } else {
+            self.cadence
+                .observe_frame(sample.completed, remote_received, None)
+                .map_err(failure)?;
+        }
+        let resident_bytes = frames
+            .is_multiple_of(RSS_SAMPLE_FRAMES)
+            .then(|| resident_bytes().ok())
+            .flatten();
+        self.collector
+            .observe(FrameObservation {
+                frame_time: sample.work,
+                input_latency,
+                resident_bytes,
+            })
+            .map_err(failure)
     }
 
     fn report(&self) -> Result<(), RenderError> {
@@ -152,10 +185,16 @@ impl LiveMeasurement {
         self.remote.advance(next_tick);
     }
 
-    pub(super) fn finish(&mut self) -> Result<(), RenderError> {
+    /// End the presentation segment without discarding applied input.
+    pub(super) fn close_segment(&mut self) -> Result<(), RenderError> {
         if let Some(segment) = self.segment.take() {
             segment.report()?;
         }
+        Ok(())
+    }
+
+    pub(super) fn finish(&mut self) -> Result<(), RenderError> {
+        self.close_segment()?;
         let _cleared = self.local.take_applied();
         let _remote = self.remote.take_applied();
         Ok(())
@@ -174,15 +213,20 @@ impl LiveMeasurement {
         };
         let input_latency = self
             .local
-            .take_applied()
-            .and_then(|received| sample.elapsed.checked_sub(received));
-        let remote_received = self.remote.take_applied();
+            .applied()
+            .map(|received| elapsed_between(received, sample.elapsed))
+            .transpose()
+            .map_err(failure)?;
+        let remote_received = self.remote.applied();
+        if let Some(received) = remote_received {
+            let _age =
+                elapsed_between(received, sample.completed).map_err(failure)?;
+        }
         if self.segment.as_ref().is_some_and(|segment| {
             segment.layout != sample.layout || segment.display != sample.display
         }) {
-            self.finish()?;
+            self.close_segment()?;
         }
-        let first = self.segment.is_none();
         let segment = self.segment.get_or_insert_with(|| {
             Segment::new(
                 profile,
@@ -191,35 +235,10 @@ impl LiveMeasurement {
                 sample.completed,
             )
         });
-        if first {
-            if let Some(received) = remote_received {
-                segment
-                    .cadence
-                    .observe_input(received, sample.completed)
-                    .map_err(failure)?;
-            }
-        } else {
-            segment
-                .cadence
-                .observe_frame(sample.completed, remote_received, None)
-                .map_err(failure)?;
-        }
-        let resident_bytes = segment
-            .collector
-            .report()
-            .frame_time
-            .samples()
-            .is_multiple_of(RSS_SAMPLE_FRAMES)
-            .then(|| resident_bytes().ok())
-            .flatten();
-        segment
-            .collector
-            .observe(FrameObservation {
-                frame_time: sample.work,
-                input_latency,
-                resident_bytes,
-            })
-            .map_err(failure)
+        segment.observe(sample, input_latency, remote_received)?;
+        let _local = self.local.take_applied();
+        let _remote = self.remote.take_applied();
+        Ok(())
     }
 }
 
@@ -277,6 +296,97 @@ mod tests {
         if report.frame_time.samples() != 3
             || report.input_latency.samples() != 1
             || report.input_latency.maximum() != Some(Duration::from_millis(20))
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_input_time_does_not_create_a_sample() -> Result<(), RenderError>
+    {
+        let mut measurement = LiveMeasurement::default();
+        let design = Dimensions::new(dimension(320)?, dimension(224)?);
+        let sample = FrameSample {
+            completed: Duration::from_millis(100),
+            display: DisplaySettings::default(),
+            elapsed: Duration::from_millis(30),
+            layout: PresentationMode::AspectFit.layout(design, design),
+            work: Duration::from_millis(3),
+        };
+        let future = Duration::from_millis(31);
+        measurement.admit(1, future);
+        measurement.advance(2);
+        if measurement.observe(sample).is_ok()
+            || measurement.segment.is_some()
+            || measurement.local.applied() != Some(future)
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        let future_remote = Duration::from_millis(101);
+        measurement.admit_remote(2, future_remote);
+        measurement.advance(3);
+        let corrected = FrameSample {
+            elapsed: future,
+            ..sample
+        };
+        if measurement.observe(corrected).is_ok()
+            || measurement.segment.is_some()
+            || measurement.local.applied() != Some(future)
+            || measurement.remote.applied() != Some(future_remote)
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        measurement.observe(FrameSample {
+            completed: future_remote,
+            ..corrected
+        })?;
+        let segment = measurement
+            .segment
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?;
+        if segment.collector.report().input_latency.mean()
+            != Some(Duration::ZERO)
+            || segment.cadence.collector().report().input_latency.mean()
+                != Some(Duration::ZERO)
+        {
+            return Err(RenderError::InvalidSprite);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unavailable_drawable_breaks_cadence_without_losing_applied_input()
+    -> Result<(), RenderError> {
+        let mut measurement = LiveMeasurement::default();
+        let design = Dimensions::new(dimension(320)?, dimension(224)?);
+        let sample = FrameSample {
+            completed: Duration::from_millis(100),
+            display: DisplaySettings::default(),
+            elapsed: Duration::from_millis(30),
+            layout: PresentationMode::AspectFit.layout(design, design),
+            work: Duration::from_millis(3),
+        };
+        measurement.observe(sample)?;
+        measurement.admit(1, Duration::from_millis(30));
+        measurement.admit_remote(1, sample.completed);
+        measurement.advance(2);
+        measurement.close_segment()?;
+        measurement.observe(FrameSample {
+            completed: Duration::from_millis(200),
+            elapsed: Duration::from_millis(130),
+            ..sample
+        })?;
+        let segment = measurement
+            .segment
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?;
+        let cadence = segment.cadence.collector().report();
+        if cadence.frame_time.samples() != 0
+            || cadence.input_latency.mean() != Some(Duration::from_millis(100))
+            || segment.collector.report().frame_time.samples() != 1
+            || segment.collector.report().input_latency.mean()
+                != Some(Duration::from_millis(100))
         {
             return Err(RenderError::InvalidSprite);
         }

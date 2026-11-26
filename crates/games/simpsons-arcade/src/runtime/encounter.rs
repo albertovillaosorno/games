@@ -45,7 +45,7 @@ use games::replay::LiveSimulation;
 use games::session::LocalSession;
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
-use games_platform::ir::measurement::now;
+use games_platform::ir::measurement::{elapsed_between, now};
 use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
@@ -740,9 +740,12 @@ fn measure_strike(
         let completed = now().map_err(failure)?;
         collector
             .observe(FrameObservation {
-                frame_time: completed.saturating_sub(started),
+                frame_time: elapsed_between(started, completed)
+                    .map_err(failure)?,
                 input_latency: (tick == 0)
-                    .then(|| completed.saturating_sub(injected)),
+                    .then(|| elapsed_between(injected, completed))
+                    .transpose()
+                    .map_err(failure)?,
                 resident_bytes: None,
             })
             .map_err(failure)?;

@@ -2748,14 +2748,16 @@ physical network-partition or multi-device acceptance.
 For an opt-in visible native performance report, use `--measure` before
 `--touch`, `--display` or the asset selection instead of `--smoke`.
 Startup reports the renderer, load interval, RSS and executable size.
-Gameplay reports are emitted when leaving play, changing logical or
-drawable extent, viewport or display settings, and closing the host.
+Gameplay reports are emitted when leaving play, losing the drawable,
+changing logical or drawable extent, viewport or display settings, and
+closing the host.
 They include host work time through successful presentation, intervals
 between consecutive successful submissions, separate 60 Hz budgets,
 sampled RSS and separate oldest applied local-input and remote-decode
 ages for frames with observed controls. Remote timing starts at successful
 authenticated host decoding and includes delayed admission and execution.
 The first submission of each gameplay segment starts the interval clock;
-it contributes no interval or FPS sample.
+it contributes no interval or FPS sample. Applied input survives a lost
+drawable until the next successful submission, while cadence restarts.
 They exclude menu-only and failed submissions, client-side input and
 network transit, physical scanout and GPU-completion timing.

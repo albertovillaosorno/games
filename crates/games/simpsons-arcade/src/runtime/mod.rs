@@ -72,7 +72,8 @@ use games_platform::ir::input::{
     HostEvent, InputStartup, NativeInput, key_from_name, key_name,
 };
 use games_platform::ir::measurement::{
-    FrameMeter, executable_bytes, now, peak_resident_bytes, resident_bytes,
+    FrameMeter, elapsed_between, executable_bytes, now, peak_resident_bytes,
+    resident_bytes,
 };
 use games_platform::ir::menu::{MenuArt, MenuContent};
 use games_platform::ir::process::write_status;
@@ -874,16 +875,19 @@ impl<'preferences> Interactive<'preferences> {
         layout: Option<PresentationLayout>,
     ) -> Result<(), RenderError> {
         if self.simulation.state().state().phase() == Phase::Playing
-            && let (Some(meter), Some(beginning), Some(submitted)) =
-                (&mut self.measurement, started, layout)
+            && let (Some(meter), Some(beginning)) =
+                (&mut self.measurement, started)
         {
+            let Some(submitted) = layout else {
+                return meter.close_segment();
+            };
             let completed = now().map_err(failure)?;
             meter.observe(measurement::FrameSample {
                 completed,
                 display: self.applied,
                 elapsed: self.input.elapsed(),
                 layout: submitted,
-                work: completed.saturating_sub(beginning),
+                work: elapsed_between(beginning, completed).map_err(failure)?,
             })?;
         }
         Ok(())
@@ -1061,7 +1065,9 @@ impl<'preferences> Interactive<'preferences> {
                 let drawn = art.present(scene, cabinet)?;
                 presented = (drawn && cabinet.phase() != Phase::Playing)
                     .then_some(*hosted);
-                self.measure_presented(started, scene.last_presented_layout())?;
+                let submitted =
+                    scene.last_presented_layout().filter(|_layout| drawn);
+                self.measure_presented(started, submitted)?;
             }
         }
         if let Some(measurement) = &mut self.measurement {
@@ -2091,10 +2097,16 @@ fn smoke_movement_benchmark(
             let started = now().map_err(failure)?;
             let _advanced =
                 simulation.advance(TICK_INTERVAL).map_err(failure)?;
-            let _drawn = art.present(scene, simulation.state())?;
+            if !art.present(scene, simulation.state())? {
+                return Err(failure("movement frame was not submitted"));
+            }
             collector
                 .observe(FrameObservation {
-                    frame_time: now().map_err(failure)?.saturating_sub(started),
+                    frame_time: elapsed_between(
+                        started,
+                        now().map_err(failure)?,
+                    )
+                    .map_err(failure)?,
                     input_latency: None,
                     resident_bytes: if frame == 0 {
                         rss
