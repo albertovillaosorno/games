@@ -1,6 +1,6 @@
 ---
 id: "build-command"
-status: "open"
+status: "completed"
 lane: "3"
 priority: "p3"
 area: "build"
@@ -33,3 +33,19 @@ profile and explicit GNU/Linux x86-64 target. Unknown titles, targets and
 additional arguments are rejected. The actual build and hidden native smoke
 succeeded for `simpsons-arcade`. Android and browser compilation, portable
 packaging and automatic asset discovery remain unimplemented.
+
+Acceptance review, 2026-11-25: the title selector admits exactly the
+current authored title, its package, binary, required runtime feature
+and explicit native target. An omitted target selects the existing
+Linux x86-64 release path. The toolchain IR owns host selection and
+compilation; the portable build command does not invoke a native SDK
+or select an OS itself. The independent all-feature graphs reject
+source decoders in runtimes and authenticated LAN in the asset build.
+Synthetic controls reject unknown titles, targets and additional flags;
+local release builds and package executions are recorded in native and
+release-checks.
+
+The universal selected-title command is established for the supported
+native target. Further title registrations, Android and Web linking,
+packaging, portable deployment and physical-device acceptance remain
+separate tasks. Unsupported targets return explicit errors.

@@ -1,0 +1,96 @@
+---
+id: "onboarding"
+status: "completed"
+lane: "2"
+priority: "p2"
+area: "assets"
+task: "TODO - Title onboarding"
+depends_on:
+  - "importer"
+  - "reference-tests"
+validation:
+  - "cargo validate"
+---
+# TODO - Title onboarding
+
+## Objective
+
+Establish the shared title package and onboarding convention, demonstrated
+by the first catalogue title. Subsequent titles use the same convention
+in catalogue order, after the foundation and build gates.
+
+## Acceptance
+
+Shared foundation milestone:
+
+- Use the existing catalogue order; no preliminary ranking audit needed.
+- Demonstrate the convention on the first title, with its supplied source
+  edition, canonical task record, workspace package and inline tests.
+- Use `crates/games/<id>` or `crates/apps/<id>` and inline behavioural tests.
+- Reference the canonical task record rather than duplicating its contents.
+- Demonstrate reuse of shared mechanisms and the shared build selection
+  and portable library validation on the first title.
+
+Per-title acceptance remains mandatory under AGENTS.md and every title's
+own record. It is evaluated before that title closes, not as a prerequisite
+for the shared P2 onboarding milestone:
+
+- Pin one preferred source edition per title when supplied.
+- Keep only unique gameplay and adapters in each title package.
+- Before implementing each new title, review every previously implemented
+  game and app package, including unfinished titles, without exception.
+  Inspect their code and tests as well as existing shared capabilities.
+- Extract genuinely reusable mechanisms into their owning shared crates
+  before duplicating them. Migrate existing consumers and retain their
+  behavioural regression tests. Keep only unique rules and data in titles.
+- Record the reviewed title identifiers, reused or extracted mechanisms,
+  and justified title-specific exceptions in the existing task evidence.
+  Recheck newly introduced mechanisms for reuse before closing the task.
+- Implement adaptive height-fit world rendering for each title, manually
+  adapting camera, scene data and HUD where necessary. Retain the original
+  vertical field and uniform scale, render real additional scene content
+  at wider aspect ratios, and adapt input transforms without changing
+  simulation behaviour. Preserve original presentation as an option.
+  Treat unsupported scenes as open work, with temporary aspect-fit fallback
+  and documented limitations; do not count fallback as adaptive support.
+
+## Evidence
+
+The first catalogue title has a dedicated Rust package at
+`crates/games/simpsons-arcade`, with the same identifier as its canonical
+record and inline deterministic behavioural tests. Its verified source
+edition and local layout are recorded in that title task. No earlier
+implemented title package existed when it was introduced. The package
+owns its gameplay and runtime composition; shared engine timing, logical
+input, replay, menus, presentation, storage, audio and network mechanisms
+remain in their respective shared owners.
+
+The build selector admits the exact title identifier and explicit native
+feature/target combination. Its synthetic regression rejects unknown
+titles, path-like identifiers, unsupported targets and extra arguments.
+The validator classifies game and app packages automatically for portable
+library checks and runtime dependency isolation. It rejects binary-only
+title packages, misplaced workspace files and noncanonical source layout.
+
+The first title's original-backed native preview has demonstrated real
+height-fit street extension, not stretched or duplicated edge pixels.
+At 1b64256 the existing 218-pose diagnostic verified the 444-column
+world camera, 600 movement and 20 combat submissions in the admitted
+presentation modes, including adaptive with touch. The later visible
+settings reset work passed native-enabled workspace validation
+1795662082554524617-58037 (1,719 aggregate test executions and six
+portable core targets). Other title scenes, full gameplay parity,
+physical devices and future title onboarding remain open in their
+respective canonical title and platform records.
+
+The shared milestone is independent of the remaining catalogue packages:
+requiring all of their implementation and adaptive scenes before the
+build command would prevent the sequential P4 title work from starting.
+The per-title acceptance obligations above are unchanged and may not be
+claimed as passed merely because this shared convention is demonstrated.
+
+Commit 1d7f686 makes title-task linkage mandatory in the validator:
+package directory identifiers and areas must match their canonical task,
+completed title tasks must have a package, and untracked orphan packages
+are rejected. Future open title records may remain unimplemented. The
+fresh validation run 1795665047137724133-520482 passed.

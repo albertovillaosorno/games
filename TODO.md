@@ -18,19 +18,9 @@ Completed. See `docs/todo/completed/contracts/`.
 
 ## P2 - Asset importer
 
-### TODO - Title onboarding
-
-Create title packages linked to their existing canonical task records.
-
-[TODO - Title onboarding](docs/todo/open/assets/onboarding.mdc)
+Completed. See `docs/todo/completed/assets/`.
 
 ## P3 - Build system
-
-### TODO - Universal build command
-
-Expose one build command accepting a title and optional target.
-
-[TODO - Universal build command](docs/todo/open/build/build-command.mdc)
 
 ### TODO - Native Linux packaging
 
