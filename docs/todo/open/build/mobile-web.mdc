@@ -1021,3 +1021,18 @@ a harness timeout; terminating the isolated harness after the game
 exit permitted cleanup. The package receipt and all 88 files still
 verified afterward. This covers the published entry page on virtual
 Firefox, not physical devices or broader browser compatibility.
+
+The current package at fadd621 also passed the unchanged published entry
+workflow in a fresh isolated Firefox/Xvfb session. The exact 576-byte
+index, 45,123-byte JavaScript and 1,005,295-byte Wasm were served over
+loopback. Trusted X11 input selected the existing canonical assets,
+joined the first station, moved left and exited through the menu.
+The ready, menu, joined and terminal captures each differed from the
+previous accepted run by less than 0.002% of captured pixels (weighted
+absolute error). The movement capture differed from the joined capture
+by 0.837%. Independent readback before and after the run verified the
+same 88 files, 1,509,219 bytes and receipt recorded in release-checks.
+No observer page or injected DOM event was used. The private browser
+harness was terminated after game exit and left the package unchanged.
+Physical devices, hardware acceleration, audible output and Android
+runtime acceptance remain open.
