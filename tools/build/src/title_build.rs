@@ -82,6 +82,16 @@ impl Title {
         match args {
             [] => Ok(selected),
             [target] if target == NATIVE_TARGET.name() => Ok(selected),
+            [target]
+                if Target::portable_checks()
+                    .iter()
+                    .any(|candidate| target == candidate.name()) =>
+            {
+                Err(format!(
+                    "target {} is unavailable for distribution; core only",
+                    target.to_string_lossy()
+                ))
+            },
             _ => Err(String::from("expected optional target linux-x86-64")),
         }
     }
@@ -141,7 +151,19 @@ mod tests {
             Title::parse(title, &["linux-x86-64".into()]),
             Ok(Title::SimpsonsArcade)
         );
-        for target in ["android-arm64", "wasm", "--workspace", "../target"] {
+        for target in Target::portable_checks() {
+            if target == NATIVE_TARGET {
+                continue;
+            }
+            let name = target.name();
+            assert_eq!(
+                Title::parse(title, &[name.into()]),
+                Err(format!(
+                    "target {name} is unavailable for distribution; core only"
+                ))
+            );
+        }
+        for target in ["wasm", "--workspace", "../target"] {
             assert!(Title::parse(title, &[target.into()]).is_err());
         }
         assert!(Title::parse("../simpsons-arcade", &[]).is_err());

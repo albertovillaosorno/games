@@ -61,3 +61,15 @@ all three targets, including Windows GNU x86-64. Fresh validation run
 WebAssembly and Windows. The storage facade reports unsupported on
 WebAssembly and Windows rather than attempting a weaker file open.
 This is compile-time evidence only; no target was linked or executed.
+
+On 2026-11-25 the official Android ARM64 and WebAssembly Rust targets
+remained installed, and the mandatory six-target portable core gate
+passed. Android Debug Bridge was installed, but no SDK or NDK root was
+configured or found in the conventional local locations. The browser
+and Node.js were installed, but no authored browser runtime or packaging
+adapter exists. A standard-library target or a browser alone is not a
+working distribution toolchain. The title build command now distinguishes
+recognized core-only targets from invalid target names and refuses each
+of the five non-native distribution requests before invoking Cargo.
+Android and browser packaging, runtime graphics, input and storage
+acceptance remain open.
