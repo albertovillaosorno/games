@@ -1290,7 +1290,7 @@ impl Interactive {
         mut self,
         scene: &mut SceneSession<'_, '_>,
         art: &mut Scene,
-        mut playback: Option<&mut audio::Playback<'_>>,
+        mut playback: Option<&mut audio::Playback>,
     ) -> Result<(), RenderError> {
         if let Some(audio) = &mut playback {
             audio.enable_output();
@@ -1314,7 +1314,7 @@ impl Interactive {
     fn step(
         &mut self,
         scene: &mut SceneSession<'_, '_>,
-        (art, playback): (&mut Scene, Option<&mut audio::Playback<'_>>),
+        (art, playback): (&mut Scene, Option<&mut audio::Playback>),
         wait_ms: u32,
     ) -> Result<bool, RenderError> {
         if self.stopped
@@ -3009,7 +3009,7 @@ fn smoke_optional(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     touch_enabled: bool,
-    playback: Option<&mut audio::Playback<'_>>,
+    playback: Option<&mut audio::Playback>,
 ) -> Result<(), RenderError> {
     smoke_cooperation(scene, art)?;
     if art.combat.is_some() {

@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Open native devices, decode source media or schedule title events.
 // - Allows:
-//   - Inputs: Borrowed signed PCM samples, rates, gains and output frames.
+//   - Inputs: Borrowed or retained PCM, rates, gains and output frames.
 //   - Outputs: Mixed stereo frames and explicit voice occupancy.
 //   - Side effects: Mutates caller-owned output and playback positions.
 // - Split-When:
@@ -32,6 +32,7 @@
 //! Deterministic PCM playback independently of presentation and device rate.
 
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize};
+use std::rc::Rc;
 use std::time::Duration;
 
 /// Interleaved source sample layout.
@@ -54,31 +55,42 @@ impl Channels {
 
 /// A checked, nonempty, immutable PCM clip in native signed sample values.
 #[derive(Clone, Copy, Debug)]
-pub struct Clip<'samples> {
+pub struct PcmClip<S> {
     channels: Channels,
     rate: NonZeroU32,
-    samples: &'samples [i16],
+    samples: S,
 }
 
-impl<'samples> Clip<'samples> {
+/// A zero-copy borrowed PCM clip.
+pub type Clip<'samples> = PcmClip<&'samples [i16]>;
+
+/// A PCM clip retaining its immutable samples across host callbacks.
+pub type OwnedClip = PcmClip<Rc<[i16]>>;
+
+impl<S> PcmClip<S>
+where
+    S: AsRef<[i16]>,
+{
     /// Number of complete source frames.
     #[must_use]
-    pub const fn frames(self) -> usize {
+    pub fn frames(&self) -> usize {
+        let samples = self.samples.as_ref();
         match self.channels {
-            Channels::Mono => self.samples.len(),
-            Channels::Stereo => self.samples.len() >> 1,
+            Channels::Mono => samples.len(),
+            Channels::Stereo => samples.len() >> 1,
         }
     }
 
-    /// Bind complete interleaved samples without allocating.
+    /// Bind complete immutable interleaved samples without allocating.
     /// # Errors
     /// Rejects empty clips and partial frames.
-    pub const fn new(
-        samples: &'samples [i16],
+    pub fn new(
+        samples: S,
         channels: Channels,
         rate: NonZeroU32,
     ) -> Result<Self, AudioError> {
-        if samples.is_empty() || !samples.len().is_multiple_of(channels.width())
+        if samples.as_ref().is_empty()
+            || !samples.as_ref().len().is_multiple_of(channels.width())
         {
             return Err(AudioError::InvalidClip);
         }
@@ -87,21 +99,19 @@ impl<'samples> Clip<'samples> {
 
     /// Nominal source sample rate in frames per second.
     #[must_use]
-    pub const fn rate(self) -> NonZeroU32 {
+    pub const fn rate(&self) -> NonZeroU32 {
         self.rate
     }
 
-    fn stereo(self, index: usize) -> [i16; 2] {
+    fn stereo(&self, index: usize) -> [i16; 2] {
+        let samples = self.samples.as_ref();
         let offset = index.saturating_mul(self.channels.width());
-        let first = self.samples.get(offset).copied().unwrap_or(0);
+        let first = samples.get(offset).copied().unwrap_or(0);
         match self.channels {
             Channels::Mono => [first, first],
             Channels::Stereo => [
                 first,
-                self.samples
-                    .get(offset.saturating_add(1))
-                    .copied()
-                    .unwrap_or(0),
+                samples.get(offset.saturating_add(1)).copied().unwrap_or(0),
             ],
         }
     }
@@ -253,14 +263,17 @@ impl FrameClock {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Voice<'samples> {
-    clip: Clip<'samples>,
+struct Voice<S> {
+    clip: PcmClip<S>,
     frame: usize,
     gain: StereoGain,
     phase: u64,
 }
 
-impl Voice<'_> {
+impl<S> Voice<S>
+where
+    S: AsRef<[i16]>,
+{
     fn advance(&mut self, output_rate: u64) -> bool {
         let phase = self
             .phase
@@ -284,7 +297,7 @@ impl Voice<'_> {
         self.frame < self.clip.frames()
     }
 
-    fn sample(self, output_rate: u64) -> [i64; 2] {
+    fn sample(&self, output_rate: u64) -> [i64; 2] {
         let [first_left, first_right] = self.clip.stereo(self.frame);
         let [last_left, last_right] = self.clip.stereo(
             self.frame
@@ -318,18 +331,29 @@ impl Voice<'_> {
     }
 }
 
+type VoiceSlot<S> = Option<Voice<S>>;
+
 /// One-shot stereo mixer with bounded, reusable voice slots.
 ///
 /// Rendering is independent of chunk size and allocates no memory. The
-/// caller owns all borrowed clip samples for the mixer's lifetime.
+/// borrowed or owned sample storage determines the lifetime of each voice.
 #[derive(Debug)]
-pub struct Mixer<'samples> {
+pub struct PcmMixer<S> {
     rate: NonZeroU32,
-    voices: Vec<Option<Voice<'samples>>>,
+    voices: Vec<VoiceSlot<S>>,
     volume: MasterVolume,
 }
 
-impl<'samples> Mixer<'samples> {
+/// Mixer using clips backed by caller-owned sample slices.
+pub type Mixer<'samples> = PcmMixer<&'samples [i16]>;
+
+/// Mixer retaining samples for the lifetime of each admitted voice.
+pub type OwnedMixer = PcmMixer<Rc<[i16]>>;
+
+impl<S> PcmMixer<S>
+where
+    S: AsRef<[i16]>,
+{
     /// Number of currently playing voices.
     #[must_use]
     pub fn active(&self) -> usize {
@@ -338,7 +362,7 @@ impl<'samples> Mixer<'samples> {
 
     /// Stop all voices without releasing the allocated slots.
     pub fn clear(&mut self) {
-        self.voices.fill(None);
+        self.voices.fill_with(|| None);
     }
 
     /// Allocate a fixed number of reusable voice slots.
@@ -353,7 +377,7 @@ impl<'samples> Mixer<'samples> {
         voices
             .try_reserve_exact(count)
             .map_err(|_error| AudioError::Allocation)?;
-        voices.resize(count, None);
+        voices.resize_with(count, || None);
         Ok(Self {
             rate,
             voices,
@@ -369,7 +393,7 @@ impl<'samples> Mixer<'samples> {
     /// Rejects a full mixer without replacing or advancing any voice.
     pub fn play(
         &mut self,
-        clip: Clip<'samples>,
+        clip: PcmClip<S>,
         gain: StereoGain,
     ) -> Result<usize, AudioError> {
         let (index, slot) = self
@@ -417,11 +441,14 @@ impl<'samples> Mixer<'samples> {
     }
 }
 
-fn mix_frame(
-    voices: &mut [Option<Voice<'_>>],
+fn mix_frame<S>(
+    voices: &mut [VoiceSlot<S>],
     rate: u64,
     volume: MasterVolume,
-) -> [i16; 2] {
+) -> [i16; 2]
+where
+    S: AsRef<[i16]>,
+{
     let mut sum = [0i64; 2];
     for slot in voices {
         let Some(voice) = slot else {
@@ -683,6 +710,32 @@ mod tests {
             && mixer.stop(slot)
             && !mixer.stop(slot)
             && mixer.play(clip, StereoGain::UNITY)? == slot)
+            .then_some(())
+            .ok_or(AudioError::InvalidClip)
+    }
+
+    #[test]
+    fn retained_samples_survive_the_admitting_scope() -> Result<(), AudioError>
+    {
+        let mut owned = OwnedMixer::new(rate(3), NonZeroU16::MIN)?;
+        {
+            let samples = Rc::<[i16]>::from([0, 12_000, -12_000]);
+            let clip =
+                OwnedClip::new(Rc::clone(&samples), Channels::Mono, rate(2))?;
+            let _slot = owned.play(clip, StereoGain::UNITY)?;
+        }
+        let mut borrowed = Mixer::new(rate(3), NonZeroU16::MIN)?;
+        let clip = Clip::new(&[0, 12_000, -12_000], Channels::Mono, rate(2))?;
+        let _slot = borrowed.play(clip, StereoGain::UNITY)?;
+        let mut expected = [[0; 2]; 6];
+        borrowed.render(&mut expected);
+        let mut first = [[0; 2]; 2];
+        let mut last = [[0; 2]; 4];
+        owned.render(&mut first);
+        owned.render(&mut last);
+        (expected.into_iter().eq(first.into_iter().chain(last))
+            && owned.active() == 0
+            && borrowed.active() == 0)
             .then_some(())
             .ok_or(AudioError::InvalidClip)
     }

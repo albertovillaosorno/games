@@ -32,10 +32,11 @@
 //! Opt-in playback of observed attack-associated PCM clips.
 
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
+use std::rc::Rc;
 use std::time::Duration;
 
 use games::audio::{
-    AudioError, Channels, Clip, MasterVolume, Mixer, StereoGain,
+    AudioError, Channels, MasterVolume, OwnedClip, OwnedMixer, StereoGain,
 };
 use games::input::{InputEvent, LogicalAction};
 use games::replay::LiveSimulation;
@@ -89,14 +90,15 @@ const CLIPS: [(&str, u64); 4] = [
 ];
 
 pub(super) struct Samples {
-    clips: [Vec<i16>; 4],
+    clips: [Rc<[i16]>; 4],
 }
 
 impl Samples {
-    fn clips(&self) -> Result<[Clip<'_>; 4], RenderError> {
+    fn clips(&self) -> Result<[OwnedClip; 4], RenderError> {
         let [marge, homer, bart, lisa] = &self.clips;
-        let clip = |samples| {
-            Clip::new(samples, Channels::Mono, ATTACK_RATE).map_err(failure)
+        let clip = |samples: &Rc<[i16]>| {
+            OwnedClip::new(Rc::clone(samples), Channels::Mono, ATTACK_RATE)
+                .map_err(failure)
         };
         Ok([clip(marge)?, clip(homer)?, clip(bart)?, clip(lisa)?])
     }
@@ -153,7 +155,7 @@ impl Samples {
                 .try_reserve_exact(pcm.samples().len())
                 .map_err(failure)?;
             samples.extend(pcm.samples());
-            clips.push(samples);
+            clips.push(Rc::<[i16]>::from(samples));
         }
         Ok(Self {
             clips: clips.try_into().map_err(|_error| failure("clip count"))?,
@@ -161,18 +163,18 @@ impl Samples {
     }
 }
 
-pub(super) struct Playback<'samples> {
-    clips: [Clip<'samples>; 4],
+pub(super) struct Playback {
+    clips: [OwnedClip; 4],
     cues: [u64; 4],
     device: NativeAudio,
     live_output: bool,
-    mixer: Mixer<'samples>,
+    mixer: OwnedMixer,
     running: bool,
     scratch: [[i16; 2]; CHUNK],
     volume: MasterVolume,
 }
 
-impl<'samples> Playback<'samples> {
+impl Playback {
     pub(super) const fn enable_output(&mut self) {
         self.live_output = true;
     }
@@ -193,7 +195,7 @@ impl<'samples> Playback<'samples> {
     }
 
     pub(super) fn open(
-        samples: &'samples Samples,
+        samples: &Samples,
         name: Option<&str>,
     ) -> Result<Self, RenderError> {
         let spec = PlaybackSpec {
@@ -214,7 +216,7 @@ impl<'samples> Playback<'samples> {
             cues: [0; 4],
             device,
             live_output: false,
-            mixer: Mixer::new(RATE, NonZeroU16::MIN.saturating_add(15))
+            mixer: OwnedMixer::new(RATE, NonZeroU16::MIN.saturating_add(15))
                 .map_err(failure)?,
             running: false,
             scratch: [[0; 2]; CHUNK],
@@ -333,7 +335,11 @@ impl<'samples> Playback<'samples> {
         &mut self,
         simulation: &mut LiveSimulation<Cabinet>,
     ) -> Result<(), RenderError> {
-        let clip = *self.clips.first().ok_or(RenderError::InvalidSprite)?;
+        let clip = self
+            .clips
+            .first()
+            .ok_or(RenderError::InvalidSprite)?
+            .clone();
         play(&mut self.mixer, clip, StereoGain::UNITY)?;
         self.fill()?;
         self.verify_submission(1)?;
@@ -395,8 +401,12 @@ impl<'samples> Playback<'samples> {
         if !playing {
             return Ok(());
         }
-        for (((previous, count), clip), gain) in
-            self.cues.iter_mut().zip(current).zip(self.clips).zip(GAINS)
+        for (((previous, count), clip), gain) in self
+            .cues
+            .iter_mut()
+            .zip(current)
+            .zip(&self.clips)
+            .zip(GAINS)
         {
             let new_cues = count.saturating_sub(*previous);
             *previous = count;
@@ -405,7 +415,7 @@ impl<'samples> Playback<'samples> {
                 return Err(failure("attack cue count exceeded tick budget"));
             }
             for _ in 0..new_cues {
-                play(&mut self.mixer, clip, gain)?;
+                play(&mut self.mixer, clip.clone(), gain)?;
             }
         }
         self.fill()
@@ -448,10 +458,10 @@ pub(super) fn list_devices() -> Result<(), RenderError> {
     Ok(())
 }
 
-pub(super) fn open_optional<'samples>(
-    samples: Option<&'samples Samples>,
+pub(super) fn open_optional(
+    samples: Option<&Samples>,
     name: Option<&str>,
-) -> Result<Option<Playback<'samples>>, RenderError> {
+) -> Result<Option<Playback>, RenderError> {
     if let Some(available) = samples {
         return Playback::open(available, name).map(Some);
     }
@@ -476,9 +486,9 @@ fn replacement_limits() -> Result<ManifestLimits, RenderError> {
     })
 }
 
-fn play<'samples>(
-    mixer: &mut Mixer<'samples>,
-    clip: Clip<'samples>,
+fn play(
+    mixer: &mut OwnedMixer,
+    clip: OwnedClip,
     gain: StereoGain,
 ) -> Result<(), RenderError> {
     match mixer.play(clip, gain) {
@@ -610,7 +620,12 @@ mod tests {
             replacement: None,
         };
         let original = Samples::load(BundleSource::Local(parent), &selection)?;
-        if original.clips.iter().flatten().any(|sample| *sample != 12) {
+        if original
+            .clips
+            .iter()
+            .flat_map(|clip| clip.iter())
+            .any(|sample| *sample != 12)
+        {
             return Err(failure("incorrect original clip samples"));
         }
         let (key, frames) = CLIPS
@@ -622,7 +637,10 @@ mod tests {
         let modified = Samples::load(BundleSource::Local(parent), &selection)?;
         let [first, rest @ ..] = &modified.clips;
         if first.iter().any(|sample| *sample != -7)
-            || rest.iter().flatten().any(|sample| *sample != 12)
+            || rest
+                .iter()
+                .flat_map(|clip| clip.iter())
+                .any(|sample| *sample != 12)
         {
             return Err(failure("replacement did not remain selective"));
         }
@@ -645,17 +663,18 @@ mod tests {
     fn isolated_attack_clips_use_observed_stereo_ratios_and_rate()
     -> Result<(), RenderError> {
         let samples = Samples {
-            clips: array::from_fn(|_| vec![i16::MAX; 2]),
+            clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
         };
         let expected = [[5451, 2443], [7383, 5182], [3430, 4887], [2027, 4523]];
-        for ((clip, gain), frame) in
-            samples.clips()?.into_iter().zip(GAINS).zip(expected)
+        let clips = samples.clips()?;
+        drop(samples);
+        for ((clip, gain), frame) in clips.into_iter().zip(GAINS).zip(expected)
         {
             if clip.rate().get() != 10_027 {
                 return Err(failure("attack clip rate did not match pitch"));
             }
             let mut mixer =
-                Mixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+                OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
             play(&mut mixer, clip, gain)?;
             let mut output = [[0; 2]];
             mixer.render(&mut output);
