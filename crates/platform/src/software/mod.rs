@@ -278,6 +278,10 @@ impl ProcessPort for () {
         Err(ErrorKind::Unsupported.into())
     }
 
+    fn write_diagnostic(_message: StatusMessage<'_>) -> io::Result<()> {
+        Err(ErrorKind::Unsupported.into())
+    }
+
     fn write_status(_message: StatusMessage<'_>) -> io::Result<()> {
         Err(ErrorKind::Unsupported.into())
     }

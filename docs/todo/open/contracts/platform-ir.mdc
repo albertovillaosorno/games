@@ -359,3 +359,22 @@ executions and all six portable core targets. Local path interpretation
 is implemented by the existing Linux/Android storage adapter only;
 native storage conformance on other targets remains open. Contributor
 tool isolation also remains open.
+
+Commit 4d4b1ac extends the shared lexical path contract to contributor
+build tools and moves validator test fixtures behind explicit platform
+ports. The build tool uses opaque local paths and canonical package keys.
+The actual locked title licence inventory now resolves its registered
+manifest and includes the reviewed constant_time_eq and zlib-rs texts.
+The fresh joint gate 1795651377204258447-1161525 passed 1,489 aggregate
+test executions, all features and all six portable core target checks.
+Validator lexical path migration and native backend coverage remain open.
+
+Authored package executable admission now belongs to shared toolchain
+security IR. The existing file-backed entry and malformed ELF checks
+remain; all other target formats fail explicitly. The policy does not
+establish ABI compatibility. The validator routes clone diagnostics
+through the process adapter and detects direct imported aliases of
+host error-state reads. Alias matching is conservative and file-local,
+not full Rust name resolution. Fresh validation
+1795651537512300811-1218789 passed 1,493 aggregate test executions and
+all six portable core checks. No native target support is added.

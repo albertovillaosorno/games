@@ -33,6 +33,12 @@ use std::collections::BTreeSet;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
+#[derive(Default)]
+struct ErrorReferences {
+    imports: BTreeSet<String>,
+    reads: BTreeSet<String>,
+}
+
 type Findings = BTreeSet<&'static str>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -208,11 +214,74 @@ fn inspect_standard(
     let _previous = findings.insert(diagnostic);
 }
 
-fn inspect(stream: TokenStream, findings: &mut Findings) {
+fn collect_error_imports(
+    path: &[TokenTree],
+    scope: Option<Scope>,
+    aliases: &mut BTreeSet<String>,
+) {
+    let tokens = if punct(path.first(), ':') && punct(path.get(1), ':') {
+        path.get(2..).unwrap_or_default()
+    } else {
+        path
+    };
+    let Some(head) = tokens.first() else {
+        return;
+    };
+    if let TokenTree::Group(group) = head {
+        if group.delimiter() == Delimiter::Brace {
+            let children: Vec<_> = group.stream().into_iter().collect();
+            for branch in children.split(|token| punct(Some(token), ',')) {
+                collect_error_imports(branch, scope, aliases);
+            }
+        }
+        return;
+    }
+    let member = name(head);
+    match (scope, member.as_deref()) {
+        (None, Some("std")) => {
+            if let Some(tail) = path_tail(tokens) {
+                collect_error_imports(tail, Some(Scope::Standard), aliases);
+            }
+        },
+        (Some(Scope::Standard), Some("io")) => {
+            if let Some(tail) = path_tail(tokens) {
+                collect_error_imports(tail, Some(Scope::Io), aliases);
+            }
+        },
+        (Some(Scope::Io), Some("Error")) => {
+            let alias = if tokens.get(1).and_then(name).as_deref() == Some("as")
+            {
+                tokens.get(2).and_then(name)
+            } else {
+                member
+            };
+            if let Some(imported) = alias {
+                let _previous = aliases.insert(imported);
+            }
+        },
+        _ => {},
+    }
+}
+
+fn collect_import(tokens: &[TokenTree], aliases: &mut BTreeSet<String>) {
+    let length = tokens
+        .iter()
+        .position(|token| punct(Some(token), ';'))
+        .unwrap_or(tokens.len());
+    if let Some(tree) = tokens.get(..length) {
+        collect_error_imports(tree, None, aliases);
+    }
+}
+
+fn inspect(
+    stream: TokenStream,
+    findings: &mut Findings,
+    errors: &mut ErrorReferences,
+) {
     let tokens: Vec<_> = stream.into_iter().collect();
     for (index, token) in tokens.iter().enumerate() {
         if let TokenTree::Group(group) = token {
-            inspect(group.stream(), findings);
+            inspect(group.stream(), findings, errors);
         }
         let Some(word) = name(token) else {
             continue;
@@ -225,7 +294,21 @@ fn inspect(stream: TokenStream, findings: &mut Findings) {
         {
             let _previous = findings.insert(diagnostic);
         }
+        if path_tail(suffix)
+            .and_then(|tail| tail.first())
+            .and_then(name)
+            .as_deref()
+            == Some("last_os_error")
+        {
+            let _previous = errors.reads.insert(word.clone());
+        }
         match word.as_str() {
+            "use" => {
+                collect_import(
+                    suffix.get(1..).unwrap_or_default(),
+                    &mut errors.imports,
+                );
+            },
             "std" | "core" => {
                 let scope = if word == "std" {
                     Scope::Standard
@@ -255,7 +338,12 @@ pub(crate) fn findings(source: &str) -> Result<Findings, String> {
         .parse()
         .map_err(|error| format!("Rust token parsing: {error}"))?;
     let mut found = Findings::new();
-    inspect(stream, &mut found);
+    let mut errors = ErrorReferences::default();
+    inspect(stream, &mut found, &mut errors);
+    // File-level matching is conservative; it does not resolve shadowing.
+    if !errors.imports.is_disjoint(&errors.reads) {
+        let _previous = found.insert(Scope::Io.diagnostic());
+    }
     Ok(found)
 }
 
@@ -278,6 +366,30 @@ pub(crate) fn validate(source: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::fixtures::require;
+
+    #[test]
+    fn error_aliases_cannot_read_the_host_error_state() -> Result<(), String> {
+        for source in [
+            "use std::io::Error; fn read() { Error::last_os_error(); }",
+            "use std::io::Error as E; fn read() { E::last_os_error(); }",
+            "fn read() { E::last_os_error(); } use std::io::Error as E;",
+            "use std::{io::{Error as E}}; fn read() { E::last_os_error(); }",
+            "use {::std::io::Error as E}; fn read() { E::last_os_error(); }",
+            concat!(
+                "use std::io::Error as E; ",
+                "macro_rules! m { () => { E::last_os_error() } }",
+            ),
+        ] {
+            require(
+                findings(source)?.contains(Scope::Io.diagnostic()),
+                "reject aliased host error state",
+            )?;
+        }
+        validate(
+            "use std::io::Error as E; fn value() { E::other(\"message\"); }",
+        )?;
+        validate("fn custom() { Error::last_os_error(); }")
+    }
 
     #[test]
     fn host_free_values_and_literals_are_admitted() -> Result<(), String> {

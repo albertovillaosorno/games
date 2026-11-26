@@ -9,13 +9,14 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native process arguments, status output and scoped retry scheduling.
+//   - Native process arguments, output streams and scoped retry scheduling.
 // - Must-Not:
 //   - Parse title or contributor options or select simulation policy.
 // - Allows:
 //   - Inputs: Explicit observation and formatted status requests.
 //   - Outputs: Owned arguments and typed output failures.
-//   - Side effects: Process argument reads and standard output writes.
+//   - Side effects: Process argument reads and standard output and error
+//     writes.
 // - Split-When:
 //   - Native process capabilities need independent responsibility.
 // - Merge-When:
@@ -23,7 +24,7 @@
 // - Summary:
 //   - Linux process-facing adapter for shared runtime and tools.
 // - Description:
-//   - Retains native argument encoding and writes locked status lines.
+//   - Retains native argument encoding and writes locked output lines.
 // - Usage:
 //   - Select the adapter through the portable process contract.
 // - Defaults:
@@ -35,7 +36,7 @@ use std::ffi::OsString;
 use std::fmt::Arguments;
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::io::Error;
-use std::io::{Result as IoResult, Write as _, stdout};
+use std::io::{Result as IoResult, Write as _, stderr, stdout};
 use std::time::Duration;
 use std::{env, thread};
 
@@ -51,6 +52,10 @@ impl ProcessPort for () {
     fn wait_for_retry(delay: Duration) -> IoResult<()> {
         thread::sleep(delay);
         Ok(())
+    }
+
+    fn write_diagnostic(message: Arguments<'_>) -> IoResult<()> {
+        writeln!(stderr().lock(), "{message}")
     }
 
     fn write_status(message: Arguments<'_>) -> IoResult<()> {

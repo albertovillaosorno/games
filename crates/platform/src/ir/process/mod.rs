@@ -9,11 +9,11 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable launch arguments, status output and cooperative retry waits.
+//   - Portable launch arguments, status and diagnostic output, retry waits.
 // - Must-Not:
 //   - Read host arguments, write native streams or interpret title options.
 // - Allows:
-//   - Inputs: Explicit requests and borrowed formatted status messages.
+//   - Inputs: Explicit requests and borrowed formatted output messages.
 //   - Outputs: Owned portable arguments or typed I/O errors.
 //   - Side effects: Only explicitly requested adapter dispatch or waiting.
 // - Split-When:
@@ -25,11 +25,11 @@
 // - Description:
 //   - Preserves non-Unicode launch arguments and output failures.
 // - Usage:
-//   - Observe launch arguments and explicitly emit a status line.
+//   - Observe launch arguments and explicitly emit an output line.
 // - Defaults:
 //   - Missing host implementations return unsupported errors.
 
-//! Portable process arguments, status output and cooperative retry waits.
+//! Portable process arguments, status and diagnostic output, retry waits.
 
 /// Isolated host integration test scheduling and opt-in.
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -44,6 +44,8 @@ pub(crate) trait ProcessPort {
     fn arguments() -> IoResult<Vec<OsString>>;
 
     fn wait_for_retry(delay: Duration) -> IoResult<()>;
+
+    fn write_diagnostic(message: Arguments<'_>) -> IoResult<()>;
 
     fn write_status(message: Arguments<'_>) -> IoResult<()>;
 }
@@ -65,6 +67,14 @@ pub fn arguments() -> IoResult<Vec<OsString>> {
 /// Reports unavailable cooperative waiting.
 pub fn wait_for_retry(delay: Duration) -> IoResult<()> {
     wait_with::<()>(delay)
+}
+
+/// Write a formatted diagnostic message followed by a newline.
+///
+/// # Errors
+/// Reports unavailable output or a host write failure.
+pub fn write_diagnostic(message: Arguments<'_>) -> IoResult<()> {
+    write_diagnostic_with::<()>(message)
 }
 
 /// Write a formatted status message followed by a newline.
@@ -90,6 +100,13 @@ where
         return Ok(());
     }
     Port::wait_for_retry(delay)
+}
+
+fn write_diagnostic_with<Port>(message: Arguments<'_>) -> IoResult<()>
+where
+    Port: ProcessPort,
+{
+    Port::write_diagnostic(message)
 }
 
 fn write_status_with<Port>(message: Arguments<'_>) -> IoResult<()>
@@ -120,6 +137,14 @@ mod tests {
             }
         }
 
+        fn write_diagnostic(message: Arguments<'_>) -> IoResult<()> {
+            if message.to_string() == "review 4" {
+                Ok(())
+            } else {
+                Err(ErrorKind::BrokenPipe.into())
+            }
+        }
+
         fn write_status(message: Arguments<'_>) -> IoResult<()> {
             if message.to_string() == "ready 4" {
                 Ok(())
@@ -146,6 +171,12 @@ mod tests {
     fn process_port_preserves_arguments_messages_and_errors() -> IoResult<()> {
         let arguments = arguments_with::<Recording>()?;
         if arguments != [OsString::from("--local"), OsString::from("a b")] {
+            return Err(ErrorKind::InvalidData.into());
+        }
+        write_diagnostic_with::<Recording>(format_args!("review {}", 4u8))?;
+        if !write_diagnostic_with::<Recording>(format_args!("unavailable"))
+            .is_err_and(|error| error.kind() == ErrorKind::BrokenPipe)
+        {
             return Err(ErrorKind::InvalidData.into());
         }
         write_status_with::<Recording>(format_args!("ready {}", 4u8))?;

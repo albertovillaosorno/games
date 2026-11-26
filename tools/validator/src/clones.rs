@@ -32,10 +32,11 @@
 //! Conservative detection of substantial Rust function-body duplicates.
 
 use std::collections::BTreeMap;
-use std::io::{self, Write as _};
 use std::iter::Peekable;
 use std::path::Path;
 use std::str::Chars;
+
+use games_platform::ir::process::write_diagnostic;
 
 use crate::files;
 
@@ -484,10 +485,11 @@ pub fn validate(root: &Path) -> Result<(), String> {
         records.extend(functions(&path.to_string_lossy(), &source));
     }
     let findings = compare(&records);
-    let mut stderr = io::stderr().lock();
     for near in findings.near.iter().take(20) {
-        writeln!(stderr, "{near} (review manually; not blocking)")
-            .map_err(|error| error.to_string())?;
+        write_diagnostic(format_args!(
+            "{near} (review manually; not blocking)"
+        ))
+        .map_err(|error| error.to_string())?;
     }
     if !findings.exact.is_empty() {
         return Err(findings.exact.join("\n"));
