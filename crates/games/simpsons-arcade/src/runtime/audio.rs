@@ -31,7 +31,6 @@
 
 //! Opt-in playback of observed attack-associated PCM clips.
 
-use std::ffi::OsStr;
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::time::Duration;
 
@@ -45,7 +44,7 @@ use games_assets::pcm::PcmSamples;
 use games_platform::ir::audio::{NativeAudio, PlaybackControl, PlaybackSpec};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::process::write_status;
-use games_platform::ir::storage::bundle::MediaOverlay;
+use games_platform::ir::storage::bundle::{BundleSource, MediaOverlay};
 
 use super::launch::AudioSelection;
 use super::{Controls, failure, live, open_selected_bundle, size, smoke_press};
@@ -100,11 +99,11 @@ impl Samples {
     }
 
     pub(super) fn load(
-        parent: &OsStr,
+        store: BundleSource<'_>,
         selection: &AudioSelection,
     ) -> Result<Self, RenderError> {
         let bundle =
-            open_selected_bundle(parent, &selection.base, ManifestLimits {
+            open_selected_bundle(store, &selection.base, ManifestLimits {
                 manifest_bytes: size(65_536)?,
                 payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
                 records: size(161)?,
@@ -114,7 +113,7 @@ impl Samples {
             .replacement
             .as_ref()
             .map(|hash| {
-                open_selected_bundle(parent, hash, replacement_limits()?)
+                open_selected_bundle(store, hash, replacement_limits()?)
             })
             .transpose()?;
         let allowed = CLIPS.map(|(key, _frames)| key);
@@ -526,7 +525,7 @@ fn smoke_join(
 #[cfg(test)]
 mod tests {
     use std::array;
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
 
     use games_assets::archive::ArchiveBudget;
     use games_assets::{
@@ -600,7 +599,7 @@ mod tests {
             base: publish_fixture(parent, &base)?,
             replacement: None,
         };
-        let original = Samples::load(parent, &selection)?;
+        let original = Samples::load(BundleSource::Local(parent), &selection)?;
         if original.clips.iter().flatten().any(|sample| *sample != 12) {
             return Err(failure("incorrect original clip samples"));
         }
@@ -610,7 +609,7 @@ mod tests {
             .ok_or_else(|| failure("missing fixture clip"))?;
         selection.replacement =
             Some(publish_fixture(parent, &[(key, frames, -7)])?);
-        let modified = Samples::load(parent, &selection)?;
+        let modified = Samples::load(BundleSource::Local(parent), &selection)?;
         let [first, rest @ ..] = &modified.clips;
         if first.iter().any(|sample| *sample != -7)
             || rest.iter().flatten().any(|sample| *sample != 12)
@@ -625,7 +624,7 @@ mod tests {
                 invalid_frames,
                 -7,
             )])?);
-            if Samples::load(parent, &selection).is_ok() {
+            if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
                 return Err(failure("invalid replacement accepted"));
             }
         }

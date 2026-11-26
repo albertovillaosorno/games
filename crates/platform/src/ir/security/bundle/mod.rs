@@ -80,12 +80,13 @@ pub(crate) struct VerifiedManifest {
 }
 
 impl VerifiedManifest {
-    pub(crate) fn admit_payloads(
+    fn admit_inventory(
         &self,
         payloads: &BTreeMap<ContentHash, Vec<u8>>,
+        exact: bool,
     ) -> Result<(), BundleError> {
         let expected = self.manifest.payload_sizes();
-        if payloads.len() != expected.len() {
+        if exact && payloads.len() != expected.len() {
             return Err(AssetError::PayloadMismatch.into());
         }
         for (identity, size) in expected {
@@ -98,6 +99,20 @@ impl VerifiedManifest {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn admit_payloads(
+        &self,
+        payloads: &BTreeMap<ContentHash, Vec<u8>>,
+    ) -> Result<(), BundleError> {
+        self.admit_inventory(payloads, true)
+    }
+
+    pub(crate) fn admit_referenced_payloads(
+        &self,
+        payloads: &BTreeMap<ContentHash, Vec<u8>>,
+    ) -> Result<(), BundleError> {
+        self.admit_inventory(payloads, false)
     }
 
     pub(crate) const fn digest(&self) -> ContentHash {

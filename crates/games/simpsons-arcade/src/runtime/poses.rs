@@ -42,6 +42,7 @@ use games::animation::{
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::storage::bundle::BundleSource;
 use games_platform::ir::storage::file::snapshot;
 
 use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
@@ -51,6 +52,7 @@ use crate::{
 };
 
 const MAX_POSES: usize = 220;
+const MAX_CATALOGUE_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(18_431);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -117,13 +119,13 @@ impl Catalogue {
 
     pub(super) fn load(
         &self,
-        parent: &OsStr,
+        store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<PoseArt, RenderError> {
         let mut entries = BTreeMap::new();
         for (&key, digest) in &self.entries {
             let bundle =
-                open_bundle(parent, &OsString::from(digest.to_string()))?;
+                open_bundle(store, &OsString::from(digest.to_string()))?;
             let name = match (key.0, key.1) {
                 (Subject::Station(player), _) => KEYS
                     .get(player.index())
@@ -146,12 +148,16 @@ impl Catalogue {
     }
 
     pub(super) fn open(path: &OsStr) -> Result<Self, RenderError> {
-        let bytes = snapshot(path, NonZeroU64::MIN.saturating_add(18_431))
-            .map_err(failure)?;
+        let bytes = snapshot(path, MAX_CATALOGUE_BYTES).map_err(failure)?;
         Self::parse(from_utf8(&bytes).map_err(failure)?)
     }
 
-    fn parse(text: &str) -> Result<Self, RenderError> {
+    pub(super) fn parse(text: &str) -> Result<Self, RenderError> {
+        if u64::try_from(text.len())
+            .map_or(true, |length| length > MAX_CATALOGUE_BYTES.get())
+        {
+            return Err(failure("pose catalogue exceeds byte limit"));
+        }
         let mut entries = BTreeMap::new();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let (key, digest) = parse_line(line)?;
@@ -937,10 +943,22 @@ mod tests {
         let extra: String = ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
-                (0u8..53).map(move |tick| {
-                    format!("{name} air-attack {tick} {HASH}\n")
-                })
+                (0u8..24)
+                    .map(move |tick| format!("{name} walk {tick} {HASH}\n"))
             })
+            .chain(
+                [
+                    ("walk", ENEMY_WALK_TICKS),
+                    ("defeat", ENEMY_DEFEAT_TICKS),
+                    ("attack", 2),
+                ]
+                .into_iter()
+                .flat_map(|(kind, count)| {
+                    (0..count).map(move |tick| {
+                        format!("enemy {kind} {tick} {HASH}\n")
+                    })
+                }),
+            )
             .collect();
         let text = format!("{}{extra}", complete());
         assert_eq!(
@@ -948,9 +966,16 @@ mod tests {
             Some(MAX_POSES)
         );
         assert!(
-            Catalogue::parse(&format!("{text}marge air-attack 53 {HASH}\n"))
-                .is_err()
+            Catalogue::parse(&format!("{text}marge walk 24 {HASH}\n")).is_err()
         );
+    }
+
+    #[test]
+    fn memory_pose_text_has_the_same_byte_budget_as_local_text() {
+        let valid = complete();
+        let padded = format!("{valid}\n{}", " ".repeat(18_432));
+        assert!(Catalogue::parse(&valid).is_ok());
+        assert!(Catalogue::parse(&padded).is_err());
     }
 
     #[test]

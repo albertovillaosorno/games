@@ -89,7 +89,7 @@ use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
 };
-use games_platform::ir::storage::bundle::CanonicalBundle;
+use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{DisplayStore, VolumeStore};
 use games_platform::ir::ui::PlateLayout;
@@ -576,7 +576,7 @@ impl Scene {
             } else {
                 None
             },
-            poses: source.poses.load(source.parent, scene)?,
+            poses: source.poses.load(source.store, scene)?,
             shadow: source
                 .shadow
                 .as_ref()
@@ -855,41 +855,41 @@ struct Sources<'source> {
     actors: [CanonicalBundle; 4],
     audio: Option<audio::Samples>,
     enemy: Option<[CanonicalBundle; 2]>,
-    parent: &'source OsStr,
     poses: poses::Catalogue,
     shadow: Option<CanonicalBundle>,
+    store: BundleSource<'source>,
     world: Option<CanonicalBundle>,
 }
 
 impl<'source> Sources<'source> {
     fn load(
-        parent: &'source OsStr,
+        store: BundleSource<'source>,
         actors: &[OsString; 4],
         options: OptionalSources,
     ) -> Result<Self, RenderError> {
         Ok(Self {
-            actors: open_bundles(parent, actors)?,
+            actors: open_bundles(store, actors)?,
             audio: options
                 .audio
                 .as_ref()
-                .map(|selection| audio::Samples::load(parent, selection))
+                .map(|selection| audio::Samples::load(store, selection))
                 .transpose()?,
             enemy: options
                 .enemy
                 .as_ref()
-                .map(|hashes| open_bundles(parent, hashes))
+                .map(|hashes| open_bundles(store, hashes))
                 .transpose()?,
-            parent,
             poses: options.poses,
             shadow: options
                 .shadow
                 .as_ref()
-                .map(|hash| open_bundle(parent, hash))
+                .map(|hash| open_bundle(store, hash))
                 .transpose()?,
+            store,
             world: options
                 .world
                 .as_ref()
-                .map(|hash| open_bundle(parent, hash))
+                .map(|hash| open_bundle(store, hash))
                 .transpose()?,
         })
     }
@@ -1743,7 +1743,7 @@ where
 }
 
 fn open_bundle(
-    parent: &OsStr,
+    store: BundleSource<'_>,
     digest: &OsString,
 ) -> Result<CanonicalBundle, RenderError> {
     let limits = ManifestLimits {
@@ -1754,11 +1754,11 @@ fn open_bundle(
         total_bytes: NonZeroU64::new(33_554_432)
             .ok_or(RenderError::TooLarge)?,
     };
-    open_selected_bundle(parent, digest, limits)
+    open_selected_bundle(store, digest, limits)
 }
 
 fn open_selected_bundle(
-    parent: &OsStr,
+    store: BundleSource<'_>,
     digest: &OsString,
     limits: ManifestLimits,
 ) -> Result<CanonicalBundle, RenderError> {
@@ -1767,8 +1767,7 @@ fn open_selected_bundle(
         .ok_or_else(|| failure("invalid hash"))?
         .parse()
         .map_err(failure)?;
-    let bundle =
-        CanonicalBundle::open(parent, hash, limits).map_err(failure)?;
+    let bundle = store.open(hash, limits).map_err(failure)?;
     let source = bundle.manifest().source();
     if source.title != "simpsons-arcade" || source.revision != "world-4p-set-1"
     {
@@ -1778,12 +1777,12 @@ fn open_selected_bundle(
 }
 
 fn open_bundles<const COUNT: usize>(
-    parent: &OsStr,
+    store: BundleSource<'_>,
     hashes: &[OsString; COUNT],
 ) -> Result<[CanonicalBundle; COUNT], RenderError> {
     hashes
         .iter()
-        .map(|hash| open_bundle(parent, hash))
+        .map(|hash| open_bundle(store, hash))
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
         .map_err(|_error| failure("bundle count"))
@@ -1861,32 +1860,35 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
         .transpose()
         .map_err(|error| format!("{error:?}"))?
         .unwrap_or_default();
-    let result =
-        Sources::load(&assets.directory, &assets.actors, OptionalSources {
+    let result = Sources::load(
+        BundleSource::Local(&assets.directory),
+        &assets.actors,
+        OptionalSources {
             audio: assets.audio,
             enemy: assets.enemy,
             poses: catalogue,
             shadow: assets.shadow,
             world: assets.world,
-        })
-        .and_then(|source| {
-            window(
-                &source,
-                PreviewOptions {
-                    audio_device: audio_device.as_deref(),
-                    controls: &resolved,
-                    display,
-                    hidden: smoke,
-                    measure,
-                    preferences: preferences.as_ref(),
-                    touch_enabled,
-                    volume,
-                    volume_store: volume_store.as_ref(),
-                },
-                listener,
-                load_started,
-            )
-        });
+        },
+    )
+    .and_then(|source| {
+        window(
+            &source,
+            PreviewOptions {
+                audio_device: audio_device.as_deref(),
+                controls: &resolved,
+                display,
+                hidden: smoke,
+                measure,
+                preferences: preferences.as_ref(),
+                touch_enabled,
+                volume,
+                volume_store: volume_store.as_ref(),
+            },
+            listener,
+            load_started,
+        )
+    });
     result.map_err(|error| format!("{error:?}"))
 }
 
@@ -3161,24 +3163,119 @@ fn preview_layout(
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+    use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+
     use games::input::physical::{
         ControllerAxis, ControllerButton, KeyboardKey,
     };
     use games::input::profile::editor::EditorNavigation;
     use games::input::{InputEvent, LogicalAction};
     use games::replay::{InputStep as _, LiveSimulation};
+    use games_assets::{
+        AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
+        SourceIdentity,
+    };
     use games_platform::ir::frame::RenderError;
     use games_platform::ir::scene::EventBatch;
+    use games_platform::ir::storage::bundle::{
+        BundleSource, MemoryBundleLimits, MemoryBundleStore,
+    };
 
     use super::{
-        Action, Cabinet, Control, Controls, DEFAULT_PROFILES, LiveInputLimits,
-        NativeBatch, Phase, Player, Profiles, Station, StepClock, StreetLayout,
-        TICK_INTERVAL, configured_profiles, dimension, failure, frame_due,
-        live, presentation_wait, size,
+        Action, Cabinet, Control, Controls, DEFAULT_PROFILES, KEYS,
+        LiveInputLimits, NativeBatch, OptionalSources, Phase, Player, Profiles,
+        Sources, Station, StepClock, StreetLayout, TICK_INTERVAL,
+        configured_profiles, dimension, failure, frame_due, live, poses,
+        presentation_wait, size,
     };
     use crate::remote::{HostedCabinet, HostedInput};
 
     type TestCabinet = (Controls, LiveSimulation<Cabinet>);
+    type MemoryActor = (ContentHash, Vec<u8>);
+
+    fn memory_actor(
+        revision: &str,
+        object: ContentHash,
+    ) -> Result<MemoryActor, RenderError> {
+        let limits = ManifestLimits {
+            manifest_bytes: size(4096)?,
+            payload_bytes: NonZeroU64::MIN.saturating_add(3),
+            records: size(KEYS.len())?,
+            total_bytes: NonZeroU64::MIN.saturating_add(15),
+        };
+        let records = KEYS
+            .into_iter()
+            .map(|key| AssetRecord {
+                digest: object,
+                format: AssetFormat::Rgba8 {
+                    height: NonZeroU32::MIN,
+                    width: NonZeroU32::MIN,
+                },
+                key: String::from(key),
+                size: 4,
+            })
+            .collect();
+        let manifest = AssetManifest::new(
+            SourceIdentity {
+                revision: String::from(revision),
+                title: String::from("simpsons-arcade"),
+            },
+            records,
+            limits,
+        )
+        .map_err(failure)?;
+        let bytes = manifest.encode(limits).map_err(failure)?;
+        Ok((ContentHash::calculate(&bytes), bytes))
+    }
+
+    #[test]
+    fn title_source_admits_pinned_memory_bundles_without_local_paths()
+    -> Result<(), RenderError> {
+        let pixel = [20, 40, 60, 255];
+        let object = ContentHash::calculate(&pixel);
+        let (valid, valid_bytes) = memory_actor("world-4p-set-1", object)?;
+        let (foreign, foreign_bytes) = memory_actor("other-edition", object)?;
+        let store = MemoryBundleStore::new(
+            BTreeMap::from([(valid, valid_bytes), (foreign, foreign_bytes)]),
+            BTreeMap::from([(object, pixel.to_vec())]),
+            MemoryBundleLimits {
+                bytes: NonZeroU64::MIN.saturating_add(8191),
+                manifests: NonZeroUsize::MIN.saturating_add(1),
+                objects: NonZeroUsize::MIN,
+            },
+        )
+        .map_err(failure)?;
+        let actors = array::from_fn(|_| OsString::from(valid.to_string()));
+        let options = || OptionalSources {
+            audio: None,
+            enemy: None,
+            poses: poses::Catalogue::default(),
+            shadow: None,
+            world: None,
+        };
+        let source =
+            Sources::load(BundleSource::Memory(&store), &actors, options())?;
+        for (actor, key) in source.actors.iter().zip(KEYS) {
+            if actor.read_payload(key).map_err(failure)? != pixel {
+                return Err(failure("selected memory actor changed"));
+            }
+        }
+        let foreign_actors =
+            array::from_fn(|_| OsString::from(foreign.to_string()));
+        if Sources::load(
+            BundleSource::Memory(&store),
+            &foreign_actors,
+            options(),
+        )
+        .is_ok()
+        {
+            return Err(failure("foreign memory edition admitted"));
+        }
+        Ok(())
+    }
 
     #[test]
     fn editor_capture_releases_holds_without_leaking_gameplay_presses()

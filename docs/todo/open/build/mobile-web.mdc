@@ -517,3 +517,14 @@ was 146,232 bytes. Firefox reported llvmpipe or similar; this is real
 WebGL API execution with a software renderer, not physical GPU
 acceleration. Production window integration, context recovery and
 browser gameplay remain open.
+
+The portable canonical bundle capability now accepts an immutable memory
+snapshot with separate manifest and shared object maps under aggregate
+byte and inventory limits. Each selected digest still uses the canonical
+manifest parser and verifies all referenced objects before granting a
+handle. Distinct bundle handles share object storage and retain the
+existing per-record readback checks. The title's actor, pose, world,
+shadow, enemy and audio loaders select the same local or memory source;
+pose text applies its local byte limit even when supplied in memory.
+This is path-independent source admission, not a browser file-picker,
+asset package, live title or persistent storage implementation.
