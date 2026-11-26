@@ -36,8 +36,7 @@ use std::collections::btree_map::Entry;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use crate::presentation::{
-    Dimensions, PresentationLayout, PresentationRegion, Viewport,
-    centered_expansion,
+    PresentationLayout, PresentationRegion, Viewport, centered_expansion,
 };
 
 /// A position in the normalized control surface, inclusive at both edges.
@@ -72,16 +71,19 @@ impl TouchPoint {
     ///
     /// Rejects letterbox space and invalid rectangles. Cropped content
     /// retains its position within the complete logical frame.
+    /// A protected lower strip owns the shared internal boundary, including
+    /// its letterbox space. Unsplit viewport edges remain inclusive.
     #[must_use]
     pub fn in_presentation(self, layout: PresentationLayout) -> Option<Self> {
-        layout
-            .regions()
-            .into_iter()
-            .rev()
-            .flatten()
-            .find_map(|region| {
-                self.through_region(region, layout.surface, layout.design)
-            })
+        layout.regions().into_iter().enumerate().rev().find_map(
+            |(index, region)| {
+                self.through_region(
+                    region?,
+                    layout,
+                    index == 0 && layout.protected.is_some(),
+                )
+            },
+        )
     }
 
     /// Project surface-normalized coordinates into a fitted viewport.
@@ -127,46 +129,44 @@ impl TouchPoint {
     /// Returns None for cropped-out content or invalid geometry.
     #[must_use]
     pub fn on_presentation(self, layout: PresentationLayout) -> Option<Self> {
-        layout
-            .regions()
-            .into_iter()
-            .rev()
-            .flatten()
-            .find_map(|region| {
-                self.through_region(
-                    PresentationRegion {
-                        destination: region.source,
-                        source: region.destination,
-                    },
-                    layout.design,
-                    layout.surface,
-                )
-            })
+        self.in_presentation(PresentationLayout {
+            design: layout.surface,
+            destination: layout.source,
+            protected: layout.protected.map(|region| PresentationRegion {
+                destination: region.source,
+                source: region.destination,
+            }),
+            source: layout.destination,
+            surface: layout.design,
+        })
     }
 
     fn through_region(
         self,
         region: PresentationRegion,
-        surface: Dimensions,
-        design: Dimensions,
+        layout: PresentationLayout,
+        exclude_bottom_edge: bool,
     ) -> Option<Self> {
         let relative = self.in_viewport(
             region.destination,
-            surface.width,
-            surface.height,
+            layout.surface.width,
+            layout.surface.height,
         )?;
+        if exclude_bottom_edge && relative.y == u16::MAX {
+            return None;
+        }
         Some(Self {
             x: source_axis(
                 relative.x,
                 region.source.x,
                 region.source.width,
-                design.width,
+                layout.design.width,
             )?,
             y: source_axis(
                 relative.y,
                 region.source.y,
                 region.source.height,
-                design.height,
+                layout.design.height,
             )?,
         })
     }
@@ -696,6 +696,33 @@ mod tests {
                     .is_none())
             );
         }
+    }
+
+    #[test]
+    fn protected_fill_owns_the_exact_internal_split_boundary() {
+        let nz = |value| NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
+        let design = Dimensions::new(nz(6), nz(5));
+        let surface = Dimensions::new(nz(12), nz(5));
+        let geometry = PresentationMode::Fill.layout_with_protected_bottom(
+            surface,
+            design,
+            Some(nz(2)),
+        );
+        assert!(geometry.is_some_and(|layout| {
+            let before = TouchPoint { x: 0, y: 39320 };
+            let seam_bar = TouchPoint { x: 0, y: 39321 };
+            let seam_panel = TouchPoint { x: 32768, y: 39321 };
+            let crop_end = TouchPoint { x: 0, y: 26214 };
+            let panel_start = TouchPoint { x: 32768, y: 39321 };
+            before.in_presentation(layout).is_some()
+                && seam_bar.in_presentation(layout).is_none()
+                && seam_panel.in_presentation(layout).is_some()
+                && crop_end.on_presentation(layout).is_none()
+                && panel_start.on_presentation(layout).is_some()
+                && TouchPoint { x: 32768, y: u16::MAX }
+                    .in_presentation(layout)
+                    .is_some_and(|point| point.y == u16::MAX)
+        }));
     }
 
     #[test]

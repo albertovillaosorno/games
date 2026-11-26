@@ -374,3 +374,35 @@ the Xvfb displays of 1920x1080 and 720x1280. They verified menu selection,
 synthetic touch admission and movement, 600 four-player submissions,
 controller axes and original-media combat smoke. This is not physical
 touch, high-DPI or actual wide/portrait fullscreen drawable acceptance.
+
+A subsequent visible Xvfb/X11 OpenGL run of the same release verified
+actual fullscreen gameplay drawables of 1920x1080 and 720x1280, and
+windowed gameplay through 960x912, 900x600 and 520x760 resizes. All five
+measured segments completed and the sessions exited through the pause
+menu. The centered panel measured 1136x284, 720x180, 960x240, 628x157
+and 520x130 pixels respectively. Nearest-neighbor reduction of all four
+nonbaseline panel captures to 320x80 matched the 960x240 baseline
+exactly; the surrounding predicted bars contained only black pixels.
+The five gameplay segments submitted 3487 frames with five measured
+host-work budget misses; their loads and durations were not controlled.
+This verifies actual virtual drawable geometry, rendering and synthetic
+keyboard navigation, not physical touch, high-DPI or audible playback.
+
+A separate visible run changed integer scaling to Fill in settings with
+`--touch` active, then exited normally. Relaunching from the same private
+settings without display or window overrides entered Fill gameplay.
+The display save's SHA-256 was unchanged after the second run. Across
+889 submissions, five host-work budget misses occurred in the first
+segment, and none in the relaunch segment. No owner settings changed.
+
+A hidden Fill smoke also passed using a private explicit profile for
+Bart with both primary/secondary and left/right touch slots exchanged.
+The protected geometry and synthetic touch probes passed, along with
+48 controller axis directions, 444 camera columns, two cooperative
+pose families, six reinforcement meters, 600 movement and 20 combat
+submissions without host-work budget misses.
+
+The protected panel owns the exact internal split boundary in both
+projection directions. A contact on the split row outside the panel
+is rejected instead of falling through to the upper scene. A regression
+covers the split, adjacent visible points and the inclusive outer edge.
