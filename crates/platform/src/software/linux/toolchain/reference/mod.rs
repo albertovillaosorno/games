@@ -41,6 +41,9 @@ use crate::ir::security::toolchain::reference::{
     ReferenceKind, ReferenceRevision, ReferenceTool,
 };
 use crate::ir::toolchain::ToolchainError;
+use crate::software::linux::storage::{
+    contributor_directory, contributor_lease,
+};
 
 type Outcome<T> = Result<T, ToolchainError>;
 
@@ -48,8 +51,9 @@ pub(super) fn download(
     workspace: &Path,
     tool: ReferenceTool,
 ) -> Outcome<OsString> {
-    let directory = workspace.join(".reference/tools").join(tool.name());
-    let _guard = lock(&directory)?;
+    let directory = reference_directory(workspace, tool)?;
+    let _guard = contributor_lease(&directory.join(".download.lock"))
+        .map_err(io_failure("lock download"))?;
     let path = match tool.kind() {
         ReferenceKind::Dependencies => {
             dependencies(workspace, &directory)?;
@@ -131,17 +135,18 @@ fn result(command: &mut Command) -> Outcome<()> {
     }
 }
 
-fn lock(directory: &Path) -> Outcome<File> {
-    fs::create_dir_all(directory).map_err(io_failure("create reference"))?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(directory.join(".download.lock"))
-        .map_err(io_failure("open download lock"))?;
-    file.lock().map_err(io_failure("lock download"))?;
-    Ok(file)
+fn reference_directory(
+    workspace: &Path,
+    tool: ReferenceTool,
+) -> Outcome<PathBuf> {
+    let root = workspace.join(".reference");
+    let tools = root.join("tools");
+    let directory = tools.join(tool.name());
+    for component in [&root, &tools, &directory] {
+        contributor_directory(component)
+            .map_err(io_failure("create reference"))?;
+    }
+    Ok(directory)
 }
 
 fn resolve(kind: ReferenceKind) -> Outcome<String> {
@@ -298,6 +303,29 @@ mod tests {
             .ok_or("missing release catalogue entry")?
             .revision(value)
             .map_err(|error| format!("{error:?}"))
+    }
+
+    #[test]
+    fn reference_directories_reject_linked_workspace_components()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let other = TestRoot::new().map_err(|error| error.to_string())?;
+        let tool = ReferenceTool::parse("craft-libs")
+            .ok_or("missing source catalogue entry")?;
+        let linked = root.path().join(".reference");
+        file_link(other.path(), &linked).map_err(|error| error.to_string())?;
+        if reference_directory(root.path(), tool).is_ok()
+            || other.entry_count().map_err(|error| error.to_string())? != 0
+        {
+            return Err("linked reference root was followed".into());
+        }
+        fs::remove_file(&linked).map_err(|error| error.to_string())?;
+        let directory = reference_directory(root.path(), tool)
+            .map_err(|error| error.to_string())?;
+        if directory != linked.join("tools").join(tool.name()) {
+            return Err("unexpected reference directory".into());
+        }
+        Ok(())
     }
 
     #[test]

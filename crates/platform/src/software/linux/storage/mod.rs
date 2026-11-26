@@ -39,6 +39,9 @@ mod bundle;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file;
 
+#[cfg(target_os = "linux")]
+pub(super) use file::{contributor_directory, contributor_lease};
+
 /// Shared native storage fixtures for workspace tests.
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),

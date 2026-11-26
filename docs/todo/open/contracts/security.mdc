@@ -539,3 +539,12 @@ the security owner binds encoded bytes, digest and unique payload sizes.
 A portable fixture verifies exact-byte limits, deduplication and rejection
 of insufficient manifest budgets. Fresh native Xvfb/X11 and dummy-audio
 validation 1795658907068485111-3411052 passed with all six portable checks.
+
+Contributor validation and reference acquisition now share native directory
+and lease admission. Each directory is created relative to an admitted
+parent; existing locks are pinned before ordinary file access and checked
+again after acquiring the lock. Native regressions reject linked, special,
+non-single-link and untrusted-mode lease entries without changing their
+contents. Fresh Xvfb/X11 and dummy-audio validation
+1795660534548555459-3863730 passed 1,674 aggregate test executions and all
+six portable core checks. Trusted workspace ancestry remains required.

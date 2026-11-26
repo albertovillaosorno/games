@@ -43,6 +43,9 @@ use crate::ir::toolchain::environment::validation_log_name;
 use crate::ir::toolchain::validation::state::{
     StateBackend, StateFactory, StatePort, ValidationKey,
 };
+use crate::software::linux::storage::{
+    contributor_directory, contributor_lease,
+};
 
 #[derive(Debug)]
 struct State {
@@ -107,7 +110,7 @@ impl StateFactory for () {
         let workspace = Path::new(root);
         let cache = state_directory(workspace, ".cache")?;
         let logs = state_directory(workspace, ".temp")?;
-        let lease = lock(&cache.join("lock"))?;
+        let lease = contributor_lease(&cache.join("lock"))?;
         let name = validation_log_name()
             .map_err(|error| Error::other(error.to_string()))?;
         let log_path = logs.join(&name);
@@ -122,15 +125,6 @@ impl StateFactory for () {
             marker: cache.join("success"),
             pending: cache.join(format!("pending-{name}")),
         }))
-    }
-}
-
-fn directory(path: &Path) -> IoResult<()> {
-    fs::create_dir_all(path)?;
-    if fs::symlink_metadata(path)?.is_dir() {
-        Ok(())
-    } else {
-        Err(ErrorKind::InvalidData.into())
     }
 }
 
@@ -152,32 +146,11 @@ fn existing_marker(path: &Path) -> IoResult<Option<File>> {
     }
 }
 
-fn lock(path: &Path) -> IoResult<File> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() => {},
-        Ok(_metadata) => return Err(ErrorKind::InvalidData.into()),
-        Err(error) if error.kind() == ErrorKind::NotFound => {},
-        Err(error) => return Err(error),
-    }
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .custom_flags(O_NOFOLLOW | O_NONBLOCK)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(ErrorKind::InvalidData.into());
-    }
-    file.lock()?;
-    Ok(file)
-}
-
 fn state_directory(root: &Path, parent: &str) -> IoResult<PathBuf> {
     let local = root.join(parent);
-    directory(&local)?;
+    contributor_directory(&local)?;
     let state = local.join("validate");
-    directory(&state)?;
+    contributor_directory(&state)?;
     Ok(state)
 }
 

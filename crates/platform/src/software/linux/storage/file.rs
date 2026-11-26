@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded snapshots and shared native regular-file admission.
+//   - Bounded snapshots, native file admission and contributor leases.
 // - Must-Not:
 //   - Interpret source formats, asset semantics or execute files.
 // - Allows:
 //   - Inputs: Explicit local paths and byte limits.
-//   - Outputs: Bounded bytes or typed file admission failures.
-//   - Side effects: Read-only descriptor access, without following final links.
+//   - Outputs: Bounded bytes, owned leases or typed admission failures.
+//   - Side effects: Pinned reads and lease creation, no final symlinks.
 // - Split-When:
 //   - A platform needs a different safe file-opening primitive.
 // - Merge-When:
@@ -29,6 +29,8 @@
 // - Defaults:
 //   - No final symlinks, no device access, no unchecked allocation.
 
+#[cfg(target_os = "linux")]
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
 use std::num::NonZeroU64;
@@ -37,6 +39,8 @@ use std::path::Path;
 
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
+#[cfg(target_os = "linux")]
+use nix::sys::stat::mkdirat;
 use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
 use nix::unistd::geteuid;
 use zeroize::Zeroizing;
@@ -303,6 +307,107 @@ pub(super) fn sync_regular(
     verify_staged_regular(parent, name, expected)
 }
 
+// Both contributor workflows use one local directory and lease policy.
+// Only the workspace owner may create or mutate lease entries.
+#[cfg(target_os = "linux")]
+pub(in crate::software::linux) fn contributor_directory(
+    path: &Path,
+) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_contributor_directory(parent)?;
+    match mkdirat(&directory, name, Mode::S_IRWXU) {
+        Ok(()) | Err(Errno::EEXIST) => {},
+        Err(error) => return Err(error.into()),
+    }
+    let created = openat(&directory, name, DIRECTORY_FLAGS, Mode::empty())
+        .map_err(contributor_directory_error)?;
+    if !trusted_directory(&created)? {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn open_contributor_directory(path: &Path) -> io::Result<OwnedFd> {
+    let directory = open(path, DIRECTORY_FLAGS, Mode::empty())
+        .map_err(contributor_directory_error)?;
+    if !trusted_directory(&directory)? {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(directory)
+}
+
+#[cfg(target_os = "linux")]
+fn contributor_directory_error(error: Errno) -> io::Error {
+    if matches!(error, Errno::ELOOP | Errno::ENOTDIR) {
+        io::ErrorKind::InvalidData.into()
+    } else {
+        error.into()
+    }
+}
+
+// The existing-file path pins metadata before reopening the inode. A
+// conflicting creation never opens a device, FIFO or symbolic link for I/O.
+// After waiting, verify that the lease still names this single-link inode.
+#[cfg(target_os = "linux")]
+pub(in crate::software::linux) fn contributor_lease(
+    path: &Path,
+) -> io::Result<File> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_contributor_directory(parent)?;
+    let fd = match openat(
+        &directory,
+        name,
+        OFlag::O_RDWR
+            | OFlag::O_CREAT
+            | OFlag::O_EXCL
+            | OFlag::O_NOFOLLOW
+            | OFlag::O_CLOEXEC,
+        Mode::S_IRUSR | Mode::S_IWUSR,
+    ) {
+        Ok(created) => created,
+        Err(Errno::EEXIST) => reopen_contributor_lease(&directory, name)?,
+        Err(error) => return Err(error.into()),
+    };
+    let before = fstat(&fd)?;
+    if !staged_regular(&before) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let file = File::from(fd);
+    file.lock()?;
+    let named = openat(&directory, name, PIN_FLAGS, Mode::empty())?;
+    let after = fstat(&named)?;
+    if !staged_regular(&after) || !same_inode(&before, &after) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "linux")]
+fn reopen_contributor_lease(
+    directory: &OwnedFd,
+    name: &OsStr,
+) -> io::Result<OwnedFd> {
+    let pinned = openat(directory, name, PIN_FLAGS, Mode::empty())?;
+    let before = fstat(&pinned)?;
+    if !staged_regular(&before) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let descriptor_path = format!("/proc/self/fd/{}", pinned.as_raw_fd());
+    let fd = open(
+        descriptor_path.as_str(),
+        OFlag::O_RDWR | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )?;
+    let after = fstat(&fd)?;
+    if !staged_regular(&after) || !same_inode(&before, &after) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(fd)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -319,6 +424,42 @@ mod tests {
         condition
             .then_some(())
             .ok_or(FileReadError::Io(io::ErrorKind::InvalidData))
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn contributor_lease_preserves_single_inode_and_rejects_unsafe_entries()
+    -> Result<(), FileReadError> {
+        let root = TestRoot::new()?;
+        let directory = root.path.join("leases");
+        contributor_directory(&directory)?;
+        contributor_directory(&directory)?;
+        let lease = directory.join("lock");
+        let acquired = contributor_lease(&lease)?;
+        let original = fstat(&acquired)?;
+        drop(acquired);
+        fs::write(&lease, b"retained")?;
+        let reacquired = contributor_lease(&lease)?;
+        require(same_inode(&original, &fstat(&reacquired)?))?;
+        drop(reacquired);
+        require(fs::read(&lease)? == b"retained")?;
+        let link = directory.join("link");
+        symlink(&lease, &link)?;
+        require(contributor_lease(&link).is_err())?;
+        fs::remove_file(&link)?;
+        fs::hard_link(&lease, &link)?;
+        require(contributor_lease(&link).is_err())?;
+        require(contributor_lease(&lease).is_err())?;
+        fs::remove_file(&link)?;
+        mkfifo(&link, Mode::S_IRUSR | Mode::S_IWUSR)?;
+        require(contributor_lease(&link).is_err())?;
+        fs::set_permissions(&lease, fs::Permissions::from_mode(0o666))?;
+        require(contributor_lease(&lease).is_err())?;
+        require(fs::read(&lease)? == b"retained")?;
+        let linked_directory = root.path.join("linked");
+        symlink(&directory, &linked_directory)?;
+        require(contributor_directory(&linked_directory).is_err())?;
+        require(contributor_lease(&linked_directory.join("lock")).is_err())
     }
 
     #[test]
