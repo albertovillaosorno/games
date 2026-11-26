@@ -8,11 +8,26 @@ planned targets; no blanket compatibility is promised.
 Linux development requires the system SDL2 library and its pkg-config
 development metadata. The native graphics adapter requests acceleration
 without requiring vertical synchronization. A display-enabled smoke test
-can be explicitly included with:
+can be explicitly included with the following command. The gate briefly maps
+and resizes a small test window, reports its actual drawable dimensions,
+and checks all presentation modes and protected touch projection:
 
 ```sh
 GAMES_NATIVE_RENDER_SMOKE=1 cargo validate --no-cache
 ```
+
+On a Wayland display configured above 1x, SDL2 compatibility may report
+window dimensions in drawable pixels. To exercise distinct window and
+drawable dimensions on a compatible SDL backend, use:
+
+```sh
+SDL_VIDEODRIVER=wayland SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=0 \
+  SDL_VIDEO_HIGHDPI_DISABLED=0 GAMES_NATIVE_RENDER_SMOKE=1 \
+  cargo validate --no-cache
+```
+
+Check the reported window and drawable dimensions; setting these options
+alone does not establish high-DPI support or physical input acceptance.
 
 The native audio adapter uses a separate, bounded signed-PCM playback queue.
 Its paused-device smoke test can run without audible output using SDL2's

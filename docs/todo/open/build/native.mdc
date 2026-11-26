@@ -426,3 +426,33 @@ directions, two cooperative pose families and six reinforcement meters.
 All 600 movement and 20 combat submissions met the 16.667 ms host-work
 budget. The original installed package and owner settings were untouched;
 physical input, screen and audible output remain unverified.
+
+On 2026-11-26 the actual development session exposed no monitor to
+Wayland and Xwayland reported a 0x0 screen. The default SDL PipeWire
+backend enumerated only Dummy Output. An accelerated X11 hidden
+release run with the default PipeWire device passed the full Fill/touch
+smoke, including 600 movement and 20 combat submissions without budget
+misses. It did not establish audible output or physical screen geometry.
+
+A separate headless Mutter 51.1 compositor with a 1920x1080 virtual
+monitor passed all five hidden Wayland/OpenGL display mode smokes with
+synthetic touch and dummy audio. Each verified the full configured
+catalogue, 444 camera columns, 48 controller axis directions, two
+cooperative pose families and six reinforcement meters; none missed
+its host-work budget. Mutter reported a temporary 2x monitor scale.
+The SDL2 compatibility defaults nevertheless reported equal window
+and drawable dimensions, so those runs alone did not verify high DPI.
+
+The opt-in native render gate now also maps and resizes a small window
+and verifies actual drawable receipts, adaptive target admission and
+forward/inverse panel touch projection in all five modes. Fill also
+rejects contacts in the protected strip's letterbox. The fresh gate
+1795676019114621260-2497319 passed on the isolated Wayland compositor
+with explicit SDL scaling hints: 320x192 and 400x240 window extents
+produced 640x384 and 800x480 drawables respectively. Fresh Xvfb/X11
+validation 1795676046221400357-2503331 passed at corresponding 1x
+sizes and also exercised default and named PipeWire queue admission.
+Both gates passed 1,860 aggregate test executions and the portable
+WebAssembly execution check. No owner settings were changed. This
+establishes virtual 2x drawable geometry, not physical high-DPI touch,
+audible output or the owner's actual maximized desktop.

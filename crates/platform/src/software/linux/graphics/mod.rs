@@ -445,7 +445,10 @@ mod tests {
         ContactId, ContactPhase, TouchLayout, TouchPoint, TouchZone,
     };
     use games::input::{InputEvent, InputMapping, InputRouter, LogicalAction};
-    use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
+    use games::presentation::{
+        Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
+        WindowMode,
+    };
     use games::replay::{InputStep, LiveInputLimits, LiveSimulation};
     use games::timing::StepClock;
     use sdl2::controller::{Axis, Button};
@@ -459,7 +462,7 @@ mod tests {
     use super::{
         FrameLayout, FramePresentation, HIDDEN_FLAG, LinuxWindow,
         MINIMIZED_FLAG, RenderError, WindowBackend as _, create_texture,
-        draw_frame, drawable_allowed, sample,
+        draw_frame, drawable_allowed, output_dimensions, sample,
     };
     use crate::ir::graphics::scene_renderer::SceneSession;
     use crate::ir::graphics::{FrameSession, NativeWindow};
@@ -468,6 +471,7 @@ mod tests {
         HostEvent, InputStartup, NativeInput, key_from_name,
     };
     use crate::ir::process::fixtures::{NativeSmoke, smoke_requested};
+    use crate::ir::process::write_status;
     use crate::ir::scene::{EventBatch, SceneLimits, SpriteDraw, SpriteRect};
 
     const BLACK: [u8; 4] = [0, 0, 0, 255];
@@ -770,6 +774,131 @@ mod tests {
         drop(window);
         require(renderer_name == expected_name, "renderer name changed")?;
         verify_public_window_mode()
+    }
+
+    #[test]
+    fn opt_in_native_mapped_surface_smoke() -> Result<(), RenderError> {
+        if !smoke_requested(NativeSmoke::Render)
+            .map_err(|error| RenderError::Backend(error.to_string()))?
+        {
+            return Ok(());
+        }
+        let _guard = super::super::NATIVE_SMOKE_LOCK
+            .lock()
+            .map_err(|error| RenderError::Backend(error.to_string()))?;
+        let mut window = LinuxWindow::open(
+            "games mapped surface smoke",
+            nz(320),
+            nz(192),
+            false,
+        )?;
+        let initial = verify_mapped_surface(&mut window)?;
+        window
+            .canvas
+            .window_mut()
+            .set_size(400, 240)
+            .map_err(|error| RenderError::Backend(error.to_string()))?;
+        let resized = verify_mapped_surface(&mut window)?;
+        require(initial != resized, "mapped drawable did not resize")
+    }
+
+    fn verify_mapped_surface(
+        window: &mut LinuxWindow,
+    ) -> Result<Dimensions, RenderError> {
+        let base = FrameLayout::new(nz(4), nz(4), budget(64))?;
+        let mut observed = None;
+        window.with_scene(
+            base,
+            PresentationMode::AspectFit,
+            &mut |backend| {
+                let mut scene = SceneSession::new(
+                    backend,
+                    base,
+                    SceneLimits {
+                        atlas_bytes: budget(16),
+                        atlases: budget(1),
+                        sprites: budget(1),
+                    },
+                    PresentationMode::AspectFit,
+                )?;
+                scene.protect_bottom(Some(nz(1)))?;
+                observed = Some(verify_mapped_modes(&mut scene)?);
+                Ok(())
+            },
+        )?;
+        let drawable = output_dimensions(&window.canvas)?;
+        require(
+            drawable == observed,
+            "presentation did not use the actual drawable pixels",
+        )?;
+        let extent = drawable.ok_or(RenderError::InvalidDimensions)?;
+        let (width, height) = window.canvas.window().size();
+        write_status(format_args!(
+            "Mapped native surface: {width}x{height} window, {}x{} drawable",
+            extent.width, extent.height,
+        ))
+        .map_err(|error| RenderError::Backend(error.to_string()))?;
+        Ok(extent)
+    }
+
+    fn verify_mapped_modes(
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<Dimensions, RenderError> {
+        let maximum = FrameLayout::new(nz(8), nz(4), budget(128))?;
+        let mut surface = None;
+        for presentation in PresentationMode::ALL {
+            scene.apply_display_settings(DisplaySettings {
+                presentation,
+                ..DisplaySettings::default()
+            })?;
+            let _batch =
+                scene.dispatch_events(budget(64), 8, |_, _| Ok(true))?;
+            let _logical = scene.fit_adaptive_width(maximum)?;
+            require(
+                !scene.presentation_is_current()?,
+                "mode change retained an old presentation receipt",
+            )?;
+            require(scene.present([0; 3], &[])?, "no mapped scene")?;
+            let receipt = scene
+                .visible_layout()?
+                .ok_or(RenderError::InvalidDimensions)?;
+            verify_mapped_touch(scene, receipt, presentation)?;
+            surface = Some(receipt.surface);
+        }
+        surface.ok_or(RenderError::InvalidDimensions)
+    }
+
+    fn verify_mapped_touch(
+        scene: &SceneSession<'_, '_>,
+        receipt: PresentationLayout,
+        mode: PresentationMode,
+    ) -> Result<(), RenderError> {
+        let panel = TouchPoint { x: 32_768, y: 57_344 };
+        let surface = scene.surface_touch(panel)?.ok_or_else(|| {
+            RenderError::Backend(String::from("panel center was cropped"))
+        })?;
+        let logical = scene.logical_touch(surface)?.ok_or_else(|| {
+            RenderError::Backend(String::from("panel center was rejected"))
+        })?;
+        require(
+            logical.x.abs_diff(panel.x) <= 8
+                && logical.y.abs_diff(panel.y) <= 8,
+            "mapped touch did not round trip",
+        )?;
+        if mode == PresentationMode::Fill {
+            let strip = receipt.protected.ok_or_else(|| {
+                RenderError::Backend(String::from("missing protected strip"))
+            })?;
+            if strip.destination.x > 0 {
+                require(
+                    scene
+                        .logical_touch(TouchPoint { x: 0, ..surface })?
+                        .is_none(),
+                    "mapped touch entered the protected strip's letterbox",
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn verify_frame_session(
