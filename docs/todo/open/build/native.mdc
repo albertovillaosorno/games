@@ -456,3 +456,13 @@ Both gates passed 1,860 aggregate test executions and the portable
 WebAssembly execution check. No owner settings were changed. This
 establishes virtual 2x drawable geometry, not physical high-DPI touch,
 audible output or the owner's actual maximized desktop.
+
+The native audio gate now also verifies consumption of 1,024 silent
+stereo frames at 48 kHz, retained while paused and drained after resume
+within bounded polling. It checks the default device and the first
+named device when enumeration is available. Fresh Xvfb/X11 plus PipeWire
+validation 1795676331174012725-2564238 drained both the system default
+and named Dummy Output. Fresh dummy-driver validation
+1795676362701607577-2577570 also passed. This verifies the running SDL
+software queue rather than merely queue admission; it cannot establish
+sound reaching speakers, headphones or the owner's current audio sink.

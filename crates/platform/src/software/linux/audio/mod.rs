@@ -153,19 +153,54 @@ pub(in crate::software) fn devices() -> Result<AudioDevices, PlaybackError> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::num::{NonZeroU16, NonZeroU32};
+    use std::time::Duration;
 
     use super::super::NATIVE_SMOKE_LOCK;
     use super::*;
-    use crate::ir::audio::NativeAudio;
     use crate::ir::audio::fixtures::{configuration, pcm};
+    use crate::ir::audio::{NativeAudio, PlaybackSpec};
     use crate::ir::process::fixtures::{NativeSmoke, smoke_requested};
+    use crate::ir::process::{wait_for_retry, write_status};
     fn require(condition: bool, reason: &str) -> Result<(), PlaybackError> {
         if condition {
             Ok(())
         } else {
             Err(PlaybackError::Backend(reason.to_owned()))
         }
+    }
+
+    // Use silence so opt-in device tests never emit an audible test tone.
+    fn verify_running_queue(name: Option<&str>) -> Result<(), PlaybackError> {
+        let audio = NativeAudio::open_on(
+            PlaybackSpec {
+                buffer_frames: NonZeroU16::MIN.saturating_add(255),
+                max_queued_frames: NonZeroU32::MIN.saturating_add(1023),
+                ..configuration()
+            },
+            name,
+        )?;
+        audio.queue_samples(&[0; 2048])?;
+        wait_for_retry(Duration::from_millis(30))
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+        require(audio.queued_frames()? == 1024, "paused queue drained")?;
+        audio.resume()?;
+        for _attempt in 0u32..100 {
+            if audio.queued_frames()? == 0 {
+                audio.pause()?;
+                let (driver, requested) = audio.output();
+                return write_status(format_args!(
+                    "Native audio drained 1024 frames: SDL {driver}, {}",
+                    requested.unwrap_or("system default").escape_debug(),
+                ))
+                .map_err(|error| PlaybackError::Backend(error.to_string()));
+            }
+            wait_for_retry(Duration::from_millis(10))
+                .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+        }
+        Err(PlaybackError::Backend(String::from(
+            "resumed native software queue did not drain",
+        )))
     }
 
     #[test]
@@ -206,6 +241,7 @@ mod tests {
         audio.pause()?;
         audio.clear()?;
         drop(audio);
+        verify_running_queue(None)?;
         if let Some(name) =
             devices.names.as_ref().and_then(|names| names.first())
         {
@@ -217,6 +253,8 @@ mod tests {
                 named.output() == (devices.driver, Some(name.as_str())),
                 "unexpected named output",
             )?;
+            drop(named);
+            verify_running_queue(Some(name))?;
         }
         Ok(())
     }

@@ -30,7 +30,8 @@ Check the reported window and drawable dimensions; setting these options
 alone does not establish high-DPI support or physical input acceptance.
 
 The native audio adapter uses a separate, bounded signed-PCM playback queue.
-Its paused-device smoke test can run without audible output using SDL2's
+Its smoke checks paused admission and resumed silent queue consumption.
+It can run without audible output using SDL2's
 dummy audio driver:
 
 ```sh
