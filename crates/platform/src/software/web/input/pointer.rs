@@ -34,16 +34,17 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
-use games::presentation::{Dimensions, PresentationMode};
+use games::presentation::{Dimensions, PresentationLayout, PresentationMode};
 use wasm_bindgen::JsCast as _;
-use web_sys::{Element, PointerEvent, PointerEventInit};
+use web_sys::{Element, Event, PointerEvent, PointerEventInit};
 
 use super::{
-    BrowserInput, EventSource, SCOPE, dom_error, mouse, next_event, verify,
+    BrowserInput, EventSource, SCOPE, dom_error, focus_lost, mouse, next_event,
+    verify,
 };
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputEvent, InputTransition};
-use crate::ir::input::InputStartup;
+use crate::ir::input::{InputStartup, NativeInput};
 
 fn contact(id: i32, phase: ContactPhase) -> HostEvent {
     HostEvent::Input(InputEvent::Contact {
@@ -140,13 +141,38 @@ fn subscribe(
             changes.into_iter().flatten()
         })?;
     }
+    let element_mouse = Rc::clone(&mouse);
     source.listen(element, "blur", move |_| {
-        mouse.borrow_mut().clear();
+        element_mouse.borrow_mut().clear();
         None
     })?;
     source.listen(element, "contextmenu", |event| {
         event.prevent_default();
         None
+    })?;
+    subscribe_lifecycle(source, element, mouse)
+}
+
+fn subscribe_lifecycle(
+    source: &mut EventSource,
+    element: &Element,
+    mouse: Rc<RefCell<mouse::MouseButtons>>,
+) -> Result<(), RenderError> {
+    let document = element.owner_document().ok_or(RenderError::Unsupported)?;
+    let window = document.default_view().ok_or(RenderError::Unsupported)?;
+    let visibility = document.clone();
+    let visibility_mouse = Rc::clone(&mouse);
+    source.listen(&document, "visibilitychange", move |_| {
+        if visibility.hidden() {
+            visibility_mouse.borrow_mut().clear();
+            Some(focus_lost())
+        } else {
+            None
+        }
+    })?;
+    source.listen(&window, "blur", move |_| {
+        mouse.borrow_mut().clear();
+        Some(focus_lost())
     })
 }
 
@@ -276,6 +302,7 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
             && next_event(&source, &mut input)?.is_none(),
         "foreign touch surface",
     )?;
+    verify_lifecycle(&source, canvas, &mut input, layout)?;
     mouse::verify_source(&source, canvas, &mut input)?;
     verify(
         !send_pointer(canvas, "contextmenu", "mouse", 1, [110, 55])?
@@ -286,5 +313,62 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
     verify(
         send_pointer(canvas, "pointerdown", "touch", 3, [110, 55])?,
         "touch listeners removed",
+    )
+}
+
+fn verify_lifecycle(
+    source: &EventSource,
+    canvas: &Element,
+    input: &mut NativeInput,
+    layout: PresentationLayout,
+) -> Result<(), RenderError> {
+    let document = canvas.owner_document().ok_or(RenderError::Unsupported)?;
+    let window = document.default_view().ok_or(RenderError::Unsupported)?;
+    let visibility = Event::new("visibilitychange").map_err(dom_error)?;
+    let hidden = document.hidden();
+    let _sent = document.dispatch_event(&visibility).map_err(dom_error)?;
+    let cancelled = HostEvent::Input(InputEvent::FocusLost);
+    if hidden {
+        verify(
+            next_event(source, input)? == Some(cancelled),
+            "document visibility loss",
+        )?;
+        verify_withdrawn_geometry(source, canvas, input, layout)?;
+    }
+    verify(source.pop().is_none(), "fabricated visibility focus gain")?;
+    let blur = Event::new("blur").map_err(dom_error)?;
+    let _sent = window.dispatch_event(&blur).map_err(dom_error)?;
+    verify(next_event(source, input)? == Some(cancelled), "window blur")?;
+    verify_withdrawn_geometry(source, canvas, input, layout)
+}
+
+fn verify_withdrawn_geometry(
+    source: &EventSource,
+    canvas: &Element,
+    input: &mut NativeInput,
+    layout: PresentationLayout,
+) -> Result<(), RenderError> {
+    let _sent = send_pointer(canvas, "pointerdown", "touch", 9, [110, 55])?;
+    verify(
+        next_event(source, input)?.is_none(),
+        "withdrawn touch geometry",
+    )?;
+    verify(
+        input.synchronize_touch(|| Ok(Some(layout)))?.is_none(),
+        "renewed browser touch geometry",
+    )?;
+    let _sent = send_pointer(canvas, "pointerdown", "touch", 9, [110, 55])?;
+    verify(
+        next_event(source, input)?
+            == Some(contact(
+                9,
+                ContactPhase::Down(TouchPoint { x: 32_768, y: 32_768 }),
+            )),
+        "renewed touch admission",
+    )?;
+    let _sent = send_pointer(canvas, "pointerup", "touch", 9, [-1, -1])?;
+    verify(
+        next_event(source, input)? == Some(contact(9, ContactPhase::Up)),
+        "renewed contact release",
     )
 }

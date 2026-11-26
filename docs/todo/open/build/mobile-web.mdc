@@ -421,3 +421,24 @@ All four indicators were green. The first compile caught an unused
 normalised point result, corrected before the fresh gate. Mouse presses,
 chords, cancellation and capture loss were synthetic DOM events; physical
 mouse input and trusted capture still need an actual running host.
+
+The browser pointer source now also observes its owning document's
+visibility and window blur. Hidden visibility and blur emit the shared
+focus-loss transition and clear tracked mouse buttons. A visible
+visibility event does not fabricate focus gain. The touch fixture checks
+that cancellation withdraws the last admitted geometry and that contact
+admission resumes only after a fresh presentation observation.
+
+Fresh validation 1795679856892678048-3213523 passed. The 128,411-byte bound
+input module (20,619-byte binding JavaScript) had SHA-256
+ec077f875334caa53e7f0191e35ffaaec9859980ef39ee6e7b8458043ecb9e1c.
+Six isolated Firefox cases passed: two normal visible launches, an
+injected hidden document observation, invalid clock, seventh canvas
+listener registration failure and window blur registration failure.
+The normal cases each dispatched 94 canvas events, and the hidden case
+100, across both invocations. Each registered and removed two document
+and two window listeners; all surfaces were removed. The injected window
+failure cleaned both preceding document listeners and all 24 canvas
+listeners. All six indicators were green. The visibility and blur events
+were dispatched by the fixture; actual user-driven tab switching and
+callback scheduling in a live game remain unverified.
