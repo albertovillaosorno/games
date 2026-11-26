@@ -211,7 +211,7 @@ impl LocalIdentity {
         }
         if self.role != Role::Host
             || clients.is_empty()
-            || clients.len() > usize::from(config.max_players.get())
+            || !config.admits_players(clients.len())
         {
             return Err(ErrorKind::InvalidInput.into());
         }

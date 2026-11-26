@@ -32,7 +32,7 @@
 //! Caller-driven bounded host I/O independent of the simulation thread.
 
 use std::io::{self, ErrorKind};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{
@@ -247,9 +247,7 @@ impl<Message: Send + 'static> HostWorker<Message> {
     where
         Codec: MessageSchema<Message = Message> + Send + 'static,
     {
-        if capacity.get() > MAX_QUEUE_CAPACITY {
-            return Err(ErrorKind::InvalidInput.into());
-        }
+        admit_queue_capacity(capacity)?;
         let frame_budget = session.frame_budget();
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stopped = Arc::clone(&stopped);
@@ -341,6 +339,28 @@ impl<Message> Drop for HostWorker<Message> {
     fn drop(&mut self) {
         let _result = self.stop();
     }
+}
+
+/// Admit queue storage for both pending and active peer populations.
+/// # Errors
+/// Rejects unrepresentable capacities and the native queue ceiling.
+pub(super) fn capacity_for_players(
+    players: NonZeroU32,
+) -> io::Result<NonZeroUsize> {
+    let capacity = usize::try_from(players.get())
+        .ok()
+        .and_then(|count| count.checked_mul(2))
+        .and_then(NonZeroUsize::new)
+        .ok_or(ErrorKind::InvalidInput)?;
+    admit_queue_capacity(capacity)?;
+    Ok(capacity)
+}
+
+fn admit_queue_capacity(capacity: NonZeroUsize) -> io::Result<()> {
+    if capacity.get() > MAX_QUEUE_CAPACITY {
+        return Err(ErrorKind::InvalidInput.into());
+    }
+    Ok(())
 }
 
 const fn outgoing_bytes(operation: &HostOperation) -> Option<usize> {
@@ -493,7 +513,6 @@ fn serve<Codec>(
 mod tests {
     use std::cell::Cell;
     use std::net::TcpStream;
-    use std::num::NonZeroU8;
     use std::thread;
 
     use super::super::super::tests::{
@@ -537,6 +556,27 @@ mod tests {
             self.decoded.set(true);
             TestCodec.decode(bytes)
         }
+    }
+
+    #[test]
+    fn queue_capacity_rejects_excess() -> io::Result<()> {
+        let lower = NonZeroU32::MIN.saturating_add(255);
+        let maximum = NonZeroU32::MIN.saturating_add(511);
+        require(
+            capacity_for_players(lower)?.get() == 512
+                && capacity_for_players(maximum)?.get() == MAX_QUEUE_CAPACITY,
+            "active and pending populations both fit",
+        )?;
+        for oversized in [maximum.saturating_add(1), NonZeroU32::MAX] {
+            require(
+                capacity_for_players(oversized)
+                    .err()
+                    .map(|error| error.kind())
+                    == Some(ErrorKind::InvalidInput),
+                "excess queue budget must be rejected",
+            )?;
+        }
+        Ok(())
     }
 
     fn submit<Message>(
@@ -1081,7 +1121,7 @@ mod tests {
             client_credentials(&issuer, &issuer, keys.server_id)?;
         let mut limits = session_config(true);
         limits.max_players =
-            NonZeroU8::new(3).ok_or(ErrorKind::InvalidInput)?;
+            NonZeroU32::new(3).ok_or(ErrorKind::InvalidInput)?;
         let settings = LanConfig::new(limits, TIMEOUT)?;
         let listener =
             SecureLanListener::bind(LOOPBACK, settings, keys.server.clone())?;

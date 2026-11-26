@@ -34,7 +34,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, ErrorKind};
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use games::network::{MessageSchema, SessionError};
@@ -42,7 +41,7 @@ use games::network::{MessageSchema, SessionError};
 use super::host::{HostError, HostSession};
 use super::worker::{
     HostCompletion, HostOperation, HostOutcome, HostRequest, HostResult,
-    HostWorker, OperationError, RejectionReason,
+    HostWorker, OperationError, RejectionReason, capacity_for_players,
 };
 use super::{
     LanConfig, PendingConnection, SecureLanListener, SendProgress, ServerTls,
@@ -174,9 +173,10 @@ impl<Message: Send + 'static> HostInputPump<Message> {
         }) {
             return Err(ErrorKind::InvalidInput.into());
         }
-        let players = NonZeroUsize::from(limits.max_players).get();
+        let capacity = capacity_for_players(limits.max_players)?;
+        let count = enrolments.len().checked_add(local_peers.len());
         if enrolments.is_empty()
-            || enrolments.len().saturating_add(local_peers.len()) > players
+            || !count.is_some_and(|combined| limits.admits_players(combined))
         {
             return Err(ErrorKind::InvalidInput.into());
         }
@@ -187,8 +187,6 @@ impl<Message: Send + 'static> HostInputPump<Message> {
                 .join_local(peer)
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
         }
-        let capacity = NonZeroUsize::new(players.saturating_mul(2))
-            .ok_or(ErrorKind::InvalidInput)?;
         let listener = SecureLanListener::bind(address, settings, tls)?;
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
@@ -465,7 +463,7 @@ impl<Message: Send + 'static> PumpBackend<Message> for HostInputPump<Message> {
 #[cfg(test)]
 mod tests {
     use std::net::TcpStream;
-    use std::num::NonZeroU8;
+    use std::num::NonZeroU32;
     use std::thread;
 
     use super::super::super::tests::{
@@ -593,7 +591,7 @@ mod tests {
             client_credentials(&issuer, &issuer, keys.server_id)?;
         let mut session = session_config(true);
         session.max_players =
-            NonZeroU8::new(3).ok_or(ErrorKind::InvalidInput)?;
+            NonZeroU32::new(3).ok_or(ErrorKind::InvalidInput)?;
         let pump = HostInputPump::bind(
             HostInputConfig {
                 address: LOOPBACK,
@@ -741,6 +739,35 @@ mod tests {
                 == Some(ErrorKind::InvalidInput),
             "at least one explicit remote approval is required",
         )
+    }
+
+    #[test]
+    fn scheduler_admits_a_wider_budget_and_rejects_excess_before_bind()
+    -> io::Result<()> {
+        let issuer = authority()?;
+        let keys = credentials(&issuer, &issuer)?;
+        let approved = [(keys.client_id, 1)];
+        let mut limits = session_config(true);
+        limits.max_players = NonZeroU32::MIN.saturating_add(255);
+        let config = HostInputConfig {
+            address: LOOPBACK,
+            enrolments: &approved,
+            idle_timeout: None,
+            local_peers: &[0],
+            session: limits,
+            timeout: TIMEOUT,
+        };
+        let pump = HostInputPump::bind(config, keys.server.clone(), TestCodec)?;
+        let mut excess = config;
+        excess.address = pump.local_addr()?;
+        excess.session.max_players = NonZeroU32::MIN.saturating_add(512);
+        let rejected = HostInputPump::bind(excess, keys.server, TestCodec);
+        require(
+            rejected.err().map(|error| error.kind())
+                == Some(ErrorKind::InvalidInput),
+            "queue capacity is rejected before rebinding the occupied port",
+        )?;
+        Box::new(pump).shutdown()
     }
 
     #[test]

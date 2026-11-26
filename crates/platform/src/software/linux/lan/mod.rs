@@ -415,7 +415,7 @@ mod tests {
     use std::cell::Cell;
     use std::io::{self, ErrorKind, Read as _, Write as _};
     use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream};
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -872,7 +872,7 @@ mod tests {
             allow_lan: lan,
             max_message_bytes: NonZeroUsize::new(8)
                 .unwrap_or(NonZeroUsize::MIN),
-            max_players: NonZeroU8::new(2).unwrap_or(NonZeroU8::MIN),
+            max_players: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
         }
     }
 

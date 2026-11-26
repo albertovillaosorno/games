@@ -42,7 +42,7 @@ mod worker;
 use std::io::{self, ErrorKind, Read as _, Write as _};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use rustls::client::danger::{
@@ -237,7 +237,7 @@ impl ServerTls {
 #[derive(Debug)]
 struct SecureLanListener {
     listener: LanListener,
-    pending: Arc<AtomicU8>,
+    pending: Arc<AtomicU32>,
     tls: ServerTls,
 }
 
@@ -255,7 +255,7 @@ impl SecureLanListener {
         let listener = LanListener::bind(address, config)?;
         Ok(Self {
             listener,
-            pending: Arc::new(AtomicU8::new(0)),
+            pending: Arc::new(AtomicU32::new(0)),
             tls,
         })
     }
@@ -302,10 +302,10 @@ impl SecureLanListener {
 }
 
 #[derive(Debug)]
-struct PendingPermit(Arc<AtomicU8>);
+struct PendingPermit(Arc<AtomicU32>);
 
 impl PendingPermit {
-    fn acquire(counter: &Arc<AtomicU8>, limit: u8) -> Option<Self> {
+    fn acquire(counter: &Arc<AtomicU32>, limit: u32) -> Option<Self> {
         let _previous = counter
             .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 count.checked_add(1).filter(|next| *next <= limit)
@@ -656,7 +656,9 @@ fn finish_handshake(
 #[cfg(test)]
 mod tests {
     use std::net::TcpStream;
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -673,8 +675,8 @@ mod tests {
     };
     use super::{
         ClientTls, ErrorKind, FrameBackend as _, LanConfig, PeerFingerprint,
-        RootCertStore, SecureFrameStream, SecureLanListener, ServerTls,
-        finish_handshake, io,
+        PendingPermit, RootCertStore, SecureFrameStream, SecureLanListener,
+        ServerTls, finish_handshake, io,
     };
 
     const HOST: &str = "games.test";
@@ -1007,6 +1009,34 @@ mod tests {
     }
 
     #[test]
+    fn pending_permits_cross_the_former_byte_boundary() -> io::Result<()> {
+        let counter = Arc::new(AtomicU32::new(0));
+        let mut permits = Vec::new();
+        for _ in 0u32..256 {
+            let permit =
+                PendingPermit::acquire(&counter, 256).ok_or_else(|| {
+                    io::Error::other("pending budget was narrowed")
+                })?;
+            permits.push(permit);
+        }
+        require(
+            PendingPermit::acquire(&counter, 256).is_none(),
+            "pending admission remains bounded",
+        )?;
+        drop(permits.pop());
+        let replacement =
+            PendingPermit::acquire(&counter, 256).ok_or_else(|| {
+                io::Error::other("released permit was not reusable")
+            })?;
+        drop(replacement);
+        drop(permits);
+        require(
+            counter.load(Ordering::Acquire) == 0,
+            "all permits are released",
+        )
+    }
+
+    #[test]
     fn wrong_name_and_untrusted_clients_are_rejected() -> io::Result<()> {
         let issuer = authority()?;
         let outsider = authority()?;
@@ -1014,7 +1044,7 @@ mod tests {
         let (untrusted, _identity) =
             client_credentials(&issuer, &outsider, keys.server_id)?;
         let mut limits = session_config(true);
-        limits.max_players = NonZeroU8::MIN;
+        limits.max_players = NonZeroU32::MIN;
         let settings = LanConfig::new(limits, TIMEOUT)?;
         let listener =
             SecureLanListener::bind(LOOPBACK, settings, keys.server)?;
@@ -1175,7 +1205,7 @@ mod tests {
         let (untrusted, _identity) =
             client_credentials(&issuer, &outsider, keys.server_id)?;
         let mut limits = session_config(true);
-        limits.max_players = NonZeroU8::MIN;
+        limits.max_players = NonZeroU32::MIN;
         let settings = LanConfig::new(limits, TIMEOUT)?;
         let listener =
             SecureLanListener::bind(LOOPBACK, settings, keys.server)?;

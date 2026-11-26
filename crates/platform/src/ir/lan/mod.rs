@@ -299,7 +299,7 @@ impl SecureFrameStream {
 #[cfg(test)]
 mod tests {
     use std::io::{Error, ErrorKind, Result};
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
     use games::network::SessionConfig;
@@ -311,7 +311,7 @@ mod tests {
         SessionConfig {
             allow_lan,
             max_message_bytes: NonZeroUsize::MIN.saturating_add(63),
-            max_players: NonZeroU8::MIN.saturating_add(3),
+            max_players: NonZeroU32::MIN.saturating_add(3),
         }
     }
 

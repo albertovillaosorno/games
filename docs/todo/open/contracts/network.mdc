@@ -701,3 +701,17 @@ wrong-origin reconnects preserve reserved capacity and leave another local
 player active. Explicit removal releases that capacity for a new player.
 These tests exercise shared policy, not certificate or physical-device
 interoperability.
+
+The portable roster and pending-connection budget now use a nonzero
+32-bit count instead of an eight-bit title-derived limit. Shared count
+admission is reused by the roster, certificate approval and native host
+scheduler. The Linux worker retains its existing 1,024-command queue
+ceiling; capacity for both active and pending peers is checked before
+binding. The Simpsons still requests four stations. Pure regressions
+fill a 256-member mixed roster and verify reservation, rejoin and
+replacement; the transport tests check wide permit admission and release,
+queue boundaries and rejection before attempting to bind an occupied port.
+Fresh X11/Xvfb rendering, dummy audio and workspace validation passed in
+run 1795652468098676558-1693998 (1,510 aggregate test executions and all
+six portable core targets). No larger physical LAN or device capacity is
+claimed; multi-device acceptance remains open.

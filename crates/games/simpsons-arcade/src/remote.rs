@@ -303,7 +303,7 @@ impl InputStep for HostedCabinet {
 
 #[cfg(test)]
 mod tests {
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::slice;
 
     use games::network::{PeerKind, Session, SessionConfig, SessionError};
@@ -424,7 +424,7 @@ mod tests {
             allow_lan: true,
             max_message_bytes: NonZeroUsize::new(CONTROL_BYTES)
                 .ok_or("frame size")?,
-            max_players: NonZeroU8::new(4).ok_or("four seats")?,
+            max_players: NonZeroU32::new(4).ok_or("four seats")?,
         };
         let mut roster = Session::new(config);
         roster

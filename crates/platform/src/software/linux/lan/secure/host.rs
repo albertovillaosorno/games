@@ -158,7 +158,7 @@ impl HostSession {
         if !config.allow_lan && !enrolments.is_empty() {
             return Err(SessionError::LanDisabled.into());
         }
-        if enrolments.len() > usize::from(config.max_players.get()) {
+        if !config.admits_players(enrolments.len()) {
             return Err(HostError::TooManyEnrollments);
         }
         let mut enrolled = BTreeMap::new();

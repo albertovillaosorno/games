@@ -312,7 +312,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::io::Read as _;
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
     use games::network::SessionConfig;
@@ -325,7 +325,7 @@ mod tests {
                 allow_lan: true,
                 max_message_bytes: NonZeroUsize::new(maximum)
                     .ok_or(ErrorKind::InvalidInput)?,
-                max_players: NonZeroU8::MIN,
+                max_players: NonZeroU32::MIN,
             },
             Duration::from_secs(2),
         )

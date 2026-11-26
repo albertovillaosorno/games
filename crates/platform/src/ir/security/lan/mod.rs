@@ -104,7 +104,7 @@ impl CredentialKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LanLimits {
     max_bytes: u32,
-    max_pending: u8,
+    max_pending: u32,
     timeout: Duration,
 }
 
@@ -132,7 +132,7 @@ impl LanLimits {
 
     /// Maximum outstanding peer connections.
     #[must_use]
-    pub const fn max_pending(self) -> u8 {
+    pub const fn max_pending(self) -> u32 {
         self.max_pending
     }
 
@@ -213,7 +213,7 @@ pub const fn admit_endpoint(
 #[cfg(test)]
 mod tests {
     use core::net::SocketAddr;
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
     use games::network::SessionConfig;
@@ -225,7 +225,7 @@ mod tests {
             allow_lan,
             max_message_bytes: NonZeroUsize::new(8)
                 .unwrap_or(NonZeroUsize::MIN),
-            max_players: NonZeroU8::new(2).unwrap_or(NonZeroU8::MIN),
+            max_players: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
         }
     }
 
@@ -253,6 +253,22 @@ mod tests {
                 != Err(LanAdmissionError::FrameBudget)
             {
                 return Err(String::from("unrepresentable wire budget"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pending_capacity_preserves_wide_budget() -> Result<(), String> {
+        for count in [NonZeroU32::MIN.saturating_add(255), NonZeroU32::MAX] {
+            let session = SessionConfig {
+                max_players: count,
+                ..config(true)
+            };
+            let limits = LanLimits::new(session, Duration::from_secs(2))
+                .map_err(|error| format!("{error:?}"))?;
+            if limits.max_pending() != count.get() {
+                return Err(String::from("pending roster budget was narrowed"));
             }
         }
         Ok(())

@@ -33,7 +33,7 @@ use core::net::SocketAddr;
 use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result as IoResult};
 use std::mem;
-use std::num::{NonZeroU8, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use games::network::SessionConfig;
@@ -355,7 +355,7 @@ pub fn session_config() -> SessionConfig {
         allow_lan: true,
         max_message_bytes: NonZeroUsize::new(CONTROL_BYTES)
             .unwrap_or(NonZeroUsize::MIN),
-        max_players: NonZeroU8::new(4).unwrap_or(NonZeroU8::MIN),
+        max_players: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
     }
 }
 
@@ -393,7 +393,6 @@ const fn hosted_input(
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
     use std::slice::from_ref;
 
     use games::input::LogicalAction;

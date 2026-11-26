@@ -32,7 +32,7 @@
 //! In-memory session contracts for offline and self-hosted multiplayer.
 
 use std::collections::BTreeMap;
-use std::num::{NonZeroU8, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroUsize};
 
 /// The trusted transport origin of a member of a self-hosted session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,14 +70,21 @@ pub struct SessionConfig {
     /// Maximum frame payload in bytes.
     pub max_message_bytes: NonZeroUsize,
     /// Maximum local and LAN players combined.
-    pub max_players: NonZeroU8,
+    pub max_players: NonZeroU32,
 }
 
 impl SessionConfig {
+    /// Whether a combined local and remote roster count fits the budget.
+    #[must_use]
+    pub fn admits_players(self, count: usize) -> bool {
+        u32::try_from(count)
+            .is_ok_and(|admitted| admitted <= self.max_players.get())
+    }
+
     /// Configure a local-only session without a network or account service.
     #[must_use]
     pub const fn local(
-        max_players: NonZeroU8,
+        max_players: NonZeroU32,
         max_message_bytes: NonZeroUsize,
     ) -> Self {
         Self {
@@ -170,8 +177,12 @@ impl Session {
         {
             return Err(SessionError::AlreadyConnected);
         }
-        let used = self.active.len().saturating_add(self.reserved.len());
-        if used >= usize::from(self.config.max_players.get()) {
+        let next_count = self
+            .active
+            .len()
+            .checked_add(self.reserved.len())
+            .and_then(|used| used.checked_add(1));
+        if !next_count.is_some_and(|count| self.config.admits_players(count)) {
             return Err(SessionError::NoCapacity);
         }
         let _old = self.active.insert(peer, kind);
@@ -233,7 +244,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::num::{NonZeroU8, NonZeroUsize};
+    use std::num::{NonZeroU32, NonZeroUsize};
 
     use super::{
         MessageSchema, PeerKind, Session, SessionConfig, SessionError,
@@ -271,7 +282,7 @@ mod tests {
             allow_lan: lan,
             max_message_bytes: NonZeroUsize::new(8)
                 .unwrap_or(NonZeroUsize::MIN),
-            max_players: NonZeroU8::new(2).unwrap_or(NonZeroU8::MIN),
+            max_players: NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
         }
     }
 
@@ -289,6 +300,43 @@ mod tests {
             session.join(1, PeerKind::Local),
             Err(SessionError::AlreadyConnected)
         );
+    }
+
+    fn full_wide_roster() -> Session {
+        let limits = SessionConfig {
+            max_players: NonZeroU32::MIN.saturating_add(255),
+            ..config(true)
+        };
+        assert!(limits.admits_players(256));
+        assert!(!limits.admits_players(257));
+        let mut session = Session::new(limits);
+        for peer in 0..255 {
+            assert_eq!(session.join(peer, PeerKind::Local), Ok(()));
+        }
+        assert_eq!(session.join(255, PeerKind::Lan), Ok(()));
+        session
+    }
+
+    #[test]
+    fn wide_roster_reserves_and_reconnects_at_capacity() {
+        let mut session = full_wide_roster();
+        assert_eq!(session.disconnect(255), Ok(()));
+        assert_eq!(
+            session.join(256, PeerKind::Local),
+            Err(SessionError::NoCapacity)
+        );
+        assert_eq!(session.reconnect(255, PeerKind::Lan), Ok(()));
+        assert_eq!(session.accept(255, b"move"), Ok(()));
+    }
+
+    #[test]
+    fn wide_roster_releases_reservation_for_new_member() {
+        let mut session = full_wide_roster();
+        assert_eq!(session.disconnect(255), Ok(()));
+        assert_eq!(session.remove(255), Ok(()));
+        assert_eq!(session.join(256, PeerKind::Local), Ok(()));
+        assert_eq!(session.accept(0, b"move"), Ok(()));
+        assert_eq!(session.accept(256, b"move"), Ok(()));
     }
 
     #[test]
