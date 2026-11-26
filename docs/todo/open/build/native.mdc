@@ -613,3 +613,21 @@ against the 16.667 ms host-work budget; maxima were 4.160 ms and
 bytes. Subsequent package readback verified 109 files and 4,151,385
 bytes. The measured synthetic workload is not a physical acceptance
 run or a controlled comparison against earlier binaries.
+
+The 4824752 menu correction describes admitted desktop movement,
+combat and pause controls even when a keyboard binding is absent or
+shares an action with a mouse binding. The prior isolated live run's
+retained remap and captures exercise mouse-only left movement and jump,
+combined right movement and mouse/keyboard pause. At 960x672 the
+movement and jumping captures differ from their initial or settled
+frames; the moved/settled and settled/landed frame pairs are identical.
+The mouse-paused and keyboard-paused frames are also pixel-identical.
+The previous package's pause panel differs from the corrected panel.
+The two corrected gameplay intervals submitted 1,945 and 378 frames
+with zero work-budget misses; maxima were 15.066 and 16.522 ms.
+The corrected package was rebuilt independently after commit and the
+3,626,248-byte executable and receipt match the retained live-run
+package byte-for-byte. Readback verified 109 files and 4,151,921 bytes.
+Fresh validation 1795696847296228456-2077761 passed with virtual X11
+rendering and dummy audio. These are injected input and retained capture
+checks, not physical-device or audible-output acceptance.
