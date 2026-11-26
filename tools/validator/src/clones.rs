@@ -32,8 +32,8 @@
 //! Conservative detection of substantial Rust function-body duplicates.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::iter::Peekable;
-use std::path::Path;
 use std::str::Chars;
 
 use games_platform::ir::process::write_diagnostic;
@@ -409,13 +409,11 @@ fn functions(path: &str, source: &str) -> Vec<Function> {
         .collect()
 }
 
-fn excluded(path: &Path, source: &str) -> Option<&'static str> {
-    let generated = path.components().any(|component| {
-        matches!(
-            component.as_os_str().to_str(),
-            Some("generated" | "gen" | "target" | ".reference")
-        )
-    }) || path.to_string_lossy().ends_with(".generated.rs");
+fn excluded(path: &OsStr, source: &str) -> Option<&'static str> {
+    let name = path.to_str()?;
+    let generated = name.split('/').any(|component| {
+        matches!(component, "generated" | "gen" | "target" | ".reference")
+    }) || name.ends_with(".generated.rs");
     if generated {
         return Some("generated path");
     }
@@ -472,10 +470,12 @@ fn compare<'functions>(
 /// # Errors
 ///
 /// Rejects matching substantial function bodies in different source files.
-pub fn validate(root: &Path) -> Result<(), String> {
+pub fn validate(root: &OsStr) -> Result<(), String> {
     let mut records = Vec::new();
     for path in files::authored(root)? {
-        if path.extension().is_none_or(|extension| extension != "rs") {
+        if files::authored_extension(&path)
+            .is_none_or(|extension| extension != "rs")
+        {
             continue;
         }
         let source = files::read_text(root, &path)?;
@@ -499,8 +499,8 @@ pub fn validate(root: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
     use std::fmt::Write as _;
-    use std::path::Path;
 
     use super::{compare, excluded, functions, tokens};
 
@@ -561,11 +561,11 @@ mod tests {
             String::from("fn example() { /* nested /* comment */ text */ 1; }");
         let stream = tokens(&first);
         assert!(!stream.iter().any(|token| token.text == "comment"));
-        let path = Path::new("crates/example/src/generated/file.rs");
+        let path = OsStr::new("crates/example/src/generated/file.rs");
         assert_eq!(excluded(path, &first), Some("generated path"));
         let marked = String::from("// @generated\nfn manual() {}\n");
         assert_eq!(
-            excluded(Path::new("crates/example/src/lib.rs"), &marked),
+            excluded(OsStr::new("crates/example/src/lib.rs"), &marked),
             Some("explicit generated marker"),
         );
     }

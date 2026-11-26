@@ -31,10 +31,12 @@
 //
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
 
-use games_platform::ir::storage::{PathKind, directory_entries};
+use games_platform::ir::storage::{
+    PathKind, directory_entries, join_path, path_extension, strip_path_prefix,
+};
 
 use crate::files;
 
@@ -229,31 +231,35 @@ fn record(text: &str, path: &str) -> Result<IdentifiedTask, String> {
 }
 
 fn collect(
-    root: &Path,
-    directory: &Path,
+    root: &OsStr,
+    directory: &OsStr,
     inventory: &mut TaskInventory,
     depth: usize,
 ) -> Result<(), String> {
     require(depth < MAX_TASK_DEPTH, "task directory depth limit")?;
     let maximum =
         NonZeroUsize::new(inventory.remaining).unwrap_or(NonZeroUsize::MIN);
-    let entries = directory_entries(directory.as_os_str(), maximum)
+    let entries = directory_entries(directory, maximum)
         .map_err(|error| error.to_string())?;
     inventory.remaining = inventory
         .remaining
         .checked_sub(entries.len())
         .ok_or("task directory entry limit")?;
     for entry in entries {
-        let path = directory.join(entry.name);
+        let path = join_path(directory, &entry.name)
+            .map_err(|error| error.to_string())?;
         require(
             entry.kind != PathKind::SymbolicLink,
             "symlink in task directory",
         )?;
         if entry.kind == PathKind::Directory {
             collect(root, &path, inventory, depth.saturating_add(1))?;
-        } else if path.extension().is_some_and(|ext| ext == "mdc") {
-            let relative =
-                path.strip_prefix(root).map_err(|error| error.to_string())?;
+        } else if path_extension(&path)
+            .map_err(|error| error.to_string())?
+            .is_some_and(|ext| ext == "mdc")
+        {
+            let relative = strip_path_prefix(&path, root)
+                .map_err(|error| error.to_string())?;
             let name = relative.to_str().ok_or("non-UTF-8 task path")?;
             let text = files::read_text(root, relative)?;
             let (id, task) = record(&text, name)
@@ -402,14 +408,15 @@ fn dependency_order(
     Ok(())
 }
 
-fn unique_roadmap(authored: &[PathBuf]) -> Result<(), String> {
+fn unique_roadmap(authored: &[OsString]) -> Result<(), String> {
     for path in authored {
-        let duplicate = path
-            .file_name()
-            .and_then(|name| name.to_str())
+        let duplicate = files::authored_leaf(path)
             .is_some_and(|name| name.eq_ignore_ascii_case("TODO.md"));
-        if duplicate && path != Path::new("TODO.md") {
-            return Err(format!("duplicate roadmap: {}", path.display()));
+        if duplicate && path != OsStr::new("TODO.md") {
+            return Err(format!(
+                "duplicate roadmap: {}",
+                path.to_string_lossy()
+            ));
         }
     }
     Ok(())
@@ -420,19 +427,24 @@ fn unique_roadmap(authored: &[PathBuf]) -> Result<(), String> {
 /// # Errors
 ///
 /// Returns diagnostics for inconsistent or malformed task records.
-pub fn validate(root: &Path) -> Result<(), String> {
+pub fn validate(root: &OsStr) -> Result<(), String> {
     unique_roadmap(&files::authored(root)?)?;
     let mut inventory = TaskInventory {
         remaining: MAX_TASK_ENTRIES.get(),
         tasks: BTreeMap::new(),
     };
-    collect(root, &root.join("docs/todo"), &mut inventory, 0)?;
+    collect(
+        root,
+        &join_path(root, "docs/todo").map_err(|error| error.to_string())?,
+        &mut inventory,
+        0,
+    )?;
     let tasks = inventory.tasks;
     require(!tasks.is_empty(), "missing task inventory")?;
     for task in tasks.values() {
         predecessors(task, &tasks)?;
     }
-    let text = files::read_text(root, Path::new("TODO.md"))?;
+    let text = files::read_text(root, OsStr::new("TODO.md"))?;
     let ordered = index(&text, &tasks)?;
     dependency_order(&tasks, &ordered)
 }
@@ -440,7 +452,9 @@ pub fn validate(root: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
+    use std::ffi::OsString;
+
+    use games_platform::ir::storage::join_path;
 
     use super::{
         MAX_TASK_DEPTH, Task, TaskInventory, collect, dependency_order,
@@ -465,8 +479,9 @@ mod tests {
     fn task_inventory_rejects_depth_and_entry_exhaustion() -> Result<(), String>
     {
         let fixture = directory()?;
-        let root = Path::new(fixture.location());
-        let directory = root.join("records");
+        let root = fixture.location();
+        let directory =
+            join_path(root, "records").map_err(|error| error.to_string())?;
         fixture
             .create_directories("records/nested")
             .map_err(|error| error.to_string())?;
@@ -495,8 +510,8 @@ mod tests {
     #[test]
     fn only_root_roadmap_is_allowed() {
         let canonical = [
-            PathBuf::from("TODO.md"),
-            PathBuf::from("docs/todo/open/games/example.mdc"),
+            OsString::from("TODO.md"),
+            OsString::from("docs/todo/open/games/example.mdc"),
         ];
         assert!(unique_roadmap(&canonical).is_ok());
         for path in [
@@ -505,7 +520,7 @@ mod tests {
             "docs/Todo.md",
             "todo.md",
         ] {
-            let duplicate = [PathBuf::from("TODO.md"), PathBuf::from(path)];
+            let duplicate = [OsString::from("TODO.md"), OsString::from(path)];
             assert!(unique_roadmap(&duplicate).is_err(), "{path}");
         }
     }
@@ -513,7 +528,7 @@ mod tests {
     #[test]
     fn untracked_roadmaps_fail_the_real_task_gate() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .create_directories("crates/games/example")
             .map_err(|error| error.to_string())?;

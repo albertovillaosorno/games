@@ -37,13 +37,13 @@
 pub mod fixtures;
 
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
 use std::str::from_utf8;
 
 use games_platform::ir::storage::file::snapshot;
-use games_platform::ir::storage::{PathKind, path_kind};
+use games_platform::ir::storage::{PathKind, join_path, path_kind};
 use games_platform::ir::toolchain::validation::{
     GitRequest, Request, repository_head, run,
 };
@@ -51,10 +51,8 @@ use games_platform::ir::toolchain::{arguments, workspace_root};
 
 type DiffPaths<'path> = Vec<&'path [u8]>;
 
-fn root() -> Result<PathBuf, String> {
-    workspace_root()
-        .map(PathBuf::from)
-        .map_err(|error| error.to_string())
+fn root() -> Result<OsString, String> {
+    workspace_root().map_err(|error| error.to_string())
 }
 
 fn scope_valid(scope: &str) -> bool {
@@ -174,10 +172,9 @@ fn check_commit(message: &str) -> Result<(), String> {
     check_trailers(message)
 }
 
-fn check_message_file(path: &Path) -> Result<(), String> {
-    let bytes =
-        snapshot(path.as_os_str(), NonZeroU64::MIN.saturating_add(1_048_575))
-            .map_err(|error| format!("commit message: {error:?}"))?;
+fn check_message_file(path: &OsStr) -> Result<(), String> {
+    let bytes = snapshot(path, NonZeroU64::MIN.saturating_add(1_048_575))
+        .map_err(|error| format!("commit message: {error:?}"))?;
     let message = from_utf8(&bytes).map_err(|error| error.to_string())?;
     check_commit(message)
 }
@@ -221,9 +218,9 @@ fn prohibited_path(path: &str) -> bool {
         || parts.iter().any(|part| {
             (part.starts_with(".env") && *part != ".env.example")
                 || *part == ".reference"
-                || Path::new(part)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("rep"))
+                || part.rsplit_once('.').is_some_and(|(stem, ext)| {
+                    !stem.is_empty() && ext.eq_ignore_ascii_case("rep")
+                })
         })
         || [
             ".iso",
@@ -281,9 +278,9 @@ fn check_paths(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn changed_paths(root: &Path, request: GitRequest) -> Result<Vec<u8>, String> {
-    let output = run(root.as_os_str(), Request::Git(request))
-        .map_err(|error| error.to_string())?;
+fn changed_paths(root: &OsStr, request: GitRequest) -> Result<Vec<u8>, String> {
+    let output =
+        run(root, Request::Git(request)).map_err(|error| error.to_string())?;
     if !output.success {
         return Err("cannot inspect changed paths".into());
     }
@@ -303,13 +300,15 @@ fn check_worktree(staged: &[u8], unstaged: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn check_deleted(root: &Path, deleted: &[u8]) -> Result<(), String> {
+fn check_deleted(root: &OsStr, deleted: &[u8]) -> Result<(), String> {
     for raw in path_list(deleted)? {
         let path = from_utf8(raw).map_err(|error| error.to_string())?;
         if !relative_path(path) {
             return Err("invalid deleted path".into());
         }
-        match path_kind(root.join(path).as_os_str()) {
+        match path_kind(
+            &join_path(root, path).map_err(|error| error.to_string())?,
+        ) {
             Ok(PathKind::Directory | PathKind::Missing) => {},
             Ok(_) => {
                 return Err(format!("staged deletion still exists: {path}"));
@@ -351,8 +350,10 @@ fn check_history_bytes(bytes: &[u8]) -> Result<(), String> {
 
 fn check_history() -> Result<(), String> {
     let root = root()?;
-    match path_kind(root.join(".git").as_os_str())
-        .map_err(|error| error.to_string())?
+    match path_kind(
+        &join_path(&root, ".git").map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?
     {
         PathKind::Missing => return Ok(()),
         PathKind::Directory | PathKind::RegularFile => {},
@@ -360,13 +361,13 @@ fn check_history() -> Result<(), String> {
             return Err(String::from("invalid Git repository entry"));
         },
     }
-    if repository_head(root.as_os_str())
+    if repository_head(&root)
         .map_err(|error| error.to_string())?
         .is_none()
     {
         return Ok(());
     }
-    let history = run(root.as_os_str(), Request::Git(GitRequest::History))
+    let history = run(&root, Request::Git(GitRequest::History))
         .map_err(|error| error.to_string())?;
     if !history.success {
         return Err("cannot read commit history".into());
@@ -379,20 +380,18 @@ fn main() -> Result<(), String> {
     match args.as_slice() {
         [mode] if mode == "staged" => check_staged(),
         [mode] if mode == "history" => check_history(),
-        [mode, path] if mode == "commit-message" => {
-            check_message_file(Path::new(path))
-        },
+        [mode, path] if mode == "commit-message" => check_message_file(path),
         _ => Err(String::from("invalid hook invocation")),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
 
     use games_platform::ir::storage::fixtures::{
         self as platform_fixtures, TestRoot,
     };
+    use games_platform::ir::storage::join_path;
     use games_platform::ir::toolchain::validation::fixtures::{
         FixtureDelegate, FixtureHook, hook_syntax, run_hook,
     };
@@ -560,7 +559,7 @@ mod tests {
     #[test]
     fn rejects_restored_staged_deletions() -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = Path::new(fixture_owner.location());
+        let fixture = fixture_owner.location();
         let deleted = b"old.md\0";
         check_deleted(fixture, deleted)?;
         write(&fixture_owner, "old.md", b"restored")?;
@@ -579,8 +578,9 @@ mod tests {
     #[test]
     fn exercises_isolated_hook_fixtures() -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = Path::new(fixture_owner.location());
-        let message = fixture.join("COMMIT_MSG");
+        let fixture = fixture_owner.location();
+        let message = join_path(fixture, "COMMIT_MSG")
+            .map_err(|error| error.to_string())?;
         write(
             &fixture_owner,
             "COMMIT_MSG",
@@ -593,7 +593,8 @@ mod tests {
             "invalid commit message file",
         )?;
 
-        let staged = fixture.join("staged-paths");
+        let staged = join_path(fixture, "staged-paths")
+            .map_err(|error| error.to_string())?;
         write(
             &fixture_owner,
             "staged-paths",
@@ -634,7 +635,8 @@ mod tests {
         failure: FixtureDelegate,
         expected: &str,
     ) -> Result<(), String> {
-        let calls = Path::new(fixture.location()).join("calls");
+        let calls = join_path(fixture.location(), "calls")
+            .map_err(|error| error.to_string())?;
         write(fixture, "calls", b"")?;
         let status = run_hook(fixture, hook, failure)
             .map_err(|error| error.to_string())?;
@@ -655,7 +657,7 @@ mod tests {
             return Err(String::from("native fixture capability unavailable"));
         }
         let fixture_owner = directory()?;
-        let fixture = Path::new(fixture_owner.location());
+        let fixture = fixture_owner.location();
         executable(
             &fixture_owner,
             "git",
@@ -696,7 +698,7 @@ mod tests {
         )?;
         let message = format!(
             "{staged} -- commit-message {}/COMMIT_MSG\n",
-            fixture.display()
+            fixture.to_string_lossy()
         );
         hook_dispatch(
             &fixture_owner,

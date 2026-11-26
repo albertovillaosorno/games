@@ -57,8 +57,8 @@ pub mod todo;
 /// Unified IR and device protocol boundaries.
 pub mod unified_ir;
 
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::str;
 
 use games_platform::ir::toolchain::validation::{self, Request};
@@ -78,12 +78,12 @@ const CHECKS: [Request<'static>; 8] = [
 ];
 
 fn execute(
-    root: &Path,
+    root: &OsStr,
     request: Request<'_>,
     log: &mut dyn Write,
 ) -> Result<(), String> {
-    let output = validation::run(root.as_os_str(), request)
-        .map_err(|error| error.to_string())?;
+    let output =
+        validation::run(root, request).map_err(|error| error.to_string())?;
     writeln!(log, "{}", output.command).map_err(|error| error.to_string())?;
     log.write_all(&output.stdout)
         .map_err(|error| error.to_string())?;
@@ -123,10 +123,9 @@ fn runtime_dependency_graph(graph: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_runtime_graph(root: &Path, package: &str) -> Result<(), String> {
-    let graph =
-        validation::run(root.as_os_str(), Request::RuntimeGraph(package))
-            .map_err(|error| error.to_string())?;
+fn validate_runtime_graph(root: &OsStr, package: &str) -> Result<(), String> {
+    let graph = validation::run(root, Request::RuntimeGraph(package))
+        .map_err(|error| error.to_string())?;
     if !graph.success {
         return Err(format!("runtime dependency graph failed: {package}"));
     }
@@ -145,7 +144,7 @@ fn portable_packages(packages: &[Package]) -> Vec<&str> {
 }
 
 fn validate_portable(
-    root: &Path,
+    root: &OsStr,
     packages: &[Package],
     log: &mut dyn Write,
 ) -> Result<(), String> {
@@ -164,11 +163,11 @@ fn validate_portable(
 }
 
 fn validate_feature_graphs(
-    root: &Path,
+    root: &OsStr,
     packages: &[Package],
     log: &mut dyn Write,
 ) -> Result<(), String> {
-    let graph = validation::run(root.as_os_str(), Request::BuildGraph)
+    let graph = validation::run(root, Request::BuildGraph)
         .map_err(|error| error.to_string())?;
     if !graph.success {
         return Err(String::from("build dependency graph failed"));
@@ -187,7 +186,7 @@ fn validate_feature_graphs(
     Ok(())
 }
 
-fn run_validation(root: &Path, log: &mut dyn Write) -> Result<(), String> {
+fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
     writeln!(log, "Workspace and task contracts")
         .map_err(|error| error.to_string())?;
     let packages = contracts::validate(root)?;
@@ -203,19 +202,18 @@ fn run_validation(root: &Path, log: &mut dyn Write) -> Result<(), String> {
     let markdown: Vec<_> = paths
         .iter()
         .filter(|path| {
-            path.extension()
+            files::authored_extension(path)
                 .is_some_and(|ext| ext == "md" || ext == "mdc")
         })
-        .map(|path| path.as_os_str())
+        .map(OsString::as_os_str)
         .collect();
     execute(root, Request::Markdown(&markdown), log)
 }
 
 fn main() -> Result<(), String> {
     let args = toolchain::arguments().map_err(|error| error.to_string())?;
-    let root = PathBuf::from(
-        toolchain::workspace_root().map_err(|error| error.to_string())?,
-    );
+    let root =
+        toolchain::workspace_root().map_err(|error| error.to_string())?;
     match args.as_slice() {
         [] => cache::run(&root, false, run_validation),
         [mode] if mode == "--no-cache" => {

@@ -30,13 +30,18 @@
 //   - Fail closed on invalid inputs.
 //
 
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU64;
-use std::path::{Component, Path, PathBuf};
 use std::str::from_utf8;
 
-use games_platform::ir::security::toolchain::validation::admit_paths;
+use games_platform::ir::security::toolchain::validation::{
+    admit_path, admit_paths,
+};
 use games_platform::ir::storage::file::snapshot;
-use games_platform::ir::storage::{PathKind, canonical_path, path_kind};
+use games_platform::ir::storage::{
+    PathKind, RelativeComponent, canonical_path, join_path, parent_path,
+    path_kind, relative_components,
+};
 use games_platform::ir::toolchain::validation::{GitRequest, Request, run};
 
 use crate::todo::roadmap_width;
@@ -50,9 +55,9 @@ const MAX_AUTHORED_BYTES: NonZeroU64 =
 /// # Errors
 ///
 /// Returns an error if discovery fails.
-pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let output = run(root.as_os_str(), Request::AuthoredFiles)
-        .map_err(|error| error.to_string())?;
+pub fn authored(root: &OsStr) -> Result<Vec<OsString>, String> {
+    let output =
+        run(root, Request::AuthoredFiles).map_err(|error| error.to_string())?;
     if !output.success {
         return Err("authored file discovery failed".into());
     }
@@ -60,7 +65,7 @@ pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
     if let Some(path) = paths.iter().find(|path| private_configuration(path)) {
         return Err(format!(
             "private configuration cannot be authored: {}",
-            path.display()
+            path.to_string_lossy()
         ));
     }
     if repository_present(root)? {
@@ -70,11 +75,32 @@ pub fn authored(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Check every component of an authored path without following symlinks.
-pub(crate) fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
-    let mut current = root.to_path_buf();
-    let mut components = path.components().peekable();
+pub(crate) fn regular_path(root: &OsStr, path: &OsStr) -> Result<bool, String> {
+    let mut current = root.to_os_string();
+    let mut depth = 0usize;
+    let mut components = relative_components(path)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .peekable();
+    if components.peek().is_none() {
+        return Err("empty authored path".into());
+    }
     while let Some(component) = components.next() {
-        current.push(component);
+        match component {
+            RelativeComponent::Current => {},
+            RelativeComponent::Name(name) => {
+                current = join_path(&current, name)
+                    .map_err(|error| error.to_string())?;
+                depth = depth.checked_add(1).ok_or("path depth overflow")?;
+            },
+            RelativeComponent::Parent => {
+                depth =
+                    depth.checked_sub(1).ok_or("authored path escapes root")?;
+                current = parent_path(&current)
+                    .map_err(|error| error.to_string())?
+                    .to_os_string();
+            },
+        }
         let kind = path_kind(current.as_os_str())
             .map_err(|error| error.to_string())?;
         if kind == PathKind::Missing {
@@ -89,16 +115,18 @@ pub(crate) fn regular_path(root: &Path, path: &Path) -> Result<bool, String> {
         if !valid {
             return Err(format!(
                 "non-regular authored path: {}",
-                path.display()
+                path.to_string_lossy()
             ));
         }
     }
     Ok(true)
 }
 
-pub(crate) fn repository_present(root: &Path) -> Result<bool, String> {
-    match path_kind(root.join(".git").as_os_str())
-        .map_err(|error| error.to_string())?
+pub(crate) fn repository_present(root: &OsStr) -> Result<bool, String> {
+    match path_kind(
+        &join_path(root, ".git").map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?
     {
         PathKind::Directory | PathKind::RegularFile => Ok(true),
         PathKind::Missing => Ok(false),
@@ -109,40 +137,45 @@ pub(crate) fn repository_present(root: &Path) -> Result<bool, String> {
 }
 
 /// Canonicalize a trusted local path for contributor identity checks.
-pub(crate) fn canonical(path: &Path) -> Result<PathBuf, String> {
-    canonical_path(path.as_os_str())
-        .map(PathBuf::from)
-        .map_err(|error| error.to_string())
+pub(crate) fn canonical(path: &OsStr) -> Result<OsString, String> {
+    canonical_path(path).map_err(|error| error.to_string())
 }
 
 /// Read an authored regular file with the shared bounded snapshot.
 pub(crate) fn read_authored(
-    root: &Path,
-    path: &Path,
+    root: &OsStr,
+    path: &OsStr,
 ) -> Result<Vec<u8>, String> {
-    if path.as_os_str().is_empty()
-        || path
-            .components()
-            .any(|part| !matches!(part, Component::Normal(_)))
-        || private_configuration(path)
-    {
+    let name = path.to_str().ok_or("invalid authored name")?;
+    let _admitted =
+        admit_path(name).map_err(|_error| "invalid authored name")?;
+    if private_configuration(path) {
         return Err(String::from("invalid authored read path"));
     }
     if !regular_path(root, path)? {
-        return Err(format!("missing authored file: {}", path.display()));
+        return Err(format!(
+            "missing authored file: {}",
+            path.to_string_lossy()
+        ));
     }
-    snapshot(root.join(path).as_os_str(), MAX_AUTHORED_BYTES)
-        .map_err(|error| format!("{}: {error:?}", path.display()))
+    snapshot(
+        &join_path(root, path).map_err(|error| error.to_string())?,
+        MAX_AUTHORED_BYTES,
+    )
+    .map_err(|error| format!("{}: {error:?}", path.to_string_lossy()))
 }
 
 /// Decode authored text after the same bounded regular-file admission.
-pub(crate) fn read_text(root: &Path, path: &Path) -> Result<String, String> {
+pub(crate) fn read_text(root: &OsStr, path: &OsStr) -> Result<String, String> {
     String::from_utf8(read_authored(root, path)?)
-        .map_err(|error| format!("{}: {error}", path.display()))
+        .map_err(|error| format!("{}: {error}", path.to_string_lossy()))
 }
 
-fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
-    let output = run(root.as_os_str(), Request::Git(GitRequest::Inventory))
+fn verify_git_inventory(
+    root: &OsStr,
+    paths: &[OsString],
+) -> Result<(), String> {
+    let output = run(root, Request::Git(GitRequest::Inventory))
         .map_err(|error| error.to_string())?;
     if !output.success {
         return Err("Git inventory discovery failed".into());
@@ -151,34 +184,55 @@ fn verify_git_inventory(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
         if regular_path(root, &path)? && paths.binary_search(&path).is_err() {
             return Err(format!(
                 "Git path omitted from authored inventory: {}",
-                path.display()
+                path.to_string_lossy()
             ));
         }
     }
     Ok(())
 }
 
-fn discover_bytes(bytes: &[u8]) -> Result<Vec<PathBuf>, String> {
+fn discover_bytes(bytes: &[u8]) -> Result<Vec<OsString>, String> {
     let mut paths: Vec<_> = admit_paths(bytes)
         .map_err(|_error| "invalid authored inventory record")?
         .into_iter()
-        .map(PathBuf::from)
+        .map(OsString::from)
         .collect();
     paths.sort();
     Ok(paths)
 }
 
-fn private_configuration(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name == ".env"
-                || (name.starts_with(".env.") && name != ".env.example")
-        })
+/// Inspect the final segment of a canonical portable authored name.
+pub(crate) fn authored_leaf(path: &OsStr) -> Option<&str> {
+    path.to_str()?
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
 }
 
-fn python(path: &Path, bytes: &[u8]) -> bool {
-    let extension = path.extension().and_then(|value| value.to_str());
+/// Inspect the extension of a canonical portable authored filename.
+pub(crate) fn authored_extension(path: &OsStr) -> Option<&str> {
+    let (stem, extension) = authored_leaf(path)?.rsplit_once('.')?;
+    (!stem.is_empty()).then_some(extension)
+}
+
+/// Compare a component-aligned prefix of canonical portable authored names.
+pub(crate) fn authored_prefix(path: &OsStr, prefix: &str) -> bool {
+    path.to_str().is_some_and(|name| {
+        name == prefix
+            || name
+                .strip_prefix(prefix)
+                .is_some_and(|tail| tail.starts_with('/'))
+    })
+}
+
+fn private_configuration(path: &OsStr) -> bool {
+    authored_leaf(path).is_some_and(|name| {
+        name == ".env" || (name.starts_with(".env.") && name != ".env.example")
+    })
+}
+
+fn python(path: &OsStr, bytes: &[u8]) -> bool {
+    let extension = authored_extension(path);
     extension.is_some_and(|value| {
         ["py", "pyw", "pyi", "pyc", "pyo", "ipynb"]
             .iter()
@@ -190,8 +244,8 @@ fn python(path: &Path, bytes: &[u8]) -> bool {
         .is_some_and(|line| line.starts_with("#!") && line.contains("python"))
 }
 
-fn requires_text(path: &Path) -> bool {
-    let extension = path.extension().and_then(|value| value.to_str());
+fn requires_text(path: &OsStr) -> bool {
+    let extension = authored_extension(path);
     extension.is_some_and(|value| {
         [
             "rs", "toml", "md", "mdc", "txt", "json", "jsonc", "yaml", "yml",
@@ -199,20 +253,17 @@ fn requires_text(path: &Path) -> bool {
             "html", "css",
         ]
         .contains(&value)
-    }) || path.starts_with(".githooks")
-        || path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                matches!(name, "LICENSE" | ".gitignore" | ".editorconfig")
-            })
+    }) || authored_prefix(path, ".githooks")
+        || authored_leaf(path).is_some_and(|name| {
+            matches!(name, "LICENSE" | ".gitignore" | ".editorconfig")
+        })
 }
 
 fn authored_text<'bytes>(
-    path: &Path,
+    path: &OsStr,
     bytes: &'bytes [u8],
 ) -> Result<Option<&'bytes str>, String> {
-    if path == Path::new("Cargo.lock") {
+    if path == OsStr::new("Cargo.lock") {
         return Ok(None);
     }
     if let Ok(text) = from_utf8(bytes)
@@ -221,13 +272,13 @@ fn authored_text<'bytes>(
         return Ok(Some(text));
     }
     if requires_text(path) {
-        return Err(format!("invalid UTF-8 text: {}", path.display()));
+        return Err(format!("invalid UTF-8 text: {}", path.to_string_lossy()));
     }
     Ok(None)
 }
 
-fn schema_exception(path: &Path, line: &str, previous: &str) -> bool {
-    path == Path::new(".markdownlint-cli2.jsonc")
+fn schema_exception(path: &OsStr, line: &str, previous: &str) -> bool {
+    path == OsStr::new(".markdownlint-cli2.jsonc")
         && previous
             == "  // jig-ignore-next-line: indivisible reviewed identifier"
         && line
@@ -239,13 +290,13 @@ fn schema_exception(path: &Path, line: &str, previous: &str) -> bool {
             )
 }
 
-fn line_width(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn line_width(path: &OsStr, bytes: &[u8]) -> Result<(), String> {
     let Some(text) = authored_text(path, bytes)? else {
         return Ok(());
     };
     let mut previous = "";
     for (index, line) in text.lines().enumerate() {
-        let valid = if path == Path::new("TODO.md") {
+        let valid = if path == OsStr::new("TODO.md") {
             roadmap_width(line, previous)
         } else {
             line.chars().count() <= 80 || schema_exception(path, line, previous)
@@ -253,7 +304,7 @@ fn line_width(path: &Path, bytes: &[u8]) -> Result<(), String> {
         if !valid {
             return Err(format!(
                 "{}:{}: line exceeds 80 characters",
-                path.display(),
+                path.to_string_lossy(),
                 index.saturating_add(1)
             ));
         }
@@ -262,8 +313,8 @@ fn line_width(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn local_storage_policy(root: &Path) -> Result<(), String> {
-    let ignore = read_text(root, Path::new(".gitignore"))?;
+fn local_storage_policy(root: &OsStr) -> Result<(), String> {
+    let ignore = read_text(root, OsStr::new(".gitignore"))?;
     for directory in [".reference", ".cache", ".temp"] {
         let pattern = format!("/{directory}/");
         if !ignore.lines().any(|line| line == pattern) {
@@ -274,15 +325,16 @@ fn local_storage_policy(root: &Path) -> Result<(), String> {
 }
 
 /// Reject a durable ledger in disposable storage even before cache admission.
-pub(crate) fn ledger_location(root: &Path) -> Result<(), String> {
+pub(crate) fn ledger_location(root: &OsStr) -> Result<(), String> {
     for directory in [".cache", ".temp"] {
-        let path = root.join(directory).join("ledger");
-        if path_kind(path.as_os_str()).map_err(|error| error.to_string())?
+        let path = join_path(root, &format!("{directory}/ledger"))
+            .map_err(|error| error.to_string())?;
+        if path_kind(&path).map_err(|error| error.to_string())?
             != PathKind::Missing
         {
             return Err(format!(
                 "durable ledger belongs in .reference/ledger: {}",
-                path.display(),
+                path.to_string_lossy(),
             ));
         }
     }
@@ -293,12 +345,15 @@ pub(crate) fn ledger_location(root: &Path) -> Result<(), String> {
 ///
 /// # Errors
 /// Returns an error for prohibited source, malformed text or excessive width.
-pub fn validate(root: &Path) -> Result<(), String> {
+pub fn validate(root: &OsStr) -> Result<(), String> {
     local_storage_policy(root)?;
     for path in authored(root)? {
         let bytes = read_authored(root, &path)?;
         if python(&path, &bytes) {
-            return Err(format!("Python is forbidden: {}", path.display()));
+            return Err(format!(
+                "Python is forbidden: {}",
+                path.to_string_lossy()
+            ));
         }
         line_width(&path, &bytes)?;
     }
@@ -307,46 +362,52 @@ pub fn validate(root: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::ffi::OsStr;
 
-    use games_platform::ir::storage::fixtures as platform_fixtures;
+    use games_platform::ir::storage::{
+        fixtures as platform_fixtures, join_path,
+    };
     use games_platform::ir::toolchain::validation::fixtures::{
         FixtureGit, git,
     };
 
     use super::{
         MAX_AUTHORED_BYTES, authored, line_width, local_storage_policy,
-        private_configuration, python, read_authored, read_text,
+        private_configuration, python, read_authored, read_text, regular_path,
     };
     use crate::fixtures::{directory, require};
 
     #[test]
     fn authored_reads_are_bounded_and_reject_links() -> Result<(), String> {
         let fixture = directory()?;
-        let root = Path::new(fixture.location());
+        let root = fixture.location();
         fixture
             .write_file("source.rs", b"source")
             .map_err(|error| error.to_string())?;
         require(
-            read_text(root, Path::new("source.rs"))? == "source",
+            read_text(root, OsStr::new("source.rs"))? == "source",
             "exact snapshot",
         )?;
         fixture
-            .link(root.join("source.rs").as_os_str(), "alias.rs")
+            .link(
+                &join_path(root, "source.rs")
+                    .map_err(|error| error.to_string())?,
+                "alias.rs",
+            )
             .map_err(|error| error.to_string())?;
         require(
-            read_authored(root, Path::new("alias.rs")).is_err(),
+            read_authored(root, OsStr::new("alias.rs")).is_err(),
             "reject linked source",
         )?;
         require(
-            read_authored(root, Path::new("../source.rs")).is_err(),
+            read_authored(root, OsStr::new("../source.rs")).is_err(),
             "reject traversal",
         )?;
         fixture
             .write_file(".env", b"private")
             .map_err(|error| error.to_string())?;
         require(
-            read_authored(root, Path::new(".env")).is_err(),
+            read_authored(root, OsStr::new(".env")).is_err(),
             "reject private source",
         )?;
         fixture
@@ -356,15 +417,47 @@ mod tests {
             )
             .map_err(|error| error.to_string())?;
         require(
-            read_authored(root, Path::new("large")).is_err(),
+            read_authored(root, OsStr::new("large")).is_err(),
             "reject oversized source",
+        )
+    }
+
+    #[test]
+    fn relative_observation_rejects_escape_and_linked_ancestors()
+    -> Result<(), String> {
+        let fixture = directory()?;
+        let root = fixture.location();
+        fixture
+            .create_directories("nested")
+            .map_err(|error| error.to_string())?;
+        fixture
+            .write_file("source.rs", b"source")
+            .map_err(|error| error.to_string())?;
+        fixture
+            .link(OsStr::new("nested"), "alias")
+            .map_err(|error| error.to_string())?;
+        require(
+            regular_path(root, OsStr::new("nested/../source.rs"))?,
+            "internal parent observation",
+        )?;
+        require(
+            regular_path(root, OsStr::new("../source.rs")).is_err(),
+            "root escape",
+        )?;
+        require(
+            regular_path(root, OsStr::new("alias/../source.rs")).is_err(),
+            "linked ancestor",
+        )?;
+        require(
+            read_authored(root, OsStr::new("nested/../source.rs")).is_err(),
+            "authored names must be canonical",
         )
     }
 
     #[test]
     fn durable_ledgers_are_not_disposable() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file(".gitignore", b"/.reference/\n/.cache/\n/.temp/\n")
             .map_err(|error| error.to_string())?;
@@ -391,7 +484,7 @@ mod tests {
     #[test]
     fn private_configuration_is_not_authored() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file(".gitignore", b"")
             .map_err(|error| error.to_string())?;
@@ -404,7 +497,7 @@ mod tests {
             .map_err(|error| error.to_string())?;
         require(authored(root).is_err(), "private configuration rejected")?;
         require(
-            private_configuration(Path::new("local/.env.production")),
+            private_configuration(OsStr::new("local/.env.production")),
             "private variant rejected",
         )?;
         Ok(())
@@ -412,12 +505,12 @@ mod tests {
 
     #[test]
     fn prohibits_python_source_and_scripts() {
-        assert!(python(Path::new("test.PY"), b""), "Python source");
+        assert!(python(OsStr::new("test.PY"), b""), "Python source");
         assert!(
-            python(Path::new("run"), b"#!/usr/bin/env python3\n"),
+            python(OsStr::new("run"), b"#!/usr/bin/env python3\n"),
             "Python script"
         );
-        assert!(!python(Path::new("lib.rs"), b"// python"), "Rust source");
+        assert!(!python(OsStr::new("lib.rs"), b"// python"), "Rust source");
     }
 
     #[test]
@@ -425,23 +518,23 @@ mod tests {
         let exact = "\u{e9}".repeat(80);
         let wide = "\u{e9}".repeat(81);
         assert!(
-            line_width(Path::new("notes.txt"), exact.as_bytes()).is_ok(),
+            line_width(OsStr::new("notes.txt"), exact.as_bytes()).is_ok(),
             "80 Unicode characters fit"
         );
         assert!(
-            line_width(Path::new("notes.txt"), wide.as_bytes()).is_err(),
+            line_width(OsStr::new("notes.txt"), wide.as_bytes()).is_err(),
             "81 Unicode characters exceed the contract"
         );
         assert!(
-            line_width(Path::new("Cargo.lock"), wide.as_bytes()).is_ok(),
+            line_width(OsStr::new("Cargo.lock"), wide.as_bytes()).is_ok(),
             "generated lockfile is outside authored width checks"
         );
         assert!(
-            line_width(Path::new("image.png"), b"\x89PNG\0").is_ok(),
+            line_width(OsStr::new("image.png"), b"\x89PNG\0").is_ok(),
             "binary resources are not authored text"
         );
         assert!(
-            line_width(Path::new("lib.rs"), b"\xff").is_err(),
+            line_width(OsStr::new("lib.rs"), b"\xff").is_err(),
             "invalid UTF-8 in source is not a binary exemption"
         );
     }
@@ -453,11 +546,11 @@ mod tests {
             "a".repeat(80)
         );
         assert!(
-            line_width(Path::new("TODO.md"), link.as_bytes()).is_ok(),
+            line_width(OsStr::new("TODO.md"), link.as_bytes()).is_ok(),
             "reviewed direct roadmap link"
         );
         assert!(
-            line_width(Path::new("README.md"), link.as_bytes()).is_err(),
+            line_width(OsStr::new("README.md"), link.as_bytes()).is_err(),
             "other documents cannot use the roadmap exception"
         );
         let prose = format!(
@@ -465,7 +558,7 @@ mod tests {
             "a".repeat(81)
         );
         assert!(
-            line_width(Path::new("TODO.md"), prose.as_bytes()).is_err(),
+            line_width(OsStr::new("TODO.md"), prose.as_bytes()).is_err(),
             "exception cannot suppress an overlong prose line"
         );
     }
@@ -473,7 +566,7 @@ mod tests {
     #[test]
     fn discovers_authored_files_without_local_media() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file(".gitignore", b"/.reference/\n/target/\n")
             .map_err(|error| error.to_string())?;
@@ -490,7 +583,7 @@ mod tests {
             .map_err(|error| error.to_string())?;
         let files = authored(root)?;
         require(
-            files == [Path::new(".gitignore"), Path::new("lib.rs")],
+            files == [OsStr::new(".gitignore"), OsStr::new("lib.rs")],
             "only authored source and configuration are visible",
         )?;
         Ok(())
@@ -502,7 +595,7 @@ mod tests {
             return Err(String::from("native fixture capability unavailable"));
         }
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         git(&root_owner, FixtureGit::Initialize)
             .map_err(|error| error.to_string())?;
         root_owner

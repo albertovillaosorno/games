@@ -30,13 +30,14 @@
 //   - Reject malformed documents, cycles and unavailable required files.
 
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
-use std::iter;
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
 
-use games_platform::ir::storage::canonical_path;
 use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::{
+    canonical_path, join_path, parent_path, path_extension,
+};
 use toml::Value;
 
 const MAX_DEPTH: usize = 64;
@@ -45,18 +46,21 @@ const MAX_DOCUMENTS: usize = 1024;
 
 /// Contents and parsed values of one configuration file.
 pub(crate) type Document<'config> = (&'config str, &'config Value);
-type Inclusion<'path> = (&'path Path, bool);
+type Inclusion<'path> = (&'path OsStr, bool);
 
 struct Traversal {
-    active: BTreeSet<PathBuf>,
+    active: BTreeSet<OsString>,
     remaining: usize,
 }
 
-type ConfigSource = (PathBuf, String);
+type ConfigSource = (OsString, String);
 
-fn source(path: &Path, optional: bool) -> Result<Option<ConfigSource>, String> {
-    let canonical = match canonical_path(path.as_os_str()) {
-        Ok(value) => PathBuf::from(value),
+fn source(
+    path: &OsStr,
+    optional: bool,
+) -> Result<Option<ConfigSource>, String> {
+    let canonical = match canonical_path(path) {
+        Ok(value) => value,
         Err(error) if optional && error.kind() == ErrorKind::NotFound => {
             return Ok(None);
         },
@@ -87,21 +91,24 @@ fn inclusion(value: &Value) -> Result<Inclusion<'_>, String> {
             .unwrap_or(false);
         (name, optional)
     };
-    let path = Path::new(name);
-    if path.extension().is_none_or(|extension| extension != "toml") {
+    let path = OsStr::new(name);
+    if path_extension(path)
+        .map_err(|error| error.to_string())?
+        .is_none_or(|extension| extension != "toml")
+    {
         return Err(String::from("Cargo include must be a TOML file"));
     }
     Ok((path, optional))
 }
 
 fn walk<Inspect>(
-    path: &Path,
+    path: &OsStr,
     optional: bool,
     state: &mut Traversal,
     inspect: &mut Inspect,
 ) -> Result<bool, String>
 where
-    Inspect: FnMut(&Path, Option<Document<'_>>) -> Result<(), String>,
+    Inspect: FnMut(&OsStr, Option<Document<'_>>) -> Result<(), String>,
 {
     state.remaining = state
         .remaining
@@ -122,11 +129,15 @@ where
     );
     inspect(path, Some((&text, &value)))?;
     if let Some(includes) = value.get("include") {
-        let parent = path.parent().ok_or("invalid Cargo configuration path")?;
+        let parent = parent_path(path).map_err(|error| error.to_string())?;
         for entry in includes.as_array().ok_or("invalid Cargo include list")? {
             let (child, child_optional) = inclusion(entry)?;
-            let _present =
-                walk(&parent.join(child), child_optional, state, inspect)?;
+            let _present = walk(
+                &join_path(parent, child).map_err(|error| error.to_string())?,
+                child_optional,
+                state,
+                inspect,
+            )?;
         }
     }
     let _removed = state.active.remove(&canonical);
@@ -136,12 +147,12 @@ where
 /// Visit a configuration and its included documents, including absent
 /// optional paths. Return whether the initial file exists.
 pub(crate) fn visit<Inspect>(
-    path: &Path,
+    path: &OsStr,
     optional: bool,
     inspect: &mut Inspect,
 ) -> Result<bool, String>
 where
-    Inspect: FnMut(&Path, Option<Document<'_>>) -> Result<(), String>,
+    Inspect: FnMut(&OsStr, Option<Document<'_>>) -> Result<(), String>,
 {
     walk(
         path,
@@ -157,29 +168,47 @@ where
 /// Visit active Cargo configuration from the current directory through its
 /// ancestors and finally Cargo home. An extensionless file takes precedence.
 pub(crate) fn visit_active<Inspect>(
-    root: &Path,
-    home: &Path,
+    root: &OsStr,
+    home: &OsStr,
     inspect: &mut Inspect,
 ) -> Result<(), String>
 where
-    Inspect: FnMut(&Path, Option<Document<'_>>) -> Result<(), String>,
+    Inspect: FnMut(&OsStr, Option<Document<'_>>) -> Result<(), String>,
 {
-    for directory in root
-        .ancestors()
-        .map(|ancestor| ancestor.join(".cargo"))
-        .chain(iter::once(home.to_path_buf()))
-    {
-        if !visit(&directory.join("config"), true, inspect)? {
-            let _present =
-                visit(&directory.join("config.toml"), true, inspect)?;
+    let mut ancestor = root;
+    loop {
+        let directory =
+            join_path(ancestor, ".cargo").map_err(|error| error.to_string())?;
+        visit_directory(&directory, inspect)?;
+        match parent_path(ancestor) {
+            Ok(parent) => ancestor = parent,
+            Err(error) if error.kind() == ErrorKind::InvalidInput => break,
+            Err(error) => return Err(error.to_string()),
         }
+    }
+    visit_directory(home, inspect)
+}
+
+fn visit_directory<Inspect>(
+    directory: &OsStr,
+    inspect: &mut Inspect,
+) -> Result<(), String>
+where
+    Inspect: FnMut(&OsStr, Option<Document<'_>>) -> Result<(), String>,
+{
+    let legacy =
+        join_path(directory, "config").map_err(|error| error.to_string())?;
+    if !visit(&legacy, true, inspect)? {
+        let config = join_path(directory, "config.toml")
+            .map_err(|error| error.to_string())?;
+        let _present = visit(&config, true, inspect)?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use games_platform::ir::storage::{join_path, path_leaf};
 
     use super::{MAX_CONFIG_BYTES, MAX_DOCUMENTS, visit};
     use crate::fixtures::{directory, require};
@@ -187,8 +216,9 @@ mod tests {
     #[test]
     fn rejects_cycles_and_missing_required_includes() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
-        let config = root.join("config.toml");
+        let root = root_owner.location();
+        let config = join_path(root, "config.toml")
+            .map_err(|error| error.to_string())?;
         root_owner
             .write_file("config.toml", b"include = [\"child.toml\"]")
             .map_err(|error| error.to_string())?;
@@ -212,7 +242,9 @@ mod tests {
         let mut absent = false;
         require(
             visit(&config, false, &mut |path, document| {
-                if path.ends_with("absent.toml") && document.is_none() {
+                if path_leaf(path).is_ok_and(|leaf| leaf == "absent.toml")
+                    && document.is_none()
+                {
                     absent = true;
                 }
                 Ok(())
@@ -226,7 +258,8 @@ mod tests {
     #[test]
     fn rejects_oversized_configuration() -> Result<(), String> {
         let fixture = directory()?;
-        let path = Path::new(fixture.location()).join("config.toml");
+        let path = join_path(fixture.location(), "config.toml")
+            .map_err(|error| error.to_string())?;
         fixture
             .create_sized_file(
                 "config.toml",
@@ -242,8 +275,9 @@ mod tests {
     #[test]
     fn bounds_repeated_optional_include_attempts() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
-        let config = root.join("config.toml");
+        let root = root_owner.location();
+        let config = join_path(root, "config.toml")
+            .map_err(|error| error.to_string())?;
         let document = |count| {
             let entries =
                 vec!["{path=\"absent.toml\", optional=true}"; count].join(",");

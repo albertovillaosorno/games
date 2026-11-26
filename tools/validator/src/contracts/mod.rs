@@ -32,8 +32,9 @@
 
 mod ir_layout;
 
-use std::path::Path;
+use std::ffi::OsStr;
 
+use games_platform::ir::storage::strip_path_prefix;
 use games_platform::ir::toolchain::validation::{self, Request};
 use serde_json::Value;
 
@@ -56,19 +57,19 @@ pub struct Package {
 /// # Errors
 ///
 /// Returns diagnostics if the task validator fails.
-pub fn todo(root: &Path) -> Result<(), String> {
+pub fn todo(root: &OsStr) -> Result<(), String> {
     validate_tasks(root)
 }
 
-fn manifest(root: &Path) -> Result<Value, String> {
-    let source = files::read_text(root, Path::new("Cargo.toml"))?;
+fn manifest(root: &OsStr) -> Result<Value, String> {
+    let source = files::read_text(root, OsStr::new("Cargo.toml"))?;
     let value = source
         .parse::<toml::Table>()
         .map_err(|error| error.to_string())?;
     if !value.contains_key("workspace") {
         return Err(String::from("missing workspace manifest"));
     }
-    let output = validation::run(root.as_os_str(), Request::WorkspaceMetadata)
+    let output = validation::run(root, Request::WorkspaceMetadata)
         .map_err(|error| error.to_string())?;
     if !output.success {
         return Err(String::from("Cargo metadata failed"));
@@ -78,7 +79,7 @@ fn manifest(root: &Path) -> Result<Value, String> {
     Ok(metadata)
 }
 
-fn classify(package: &Value, root: &Path) -> Result<Package, String> {
+fn classify(package: &Value, root: &OsStr) -> Result<Package, String> {
     let name = package
         .get("name")
         .and_then(Value::as_str)
@@ -88,8 +89,7 @@ fn classify(package: &Value, root: &Path) -> Result<Package, String> {
         .get("manifest_path")
         .and_then(Value::as_str)
         .ok_or("missing package manifest path")?;
-    let relative = Path::new(manifest)
-        .strip_prefix(root)
+    let relative = strip_path_prefix(OsStr::new(manifest), root)
         .map_err(|error| error.to_string())?;
     let path = relative.to_str().ok_or("invalid package manifest path")?;
     let portable = path.starts_with("crates/");
@@ -120,10 +120,10 @@ fn classify(package: &Value, root: &Path) -> Result<Package, String> {
 /// # Errors
 ///
 /// Returns diagnostics if a required check fails.
-pub fn validate(root: &Path) -> Result<Vec<Package>, String> {
+pub fn validate(root: &OsStr) -> Result<Vec<Package>, String> {
     let metadata = manifest(root)?;
-    if files::read_authored(root, Path::new("LICENSE"))?
-        != files::read_authored(root, Path::new("crates/engine/LICENSE"))?
+    if files::read_authored(root, OsStr::new("LICENSE"))?
+        != files::read_authored(root, OsStr::new("crates/engine/LICENSE"))?
     {
         return Err(String::from("engine licence differs from root licence"));
     }
@@ -148,7 +148,7 @@ pub fn validate(root: &Path) -> Result<Vec<Package>, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::ffi::OsStr;
 
     use serde_json::json;
 
@@ -164,7 +164,7 @@ mod tests {
                 "targets": [{"kind": ["lib"]}],
             });
             assert!(
-                classify(&package, Path::new("/repo"))
+                classify(&package, OsStr::new("/repo"))
                     .is_ok_and(|entry| entry.portable && entry.runtime)
             );
             let binary = json!({
@@ -172,14 +172,14 @@ mod tests {
                 "manifest_path": manifest,
                 "targets": [{"kind": ["bin"]}],
             });
-            assert!(classify(&binary, Path::new("/repo")).is_err());
+            assert!(classify(&binary, OsStr::new("/repo")).is_err());
         }
         let tool = json!({
             "name": "tool", "manifest_path": "/repo/tools/new/Cargo.toml",
             "targets": [{"kind": ["bin"]}],
         });
         assert!(
-            classify(&tool, Path::new("/repo"))
+            classify(&tool, OsStr::new("/repo"))
                 .is_ok_and(|entry| !entry.portable && !entry.runtime)
         );
     }

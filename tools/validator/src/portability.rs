@@ -30,7 +30,7 @@
 //   - Any detected coupling is an error.
 //
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
 
 use crate::boundaries::{dependency_tables, host_independent};
 use crate::clones::tokens;
@@ -204,8 +204,8 @@ fn source_counts(name: &str, source: &str) -> Result<Counts, String> {
 }
 
 fn inventory(
-    root: &Path,
-    authored: &[PathBuf],
+    root: &OsStr,
+    authored: &[OsString],
     workspace: &toml::Table,
 ) -> Result<Inventory, String> {
     let mut found = Inventory::new();
@@ -216,9 +216,10 @@ fn inventory(
         {
             continue;
         }
-        let is_rust = path.extension().is_some_and(|ext| ext == "rs");
+        let is_rust =
+            files::authored_extension(path).is_some_and(|ext| ext == "rs");
         let is_manifest =
-            path.file_name().is_some_and(|ext| ext == "Cargo.toml");
+            files::authored_leaf(path).is_some_and(|ext| ext == "Cargo.toml");
         if !is_rust && !is_manifest {
             continue;
         }
@@ -248,8 +249,8 @@ fn reject_coupling(found: &Inventory) -> Result<(), String> {
 /// # Errors
 /// Reports unreadable sources, invalid manifests or any coupling.
 pub fn validate(
-    root: &Path,
-    authored: &[PathBuf],
+    root: &OsStr,
+    authored: &[OsString],
     workspace: &toml::Table,
 ) -> Result<(), String> {
     reject_coupling(&inventory(root, authored, workspace)?)
@@ -258,8 +259,8 @@ pub fn validate(
 /// Check the actual repository before any cached validation can pass.
 /// # Errors
 /// Rejects unreadable metadata, authored inventory or platform coupling.
-pub fn preflight(root: &Path) -> Result<(), String> {
-    let source = files::read_text(root, Path::new("Cargo.toml"))?;
+pub fn preflight(root: &OsStr) -> Result<(), String> {
+    let source = files::read_text(root, OsStr::new("Cargo.toml"))?;
     let document = source
         .parse::<toml::Table>()
         .map_err(|error| error.to_string())?;
@@ -275,7 +276,7 @@ pub fn preflight(root: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::ffi::OsString;
 
     use super::{
         Counts, Inventory, adapter, manifest, neutral_ir, reject_coupling,
@@ -400,8 +401,8 @@ mod tests {
     fn real_inventory_rejects_previously_allowed_source() -> Result<(), String>
     {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
-        let source = PathBuf::from("crates/games/example/src/lib.rs");
+        let root = root_owner.location();
+        let source = OsString::from("crates/games/example/src/lib.rs");
         root_owner
             .create_directories("crates/games/example/src")
             .map_err(|error| error.to_string())?;
@@ -422,20 +423,22 @@ mod tests {
     fn linux_entrypoints_and_tools_never_receive_allowances()
     -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         let authored = [
             "crates/games/example/src/lib.rs",
             "crates/games/example/src/main.rs",
             "tools/build/src/main.rs",
             "tools/validator/src/validate.rs",
         ]
-        .map(PathBuf::from);
+        .map(OsString::from);
         for relative in &authored {
             root_owner
                 .create_directories(
                     relative
-                        .parent()
-                        .and_then(Path::to_str)
+                        .to_str()
+                        .and_then(|name| {
+                            name.rsplit_once('/').map(|(parent, _)| parent)
+                        })
                         .ok_or("fixture parent")?,
                 )
                 .map_err(|error| error.to_string())?;
@@ -464,13 +467,13 @@ mod tests {
     #[test]
     fn host_and_target_findings_are_reported_together() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         let paths = [
             "crates/platform/src/ir/example/mod.rs",
             "crates/platform/src/lib.rs",
             "tools/build/src/main.rs",
         ]
-        .map(PathBuf::from);
+        .map(OsString::from);
         for (relative, source) in paths.iter().zip([
             "use std::fs;",
             "#[cfg(unix)] mod backend;",
@@ -479,8 +482,10 @@ mod tests {
             root_owner
                 .create_directories(
                     relative
-                        .parent()
-                        .and_then(Path::to_str)
+                        .to_str()
+                        .and_then(|name| {
+                            name.rsplit_once('/').map(|(parent, _)| parent)
+                        })
                         .ok_or("fixture parent")?,
                 )
                 .map_err(|error| error.to_string())?;
@@ -503,22 +508,25 @@ mod tests {
     fn portable_source_cannot_embed_host_files_or_environment()
     -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         let authored = [
             "crates/engine/src/lib.rs",
             "crates/importer/src/lib.rs",
             "crates/platform/src/ir/example/mod.rs",
             "crates/platform/src/hardware/example/mod.rs",
             "tools/download/src/download.rs",
+            "tools/validator/src/validate.rs",
             "crates/platform/src/software/linux/example/mod.rs",
         ]
-        .map(PathBuf::from);
+        .map(OsString::from);
         for relative in &authored {
             root_owner
                 .create_directories(
                     relative
-                        .parent()
-                        .and_then(Path::to_str)
+                        .to_str()
+                        .and_then(|name| {
+                            name.rsplit_once('/').map(|(parent, _)| parent)
+                        })
                         .ok_or("fixture parent")?,
                 )
                 .map_err(|error| error.to_string())?;
@@ -534,7 +542,7 @@ mod tests {
         }
         let result = validate(root, &authored, &toml::Table::new());
         let error = result.err().ok_or("accepted compile-time host inputs")?;
-        for relative in authored.iter().take(5) {
+        for relative in authored.iter().take(6) {
             require(
                 error.contains(relative.to_string_lossy().as_ref()),
                 "missing portable path",

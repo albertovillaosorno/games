@@ -33,8 +33,8 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::path::{Path, PathBuf};
 
+use games_platform::ir::storage::join_path;
 use games_platform::ir::toolchain::environment::{
     self, Environment, FINGERPRINT_KEYS, FRESH_CHECK_FLAGS,
 };
@@ -53,8 +53,8 @@ use crate::files::{
 use crate::{cargo_config, portability};
 
 /// Function signature for a complete validation pass.
-pub type Check = fn(&Path, &mut dyn Write) -> Result<(), String>;
-type Fingerprint = fn(&Path) -> Result<ValidationKey, String>;
+pub type Check = fn(&OsStr, &mut dyn Write) -> Result<(), String>;
+type Fingerprint = fn(&OsStr) -> Result<ValidationKey, String>;
 
 fn hash_value(hash: &mut Sha256, value: &[u8]) {
     hash.update(value.len().to_le_bytes());
@@ -81,26 +81,31 @@ fn hash_build_overrides(
     }
 }
 
-fn cargo_home(root: &Path, observed: &Environment) -> Result<PathBuf, String> {
+fn cargo_home(
+    root: &OsStr,
+    observed: &Environment,
+) -> Result<OsString, String> {
     if let Some(home) =
         observed.value("CARGO_HOME").filter(|path| !path.is_empty())
     {
-        return Ok(root.join(home));
+        return join_path(root, home).map_err(|error| error.to_string());
     }
     observed
         .home()
-        .map(|home| Path::new(home).join(".cargo"))
         .ok_or_else(|| String::from("cannot resolve Cargo home"))
+        .and_then(|home| {
+            join_path(home, ".cargo").map_err(|error| error.to_string())
+        })
 }
 
 fn hash_cargo_config_files(
-    root: &Path,
-    home: &Path,
+    root: &OsStr,
+    home: &OsStr,
     hash: &mut Sha256,
 ) -> Result<(), String> {
     hash_value(hash, b"cargo-config-files");
     cargo_config::visit_active(root, home, &mut |path, document| {
-        hash_value(hash, path.as_os_str().as_encoded_bytes());
+        hash_value(hash, path.as_encoded_bytes());
         hash_value(hash, &[u8::from(document.is_some())]);
         if let Some((text, _value)) = document {
             hash_value(hash, text.as_bytes());
@@ -110,7 +115,7 @@ fn hash_cargo_config_files(
 }
 
 fn tool_versions(
-    root: &Path,
+    root: &OsStr,
     hash: &mut Sha256,
     observed: &Environment,
 ) -> Result<(), String> {
@@ -124,8 +129,8 @@ fn tool_versions(
         ValidationTool::Ripgrep,
         ValidationTool::Git,
     ] {
-        let output = probe_version(root.as_os_str(), tool)
-            .map_err(|error| error.to_string())?;
+        let output =
+            probe_version(root, tool).map_err(|error| error.to_string())?;
         hash_value(hash, &output.stdout);
         hash_value(hash, &output.stderr);
     }
@@ -136,7 +141,7 @@ fn tool_versions(
     Ok(())
 }
 
-fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
+fn fingerprint(root: &OsStr) -> Result<ValidationKey, String> {
     ledger_location(root)?;
     portability::preflight(root)?;
     let mut hash = Sha256::new();
@@ -149,8 +154,7 @@ fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
         &mut hash,
     )?;
     if repository_present(root)? {
-        let head = repository_head(root.as_os_str())
-            .map_err(|error| error.to_string())?;
+        let head = repository_head(root).map_err(|error| error.to_string())?;
         hash_value(&mut hash, b"git-history");
         hash_value(&mut hash, &[u8::from(head.is_some())]);
         if let Some(identity) = head {
@@ -158,7 +162,7 @@ fn fingerprint(root: &Path) -> Result<ValidationKey, String> {
         }
     }
     for path in authored(root)? {
-        hash_value(&mut hash, path.as_os_str().as_encoded_bytes());
+        hash_value(&mut hash, path.as_encoded_bytes());
         let bytes = read_authored(root, &path)?;
         hash_value(&mut hash, &bytes);
     }
@@ -177,7 +181,7 @@ fn announce(message: &str) -> Result<(), String> {
 /// # Errors
 ///
 /// Returns an error for failed checks, I/O or concurrent source changes.
-pub fn run(root: &Path, fresh: bool, check: Check) -> Result<(), String> {
+pub fn run(root: &OsStr, fresh: bool, check: Check) -> Result<(), String> {
     let requested = environment::capture()
         .map_err(|error| error.to_string())?
         .fresh_requested();
@@ -185,19 +189,19 @@ pub fn run(root: &Path, fresh: bool, check: Check) -> Result<(), String> {
 }
 
 fn run_with<Operation>(
-    root: &Path,
+    root: &OsStr,
     fresh: bool,
     check: Operation,
     identify: Fingerprint,
 ) -> Result<(), String>
 where
-    Operation: FnOnce(&Path, &mut dyn Write) -> Result<(), String>,
+    Operation: FnOnce(&OsStr, &mut dyn Write) -> Result<(), String>,
 {
-    let mut state = ValidationState::open(root.as_os_str())
-        .map_err(|error| error.to_string())?;
+    let mut state =
+        ValidationState::open(root).map_err(|error| error.to_string())?;
     announce(&format!(
         "Validation log: {}",
-        Path::new(state.log_path()).display()
+        state.log_path().to_string_lossy()
     ))?;
     let before = match identify(root) {
         Ok(value) => value,
@@ -232,10 +236,9 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::io::{Error, Write};
     use std::num::NonZeroUsize;
-    use std::path::Path;
 
     use games_platform::ir::process::fixtures::with_worker;
-    use games_platform::ir::storage::directory_entries;
+    use games_platform::ir::storage::{directory_entries, join_path};
     use sha2::{Digest as _, Sha256};
 
     use super::{
@@ -245,27 +248,31 @@ mod tests {
     };
     use crate::fixtures::{directory, exists, read, require};
 
-    fn key(root: &Path) -> Result<ValidationKey, String> {
-        let bytes = read(&root.join("input"))?;
+    fn key(root: &OsStr) -> Result<ValidationKey, String> {
+        let bytes = read(
+            &join_path(root, "input").map_err(|error| error.to_string())?,
+        )?;
         Ok(Sha256::digest(bytes).into())
     }
 
-    fn pass(_root: &Path, log: &mut dyn Write) -> Result<(), String> {
+    fn pass(_root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
         writeln!(log, "executed").map_err(|error| error.to_string())
     }
 
-    fn fail(root: &Path, _log: &mut dyn Write) -> Result<(), String> {
-        read(&root.join("missing")).map(|_| ())
+    fn fail(root: &OsStr, _log: &mut dyn Write) -> Result<(), String> {
+        read(&join_path(root, "missing").map_err(|error| error.to_string())?)
+            .map(|_| ())
     }
 
     #[test]
     fn caches_only_unchanged_success() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file("input", b"original")
             .map_err(|error| error.to_string())?;
-        let marker = root.join(".cache/validate/success");
+        let marker = join_path(root, ".cache/validate/success")
+            .map_err(|error| error.to_string())?;
 
         run_with(root, false, pass, key)?;
         require(exists(&marker)?, "successful result must be cached")?;
@@ -314,12 +321,13 @@ mod tests {
     fn ignored_disposable_ledger_invalidates_cached_success()
     -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file("input", b"previously admitted")
             .map_err(|error| error.to_string())?;
         run_with(root, false, pass, key)?;
-        let marker = root.join(".cache/validate/success");
+        let marker = join_path(root, ".cache/validate/success")
+            .map_err(|error| error.to_string())?;
         require(exists(&marker)?, "fixture success marker")?;
         root_owner
             .create_directories(".temp/ledger")
@@ -336,7 +344,7 @@ mod tests {
     #[test]
     fn forbidden_source_invalidates_cached_success() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .create_directories("crates/games/example/src")
             .map_err(|error| error.to_string())?;
@@ -350,7 +358,8 @@ mod tests {
             .write_file("input", b"previously admitted")
             .map_err(|error| error.to_string())?;
         run_with(root, false, pass, key)?;
-        let marker = root.join(".cache/validate/success");
+        let marker = join_path(root, ".cache/validate/success")
+            .map_err(|error| error.to_string())?;
         require(exists(&marker)?, "fixture must have a success marker")?;
         root_owner
             .write_file(
@@ -371,7 +380,7 @@ mod tests {
     #[test]
     fn fresh_requests_cannot_reuse_ordinary_cache() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file("input", b"unchanged")
             .map_err(|error| error.to_string())?;
@@ -490,9 +499,11 @@ mod tests {
     fn cargo_config_fingerprint_tracks_hierarchy_and_includes()
     -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = Path::new(fixture_owner.location());
-        let root = fixture.join("repo");
-        let home = fixture.join("cargo-home");
+        let fixture = fixture_owner.location();
+        let root =
+            join_path(fixture, "repo").map_err(|error| error.to_string())?;
+        let home = join_path(fixture, "cargo-home")
+            .map_err(|error| error.to_string())?;
         for name in ["repo", ".cargo", "cargo-home"] {
             fixture_owner
                 .create_directories(name)
@@ -544,7 +555,7 @@ mod tests {
     #[test]
     fn concurrent_runs_have_distinct_logs() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .write_file("input", b"original")
             .map_err(|error| error.to_string())?;
@@ -553,7 +564,8 @@ mod tests {
             || run_with(root, true, pass, key).map_err(Error::other),
         )
         .map_err(|error| error.to_string())?;
-        let log_dir = root.join(".temp/validate");
+        let log_dir = join_path(root, ".temp/validate")
+            .map_err(|error| error.to_string())?;
         let logs = directory_entries(
             log_dir.as_os_str(),
             NonZeroUsize::MIN.saturating_add(2),
@@ -561,7 +573,10 @@ mod tests {
         .map_err(|error| error.to_string())?;
         require(logs.len() == 2, "one unique log per validation")?;
         for entry in logs {
-            let log = read(&log_dir.join(entry.name))?;
+            let log = read(
+                &join_path(&log_dir, &entry.name)
+                    .map_err(|error| error.to_string())?,
+            )?;
             require(log == b"executed\nPASS\n", "complete independent log")?;
         }
         Ok(())

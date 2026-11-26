@@ -91,14 +91,33 @@ pub(crate) trait PathObservation {
     fn path_kind(path: &OsStr) -> IoResult<PathKind>;
 }
 
+/// A lexical component of a relative local path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelativeComponent<'path> {
+    /// An explicitly selected current directory.
+    Current,
+    /// An ordinary local name, without interpreting its encoding.
+    Name(&'path OsStr),
+    /// An explicitly selected parent directory.
+    Parent,
+}
+
 /// Local path syntax, without access to the filesystem.
 pub(crate) trait PathResolution {
     fn absolute(path: &OsStr) -> IoResult<bool>;
     fn equivalent(left: &OsStr, right: &OsStr) -> IoResult<bool>;
+    fn extension(path: &OsStr) -> IoResult<Option<&OsStr>>;
     fn has_prefix(path: &OsStr, prefix: &OsStr) -> IoResult<bool>;
     fn join(base: &OsStr, child: &OsStr) -> IoResult<OsString>;
     fn leaf(path: &OsStr) -> IoResult<&OsStr>;
     fn parent(path: &OsStr) -> IoResult<&OsStr>;
+    fn relative_components(
+        path: &OsStr,
+    ) -> IoResult<Vec<RelativeComponent<'_>>>;
+    fn strip_prefix<'path>(
+        path: &'path OsStr,
+        prefix: &OsStr,
+    ) -> IoResult<&'path OsStr>;
 }
 
 /// Resolve the canonical local path, explicitly following links.
@@ -183,6 +202,32 @@ pub fn path_is_absolute(path: &OsStr) -> IoResult<bool> {
 /// Reports unavailable interpretation or a path without a filename.
 pub fn path_leaf(path: &OsStr) -> IoResult<&OsStr> {
     <() as PathResolution>::leaf(path)
+}
+
+/// Identify a local filename extension without accessing storage.
+/// # Errors
+/// Reports unavailable local path interpretation.
+pub fn path_extension(path: &OsStr) -> IoResult<Option<&OsStr>> {
+    <() as PathResolution>::extension(path)
+}
+
+/// List lexical relative path components, preserving parent observations.
+/// # Errors
+/// Rejects absolute paths and unavailable local interpretation.
+pub fn relative_components(
+    path: &OsStr,
+) -> IoResult<Vec<RelativeComponent<'_>>> {
+    <() as PathResolution>::relative_components(path)
+}
+
+/// Strip a lexical component prefix without following links.
+/// # Errors
+/// Reports unavailable interpretation or a mismatched prefix.
+pub fn strip_path_prefix<'path>(
+    path: &'path OsStr,
+    prefix: &OsStr,
+) -> IoResult<&'path OsStr> {
+    <() as PathResolution>::strip_prefix(path, prefix)
 }
 
 /// Observe the final entry kind for preflight diagnostics.

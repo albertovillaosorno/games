@@ -341,10 +341,17 @@ pub fn admit_paths(bytes: &[u8]) -> Result<Vec<&str>, InvalidRequest> {
         .split(|byte| *byte == 0)
         .map(|part| {
             let name = from_utf8(part).map_err(|_error| InvalidRequest)?;
-            validate_path(name).map_err(|_error| InvalidRequest)?;
-            Ok(name)
+            admit_path(name)
         })
         .collect()
+}
+
+/// Admit a canonical portable authored relative name.
+/// # Errors
+/// Rejects unsafe or nonportable names.
+pub fn admit_path(name: &str) -> Result<&str, InvalidRequest> {
+    validate_path(name).map_err(|_error| InvalidRequest)?;
+    Ok(name)
 }
 
 fn markdown(path: &OsStr) -> bool {

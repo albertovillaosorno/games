@@ -30,7 +30,7 @@
 //   - Allow neutral IR and reject new concrete backend access.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
 
 use crate::clones::tokens;
 use crate::{files, host_api};
@@ -265,11 +265,11 @@ fn consumer_source(source: &str) -> Result<(), String> {
 /// # Errors
 /// Reports forbidden host operations or concrete backend imports.
 pub(crate) fn validate(
-    root: &Path,
-    authored: &[PathBuf],
+    root: &OsStr,
+    authored: &[OsString],
 ) -> Result<(), String> {
     for path in authored {
-        if path.extension().is_none_or(|ext| ext != "rs") {
+        if files::authored_extension(path).is_none_or(|ext| ext != "rs") {
             continue;
         }
         let name = path.to_string_lossy().replace('\\', "/");

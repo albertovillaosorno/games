@@ -30,8 +30,9 @@
 //   - Reject missing ownership, local lint overrides and reverse edges.
 //
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
 
+use games_platform::ir::storage::{join_path, parent_path, strip_path_prefix};
 use serde_json::Value as JsonValue;
 use toml::Value;
 
@@ -62,17 +63,19 @@ enum Role {
     Tool,
 }
 
-fn package_directory(path: &Path) -> bool {
-    let parts: Vec<_> = path.iter().filter_map(|part| part.to_str()).collect();
+fn package_directory(path: &OsStr) -> bool {
+    let parts: Vec<_> = path.to_str().unwrap_or_default().split('/').collect();
     match parts.as_slice() {
         ["crates", name] => {
-            !matches!(
-                *name,
-                "games" | "apps" | "tools" | "hardware" | "." | ".."
-            ) && !name.starts_with("platform-")
+            !name.is_empty()
+                && !matches!(
+                    *name,
+                    "games" | "apps" | "tools" | "hardware" | "." | ".."
+                )
+                && !name.starts_with("platform-")
         },
         ["crates", "games" | "apps", name] | ["tools", name] => {
-            !matches!(*name, "." | "..")
+            !name.is_empty() && !matches!(*name, "." | "..")
         },
         _ => false,
     }
@@ -95,6 +98,7 @@ fn role(path: &str) -> Option<Role> {
 pub(crate) fn host_independent(path: &str) -> bool {
     path.starts_with("tools/download/")
         || path.starts_with("tools/build/")
+        || path.starts_with("tools/validator/")
         || matches!(
             role(path),
             Some(Role::Shared | Role::Runtime | Role::Importer | Role::Title)
@@ -121,15 +125,15 @@ const fn dependency_allowed(owner: Role, target: Role) -> bool {
     )
 }
 
-fn code_path(path: &Path) -> bool {
-    let extension = path.extension().and_then(|value| value.to_str());
+fn code_path(path: &OsStr) -> bool {
+    let extension = files::authored_extension(path);
     extension.is_some_and(|value| {
         [
             "rs", "sh", "wgsl", "glsl", "vert", "frag", "comp", "hlsl", "c",
             "h", "cc", "cpp", "js", "ts", "tsx", "jsx",
         ]
         .contains(&value)
-    }) || path.starts_with(".githooks")
+    }) || files::authored_prefix(path, ".githooks")
 }
 
 fn comment(line: &str) -> Option<&str> {
@@ -179,52 +183,58 @@ fn header(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn source_package(path: &Path) -> Option<PathBuf> {
-    let depth = if path.starts_with("crates/games")
-        || path.starts_with("crates/apps")
+fn source_package(path: &OsStr) -> Option<OsString> {
+    let depth = if files::authored_prefix(path, "crates/games")
+        || files::authored_prefix(path, "crates/apps")
     {
         3
     } else {
         2
     };
-    let package = path.components().take(depth).collect::<PathBuf>();
-    let source = path.strip_prefix(&package).ok()?;
-    if !package_directory(&package) || !source.starts_with("src") {
+    let mut parts = path.to_str()?.split('/');
+    let package = OsString::from(
+        parts.by_ref().take(depth).collect::<Vec<_>>().join("/"),
+    );
+    if !package_directory(&package) || parts.next() != Some("src") {
         return None;
     }
     Some(package)
 }
 
-fn source_layout(path: &Path) -> bool {
-    path.extension().is_none_or(|ext| ext != "rs")
+fn source_layout(path: &OsStr) -> bool {
+    files::authored_extension(path).is_none_or(|ext| ext != "rs")
         || source_package(path).is_some()
 }
 
 fn sources(
-    root: &Path,
-    members: &BTreeSet<PathBuf>,
-    authored: &[PathBuf],
+    root: &OsStr,
+    members: &BTreeSet<OsString>,
+    authored: &[OsString],
 ) -> Result<(), String> {
     for path in authored {
         if !source_layout(path) {
             return Err(format!(
                 "Rust source outside crate: {}",
-                path.display()
+                path.to_string_lossy()
             ));
         }
-        if path.extension().is_some_and(|ext| ext == "rs") {
+        if files::authored_extension(path).is_some_and(|ext| ext == "rs") {
             let package = source_package(path).ok_or("invalid source owner")?;
-            if !members.contains(&package.join("Cargo.toml")) {
+            if !members.contains(
+                &join_path(&package, "Cargo.toml")
+                    .map_err(|error| error.to_string())?,
+            ) {
                 return Err(format!(
                     "Rust source outside workspace member: {}",
-                    path.display()
+                    path.to_string_lossy()
                 ));
             }
         }
         if code_path(path) {
             let content = files::read_text(root, path)?;
-            header(&content)
-                .map_err(|error| format!("{}: {error}", path.display()))?;
+            header(&content).map_err(|error| {
+                format!("{}: {error}", path.to_string_lossy())
+            })?;
         }
     }
     Ok(())
@@ -288,7 +298,7 @@ fn dependency(
         .get(name)
         .ok_or_else(|| format!("dependency not in workspace: {name}"))?;
     if let Some(path) = reference.get("path").and_then(Value::as_str) {
-        if !package_directory(Path::new(path)) {
+        if !package_directory(OsStr::new(path)) {
             return Err(format!("invalid workspace path: {path}"));
         }
         let target = role(path)
@@ -359,22 +369,23 @@ fn member(
 }
 
 fn target_source(
-    root: &Path,
-    directory: &Path,
+    root: &OsStr,
+    directory: &OsStr,
     target: &JsonValue,
-    authored: &[PathBuf],
+    authored: &[OsString],
 ) -> Result<(), String> {
     let source = target
         .get("src_path")
         .and_then(JsonValue::as_str)
         .ok_or("missing Cargo target source path")?;
-    let relative = Path::new(source)
-        .strip_prefix(root)
+    let relative = strip_path_prefix(OsStr::new(source), root)
         .map_err(|error| format!("Cargo target outside repository: {error}"))?;
-    if !relative.starts_with(directory)
-        || relative.extension().is_none_or(|ext| ext != "rs")
+    if !files::authored_prefix(
+        relative,
+        directory.to_str().ok_or("invalid package directory")?,
+    ) || files::authored_extension(relative).is_none_or(|ext| ext != "rs")
         || authored
-            .binary_search_by(|path| path.as_path().cmp(relative))
+            .binary_search_by(|path| path.as_os_str().cmp(relative))
             .is_err()
     {
         return Err(format!(
@@ -385,21 +396,20 @@ fn target_source(
 }
 
 fn package_manifest(
-    root: &Path,
+    root: &OsStr,
     package: &JsonValue,
-    authored: &[PathBuf],
-) -> Result<PathBuf, String> {
+    authored: &[OsString],
+) -> Result<OsString, String> {
     let manifest = package
         .get("manifest_path")
         .and_then(JsonValue::as_str)
         .ok_or("missing package manifest path")?;
-    let path = Path::new(manifest)
-        .strip_prefix(root)
+    let path = strip_path_prefix(OsStr::new(manifest), root)
         .map_err(|error| format!("workspace member outside root: {error}"))?;
-    let directory = path.parent().ok_or("missing package directory")?;
+    let directory = parent_path(path).map_err(|error| error.to_string())?;
     if !package_directory(directory)
-        || directory.file_name().is_none()
-        || path.file_name().is_none_or(|name| name != "Cargo.toml")
+        || files::authored_leaf(directory).is_none()
+        || files::authored_leaf(path).is_none_or(|name| name != "Cargo.toml")
     {
         return Err(format!(
             "workspace member outside canonical layout: {manifest}"
@@ -421,14 +431,14 @@ fn package_manifest(
         }
         target_source(root, directory, target, authored)?;
     }
-    Ok(path.to_path_buf())
+    Ok(path.to_os_string())
 }
 
 fn metadata_members(
-    root: &Path,
+    root: &OsStr,
     metadata: &JsonValue,
-    authored: &[PathBuf],
-) -> Result<BTreeSet<PathBuf>, String> {
+    authored: &[OsString],
+) -> Result<BTreeSet<OsString>, String> {
     let ids = metadata
         .get("workspace_members")
         .and_then(JsonValue::as_array)
@@ -580,38 +590,37 @@ fn reject_indirect_paths(value: &Value) -> Result<(), String> {
 }
 
 fn repository_cargo_config(
-    root: &Path,
-    authored: &[PathBuf],
+    root: &OsStr,
+    authored: &[OsString],
 ) -> Result<(), String> {
     let canonical = files::canonical(root)?;
     for name in [".cargo/config", ".cargo/config.toml"] {
         let _present = cargo_config::visit(
-            &canonical.join(name),
+            &join_path(&canonical, name).map_err(|error| error.to_string())?,
             true,
             &mut |path, document| {
                 let Some((_text, value)) = document else {
                     return Ok(());
                 };
-                let raw = path
-                    .strip_prefix(&canonical)
+                let raw = strip_path_prefix(path, &canonical)
                     .map_err(|_error| "Cargo include outside repository")?;
                 if !files::regular_path(&canonical, raw)? {
                     return Err(String::from("Cargo include disappeared"));
                 }
                 let target = files::canonical(path)?;
-                let relative = target
-                    .strip_prefix(&canonical)
+                let relative = strip_path_prefix(&target, &canonical)
                     .map_err(|_error| "Cargo include outside repository")?;
                 if authored
                     .binary_search_by(|candidate| {
-                        candidate.as_path().cmp(relative)
+                        candidate.as_os_str().cmp(relative)
                     })
                     .is_err()
                 {
                     return Err(String::from("Cargo include is not authored"));
                 }
-                reject_indirect_paths(value)
-                    .map_err(|error| format!("{}: {error}", relative.display()))
+                reject_indirect_paths(value).map_err(|error| {
+                    format!("{}: {error}", relative.to_string_lossy())
+                })
             },
         )?;
     }
@@ -619,12 +628,12 @@ fn repository_cargo_config(
 }
 
 fn manifests(
-    root: &Path,
-    members: &BTreeSet<PathBuf>,
-    authored: &[PathBuf],
+    root: &OsStr,
+    members: &BTreeSet<OsString>,
+    authored: &[OsString],
 ) -> Result<toml::Table, String> {
     let root_manifest = Value::Table(
-        files::read_text(root, Path::new("Cargo.toml"))?
+        files::read_text(root, OsStr::new("Cargo.toml"))?
             .parse::<toml::Table>()
             .map_err(|error| error.to_string())?,
     );
@@ -643,21 +652,25 @@ fn manifests(
     workspace_lints(workspace)?;
     unique_dependencies(dependencies)?;
     for relative in authored {
-        if relative == Path::new("Cargo.toml")
-            || relative.file_name().is_none_or(|name| name != "Cargo.toml")
+        if relative == OsStr::new("Cargo.toml")
+            || files::authored_leaf(relative)
+                .is_none_or(|name| name != "Cargo.toml")
         {
             continue;
         }
         if !members.contains(relative) {
             return Err(format!(
                 "crate excluded from workspace: {}",
-                relative.display()
+                relative.to_string_lossy()
             ));
         }
     }
     for relative in members {
         if !files::regular_path(root, relative)? {
-            return Err(format!("missing member: {}", relative.display()));
+            return Err(format!(
+                "missing member: {}",
+                relative.to_string_lossy()
+            ));
         }
         let name = relative.to_string_lossy().replace('\\', "/");
         let member_role = role(&name)
@@ -679,7 +692,7 @@ fn manifests(
 /// # Errors
 ///
 /// Rejects missing source contracts, lint overrides and forbidden edges.
-pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
+pub fn validate(root: &OsStr, metadata: &JsonValue) -> Result<(), String> {
     let canonical = files::canonical(root)?;
     let authored = files::authored(root)?;
     let members = metadata_members(&canonical, metadata, &authored)?;
@@ -691,9 +704,11 @@ pub fn validate(root: &Path, metadata: &JsonValue) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::path::{Path, PathBuf};
+    use std::ffi::{OsStr, OsString};
 
-    use games_platform::ir::storage::fixtures as platform_fixtures;
+    use games_platform::ir::storage::{
+        fixtures as platform_fixtures, join_path,
+    };
     use serde_json::{Value as JsonValue, json};
     use toml::Value;
 
@@ -702,12 +717,12 @@ mod tests {
         reject_indirect_paths, repository_cargo_config, role, source_layout,
         unique_dependencies, workspace_lints,
     };
-    use crate::fixtures::{directory, require};
+    use crate::fixtures::{directory, repository_text, require};
 
     #[test]
-    fn target_tables_are_exclusive_to_platform() {
-        let source = include_str!("../../../crates/engine/Cargo.toml");
-        let workspace = include_str!("../../../Cargo.toml")
+    fn target_tables_are_exclusive_to_platform() -> Result<(), String> {
+        let source = repository_text("crates/engine/Cargo.toml")?;
+        let workspace = repository_text("Cargo.toml")?
             .parse::<toml::Table>()
             .unwrap_or_default();
         let dependencies = workspace
@@ -715,14 +730,17 @@ mod tests {
             .and_then(|value| value.get("dependencies"))
             .and_then(Value::as_table);
         let target = format!("{source}\n[target.'cfg(unix)'.dependencies]\n");
-        assert!(dependencies.is_some_and(|deps| {
-            target.parse::<toml::Table>().is_ok_and(|manifest| {
-                let value = Value::Table(manifest);
-                member(Role::Title, &value, deps).is_err()
-                    && member(Role::Tool, &value, deps).is_err()
-                    && member(Role::Platform, &value, deps).is_ok()
-            })
-        }));
+        require(
+            dependencies.is_some_and(|deps| {
+                target.parse::<toml::Table>().is_ok_and(|manifest| {
+                    let value = Value::Table(manifest);
+                    member(Role::Title, &value, deps).is_err()
+                        && member(Role::Tool, &value, deps).is_err()
+                        && member(Role::Platform, &value, deps).is_ok()
+                })
+            }),
+            "only platform can own target tables",
+        )
     }
 
     #[test]
@@ -769,30 +787,30 @@ serde_json = "1""#;
             "tools/download/src/download.rs",
             "crates/games/simpsons-arcade/src/lib.rs",
         ] {
-            assert!(source_layout(Path::new(path)));
+            assert!(source_layout(OsStr::new(path)));
         }
         for path in [
             "tests/engine/input.rs",
             "tools/download/tests/main.rs",
             "crates/engine/tests/input.rs",
         ] {
-            assert!(!source_layout(Path::new(path)));
+            assert!(!source_layout(OsStr::new(path)));
         }
     }
 
     #[test]
-    fn requires_meaningful_source_contracts() {
-        let valid = include_str!("contracts/mod.rs");
-        assert!(header(valid).is_ok(), "normal source header");
-        assert!(header("pub fn call() {}\n").is_err(), "missing header");
+    fn requires_meaningful_source_contracts() -> Result<(), String> {
+        let valid = repository_text("tools/validator/src/contracts/mod.rs")?;
+        require(header(&valid).is_ok(), "normal source header")?;
+        require(header("pub fn call() {}\n").is_err(), "missing header")?;
         let missing = valid.replacen("- Must-Not:", "- Not-Allowed:", 1);
-        assert!(header(&missing).is_err(), "missing required key");
+        require(header(&missing).is_err(), "missing required key")?;
         let empty = valid.replacen(
             "//   - Own gameplay acceptance or modify the roadmap.",
             "//",
             1,
         );
-        assert!(header(&empty).is_err(), "empty ownership responsibility");
+        require(header(&empty).is_err(), "empty ownership responsibility")
     }
 
     #[test]
@@ -825,16 +843,13 @@ serde_json = "1""#;
 
     #[test]
     fn members_must_inherit_lints_and_dependencies() -> Result<(), String> {
-        let source = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../crates/engine/Cargo.toml"
-        ));
+        let source = repository_text("crates/engine/Cargo.toml")?;
         let mut valid = Value::Table(
             source
                 .parse::<toml::Table>()
                 .map_err(|error| error.to_string())?,
         );
-        let manifest = include_str!("../../../Cargo.toml")
+        let manifest = repository_text("Cargo.toml")?
             .parse::<toml::Table>()
             .map_err(|error| error.to_string())?;
         let deps = manifest
@@ -949,7 +964,10 @@ serde_json = "1""#;
     }
 
     fn metadata_fixture(path: &str, target_kind: &str) -> JsonValue {
-        let source = Path::new(path).with_file_name("src/lib.rs");
+        let source = format!(
+            "{}/src/lib.rs",
+            path.rsplit_once('/').map_or("", |(parent, _)| parent)
+        );
         json!({
             "workspace_members": ["member"],
             "packages": [{
@@ -962,12 +980,12 @@ serde_json = "1""#;
 
     #[test]
     fn rejects_workspace_members_outside_the_direct_crates_layout() {
-        let root = Path::new("repo");
-        let authored = [PathBuf::from("crates/engine/src/lib.rs")];
+        let root = OsStr::new("repo");
+        let authored = [OsString::from("crates/engine/src/lib.rs")];
         let valid = metadata_fixture("repo/crates/engine/Cargo.toml", "lib");
         assert_eq!(
             metadata_members(root, &valid, &authored),
-            Ok(BTreeSet::from([PathBuf::from("crates/engine/Cargo.toml")]))
+            Ok(BTreeSet::from([OsString::from("crates/engine/Cargo.toml")]))
         );
         for path in [
             "other/crates/engine/Cargo.toml",
@@ -988,8 +1006,8 @@ serde_json = "1""#;
 
     #[test]
     fn rejects_separate_test_targets_and_incomplete_metadata() {
-        let root = Path::new("repo");
-        let authored = [PathBuf::from("crates/engine/src/lib.rs")];
+        let root = OsStr::new("repo");
+        let authored = [OsString::from("crates/engine/src/lib.rs")];
         let integration =
             metadata_fixture("repo/crates/engine/Cargo.toml", "test");
         assert!(metadata_members(root, &integration, &authored).is_err());
@@ -1002,10 +1020,10 @@ serde_json = "1""#;
 
     #[test]
     fn rejects_custom_targets_outside_the_owning_crate() {
-        let root = Path::new("repo");
+        let root = OsStr::new("repo");
         let authored = [
-            PathBuf::from("crates/engine/src/lib.rs"),
-            PathBuf::from("crates/platform/src/lib.rs"),
+            OsString::from("crates/engine/src/lib.rs"),
+            OsString::from("crates/platform/src/lib.rs"),
         ];
         for source in [
             "repo/crates/platform/src/lib.rs",
@@ -1072,12 +1090,12 @@ serde_json = "1""#;
     #[test]
     fn checks_both_repository_cargo_config_names() -> Result<(), String> {
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .create_directories(".cargo")
             .map_err(|error| error.to_string())?;
         let authored =
-            [".cargo/config", ".cargo/config.toml"].map(PathBuf::from);
+            [".cargo/config", ".cargo/config.toml"].map(OsString::from);
         require(
             repository_cargo_config(root, &authored).is_ok(),
             "missing optional config",
@@ -1100,7 +1118,7 @@ serde_json = "1""#;
 
     #[test]
     fn requires_absolute_workspace_safety_lints() -> Result<(), String> {
-        let source = include_str!("../../../Cargo.toml");
+        let source = repository_text("Cargo.toml")?;
         let workspace = |manifest: &str| {
             let value = manifest
                 .parse::<toml::Table>()
@@ -1111,7 +1129,7 @@ serde_json = "1""#;
                 .cloned()
                 .ok_or_else(|| String::from("missing fixture workspace"))
         };
-        require(workspace_lints(&workspace(source)?).is_ok(), "root policy")?;
+        require(workspace_lints(&workspace(&source)?).is_ok(), "root policy")?;
         for (from, to) in [
             ("unsafe_code = \"forbid\"", "unsafe_code = \"deny\""),
             ("warnings = \"deny\"", "warnings = \"warn\""),
@@ -1134,8 +1152,9 @@ serde_json = "1""#;
     #[test]
     fn checks_nested_repository_cargo_includes() -> Result<(), String> {
         let fixture_owner = directory()?;
-        let fixture = Path::new(fixture_owner.location());
-        let root = fixture.join("repo");
+        let fixture = fixture_owner.location();
+        let root =
+            join_path(fixture, "repo").map_err(|error| error.to_string())?;
         fixture_owner
             .create_directories("repo/.cargo/nested")
             .map_err(|error| error.to_string())?;
@@ -1159,13 +1178,13 @@ serde_json = "1""#;
             ".cargo/nested/first.toml",
             ".cargo/shared.toml",
         ]
-        .map(PathBuf::from);
+        .map(OsString::from);
         require(
             repository_cargo_config(&root, &authored).is_ok(),
             "ordinary authored nested configuration",
         )?;
         let omitted = [".cargo/config.toml", ".cargo/nested/first.toml"]
-            .map(PathBuf::from);
+            .map(OsString::from);
         require(
             repository_cargo_config(&root, &omitted).is_err(),
             "omitted from authored inventory",
@@ -1199,7 +1218,7 @@ serde_json = "1""#;
             return Err(String::from("native fixture capability unavailable"));
         }
         let root_owner = directory()?;
-        let root = Path::new(root_owner.location());
+        let root = root_owner.location();
         root_owner
             .create_directories(".cargo")
             .map_err(|error| error.to_string())?;
@@ -1213,7 +1232,7 @@ serde_json = "1""#;
             .link("actual.toml".as_ref(), ".cargo/alias.toml")
             .map_err(|error| error.to_string())?;
         let authored =
-            [".cargo/actual.toml", ".cargo/config.toml"].map(PathBuf::from);
+            [".cargo/actual.toml", ".cargo/config.toml"].map(OsString::from);
         require(
             repository_cargo_config(root, &authored).is_err(),
             "include aliases cannot hide outside authored inventory",

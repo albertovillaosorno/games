@@ -78,10 +78,10 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, Metadata};
 use std::io;
 use std::num::{NonZeroU64, NonZeroUsize};
-#[cfg(any(target_os = "linux", target_os = "android"))]
-use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::path::{Component, Path};
 
 use games_assets::{ContentHash, ManifestLimits};
 
@@ -94,6 +94,7 @@ use crate::ir::storage::save::SaveError;
 use crate::ir::storage::save::{OpenSave, SaveFactory};
 use crate::ir::storage::{
     DirectoryEntry, PathKind, PathObservation, PathResolution,
+    RelativeComponent,
 };
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -242,6 +243,10 @@ impl PathResolution for () {
         Ok(Path::new(left) == Path::new(right))
     }
 
+    fn extension(path: &OsStr) -> io::Result<Option<&OsStr>> {
+        Ok(Path::new(path).extension())
+    }
+
     fn has_prefix(path: &OsStr, prefix: &OsStr) -> io::Result<bool> {
         Ok(Path::new(path).starts_with(prefix))
     }
@@ -262,6 +267,32 @@ impl PathResolution for () {
             .map(Path::as_os_str)
             .ok_or_else(|| io::ErrorKind::InvalidInput.into())
     }
+
+    fn relative_components(
+        path: &OsStr,
+    ) -> io::Result<Vec<RelativeComponent<'_>>> {
+        Path::new(path)
+            .components()
+            .map(|component| match component {
+                Component::CurDir => Ok(RelativeComponent::Current),
+                Component::Normal(name) => Ok(RelativeComponent::Name(name)),
+                Component::ParentDir => Ok(RelativeComponent::Parent),
+                Component::Prefix(_) | Component::RootDir => {
+                    Err(io::ErrorKind::InvalidInput.into())
+                },
+            })
+            .collect()
+    }
+
+    fn strip_prefix<'path>(
+        path: &'path OsStr,
+        prefix: &OsStr,
+    ) -> io::Result<&'path OsStr> {
+        Path::new(path)
+            .strip_prefix(prefix)
+            .map(Path::as_os_str)
+            .map_err(|_error| io::ErrorKind::InvalidInput.into())
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -271,6 +302,10 @@ impl PathResolution for () {
     }
 
     fn equivalent(_left: &OsStr, _right: &OsStr) -> io::Result<bool> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn extension(_path: &OsStr) -> io::Result<Option<&OsStr>> {
         Err(io::ErrorKind::Unsupported.into())
     }
 
@@ -287,6 +322,19 @@ impl PathResolution for () {
     }
 
     fn parent(_path: &OsStr) -> io::Result<&OsStr> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn relative_components(
+        _path: &OsStr,
+    ) -> io::Result<Vec<RelativeComponent<'_>>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn strip_prefix<'path>(
+        _path: &'path OsStr,
+        _prefix: &OsStr,
+    ) -> io::Result<&'path OsStr> {
         Err(io::ErrorKind::Unsupported.into())
     }
 }
@@ -317,7 +365,10 @@ mod tests {
     -> io::Result<()> {
         use std::os::unix::ffi::OsStrExt as _;
 
-        use crate::ir::storage::{join_path, parent_path};
+        use crate::ir::storage::{
+            join_path, parent_path, path_extension, relative_components,
+            strip_path_prefix,
+        };
 
         let base = OsStr::new("/package");
         let opaque = OsStr::from_bytes(b"file-\xff");
@@ -327,6 +378,19 @@ mod tests {
             && join_path(base, "../assets")? == "/package/../assets"
             && join_path(base, "/other")? == "/other"
             && parent_path(OsStr::new("file"))?.is_empty()
+            && path_extension(OsStr::new(".hidden"))?.is_none()
+            && path_extension(OsStr::new("a.tar.gz"))?
+                == Some(OsStr::new("gz"))
+            && relative_components(OsStr::new("./a/../b"))?
+                == [
+                    RelativeComponent::Current,
+                    RelativeComponent::Name(OsStr::new("a")),
+                    RelativeComponent::Parent,
+                    RelativeComponent::Name(OsStr::new("b")),
+                ]
+            && relative_components(base).is_err()
+            && strip_path_prefix(&joined, base)? == opaque
+            && strip_path_prefix(&joined, OsStr::new("/pack")).is_err()
             && parent_path(OsStr::new("/")).is_err_and(|error| {
                 error.kind() == io::ErrorKind::InvalidInput
             });

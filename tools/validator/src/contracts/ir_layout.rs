@@ -30,7 +30,9 @@
 //   - Allow only canonical roots and recorded migration files.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+
+use crate::files::{authored_extension, authored_prefix};
 
 fn os_backend(name: &str) -> bool {
     matches!(
@@ -137,32 +139,34 @@ fn path_allowed(path: &str) -> bool {
     matches!(relative.as_str(), "Cargo.toml" | "LICENSE" | "README.md")
 }
 
-fn directory_modules(authored: &[PathBuf], root: &Path) -> Result<(), String> {
+fn directory_modules(authored: &[OsString], root: &str) -> Result<(), String> {
     let mut required = BTreeSet::new();
     for path in authored.iter().filter(|path| {
-        path.starts_with(root)
-            && path.extension().is_some_and(|ext| ext == "rs")
+        authored_prefix(path, root)
+            && authored_extension(path).is_some_and(|ext| ext == "rs")
     }) {
-        for directory in path
-            .ancestors()
-            .skip(1)
-            .take_while(|directory| *directory != root)
-        {
-            let _inserted = required.insert(directory.join("mod.rs"));
+        let mut name = path.to_str().ok_or("invalid authored path")?;
+        while let Some((directory, _)) = name.rsplit_once('/') {
+            if directory == root {
+                break;
+            }
+            let _inserted =
+                required.insert(OsString::from(format!("{directory}/mod.rs")));
+            name = directory;
         }
     }
     for module in required {
         if !authored.contains(&module) {
             return Err(format!(
                 "missing directory module: {}",
-                module.display()
+                module.to_string_lossy()
             ));
         }
     }
     Ok(())
 }
 
-pub(super) fn validate(authored: &[PathBuf]) -> Result<(), String> {
+pub(super) fn validate(authored: &[OsString]) -> Result<(), String> {
     for path in authored {
         let name = path.to_string_lossy().replace('\\', "/");
         if !path_allowed(&name) {
@@ -171,8 +175,8 @@ pub(super) fn validate(authored: &[PathBuf]) -> Result<(), String> {
             ));
         }
     }
-    let root = Path::new("crates/platform/src");
-    if !authored.iter().any(|path| path.starts_with(root)) {
+    let root = "crates/platform/src";
+    if !authored.iter().any(|path| authored_prefix(path, root)) {
         return Ok(());
     }
     for module in [
@@ -182,7 +186,7 @@ pub(super) fn validate(authored: &[PathBuf]) -> Result<(), String> {
         "ir/hardware/mod.rs",
         "software/mod.rs",
     ] {
-        if !authored.contains(&root.join(module)) {
+        if !authored.contains(&OsString::from(format!("{root}/{module}"))) {
             return Err(format!("missing canonical module: {module}"));
         }
     }
@@ -191,7 +195,7 @@ pub(super) fn validate(authored: &[PathBuf]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::ffi::OsString;
 
     use super::{path_allowed, validate};
 
@@ -262,19 +266,26 @@ mod tests {
 
     #[test]
     fn ir_requires_security_and_bridge_roots() {
-        let root = PathBuf::from("crates/platform/src");
-        let mut paths = vec![root.join("lib.rs"), root.join("ir/mod.rs")];
+        let root = "crates/platform/src";
+        let mut paths = vec![
+            OsString::from(format!("{root}/lib.rs")),
+            OsString::from(format!("{root}/ir/mod.rs")),
+        ];
         assert!(validate(&paths).is_err());
-        paths.push(root.join("ir/security/mod.rs"));
-        paths.push(root.join("software/mod.rs"));
+        paths.push(OsString::from(format!("{root}/ir/security/mod.rs")));
+        paths.push(OsString::from(format!("{root}/software/mod.rs")));
         assert!(validate(&paths).is_err());
-        paths.push(root.join("ir/hardware/mod.rs"));
+        paths.push(OsString::from(format!("{root}/ir/hardware/mod.rs")));
         assert!(validate(&paths).is_ok());
-        paths.push(root.join("hardware/playstation/four.rs"));
+        paths.push(OsString::from(format!(
+            "{root}/hardware/playstation/four.rs"
+        )));
         assert!(validate(&paths).is_err());
-        paths.push(root.join("hardware/mod.rs"));
+        paths.push(OsString::from(format!("{root}/hardware/mod.rs")));
         assert!(validate(&paths).is_err());
-        paths.push(root.join("hardware/playstation/mod.rs"));
+        paths.push(OsString::from(format!(
+            "{root}/hardware/playstation/mod.rs"
+        )));
         assert!(validate(&paths).is_ok());
     }
 }
