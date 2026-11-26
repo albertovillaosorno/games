@@ -14,12 +14,6 @@ Completed. See `docs/todo/completed/foundation/`.
 
 ## P1 - Contracts
 
-### TODO - Offline and multiplayer contracts
-
-Verify local and self-hosted play without commercial services.
-
-[TODO - Offline and multiplayer contracts](docs/todo/open/contracts/network.mdc)
-
 ### TODO - Portable capability IR and platform isolation
 
 Eliminate existing platform coupling through one platform crate: public

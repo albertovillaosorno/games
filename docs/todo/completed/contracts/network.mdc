@@ -1,6 +1,6 @@
 ---
 id: "network"
-status: "open"
+status: "completed"
 lane: "1"
 priority: "p1"
 area: "contracts"
@@ -24,7 +24,7 @@ Verify local and self-hosted play without commercial services.
 
 ## Evidence
 
-Partial evidence, 2026-11-24: `cargo validate --no-cache` passes.
+Initial evidence, 2026-11-24: `cargo validate --no-cache` passes.
 The shared `games::network::Session` policy supports local identities,
 explicit opt-in LAN admission, bounded messages, reserved disconnect slots,
 and same-origin reconnect. Title-specific codecs reject malformed remote
@@ -840,3 +840,25 @@ Changed pixels and repeated stable captures verified observable movement
 and release. The initial launch lacked required settings directories;
 the corrected isolated run passed. Synthetic keyboard input, virtual
 presentation and loopback do not establish physical-device LAN acceptance.
+
+Acceptance review, 2026-11-25: the shared offline and multiplayer contract
+is satisfied for the supported native host and portable session policy.
+The local roster and input routing fixtures cover independent stations;
+the actual Linux preview demonstrates a host, three remote controller
+clients, disconnect and same-identity rejoin without commercial services.
+The bounded schema, authenticated framing, explicit enrolment and private
+endpoint policy reject inadmissible traffic and keep LAN disabled by default.
+Offline local play requires no central account, network access or remote
+asset service. The latest original-backed loopback result above confirms
+these contracts compose in the current preview. Physical multi-device LAN,
+real device calibration, credential provisioning UX, remote world rendering
+and additional native backends are not certified; their implementation
+and device acceptance belong to the relevant platform, build and title
+records. This closure is for shared local and self-hosted contracts, not
+complete original-game parity or universal multiplayer compatibility.
+
+Additional native offline tests at f3f91bf completed 600 four-player
+movement frames with zero missed frame budgets, and a visible X11 run
+joined four local keyboard stations and observed independent movement and
+stable release captures for each. Neither run used a LAN option, account,
+or credential configuration; physical controllers remain unverified.
