@@ -385,3 +385,28 @@ accepted the 1,039,067-byte bound Wasm. Current native smoke and
 unchanged browser entry gameplay passed with isolated settings and
 dummy audio; both receipts verified again afterward. These results
 do not close the physical-device or independent-host release gates.
+
+At a1f5865, independent native and browser publications reproduced
+both b5b1b5b packages byte-for-byte. Native contained 109 files and
+4,148,929 bytes, with receipt SHA-256
+`988d5e3ea4aa5144e9f910fdfdb04e97c64b27f586e57a94674a560e34001f0c`.
+Browser contained 88 files and 1,545,538 bytes, with receipt SHA-256
+`d2f386717c7777c364e5b0be0dd4123d82056994aad51c080062baf420aad701`.
+Independent SHA-256 and length checks matched every receipt entry.
+Native had 108 mode-0600 files and one mode-0700 executable; all browser
+files had mode 0600. Both project notices and licences matched the
+workspace. Node accepted the 1,041,614-byte bound Wasm. Cross-target
+readback and repeat browser publication failed without changing either
+package. Readback succeeded from an unrelated working directory.
+
+The native executable passed touch-enabled hidden smoke from that
+unrelated directory with separate private settings and external assets.
+The windowed virtual OpenGL/dummy-audio run verified the street camera,
+48 synthetic axis directions, two cooperative pose families and six
+reinforcement meters. It recorded one missed movement budget among 600
+movement and 20 combat submissions. The fullscreen adaptive repeat
+verified 106 added logical columns and met the 16.667 ms host-work
+budget on all 620 submissions. Package readback remained unchanged.
+These are host-local reproducibility and virtual presentation checks;
+physical input, accelerated presentation, audible output, independent
+host compatibility and Android distribution are not established.
