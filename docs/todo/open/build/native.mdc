@@ -785,3 +785,48 @@ The correctly ordered invocation of the same 3,625,200-byte binary
 on the disposable Wayland monitor exited normally by touch alone.
 It submitted 11,200 gameplay frames with zero work-budget misses
 (maximum 8.325 ms) and seven applied local input samples.
+
+The retained package at c6e8232 also passed against upstream SDL
+2.32.10, built without changes from the locked sdl2-sys 0.39.0
+reference source in disposable scratch storage. Dynamic loader readback
+selected that library rather than the installed SDL2 compatibility
+library. No system library or package file was replaced. The package
+receipt still verified 109 files and 4,150,873 bytes.
+
+Five hidden Xvfb/X11 software OpenGL display-mode runs and two more
+with the complete configured asset catalogue passed with dummy audio.
+The latter verified 444 camera columns, 48 synthetic axis directions,
+two cooperative pose families and six reinforcement meters. Adaptive
+verified 426x304 logical pixels, including 106 added columns; Fill
+verified the protected 960x240 panel in a 1280x912 drawable. Across
+all seven runs, all 4,340 movement and combat submissions met the
+16.667 ms work budget (maximum 4.204 ms). The initially empty private
+settings directory remained empty through the five-mode smoke matrix.
+
+A private Mutter Wayland session with actual SDL2 also delivered the
+distinct international-backslash, keypad-comma and keypad-decimal
+codes 86, 121 and 83 to the client. SDL reported scancodes 100, 99
+and 99, respectively, and the profile remained byte-identical. The
+combined gameplay run recorded four applied local input samples and
+11,618 submitted frames, all within the work budget. The keypad
+collision is therefore not specific to the SDL2 compatibility library.
+
+A separate touch-only session admitted the start, simultaneous
+right/up contacts, motion out of the panel, primary attack, pause and
+menu exit. It recorded seven applied local input samples and 11,393
+submitted frames, all within budget (maximum 7.606 ms). The first
+attempt used the final confirmation coordinates of a previously
+swapped touch profile; correcting the private harness enabled normal
+exit. These are virtual compositor inputs, not physical-device tests.
+
+Fresh integrated validation 1795700801736027516-2975150 and
+1795700851579196821-2989169 passed on X11 and Wayland respectively,
+each with 1,959 aggregate test executions and zero failures. The
+Wayland gate verified 320x192 and 400x240 window extents mapped to
+640x384 and 800x480 drawables at virtual 2x scale; the X11 gate
+verified the corresponding 1x geometry. Both drained the 1,024-frame
+silent queue through the default and named dummy outputs. The local
+input-device inventory exposed no keyboard, pointer, touchscreen or
+gamepad event device during these tests. Physical interaction, audible
+output, independent-host ABI and the owner's maximized desktop remain
+unverified.
