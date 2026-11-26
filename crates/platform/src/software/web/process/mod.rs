@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Browser console dispatch for portable status and diagnostic messages.
+//   - Browser dispatch for portable status and diagnostic messages.
 // - Must-Not:
 //   - Parse launch arguments or block the browser event loop.
 // - Allows:
 //   - Inputs: Borrowed formatted output messages.
 //   - Outputs: Success or typed console availability and invocation errors.
-//   - Side effects: Explicit calls to the browser console.
+//   - Side effects: Explicit console calls and opt-in page status updates.
 // - Split-When:
 //   - Other browser process capabilities need independent resources.
 // - Merge-When:
@@ -23,7 +23,7 @@
 // - Summary:
 //   - Browser process-facing status and diagnostic output.
 // - Description:
-//   - Preserves message text and admits console methods before invocation.
+//   - Preserves message text in the console and a marked status element.
 // - Usage:
 //   - Dispatch through the portable process capability.
 // - Defaults:
@@ -51,15 +51,25 @@ impl ProcessPort for () {
     }
 
     fn write_diagnostic(message: Arguments<'_>) -> IoResult<()> {
-        write_console("error", message)
+        write_output("error", message)
     }
 
     fn write_status(message: Arguments<'_>) -> IoResult<()> {
-        write_console("log", message)
+        write_output("log", message)
     }
 }
 
-fn write_console(method: &str, message: Arguments<'_>) -> IoResult<()> {
+fn write_output(method: &str, message: Arguments<'_>) -> IoResult<()> {
+    let text = message.to_string();
+    // Embedded titles need not supply a status region. Never overwrite
+    // an unrelated element that happens to use the same identifier.
+    if let Some(status) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("status"))
+        .filter(|element| element.has_attribute("data-games-process-status"))
+    {
+        status.set_text_content(Some(&text));
+    }
     let console = Reflect::get(&global(), &JsValue::from_str("console"))
         .map_err(|_error| Error::other("browser console lookup failed"))?;
     if !console.is_object() {
@@ -70,7 +80,7 @@ fn write_console(method: &str, message: Arguments<'_>) -> IoResult<()> {
         .dyn_into::<Function>()
         .map_err(|_value| ErrorKind::Unsupported)?;
     let _result = callable
-        .call1(&console, &JsValue::from_str(&message.to_string()))
+        .call1(&console, &JsValue::from_str(&text))
         .map_err(|_error| Error::other("browser console invocation failed"))?;
     Ok(())
 }

@@ -133,6 +133,8 @@ cargo run --locked -p games-build -- package-check simpsons-arcade \
 Serve the package directory through a trusted local HTTP server with
 JavaScript and Wasm MIME types; open `index.html` in a compatible browser.
 Select the local canonical assets directory containing `launch.local`.
+After normal exit or asynchronous launch failure, the packaged status
+region reports the terminal message; reload the page to launch again.
 The catalogue must use `parent=.`, windowed presentation, no native
 settings/control/device paths, and `launch-poses.txt` if poses are used.
 No original assets are included in the package or automatically uploaded.
