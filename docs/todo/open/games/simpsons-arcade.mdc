@@ -2818,3 +2818,22 @@ comparison. Physical input, audio, display and full gameplay parity remain
 unverified. Fresh native-enabled workspace validation
 1795655381182031058-2515004 passed 1,591 aggregate test executions and six
 portable core checks.
+
+The optimized 3,479,960-byte Linux preview at af06752 passed the existing
+original-backed 218-pose recovery diagnostic after the shared clock,
+feedback, playback and scene geometry admission changes. NVIDIA EGL
+OpenGL ES with dummy audio passed adaptive, aspect-fit, integer and
+stretch with touch, and fill without touch; fill with touch was rejected
+before startup. Adaptive retained 426 by 304 logical pixels with 106
+added columns; the other touch modes retained 320 by 304. Each admitted
+run verified 444 camera columns, 600 movement and 20 combat submissions,
+two cooperative families, six reinforcement meters and both restraint
+recovery paths. All recorded zero 16.667 ms host-work budget misses.
+Whole-smoke peak RSS ranged from 100,433,920 to 101,810,176 bytes.
+The separate Xvfb/X11 OpenGL adaptive touch diagnostic also passed with
+zero budget misses and 129,847,296 bytes peak RSS. These are individual
+synthetic observations, not physical device acceptance or a controlled
+performance comparison. Physical input, audible output, visible desktop
+behaviour and full gameplay parity remain open. Fresh native validation
+1795657228495677731-2999073 passed 1,634 aggregate test executions and
+all six portable core checks.
