@@ -99,6 +99,27 @@ impl ControllerEvents {
         }
     }
 
+    #[cfg(all(feature = "test-fixtures", target_arch = "wasm32"))]
+    pub(super) fn fixture_hold(
+        &mut self,
+        stamp: Duration,
+    ) -> Result<Vec<InputEvent>, RenderError> {
+        let state = State::from_values(
+            [1.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64],
+            [false; BUTTONS.len()],
+        )
+        .ok_or(RenderError::InvalidLength)?;
+        let observed = [(0, state)];
+        if self.registry.is_none() {
+            self.open(NonZeroUsize::MIN)?;
+            let attached = self.poll(Some(&observed), stamp)?;
+            let _observed = self.poll(Some(&observed), stamp)?;
+            Ok(attached)
+        } else {
+            self.poll(Some(&observed), stamp)
+        }
+    }
+
     pub(super) const fn new(scope: u64) -> Self {
         Self {
             registry: None,

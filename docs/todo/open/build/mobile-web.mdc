@@ -732,3 +732,22 @@ The observer's preliminary runs encountered chooser coordinate and
 resize sequencing issues before the successful runs. This is synthetic
 touch input with Xvfb software rendering and dummy audio, not physical
 touchscreen, display or audio acceptance.
+
+Browser controller lifecycle cancellation now enters the independent
+controller event feed at the observed focus-loss timestamp, even when
+blur and refocus happen between frame polls. A bounded queue retains
+pending physical changes followed by neutralizing edges; a duplicate
+loss cannot repeat them. DOM overflow alone does not release controllers.
+The browser input smoke links the interactive adapter and exercises a
+fixture-only controller observation through the actual DOM listeners.
+It verifies held input across overflow, release at blur, same-identity
+reassertion after refocus and ordered samples.
+
+Fresh validation 1795688810995549323-423372 passed 1,931 aggregate test
+executions. Six isolated headless Firefox runs of the bound diagnostic
+passed visible, hidden, invalid clock, listener registration failure,
+lifecycle registration failure and repeated visible outcomes. Successful
+runs removed all surfaces and balanced all registered listeners. The
+initial harness launch lacked its temporary profile directory; the
+corrected runs all passed. These checks do not establish physical
+controller operation, latency or vibration.

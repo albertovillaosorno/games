@@ -25,7 +25,11 @@ browser-audio-smoke = [
     "games-platform/test-fixtures",
 ]
 browser-frame-smoke = ["dep:games-platform", "games-platform/interactive"]
-browser-input-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
+browser-input-smoke = [
+    "dep:games-platform",
+    "games-platform/interactive",
+    "games-platform/test-fixtures",
+]
 browser-preview = ["native-preview"]
 browser-scene-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 browser-storage-smoke = ["dep:games-platform"]

@@ -37,6 +37,8 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::time::Duration;
 
+#[cfg(all(feature = "interactive", feature = "test-fixtures"))]
+use games::input::physical::ControllerAxis;
 use games::input::physical::KeyboardKey;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
@@ -467,6 +469,82 @@ fn verify(condition: bool, message: &str) -> Result<(), RenderError> {
     }
 }
 
+#[cfg(all(feature = "interactive", feature = "test-fixtures"))]
+fn controller_edge(value: i16) -> InputTransition {
+    InputTransition::Event(HostEvent::Input(InputEvent::Axis {
+        code: ControllerAxis::LeftX.code(),
+        device: 1,
+        value,
+    }))
+}
+
+#[cfg(all(feature = "interactive", feature = "test-fixtures"))]
+fn verify_controller_lifecycle(
+    source: &EventSource,
+    target: &EventTarget,
+) -> Result<(), RenderError> {
+    let stamp =
+        super::performance::now().map_err(|_| RenderError::InvalidTimestamp)?;
+    verify(
+        source.controller_events.borrow_mut().fixture_hold(stamp)?
+            == [InputEvent::Attached { device: 1 }],
+        "controller attachment",
+    )?;
+    verify(
+        source.pop()
+            == Some(InputSample::new(
+                Some(stamp),
+                controller_edge(i16::MAX),
+                Some(SCOPE),
+            )),
+        "controller hold",
+    )?;
+    for _ in 0..4 {
+        let _sent = send_key(target, "keydown", "KeyA", false)?;
+    }
+    verify(
+        source
+            .pop()
+            .is_some_and(|event| event.transition() == focus_lost())
+            && source.pop().is_none(),
+        "DOM overflow does not release controller",
+    )?;
+    let blur = Event::new("blur").map_err(dom_error)?;
+    let stamp = super::performance::timestamp(blur.time_stamp()).ok();
+    let _sent = target.dispatch_event(&blur).map_err(dom_error)?;
+    let focus = Event::new("focus").map_err(dom_error)?;
+    let _sent = target.dispatch_event(&focus).map_err(dom_error)?;
+    verify(
+        source.pop()
+            == Some(InputSample::new(stamp, controller_edge(0), Some(SCOPE))),
+        "blur and refocus between controller polls release the hold",
+    )?;
+    verify(
+        source
+            .pop()
+            .is_some_and(|event| event.transition() == focus_lost())
+            && source.pop().is_some_and(|event| {
+                event.transition() == InputTransition::FocusGained
+            })
+            && source.pop().is_none(),
+        "ordered lifecycle and no duplicate release",
+    )?;
+    let stamp =
+        super::performance::now().map_err(|_| RenderError::InvalidTimestamp)?;
+    let attached = source.controller_events.borrow_mut().fixture_hold(stamp)?;
+    verify(
+        attached.is_empty()
+            && source.pop()
+                == Some(InputSample::new(
+                    Some(stamp),
+                    controller_edge(i16::MAX),
+                    Some(SCOPE),
+                ))
+            && source.pop().is_none(),
+        "refocus snapshot reasserts the same controller identity",
+    )
+}
+
 #[cfg(feature = "test-fixtures")]
 pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
     let target = EventTarget::new().map_err(dom_error)?;
@@ -547,6 +625,8 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
             })),
         "recovery",
     )?;
+    #[cfg(feature = "interactive")]
+    verify_controller_lifecycle(&source, &target)?;
     drop(source);
     verify(
         send_key(&target, "keydown", "KeyA", false)?,
