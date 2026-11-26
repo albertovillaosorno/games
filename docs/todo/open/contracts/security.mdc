@@ -513,3 +513,12 @@ truncated and extended streams and rejection of an unrepresentable byte
 count before reading. Fresh Xvfb/X11 and dummy-audio validation
 1795657605997045370-3086687 passed 1,638 aggregate test executions and
 all six portable core checks.
+
+Save-envelope preparation, exact stream verification and returned payload
+limit admission now share the security/save owner. The slot facade and
+native adapter retain the existing wire format and publication contract.
+A portable round-trip fixture verifies empty and exact-limit payloads,
+the canonical header, and rejection of excessive bytes.
+Fresh Xvfb/X11 and dummy-audio validation
+1795658234886303432-3246198 passed 1,650 aggregate test executions
+and all six portable core checks.

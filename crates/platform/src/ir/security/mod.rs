@@ -45,6 +45,8 @@ pub mod input;
 pub mod lan;
 /// Versioned portable preference admission and encoding.
 pub mod preferences;
+/// Exact save-envelope admission.
+pub mod save;
 /// Bounded atlas and ordered scene admission.
 pub mod scene;
 /// Shared canonical staging admission.

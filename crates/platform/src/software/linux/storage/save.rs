@@ -46,9 +46,8 @@ use super::file::{
     DIRECTORY_FLAGS, check_staged_metadata, private_regular, read_regular_with,
     same_inode, trusted_directory,
 };
-use crate::ir::storage::save::{
-    PreparedSave, SaveBackend, SaveError, SaveReceipt, VerifiedSave,
-};
+use crate::ir::security::save::{PreparedSave, VerifiedSave};
+use crate::ir::storage::save::{SaveBackend, SaveError, SaveReceipt};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
