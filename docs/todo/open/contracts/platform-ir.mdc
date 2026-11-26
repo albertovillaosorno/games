@@ -537,3 +537,12 @@ Regressions exercise implicit directory reuse and portable collision
 rejection before streaming even with a permissive backend. Fresh native
 validation 1795656535543811233-2829651 passed 1,614 aggregate test
 executions and all six portable core checks.
+
+Playback opens now require a portable admission of the observed native PCM
+format, requested device identity, paused state and empty software queue.
+The negotiated native period may differ from the software queue budget,
+but its frame and byte geometry must agree. Rejected handles are dropped
+before exposure. Fake-backend regressions cover mismatched formats,
+inconsistent periods, device identity and startup state. Fresh X11 and
+dummy-audio validation 1795656729860859446-2879804 passed 1,618 aggregate
+test executions and all six portable core checks.

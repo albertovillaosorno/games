@@ -24,7 +24,7 @@
 // - Summary:
 //   - Exact-format native PCM playback with explicit backpressure.
 // - Description:
-//   - Opens admitted devices and verifies the obtained playback format.
+//   - Opens admitted devices and reports the obtained playback format.
 // - Usage:
 //   - Open a paused device, queue complete frames and explicitly resume.
 // - Defaults:
@@ -33,13 +33,13 @@
 
 use std::fmt::{self, Debug, Formatter};
 
-use sdl2::audio::{AudioFormat, AudioQueue, AudioSpecDesired};
+use sdl2::audio::{AudioFormat, AudioQueue, AudioSpecDesired, AudioStatus};
 
 use crate::ir::audio::{
     AudioDevices, PlaybackBackend, PlaybackError, PlaybackPort,
 };
 use crate::ir::security::audio::{
-    AdmittedSamples, PlaybackRequest, admit_device_count,
+    AdmittedSamples, PlaybackObservation, PlaybackRequest, admit_device_count,
 };
 
 /// Native device ownership; format and queue admission belong to the IR.
@@ -58,6 +58,18 @@ impl Debug for AudioBackend {
 impl PlaybackBackend for AudioBackend {
     fn clear(&self) {
         self.device.clear();
+    }
+
+    fn observe_open(&self) -> PlaybackObservation {
+        let obtained = self.device.spec();
+        PlaybackObservation {
+            buffer_bytes: obtained.size,
+            buffer_frames: obtained.samples,
+            channels: obtained.channels,
+            frequency: obtained.freq,
+            paused: self.device.status() == AudioStatus::Paused,
+            signed_native_16: obtained.format == AudioFormat::s16_sys(),
+        }
     }
 
     fn output(&self) -> (&str, Option<&str>) {
@@ -86,7 +98,7 @@ impl PlaybackBackend for AudioBackend {
     }
 }
 
-/// Open the already admitted request and verify the obtained format.
+/// Open the already admitted request; the IR admits the obtained format.
 pub(in crate::software) fn open_audio(
     request: PlaybackRequest<'_>,
 ) -> Result<PlaybackPort, PlaybackError> {
@@ -103,13 +115,6 @@ pub(in crate::software) fn open_audio(
     let device = audio
         .open_queue::<i16, _>(name, &desired)
         .map_err(PlaybackError::Backend)?;
-    let obtained = device.spec();
-    if obtained.freq != layout.frequency()
-        || obtained.channels != spec.channels.get()
-        || obtained.format != AudioFormat::s16_sys()
-    {
-        return Err(PlaybackError::FormatMismatch);
-    }
     device.pause();
     Ok(Box::new(AudioBackend {
         device,

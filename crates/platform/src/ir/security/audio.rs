@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded PCM playback and device-name admission.
+//   - Bounded PCM playback, device names and obtained-format admission.
 // - Must-Not:
 //   - Resample, mix, interpret original sound hardware or advance game time.
 // - Allows:
@@ -42,6 +42,17 @@ const MAX_DEVICE_NAME: usize = 512;
 /// Maximum number of admitted playback devices.
 pub const MAX_DEVICES: u32 = 64;
 
+/// Actual application-facing playback format and initial device state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlaybackObservation {
+    pub buffer_bytes: u32,
+    pub buffer_frames: u16,
+    pub channels: u8,
+    pub frequency: i32,
+    pub paused: bool,
+    pub signed_native_16: bool,
+}
+
 /// Device open request whose name and layout have passed shared admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlaybackRequest<'device> {
@@ -50,6 +61,38 @@ pub struct PlaybackRequest<'device> {
 }
 
 impl<'device> PlaybackRequest<'device> {
+    /// Admit the opened device before exposing its playback handle.
+    ///
+    /// Native buffer negotiation may change the period size but not the
+    /// application-facing signed sample representation or frame geometry.
+    pub(crate) fn admit_opened(
+        self,
+        observed: PlaybackObservation,
+        reported_name: Option<&str>,
+        queued_bytes: u32,
+    ) -> Result<(), PlaybackError> {
+        if reported_name != self.name {
+            return Err(PlaybackError::InvalidDevice);
+        }
+        if observed.frequency != self.layout.frequency()
+            || observed.channels != self.layout.spec().channels.get()
+            || !observed.signed_native_16
+            || observed.buffer_frames == 0
+            || u32::from(observed.buffer_frames)
+                .checked_mul(self.layout.frame_bytes)
+                != Some(observed.buffer_bytes)
+        {
+            return Err(PlaybackError::FormatMismatch);
+        }
+        if !observed.paused {
+            return Err(PlaybackError::InvalidState);
+        }
+        if queued_bytes != 0 {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        Ok(())
+    }
+
     /// Admitted queue geometry.
     #[must_use]
     pub const fn layout(self) -> QueueLayout {

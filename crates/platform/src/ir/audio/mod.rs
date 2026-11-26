@@ -37,13 +37,14 @@ use std::num::{NonZeroU8, NonZeroU16, NonZeroU32};
 use games_assets::pcm::PcmSamples;
 
 use super::security::audio::{
-    AdmittedSamples, PlaybackRequest, QueueLayout, validate_devices,
+    AdmittedSamples, PlaybackObservation, PlaybackRequest, QueueLayout,
+    validate_devices,
 };
 
 /// Explicit audio playback configuration and software-queue budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlaybackSpec {
-    /// Native audio buffer size in sample frames; a power of two.
+    /// Requested native buffer period in sample frames; a power of two.
     pub buffer_frames: NonZeroU16,
     /// Number of interleaved channels.
     pub channels: NonZeroU8,
@@ -72,6 +73,8 @@ pub enum PlaybackError {
     InvalidQueue,
     /// The requested playback configuration is not representable.
     InvalidSpec,
+    /// The backend did not open the device in its initial paused state.
+    InvalidState,
     /// No playback adapter is available for the selected host.
     Unsupported,
 }
@@ -89,6 +92,8 @@ pub struct AudioDevices {
 pub(crate) trait PlaybackBackend: Debug {
     /// Clear pending frames without changing pause state.
     fn clear(&self);
+    /// Observe the actual application-facing format and initial pause state.
+    fn observe_open(&self) -> PlaybackObservation;
     /// Backend and requested device diagnostics.
     fn output(&self) -> (&str, Option<&str>);
     /// Stop consuming queued samples.
@@ -133,6 +138,22 @@ impl Debug for NativeAudio {
 }
 
 impl NativeAudio {
+    fn admit_opened(
+        request: PlaybackRequest<'_>,
+        backend: PlaybackPort,
+    ) -> Result<Self, PlaybackError> {
+        request.admit_opened(
+            backend.observe_open(),
+            backend.output().1,
+            backend.queued_bytes(),
+        )?;
+        Ok(Self {
+            backend,
+            layout: request.layout(),
+            scratch: Vec::new(),
+        })
+    }
+
     /// Discard pending software-queued frames without changing pause state.
     pub fn clear(&self) {
         self.backend.clear();
@@ -154,13 +175,7 @@ impl NativeAudio {
         name: Option<&str>,
     ) -> Result<Self, PlaybackError> {
         let request = PlaybackRequest::new(spec, name)?;
-        let backend = <() as PlaybackFactory>::open(request)?;
-        let layout = request.layout();
-        Ok(Self {
-            backend,
-            layout,
-            scratch: Vec::new(),
-        })
+        Self::admit_opened(request, <() as PlaybackFactory>::open(request)?)
     }
 
     /// Backend identifier and requested device name. None means the system
@@ -286,7 +301,9 @@ mod tests {
     #[derive(Debug)]
     struct FakeBackend {
         observation: Cell<Option<u32>>,
+        obtained: Cell<PlaybackObservation>,
         paused: Cell<bool>,
+        requested_name: Option<&'static str>,
         samples: RefCell<Vec<i16>>,
         submission_fails: Cell<bool>,
     }
@@ -296,8 +313,15 @@ mod tests {
             self.samples.borrow_mut().clear();
         }
 
+        fn observe_open(&self) -> PlaybackObservation {
+            PlaybackObservation {
+                paused: self.paused.get(),
+                ..self.obtained.get()
+            }
+        }
+
         fn output(&self) -> (&str, Option<&str>) {
-            ("fake", None)
+            ("fake", self.requested_name)
         }
 
         fn pause(&self) {
@@ -332,19 +356,117 @@ mod tests {
 
     type FakePlayback = (NativeAudio, Rc<FakeBackend>);
 
-    fn fake() -> Result<FakePlayback, PlaybackError> {
-        let backend = Rc::new(FakeBackend {
+    fn fake_backend(requested_name: Option<&'static str>) -> Rc<FakeBackend> {
+        Rc::new(FakeBackend {
             observation: Cell::new(None),
+            obtained: Cell::new(PlaybackObservation {
+                buffer_bytes: 8,
+                buffer_frames: 2,
+                channels: 2,
+                frequency: 48_000,
+                paused: true,
+                signed_native_16: true,
+            }),
             paused: Cell::new(true),
+            requested_name,
             samples: RefCell::new(Vec::new()),
             submission_fails: Cell::new(false),
-        });
-        let handle = NativeAudio {
-            backend: Box::new(Rc::clone(&backend)),
-            layout: QueueLayout::new(configuration())?,
-            scratch: Vec::new(),
-        };
+        })
+    }
+
+    fn fake() -> Result<FakePlayback, PlaybackError> {
+        let backend = fake_backend(None);
+        let request = PlaybackRequest::new(configuration(), None)?;
+        let handle =
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend)))?;
         Ok((handle, backend))
+    }
+
+    #[test]
+    fn incompatible_obtained_formats_never_expose_a_playback_handle()
+    -> Result<(), PlaybackError> {
+        let backend = fake_backend(None);
+        let request = PlaybackRequest::new(configuration(), None)?;
+        let valid = backend.obtained.get();
+        for observation in [
+            PlaybackObservation {
+                frequency: 44_100,
+                ..valid
+            },
+            PlaybackObservation { channels: 1, ..valid },
+            PlaybackObservation {
+                signed_native_16: false,
+                ..valid
+            },
+            PlaybackObservation {
+                buffer_bytes: 0,
+                buffer_frames: 0,
+                ..valid
+            },
+            PlaybackObservation { buffer_bytes: 7, ..valid },
+        ] {
+            backend.obtained.set(observation);
+            if !matches!(
+                NativeAudio::admit_opened(
+                    request,
+                    Box::new(Rc::clone(&backend))
+                ),
+                Err(PlaybackError::FormatMismatch)
+            ) || Rc::strong_count(&backend) != 1
+            {
+                return Err(PlaybackError::FormatMismatch);
+            }
+        }
+        backend.obtained.set(PlaybackObservation {
+            buffer_bytes: 16,
+            buffer_frames: 4,
+            ..valid
+        });
+        let opened =
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend)))?;
+        if opened.queued_frames()? != 0 {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn opening_requires_requested_device_paused_and_empty()
+    -> Result<(), PlaybackError> {
+        let backend = fake_backend(Some("selected"));
+        let request = PlaybackRequest::new(configuration(), Some("selected"))?;
+        let wrong = PlaybackRequest::new(configuration(), Some("other"))?;
+        if !matches!(
+            NativeAudio::admit_opened(wrong, Box::new(Rc::clone(&backend))),
+            Err(PlaybackError::InvalidDevice)
+        ) {
+            return Err(PlaybackError::InvalidDevice);
+        }
+        backend.paused.set(false);
+        if !matches!(
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend))),
+            Err(PlaybackError::InvalidState)
+        ) {
+            return Err(PlaybackError::InvalidState);
+        }
+        backend.paused.set(true);
+        backend.observation.set(Some(4));
+        if !matches!(
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend))),
+            Err(PlaybackError::InvalidQueue)
+        ) {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        backend.observation.set(None);
+        let opened =
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend)))?;
+        if opened.output() != ("fake", Some("selected")) {
+            return Err(PlaybackError::InvalidDevice);
+        }
+        if opened.queued_frames()? != 0 {
+            return Err(PlaybackError::InvalidQueue);
+        }
+        Ok(())
     }
 
     #[test]
