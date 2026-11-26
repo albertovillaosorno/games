@@ -729,3 +729,49 @@ letterbox warm-up established the touch seat before measurements.
 An optional private screencast capture timed out, so this evidence
 does not establish pixel-exact movement, visual settling, physical
 touch or presentation latency. The owner desktop was not accessed.
+
+A retry with a policy-only WirePlumber session enabled private
+PipeWire screencast observation. The single-panel touch chord run
+changed 21,801 pixels in its half-size gameplay crop, then remained
+identical across nine consecutive captures at 5 Hz. It submitted
+16,992 gameplay frames with zero work-budget misses (maximum
+8.495 ms). The capture cadence does not measure presentation latency.
+
+A four-seat private profile swapped seat two's horizontal slots and
+seat four's primary/secondary slots. At 1920x1080 fullscreen Fill,
+all four touch starts and eight simultaneous movement contacts
+reached SDL, with four motions out of the panel and all eight
+releases. The gameplay crop changed by 44,568 pixels and remained
+identical across nine consecutive captures after release. A
+720x1280 portrait relaunch without an explicit control profile
+restored the same saved envelope byte-for-byte, admitted the same
+sequence and produced eight identical settled captures after a
+10,925-pixel gameplay change. Both exited by touch alone. The
+landscape and portrait runs submitted 7,451 and 11,163 frames,
+respectively, with six and three work-budget misses (maxima
+39.372 and 21.332 ms). These are virtual display and input checks;
+they neither isolate capture overhead nor prove physical acceptance.
+
+A windowed Fill run held a touch direction across maximization from
+960x912 to 1920x1043. SDL delivered the resize before the late
+finger-up, and eleven successive maximized captures were identical
+across the held and released interval. A fresh touch then changed
+the capture and settled again. The two gameplay intervals submitted
+11,226 and 18,605 frames with zero and one work-budget misses
+(maximum 49.266 ms). The run exited normally.
+
+An original-backed adaptive window on the same disposable virtual
+monitor maximized from 960x672 to 1920x1043, increasing its logical
+scene from 320x224 to 368x224 (48 additional columns). The two live
+segments submitted 2,378 and 5,153 frames with zero and nine work
+budget misses (maximum 34.623 ms). The initial diagnostic selected
+a retired parent path; a private catalogue pointing at the current
+shared store resolved the launch failure. This is not the owner's
+maximized desktop or a complete HUD legibility assessment.
+
+The private touch-only editor also admitted menu navigation, selection
+of the first seat's primary action, three source-family changes,
+selection of the secondary physical slot, confirmation and normal
+exit. Its new owner-only 4,031-byte settings envelope recorded
+`touch 1 primary=secondary` and `touch 1 secondary=primary`, with
+keyboard and controller bindings unchanged.

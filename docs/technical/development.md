@@ -183,6 +183,9 @@ owner-only settings directory outside the package and asset store. Set
 Without this selection, display and volume changes are session-only and
 control editing/reset is unavailable. A normal launch with the directory
 selected enables the next-launch control editor; smoke never writes it.
+Native launch options follow the order shown in usage. For a path value
+starting with `--`, use an explicit relative path such as `./--controls`
+to distinguish the filename from a misplaced option.
 
 Keep the engine modular, dependency versions centralised and game code
 limited to unique behaviour.
