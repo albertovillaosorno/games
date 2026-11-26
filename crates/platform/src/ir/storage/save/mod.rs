@@ -33,12 +33,16 @@
 
 use std::ffi::OsStr;
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, Read};
 use std::num::NonZeroU64;
 
-use games::safety::{SafetyError, admit_save_size};
+use games::safety::{
+    SAVE_HEADER, SafetyError, admit_save_size, encode_save_header,
+    save_envelope_limit, validate_save_header,
+};
 
-use super::file::FileReadError;
+use super::file::{FileReadError, read_exact_snapshot};
+use crate::ir::security::file::admit_size;
 
 /// Save admission or pre-publication failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +83,88 @@ pub struct SaveReceipt {
     pub durability: Result<(), ErrorKind>,
 }
 
+/// One encoded, admitted save with a borrowed, unchanged payload.
+///
+/// The separate header avoids allocating a second copy of the payload.
+#[derive(Debug)]
+pub struct PreparedSave<'payload> {
+    header: [u8; SAVE_HEADER],
+    payload: &'payload [u8],
+    size: u64,
+}
+
+impl<'payload> PreparedSave<'payload> {
+    /// Exact encoded byte count, including the fixed header.
+    #[must_use]
+    pub const fn encoded_size(&self) -> u64 {
+        self.size
+    }
+
+    /// Canonical fixed-width encoded header.
+    #[must_use]
+    pub const fn header(&self) -> &[u8; SAVE_HEADER] {
+        &self.header
+    }
+
+    /// Prepare the complete envelope before dispatching a slot write.
+    ///
+    /// # Errors
+    /// Rejects payloads exceeding the requested or format limit.
+    pub fn new(
+        payload: &'payload [u8],
+        maximum: NonZeroU64,
+    ) -> Result<Self, SaveError> {
+        let header = encode_save_header(payload, maximum)?;
+        let size = header
+            .len()
+            .checked_add(payload.len())
+            .and_then(|length| u64::try_from(length).ok())
+            .ok_or(SafetyError::TooLarge)?;
+        Ok(Self { header, payload, size })
+    }
+
+    /// Exact borrowed bytes following the encoded header.
+    #[must_use]
+    pub const fn payload(&self) -> &'payload [u8] {
+        self.payload
+    }
+}
+
+/// A complete save payload whose header and checksum have been verified.
+#[derive(Debug)]
+pub struct VerifiedSave(Vec<u8>);
+
+impl VerifiedSave {
+    /// Transfer the verified payload without copying it.
+    #[must_use]
+    pub fn into_payload(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// Verify one encoded save from an independently sized stream.
+    ///
+    /// # Errors
+    /// Rejects oversized, truncated, extended or corrupt envelopes.
+    pub fn read(
+        input: &mut dyn Read,
+        size: u64,
+        maximum: NonZeroU64,
+    ) -> Result<Self, SaveError> {
+        admit_size(size, save_envelope_limit(maximum))?;
+        let header_size = u64::try_from(SAVE_HEADER).unwrap_or(u64::MAX);
+        let length = size
+            .checked_sub(header_size)
+            .ok_or(SafetyError::InvalidSave)?;
+        let mut bytes = [0; SAVE_HEADER];
+        input.read_exact(&mut bytes).map_err(FileReadError::from)?;
+        let header = validate_save_header(&bytes, length, maximum)?;
+        let mut payload = Vec::new();
+        read_exact_snapshot(input, length, &mut payload)?;
+        header.verify(&payload)?;
+        Ok(Self(payload))
+    }
+}
+
 pub(crate) type OpenSave = Result<Box<dyn SaveBackend>, SaveError>;
 
 /// Private selected backend for opening a dedicated save directory.
@@ -86,14 +172,14 @@ pub(crate) trait SaveFactory {
     fn open(directory: &OsStr, maximum: NonZeroU64) -> OpenSave;
 }
 
-/// A pinned backend verifies complete envelopes and publishes atomically.
+/// A pinned backend reads admitted envelopes and publishes atomically.
 pub(crate) trait SaveBackend: Debug + Send + Sync {
-    fn read_slot(&self, slot: u32) -> Result<Vec<u8>, SaveError>;
+    fn read_slot(&self, slot: u32) -> Result<VerifiedSave, SaveError>;
 
     fn write_slot(
         &self,
         slot: u32,
-        payload: &[u8],
+        save: PreparedSave<'_>,
     ) -> Result<SaveReceipt, SaveError>;
 }
 
@@ -121,7 +207,7 @@ impl SaveStore {
     /// # Errors
     /// Rejects unsafe storage, missing or malformed slots and excess sizes.
     pub fn load(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
-        let payload = self.backend.read_slot(slot)?;
+        let payload = self.backend.read_slot(slot)?.into_payload();
         self.admit(&payload)?;
         Ok(payload)
     }
@@ -160,13 +246,15 @@ impl SaveStore {
         slot: u32,
         payload: &[u8],
     ) -> Result<SaveReceipt, SaveError> {
-        self.admit(payload)?;
-        self.backend.write_slot(slot, payload)
+        self.backend
+            .write_slot(slot, PreparedSave::new(payload, self.maximum)?)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use games::safety::encode_save;
+
     use super::*;
 
     #[derive(Debug)]
@@ -183,23 +271,39 @@ mod tests {
     }
 
     impl SaveBackend for Fake {
-        fn read_slot(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
-            match slot {
-                0 => Ok(Vec::new()),
-                1 => Ok(b"four".to_vec()),
-                2 => Ok(b"large".to_vec()),
+        fn read_slot(&self, slot: u32) -> Result<VerifiedSave, SaveError> {
+            let maximum = NonZeroU64::MIN.saturating_add(4);
+            let payload: &[u8] = match slot {
+                0 => b"",
+                1 | 4 => b"four",
+                2 => b"large",
                 _ => {
-                    Err(SaveError::Read(FileReadError::Io(ErrorKind::NotFound)))
+                    return Err(SaveError::Read(FileReadError::Io(
+                        ErrorKind::NotFound,
+                    )));
                 },
+            };
+            let mut bytes = encode_save(payload, maximum)?;
+            if slot == 4 {
+                let last = bytes.last_mut().ok_or(SafetyError::InvalidSave)?;
+                *last = 0;
             }
+            let size = u64::try_from(bytes.len())
+                .map_err(|_error| SafetyError::TooLarge)?;
+            VerifiedSave::read(&mut bytes.as_slice(), size, maximum)
         }
 
         fn write_slot(
             &self,
             slot: u32,
-            payload: &[u8],
+            save: PreparedSave<'_>,
         ) -> Result<SaveReceipt, SaveError> {
-            if slot == u32::MAX && payload == b"four" {
+            let maximum = NonZeroU64::MIN.saturating_add(3);
+            if slot == u32::MAX
+                && save.payload() == b"four"
+                && *save.header() == encode_save_header(b"four", maximum)?
+                && save.encoded_size() == save_envelope_limit(maximum)
+            {
                 Ok(SaveReceipt {
                     durability: Err(ErrorKind::Other),
                 })
@@ -219,6 +323,7 @@ mod tests {
             && store.load(2) == Err(SafetyError::TooLarge.into())
             && store.load(3)
                 == Err(SaveError::Read(FileReadError::Io(ErrorKind::NotFound)))
+            && store.load(4) == Err(SafetyError::InvalidSave.into())
             && store.store(0, b"large") == Err(SafetyError::TooLarge.into())
             && store.store(0, b"four") == Err(SaveError::UnsafeStorage)
             && store.store(u32::MAX, b"four")?.durability
@@ -230,5 +335,51 @@ mod tests {
         valid
             .then_some(())
             .ok_or(SaveError::Io(ErrorKind::InvalidData))
+    }
+
+    #[test]
+    fn portable_stream_admission_rejects_size_before_reading()
+    -> Result<(), SaveError> {
+        let maximum = NonZeroU64::MIN;
+        let limit = save_envelope_limit(maximum);
+        let mut input = b"unchanged".as_slice();
+        let result =
+            VerifiedSave::read(&mut input, limit.saturating_add(1), maximum);
+        if result.err() != Some(FileReadError::TooLarge.into())
+            || input != b"unchanged"
+        {
+            return Err(SaveError::UnsafeStorage);
+        }
+
+        let header = encode_save_header(b"", maximum)?;
+        let mut stream = header.as_slice();
+        let malformed = VerifiedSave::read(&mut stream, limit, maximum);
+        (malformed.err() == Some(SafetyError::InvalidSave.into()))
+            .then_some(())
+            .ok_or(SaveError::UnsafeStorage)
+    }
+
+    #[test]
+    fn portable_stream_admission_rejects_truncation_and_trailing_bytes()
+    -> Result<(), SaveError> {
+        let maximum = NonZeroU64::MIN;
+        let bytes = encode_save(b"x", maximum)?;
+        let size = save_envelope_limit(maximum);
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        let truncated = bytes
+            .get(..bytes.len().saturating_sub(1))
+            .ok_or(SafetyError::InvalidSave)?;
+        let cases = [
+            (truncated, FileReadError::Io(ErrorKind::UnexpectedEof)),
+            (trailing.as_slice(), FileReadError::TooLarge),
+        ];
+        for (mut input, error) in cases {
+            let observed = VerifiedSave::read(&mut input, size, maximum);
+            if observed.err() != Some(error.into()) {
+                return Err(SaveError::UnsafeStorage);
+            }
+        }
+        Ok(())
     }
 }

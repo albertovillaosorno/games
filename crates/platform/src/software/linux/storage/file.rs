@@ -30,7 +30,7 @@
 //   - No final symlinks, no device access, no unchecked allocation.
 
 use std::fs::File;
-use std::io::{self, Read as _};
+use std::io;
 use std::num::NonZeroU64;
 use std::os::fd::{AsFd, AsRawFd as _, OwnedFd};
 use std::path::Path;
@@ -43,8 +43,8 @@ use zeroize::Zeroizing;
 
 /// Admission failure shared by the portable facade and native readers.
 pub(super) use crate::ir::security::file::FileReadError;
-use crate::ir::security::file::{admit_size, allocation_length};
-use crate::ir::storage::file::SecretSnapshot;
+use crate::ir::security::file::admit_size;
+use crate::ir::storage::file::{SecretSnapshot, read_exact_snapshot};
 
 pub(super) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)
@@ -171,7 +171,7 @@ fn read_consistent(
     admitted: fn(&FileStat) -> bool,
     bytes: &mut Vec<u8>,
 ) -> Result<(), FileReadError> {
-    read_bounded_descriptor(&mut file, file_size(before)?, bytes)?;
+    read_exact_snapshot(&mut file, file_size(before)?, bytes)?;
     check_content_metadata(&file, before, admitted)
 }
 
@@ -185,25 +185,6 @@ fn check_content_metadata(
         return Err(FileReadError::UnsafeFile);
     }
     Ok(())
-}
-
-pub(super) fn read_bounded_descriptor(
-    file: &mut File,
-    size: u64,
-    bytes: &mut Vec<u8>,
-) -> Result<(), FileReadError> {
-    let length = allocation_length(size)?;
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_error| FileReadError::TooLarge)?;
-    bytes.resize(length, 0);
-    file.read_exact(bytes)?;
-    let mut extra = Zeroizing::new([0u8; 1]);
-    match file.read_exact(&mut *extra) {
-        Ok(()) => Err(FileReadError::TooLarge),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 const fn regular(stat: &FileStat) -> bool {
@@ -244,7 +225,7 @@ pub(super) fn read_regular(
 ) -> Result<Vec<u8>, FileReadError> {
     read_regular_with(parent, name, maximum, |file, size| {
         let mut bytes = Vec::new();
-        read_bounded_descriptor(file, size, &mut bytes)?;
+        read_exact_snapshot(file, size, &mut bytes)?;
         Ok(bytes)
     })
 }
@@ -437,17 +418,13 @@ mod tests {
         let fd = open(&path, OFlag::O_RDONLY, Mode::empty())?;
         fs::write(&path, b"fives")?;
         require(
-            read_bounded_descriptor(&mut File::from(fd), 4, &mut Vec::new())
+            read_exact_snapshot(&mut File::from(fd), 4, &mut Vec::new())
                 == Err(FileReadError::TooLarge),
         )?;
         let shortened = open(&path, OFlag::O_RDONLY, Mode::empty())?;
         fs::write(&path, b"x")?;
         require(matches!(
-            read_bounded_descriptor(
-                &mut File::from(shortened),
-                5,
-                &mut Vec::new(),
-            ),
+            read_exact_snapshot(&mut File::from(shortened), 5, &mut Vec::new()),
             Err(FileReadError::Io(io::ErrorKind::UnexpectedEof))
         ))
     }

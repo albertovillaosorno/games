@@ -30,26 +30,25 @@
 //   - No traversal, links, special files or partial publication.
 
 use std::fs::File;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Write as _};
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use games::safety::{
-    SAVE_HEADER, SafetyError, encode_save_header, save_envelope_limit,
-    validate_save_header,
-};
+use games::safety::save_envelope_limit;
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat, renameat};
 use nix::sys::stat::{FileStat, Mode, fstat, fstatat};
 use nix::unistd::{UnlinkatFlags, unlinkat};
 
 use super::file::{
-    DIRECTORY_FLAGS, FileReadError, check_staged_metadata, private_regular,
-    read_bounded_descriptor, read_regular_with, same_inode, trusted_directory,
+    DIRECTORY_FLAGS, check_staged_metadata, private_regular, read_regular_with,
+    same_inode, trusted_directory,
 };
-use crate::ir::storage::save::{SaveBackend, SaveError, SaveReceipt};
+use crate::ir::storage::save::{
+    PreparedSave, SaveBackend, SaveError, SaveReceipt, VerifiedSave,
+};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -72,32 +71,9 @@ pub(super) struct SaveStore {
 }
 
 impl SaveStore {
-    /// Load a slot and validate its exact envelope before returning payload.
-    ///
-    /// # Errors
-    /// Rejects unsafe storage, missing or malformed files and oversized data.
-    pub(super) fn load(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
-        let directory = &self.directory;
-        read_regular_with(
-            directory,
-            &slot_name(slot),
-            save_envelope_limit(self.maximum),
-            |file, size| {
-                let header_size =
-                    u64::try_from(SAVE_HEADER).unwrap_or(u64::MAX);
-                let length = size
-                    .checked_sub(header_size)
-                    .ok_or(SafetyError::InvalidSave)?;
-                let mut bytes = [0; SAVE_HEADER];
-                file.read_exact(&mut bytes).map_err(FileReadError::from)?;
-                let header =
-                    validate_save_header(&bytes, length, self.maximum)?;
-                let mut payload = Vec::new();
-                read_bounded_descriptor(file, length, &mut payload)?;
-                header.verify(&payload)?;
-                Ok(payload)
-            },
-        )
+    #[cfg(test)]
+    fn load(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
+        Ok(self.read_slot(slot)?.into_payload())
     }
 
     /// Open a trusted save directory without following a final symlink.
@@ -118,15 +94,30 @@ impl SaveStore {
         })
     }
 
-    /// Replace a slot atomically using a synced private temporary file.
-    ///
-    /// # Errors
-    /// Rejects invalid storage and oversized saves before publication.
-    /// A pre-publication failure leaves an existing slot unchanged.
-    pub(super) fn store(
+    #[cfg(test)]
+    fn store(
         &self,
         slot: u32,
         payload: &[u8],
+    ) -> Result<SaveReceipt, SaveError> {
+        self.write_slot(slot, PreparedSave::new(payload, self.maximum)?)
+    }
+}
+
+impl SaveBackend for SaveStore {
+    fn read_slot(&self, slot: u32) -> Result<VerifiedSave, SaveError> {
+        read_regular_with(
+            &self.directory,
+            &slot_name(slot),
+            save_envelope_limit(self.maximum),
+            |file, size| VerifiedSave::read(file, size, self.maximum),
+        )
+    }
+
+    fn write_slot(
+        &self,
+        slot: u32,
+        save: PreparedSave<'_>,
     ) -> Result<SaveReceipt, SaveError> {
         let directory = &self.directory;
         if !trusted_directory(directory)? {
@@ -134,34 +125,14 @@ impl SaveStore {
         }
         let name = slot_name(slot);
         admit_slot(directory, &name)?;
-        let header = encode_save_header(payload, self.maximum)?;
-        let expected = header
-            .len()
-            .checked_add(payload.len())
-            .and_then(|length| u64::try_from(length).ok())
-            .ok_or(SafetyError::TooLarge)?;
         let mut pending = PendingSave::create(directory)?;
-        pending.file.write_all(&header)?;
-        pending.file.write_all(payload)?;
+        pending.file.write_all(save.header())?;
+        pending.file.write_all(save.payload())?;
         let stamp = fstat(&pending.file)?;
-        pending.publish(&name, expected, &stamp)?;
+        pending.publish(&name, save.encoded_size(), &stamp)?;
         Ok(SaveReceipt {
             durability: self.directory.sync_all().map_err(|error| error.kind()),
         })
-    }
-}
-
-impl SaveBackend for SaveStore {
-    fn read_slot(&self, slot: u32) -> Result<Vec<u8>, SaveError> {
-        Self::load(self, slot)
-    }
-
-    fn write_slot(
-        &self,
-        slot: u32,
-        payload: &[u8],
-    ) -> Result<SaveReceipt, SaveError> {
-        Self::store(self, slot, payload)
     }
 }
 
@@ -280,9 +251,12 @@ mod tests {
     use std::time::UNIX_EPOCH;
     use std::{fs, thread};
 
-    use games::safety::{decode_save, encode_save};
+    use games::safety::{
+        SafetyError, decode_save, encode_save, encode_save_header,
+    };
     use nix::unistd::mkfifo;
 
+    use super::super::file::FileReadError;
     use super::super::fixtures::TestRoot;
     use super::*;
 

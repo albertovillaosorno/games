@@ -428,3 +428,16 @@ and malformed manifests before payload dispatch and exercise both empty
 and populated namespaces. Fresh native X11 and dummy audio validation
 1795654372649660988-2255910 passed 1,561 aggregate test executions and
 all six portable core checks.
+
+Save-envelope admission now belongs to the shared storage IR. A prepared
+save binds the admitted header to its borrowed payload before dispatch,
+and a verified save checks the independently observed stream length,
+header, exact payload and checksum before returning bytes. Native file
+and save reads share the same bounded exact-stream reader, including its
+zeroised overrun probe. The native slot writer retains atomic replacement,
+metadata checks and durability reporting without an extra payload copy.
+Portable fixtures reject excess size before reading, malformed headers,
+truncated and extended streams, corrupt checksums and oversized backend
+results. Fresh native X11 and dummy audio validation
+1795654644837526498-2329962 passed 1,567 aggregate test executions and
+all six portable core checks.
