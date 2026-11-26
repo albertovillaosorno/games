@@ -1437,3 +1437,32 @@ bytes and receipt SHA-256
 `5e9ebd8cf362b390f7d71733c6ffc2c5616c11cb7ad39c8c0afa18509cee78e3`.
 These are browser-trusted compositor events, not physical touchscreen,
 audio or GPU acceptance. Android and broader browser gates remain open.
+
+Two additional trusted Wayland Firefox sessions at DPR 1.5 exercised
+contact multiplicity on the unchanged package. The four-seat session
+seeded an isolated origin with the canonical native control save
+converted losslessly to the browser's hexadecimal representation.
+The admitted profile selected all four touch seats and swapped seat 2's
+horizontal controls and seat 4's attack controls. Its 320-by-544 logical
+scene contained a single 320-by-320 touch atlas. Four distinct trusted
+start taps joined all seats. Four simultaneously held direction contacts,
+including the reversed physical direction on seat 2, moved the observed
+actor centers from 88, 110, 132, 154 to 62, 82, 108, 132. After all four
+releases they settled at 56, 80, 102, 124 for two observations. Earlier
+attempts ran long enough for combat and enemy sprites to confound the
+observer; the shorter window isolated the four initial actor centers.
+The successful session ended normally after 227 callbacks and 134 blits,
+with 15 trusted touch downs and 14 observed releases and capture losses.
+
+A separate default single-seat session held two distinct contacts in the
+same left control. The actor moved from x=110 to x=76, then to x=52
+with only one contact remaining, and settled at x=46 twice following
+the final release. It completed normally after 180 callbacks and 88 blits,
+with eight trusted downs and seven observed releases and capture losses.
+Both final menu actions removed the canvas before their corresponding
+releases; neither session observed compatibility mouse events. Both
+selected 743 files, read precisely 616 entries (24,937,054 bytes), peaked
+at one outstanding frame, closed the private stereo audio context and
+removed both the picker and canvas. The four-seat fixture tests admitted
+portable preference bytes, not a browser UI for selecting touch seats.
+The compositor events are trusted by Firefox but not physical hardware.
