@@ -844,3 +844,11 @@ later focus run was confounded by nearby enemy movement. The corrected
 checks isolate all four initial actor positions and move away from the
 enemy for the focus test. Synthetic keys, Xvfb software rendering and
 dummy output do not establish physical-device operation.
+
+A repeat of the asset-backed context-loss check replaced the keyboard
+attack with a synthetic left mouse pointer press and release. After
+movement, this default attack route submitted 43 Web Audio sources.
+The expected context-loss diagnostic completed once after 55 callbacks
+and 50 blits; the audio context closed without error, no callback
+remained pending, and the picker and canvas were removed. This verifies
+the browser mouse-to-title attack route, not physical mouse operation.
