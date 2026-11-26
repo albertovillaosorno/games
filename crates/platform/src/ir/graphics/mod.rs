@@ -183,7 +183,7 @@ impl NativeWindow {
     {
         run_once(run, |once| {
             self.backend.with_scene(layout, &mut |backend| {
-                let mut session = SceneSession::new(backend, limits);
+                let mut session = SceneSession::new(backend, layout, limits)?;
                 once.call(|callback| callback(&mut session))
             })
         })

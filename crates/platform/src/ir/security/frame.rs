@@ -33,6 +33,8 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use games::presentation::{Dimensions, PresentationMode};
+
 // Keep both ends of a signed rectangle representable.
 const MAX_RECTANGLE_EXTENT: u32 = 1_073_741_823;
 
@@ -120,6 +122,57 @@ impl FrameLayout {
     }
 }
 
+/// An admitted bound for height-preserving scene extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdaptiveWidthRequest {
+    base: FrameLayout,
+    maximum: FrameLayout,
+}
+
+impl AdaptiveWidthRequest {
+    /// Whether selecting the next extent requires a drawable observation.
+    #[must_use]
+    pub fn needs_surface(self, mode: PresentationMode) -> bool {
+        mode == PresentationMode::Adaptive
+            && self.maximum.width() > self.base.width()
+    }
+
+    /// Admit a maximum against the initial logical scene dimensions.
+    /// # Errors
+    /// Rejects a different height or a width smaller than the base.
+    pub fn new(
+        base: FrameLayout,
+        maximum: FrameLayout,
+    ) -> Result<Self, RenderError> {
+        if maximum.height() != base.height() || maximum.width() < base.width() {
+            return Err(RenderError::InvalidDimensions);
+        }
+        Ok(Self { base, maximum })
+    }
+
+    /// Choose the complete bounded logical frame for the next presentation.
+    ///
+    /// Missing drawable geometry and fixed presentation modes use the base.
+    /// # Errors
+    /// Rejects an unrepresentable selected extent.
+    pub fn select(
+        self,
+        mode: PresentationMode,
+        surface: Option<Dimensions>,
+    ) -> Result<FrameLayout, RenderError> {
+        let base = Dimensions::new(self.base.width(), self.base.height());
+        let design = surface.map_or(base, |extent| {
+            mode.design_for_surface(extent, base, self.maximum.width())
+        });
+        if design.width == base.width {
+            return Ok(self.base);
+        }
+        let budget = NonZeroUsize::new(self.maximum.bytes())
+            .ok_or(RenderError::TooLarge)?;
+        FrameLayout::new(design.width, design.height, budget)
+    }
+}
+
 /// Validate dimensions before opening a window or allocating a frame.
 ///
 /// # Errors
@@ -139,7 +192,43 @@ pub fn validate_extent(
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use super::{FrameLayout, RenderError};
+    use super::{
+        AdaptiveWidthRequest, Dimensions, FrameLayout, PresentationMode,
+        RenderError,
+    };
+    use crate::ir::check;
+
+    #[test]
+    fn adaptive_selector_retains_height_and_bounded_world_extent()
+    -> Result<(), RenderError> {
+        let size = |value| NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
+        let layout =
+            |width| FrameLayout::new(size(width), size(4), NonZeroUsize::MAX);
+        let base = layout(6)?;
+        let maximum = layout(10)?;
+        let request = AdaptiveWidthRequest::new(base, maximum)?;
+        for mode in PresentationMode::ALL {
+            let adaptive = mode == PresentationMode::Adaptive;
+            check(&request.needs_surface(mode), &adaptive)?;
+            check(&request.select(mode, None), &Ok(base))?;
+            check(
+                &request.select(mode, Some(Dimensions::new(size(3), size(4)))),
+                &Ok(base),
+            )?;
+        }
+        for (mode, columns, expected) in [
+            (PresentationMode::Adaptive, 8, 8),
+            (PresentationMode::Adaptive, 24, 10),
+            (PresentationMode::AspectFit, 24, 6),
+            (PresentationMode::Integer, 24, 6),
+            (PresentationMode::Fill, 24, 6),
+            (PresentationMode::Stretch, 24, 6),
+        ] {
+            let surface = Some(Dimensions::new(size(columns), size(4)));
+            check(&request.select(mode, surface), &layout(expected))?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn layout_preserves_packed_extent_and_budget() {

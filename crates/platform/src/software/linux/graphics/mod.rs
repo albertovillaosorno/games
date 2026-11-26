@@ -55,6 +55,7 @@ use sdl2::{EventPump, Sdl, TimerSubsystem};
 use self::scene_renderer::{LinuxScene, SceneTextures};
 use super::input::{open_input, sample};
 use crate::ir::frame::{FrameLayout, RenderError};
+use crate::ir::graphics::scene_renderer::SceneBackend as _;
 use crate::ir::graphics::{
     FrameBackend, FrameRun, SceneRun, WindowBackend, WindowPort,
 };
@@ -737,11 +738,12 @@ mod tests {
             InputStartup::new(window.input(budget(1))?)?.input;
         touch_input.enable_touch();
         window.with_scene(extent()?, &mut |backend| {
-            let mut scene = SceneSession::new(backend, SceneLimits {
-                atlas_bytes: budget(16),
-                atlases: budget(1),
-                sprites: budget(2),
-            });
+            let mut scene =
+                SceneSession::new(backend, extent()?, SceneLimits {
+                    atlas_bytes: budget(16),
+                    atlases: budget(1),
+                    sprites: budget(2),
+                })?;
             verify_native_batches(&mut scene, &events, window_id)?;
             verify_sprite_scene(&mut scene, &mut touch_input, &timer, window_id)
         })?;

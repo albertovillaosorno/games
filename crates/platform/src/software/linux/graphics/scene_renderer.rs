@@ -32,7 +32,7 @@
 //! Ordered native sprite composition over persistent texture atlases.
 
 use std::fmt::{self, Debug, Formatter};
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
@@ -112,7 +112,6 @@ impl<'texture, Context> Atlases<'texture, Context> {
 
 pub(super) struct SceneTextures<'texture, Context> {
     atlases: Atlases<'texture, Context>,
-    base: FrameLayout,
     layout: FrameLayout,
     mode: PresentationMode,
     target: Texture<'texture>,
@@ -149,31 +148,6 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         Ok(Some(drawable))
     }
 
-    fn fit(
-        &mut self,
-        surface: Option<Dimensions>,
-        maximum: FrameLayout,
-    ) -> Result<FrameLayout, RenderError> {
-        if maximum.height() != self.base.height()
-            || maximum.width() < self.base.width()
-        {
-            return Err(RenderError::InvalidDimensions);
-        }
-        let base = Dimensions::new(self.base.width(), self.base.height());
-        let design = surface.map_or(base, |extent| {
-            self.mode.design_for_surface(extent, base, maximum.width())
-        });
-        if design.width != self.layout.width() {
-            let budget = NonZeroUsize::new(maximum.bytes())
-                .ok_or(RenderError::TooLarge)?;
-            let layout = FrameLayout::new(design.width, design.height, budget)?;
-            let target = create_target(self.atlases.creator, layout)?;
-            self.target = target;
-            self.layout = layout;
-        }
-        Ok(self.layout)
-    }
-
     pub(super) fn new(
         creator: &'texture TextureCreator<Context>,
         layout: FrameLayout,
@@ -181,7 +155,6 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
     ) -> Result<Self, RenderError> {
         Ok(Self {
             atlases: Atlases::new(creator),
-            base: layout,
             layout,
             mode,
             target: create_target(creator, layout)?,
@@ -215,6 +188,15 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
         }
         Ok(pixels)
     }
+
+    fn resize(&mut self, layout: FrameLayout) -> Result<(), RenderError> {
+        if layout != self.layout {
+            let target = create_target(self.atlases.creator, layout)?;
+            self.target = target;
+            self.layout = layout;
+        }
+        Ok(())
+    }
 }
 
 /// A logical render target, persistent atlases and a native event pump.
@@ -247,30 +229,6 @@ impl SceneBackend for LinuxScene<'_, '_> {
         apply_window_mode(self.canvas, settings.window)?;
         self.textures.mode = settings.presentation;
         Ok(())
-    }
-
-    /// Choose the bounded logical extent for the next frame.
-    ///
-    /// The maximum must retain the initial height and contain its width.
-    /// Only adaptive mode may extend; other modes restore the base target.
-    /// Atlases stay resident, and the old target survives allocation failure.
-    /// # Errors
-    /// Rejects an invalid maximum or native query/allocation failure.
-    fn fit_adaptive_width(
-        &mut self,
-        maximum: FrameLayout,
-    ) -> Result<FrameLayout, RenderError> {
-        if self.textures.mode != PresentationMode::Adaptive
-            || maximum.width() <= self.textures.base.width()
-        {
-            return self.textures.fit(None, maximum);
-        }
-        let (width, height) =
-            self.canvas.output_size().map_err(RenderError::Backend)?;
-        let surface = NonZeroU32::new(width)
-            .zip(NonZeroU32::new(height))
-            .map(|(columns, rows)| Dimensions::new(columns, rows));
-        self.textures.fit(surface, maximum)
     }
 
     /// Exact layout of the last completed presentation attempt.
@@ -333,6 +291,10 @@ impl SceneBackend for LinuxScene<'_, '_> {
         Ok(drawable.is_some())
     }
 
+    fn presentation_mode(&self) -> PresentationMode {
+        self.textures.mode
+    }
+
     /// Read the current logical scene as RGBA bytes.
     ///
     /// Call only immediately after successful presentation. This diagnostic
@@ -343,6 +305,21 @@ impl SceneBackend for LinuxScene<'_, '_> {
     /// Rejects failed native readback or an unexpected byte extent.
     fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
         self.textures.readback(self.canvas)
+    }
+
+    fn resize_target(
+        &mut self,
+        layout: FrameLayout,
+    ) -> Result<(), RenderError> {
+        self.textures.resize(layout)
+    }
+
+    fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError> {
+        let (width, height) =
+            self.canvas.output_size().map_err(RenderError::Backend)?;
+        Ok(NonZeroU32::new(width)
+            .zip(NonZeroU32::new(height))
+            .map(|(columns, rows)| Dimensions::new(columns, rows)))
     }
 
     /// Observe the last presented layout if it matches current geometry.
@@ -390,10 +367,6 @@ impl<'canvas, 'texture> LinuxScene<'canvas, 'texture> {
             textures,
             timer,
         })
-    }
-
-    pub(super) const fn presentation_mode(&self) -> PresentationMode {
-        self.textures.mode
     }
 }
 
@@ -482,6 +455,7 @@ mod tests {
         Atlases, FrameLayout, RenderError, SceneTextures, SpriteDraw,
         SpriteRect,
     };
+    use crate::ir::frame::AdaptiveWidthRequest;
     use crate::ir::scene::{AtlasId, SceneLimits};
     use crate::ir::security::scene::SceneAdmission;
 
@@ -590,7 +564,9 @@ mod tests {
         let mut admission = SceneAdmission::new(limits());
         let [sprite, _overlay] = commands(&mut admission, &mut scene.atlases)?;
         let wide = Some(Dimensions::new(nz(12), nz(2)));
-        require(scene.fit(wide, maximum)? == maximum, "width cap differs")?;
+        let request = AdaptiveWidthRequest::new(base, maximum)?;
+        scene.resize(request.select(scene.mode, wide)?)?;
+        require(scene.layout == maximum, "width cap differs")?;
         let edge = SpriteDraw {
             destination: rect(4, 1, 2, 1),
             flip_horizontal: false,
@@ -615,13 +591,14 @@ mod tests {
         )?;
         let wrong_height = FrameLayout::new(nz(6), nz(3), budget(72))?;
         require(
-            scene.fit(wide, wrong_height)
+            AdaptiveWidthRequest::new(base, wrong_height)
                 == Err(RenderError::InvalidDimensions)
                 && scene.layout == maximum,
             "invalid extent changed target",
         )?;
         scene.mode = PresentationMode::AspectFit;
-        require(scene.fit(wide, maximum)? == base, "base not restored")?;
+        scene.resize(request.select(scene.mode, wide)?)?;
+        require(scene.layout == base, "base not restored")?;
         require(
             scene.draw(&mut canvas, [0; 3], &[sprite])?.is_some(),
             "atlas lost",

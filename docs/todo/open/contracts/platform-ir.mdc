@@ -426,3 +426,14 @@ observations, backend rejection and successful retry. Fresh X11 and
 dummy-audio validation 1795653896779320717-2105317 passed 1,551 aggregate
 test executions and all six portable core checks. Physical audio and
 non-Linux native audio support remain unverified.
+
+Adaptive scene fitting now admits the maximum against the original logical
+extent and selects the exact height-preserving target in the portable IR.
+Only adaptive mode with an extendable scene queries the drawable; fixed
+modes and missing geometry restore the base. The native renderer retains
+allocation and resident atlas ownership. Synthetic regressions exercise
+invalid bounds, no-op allocation, base restoration and inconsistent backend
+results; the native test retains atlas pixels across target changes. Fresh
+X11 and dummy-audio validation 1795654243573388824-2214293 passed 1,557
+aggregate test executions and all six portable core checks. Other native
+backends and physical device acceptance remain open.

@@ -35,9 +35,11 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::NonZeroUsize;
 
 use games::input::touch::TouchPoint;
-use games::presentation::{DisplaySettings, PresentationLayout};
+use games::presentation::{
+    Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
+};
 
-use crate::ir::frame::{FrameLayout, RenderError};
+use crate::ir::frame::{AdaptiveWidthRequest, FrameLayout, RenderError};
 use crate::ir::hardware::InputSample;
 use crate::ir::scene::{
     AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw,
@@ -50,10 +52,6 @@ pub(crate) trait SceneBackend: Debug {
         &mut self,
         settings: DisplaySettings,
     ) -> Result<(), RenderError>;
-    fn fit_adaptive_width(
-        &mut self,
-        maximum: FrameLayout,
-    ) -> Result<FrameLayout, RenderError>;
     fn last_presented_layout(&self) -> Option<PresentationLayout>;
     fn layout(&self) -> FrameLayout;
     // Commit the supplied atlas identity only after a successful upload.
@@ -70,7 +68,11 @@ pub(crate) trait SceneBackend: Debug {
         background: [u8; 3],
         sprites: &[SpriteDraw],
     ) -> Result<bool, RenderError>;
+    fn presentation_mode(&self) -> PresentationMode;
     fn readback(&mut self) -> Result<Vec<u8>, RenderError>;
+    fn resize_target(&mut self, layout: FrameLayout)
+    -> Result<(), RenderError>;
+    fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError>;
     fn visible_layout(&self)
     -> Result<Option<PresentationLayout>, RenderError>;
 }
@@ -134,6 +136,7 @@ impl SceneView<'_> {
 pub struct SceneSession<'session, 'backend> {
     admission: SceneAdmission,
     backend: &'session mut (dyn SceneBackend + 'backend),
+    base: FrameLayout,
 }
 
 impl Debug for SceneSession<'_, '_> {
@@ -198,7 +201,22 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         &mut self,
         maximum: FrameLayout,
     ) -> Result<FrameLayout, RenderError> {
-        self.backend.fit_adaptive_width(maximum)
+        let request = AdaptiveWidthRequest::new(self.base, maximum)?;
+        let mode = self.backend.presentation_mode();
+        let surface = if request.needs_surface(mode) {
+            self.backend.surface_dimensions()?
+        } else {
+            None
+        };
+        let layout = request.select(mode, surface)?;
+        if self.layout() == layout {
+            return Ok(layout);
+        }
+        self.backend.resize_target(layout)?;
+        if self.layout() != layout {
+            return Err(RenderError::InvalidDimensions);
+        }
+        Ok(layout)
     }
 
     /// Exact layout of the last successful drawable presentation, if any.
@@ -238,12 +256,17 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
 
     pub(crate) fn new(
         backend: &'session mut (dyn SceneBackend + 'backend),
+        base: FrameLayout,
         limits: SceneLimits,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, RenderError> {
+        if backend.layout() != base {
+            return Err(RenderError::InvalidDimensions);
+        }
+        Ok(Self {
             admission: SceneAdmission::new(limits),
             backend,
-        }
+            base,
+        })
     }
 
     /// Present ordered sprite commands over the opaque background.
@@ -314,14 +337,15 @@ impl AtlasUpload for SceneSession<'_, '_> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::VecDeque;
     use std::num::{NonZeroU32, NonZeroUsize};
     use std::time::Duration;
 
     use super::{
-        AtlasId, DisplaySettings, EventBatch, FrameLayout, InputSample,
-        PresentationLayout, RenderError, SceneBackend, SceneLimits,
-        SceneSession, SpriteDraw,
+        AtlasId, Dimensions, DisplaySettings, EventBatch, FrameLayout,
+        InputSample, PresentationLayout, PresentationMode, RenderError,
+        SceneBackend, SceneLimits, SceneSession, SpriteDraw,
     };
     use crate::ir::check;
     use crate::ir::hardware::{HostEvent, InputTransition};
@@ -333,6 +357,11 @@ mod tests {
         events: VecDeque<InputSample>,
         fail_upload: bool,
         layout: FrameLayout,
+        mode: PresentationMode,
+        resize_outcome: Result<bool, RenderError>,
+        resizes: Vec<FrameLayout>,
+        surface: Option<Dimensions>,
+        surface_queries: Cell<usize>,
         uploads: Vec<AtlasId>,
         waits: Vec<u32>,
     }
@@ -356,6 +385,11 @@ mod tests {
                     NonZeroU32::MIN,
                     NonZeroUsize::MAX,
                 )?,
+                mode: PresentationMode::AspectFit,
+                resize_outcome: Ok(true),
+                resizes: Vec::new(),
+                surface: None,
+                surface_queries: Cell::new(0),
                 uploads: Vec::new(),
                 waits: Vec::new(),
             })
@@ -365,16 +399,10 @@ mod tests {
     impl SceneBackend for TestScene {
         fn apply_display_settings(
             &mut self,
-            _settings: DisplaySettings,
+            settings: DisplaySettings,
         ) -> Result<(), RenderError> {
+            self.mode = settings.presentation;
             Ok(())
-        }
-
-        fn fit_adaptive_width(
-            &mut self,
-            _maximum: FrameLayout,
-        ) -> Result<FrameLayout, RenderError> {
-            Ok(self.layout)
         }
 
         fn last_presented_layout(&self) -> Option<PresentationLayout> {
@@ -413,8 +441,31 @@ mod tests {
             Ok(false)
         }
 
+        fn presentation_mode(&self) -> PresentationMode {
+            self.mode
+        }
+
         fn readback(&mut self) -> Result<Vec<u8>, RenderError> {
             Ok(Vec::new())
+        }
+
+        fn resize_target(
+            &mut self,
+            layout: FrameLayout,
+        ) -> Result<(), RenderError> {
+            self.resizes.push(layout);
+            if self.resize_outcome.clone()? {
+                self.layout = layout;
+            }
+            Ok(())
+        }
+
+        fn surface_dimensions(
+            &self,
+        ) -> Result<Option<Dimensions>, RenderError> {
+            self.surface_queries
+                .set(self.surface_queries.get().saturating_add(1));
+            Ok(self.surface)
         }
 
         fn visible_layout(
@@ -433,11 +484,84 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_session_admits_extent_and_restores_base()
+    -> Result<(), RenderError> {
+        let width = NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN);
+        let height = NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN);
+        let base = FrameLayout::new(height, height, NonZeroUsize::MAX)?;
+        let maximum = FrameLayout::new(width, height, NonZeroUsize::MAX)?;
+        let short =
+            FrameLayout::new(NonZeroU32::MIN, height, NonZeroUsize::MAX)?;
+        let wrong_height =
+            FrameLayout::new(width, NonZeroU32::MIN, NonZeroUsize::MAX)?;
+        let mut backend = TestScene::new(0)?;
+        backend.layout = base;
+        backend.surface = Some(Dimensions::new(width, height));
+        backend.mode = PresentationMode::Adaptive;
+        {
+            let mut scene = SceneSession::new(&mut backend, base, limits())?;
+            for invalid in [short, wrong_height] {
+                check(
+                    &scene.fit_adaptive_width(invalid),
+                    &Err(RenderError::InvalidDimensions),
+                )?;
+            }
+            check(&scene.fit_adaptive_width(base), &Ok(base))?;
+            check(&scene.fit_adaptive_width(maximum), &Ok(maximum))?;
+            check(&scene.fit_adaptive_width(maximum), &Ok(maximum))?;
+            scene.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::AspectFit,
+                ..DisplaySettings::default()
+            })?;
+            check(&scene.fit_adaptive_width(maximum), &Ok(base))?;
+            check(&scene.layout(), &base)?;
+        }
+        check(&backend.surface_queries.get(), &2)?;
+        check(&backend.resizes, &[maximum, base])?;
+        Ok(())
+    }
+
+    #[test]
+    fn adaptive_session_rejects_inconsistent_backend_extent()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        let base = backend.layout;
+        let maximum = FrameLayout::new(
+            NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
+            base.height(),
+            NonZeroUsize::MAX,
+        )?;
+        check(
+            &SceneSession::new(&mut backend, maximum, limits()).err(),
+            &Some(RenderError::InvalidDimensions),
+        )?;
+        for (outcome, expected) in [
+            (Ok(false), RenderError::InvalidDimensions),
+            (Err(RenderError::Unsupported), RenderError::Unsupported),
+        ] {
+            backend.mode = PresentationMode::Adaptive;
+            backend.surface =
+                Some(Dimensions::new(maximum.width(), maximum.height()));
+            backend.resize_outcome = outcome;
+            {
+                let mut scene =
+                    SceneSession::new(&mut backend, base, limits())?;
+                check(&scene.fit_adaptive_width(maximum), &Err(expected))?;
+                check(&scene.layout(), &base)?;
+            }
+        }
+        backend.resize_outcome = Ok(true);
+        let mut scene = SceneSession::new(&mut backend, base, limits())?;
+        check(&scene.fit_adaptive_width(maximum), &Ok(maximum))?;
+        Ok(())
+    }
+
+    #[test]
     fn atlas_and_draw_admission_precedes_dispatch() -> Result<(), RenderError> {
         let mut backend = TestScene::new(0)?;
         backend.fail_upload = true;
         let layout = backend.layout;
-        let mut scene = SceneSession::new(&mut backend, limits());
+        let mut scene = SceneSession::new(&mut backend, layout, limits())?;
         check(
             &scene.load_atlas(layout, &[0; 3]),
             &Err(RenderError::InvalidLength),
@@ -493,7 +617,8 @@ mod tests {
         let mut backend = TestScene::new(5)?;
         let mut delivered = Vec::new();
         let budget = NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN);
-        let mut scene = SceneSession::new(&mut backend, limits());
+        let base = backend.layout;
+        let mut scene = SceneSession::new(&mut backend, base, limits())?;
         for (expected, count) in [
             (EventBatch::Limited, 2),
             (EventBatch::Limited, 4),
@@ -523,7 +648,8 @@ mod tests {
     -> Result<(), RenderError> {
         let mut backend = TestScene::new(3)?;
         let budget = NonZeroUsize::new(3).unwrap_or(NonZeroUsize::MIN);
-        let mut scene = SceneSession::new(&mut backend, limits());
+        let base = backend.layout;
+        let mut scene = SceneSession::new(&mut backend, base, limits())?;
         check(
             &scene.dispatch_events(budget, 0, |_, _| Ok(false))?,
             &EventBatch::Stopped,
