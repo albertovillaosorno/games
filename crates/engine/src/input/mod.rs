@@ -106,6 +106,8 @@ pub enum InputEvent {
         /// Whether the button is pressed.
         down: bool,
     },
+    /// The host lost mouse focus without guaranteed button release events.
+    MouseCancelled,
     /// A configured title-specific touch zone changed state.
     Touch {
         /// Title-defined touch zone identifier.
@@ -391,6 +393,8 @@ impl<Action: Clone + Ord> InputRouter<Action> {
                 let mapping = self.mapping.mouse.get(&code).cloned();
                 self.transition(Source::Mouse(code), mapping, down)
             },
+            InputEvent::MouseCancelled => self
+                .release_range(Source::Mouse(u8::MIN)..=Source::Mouse(u8::MAX)),
             InputEvent::Touch { zone, down } => {
                 let mapping = self.mapping.touch.get(&zone).cloned();
                 self.transition(Source::Touch(zone), mapping, down)
@@ -797,6 +801,39 @@ mod tests {
             ),
             (InputEvent::FocusLost, &[]),
             (InputEvent::Detached { device: 5 }, &[change("jump", false)]),
+        ])
+    }
+
+    #[test]
+    fn mouse_cancellation_preserves_nonmouse_holds() -> Result<(), &'static str>
+    {
+        let mut map = InputMapping::new();
+        map.bind_mouse(1, "shared");
+        map.bind_mouse(2, "mouse");
+        map.bind_key(42, "shared");
+        map.bind_button(7, "controller");
+        map.bind_touch(1, "touch");
+        let mut router = InputRouter::new(map);
+        let mouse = |code, down| InputEvent::Mouse { code, down };
+        let key = |down| InputEvent::Key { code: 42, down };
+        let button = |down| InputEvent::Button { device: 5, code: 7, down };
+        let touch = |down| InputEvent::Touch { zone: 1, down };
+        verify_steps(&mut router, &[
+            (mouse(1, true), &[change("shared", true)]),
+            (key(true), &[]),
+            (mouse(2, true), &[change("mouse", true)]),
+            (InputEvent::Attached { device: 5 }, &[]),
+            (button(true), &[change("controller", true)]),
+            (touch(true), &[change("touch", true)]),
+            (InputEvent::MouseCancelled, &[change("mouse", false)]),
+            (InputEvent::MouseCancelled, &[]),
+            (mouse(1, false), &[]),
+            (mouse(2, false), &[]),
+            (key(false), &[change("shared", false)]),
+            (button(false), &[change("controller", false)]),
+            (touch(false), &[change("touch", false)]),
+            (mouse(2, true), &[change("mouse", true)]),
+            (mouse(2, false), &[change("mouse", false)]),
         ])
     }
 

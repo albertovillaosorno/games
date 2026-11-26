@@ -522,6 +522,11 @@ fn route(event: &Event, window: u32) -> Option<HostEvent> {
         ) {
             return Some(HostEvent::Input(InputEvent::FocusLost));
         }
+        // Capture is not guaranteed across native SDL backends. A pointer
+        // leaving the window may never deliver its eventual button release.
+        if win_event == WindowEvent::Leave {
+            return Some(HostEvent::Input(InputEvent::MouseCancelled));
+        }
         if matches!(
             win_event,
             WindowEvent::Resized(..)
@@ -819,6 +824,26 @@ mod tests {
             y: 20i32,
         };
         assert_eq!(route(&released, 3), input(false));
+    }
+
+    #[test]
+    fn mouse_leave_cancels_only_the_owning_window() {
+        let leave = Event::Window {
+            timestamp: 0,
+            window_id: 2,
+            win_event: WindowEvent::Leave,
+        };
+        assert_eq!(route(&leave, 3), None);
+        assert_eq!(
+            route(&leave, 2),
+            Some(HostEvent::Input(InputEvent::MouseCancelled))
+        );
+        let enter = Event::Window {
+            timestamp: 1,
+            window_id: 2,
+            win_event: WindowEvent::Enter,
+        };
+        assert_eq!(route(&enter, 2), None);
     }
 
     #[test]

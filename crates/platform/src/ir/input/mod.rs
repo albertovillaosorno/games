@@ -506,9 +506,13 @@ mod tests {
         };
         let lost =
             InputTransition::Event(HostEvent::Input(InputEvent::FocusLost));
+        let mouse_cancelled = InputTransition::Event(HostEvent::Input(
+            InputEvent::MouseCancelled,
+        ));
         let quit = InputTransition::Event(HostEvent::Quit);
         check(&input.submit(command), &Ok(()))?;
         for (scope, transition, admitted) in [
+            (Some(7), mouse_cancelled, true),
             (Some(8), lost, true),
             (Some(7), lost, false),
             (Some(8), InputTransition::FocusGained, false),
@@ -581,6 +585,13 @@ mod tests {
         check(
             &session.translate(&sample(Some(Duration::from_millis(19)))),
             &None,
+        )?;
+        check(&session.translate(&sample(Some(clock))), &Some(contact))?;
+        let mouse_cancelled =
+            super::HostEvent::Input(super::InputEvent::MouseCancelled);
+        check(
+            &session.translate(&input_sample(20, mouse_cancelled, 0)),
+            &Some(mouse_cancelled),
         )?;
         check(&session.translate(&sample(Some(clock))), &Some(contact))?;
         check(&session.synchronize_touch(|| Ok(None))?, &Some(clock))?;

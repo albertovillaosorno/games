@@ -253,6 +253,7 @@ impl ControllerAdmission {
                 | InputEvent::FocusLost
                 | InputEvent::Key { .. }
                 | InputEvent::Mouse { .. }
+                | InputEvent::MouseCancelled
                 | InputEvent::TouchCancelled,
             )
             | HostEvent::Quit => Some(event),
