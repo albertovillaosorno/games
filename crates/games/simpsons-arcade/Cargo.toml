@@ -26,6 +26,7 @@ browser-audio-smoke = [
 ]
 browser-frame-smoke = ["dep:games-platform", "games-platform/interactive"]
 browser-input-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
+browser-preview = ["native-preview"]
 browser-scene-smoke = ["dep:games-platform", "games-platform/test-fixtures"]
 browser-storage-smoke = ["dep:games-platform"]
 browser-title-smoke = ["native-preview"]
@@ -90,3 +91,8 @@ required-features = ["browser-frame-smoke"]
 name = "simpsons-arcade-browser-title-smoke"
 path = "src/bin/browser-title-smoke.rs"
 required-features = ["browser-title-smoke"]
+
+[[bin]]
+name = "simpsons-arcade-browser-preview"
+path = "src/bin/browser-preview.rs"
+required-features = ["browser-preview"]

@@ -575,3 +575,38 @@ of JavaScript. This is a live title-runtime diagnostic with
 procedural canonical media; original-asset ingress, launch packaging,
 browser audio activation, durable preferences and physical
 acceleration remain open.
+
+The canonical memory snapshot now has a bounded directory ingress plan.
+It rejects ambiguous names, legacy layouts, duplicate identities and
+excessive inventory or byte budgets before payload reads. Exact selected
+file lengths and content digests are checked before memory admission.
+The browser adapter uses an explicit directory chooser and trusted
+selection or cancellation events; it reads only admitted files, one
+at a time, and removes the picker and its listeners on completion.
+Fresh validation 1795682969578186182-3660210 passed 1,904 aggregate
+unit and integration tests. No original content is packaged.
+
+The title memory preview now admits typed audio selections and reconciles
+asynchronous host playback requests. Firefox/Xvfb tests of de42e0a
+passed 76 delivered callbacks with no remaining canvas in both blocked
+and trusted-activation runs. Blocked autoplay queued no sources and
+closed its context. Trusted activation settled two resume and two
+suspend operations, submitted and ended 44 silent stereo 256-frame
+48 kHz buffers, balanced all 44 source listeners and connections,
+and closed the context. These are host API checks, not audible playback
+or hardware acceleration. Fresh validation 1795683451929288178-3846640
+and the commit hook passed.
+
+The browser title launcher reuses the native launch catalogue parser,
+selects pinned actor, enemy, pose, shadow, world and audio content
+from the explicitly chosen canonical directory, and rejects native-only
+settings paths, device selection and fullscreen. The initial launch
+uses windowed presentation and the local touch panel. The new binary
+is linked by the ordinary validation gate, which passed fresh in
+1795683732135125361-3892650. Binding with the locked wasm-bindgen CLI
+produced 968,216 bytes of Wasm and 44,812 bytes of JavaScript.
+Firefox under Xvfb delivered a real cancellation with one completion,
+no file reads or frames and no remaining picker or canvas. The initial
+folder-selection automation did not complete successfully; original
+asset-backed launch is not yet verified. Browser distribution packaging,
+persistent preferences and physical-device acceptance remain open.

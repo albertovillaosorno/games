@@ -119,29 +119,32 @@ impl AudioSelection {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(super) struct Assets {
+/// Host-independent launch fields, before resolving any selected paths.
+#[derive(Debug)]
+pub(super) struct Catalogue<'text> {
     pub(super) actors: [OsString; 4],
     pub(super) audio: Option<AudioSelection>,
-    pub(super) directory: OsString,
-    pub(super) enemy: Option<[OsString; 2]>,
-    pub(super) poses: Option<OsString>,
+    pub(super) audio_device: Option<String>,
+    pub(super) controls: Option<&'text str>,
+    pub(super) display: DisplaySettings,
+    pub(super) enemy: EnemyHashes,
+    pub(super) parent: &'text str,
+    pub(super) poses: Option<&'text str>,
+    pub(super) settings: Option<&'text str>,
     pub(super) shadow: Option<OsString>,
     pub(super) world: Option<OsString>,
 }
 
-impl Assets {
-    fn catalogue(path: &OsStr, text: &str) -> Result<ConfiguredAssets, String> {
+impl<'text> Catalogue<'text> {
+    pub(super) fn parse(text: &'text str) -> Result<Self, String> {
         if u64::try_from(text.len()).map_or(true, |len| len > MAX_BYTES.get()) {
             return Err(String::from("launch catalogue exceeds byte limit"));
         }
-        let base = parent_path(path)
-            .map_err(|error| format!("launch catalogue path: {error}"))?;
         let mut values = fields(text)?;
         if values.remove("version") != Some("1") {
             return Err(String::from("expected launch catalogue version=1"));
         }
-        let directory = resolve_local(base, required(&mut values, "parent")?)?;
+        let parent = required(&mut values, "parent")?;
         let actors = [
             hash(required(&mut values, "marge")?)?,
             hash(required(&mut values, "homer")?)?,
@@ -163,29 +166,70 @@ impl Assets {
         )?;
         let shadow = values.remove("shadow").map(hash).transpose()?;
         let world = values.remove("world").map(hash).transpose()?;
-        let poses = optional_catalogue_path(base, &mut values, "poses")?;
-        let controls = optional_catalogue_path(base, &mut values, "controls")?;
-        let settings = optional_catalogue_path(base, &mut values, "settings")?;
+        let poses = values.remove("poses");
+        let controls = values.remove("controls");
+        let settings = values.remove("settings");
         let display = DisplaySettings::default()
             .configured(values.remove("display"), values.remove("window"))?;
         if !values.is_empty() {
             return Err(String::from("unknown launch catalogue field"));
         }
+        Ok(Self {
+            actors,
+            audio,
+            audio_device,
+            controls,
+            display,
+            enemy,
+            parent,
+            poses,
+            settings,
+            shadow,
+            world,
+        })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct Assets {
+    pub(super) actors: [OsString; 4],
+    pub(super) audio: Option<AudioSelection>,
+    pub(super) directory: OsString,
+    pub(super) enemy: Option<[OsString; 2]>,
+    pub(super) poses: Option<OsString>,
+    pub(super) shadow: Option<OsString>,
+    pub(super) world: Option<OsString>,
+}
+
+impl Assets {
+    fn catalogue(path: &OsStr, text: &str) -> Result<ConfiguredAssets, String> {
+        let fields = Catalogue::parse(text)?;
+        let base = parent_path(path)
+            .map_err(|error| format!("launch catalogue path: {error}"))?;
         Ok((
             Self {
-                actors,
-                audio,
-                directory,
-                enemy,
-                poses,
-                shadow,
-                world,
+                actors: fields.actors,
+                audio: fields.audio,
+                directory: resolve_local(base, fields.parent)?,
+                enemy: fields.enemy,
+                poses: fields
+                    .poses
+                    .map(|value| resolve_local(base, value))
+                    .transpose()?,
+                shadow: fields.shadow,
+                world: fields.world,
             },
-            display,
+            fields.display,
             LocalPaths {
-                audio_device,
-                controls,
-                settings,
+                audio_device: fields.audio_device,
+                controls: fields
+                    .controls
+                    .map(|value| resolve_local(base, value))
+                    .transpose()?,
+                settings: fields
+                    .settings
+                    .map(|value| resolve_local(base, value))
+                    .transpose()?,
             },
         ))
     }

@@ -33,6 +33,8 @@
 
 mod audio;
 mod axis_smoke;
+/// Local canonical directory browser launch.
+pub mod browser_preview;
 mod controller;
 mod encounter;
 mod lan;
