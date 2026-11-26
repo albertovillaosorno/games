@@ -259,9 +259,6 @@ fn consumer_source(source: &str) -> Result<(), String> {
 
 /// Guard new canonical hardware modules and explicit backend imports.
 ///
-/// Existing legacy public platform modules are transitional and remain
-/// covered by the migration task and existing portability inventory.
-///
 /// # Errors
 /// Reports forbidden host operations or concrete backend imports.
 pub(crate) fn validate(
@@ -273,9 +270,6 @@ pub(crate) fn validate(
             continue;
         }
         let name = path.to_string_lossy().replace('\\', "/");
-        if name.starts_with("tools/validator/") {
-            continue;
-        }
         let source = files::read_text(root, path)?;
         let result = if name.starts_with("crates/platform/src/hardware/") {
             device_source(&source)
@@ -300,10 +294,47 @@ pub(crate) fn validate(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::{
         capability_source, consumer_source, device_source, external_members,
-        import_boundary, public_root, vendor_free,
+        import_boundary, public_root, validate, vendor_free,
     };
+    use crate::fixtures::{directory, require};
+
+    #[test]
+    fn validator_sources_obey_consumer_contracts() -> Result<(), String> {
+        let root = directory()?;
+        root.create_directories("tools/validator/src")
+            .map_err(|error| error.to_string())?;
+        let name = "tools/validator/src/fixture.rs";
+        let authored = [OsString::from(name)];
+        root.write_file(
+            name,
+            b"use games_platform::ir::storage::file::snapshot;",
+        )
+        .map_err(|error| error.to_string())?;
+        validate(root.location(), &authored)?;
+        for (source, diagnostic) in [
+            (
+                "use games_platform::software::linux;",
+                "consumer must import",
+            ),
+            (
+                "use games_importer::mame::Machine;",
+                "production conversion",
+            ),
+        ] {
+            root.write_file(name, source.as_bytes())
+                .map_err(|error| error.to_string())?;
+            let failure = validate(root.location(), &authored)
+                .err()
+                .ok_or("accepted forbidden validator import")?;
+            require(failure.contains(name), "missing validator path")?;
+            require(failure.contains(diagnostic), diagnostic)?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn production_conversion_requires_import_ir() {

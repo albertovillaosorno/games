@@ -124,6 +124,10 @@ fn compile_time_host_macro(member: &str) -> Option<&'static str> {
     }
 }
 
+fn host_output_macro(member: &str) -> bool {
+    matches!(member, "print" | "println" | "eprint" | "eprintln" | "dbg")
+}
+
 fn inspect_branch(tokens: &[TokenTree], scope: Scope, findings: &mut Findings) {
     let Some(head) = tokens.first() else {
         return;
@@ -196,6 +200,7 @@ fn inspect_standard(
         "process" => "std::process",
         "self" => Scope::Standard.diagnostic(),
         "thread" => "std::thread",
+        _ if host_output_macro(member) => "host output macro",
         "io" | "time" => {
             let scope = if member == "io" {
                 Scope::Io
@@ -322,8 +327,8 @@ fn inspect(
                     let _previous = findings.insert(scope.diagnostic());
                 }
             },
-            "print" | "println" | "eprint" | "eprintln" | "dbg"
-                if punct(suffix.get(1), '!') =>
+            member
+                if host_output_macro(member) && punct(suffix.get(1), '!') =>
             {
                 let _previous = findings.insert("host output macro");
             },
@@ -471,6 +476,12 @@ mod tests {
             ),
             ("fn run() { std::io::stdout(); }", Scope::Io.diagnostic()),
             ("fn run() { println!(\"x\"); }", "host output macro"),
+            ("use std::println as output;", "host output macro"),
+            (
+                "pub use ::std::{dbg as trace, eprint};",
+                "host output macro",
+            ),
+            ("use std::r#print;", "host output macro"),
             ("use std::r#process;", "std::process"),
             ("use core::arch::x86_64;", "core::arch"),
             ("use core::{arch as intrinsics};", "core::arch"),

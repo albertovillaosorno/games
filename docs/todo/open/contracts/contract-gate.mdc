@@ -413,3 +413,13 @@ Fresh validation 1795651989805946864-1503289 passed the signed hook,
 Source admission is not compiler-grade name resolution, and passing
 library checks does not demonstrate physical device or native runtime
 conformance on other platforms. The remaining P1 dependencies stay open.
+
+The unified consumer and conversion gate now covers validator sources
+rather than exempting its whole directory. An isolated contributor
+fixture admits a neutral storage reference and rejects concrete platform
+and decoder references. Standard-library host source checks also cover
+directly imported output macros, including grouped and aliased imports.
+The vendor-token policy retains its existing title and engine scope.
+This is not full Rust name resolution or macro expansion. Fresh native
+X11 and dummy audio validation 1795652720063938322-1773839 passed
+1,514 aggregate test executions and six portable core checks.
