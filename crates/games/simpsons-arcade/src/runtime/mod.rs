@@ -964,10 +964,12 @@ struct Interactive<'preferences> {
     measurement: Option<measurement::LiveMeasurement>,
     next_profiles: Profiles,
     preferences: Option<&'preferences DisplayStore>,
+    presented: Option<HostedCabinet>,
     previous: Duration,
     requested: DisplaySettings,
     reset_persisted: bool,
     simulation: LiveSimulation<HostedCabinet>,
+    stopped: bool,
     volume: MasterVolume,
     volume_store: Option<&'preferences VolumeStore>,
 }
@@ -1112,10 +1114,12 @@ impl<'preferences> Interactive<'preferences> {
                 .then(measurement::LiveMeasurement::default),
             next_profiles: options.controls.profiles,
             preferences: options.preferences,
+            presented: None,
             previous: Duration::ZERO,
             requested: cabinet.session().display(),
             reset_persisted: false,
             simulation,
+            stopped: false,
             volume: cabinet.session().volume(),
             volume_store: options.volume_store,
         })
@@ -1243,63 +1247,80 @@ impl<'preferences> Interactive<'preferences> {
         if let Some(audio) = &mut playback {
             audio.enable_output();
         }
-        let mut presented = None;
-        while self.simulation.state().state().phase() != Phase::Exited {
-            let started = self
-                .measurement
-                .as_ref()
-                .map(|_| now())
-                .transpose()
-                .map_err(failure)?;
+        loop {
             let wait_ms = presentation_wait(
                 self.simulation.state(),
                 scene.last_presented_layout().is_some(),
             );
-            let batch = self.poll(scene, wait_ms)?;
-            if batch == EventBatch::Stopped {
+            if !self.step(scene, (art, playback.as_deref_mut()), wait_ms)? {
                 break;
-            }
-            self.poll_host()?;
-            let delta = self.next_delta()?;
-            let old_phase = self.simulation.state().state().phase();
-            let advanced = self.simulation.advance(delta).map_err(failure)?;
-            self.advance_measurement(advanced.next_tick)?;
-            let session = self.simulation.state().state().session();
-            if old_phase != Phase::Controls
-                && session.phase() == Phase::Controls
-            {
-                self.editor = ControlEditor::default();
-            }
-            let desired = session.effective_display();
-            if desired != self.applied {
-                scene.apply_display_settings(desired)?;
-                self.applied = desired;
-            }
-            self.persist_preferences(session)?;
-            let hosted = self.simulation.state();
-            let cabinet = hosted.state();
-            art.hud.update_connections(hosted.connected_remotes());
-            if let Some(audio) = &mut playback {
-                audio.update(cabinet)?;
-            }
-            if frame_due(hosted, presented.as_ref(), batch)
-                || !scene.presentation_is_current()?
-            {
-                let drawn = art.present_with_editor(
-                    scene,
-                    cabinet,
-                    Some((self.editor, &self.next_profiles)),
-                )?;
-                presented = (drawn && cabinet.phase() != Phase::Playing)
-                    .then_some(*hosted);
-                let submitted =
-                    scene.last_presented_layout().filter(|_layout| drawn);
-                self.measure_presented(started, submitted)?;
             }
         }
         self.measurement
             .as_mut()
             .map_or(Ok(()), measurement::LiveMeasurement::finish)
+    }
+
+    /// Advance at most one event batch and one presentation. A caller that
+    /// yields to its host between steps can select zero event wait.
+    fn step(
+        &mut self,
+        scene: &mut SceneSession<'_, '_>,
+        (art, playback): (&mut Scene, Option<&mut audio::Playback<'_>>),
+        wait_ms: u32,
+    ) -> Result<bool, RenderError> {
+        if self.stopped
+            || self.simulation.state().state().phase() == Phase::Exited
+        {
+            return Ok(false);
+        }
+        let started = self
+            .measurement
+            .as_ref()
+            .map(|_| now())
+            .transpose()
+            .map_err(failure)?;
+        let batch = self.poll(scene, wait_ms)?;
+        if batch == EventBatch::Stopped {
+            self.stopped = true;
+            return Ok(false);
+        }
+        self.poll_host()?;
+        let delta = self.next_delta()?;
+        let old_phase = self.simulation.state().state().phase();
+        let advanced = self.simulation.advance(delta).map_err(failure)?;
+        self.advance_measurement(advanced.next_tick)?;
+        let session = self.simulation.state().state().session();
+        if old_phase != Phase::Controls && session.phase() == Phase::Controls {
+            self.editor = ControlEditor::default();
+        }
+        let desired = session.effective_display();
+        if desired != self.applied {
+            scene.apply_display_settings(desired)?;
+            self.applied = desired;
+        }
+        self.persist_preferences(session)?;
+        let hosted = self.simulation.state();
+        let cabinet = hosted.state();
+        art.hud.update_connections(hosted.connected_remotes());
+        if let Some(audio) = playback {
+            audio.update(cabinet)?;
+        }
+        if frame_due(hosted, self.presented.as_ref(), batch)
+            || !scene.presentation_is_current()?
+        {
+            let drawn = art.present_with_editor(
+                scene,
+                cabinet,
+                Some((self.editor, &self.next_profiles)),
+            )?;
+            self.presented =
+                (drawn && cabinet.phase() != Phase::Playing).then_some(*hosted);
+            let submitted =
+                scene.last_presented_layout().filter(|_layout| drawn);
+            self.measure_presented(started, submitted)?;
+        }
+        Ok(session.phase() != Phase::Exited)
     }
 }
 

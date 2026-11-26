@@ -204,3 +204,24 @@ profile with Firefox's dom.storage.enabled preference set to false
 returned no local storage object, and the diagnostic returned failure.
 All six acceptance indicators were green. The injected exception tests
 do not measure a real browser quota or establish crash durability.
+
+The native title now executes its existing interactive loop as a sequence
+of bounded steps. Each step drains at most one admitted event batch,
+advances the same fixed-step simulation, updates preferences and audio,
+and submits at most one frame. The last static presentation survives
+between calls, quit remains terminal, and the caller selects the event
+wait. Native idle waiting and uncapped gameplay remain unchanged.
+This is a preparation for callback-driven hosts, not an asynchronous
+scene lifetime or a browser runtime.
+
+Fresh validation passed 1,870 aggregate test executions. Two visible
+Xvfb/X11 OpenGL runs of the rebuilt 3,589,328-byte release used the
+configured external asset catalogue and disposable settings. One
+entered all four seats, resized a Fill/touch scene from 960x912 to
+900x600 and 520x760, and exited through the pause menu. Of 2,799
+submitted gameplay frames, one exceeded the 16.667 ms host-work
+budget (19.768 ms). The other paused, resumed and exited through the
+window manager close request, submitting 1,024 gameplay frames
+without a work-budget miss. These runs used injected keyboard input
+and dummy audio. The browser still needs resident scene resources,
+host event scheduling, rendering and input adapters.
