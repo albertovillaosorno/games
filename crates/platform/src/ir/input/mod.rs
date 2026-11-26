@@ -32,6 +32,7 @@
 //! Host-neutral input sessions and keyboard profile names.
 
 use std::fmt::{self, Debug, Formatter};
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use games::input::physical::KeyboardKey;
@@ -44,6 +45,7 @@ use super::hardware::{
     InputSample, InputTransition,
 };
 use super::security::haptics::FeedbackRequest;
+use super::security::input::ControllerAdmission;
 
 pub(crate) type InputPort = Box<dyn InputBackend>;
 
@@ -78,12 +80,17 @@ pub struct InputStartup {
 }
 
 impl InputStartup {
-    pub(crate) fn new(mut backend: InputPort) -> Result<Self, RenderError> {
-        let attached = backend.discover_available()?;
+    pub(crate) fn new(
+        mut backend: InputPort,
+        limit: NonZeroUsize,
+    ) -> Result<Self, RenderError> {
+        let mut controllers = ControllerAdmission::new(limit);
+        let attached = controllers.admit(backend.discover_available()?)?;
         Ok(Self {
             attached,
             input: NativeInput {
                 backend,
+                controllers,
                 touch_enabled: false,
                 touch_geometry: TouchGeometry::default(),
             },
@@ -94,6 +101,7 @@ impl InputStartup {
 /// An input capability with private native device ownership.
 pub struct NativeInput {
     backend: InputPort,
+    controllers: ControllerAdmission,
     touch_enabled: bool,
     touch_geometry: TouchGeometry,
 }
@@ -114,7 +122,7 @@ impl NativeInput {
     pub fn discover_after_drain(
         &mut self,
     ) -> Result<Vec<InputEvent>, RenderError> {
-        self.backend.discover_after_drain()
+        self.controllers.admit(self.backend.discover_after_drain()?)
     }
 
     /// Discover available controllers in adapter discovery order.
@@ -124,7 +132,7 @@ impl NativeInput {
     pub fn discover_available(
         &mut self,
     ) -> Result<Vec<InputEvent>, RenderError> {
-        self.backend.discover_available()
+        self.controllers.admit(self.backend.discover_available()?)
     }
 
     /// Monotonic elapsed time since input startup.
@@ -184,7 +192,7 @@ impl NativeInput {
         {
             return None;
         }
-        self.backend.translate(event)
+        self.controllers.route(self.backend.translate(event)?)
     }
 }
 
@@ -192,13 +200,16 @@ impl Haptics for NativeInput {
     fn submit(&mut self, command: HapticCommand) -> Result<(), HapticError> {
         let request = FeedbackRequest::new(
             command,
-            self.backend.feedback_support(command.device),
+            self.support(command.device),
             self.backend.feedback_allowed(),
         )?;
         self.backend.submit_feedback(request)
     }
 
     fn support(&self, device: u64) -> Option<HapticSupport> {
+        if !self.controllers.contains(device) {
+            return None;
+        }
         self.backend.feedback_support(device)
     }
 }
@@ -245,7 +256,8 @@ pub fn key_name(key: KeyboardKey) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::num::{NonZeroU16, NonZeroU32};
+    use std::mem;
+    use std::num::{NonZeroU16, NonZeroU32, NonZeroUsize};
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -256,7 +268,9 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct TestInput {
+        after_drain: Vec<super::InputEvent>,
         allowed: Rc<Cell<bool>>,
+        attachments: Vec<super::InputEvent>,
         elapsed: Duration,
         feedback: Rc<Cell<Option<super::HapticCommand>>>,
     }
@@ -265,13 +279,13 @@ mod tests {
         fn discover_after_drain(
             &mut self,
         ) -> Result<Vec<super::InputEvent>, super::RenderError> {
-            Ok(Vec::new())
+            Ok(mem::take(&mut self.after_drain))
         }
 
         fn discover_available(
             &mut self,
         ) -> Result<Vec<super::InputEvent>, super::RenderError> {
-            Ok(Vec::new())
+            Ok(mem::take(&mut self.attachments))
         }
 
         fn elapsed(&self) -> Duration {
@@ -318,10 +332,16 @@ mod tests {
             &mut self,
             event: &super::InputSample,
         ) -> Option<super::HostEvent> {
-            if let super::InputTransition::Event(routed) = event.transition() {
-                Some(routed)
-            } else {
-                None
+            match event.transition() {
+                super::InputTransition::Event(routed) => Some(routed),
+                super::InputTransition::Disconnected(device) => {
+                    Some(super::HostEvent::Input(super::InputEvent::Detached {
+                        device,
+                    }))
+                },
+                super::InputTransition::DiscoveryHint
+                | super::InputTransition::FocusGained
+                | super::InputTransition::Ignored => None,
             }
         }
     }
@@ -333,10 +353,19 @@ mod tests {
 
         use super::{HapticCommand, HapticError, Haptics as _};
 
-        let backend = TestInput::default();
+        let backend = TestInput {
+            attachments: (1..=4)
+                .map(|device| super::InputEvent::Attached { device })
+                .collect(),
+            ..TestInput::default()
+        };
         let feedback = Rc::clone(&backend.feedback);
         let allowed = Rc::clone(&backend.allowed);
-        let mut input = super::InputStartup::new(Box::new(backend))?.input;
+        let mut input = super::InputStartup::new(
+            Box::new(backend),
+            NonZeroUsize::new(4).unwrap_or(NonZeroUsize::MIN),
+        )?
+        .input;
         let effect = HapticEffect::Rumble {
             low: 7,
             high: u16::MAX,
@@ -380,10 +409,13 @@ mod tests {
         use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 
         let clock = Duration::from_millis(20);
-        let mut session = super::InputStartup::new(Box::new(TestInput {
-            elapsed: clock,
-            ..TestInput::default()
-        }))?
+        let mut session = super::InputStartup::new(
+            Box::new(TestInput {
+                elapsed: clock,
+                ..TestInput::default()
+            }),
+            NonZeroUsize::MIN,
+        )?
         .input;
         let contact = super::HostEvent::Input(super::InputEvent::Contact {
             id: ContactId { device: 1, finger: 1 },
@@ -421,6 +453,69 @@ mod tests {
         check(&session.translate(&sample(None)), &None)?;
         check(&session.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
         check(&session.translate(&sample(Some(clock))), &Some(contact))?;
+        Ok(())
+    }
+
+    #[test]
+    fn controller_routes_and_feedback_require_discovered_identity()
+    -> Result<(), super::RenderError> {
+        use super::{
+            Haptics as _, HostEvent, InputEvent, InputSample, InputTransition,
+        };
+
+        let attachment = |device| InputEvent::Attached { device };
+        let button = |device| {
+            HostEvent::Input(InputEvent::Button {
+                device,
+                code: 1,
+                down: true,
+            })
+        };
+        let sample = |transition| InputSample::new(None, transition, None);
+        let mut startup = super::InputStartup::new(
+            Box::new(TestInput {
+                after_drain: vec![attachment(2)],
+                attachments: vec![attachment(1)],
+                ..TestInput::default()
+            }),
+            NonZeroUsize::MIN,
+        )?;
+        check(&startup.attached, &vec![attachment(1)])?;
+        let input = &mut startup.input;
+        check(
+            &input.translate(&sample(InputTransition::Event(button(1)))),
+            &Some(button(1)),
+        )?;
+        check(
+            &input.translate(&sample(InputTransition::Event(button(2)))),
+            &None,
+        )?;
+        check(&input.support(2), &None)?;
+        check(
+            &input.translate(&sample(InputTransition::Event(
+                HostEvent::Input(attachment(2)),
+            ))),
+            &None,
+        )?;
+        check(
+            &input.translate(&sample(InputTransition::Disconnected(1))),
+            &Some(HostEvent::Input(InputEvent::Detached { device: 1 })),
+        )?;
+        check(
+            &input.translate(&sample(InputTransition::Disconnected(1))),
+            &None,
+        )?;
+        check(
+            &input.translate(&sample(InputTransition::Event(button(1)))),
+            &None,
+        )?;
+        check(&input.support(1), &None)?;
+        check(&input.discover_after_drain()?, &vec![attachment(2)])?;
+        check(
+            &input.translate(&sample(InputTransition::Event(button(2)))),
+            &Some(button(2)),
+        )?;
+        check(&input.support(2), &Some(super::HapticSupport::DualMotor))?;
         Ok(())
     }
 

@@ -114,7 +114,7 @@ impl NativeWindow {
         &self,
         limit: NonZeroUsize,
     ) -> Result<InputStartup, RenderError> {
-        InputStartup::new(self.backend.input(limit)?)
+        InputStartup::new(self.backend.input(limit)?, limit)
     }
 
     /// Open a resizable, accelerated window, optionally hidden for diagnostics.

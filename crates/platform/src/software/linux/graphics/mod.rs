@@ -745,7 +745,7 @@ mod tests {
         let timer = window.sdl.timer().map_err(RenderError::Backend)?;
         let window_id = window.canvas.window().id();
         let mut touch_input =
-            InputStartup::new(window.input(budget(1))?)?.input;
+            InputStartup::new(window.input(budget(1))?, budget(1))?.input;
         touch_input.enable_touch();
         window.with_scene(extent()?, &mut |backend| {
             let mut scene =
@@ -1048,7 +1048,8 @@ mod tests {
     }
 
     fn verify_native_input(window: &LinuxWindow) -> Result<(), RenderError> {
-        let mut startup = InputStartup::new(window.input(budget(4))?)?;
+        let mut startup =
+            InputStartup::new(window.input(budget(4))?, budget(4))?;
         require(startup.attached.len() <= 4, "controller limit exceeded")?;
         require(
             startup

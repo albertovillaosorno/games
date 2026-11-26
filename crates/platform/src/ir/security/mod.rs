@@ -39,6 +39,8 @@ pub mod file;
 pub mod frame;
 /// Portable feedback capability and permission admission.
 pub mod haptics;
+/// Bounded controller identity admission.
+pub mod input;
 /// Local-network transport admission.
 pub mod lan;
 /// Versioned portable preference admission and encoding.
