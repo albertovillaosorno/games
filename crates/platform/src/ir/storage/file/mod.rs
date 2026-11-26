@@ -15,7 +15,7 @@
 // - Allows:
 //   - Inputs: Explicit path values and nonzero byte budgets.
 //   - Outputs: Bounded ordinary or zeroizing secret bytes, typed failures.
-//   - Side effects: Explicit dispatch and caller-supplied stream reads.
+//   - Side effects: Explicit dispatch only.
 // - Split-When:
 //   - A different storage operation needs independent admission.
 // - Merge-When:
@@ -32,13 +32,14 @@
 //! Portable bounded local file snapshots.
 
 use std::ffi::OsStr;
-use std::io::{ErrorKind, Read};
+#[cfg(test)]
+use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
 use zeroize::Zeroizing;
 
 pub use crate::ir::security::file::FileReadError;
-use crate::ir::security::file::{admit_size, allocation_length};
+use crate::ir::security::file::admit_length;
 
 /// Owned credential bytes with zeroizing drop and redacted debug output.
 pub type SecretSnapshot = Zeroizing<Vec<u8>>;
@@ -53,36 +54,6 @@ pub(crate) trait SnapshotBackend {
         path: &OsStr,
         maximum: NonZeroU64,
     ) -> Result<SecretSnapshot, FileReadError>;
-}
-
-fn admit_length(
-    length: usize,
-    maximum: NonZeroU64,
-) -> Result<(), FileReadError> {
-    let observed =
-        u64::try_from(length).map_err(|_error| FileReadError::TooLarge)?;
-    admit_size(observed, maximum.get())
-}
-
-/// Read exactly the independently admitted length without excess allocation.
-/// The one-byte overrun probe is zeroized for private snapshots as well.
-pub(crate) fn read_exact_snapshot(
-    input: &mut dyn Read,
-    size: u64,
-    bytes: &mut Vec<u8>,
-) -> Result<(), FileReadError> {
-    let length = allocation_length(size)?;
-    bytes
-        .try_reserve_exact(length)
-        .map_err(|_error| FileReadError::TooLarge)?;
-    bytes.resize(length, 0);
-    input.read_exact(bytes)?;
-    let mut extra = Zeroizing::new([0u8; 1]);
-    match input.read_exact(&mut *extra) {
-        Ok(()) => Err(FileReadError::TooLarge),
-        Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }
 
 /// Read an explicitly selected bounded regular-file snapshot.

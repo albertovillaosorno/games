@@ -504,3 +504,12 @@ failed and consumed entries, retaining all existing namespace and budget
 checks. Fresh Xvfb/X11 and dummy-audio validation
 1795657484423431822-3063812 passed 1,636 aggregate test executions and
 all six portable core checks.
+
+Bounded ordinary and secret snapshot result checks, exact stream length
+verification and unique directory-entry admission now share the file
+security owner. Native pinned reads and verified save decoding reuse the
+same exact stream policy. Portable regression cases cover empty, exact,
+truncated and extended streams and rejection of an unrepresentable byte
+count before reading. Fresh Xvfb/X11 and dummy-audio validation
+1795657605997045370-3086687 passed 1,638 aggregate test executions and
+all six portable core checks.

@@ -43,8 +43,8 @@ use zeroize::Zeroizing;
 
 /// Admission failure shared by the portable facade and native readers.
 pub(super) use crate::ir::security::file::FileReadError;
-use crate::ir::security::file::admit_size;
-use crate::ir::storage::file::{SecretSnapshot, read_exact_snapshot};
+use crate::ir::security::file::{admit_size, read_exact_snapshot};
+use crate::ir::storage::file::SecretSnapshot;
 
 pub(super) const DIRECTORY_FLAGS: OFlag = OFlag::O_RDONLY
     .union(OFlag::O_DIRECTORY)

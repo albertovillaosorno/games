@@ -47,8 +47,10 @@ pub mod save;
 pub mod staging;
 
 use std::ffi::{OsStr, OsString};
-use std::io::{ErrorKind, Result as IoResult};
+use std::io::Result as IoResult;
 use std::num::NonZeroUsize;
+
+use crate::ir::security::file::admit_directory_entries;
 
 /// A direct entry in a bounded local directory observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,7 +141,7 @@ pub fn directory_entries(
 ) -> IoResult<Vec<DirectoryEntry>> {
     let mut entries =
         <() as PathObservation>::directory_entries(path, maximum)?;
-    admit_entries(&mut entries, maximum)?;
+    admit_directory_entries(&mut entries, maximum)?;
     Ok(entries)
 }
 
@@ -240,77 +242,4 @@ pub fn strip_path_prefix<'path>(
 /// Returns metadata or unavailable capability errors.
 pub fn path_kind(path: &OsStr) -> IoResult<PathKind> {
     <() as PathObservation>::path_kind(path)
-}
-
-fn admit_entries(
-    entries: &mut [DirectoryEntry],
-    maximum: NonZeroUsize,
-) -> IoResult<()> {
-    if entries.len() > maximum.get()
-        || entries.iter().any(|entry| {
-            let name = entry.name.as_encoded_bytes();
-            entry.kind == PathKind::Missing
-                || matches!(name, b"" | b"." | b"..")
-                || name.iter().any(|byte| matches!(byte, b'/' | b'\\' | 0))
-        })
-    {
-        return Err(ErrorKind::InvalidData.into());
-    }
-    entries.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-    if entries
-        .iter()
-        .zip(entries.iter().skip(1))
-        .any(|(left, right)| left.name == right.name)
-    {
-        return Err(ErrorKind::InvalidData.into());
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::slice::from_mut;
-
-    use super::*;
-
-    #[test]
-    fn directory_admission_rejects_invalid_names_and_counts() {
-        let mut valid = DirectoryEntry {
-            kind: PathKind::RegularFile,
-            name: OsString::from("file"),
-        };
-        let maximum = NonZeroUsize::MIN;
-        assert!(admit_entries(from_mut(&mut valid), maximum).is_ok());
-        assert!(
-            admit_entries(&mut [valid.clone(), valid.clone()], maximum)
-                .is_err()
-        );
-        let two = maximum.saturating_add(1);
-        let mut distinct = [
-            DirectoryEntry {
-                kind: PathKind::Directory,
-                name: OsString::from("z"),
-            },
-            valid.clone(),
-        ];
-        assert!(admit_entries(&mut distinct, two).is_ok());
-        assert_eq!(distinct.first(), Some(&valid));
-        let duplicate = DirectoryEntry {
-            kind: PathKind::Directory,
-            name: valid.name.clone(),
-        };
-        assert!(admit_entries(&mut [valid, duplicate], two).is_err());
-        for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
-            let entry = DirectoryEntry {
-                kind: PathKind::Directory,
-                name: OsString::from(name),
-            };
-            assert!(admit_entries(&mut [entry], maximum).is_err());
-        }
-        let missing = DirectoryEntry {
-            kind: PathKind::Missing,
-            name: OsString::from("missing"),
-        };
-        assert!(admit_entries(&mut [missing], maximum).is_err());
-    }
 }

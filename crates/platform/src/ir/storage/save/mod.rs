@@ -41,8 +41,8 @@ use games::safety::{
     save_envelope_limit, validate_save_header,
 };
 
-use super::file::{FileReadError, read_exact_snapshot};
-use crate::ir::security::file::admit_size;
+use super::file::FileReadError;
+use crate::ir::security::file::{admit_size, read_exact_snapshot};
 
 /// Save admission or pre-publication failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
