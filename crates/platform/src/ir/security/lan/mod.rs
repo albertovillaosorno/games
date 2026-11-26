@@ -34,6 +34,9 @@
 /// Incremental bounded framing over injected byte operations.
 pub mod framing;
 
+/// Initial host roster and endpoint admission.
+pub mod host;
+
 use core::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU64;
 use std::time::Duration;

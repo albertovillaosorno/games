@@ -715,3 +715,15 @@ Fresh X11/Xvfb rendering, dummy audio and workspace validation passed in
 run 1795652468098676558-1693998 (1,510 aggregate test executions and all
 six portable core targets). No larger physical LAN or device capacity is
 claimed; multi-device acceptance remains open.
+
+Host binding now requires a typed request admitted by shared IR security
+before dispatch. The request verifies private endpoints, LAN permission,
+nonzero deadlines, combined local and remote capacity, unique certificate
+and player identities, and distinct local seats. The resulting portable
+roster is transferred once to the native worker; native clock and queue
+limits remain adapter-owned. Pure tests exercise initial membership and
+all rejection classes without accessing sockets; the public facade rejects
+invalid requests even when authenticated transport is unavailable. The
+fresh native smoke and six portable core targets passed in run
+1795652914607528188-1822059. Physical multi-device LAN acceptance remains
+open.

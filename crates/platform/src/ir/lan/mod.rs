@@ -48,8 +48,9 @@ use games::network::{MessageSchema, SessionConfig};
 use sha2::{Digest as _, Sha256};
 
 use self::identity::IdentityPort;
-use self::pump::{HostInputConfig, PumpPort};
+use self::pump::PumpPort;
 pub use super::security::lan::framing::SendProgress;
+use super::security::lan::host::HostBindRequest;
 use super::security::lan::{LanAdmissionError, LanLimits, admit_endpoint};
 
 /// Whether the selected platform provides authenticated private transport.
@@ -62,6 +63,10 @@ pub struct LanConfig {
 }
 
 impl LanConfig {
+    pub(crate) const fn from_limits(limits: LanLimits) -> Self {
+        Self { limits }
+    }
+
     /// Admitted neutral wire limits.
     #[must_use]
     pub const fn limits(self) -> LanLimits {
@@ -74,9 +79,7 @@ impl LanConfig {
     /// Rejects disabled LAN, an unrepresentable frame budget or zero timeout.
     /// The backend verifies native deadline representability before I/O.
     pub fn new(session: SessionConfig, timeout: Duration) -> Result<Self> {
-        Ok(Self {
-            limits: LanLimits::new(session, timeout)?,
-        })
+        Ok(Self::from_limits(LanLimits::new(session, timeout)?))
     }
 }
 
@@ -144,7 +147,7 @@ pub(crate) trait LanAvailability {
 /// Private transport factory; concrete handles never leave the adapter.
 pub(crate) trait LanFactory {
     fn bind<Message, Codec>(
-        config: HostInputConfig<'_>,
+        config: HostBindRequest,
         tls: ServerTls,
         codec: Codec,
     ) -> Result<PumpPort<Message>>

@@ -44,11 +44,12 @@ use super::{
     ClientTls as NativeClient, SecureFrameStream, ServerTls as NativeServer,
 };
 use crate::ir::lan::identity::{IdentityBackend, IdentityPort, PublicIdentity};
-use crate::ir::lan::pump::{HostInputConfig, PumpPort};
+use crate::ir::lan::pump::PumpPort;
 use crate::ir::lan::{
     ClientTls, CredentialPort, FramePort, LanAvailability, LanConfig,
     LanFactory, ServerTls,
 };
+use crate::ir::security::lan::host::HostBindRequest;
 
 impl LanAvailability for () {
     const SUPPORTED: bool = true;
@@ -56,7 +57,7 @@ impl LanAvailability for () {
 
 impl LanFactory for () {
     fn bind<Message, Codec>(
-        config: HostInputConfig<'_>,
+        config: HostBindRequest,
         tls: ServerTls,
         codec: Codec,
     ) -> Result<PumpPort<Message>>

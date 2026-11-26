@@ -42,10 +42,11 @@ mod unavailable_lan {
     use games::network::MessageSchema;
 
     use crate::ir::lan::identity::IdentityPort;
-    use crate::ir::lan::pump::{HostInputConfig, PumpPort};
+    use crate::ir::lan::pump::PumpPort;
     use crate::ir::lan::{
         ClientTls, FramePort, LanAvailability, LanConfig, LanFactory, ServerTls,
     };
+    use crate::ir::security::lan::host::HostBindRequest;
 
     impl LanAvailability for () {
         const SUPPORTED: bool = false;
@@ -53,7 +54,7 @@ mod unavailable_lan {
 
     impl LanFactory for () {
         fn bind<Message, Codec>(
-            _config: HostInputConfig<'_>,
+            _config: HostBindRequest,
             _tls: ServerTls,
             _codec: Codec,
         ) -> Result<PumpPort<Message>>

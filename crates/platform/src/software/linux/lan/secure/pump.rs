@@ -43,12 +43,9 @@ use super::worker::{
     HostCompletion, HostOperation, HostOutcome, HostRequest, HostResult,
     HostWorker, OperationError, RejectionReason, capacity_for_players,
 };
-use super::{
-    LanConfig, PendingConnection, SecureLanListener, SendProgress, ServerTls,
-};
-use crate::ir::lan::pump::{
-    HostInputConfig, PumpBackend, PumpProgress, RemoteEvent,
-};
+use super::{PendingConnection, SecureLanListener, SendProgress, ServerTls};
+use crate::ir::lan::pump::{PumpBackend, PumpProgress, RemoteEvent};
+use crate::ir::security::lan::host::HostBindRequest;
 use crate::software::linux::performance::now;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,41 +149,24 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// Rejects disabled LAN, empty or excess enrolments, invalid identities,
     /// unrepresentable limits, or listener and worker creation failures.
     pub(super) fn bind<Codec>(
-        config: HostInputConfig<'_>,
+        request: HostBindRequest,
         tls: ServerTls,
         codec: Codec,
     ) -> io::Result<Self>
     where
         Codec: MessageSchema<Message = Message> + Send + 'static,
     {
-        let HostInputConfig {
-            address,
-            session: limits,
-            timeout,
-            enrolments,
-            idle_timeout,
-            local_peers,
-        } = config;
-        let settings = LanConfig::new(limits, timeout)?;
-        if idle_timeout.is_some_and(|limit| {
-            limit.is_zero() || now().checked_add(limit).is_none()
-        }) {
-            return Err(ErrorKind::InvalidInput.into());
-        }
-        let capacity = capacity_for_players(limits.max_players)?;
-        let count = enrolments.len().checked_add(local_peers.len());
-        if enrolments.is_empty()
-            || !count.is_some_and(|combined| limits.admits_players(combined))
+        let idle_timeout = request.idle_timeout();
+        if idle_timeout.is_some_and(|limit| now().checked_add(limit).is_none())
         {
             return Err(ErrorKind::InvalidInput.into());
         }
-        let mut session = HostSession::new(limits, enrolments)
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
-        for &peer in local_peers {
-            session
-                .join_local(peer)
-                .map_err(|error| io::Error::other(format!("{error:?}")))?;
-        }
+        let address = request.address();
+        let settings = request.transport();
+        let roster = request.into_roster();
+        let limits = roster.config();
+        let capacity = capacity_for_players(limits.max_players)?;
+        let session = HostSession::from_roster(roster);
         let listener = SecureLanListener::bind(address, settings, tls)?;
         let worker = HostWorker::spawn(session, codec, capacity)?;
         Ok(Self {
@@ -476,6 +456,7 @@ mod tests {
     use super::super::{ClientTls, SecureFrameStream};
     use super::*;
     use crate::ir::lan::FrameBackend as _;
+    use crate::ir::lan::pump::HostInputConfig;
 
     struct TestPeers {
         first: ClientTls,
@@ -486,6 +467,14 @@ mod tests {
     struct UnobservedAdmission {
         completion: HostCompletion<u8>,
         stream: SecureFrameStream,
+    }
+
+    fn bind_test(
+        config: HostInputConfig<'_>,
+        tls: ServerTls,
+        codec: TestCodec,
+    ) -> io::Result<HostInputPump<u8>> {
+        HostInputPump::bind(HostBindRequest::new(config)?, tls, codec)
     }
 
     fn next_event(pump: &mut HostInputPump<u8>) -> io::Result<RemoteEvent<u8>> {
@@ -592,7 +581,7 @@ mod tests {
         let mut session = session_config(true);
         session.max_players =
             NonZeroU32::new(3).ok_or(ErrorKind::InvalidInput)?;
-        let pump = HostInputPump::bind(
+        let pump = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[(keys.client_id, 1), (second_id, 2)],
@@ -688,7 +677,7 @@ mod tests {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
         let approved = [(keys.client_id, 1)];
-        let disabled = HostInputPump::bind(
+        let disabled = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &approved,
@@ -705,7 +694,7 @@ mod tests {
                 == Some(ErrorKind::PermissionDenied),
             "LAN cannot bind without opt-in",
         )?;
-        let full = HostInputPump::bind(
+        let full = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &approved,
@@ -722,7 +711,7 @@ mod tests {
                 == Some(ErrorKind::InvalidInput),
             "approved remote capacity cannot be consumed by local seats",
         )?;
-        let anonymous = HostInputPump::bind(
+        let anonymous = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[],
@@ -757,11 +746,11 @@ mod tests {
             session: limits,
             timeout: TIMEOUT,
         };
-        let pump = HostInputPump::bind(config, keys.server.clone(), TestCodec)?;
+        let pump = bind_test(config, keys.server.clone(), TestCodec)?;
         let mut excess = config;
         excess.address = pump.local_addr()?;
         excess.session.max_players = NonZeroU32::MIN.saturating_add(512);
-        let rejected = HostInputPump::bind(excess, keys.server, TestCodec);
+        let rejected = bind_test(excess, keys.server, TestCodec);
         require(
             rejected.err().map(|error| error.kind())
                 == Some(ErrorKind::InvalidInput),
@@ -774,7 +763,7 @@ mod tests {
     fn malformed_frames_cannot_renew_an_idle_lease() -> io::Result<()> {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
-        let mut pump = HostInputPump::bind(
+        let mut pump = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[(keys.client_id, 1)],
@@ -860,7 +849,7 @@ mod tests {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
         let idle = Duration::from_secs(30);
-        let mut pump = HostInputPump::bind(
+        let mut pump = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[(keys.client_id, 1)],
@@ -967,7 +956,7 @@ mod tests {
         let issuer = authority()?;
         let keys = credentials(&issuer, &issuer)?;
         let idle = Duration::from_secs(30);
-        let mut pump = HostInputPump::bind(
+        let mut pump = bind_test(
             HostInputConfig {
                 address: LOOPBACK,
                 enrolments: &[(keys.client_id, 1)],

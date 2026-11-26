@@ -33,13 +33,13 @@
 
 use core::net::SocketAddr;
 use std::fmt::{self, Debug, Formatter};
-use std::io::{ErrorKind, Result};
+use std::io::{Error, ErrorKind, Result};
 use std::time::Duration;
 
-use games::network::{MessageSchema, SessionConfig};
+use games::network::{MessageSchema, SessionConfig, SessionError};
 
 use super::{LanFactory, PeerFingerprint, ServerTls};
-use crate::ir::security::lan::admit_endpoint;
+use crate::ir::security::lan::host::{HostAdmissionError, HostBindRequest};
 
 /// Explicit endpoint, transport limits and pre-approved player identities.
 #[derive(Clone, Copy, Debug)]
@@ -57,6 +57,24 @@ pub struct HostInputConfig<'roster> {
     pub session: SessionConfig,
     /// Deadline for each handshake or in-progress transfer.
     pub timeout: Duration,
+}
+
+impl From<HostAdmissionError> for Error {
+    fn from(error: HostAdmissionError) -> Self {
+        match error {
+            HostAdmissionError::Lan(reason) => reason.into(),
+            HostAdmissionError::Session(SessionError::LanDisabled) => {
+                ErrorKind::PermissionDenied.into()
+            },
+            HostAdmissionError::DuplicateEnrollment
+            | HostAdmissionError::EmptyEnrollment
+            | HostAdmissionError::LocalIdentityReserved
+            | HostAdmissionError::Session(_)
+            | HostAdmissionError::TooManyEnrollments => {
+                ErrorKind::InvalidInput.into()
+            },
+        }
+    }
 }
 
 /// Result of one nonblocking scheduler poll.
@@ -133,8 +151,8 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     where
         Codec: MessageSchema<Message = Message> + Send + 'static,
     {
-        admit_endpoint(config.address)?;
-        let backend = <() as LanFactory>::bind(config, tls, codec)?;
+        let request = HostBindRequest::new(config)?;
+        let backend = <() as LanFactory>::bind(request, tls, codec)?;
         Ok(Self { backend })
     }
 
@@ -170,5 +188,54 @@ impl<Message: Send + 'static> HostInputPump<Message> {
     /// Reports worker shutdown failure.
     pub fn shutdown(self) -> Result<()> {
         self.backend.shutdown()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::net::{IpAddr, Ipv4Addr};
+    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::sync::Arc;
+
+    use super::*;
+
+    struct Codec;
+
+    impl MessageSchema for Codec {
+        type Message = ();
+
+        fn decode(&self, _bytes: &[u8]) -> Option<Self::Message> {
+            Some(())
+        }
+    }
+
+    #[test]
+    fn invalid_host_requests_are_rejected_before_backend_dispatch() {
+        let tls = ServerTls(Arc::new(()));
+        let mut config = HostInputConfig {
+            address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            enrolments: &[(PeerFingerprint::from_bytes([1; 32]), 1)],
+            idle_timeout: None,
+            local_peers: &[0],
+            session: SessionConfig::local(
+                NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN),
+                NonZeroUsize::MIN,
+            ),
+            timeout: Duration::from_secs(1),
+        };
+        assert_eq!(
+            HostInputPump::bind(config, tls.clone(), Codec)
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::PermissionDenied),
+        );
+        config.session.allow_lan = true;
+        config.local_peers = &[1];
+        assert_eq!(
+            HostInputPump::bind(config, tls, Codec)
+                .err()
+                .map(|error| error.kind()),
+            Some(ErrorKind::InvalidInput),
+        );
     }
 }

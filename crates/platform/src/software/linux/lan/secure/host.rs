@@ -32,29 +32,32 @@
 use std::collections::BTreeMap;
 use std::io;
 
-use games::network::{
-    MessageSchema, PeerKind, Session, SessionConfig, SessionError,
-};
+#[cfg(test)]
+use games::network::SessionConfig;
+use games::network::{MessageSchema, PeerKind, Session, SessionError};
 use rustls::Connection;
 
 use super::{PeerFingerprint, SecureFrameStream, SendProgress};
 use crate::ir::lan::FrameBackend as _;
+#[cfg(test)]
+use crate::ir::security::lan::host::HostAdmissionError;
+use crate::ir::security::lan::host::HostRoster;
 
 /// Host admission, session policy or transport failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HostError {
-    /// A fingerprint or player identity is already enrolled.
-    DuplicateEnrollment,
+    /// Initial roster admission failed.
+    #[cfg(test)]
+    Admission(HostAdmissionError),
     /// The stream is closed, outbound or uses a different frame budget.
     InvalidTransport,
     /// A local controller cannot claim a LAN-enrolled identity.
+    #[cfg(test)]
     LocalIdentityReserved,
     /// An outgoing frame is already queued on this peer.
     SendPending,
     /// The shared roster or message policy rejected the operation.
     Session(SessionError),
-    /// Enrolments exceed the configured maximum player count.
-    TooManyEnrollments,
     /// A bounded socket transfer failed and the LAN slot was reserved.
     Transport(io::ErrorKind),
     /// The verified certificate has no host-approved player identity.
@@ -135,10 +138,23 @@ impl HostSession {
         self.frame_budget
     }
 
+    /// Compose native channels with the admitted portable roster.
+    pub(super) fn from_roster(admitted: HostRoster) -> Self {
+        let frame_budget = admitted.config().max_message_bytes.get();
+        let (enrolled, roster) = admitted.into_parts();
+        Self {
+            channels: BTreeMap::new(),
+            enrolled,
+            frame_budget,
+            roster,
+        }
+    }
+
     /// Admit a directly connected local controller.
     ///
     /// # Errors
     /// Rejects LAN-enrolled identities, duplicates and full sessions.
+    #[cfg(test)]
     pub(super) fn join_local(&mut self, peer: u64) -> Result<(), HostError> {
         if self.enrolled.values().any(|identity| *identity == peer) {
             return Err(HostError::LocalIdentityReserved);
@@ -151,31 +167,14 @@ impl HostSession {
     ///
     /// # Errors
     /// Rejects enrolments when LAN is disabled, duplicates and excess entries.
+    #[cfg(test)]
     pub(super) fn new(
         config: SessionConfig,
         enrolments: &[(PeerFingerprint, u64)],
     ) -> Result<Self, HostError> {
-        if !config.allow_lan && !enrolments.is_empty() {
-            return Err(SessionError::LanDisabled.into());
-        }
-        if !config.admits_players(enrolments.len()) {
-            return Err(HostError::TooManyEnrollments);
-        }
-        let mut enrolled = BTreeMap::new();
-        for &(fingerprint, peer) in enrolments {
-            if enrolled.contains_key(&fingerprint)
-                || enrolled.values().any(|identity| *identity == peer)
-            {
-                return Err(HostError::DuplicateEnrollment);
-            }
-            let _previous = enrolled.insert(fingerprint, peer);
-        }
-        Ok(Self {
-            channels: BTreeMap::new(),
-            enrolled,
-            frame_budget: config.max_message_bytes.get(),
-            roster: Session::new(config),
-        })
+        let roster = HostRoster::new(config, enrolments, &[])
+            .map_err(HostError::Admission)?;
+        Ok(Self::from_roster(roster))
     }
 
     /// Poll one authenticated peer without disconnecting an idle channel.
@@ -353,7 +352,7 @@ mod tests {
         authority, client_credentials, credentials, pair,
     };
     use super::super::{PeerFingerprint, SecureLanListener};
-    use super::{HostError, HostSession};
+    use super::{HostAdmissionError, HostError, HostSession};
     use crate::ir::lan::FrameBackend as _;
 
     #[test]
@@ -362,15 +361,21 @@ mod tests {
         let second = PeerFingerprint::from_bytes([2; 32]);
         assert!(matches!(
             HostSession::new(session_config(false), &[(first, 1)]),
-            Err(HostError::Session(SessionError::LanDisabled))
+            Err(HostError::Admission(HostAdmissionError::Session(
+                SessionError::LanDisabled
+            )))
         ));
         assert!(matches!(
             HostSession::new(session_config(true), &[(first, 1), (first, 2)]),
-            Err(HostError::DuplicateEnrollment)
+            Err(HostError::Admission(
+                HostAdmissionError::DuplicateEnrollment
+            ))
         ));
         assert!(matches!(
             HostSession::new(session_config(true), &[(first, 1), (second, 1)]),
-            Err(HostError::DuplicateEnrollment)
+            Err(HostError::Admission(
+                HostAdmissionError::DuplicateEnrollment
+            ))
         ));
         assert!(matches!(
             HostSession::new(session_config(true), &[
@@ -378,7 +383,7 @@ mod tests {
                 (second, 2),
                 (first, 3)
             ],),
-            Err(HostError::TooManyEnrollments)
+            Err(HostError::Admission(HostAdmissionError::TooManyEnrollments))
         ));
     }
 
