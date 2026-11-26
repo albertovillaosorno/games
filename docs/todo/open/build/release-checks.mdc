@@ -166,3 +166,54 @@ comparison. Startup without an adjacent or explicit catalogue was
 rejected. The legacy store and catalogue remain unchanged. Physical
 screen, touch, controller and audible playback acceptance, actual
 shared-store cutover and cross-host compatibility remain open.
+
+The same configured executable passed an Xvfb/X11 visible settings run
+from an unrelated working directory with an isolated private settings
+folder and explicit custom controls. Synthetic keyboard input exercised
+live gameplay, pause, presentation cycling, fullscreen/windowed switching,
+volume adjustment and next-launch control reset. Window-manager state
+confirmed both window transitions. The three owner-only save files held
+aspect-fit/windowed, the default control profile and 75% master volume.
+All 1,646 measured gameplay submissions across the two presentation modes
+met the 16.667 ms host-work budget. Copying only those three portable save
+files to another private directory and relaunching with no explicit
+presentation or control override passed the 600 movement and 20 combat
+submission smoke, with all three SHA-256 checks unchanged afterward.
+This is virtual-display and synthetic-input evidence; physical-device
+acceptance and cross-host save portability remain open.
+
+Three subsequent fullscreen adaptive touch smoke repetitions passed all
+600 movement and 20 combat submissions each with zero host-work budget
+misses; movement maxima were 4.450, 3.920 and 2.367 ms. The prior four
+misses remain recorded because load was not controlled. ELF version
+requirements in the configured executable include GLIBC_2.34 and
+GCC_4.2.0; these are direct binary requirements, not proof of compatibility
+with every system providing those versions. No second Linux distribution
+or alternate architecture runtime was available for execution.
+
+A separate visible adaptive touch run on a virtual 2560x1440 X11 screen
+configured at 192 DPI exercised five actual window resizes. The renderer
+reported 486x304 logical at 1440x900 drawable, the 512x304 scene cap at
+1900x720, 320x304 at 660x900, and 405x304 at both 480x360 and 1200x900.
+All six measured segments continued gameplay and accepted synthetic
+keyboard input; the run exited normally. Four work-budget misses across
+3,079 submissions occurred in the resized segments (maximum 42.035 ms).
+Eight additional hidden touch smokes passed on portrait and ultrawide
+virtual screens in aspect-fit, integer, stretch and adaptive modes;
+hidden window geometry is not evidence of actual desktop fullscreen
+geometry. Virtual DPI and synthetic touch projection do not establish
+physical high-DPI or touch-device acceptance.
+
+The packaged project licence and notices matched their workspace copies
+byte-for-byte. Its dependency inventory and 104 licence files were
+present; this does not replace an independent legal distribution audit.
+A four-process visible X11 loopback diagnostic used the packaged binary
+for both host and asset-free controllers. Three separately issued local
+identities joined their assigned remote seats, moved and released, then
+all responded after a 256-repeat synthetic input burst. Disconnecting
+one controller while moving left the other two responsive; rejoining
+with the same identity restored movement and release. Host frame
+captures showed changes during movement and stable frames after release.
+Only ephemeral private credentials and settings were used; private
+keys were removed afterward. This establishes same-host package LAN
+integration, not physical multi-host network or controller acceptance.
