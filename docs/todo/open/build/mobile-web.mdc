@@ -1201,3 +1201,29 @@ chooser attempts used incorrect virtual-display geometry and did not
 establish acceptance; the successful runs used 1600x1200 Xvfb. These
 checks do not establish measured peak-memory savings, physical device
 compatibility, accelerated presentation or audible playback.
+
+The d20c298 pause and settings hint correction preserves the full
+international key label and accurately describes unavailable storage
+as session-only. The independent current browser package verified
+88 files and 1,545,168 bytes, receipt SHA-256
+`992420aa723a277818198cc343f338bf8438098ac67cbc16d42aa6ddb869a336`.
+Its observer loaded the 4,050-byte envelope written by the native
+control CLI, without regenerating or modifying the profile. Trusted
+directory selection enumerated 743 files; only the selected closure
+of 616 reads and 24,937,054 bytes was imported. The first actor
+remained at x=110 for ordinary punctuation, moved right to x=132
+and settled at x=134 for international backslash, then moved left
+to x=112 and settled at x=110 for keypad comma. The first observer
+used the wrong confirm key at exit; after correcting it to the
+native profile's Z binding, the run ended normally with 127 callbacks,
+107 blits, one completion, one preference read and no writes.
+The original envelope remained byte-identical.
+
+With browser storage disabled, the same published module accepted
+a session-only display-mode change from aspect-fit to integer,
+navigated the reduced settings menu, moved from x=110 to x=148
+via synthetic touch and exited. The run observed 96 callbacks,
+56 blits, 28 touch events, one completion, no remaining picker or
+canvas and no storage write attempts. Both runs used virtual
+presentation and injected input; physical-device acceptance remains
+open.

@@ -631,3 +631,51 @@ package byte-for-byte. Readback verified 109 files and 4,151,921 bytes.
 Fresh validation 1795696847296228456-2077761 passed with virtual X11
 rendering and dummy audio. These are injected input and retained capture
 checks, not physical-device or audible-output acceptance.
+
+At d20c298, the menu displays the full portable international
+backslash name alongside mouse bindings, within the existing pause
+plate. The settings hint describes session-only persistence instead of
+suggesting a native CLI argument on every target. Fresh validation
+1795698040871826942-2425488 and the commit hook passed.
+
+The rebuilt native package verified 109 files and 4,148,929 bytes,
+receipt SHA-256
+`988d5e3ea4aa5144e9f910fdfdb04e97c64b27f586e57a94674a560e34001f0c`.
+The native CLI wrote both extended key bindings to an owner-only
+4,050-byte profile in a separate private directory. Attempting to
+assign keypad comma to both left and right failed with duplicate
+keyboard binding; the saved envelope remained byte-identical. An
+asset-backed touch smoke using the saved profile from an unrelated
+working directory exited normally and preserved the envelope. All
+600 movement and 20 combat submissions met the 16.667 ms work budget;
+maxima were 4.872 ms and 2.096 ms. This is synthetic gameplay on
+Xvfb with software OpenGL and dummy audio, not physical-key acceptance.
+The same native-generated envelope was loaded unchanged by the browser
+package; see mobile-web for the cross-target movement evidence.
+The same executable and copied profile also passed hidden Fill
+touch smoke in the installed Freedesktop Platform 25.08 userspace
+with read-only executable and asset mounts, no network and isolated
+settings. It verified the 960x240 protected panel in a 1280x912
+drawable and preserved the saved envelope. The 600 movement and
+20 combat submissions met the work budget (maxima 4.763 ms and
+2.119 ms). The direct dependencies remain SDL2, libgcc and libc;
+the highest observed required GLIBC symbol version is 2.34. This
+is a second local userspace, not independent-host ABI verification.
+
+An additional visible actor-only run on a disposable Xvfb server
+assigned unrelated keysyms to XKB keycodes 94 (LSGT) and 129
+(KEY_KPCOMMA) to probe physical identity rather than layout text.
+The international key arrived at SDL as scancode 100, moved the
+actor, and settled after release. The keypad-comma X11 key arrived
+as SDL scancode 99 (keypad decimal), not 133; it did not move the
+actor bound to 133. The run exited normally and all 2,373 measured
+submissions met the work budget (maximum 15.308 ms). The first
+window activation attempt failed and was retried with direct focus.
+The current X11 adapter cannot distinguish keypad comma when SDL
+reports keypad decimal; do not infer native keypad-comma gameplay
+or physical-key operation from profile serialization or the
+successful browser mapping.
+The locked SDL source corroborates this distinction: its XFree86
+keycode table maps index 121 to keypad period, while its Linux
+scancode table maps index 121 to keypad comma. Preserve the two
+canonical profile identities rather than aliasing these keys.
