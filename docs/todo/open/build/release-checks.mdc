@@ -494,3 +494,34 @@ complete directory selection; explicit local GTK chooser configuration
 resolved it. Post-exit package verification and comparison confirmed
 unchanged bytes. These are repeated publications on the same host,
 not independent-host qualification, physical input or audible output.
+
+At d238e72, two fresh native and browser publications matched within
+both target pairs. The native package was byte-identical to 346609a
+(109 files, 4,150,657 bytes, one executable). The browser package had
+88 mode-0600 files and 1,546,800 bytes, with receipt SHA-256
+`b22f285a07d8c45a6546f08477f099325d71b3f3ed9ad0bb6f46d61bd3a3718f`;
+its 1,042,876-byte bound module digest was
+`9917e3f56cf4e4e6c363497f3434795b4c1c2b00413dba0988f646b5c1b25c15`.
+Independent length and SHA-256 checks matched every receipt entry,
+project notices and licence texts matched the workspace, and Node
+accepted the Wasm. The native ELF still required SDL2, libgcc_s and
+libc, with highest referenced glibc symbol version 2.34.
+
+The second native package passed the full adaptive touch smoke from an
+unrelated directory, with read-only package and external asset mounts,
+a private 1920x1080 Xvfb display, software OpenGL and dummy audio.
+It verified 106 added logical columns, 444 camera columns, 48 synthetic
+axis directions, two cooperative pose families and six reinforcement
+meters. All 620 movement and combat submissions met the 16.667 ms
+host-work budget (maximum 5.775 ms); private settings remained empty.
+The first harness attempt lacked xdpyinfo; xset verified readiness.
+The second browser package's isolated copy passed asset-backed Wayland
+Firefox with trusted virtual touch. It read 616 files (24,937,054
+bytes), submitted 227 callbacks, 130 blits and 156 audio blocks and
+closed its audio context, removing the picker and canvas. Eleven audio
+scheduling gaps totaled 245.3 ms; each followed expiration of the
+previous scheduled tail, including a 96 ms refill interval. The one
+observed positive near-tail refill remained contiguous. No larger queue
+was introduced solely to conceal the host stalls. All package receipts
+verified unchanged afterward. These are virtual-host observations and
+same-host reproduction, not independent-host or physical acceptance.
