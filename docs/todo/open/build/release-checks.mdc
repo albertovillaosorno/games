@@ -343,3 +343,19 @@ notices matched the workspace, Node accepted the bound Wasm, and
 native-target readback rejected the browser package. These checks
 establish reproducibility on the current host, not independent-host
 build reproducibility, full target compatibility or legal clearance.
+
+At 3685d73, the native package was independently rebuilt after the
+pointer-leave fix and reproduced the exact receipt of the package
+used for visible mouse and virtual audio acceptance. Readback verified
+109 files, 4,151,513 bytes and receipt SHA-256
+`3ef3bc8f59c33c3dbcb49ad1f83e664ede6ed98627fabac81c283e44fdad130e`.
+Two current WebAssembly publications also matched byte-for-byte on
+receipt content: 88 files, 1,509,219 bytes and receipt SHA-256
+`e7720da3f5a222ad5a5e7f7ece2d44b869173392a1b5f76ca4cd3445a50c5a72`.
+Node accepted the bound 1,005,295-byte module. Headless Firefox in a
+private network namespace with only loopback admitted the unmodified
+576-byte index, 45,123-byte JavaScript and bound module. The page
+reported readiness and exposed a directory picker with no canvas
+before selection. The exact current browser package has not yet been
+asset-backed gameplay-tested. Android linking and physical-device
+acceptance remain open.
