@@ -536,6 +536,7 @@ impl ControllerLaunch {
         settings: Option<&OsStr>,
     ) -> Result<ResolvedControls, String> {
         let directory = self.settings.as_deref().or(settings);
+        admit_settings_location(directory, None)?;
         ControlSelection::open(
             self.options,
             fallback.map(OsStr::to_os_string),
@@ -584,7 +585,7 @@ impl Launch {
             assets.audio.is_some(),
         )?;
         let settings = explicit_settings.or(paths.settings);
-        admit_settings_location(settings.as_deref(), &assets.directory)?;
+        admit_settings_location(settings.as_deref(), Some(&assets.directory))?;
         let preferences = settings
             .as_deref()
             .map(DisplayStore::open)
@@ -641,6 +642,7 @@ pub(super) fn edit_control(args: &[OsString]) -> Result<(), String> {
         kind.to_str().ok_or("invalid binding kind")?,
         name.to_str().ok_or("invalid binding name")?,
     )?;
+    admit_settings_location(Some(directory), None)?;
     let store = ControlStore::open(directory, profile_limit()?)
         .map_err(|error| format!("control preferences: {error:?}"))?;
     let stored = store
@@ -727,21 +729,42 @@ fn selected_audio_device(
 
 fn admit_settings_location(
     settings: Option<&OsStr>,
-    assets: &OsStr,
+    assets: Option<&OsStr>,
 ) -> Result<(), String> {
     let Some(selected) = settings else {
         return Ok(());
     };
+    let executable = executable_path()
+        .map_err(|error| format!("executable path: {error}"))?;
+    admit_settings_paths(selected, assets, &executable)
+}
+
+fn admit_settings_paths(
+    selected: &OsStr,
+    assets: Option<&OsStr>,
+    executable: &OsStr,
+) -> Result<(), String> {
     // Resolve only for comparison. The stores still open the original
     // selected path and perform their own trust and link checks.
     let resolved_settings = canonical_path(selected)
         .map_err(|error| format!("settings location: {error}"))?;
-    let resolved_assets = canonical_path(assets)
-        .map_err(|error| format!("asset location: {error}"))?;
-    if paths_overlap(&resolved_settings, &resolved_assets)
+    if let Some(directory) = assets {
+        let resolved_assets = canonical_path(directory)
+            .map_err(|error| format!("asset location: {error}"))?;
+        if paths_overlap(&resolved_settings, &resolved_assets)
+            .map_err(|error| format!("settings location: {error}"))?
+        {
+            return Err("settings and asset directories overlap".into());
+        }
+    }
+    let resolved_executable = canonical_path(executable)
+        .map_err(|error| format!("executable path: {error}"))?;
+    let package = parent_path(&resolved_executable)
+        .map_err(|error| format!("executable directory: {error}"))?;
+    if paths_overlap(&resolved_settings, package)
         .map_err(|error| format!("settings location: {error}"))?
     {
-        return Err("settings and asset directories overlap".into());
+        return Err("settings and executable directories overlap".into());
     }
     Ok(())
 }
@@ -1050,6 +1073,43 @@ mod tests {
         {
             return Err("explicit overlapping paths accepted".into());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn settings_never_overlap_the_resolved_executable_directory()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        for directory in ["package/nested", "settings", "assets"] {
+            root.create_directories(directory)
+                .map_err(|error| error.to_string())?;
+        }
+        root.write_file("package/game", b"test executable")
+            .map_err(|error| error.to_string())?;
+        let package = resolve_local(root.location(), "package")?;
+        root.link(&package, "alias")
+            .map_err(|error| error.to_string())?;
+        let executable = resolve_local(root.location(), "alias/game")?;
+        let assets = resolve_local(root.location(), "assets")?;
+        for overlapping in [".", "package", "package/nested", "alias/nested"] {
+            let settings = resolve_local(root.location(), overlapping)?;
+            let error = admit_settings_paths(&settings, None, &executable)
+                .err()
+                .ok_or_else(|| format!("accepted settings: {overlapping}"))?;
+            if error != "settings and executable directories overlap" {
+                return Err(error);
+            }
+        }
+        if !admit_settings_paths(&package, Some(&assets), &executable)
+            .is_err_and(|error| {
+                error == "settings and executable directories overlap"
+            })
+        {
+            return Err("asset selection disabled package check".into());
+        }
+        let settings = resolve_local(root.location(), "settings")?;
+        admit_settings_paths(&settings, Some(&assets), &executable)?;
+        admit_settings_paths(&settings, None, &executable)?;
         Ok(())
     }
 

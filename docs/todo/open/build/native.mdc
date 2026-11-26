@@ -1023,3 +1023,31 @@ through a catalogue, plus an overlapping explicit asset argument.
 A separate settings directory remains usable through the explicit
 override. The comparison does not replace the storage backend's
 trust checks or promise isolation against concurrent path changes.
+
+The native game, LAN controller and direct control-edit entry points
+now also reject settings directories that overlap the resolved running
+executable's directory. An isolated regression checks the same
+directory, an ancestor, a descendant and a linked descendant, with
+and without an asset selection. A distinct settings directory remains
+admitted. This preflight complements rather than replaces the native
+store's trust checks; it does not resolve concurrent path changes.
+
+The rebuilt private native package verified 109 files and 4,154,377
+bytes; receipt SHA-256 was
+`abb7e1d692d68b8c41b81c077b3730a0ca91b9cce16fe9bd6121a7661a6ada1a`.
+From an unrelated directory, all three preference entry points rejected
+the package root, ancestor, licence directory and linked licence
+directory (12 explicit rejection checks). Controller negatives used
+a syntactically admitted private catalogue with absent certificates;
+the preflight failed before opening credentials or connecting. A direct
+edit in a separate private settings directory cleared the primary key,
+and the complete original-backed adaptive touch smoke retained its
+profile bytes. It verified 106 added logical columns, 444 street
+columns, 48 controller directions, two cooperative pose families and
+six reinforcement meters. All 620 movement and combat submissions met
+the 16.667 ms work budget (maximum 2.392 ms). The package receipt
+remained unchanged. The first isolated run failed to initialize Xvfb
+through the default EGL vendor; selecting Mesa before launch resolved
+that harness failure. The final run used private X11, software OpenGL,
+dummy audio and read-only package and asset mounts, not physical input
+or audible output.
