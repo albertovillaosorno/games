@@ -84,8 +84,6 @@ use std::path::PathBuf;
 use std::path::{Component, Path};
 
 use games_assets::ContentHash;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-use games_assets::ManifestLimits;
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::bundle::{BundleError, CanonicalBundle};
@@ -524,7 +522,7 @@ use games_assets::archive::ArchiveBudget;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::staging::{
     ArchiveFactory, CanonicalFactory, CompletedBundle, OpenArchive,
-    OpenCanonical,
+    OpenCanonical, PreparedManifest,
 };
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 use crate::ir::storage::staging::{
@@ -544,7 +542,7 @@ impl CanonicalFactory for () {
         _parent: &OsStr,
         _budget: ArchiveBudget,
         _source: &CanonicalBundle,
-        _limits: ManifestLimits,
+        _manifest: &PreparedManifest,
     ) -> CompletedBundle {
         Err(StagingError::Io(io::ErrorKind::Unsupported))
     }

@@ -47,7 +47,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use games_assets::archive::{
     ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
 };
-use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
+use games_assets::{AssetError, ContentHash};
+#[cfg(test)]
+use games_assets::{AssetManifest, ManifestLimits};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{FileStat, Mode, fstat, mkdirat};
@@ -66,7 +68,7 @@ use crate::ir::storage::staging::PublishedBundle;
 use crate::ir::storage::staging::{
     ArchiveFactory, ArchivePort, CanonicalFactory, CanonicalPort,
     CompletedArchive, CompletedArchivePort, CompletedBundle, OpenArchive,
-    OpenCanonical, StagingEntry, StagingError, staging_path,
+    OpenCanonical, PreparedManifest, StagingEntry, StagingError, staging_path,
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -467,21 +469,17 @@ impl CanonicalStaging {
         parent: &Path,
         budget: ArchiveBudget,
         source: &CanonicalBundle,
-        limits: ManifestLimits,
+        manifest: &PreparedManifest,
     ) -> Result<StagedBundle, StagingError> {
-        let manifest = source.manifest();
-        let bytes = manifest.encode(limits)?;
-        let expected = manifest.payload_sizes();
-        admit_copy(budget, &bytes, &expected)?;
+        admit_copy(budget, manifest.bytes(), manifest.payload_sizes())?;
         let stage = Self::new(parent, budget)?;
-        Self::copy_into(stage, source, &bytes, &expected)
+        Self::copy_into(stage, source, manifest)
     }
 
     fn copy_into(
         mut stage: Self,
         source: &CanonicalBundle,
-        bytes: &[u8],
-        expected: &PayloadSizes,
+        manifest: &PreparedManifest,
     ) -> Result<StagedBundle, StagingError> {
         for record in source.manifest().records() {
             if stage.payloads.contains_key(&record.digest) {
@@ -490,7 +488,7 @@ impl CanonicalStaging {
             let payload = source.read_payload(&record.key)?;
             stage.write_payload(record.digest, &payload)?;
         }
-        stage.finish_encoded(bytes, expected)
+        stage.finish_encoded(manifest)
     }
 
     #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
@@ -500,18 +498,17 @@ impl CanonicalStaging {
         source: &CanonicalBundle,
         limits: ManifestLimits,
     ) -> Result<StagedBundle, StagingError> {
-        let manifest = source.manifest();
-        let bytes = manifest.encode(limits)?;
-        let expected = manifest.payload_sizes();
-        admit_copy(budget, &bytes, &expected)?;
+        let manifest = PreparedManifest::new(source.manifest(), limits)?;
+        admit_copy(budget, manifest.bytes(), manifest.payload_sizes())?;
         let stage = Self::new_legacy(parent, budget)?;
-        Self::copy_into(stage, source, &bytes, &expected)
+        Self::copy_into(stage, source, &manifest)
     }
 
     /// Finish a bundle only if every staged payload is declared and present.
     ///
     /// # Errors
     /// Rejects failed staging, mismatches and invalid or oversized metadata.
+    #[cfg(test)]
     fn finish(
         self,
         manifest: &AssetManifest,
@@ -520,25 +517,25 @@ impl CanonicalStaging {
         if self.stage.failed {
             return Err(StagingError::Aborted);
         }
-        let bytes = manifest.encode(limits)?;
-        let expected = manifest.payload_sizes();
-        self.finish_encoded(&bytes, &expected)
+        self.finish_encoded(&PreparedManifest::new(manifest, limits)?)
     }
 
     fn finish_encoded(
         mut self,
-        mut bytes: &[u8],
-        expected: &PayloadSizes,
+        manifest: &PreparedManifest,
     ) -> Result<StagedBundle, StagingError> {
-        if expected != &self.payloads {
+        if self.stage.failed {
+            return Err(StagingError::Aborted);
+        }
+        if manifest.payload_sizes() != &self.payloads {
             return Err(AssetError::PayloadMismatch.into());
         }
+        let mut bytes = manifest.bytes();
         let size = manifest_size(bytes)?;
         let mut budget = self.stage.budget;
         let _entry = budget.admit(MANIFEST_NAME, EntryKind::File, size)?;
-        let digest = ContentHash::calculate(bytes);
         self.stage.record_file(MANIFEST_NAME, size, &mut bytes)?;
-        let finished = publication::finish(self.stage, digest)?;
+        let finished = publication::finish(self.stage, manifest.digest())?;
         #[cfg(all(target_os = "linux", target_env = "gnu"))]
         let staged = finished.with_pool(self.pool);
         #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
@@ -736,13 +733,13 @@ impl CanonicalFactory for () {
         parent: &OsStr,
         budget: ArchiveBudget,
         source: &CanonicalBundle,
-        limits: ManifestLimits,
+        manifest: &PreparedManifest,
     ) -> CompletedBundle {
         Ok(Box::new(CanonicalStaging::copy_bundle(
             Path::new(parent),
             budget,
             source,
-            limits,
+            manifest,
         )?))
     }
 
@@ -754,10 +751,9 @@ impl CanonicalFactory for () {
 impl CanonicalPort for CanonicalStaging {
     fn complete(
         self: Box<Self>,
-        manifest: &AssetManifest,
-        limits: ManifestLimits,
+        manifest: &PreparedManifest,
     ) -> CompletedBundle {
-        Ok(Box::new((*self).finish(manifest, limits)?))
+        Ok(Box::new((*self).finish_encoded(manifest)?))
     }
 
     fn write_verified(

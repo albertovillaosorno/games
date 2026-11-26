@@ -441,3 +441,14 @@ truncated and extended streams, corrupt checksums and oversized backend
 results. Fresh native X11 and dummy audio validation
 1795654644837526498-2329962 passed 1,567 aggregate test executions and
 all six portable core checks.
+
+Canonical staging now prepares the exact encoded manifest, its digest and
+unique payload inventory in the shared IR before completion or copying.
+Native publication reuses those bytes and the admitted identity without
+re-encoding. The shared completed-bundle handle retains the expected digest
+and rejects mismatched backend receipts before returning a publishable
+handle. Legacy input normalization and native budget and metadata checks
+remain intact. Portable fixtures exercise correct and incorrect completion
+identities, oversized manifests and copy receipts. Fresh native X11 and
+dummy audio validation 1795654917146423573-2410267 passed 1,575 aggregate
+test executions and six portable core checks.
