@@ -538,3 +538,43 @@ submissions met the 16.667 ms host-work budget. The saved default hash
 remained unchanged through both exits and smoke. The package, existing
 asset catalogue and owner preferences were not modified. Dummy audio
 and injected X11 keys do not establish physical-device acceptance.
+
+The 51025e8 package passed two visible keyboard focus-loss checks on
+2026-11-26. In Xvfb/X11 with separate focused game windows and an
+actor-only catalogue, D moved the character, focus loss stopped it,
+and release in the other window did not restart movement on refocus.
+Five captured surfaces spanning blur, release and refocus were
+pixel-identical; a fresh A press moved the character. Both processes
+exited normally. The host SDL2 compatibility layer also admitted a
+fresh non-repeat press on refocus when D remained physically held;
+that differs from retaining a stale hold after release. The host run
+submitted 4,079 frames with no host-work budget misses. The isolated
+Freedesktop Platform 25.08 x86-64 run submitted 2,529 frames with three
+misses (maximum 27.084 ms).
+
+A separate visible test exposed a stuck remapped mouse movement when
+SDL omitted the button release outside the window. Setting its automatic
+capture hint did not resolve the host reproduction. The shared mouse
+cancellation transition now releases only mouse sources on the owning
+SDL window's pointer leave. Keyboard, controller and touch holds and
+feedback admission remain independent. Regression tests verify shared
+actions, late releases, repeated cancellation, fresh presses and window
+scope. Fresh native render/audio and portable validation passed in run
+1795692308316064415-953195 (1,935 aggregate test executions).
+
+The fixed 14096fb package readback verified 109 files and 4,151,513
+bytes. The host Xvfb/X11 drag-out test remapped right and middle mouse
+buttons to right and left movement. With keyboard focus retained, the
+character stopped on pointer leave even though no right-button release
+was delivered. Exact captures remained unchanged through release and
+settling; a fresh middle-button press moved the character. A second run
+held D and the right mouse button together. Movement continued after
+pointer leave and mouse release, then stopped on D release. The two
+runs submitted 2,761 and 2,965 frames respectively, with no host-work
+budget misses. In the isolated Freedesktop userspace the captured
+outside release reached the owning window; movement stopped on release
+and a fresh press worked. That run submitted 2,121 frames with one
+budget miss (17.749 ms maximum). All three exited normally. These are
+injected X11 input and private actor-only catalogue checks, not physical
+mouse, keyboard, controller or audible output acceptance. No owner
+preferences, installed package or canonical assets were changed.
