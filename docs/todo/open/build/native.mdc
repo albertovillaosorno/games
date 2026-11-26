@@ -286,3 +286,15 @@ selection succeeded. These runs used injected keyboard and mouse events,
 keyboard-selected touch slots and dummy audio, not physical devices.
 Controller-only and touch-only editor navigation, analogue editing,
 actual physical devices and audible output remain unverified.
+
+The editor also accepts fixed gamepad navigation independent of the
+active gameplay profile: D-pad selects player/action, right shoulder
+cycles source, south confirms and east cancels. Controller capture now
+reviews the selected physical button before saving; all button identities,
+including navigation buttons, remain assignable. Only assigned local
+controllers can navigate or capture. Closing the editor routes a single
+local pause edge even when that physical button has another gameplay
+binding. Modal capture releases existing holds without submitting new
+gameplay presses or releases. Synthetic editor and title integration
+regressions verify the navigation, cancel/confirm flow and reserved-seat
+close routing. Physical controller hardware acceptance remains open.

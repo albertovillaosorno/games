@@ -320,19 +320,39 @@ impl Controls {
     fn modal_actions(
         &mut self,
         event: InputEvent,
-        allow_close: bool,
+        request_close: bool,
+        touch_can_close: bool,
     ) -> Result<LocalActions, RenderError> {
-        let mut actions = self.actions(event)?;
-        actions.retain(|change| {
-            !change.down
-                || (allow_close
+        // Release only holds already delivered to the running simulation.
+        // Modal capture itself must not emit gameplay presses or releases.
+        let mut releases = self.router.release_all();
+        let actions = self.actions(event)?;
+        drop(self.router.release_all());
+        let touch_close = touch_can_close
+            && actions.iter().any(|change| {
+                change.down
                     && matches!(
                         change.action.control,
                         Control::Pause | Control::Start
-                    ))
-        });
-        actions.extend(self.router.release_all());
-        Ok(actions)
+                    )
+            });
+        if request_close || touch_close {
+            // The editor's physical navigation is independent of the
+            // current profile, so a remapped gamepad can still close it.
+            let player = Player::ALL
+                .into_iter()
+                .zip(self.reserved)
+                .find_map(|(player, remote)| (!remote).then_some(player))
+                .ok_or(RenderError::InvalidSprite)?;
+            releases.extend([true, false].map(|down| LogicalAction {
+                action: Action {
+                    control: Control::Pause,
+                    player,
+                },
+                down,
+            }));
+        }
+        Ok(releases)
     }
 
     fn new(touch_enabled: bool) -> Result<Self, RenderError> {
@@ -968,20 +988,30 @@ impl<'preferences> Interactive<'preferences> {
         &mut self,
         event: InputEvent,
     ) -> Result<LocalActions, RenderError> {
-        let capturing = self.editor.status() == EditorStatus::Capturing;
-        let effect = self.editor.input(event, &self.next_profiles);
+        let modal = matches!(
+            self.editor.status(),
+            EditorStatus::Capturing | EditorStatus::Reviewing(_)
+        );
+        let effect = if matches!(event, InputEvent::Button { device, .. }
+            if !self.controls.devices.contains(&Some(device)))
+        {
+            EditorEffect::None
+        } else {
+            self.editor.input(event, &self.next_profiles)
+        };
         if let EditorEffect::Propose(binding) = effect {
             self.edit_binding(binding)?;
         }
-        let close = effect == EditorEffect::Close
-            || (!capturing
-                && matches!(
-                    event,
-                    InputEvent::Button { .. }
-                        | InputEvent::Contact { .. }
-                        | InputEvent::Touch { .. }
-                ));
-        self.controls.modal_actions(event, close)
+        let touch_can_close = !modal
+            && matches!(
+                event,
+                InputEvent::Contact { .. } | InputEvent::Touch { .. }
+            );
+        self.controls.modal_actions(
+            event,
+            effect == EditorEffect::Close,
+            touch_can_close,
+        )
     }
 
     fn measure_presented(
@@ -3029,6 +3059,7 @@ mod tests {
                 down: true,
             },
             false,
+            false,
         )?;
         if modal.iter().any(|change| change.down)
             || !modal.contains(&LogicalAction {
@@ -3051,6 +3082,7 @@ mod tests {
                 down: true,
             },
             true,
+            false,
         )?;
         if close
             != [true, false].map(|down| LogicalAction {
@@ -3071,6 +3103,39 @@ mod tests {
             .is_empty()
         {
             return Err(failure("captured release leaked"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn modal_close_does_not_depend_on_the_current_gamepad_binding()
+    -> Result<(), RenderError> {
+        let mut controls =
+            Controls::with_reserved(false, &DEFAULT_PROFILES, [
+                true, false, true, true,
+            ])?;
+        drop(controls.actions(InputEvent::Attached { device: 1 })?);
+        let close = controls.modal_actions(
+            InputEvent::Button {
+                code: ControllerButton::East.code(),
+                device: 1,
+                down: true,
+            },
+            true,
+            false,
+        )?;
+        if close
+            != [true, false].map(|down| LogicalAction {
+                action: Action {
+                    control: Control::Pause,
+                    player: Player::Homer,
+                },
+                down,
+            })
+        {
+            return Err(failure(
+                "modal close was routed through an active binding",
+            ));
         }
         Ok(())
     }

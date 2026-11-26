@@ -28,7 +28,7 @@
 // - Usage:
 //   - Reserve the reported bytes and sprites before loading the panel.
 // - Defaults:
-//   - Keyboard navigation with explicit next-launch persistence feedback.
+//   - Keyboard and gamepad navigation with explicit persistence feedback.
 
 //! Portable presentation for the shared digital control editor.
 
@@ -171,15 +171,22 @@ impl ControlEditorArt {
             format!("ACTION: {action}"),
             format!("SOURCE: {}", editor.family().label()),
             format!("CURRENT: {name}"),
-            if editor.status() == EditorStatus::Capturing
-                && editor.family() == BindingFamily::Touch
-            {
-                let slot = actions
-                    .get(editor.touch_slot())
-                    .ok_or(RenderError::InvalidSprite)?;
-                format!("NEXT SLOT: {slot}")
-            } else {
-                status.to_owned()
+            match editor.status() {
+                EditorStatus::Capturing
+                    if editor.family() == BindingFamily::Touch =>
+                {
+                    let slot = actions
+                        .get(editor.touch_slot())
+                        .ok_or(RenderError::InvalidSprite)?;
+                    format!("NEXT SLOT: {slot}")
+                },
+                EditorStatus::Reviewing(button) => {
+                    format!("NEXT: {} - A/ENTER SAVE", button.profile_name())
+                },
+                EditorStatus::Capturing
+                | EditorStatus::Ready
+                | EditorStatus::Rejected
+                | EditorStatus::Saved => status.to_owned(),
             },
         ];
         draws.push(self.panel.draw(0, origin.0, origin.1)?);
@@ -271,16 +278,17 @@ const fn status_label(
         },
         EditorStatus::Saved => "SAVED FOR NEXT LAUNCH",
         EditorStatus::Rejected => "CONFLICT OR INVALID BINDING",
+        EditorStatus::Reviewing(_) => "CONFIRM OR CANCEL BUTTON",
     }
 }
 
 fn panel_lines(width: u16) -> Vec<TextLine<'static>> {
     [
         (8, "EDIT CONTROLS - NEXT LAUNCH"),
-        (130, "LEFT/RIGHT: PLAYER - UP/DOWN: ACTION"),
-        (146, "TAB: SOURCE - ENTER: EDIT OR SAVE"),
-        (162, "DELETE: CLEAR KEY OR MOUSE"),
-        (178, "ESC: CANCEL OR RETURN"),
+        (130, "ARROWS / DPAD: PLAYER AND ACTION"),
+        (146, "TAB / RB: SOURCE - ENTER / A: EDIT"),
+        (162, "DEL / X: CLEAR KEY OR MOUSE"),
+        (178, "ESC / B: CANCEL OR RETURN"),
     ]
     .into_iter()
     .map(|(top, text)| {

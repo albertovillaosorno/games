@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another editor duplicates digital binding selection or capture.
 // - Summary:
-//   - Shared keyboard-driven editor for all digital binding families.
+//   - Shared keyboard and gamepad editor for all digital binding families.
 // - Description:
 //   - Capture presses, not releases; never mutate the running input router.
 // - Usage:
@@ -81,6 +81,8 @@ pub enum EditorStatus {
     Ready,
     /// The candidate was not admitted or saved.
     Rejected,
+    /// A captured controller button awaits confirmation or cancellation.
+    Reviewing(ControllerButton),
     /// The host confirmed the next-launch profile was saved.
     Saved,
 }
@@ -94,6 +96,61 @@ pub enum EditorEffect {
     None,
     /// Validate and persist this selected binding.
     Propose(DigitalBinding),
+}
+
+/// Navigation uses physical identities independently of gameplay bindings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Navigation {
+    Cancel,
+    Clear,
+    Confirm,
+    Down,
+    Family,
+    Left,
+    Right,
+    Up,
+}
+
+impl Navigation {
+    const fn button(button: ControllerButton) -> Option<Self> {
+        match button {
+            ControllerButton::East
+            | ControllerButton::Back
+            | ControllerButton::Start => Some(Self::Cancel),
+            ControllerButton::West => Some(Self::Clear),
+            ControllerButton::South => Some(Self::Confirm),
+            ControllerButton::DPadDown => Some(Self::Down),
+            ControllerButton::RightShoulder => Some(Self::Family),
+            ControllerButton::DPadLeft => Some(Self::Left),
+            ControllerButton::DPadRight => Some(Self::Right),
+            ControllerButton::DPadUp => Some(Self::Up),
+            ControllerButton::Guide
+            | ControllerButton::LeftShoulder
+            | ControllerButton::LeftStick
+            | ControllerButton::Misc1
+            | ControllerButton::North
+            | ControllerButton::Paddle1
+            | ControllerButton::Paddle2
+            | ControllerButton::Paddle3
+            | ControllerButton::Paddle4
+            | ControllerButton::RightStick
+            | ControllerButton::Touchpad => None,
+        }
+    }
+
+    const fn key(key: KeyboardKey) -> Option<Self> {
+        match key {
+            KeyboardKey::ESCAPE => Some(Self::Cancel),
+            KeyboardKey::DELETE => Some(Self::Clear),
+            KeyboardKey::ENTER => Some(Self::Confirm),
+            KeyboardKey::DOWN => Some(Self::Down),
+            KeyboardKey::TAB => Some(Self::Family),
+            KeyboardKey::LEFT => Some(Self::Left),
+            KeyboardKey::RIGHT => Some(Self::Right),
+            KeyboardKey::UP => Some(Self::Up),
+            _ => None,
+        }
+    }
 }
 
 /// Shared editor selection, independent of title names and storage.
@@ -123,13 +180,16 @@ impl ControlEditor {
         self.action
     }
 
-    fn capture(
-        &mut self,
-        event: InputEvent,
-        key: Option<KeyboardKey>,
-        actions: usize,
-    ) -> EditorEffect {
-        if key == Some(KeyboardKey::ESCAPE) {
+    fn capture(&mut self, event: InputEvent, actions: usize) -> EditorEffect {
+        let key = pressed_key(event);
+        let gamepad = pressed_button(event);
+        let navigation = navigation(event);
+        // Controller capture must admit every physical button, including
+        // the navigation controls. Confirmation is a separate edge.
+        if key == Some(KeyboardKey::ESCAPE)
+            || (self.family != BindingFamily::Controller
+                && navigation == Some(Navigation::Cancel))
+        {
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
         }
@@ -145,21 +205,23 @@ impl ControlEditor {
             },
             (
                 BindingFamily::Controller,
-                InputEvent::Button { code, down: true, .. },
-            ) => ControllerButton::ALL
-                .into_iter()
-                .find(|button| button.code() == code)
-                .map(DigitalBinding::Button),
+                InputEvent::Button { down: true, .. },
+            ) => {
+                if let Some(candidate) = gamepad {
+                    self.status = EditorStatus::Reviewing(candidate);
+                }
+                None
+            },
             (BindingFamily::Touch, _) => {
-                match key {
-                    Some(KeyboardKey::LEFT | KeyboardKey::UP) => {
+                match navigation {
+                    Some(Navigation::Left | Navigation::Up) => {
                         self.touch_slot =
                             cycle(self.touch_slot, actions, false);
                     },
-                    Some(KeyboardKey::RIGHT | KeyboardKey::DOWN) => {
+                    Some(Navigation::Right | Navigation::Down) => {
                         self.touch_slot = cycle(self.touch_slot, actions, true);
                     },
-                    Some(KeyboardKey::ENTER) => {
+                    Some(Navigation::Confirm) => {
                         self.status = EditorStatus::Ready;
                         return EditorEffect::Propose(
                             DigitalBinding::TouchSlot(self.touch_slot),
@@ -211,6 +273,9 @@ impl ControlEditor {
     ///
     /// Arrows select station and action, Tab cycles family, Enter starts
     /// capture, Delete clears optional sources, and Escape cancels or exits.
+    /// A gamepad uses the D-pad, right shoulder, south and west face
+    /// buttons; the east face, back or start button cancels.
+    /// Confirm a captured controller button before saving it.
     /// During touch capture, arrows select a physical slot and Enter applies
     /// it. Other families capture the next pressed physical binding.
     pub fn input<const PLAYERS: usize, const ACTIONS: usize>(
@@ -221,30 +286,37 @@ impl ControlEditor {
         if self.current(profiles).is_none() {
             return EditorEffect::None;
         }
-        if event == InputEvent::FocusLost {
+        if matches!(event, InputEvent::FocusLost | InputEvent::Detached { .. })
+        {
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
         }
-        let key = pressed_key(event);
-        if self.status == EditorStatus::Capturing {
-            return self.capture(event, key, ACTIONS);
+        let command = navigation(event);
+        match self.status {
+            EditorStatus::Capturing => return self.capture(event, ACTIONS),
+            EditorStatus::Reviewing(button) => {
+                return self.review(button, command);
+            },
+            EditorStatus::Ready
+            | EditorStatus::Rejected
+            | EditorStatus::Saved => {},
         }
-        match key {
-            Some(KeyboardKey::ESCAPE) => return EditorEffect::Close,
-            Some(KeyboardKey::LEFT) => {
+        match command {
+            Some(Navigation::Cancel) => return EditorEffect::Close,
+            Some(Navigation::Left) => {
                 self.station = cycle(self.station, PLAYERS, false);
             },
-            Some(KeyboardKey::RIGHT) => {
+            Some(Navigation::Right) => {
                 self.station = cycle(self.station, PLAYERS, true);
             },
-            Some(KeyboardKey::UP) => {
+            Some(Navigation::Up) => {
                 self.action = cycle(self.action, ACTIONS, false);
             },
-            Some(KeyboardKey::DOWN) => {
+            Some(Navigation::Down) => {
                 self.action = cycle(self.action, ACTIONS, true);
             },
-            Some(KeyboardKey::TAB) => self.family = self.family.next(),
-            Some(KeyboardKey::ENTER) => {
+            Some(Navigation::Family) => self.family = self.family.next(),
+            Some(Navigation::Confirm) => {
                 if let Some(DigitalBinding::TouchSlot(slot)) =
                     self.current(profiles)
                 {
@@ -253,7 +325,7 @@ impl ControlEditor {
                 self.status = EditorStatus::Capturing;
                 return EditorEffect::None;
             },
-            Some(KeyboardKey::DELETE) => {
+            Some(Navigation::Clear) => {
                 let binding = match self.family {
                     BindingFamily::Keyboard => DigitalBinding::Key(None),
                     BindingFamily::Mouse => DigitalBinding::Mouse(None),
@@ -267,6 +339,24 @@ impl ControlEditor {
         }
         self.status = EditorStatus::Ready;
         EditorEffect::None
+    }
+
+    const fn review(
+        &mut self,
+        button: ControllerButton,
+        command: Option<Navigation>,
+    ) -> EditorEffect {
+        match command {
+            Some(Navigation::Confirm) => {
+                self.status = EditorStatus::Ready;
+                EditorEffect::Propose(DigitalBinding::Button(button))
+            },
+            Some(Navigation::Cancel) => {
+                self.status = EditorStatus::Ready;
+                EditorEffect::None
+            },
+            _ => EditorEffect::None,
+        }
     }
 
     /// Selected station index.
@@ -286,6 +376,21 @@ impl ControlEditor {
     pub const fn touch_slot(self) -> usize {
         self.touch_slot
     }
+}
+
+fn navigation(event: InputEvent) -> Option<Navigation> {
+    pressed_key(event)
+        .and_then(Navigation::key)
+        .or_else(|| pressed_button(event).and_then(Navigation::button))
+}
+
+fn pressed_button(event: InputEvent) -> Option<ControllerButton> {
+    let InputEvent::Button { code, down: true, .. } = event else {
+        return None;
+    };
+    ControllerButton::ALL
+        .into_iter()
+        .find(|button| button.code() == code)
 }
 
 const fn pressed_key(event: InputEvent) -> Option<KeyboardKey> {
@@ -402,10 +507,72 @@ mod tests {
                 },
                 &PROFILE
             ),
+            EditorEffect::None
+        );
+        assert_eq!(
+            editor.status(),
+            EditorStatus::Reviewing(ControllerButton::North)
+        );
+        assert_eq!(
+            key(editor, KeyboardKey::ENTER),
             EditorEffect::Propose(DigitalBinding::Button(
                 ControllerButton::North
             ))
         );
+    }
+
+    fn button(
+        editor: &mut ControlEditor,
+        button: ControllerButton,
+    ) -> EditorEffect {
+        editor.input(
+            InputEvent::Button {
+                code: button.code(),
+                device: 1,
+                down: true,
+            },
+            &PROFILE,
+        )
+    }
+
+    #[test]
+    fn controller_navigation_can_cancel_or_bind_its_own_buttons() {
+        use ControllerButton::{DPadDown, DPadRight, RightShoulder};
+        let mut editor = ControlEditor::default();
+        for action in [DPadRight, DPadDown, RightShoulder, RightShoulder] {
+            assert_eq!(button(&mut editor, action), EditorEffect::None);
+        }
+        assert_eq!((editor.station(), editor.action()), (1, 1));
+        assert_eq!(editor.family(), BindingFamily::Controller);
+        cancel_controller_capture(&mut editor);
+        confirm_controller_capture(&mut editor);
+    }
+
+    fn cancel_controller_capture(editor: &mut ControlEditor) {
+        use ControllerButton::{East, South};
+        for action in [South, East] {
+            assert_eq!(button(editor, action), EditorEffect::None);
+        }
+        assert_eq!(editor.status(), EditorStatus::Reviewing(East));
+        assert_eq!(button(editor, East), EditorEffect::None);
+        assert_eq!(editor.status(), EditorStatus::Ready);
+        assert_eq!(
+            editor.current(&PROFILE),
+            Some(DigitalBinding::Button(East))
+        );
+    }
+
+    fn confirm_controller_capture(editor: &mut ControlEditor) {
+        use ControllerButton::{East, RightShoulder, South};
+        for action in [South, RightShoulder] {
+            assert_eq!(button(editor, action), EditorEffect::None);
+        }
+        assert_eq!(
+            button(editor, South),
+            EditorEffect::Propose(DigitalBinding::Button(RightShoulder))
+        );
+        editor.acknowledge(true);
+        assert_eq!(button(editor, East), EditorEffect::Close);
     }
 
     fn capture_touch(editor: &mut ControlEditor) {
