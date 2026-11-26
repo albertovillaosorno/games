@@ -31,8 +31,24 @@
 
 //! Bounded scene resource and draw admission.
 
-use crate::ir::frame::{FrameLayout, RenderError, validate_extent};
+use crate::ir::frame::{FrameLayout, RenderError, validate_rectangle};
 use crate::ir::scene::{AtlasId, SceneLimits, SpriteDraw, SpriteRect};
+
+/// Borrowed draw list admitted against the owning scene's resource budget.
+///
+/// The private rendering port consumes this value without copying commands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedDraws<'draws> {
+    sprites: &'draws [SpriteDraw],
+}
+
+impl<'draws> AdmittedDraws<'draws> {
+    /// The exact admitted ordered commands.
+    #[must_use]
+    pub const fn as_slice(self) -> &'draws [SpriteDraw] {
+        self.sprites
+    }
+}
 
 /// Scene-local atlas metadata and capacity, independent of native textures.
 #[derive(Debug)]
@@ -44,10 +60,10 @@ pub(crate) struct SceneAdmission {
 
 impl SceneAdmission {
     /// Admit the complete ordered draw list against committed resources.
-    pub(crate) fn draws(
+    pub(crate) fn draws<'draws>(
         &self,
-        sprites: &[SpriteDraw],
-    ) -> Result<(), RenderError> {
+        sprites: &'draws [SpriteDraw],
+    ) -> Result<AdmittedDraws<'draws>, RenderError> {
         admit_draws(self.limits, sprites, |id| self.layouts.get(id.0).copied())
     }
 
@@ -129,7 +145,7 @@ pub fn admit_draws<Lookup>(
     limits: SceneLimits,
     sprites: &[SpriteDraw],
     mut atlas_layout: Lookup,
-) -> Result<(), RenderError>
+) -> Result<AdmittedDraws<'_>, RenderError>
 where
     Lookup: FnMut(AtlasId) -> Option<FrameLayout>,
 {
@@ -140,9 +156,9 @@ where
         let layout =
             atlas_layout(sprite.atlas).ok_or(RenderError::InvalidSprite)?;
         admit_source(sprite.source, layout)?;
-        validate_extent(sprite.destination.width, sprite.destination.height)?;
+        validate_rectangle(sprite.destination)?;
     }
-    Ok(())
+    Ok(AdmittedDraws { sprites })
 }
 
 fn admit_source(
@@ -170,8 +186,8 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
     use super::{
-        AtlasId, AtlasUsage, FrameLayout, RenderError, SceneLimits, SpriteDraw,
-        SpriteRect, admit_atlas, admit_draws,
+        AdmittedDraws, AtlasId, AtlasUsage, FrameLayout, RenderError,
+        SceneLimits, SpriteDraw, SpriteRect, admit_atlas, admit_draws,
     };
     use crate::ir::check;
 
@@ -236,7 +252,11 @@ mod tests {
             source: rectangle,
         };
         let atlas = |id| (id == AtlasId(0)).then_some(layout);
-        check(&admit_draws(limits(), &[sprite], atlas), &Ok(()))?;
+        check(
+            &admit_draws(limits(), &[sprite], atlas)
+                .map(AdmittedDraws::as_slice),
+            &Ok([sprite].as_slice()),
+        )?;
         check(
             &admit_draws(limits(), &[sprite, sprite], atlas),
             &Err(RenderError::TooLarge),
@@ -258,6 +278,45 @@ mod tests {
                 &admit_draws(limits(), &[bad], atlas),
                 &Err(RenderError::InvalidSprite),
             )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn draw_admission_preserves_clipping_and_rejects_unsafe_origins()
+    -> Result<(), RenderError> {
+        let layout = layout()?;
+        let rectangle = SpriteRect {
+            x: 0,
+            y: 0,
+            width: layout.width(),
+            height: layout.height(),
+        };
+        let sprite = SpriteDraw {
+            atlas: AtlasId(0),
+            destination: rectangle,
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rectangle,
+        };
+        let atlas = |id| (id == AtlasId(0)).then_some(layout);
+        let lower = -1_073_741_824i32;
+        let upper = 1_073_741_823i32;
+        for (x, y, valid) in [
+            (lower, upper, true),
+            (upper, lower, true),
+            (-1i32, 0i32, true),
+            (lower.saturating_sub(1), 0i32, false),
+            (0i32, lower.saturating_sub(1), false),
+            (upper.saturating_add(1), 0i32, false),
+            (0i32, upper.saturating_add(1), false),
+            (i32::MAX, i32::MIN, false),
+        ] {
+            let draw = SpriteDraw {
+                destination: SpriteRect { x, y, ..rectangle },
+                ..sprite
+            };
+            check(&admit_draws(limits(), &[draw], atlas).is_ok(), &valid)?;
         }
         Ok(())
     }

@@ -437,3 +437,13 @@ results; the native test retains atlas pixels across target changes. Fresh
 X11 and dummy-audio validation 1795654243573388824-2214293 passed 1,557
 aggregate test executions and all six portable core checks. Other native
 backends and physical device acceptance remain open.
+
+Ordered scene drawing now admits both signed destination origins and rectangle
+extents against the portable representable range, preserving off-screen
+clipping while rejecting unsafe endpoints before renderer dispatch. The
+private draw port receives a borrowed admitted command list without copying
+or changing order; native identity and rectangle guards remain in place.
+Synthetic regressions cover inclusive signed limits, both axes, rejected
+commands without backend calls and exact admitted order. Fresh X11 and
+dummy-audio validation 1795654497995277316-2294362 passed 1,563 aggregate
+test executions and all six portable core checks.

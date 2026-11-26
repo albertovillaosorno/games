@@ -44,7 +44,7 @@ use crate::ir::hardware::InputSample;
 use crate::ir::scene::{
     AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw,
 };
-use crate::ir::security::scene::SceneAdmission;
+use crate::ir::security::scene::{AdmittedDraws, SceneAdmission};
 
 /// Private, callback-scoped ordered rendering port.
 pub(crate) trait SceneBackend: Debug {
@@ -66,7 +66,7 @@ pub(crate) trait SceneBackend: Debug {
     fn present(
         &mut self,
         background: [u8; 3],
-        sprites: &[SpriteDraw],
+        sprites: AdmittedDraws<'_>,
     ) -> Result<bool, RenderError>;
     fn presentation_mode(&self) -> PresentationMode;
     fn readback(&mut self) -> Result<Vec<u8>, RenderError>;
@@ -277,8 +277,8 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         background: [u8; 3],
         sprites: &[SpriteDraw],
     ) -> Result<bool, RenderError> {
-        self.admission.draws(sprites)?;
-        self.backend.present(background, sprites)
+        let admitted = self.admission.draws(sprites)?;
+        self.backend.present(background, admitted)
     }
 
     /// Whether the last presented frame still matches current geometry.
@@ -343,9 +343,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AtlasId, Dimensions, DisplaySettings, EventBatch, FrameLayout,
-        InputSample, PresentationLayout, PresentationMode, RenderError,
-        SceneBackend, SceneLimits, SceneSession, SpriteDraw,
+        AdmittedDraws, AtlasId, Dimensions, DisplaySettings, EventBatch,
+        FrameLayout, InputSample, PresentationLayout, PresentationMode,
+        RenderError, SceneBackend, SceneLimits, SceneSession, SpriteDraw,
     };
     use crate::ir::check;
     use crate::ir::hardware::{HostEvent, InputTransition};
@@ -435,7 +435,7 @@ mod tests {
         fn present(
             &mut self,
             _background: [u8; 3],
-            _sprites: &[SpriteDraw],
+            _sprites: AdmittedDraws<'_>,
         ) -> Result<bool, RenderError> {
             self.draws = self.draws.saturating_add(1);
             Ok(false)
@@ -603,6 +603,14 @@ mod tests {
         };
         check(
             &scene.present([0; 3], &[invalid]),
+            &Err(RenderError::InvalidSprite),
+        )?;
+        let invalid_origin = SpriteDraw {
+            destination: SpriteRect { x: i32::MAX, ..rectangle },
+            ..sprite
+        };
+        check(
+            &scene.present([0; 3], &[invalid_origin]),
             &Err(RenderError::InvalidSprite),
         )?;
         check(&scene.present([0; 3], &[sprite]), &Ok(false))?;

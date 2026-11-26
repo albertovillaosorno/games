@@ -33,7 +33,7 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use games::presentation::{Dimensions, PresentationMode};
+use games::presentation::{Dimensions, PresentationMode, SpriteRect};
 
 // Keep both ends of a signed rectangle representable.
 const MAX_RECTANGLE_EXTENT: u32 = 1_073_741_823;
@@ -186,6 +186,22 @@ pub fn validate_extent(
     } else {
         Ok(())
     }
+}
+
+/// Admit a signed sprite rectangle without truncating its origin or extent.
+///
+/// Clipped destinations are permitted. Keeping each signed origin within
+/// half of the coordinate range and each extent within the positive half
+/// ensures both ends remain representable without backend-specific clamping.
+/// # Errors
+/// Rejects unrepresentable dimensions or origins.
+pub fn validate_rectangle(rectangle: SpriteRect) -> Result<(), RenderError> {
+    validate_extent(rectangle.width, rectangle.height)?;
+    let origins = -1_073_741_824i32..=1_073_741_823i32;
+    if !origins.contains(&rectangle.x) || !origins.contains(&rectangle.y) {
+        return Err(RenderError::InvalidSprite);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
