@@ -1298,3 +1298,31 @@ were removed. Package verification before and after the run matched
 `2442759025ed7b761777eb4d121601ac531624366cbab9e17ce34bce0fea3b99`.
 This confirms the current nested-focus fix did not regress virtual
 browser gameplay; physical-device and audible-output gates remain open.
+
+Controller and DOM observations now drain in a common acquisition
+order while retaining their independent bounded queues. A controller
+release observed on blur must not overtake a preceding keyboard
+press mapped to the same action. That would falsely release and
+re-press the shared action. The browser adapter assigns an order to
+each controller observation batch and each DOM transition, independent
+of coarse browser clock timestamps. A DOM overflow replaces its own
+queue only; preceding controller edges and subsequent controller
+cancellation retain their order. The inline browser fixture verifies
+the shared router emits only the final release on focus loss, and
+that an actual blur still releases the controller when the overflowed
+DOM queue cannot admit the blur observation.
+
+Fresh validation 1795699964038853508-2700825 passed 1,959 aggregate
+test executions and linked the extended browser input diagnostic.
+The bound module was 234,040 bytes, with SHA-256
+`6a77befbddce344484932d7f679dced8c11b7e1b874f15b222ab691ba39505c5`.
+All six network-isolated Firefox outcomes passed, including clock,
+listener and lifecycle failure controls. Successful cases observed
+92 dispatches on the keyboard target, balanced 26 canvas listener
+pairs and removed all surfaces. An independent WebKitGTK diagnostic
+run of the exact module returned success, with 186 observed dispatches,
+30 balanced listener pairs, four attached and removed surfaces and no
+remaining canvas. The earlier nested-focus-only module also passed
+WebKitGTK after a private bus-proxy startup failure was resolved by
+using a shorter scratch path. Neither diagnostic establishes physical
+controller operation or latency.

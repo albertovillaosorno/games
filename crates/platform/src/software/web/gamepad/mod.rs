@@ -54,20 +54,21 @@ type Observation = (u32, State);
 /// One event feed shared by the scoped surface and its controller port.
 /// A real focus-loss observation may arrive before the next frame poll.
 pub(super) struct ControllerEvents {
+    next_order: u64,
     registry: Option<Registry>,
-    samples: VecDeque<InputSample>,
+    samples: VecDeque<(u64, InputSample)>,
     scope: u64,
 }
 
 impl ControllerEvents {
     pub(super) fn cancel(&mut self, stamp: Option<Duration>) {
+        let order = self.next_order();
         if let Some(registry) = &mut self.registry {
             let scope = self.scope;
             registry.neutralize(|edge| {
-                self.samples.push_back(InputSample::new(
-                    stamp,
-                    edge,
-                    Some(scope),
+                self.samples.push_back((
+                    order,
+                    InputSample::new(stamp, edge, Some(scope)),
                 ));
             });
         }
@@ -105,12 +106,25 @@ impl ControllerEvents {
         }
     }
 
+    pub(super) fn front_order(&self) -> Option<u64> {
+        self.samples.front().map(|(order, _sample)| *order)
+    }
+
     pub(super) const fn new(scope: u64) -> Self {
         Self {
+            next_order: 0,
             registry: None,
             samples: VecDeque::new(),
             scope,
         }
+    }
+
+    // An acquisition batch shares one order. DOM callbacks use this same
+    // counter so coarse or identical clock readings cannot reorder input.
+    pub(super) const fn next_order(&mut self) -> u64 {
+        let order = self.next_order;
+        self.next_order = order.saturating_add(1);
+        order
     }
 
     fn open(&mut self, limit: NonZeroUsize) -> Result<(), RenderError> {
@@ -140,20 +154,20 @@ impl ControllerEvents {
         if !self.samples.is_empty() {
             return Ok(Vec::new());
         }
+        let order = self.next_order();
         let registry =
             self.registry.as_mut().ok_or(RenderError::Unsupported)?;
         let scope = self.scope;
         registry.poll(observations, |edge| {
-            self.samples.push_back(InputSample::new(
-                Some(stamp),
-                edge,
-                Some(scope),
+            self.samples.push_back((
+                order,
+                InputSample::new(Some(stamp), edge, Some(scope)),
             ));
         })
     }
 
     pub(super) fn pop(&mut self) -> Option<InputSample> {
-        self.samples.pop_front()
+        self.samples.pop_front().map(|(_order, sample)| sample)
     }
 
     fn remove(&mut self, id: u64) -> Option<HostEvent> {
@@ -372,8 +386,11 @@ mod tests {
         // Blur and refocus can occur between polls. Preserve all queued
         // edges, append the neutral state at the loss time exactly once,
         // and never admit a new snapshot ahead of those releases.
+        let polled = feed.front_order().ok_or(RenderError::InvalidLength)?;
+        let dom = feed.next_order();
         feed.cancel(Some(stamp(3)));
         feed.cancel(Some(stamp(4)));
+        check(polled < dom, "polled order before DOM")?;
         check(
             feed.poll(Some(&observed), stamp(5))?.is_empty(),
             "snapshot deferred while cancellation is queued",
@@ -382,6 +399,15 @@ mod tests {
             (State::default(), state, stamp(2)),
             (state, State::default(), stamp(3)),
         ] {
+            let order = feed.front_order().ok_or(RenderError::InvalidLength)?;
+            check(
+                if time == stamp(2) {
+                    order == polled
+                } else {
+                    order > dom
+                },
+                "lifecycle batch order relative to DOM",
+            )?;
             verify_samples(&mut feed, (old, new), time, scope)?;
         }
         check(feed.pop().is_none(), "duplicate cancellation")?;

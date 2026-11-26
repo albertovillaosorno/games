@@ -77,7 +77,7 @@ struct BrowserInput {
 struct EventQueue {
     capacity: NonZeroUsize,
     overflow: bool,
-    samples: VecDeque<InputSample>,
+    samples: VecDeque<(u64, InputSample)>,
 }
 
 pub(super) struct EventSource {
@@ -175,7 +175,7 @@ impl EventQueue {
     }
 
     fn pop(&mut self) -> Option<InputSample> {
-        let sample = self.samples.pop_front();
+        let sample = self.samples.pop_front().map(|(_order, sample)| sample);
         if self.samples.is_empty() {
             self.overflow = false;
         }
@@ -187,6 +187,7 @@ impl EventQueue {
         stamp: Option<Duration>,
         transition: InputTransition,
         scope: u64,
+        order: u64,
     ) {
         if self.overflow {
             return;
@@ -194,16 +195,14 @@ impl EventQueue {
         if self.samples.len() == self.capacity.get() {
             self.samples.clear();
             self.overflow = true;
-            self.samples.push_back(InputSample::new(
-                stamp,
-                focus_lost(),
-                Some(scope),
+            self.samples.push_back((
+                order,
+                InputSample::new(stamp, focus_lost(), Some(scope)),
             ));
         } else {
-            self.samples.push_back(InputSample::new(
-                stamp,
-                transition,
-                Some(scope),
+            self.samples.push_back((
+                order,
+                InputSample::new(stamp, transition, Some(scope)),
             ));
         }
     }
@@ -252,10 +251,16 @@ impl EventSource {
             let mut queue = sink.borrow_mut();
             for transition in std::iter::once(first).chain(transitions) {
                 #[cfg(feature = "interactive")]
-                if transition == focus_lost() {
-                    controllers.borrow_mut().cancel(stamp);
-                }
-                queue.push(stamp, transition, scope);
+                let order = {
+                    let mut controllers = controllers.borrow_mut();
+                    if transition == focus_lost() {
+                        controllers.cancel(stamp);
+                    }
+                    controllers.next_order()
+                };
+                #[cfg(not(feature = "interactive"))]
+                let order = 0;
+                queue.push(stamp, transition, scope, order);
             }
             // Overflow cancels logical holds. Discard adapter holds too,
             // including presses observed while the queue rejects events.
@@ -302,11 +307,20 @@ impl EventSource {
     }
 
     pub(super) fn pop(&self) -> Option<InputSample> {
+        let mut queue = self.queue.borrow_mut();
         #[cfg(feature = "interactive")]
-        if let Some(sample) = self.controller_events.borrow_mut().pop() {
-            return Some(sample);
+        {
+            let mut controllers = self.controller_events.borrow_mut();
+            if controllers.front_order().is_some_and(|order| {
+                queue
+                    .samples
+                    .front()
+                    .is_none_or(|(dom_order, _sample)| order <= *dom_order)
+            }) {
+                return controllers.pop();
+            }
         }
-        self.queue.borrow_mut().pop()
+        queue.pop()
     }
 }
 
@@ -470,7 +484,93 @@ fn verify_controller_lifecycle(
                 ))
             && source.pop().is_none(),
         "refocus snapshot reasserts the same controller identity",
-    )
+    )?;
+    verify_controller_handoff(source, target)
+}
+
+#[cfg(all(feature = "interactive", feature = "test-fixtures"))]
+fn verify_controller_handoff(
+    source: &EventSource,
+    target: &EventTarget,
+) -> Result<(), RenderError> {
+    use games::input::{AxisBinding, InputMapping, InputRouter, LogicalAction};
+
+    let key = KeyboardKey::LETTER_A.code();
+    let mut mapping = InputMapping::new();
+    mapping.bind_key(key, "move");
+    mapping.bind_axis(
+        ControllerAxis::LeftX.code(),
+        AxisBinding::new(None, Some("move"), 16_000, 8000)
+            .ok_or(RenderError::InvalidLength)?,
+    );
+    let mut router = InputRouter::new(mapping);
+    let _attached = router.handle(InputEvent::Attached { device: 1 });
+    verify(
+        router.handle(InputEvent::Axis {
+            device: 1,
+            code: ControllerAxis::LeftX.code(),
+            value: i16::MAX,
+        }) == [LogicalAction {
+            action: "move",
+            down: true,
+        }],
+        "controller handoff initial hold",
+    )?;
+    let _sent = send_key(target, "keydown", "KeyA", false)?;
+    let blur = Event::new("blur").map_err(dom_error)?;
+    let _sent = target.dispatch_event(&blur).map_err(dom_error)?;
+    // The key was pressed before blur, while the controller was held.
+    // Delivering the neutral controller edge first would spuriously
+    // release and re-press the aggregate action.
+    let mut actions = Vec::new();
+    for expected in [
+        InputTransition::Event(HostEvent::Input(InputEvent::Key {
+            code: key,
+            down: true,
+        })),
+        controller_edge(0),
+        focus_lost(),
+    ] {
+        let sample = source.pop().ok_or(RenderError::InvalidLength)?;
+        verify(sample.transition() == expected, "cross-source order")?;
+        if let InputTransition::Event(HostEvent::Input(event)) =
+            sample.transition()
+        {
+            actions.extend(router.handle(event));
+        }
+    }
+    verify(
+        actions
+            == [LogicalAction {
+                action: "move",
+                down: false,
+            }]
+            && source.pop().is_none(),
+        "handoff releases only on focus loss",
+    )?;
+
+    // DOM overflow must not erase either the older polled edge or the
+    // later controller cancellation, even if the actual blur is dropped.
+    let stamp =
+        super::performance::now().map_err(|_| RenderError::InvalidTimestamp)?;
+    let _attached =
+        source.controller_events.borrow_mut().fixture_hold(stamp)?;
+    for _ in 0..4 {
+        let _sent = send_key(target, "keydown", "KeyA", false)?;
+    }
+    let blur = Event::new("blur").map_err(dom_error)?;
+    let _sent = target.dispatch_event(&blur).map_err(dom_error)?;
+    for expected in
+        [controller_edge(i16::MAX), focus_lost(), controller_edge(0)]
+    {
+        verify(
+            source
+                .pop()
+                .is_some_and(|sample| sample.transition() == expected),
+            "independent overflow order",
+        )?;
+    }
+    verify(source.pop().is_none(), "independent overflow drained")
 }
 
 #[cfg(feature = "test-fixtures")]
