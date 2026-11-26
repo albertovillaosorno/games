@@ -36,7 +36,7 @@ use std::fmt::{self, Debug, Formatter};
 use sdl2::audio::{AudioFormat, AudioQueue, AudioSpecDesired, AudioStatus};
 
 use crate::ir::audio::{
-    AudioDevices, PlaybackBackend, PlaybackError, PlaybackPort,
+    AudioDevices, PlaybackBackend, PlaybackControl, PlaybackError, PlaybackPort,
 };
 use crate::ir::security::audio::{
     AdmittedSamples, PlaybackObservation, PlaybackRequest, PlaybackState,
@@ -81,8 +81,8 @@ impl PlaybackBackend for AudioBackend {
         (self.driver, self.requested_device.as_deref())
     }
 
-    fn pause(&self) {
-        self.device.pause();
+    fn poll_control(&self) -> Result<PlaybackControl, PlaybackError> {
+        Err(PlaybackError::InvalidState)
     }
 
     fn queue_samples(
@@ -98,8 +98,16 @@ impl PlaybackBackend for AudioBackend {
         self.device.size()
     }
 
-    fn resume(&self) {
-        self.device.resume();
+    fn request_control(
+        &self,
+        next: PlaybackState,
+    ) -> Result<PlaybackControl, PlaybackError> {
+        match next {
+            PlaybackState::Paused => self.device.pause(),
+            PlaybackState::Running => self.device.resume(),
+            PlaybackState::Stopped => return Err(PlaybackError::InvalidState),
+        }
+        Ok(PlaybackControl::Complete)
     }
 }
 
@@ -184,10 +192,16 @@ mod tests {
         wait_for_retry(Duration::from_millis(30))
             .map_err(|error| PlaybackError::Backend(error.to_string()))?;
         require(audio.queued_frames()? == 1024, "paused queue drained")?;
-        audio.resume()?;
+        require(
+            audio.resume()? == PlaybackControl::Complete,
+            "native control pending",
+        )?;
         for _attempt in 0u32..100 {
             if audio.queued_frames()? == 0 {
-                audio.pause()?;
+                require(
+                    audio.pause()? == PlaybackControl::Complete,
+                    "native control pending",
+                )?;
                 let (driver, requested) = audio.output();
                 return write_status(format_args!(
                     "Native audio drained 1024 frames: SDL {driver}, {}",
@@ -236,9 +250,15 @@ mod tests {
         require(audio.queued_frames()? == 3, "queue size changed")?;
         audio.clear()?;
         require(audio.queued_frames()? == 0, "expected empty queue")?;
-        audio.resume()?;
+        require(
+            audio.resume()? == PlaybackControl::Complete,
+            "native control pending",
+        )?;
         audio.queue_samples(&[1, -1])?;
-        audio.pause()?;
+        require(
+            audio.pause()? == PlaybackControl::Complete,
+            "native control pending",
+        )?;
         audio.clear()?;
         drop(audio);
         verify_running_queue(None)?;

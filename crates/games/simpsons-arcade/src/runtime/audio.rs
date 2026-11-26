@@ -42,7 +42,7 @@ use games::input::{InputEvent, LogicalAction};
 use games::replay::LiveSimulation;
 use games_assets::ManifestLimits;
 use games_assets::pcm::PcmSamples;
-use games_platform::ir::audio::{NativeAudio, PlaybackSpec};
+use games_platform::ir::audio::{NativeAudio, PlaybackControl, PlaybackSpec};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::process::write_status;
 use games_platform::ir::storage::bundle::MediaOverlay;
@@ -219,10 +219,14 @@ impl<'samples> Playback<'samples> {
 
     fn set_running(&mut self, running: bool) -> Result<(), RenderError> {
         if self.running != running {
-            if running {
-                self.device.resume().map_err(failure)?;
+            let receipt = if running {
+                self.device.resume()
             } else {
-                self.device.pause().map_err(failure)?;
+                self.device.pause()
+            }
+            .map_err(failure)?;
+            if receipt != PlaybackControl::Complete {
+                return Err(failure("native audio control pending"));
             }
             self.running = running;
         }
