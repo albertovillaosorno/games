@@ -31,9 +31,12 @@
 //! Shared private staging and publication admission.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::ffi::OsStr;
 
-use games_assets::archive::{ArchiveBudget, EntryKind, validate_path};
+use games_assets::archive::{
+    ArchiveBudget, ArchiveError, EntryKind, validate_path,
+};
 use games_assets::{AssetError, ContentHash};
 
 use crate::ir::storage::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
@@ -183,12 +186,13 @@ impl AdmittedManifest<'_> {
 }
 
 /// An independently authored file with an admitted portable path and bytes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct AdmittedAuthoredFile<'input> {
     bytes: &'input [u8],
     executable: bool,
     leaf: &'input str,
     parents: &'input str,
+    plan: NamespacePlan<'input>,
     size: u64,
 }
 
@@ -209,16 +213,19 @@ impl<'input> AdmittedAuthoredFile<'input> {
         path: &'input str,
         bytes: &'input [u8],
         executable: bool,
+        namespace: &mut Namespace,
     ) -> Result<Self, StagingError> {
         validate_path(path)?;
         let (parents, leaf) = staging_path(path)?;
         let size = u64::try_from(bytes.len())
             .map_err(|_error| StagingError::ChangedStorage)?;
+        let plan = namespace.admit((parents, leaf), EntryKind::File, None)?;
         Ok(Self {
             bytes,
             executable,
             leaf,
             parents,
+            plan,
             size,
         })
     }
@@ -227,6 +234,12 @@ impl<'input> AdmittedAuthoredFile<'input> {
     #[must_use]
     pub const fn parts(&self) -> (&'input str, &'input str) {
         (self.parents, self.leaf)
+    }
+
+    /// Exact admitted traversal for these bytes.
+    #[must_use]
+    pub const fn plan(&self) -> &NamespacePlan<'input> {
+        &self.plan
     }
 
     /// Exact admitted length.
@@ -258,6 +271,225 @@ impl<'name> PublicationName<'name> {
         self.0
     }
 }
+
+/// Portable directory namespace shared by all private staging transactions.
+#[derive(Debug, Default)]
+pub struct Namespace {
+    next_id: usize,
+    root: NamespaceDirectory,
+}
+
+impl Namespace {
+    /// Admit a member before dispatch; discard this namespace on failure.
+    pub(crate) fn admit<'path>(
+        &mut self,
+        parts: PathParts<'path>,
+        kind: EntryKind,
+        budget: Option<&mut ArchiveBudget>,
+    ) -> Result<NamespacePlan<'path>, StagingError> {
+        let (parents, leaf) = parts;
+        let mut admission = NamespaceAdmission {
+            budget,
+            next_id: &mut self.next_id,
+        };
+        let mut directory = &mut self.root;
+        let mut steps = Vec::new();
+        if !parents.is_empty() {
+            for part in parents.split('/') {
+                let (step, node) = directory.admit_child(
+                    &mut admission,
+                    part,
+                    NamespaceMember::Implicit,
+                )?;
+                directory =
+                    node.directory.as_mut().ok_or(StagingError::Collision)?;
+                steps.push(step);
+            }
+        }
+        let member = if kind == EntryKind::Directory {
+            NamespaceMember::Explicit
+        } else {
+            NamespaceMember::File
+        };
+        let (last, _) = directory.admit_child(&mut admission, leaf, member)?;
+        Ok(NamespacePlan {
+            leaf: last,
+            parents: steps,
+        })
+    }
+
+    /// Number of distinct admitted file and directory identities.
+    #[must_use]
+    pub const fn entry_count(&self) -> usize {
+        self.next_id
+    }
+
+    /// Root directory of the exact admitted namespace.
+    #[must_use]
+    pub const fn root(&self) -> &NamespaceDirectory {
+        &self.root
+    }
+}
+
+#[derive(Debug)]
+struct NamespaceAdmission<'budget> {
+    budget: Option<&'budget mut ArchiveBudget>,
+    next_id: &'budget mut usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NamespaceMember {
+    Explicit,
+    File,
+    Implicit,
+}
+
+/// One admitted directory and its expected entries.
+#[derive(Debug, Default)]
+pub struct NamespaceDirectory {
+    children: BTreeMap<String, NamespaceNode>,
+    explicit: bool,
+}
+
+impl NamespaceDirectory {
+    fn admit_child<'path>(
+        &mut self,
+        admission: &mut NamespaceAdmission<'_>,
+        name: &'path str,
+        member: NamespaceMember,
+    ) -> Result<AdmittedChild<'_, 'path>, StagingError> {
+        let is_directory = member != NamespaceMember::File;
+        let explicit = member == NamespaceMember::Explicit;
+        let (node, created) = match self
+            .children
+            .entry(name.to_ascii_lowercase())
+        {
+            Entry::Occupied(entry) => (entry.into_mut(), false),
+            Entry::Vacant(entry) => {
+                if member == NamespaceMember::Implicit
+                    && let Some(limits) = admission.budget.as_deref_mut()
+                {
+                    limits.admit(name, EntryKind::Directory, 0)?.finish()?;
+                }
+                let id = *admission.next_id;
+                *admission.next_id = admission
+                    .next_id
+                    .checked_add(1)
+                    .ok_or(ArchiveError::TooLarge)?;
+                let node = entry.insert(NamespaceNode {
+                    directory: is_directory.then(Self::default),
+                    id,
+                    name: name.to_owned(),
+                });
+                (node, true)
+            },
+        };
+        if node.name != name || (!created && !is_directory) {
+            return Err(StagingError::Collision);
+        }
+        if is_directory {
+            let directory =
+                node.directory.as_mut().ok_or(StagingError::Collision)?;
+            if explicit && directory.explicit {
+                return Err(StagingError::Collision);
+            }
+            directory.explicit |= explicit;
+        }
+        Ok((
+            NamespaceStep {
+                created,
+                id: node.id,
+                name,
+            },
+            node,
+        ))
+    }
+
+    /// Exact children in stable portable order.
+    pub fn children(&self) -> impl ExactSizeIterator<Item = &NamespaceNode> {
+        self.children.values()
+    }
+}
+
+/// One file or directory in the portable staged namespace.
+#[derive(Debug)]
+pub struct NamespaceNode {
+    directory: Option<NamespaceDirectory>,
+    id: usize,
+    name: String,
+}
+
+impl NamespaceNode {
+    /// Directory contents, or absence for an ordinary file.
+    #[must_use]
+    pub const fn directory(&self) -> Option<&NamespaceDirectory> {
+        self.directory.as_ref()
+    }
+
+    /// Stable transaction-local identity for associated native metadata.
+    #[must_use]
+    pub const fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Exact original portable component spelling.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// The admitted parent traversal and leaf of a single staged member.
+#[derive(Debug)]
+pub struct NamespacePlan<'path> {
+    leaf: NamespaceStep<'path>,
+    parents: Vec<NamespaceStep<'path>>,
+}
+
+impl<'path> NamespacePlan<'path> {
+    /// Exact final component and its transaction-local identity.
+    #[must_use]
+    pub const fn leaf(&self) -> NamespaceStep<'path> {
+        self.leaf
+    }
+
+    /// Ordered parent components, including whether each must be created.
+    #[must_use]
+    pub fn parents(&self) -> &[NamespaceStep<'path>] {
+        &self.parents
+    }
+}
+
+/// One admitted component to create or reopen in a pinned directory.
+#[derive(Clone, Copy, Debug)]
+pub struct NamespaceStep<'path> {
+    created: bool,
+    id: usize,
+    name: &'path str,
+}
+
+impl<'path> NamespaceStep<'path> {
+    /// Whether the component is newly admitted and must not already exist.
+    #[must_use]
+    pub const fn created(self) -> bool {
+        self.created
+    }
+
+    /// Stable transaction-local identity for associated native metadata.
+    #[must_use]
+    pub const fn id(self) -> usize {
+        self.id
+    }
+
+    /// Original portable component spelling.
+    #[must_use]
+    pub const fn name(self) -> &'path str {
+        self.name
+    }
+}
+
+type AdmittedChild<'node, 'path> =
+    (NamespaceStep<'path>, &'node mut NamespaceNode);
 
 type PathParts<'path> = (&'path str, &'path str);
 

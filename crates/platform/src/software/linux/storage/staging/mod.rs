@@ -34,8 +34,6 @@
 mod pool;
 mod publication;
 
-use std::collections::BTreeMap;
-use std::collections::btree_map::Entry;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -59,7 +57,9 @@ use super::bundle::{BundleError, CanonicalBundle};
 use super::file::{
     DIRECTORY_FLAGS, same_inode, trusted_directory, trusted_directory_stat,
 };
-use crate::ir::security::staging::{AdmittedManifest, AdmittedPayload};
+use crate::ir::security::staging::{
+    AdmittedManifest, AdmittedPayload, Namespace, NamespacePlan, NamespaceStep,
+};
 #[cfg(test)]
 use crate::ir::security::staging::{
     CanonicalAdmission, manifest_size, payload_path,
@@ -90,22 +90,35 @@ impl From<Errno> for StagingError {
 }
 
 #[derive(Debug, Default)]
-struct Directory {
-    children: BTreeMap<String, Node>,
-    explicit: bool,
-}
+struct Stamps(Vec<FileStat>);
 
-#[derive(Debug)]
-struct Node {
-    directory: Option<Directory>,
-    name: String,
-    // Directory identity or completed file metadata for verification.
-    stamp: Option<Box<FileStat>>,
-}
+impl Stamps {
+    fn get(&self, id: usize) -> Result<&FileStat, StagingError> {
+        self.0.get(id).ok_or(StagingError::ChangedStorage)
+    }
 
-impl Node {
+    const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn record(
+        &mut self,
+        id: usize,
+        stamp: &FileStat,
+    ) -> Result<(), StagingError> {
+        if self.0.len() != id {
+            return Err(StagingError::ChangedStorage);
+        }
+        self.0
+            .try_reserve(1)
+            .map_err(|_error| ArchiveError::TooLarge)?;
+        self.0.push(*stamp);
+        Ok(())
+    }
+
     fn record_file(
         &mut self,
+        id: usize,
         file: &File,
         size: u64,
     ) -> Result<(), StagingError> {
@@ -113,123 +126,8 @@ impl Node {
         if u64::try_from(stamp.st_size).ok() != Some(size) {
             return Err(StagingError::ChangedStorage);
         }
-        self.stamp = Some(Box::new(stamp));
-        Ok(())
+        self.record(id, &stamp)
     }
-}
-
-type CreatedFile<'directory> = (File, &'directory mut Node);
-type DescendedDirectory<'directory> =
-    (&'directory mut Directory, Option<OwnedFd>);
-
-#[derive(Debug)]
-enum DirectoryAdmission<'budget> {
-    Explicit,
-    Implicit(Option<&'budget mut ArchiveBudget>),
-}
-
-impl Directory {
-    fn create_file(
-        &mut self,
-        parent: &OwnedFd,
-        name: &str,
-    ) -> Result<CreatedFile<'_>, StagingError> {
-        let Entry::Vacant(entry) =
-            self.children.entry(name.to_ascii_lowercase())
-        else {
-            return Err(StagingError::Collision);
-        };
-        let fd = openat(
-            parent,
-            name,
-            OFlag::O_WRONLY
-                | OFlag::O_CREAT
-                | OFlag::O_EXCL
-                | OFlag::O_NOFOLLOW
-                | OFlag::O_CLOEXEC,
-            Mode::S_IRUSR | Mode::S_IWUSR,
-        )?;
-        let node = entry.insert(Node {
-            directory: None,
-            name: name.to_owned(),
-            stamp: None,
-        });
-        Ok((File::from(fd), node))
-    }
-
-    fn descend(
-        &mut self,
-        root: &OwnedFd,
-        parents: &str,
-        mut budget: Option<&mut ArchiveBudget>,
-    ) -> Result<DescendedDirectory<'_>, StagingError> {
-        let mut directory = self;
-        let mut descriptor = None;
-        if !parents.is_empty() {
-            for part in parents.split('/') {
-                let parent = descriptor.as_ref().unwrap_or(root);
-                let OpenedDirectory { child, fd } = directory.open_child(
-                    parent,
-                    part,
-                    DirectoryAdmission::Implicit(budget.as_deref_mut()),
-                )?;
-                directory = child;
-                descriptor = Some(fd);
-            }
-        }
-        Ok((directory, descriptor))
-    }
-
-    fn open_child(
-        &mut self,
-        parent: &OwnedFd,
-        name: &str,
-        admission: DirectoryAdmission<'_>,
-    ) -> Result<OpenedDirectory<'_>, StagingError> {
-        let explicit = matches!(admission, DirectoryAdmission::Explicit);
-        let node = match self.children.entry(name.to_ascii_lowercase()) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                if let DirectoryAdmission::Implicit(Some(limits)) = admission {
-                    limits.admit(name, EntryKind::Directory, 0)?.finish()?;
-                }
-                mkdirat(parent, name, Mode::S_IRWXU)?;
-                entry.insert(Node {
-                    directory: Some(Self::default()),
-                    name: name.to_owned(),
-                    stamp: None,
-                })
-            },
-        };
-        if node.name != name {
-            return Err(StagingError::Collision);
-        }
-        let child = node.directory.as_mut().ok_or(StagingError::Collision)?;
-        if explicit && child.explicit {
-            return Err(StagingError::Collision);
-        }
-        let fd = openat(parent, name, DIRECTORY_FLAGS, Mode::empty())?;
-        let current = fstat(&fd)?;
-        if !trusted_directory_stat(&current)
-            || node
-                .stamp
-                .as_deref()
-                .is_some_and(|stamp| !same_inode(stamp, &current))
-        {
-            return Err(StagingError::ChangedStorage);
-        }
-        if node.stamp.is_none() {
-            node.stamp = Some(Box::new(current));
-        }
-        child.explicit |= explicit;
-        Ok(OpenedDirectory { child, fd })
-    }
-}
-
-#[derive(Debug)]
-struct OpenedDirectory<'directory> {
-    child: &'directory mut Directory,
-    fd: OwnedFd,
 }
 
 #[derive(Debug)]
@@ -307,11 +205,19 @@ impl PrivateDirectory {
 
     fn verify_tree(
         &self,
-        registry: &Directory,
+        namespace: &Namespace,
+        stamps: &Stamps,
         sync: bool,
     ) -> Result<(), StagingError> {
+        if stamps.len() != namespace.entry_count() {
+            return Err(StagingError::ChangedStorage);
+        }
         self.verify_location()?;
-        publication::check_tree(registry, &self.root, None, sync)?;
+        publication::TreeVerifier::new(stamps, sync).check(
+            namespace.root(),
+            &self.root,
+            None,
+        )?;
         self.verify_location()
     }
 }
@@ -326,54 +232,99 @@ impl Drop for PrivateDirectory {
 
 #[derive(Debug)]
 struct ArchiveTree {
-    registry: Directory,
+    stamps: Stamps,
     temporary: PrivateDirectory,
 }
 
 impl ArchiveTree {
-    fn finish(self, sync: bool) -> Result<StagedArchive, StagingError> {
-        self.temporary.verify_tree(&self.registry, sync)?;
+    fn create_file(parent: &OwnedFd, name: &str) -> Result<File, StagingError> {
+        let fd = openat(
+            parent,
+            name,
+            OFlag::O_WRONLY
+                | OFlag::O_CREAT
+                | OFlag::O_EXCL
+                | OFlag::O_NOFOLLOW
+                | OFlag::O_CLOEXEC,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )?;
+        Ok(File::from(fd))
+    }
+
+    fn descend(
+        &mut self,
+        plan: &NamespacePlan<'_>,
+    ) -> Result<Option<OwnedFd>, StagingError> {
+        let mut descriptor = None;
+        for step in plan.parents() {
+            let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
+            descriptor =
+                Some(Self::open_child(&mut self.stamps, parent, *step)?);
+        }
+        Ok(descriptor)
+    }
+
+    fn finish(
+        self,
+        namespace: Namespace,
+        sync: bool,
+    ) -> Result<StagedArchive, StagingError> {
+        self.temporary.verify_tree(&namespace, &self.stamps, sync)?;
         Ok(StagedArchive {
-            registry: self.registry,
+            namespace,
+            stamps: self.stamps,
             temporary: self.temporary,
         })
     }
 
     fn new(parent: &Path) -> Result<Self, StagingError> {
         Ok(Self {
-            registry: Directory::default(),
+            stamps: Stamps::default(),
             temporary: PrivateDirectory::create_in(parent)?,
         })
+    }
+
+    fn open_child(
+        stamps: &mut Stamps,
+        parent: &OwnedFd,
+        step: NamespaceStep<'_>,
+    ) -> Result<OwnedFd, StagingError> {
+        if step.created() {
+            mkdirat(parent, step.name(), Mode::S_IRWXU)?;
+        }
+        let fd = openat(parent, step.name(), DIRECTORY_FLAGS, Mode::empty())?;
+        let current = fstat(&fd)?;
+        if !trusted_directory_stat(&current) {
+            return Err(StagingError::ChangedStorage);
+        }
+        if step.created() {
+            stamps.record(step.id(), &current)?;
+        } else if !same_inode(stamps.get(step.id())?, &current) {
+            return Err(StagingError::ChangedStorage);
+        }
+        Ok(fd)
     }
 
     fn write_member(
         &mut self,
         entry: &mut AdmittedArchiveEntry<'_>,
         input: &mut dyn Read,
-        budget: &mut ArchiveBudget,
     ) -> Result<(), StagingError> {
         let metadata = entry.metadata();
-        let (parents, leaf) = entry.parts();
-        let (directory, descriptor) = self.registry.descend(
-            &self.temporary.root,
-            parents,
-            Some(budget),
-        )?;
+        let descriptor = self.descend(entry.plan())?;
         let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
+        let leaf = entry.plan().leaf();
         match metadata.kind {
             EntryKind::Directory => {
                 entry.copy_to(input, &mut io::sink())?;
-                let _directory = directory.open_child(
-                    parent,
-                    leaf,
-                    DirectoryAdmission::Explicit,
-                )?;
+                let _directory =
+                    Self::open_child(&mut self.stamps, parent, leaf)?;
                 Ok(())
             },
             EntryKind::File => {
-                let (mut output, node) = directory.create_file(parent, leaf)?;
+                let mut output = Self::create_file(parent, leaf.name())?;
                 entry.copy_to(input, &mut output)?;
-                node.record_file(&output, metadata.size)
+                self.stamps.record_file(leaf.id(), &output, metadata.size)
             },
             EntryKind::Hardlink | EntryKind::Other | EntryKind::Symlink => {
                 Err(ArchiveError::LinkOrSpecial.into())
@@ -391,6 +342,7 @@ impl ArchiveTree {
 struct ArchiveStaging {
     budget: ArchiveBudget,
     failed: bool,
+    namespace: Namespace,
     tree: ArchiveTree,
 }
 
@@ -408,7 +360,7 @@ impl ArchiveStaging {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        self.tree.finish(sync)
+        self.tree.finish(self.namespace, sync)
     }
 
     /// Create a private temporary directory under a trusted parent.
@@ -423,6 +375,7 @@ impl ArchiveStaging {
         Ok(Self {
             budget,
             failed: false,
+            namespace: Namespace::default(),
             tree: ArchiveTree::new(parent)?,
         })
     }
@@ -475,9 +428,12 @@ impl ArchiveStaging {
     where
         Source: Read,
     {
-        let mut entry = AdmittedArchiveEntry::new(metadata, &mut self.budget)?;
-        self.tree
-            .write_member(&mut entry, input, &mut self.budget)?;
+        let mut entry = AdmittedArchiveEntry::new(
+            metadata,
+            &mut self.budget,
+            &mut self.namespace,
+        )?;
+        self.tree.write_member(&mut entry, input)?;
         entry.finish()
     }
 }
@@ -659,7 +615,8 @@ impl CanonicalStaging {
 /// A verified staging directory with best-effort cleanup on drop.
 #[derive(Debug)]
 struct StagedArchive {
-    registry: Directory,
+    namespace: Namespace,
+    stamps: Stamps,
     temporary: PrivateDirectory,
 }
 
@@ -675,7 +632,8 @@ impl StagedArchive {
     /// # Errors
     /// Rejects observed storage changes or filesystem errors.
     fn verify(&self) -> Result<(), StagingError> {
-        self.temporary.verify_tree(&self.registry, false)
+        self.temporary
+            .verify_tree(&self.namespace, &self.stamps, false)
     }
 }
 
@@ -690,13 +648,12 @@ impl ArchivePort for ArchiveTree {
         &mut self,
         entry: &mut AdmittedArchiveEntry<'_>,
         input: &mut dyn Read,
-        budget: &mut ArchiveBudget,
     ) -> Result<(), StagingError> {
-        self.write_member(entry, input, budget)
+        self.write_member(entry, input)
     }
 
-    fn complete(self: Box<Self>) -> CompletedArchive {
-        Ok(Box::new((*self).finish(false)?))
+    fn complete(self: Box<Self>, namespace: Namespace) -> CompletedArchive {
+        Ok(Box::new((*self).finish(namespace, false)?))
     }
 }
 

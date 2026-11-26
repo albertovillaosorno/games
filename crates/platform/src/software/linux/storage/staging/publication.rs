@@ -35,6 +35,8 @@ use std::fs;
 use std::io;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io::Write as _;
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+use std::mem::take;
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::Path;
 
@@ -57,12 +59,15 @@ use super::super::file::{
     trusted_directory_stat, verify_staged_regular,
 };
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use super::PrivateDirectory;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::pool::SharedPool;
-use super::{ArchiveStaging, Directory, StagedArchive, StagingError};
+use super::{ArchiveStaging, StagedArchive, StagingError, Stamps};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-use crate::ir::security::staging::{AdmittedAuthoredFile, PublicationName};
+use super::{ArchiveTree, PrivateDirectory};
+use crate::ir::security::staging::NamespaceDirectory;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::ir::security::staging::{
+    AdmittedAuthoredFile, Namespace, PublicationName,
+};
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::{
     AuthoredFactory, AuthoredPort, OpenAuthored, PublishedDirectory,
@@ -128,8 +133,9 @@ impl StagedBundle {
 #[derive(Debug)]
 pub(super) struct AuthoredStaging {
     failed: bool,
-    registry: Directory,
-    temporary: PrivateDirectory,
+    #[cfg(test)]
+    namespace: Namespace,
+    tree: ArchiveTree,
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -141,8 +147,9 @@ impl AuthoredStaging {
     pub(super) fn new(parent: &Path) -> Result<Self, StagingError> {
         Ok(Self {
             failed: false,
-            registry: Directory::default(),
-            temporary: PrivateDirectory::create_in(parent)?,
+            #[cfg(test)]
+            namespace: Namespace::default(),
+            tree: ArchiveTree::new(parent)?,
         })
     }
 
@@ -151,7 +158,7 @@ impl AuthoredStaging {
     /// Only files recorded through `write_file` may be published.
     #[must_use]
     pub(super) fn path(&self) -> &Path {
-        &self.temporary.path
+        &self.tree.temporary.path
     }
 
     /// Verify, synchronise and publish the exact recorded output tree.
@@ -162,25 +169,31 @@ impl AuthoredStaging {
     /// post-publication parent sync failure separately.
     #[cfg(test)]
     pub(super) fn publish(
-        self,
+        mut self,
         name: &OsStr,
     ) -> Result<PublishedDirectory, StagingError> {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        self.publish_admitted(PublicationName::new(name)?)
+        let namespace = take(&mut self.namespace);
+        self.publish_admitted(PublicationName::new(name)?, &namespace)
     }
 
     fn publish_admitted(
         mut self,
         name: PublicationName<'_>,
+        namespace: &Namespace,
     ) -> Result<PublishedDirectory, StagingError> {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        self.temporary.verify_tree(&self.registry, true)?;
-        self.temporary.verify_tree(&self.registry, false)?;
-        publish_directory(&mut self.temporary, name.value())
+        self.tree
+            .temporary
+            .verify_tree(namespace, &self.tree.stamps, true)?;
+        self.tree
+            .temporary
+            .verify_tree(namespace, &self.tree.stamps, false)?;
+        publish_directory(&mut self.tree.temporary, name.value())
     }
 
     /// Write an admitted, independently authored file without replacement.
@@ -201,20 +214,25 @@ impl AuthoredStaging {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        let result = AdmittedAuthoredFile::new(path, bytes, executable)
-            .and_then(|file| self.write_member(file));
+        let result = AdmittedAuthoredFile::new(
+            path,
+            bytes,
+            executable,
+            &mut self.namespace,
+        )
+        .and_then(|file| self.write_member(&file));
         self.failed = result.is_err();
         result
     }
 
     fn write_member(
         &mut self,
-        file: AdmittedAuthoredFile<'_>,
+        file: &AdmittedAuthoredFile<'_>,
     ) -> Result<(), StagingError> {
-        let (parents, leaf) = file.parts();
-        let (directory, descriptor) =
-            self.registry.descend(&self.temporary.root, parents, None)?;
-        let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
+        let plan = file.plan();
+        let descriptor = self.tree.descend(plan)?;
+        let parent = descriptor.as_ref().unwrap_or(&self.tree.temporary.root);
+        let leaf = plan.leaf();
         let mode = Mode::S_IRUSR
             | Mode::S_IWUSR
             | if file.executable() {
@@ -222,10 +240,12 @@ impl AuthoredStaging {
             } else {
                 Mode::empty()
             };
-        let (mut output, node) = directory.create_file(parent, leaf)?;
+        let mut output = ArchiveTree::create_file(parent, leaf.name())?;
         output.write_all(file.bytes())?;
         fchmod(&output, mode)?;
-        node.record_file(&output, file.size())
+        self.tree
+            .stamps
+            .record_file(leaf.id(), &output, file.size())
     }
 }
 
@@ -267,7 +287,7 @@ impl AuthoredFactory for () {
 impl AuthoredPort for AuthoredStaging {
     fn append_member(
         &mut self,
-        file: AdmittedAuthoredFile<'_>,
+        file: &AdmittedAuthoredFile<'_>,
     ) -> Result<(), StagingError> {
         self.write_member(file)
     }
@@ -279,44 +299,56 @@ impl AuthoredPort for AuthoredStaging {
     fn publish_complete(
         self: Box<Self>,
         name: PublicationName<'_>,
+        namespace: &Namespace,
     ) -> Result<PublishedDirectory, StagingError> {
-        (*self).publish_admitted(name)
+        (*self).publish_admitted(name, namespace)
     }
 }
 
-pub(super) fn check_tree(
-    directory: &Directory,
-    fd: &OwnedFd,
-    expected: Option<&FileStat>,
+#[derive(Debug)]
+pub(super) struct TreeVerifier<'stamps> {
+    stamps: &'stamps Stamps,
     sync: bool,
-) -> Result<(), StagingError> {
-    let current = fstat(fd)?;
-    if !trusted_directory_stat(&current)
-        || expected.is_some_and(|stamp| !same_inode(stamp, &current))
-    {
-        return Err(StagingError::ChangedStorage);
-    }
-    check_entry_count(fd, directory.children.len())?;
-    let check = if sync {
-        sync_regular
-    } else {
-        verify_staged_regular
-    };
-    for node in directory.children.values() {
-        let stamp =
-            node.stamp.as_deref().ok_or(StagingError::ChangedStorage)?;
-        if let Some(child) = &node.directory {
-            let child_fd =
-                openat(fd, node.name.as_str(), DIRECTORY_FLAGS, Mode::empty())?;
-            check_tree(child, &child_fd, Some(stamp), sync)?;
-        } else {
-            check(fd, &node.name, stamp).map_err(sync_error)?;
+}
+
+impl<'stamps> TreeVerifier<'stamps> {
+    pub(super) fn check(
+        &self,
+        directory: &NamespaceDirectory,
+        fd: &OwnedFd,
+        expected: Option<&FileStat>,
+    ) -> Result<(), StagingError> {
+        let current = fstat(fd)?;
+        if !trusted_directory_stat(&current)
+            || expected.is_some_and(|stamp| !same_inode(stamp, &current))
+        {
+            return Err(StagingError::ChangedStorage);
         }
+        check_entry_count(fd, directory.children().len())?;
+        let check = if self.sync {
+            sync_regular
+        } else {
+            verify_staged_regular
+        };
+        for node in directory.children() {
+            let stamp = self.stamps.get(node.id())?;
+            if let Some(child) = node.directory() {
+                let child_fd =
+                    openat(fd, node.name(), DIRECTORY_FLAGS, Mode::empty())?;
+                self.check(child, &child_fd, Some(stamp))?;
+            } else {
+                check(fd, node.name(), stamp).map_err(sync_error)?;
+            }
+        }
+        if self.sync {
+            fsync(fd)?;
+        }
+        Ok(())
     }
-    if sync {
-        fsync(fd)?;
+
+    pub(super) const fn new(stamps: &'stamps Stamps, sync: bool) -> Self {
+        Self { stamps, sync }
     }
-    Ok(())
 }
 
 pub(super) fn finish(

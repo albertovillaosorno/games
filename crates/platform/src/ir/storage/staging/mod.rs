@@ -44,7 +44,8 @@ use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 use super::bundle::{BundleError, CanonicalBundle};
 use crate::ir::security::staging::{
     AdmittedAuthoredFile, AdmittedManifest, AdmittedPayload,
-    CanonicalAdmission, PublicationName, staging_path,
+    CanonicalAdmission, Namespace, NamespacePlan, PublicationName,
+    staging_path,
 };
 
 /// A staging operation failed and the result must not be published.
@@ -112,6 +113,7 @@ pub struct AdmittedArchiveEntry<'path> {
     leaf: &'path str,
     metadata: StagingEntry<'path>,
     parents: &'path str,
+    plan: NamespacePlan<'path>,
     verified: bool,
 }
 
@@ -168,20 +170,28 @@ impl<'path> AdmittedArchiveEntry<'path> {
     ///
     /// # Errors
     /// Rejects unsafe metadata, exhausted budgets and nonportable paths.
-    pub fn new(
+    /// Any rejection requires discarding the namespace and transaction.
+    pub(crate) fn new(
         metadata: StagingEntry<'path>,
         budget: &mut ArchiveBudget,
+        namespace: &mut Namespace,
     ) -> Result<Self, StagingError> {
         let mut available = *budget;
         let entry =
             available.admit(metadata.path, metadata.kind, metadata.size)?;
         let (parents, leaf) = staging_path(metadata.path)?;
+        let plan = namespace.admit(
+            (parents, leaf),
+            metadata.kind,
+            Some(&mut available),
+        )?;
         *budget = available;
         Ok(Self {
             budget: Some(entry),
             leaf,
             metadata,
             parents,
+            plan,
             verified: false,
         })
     }
@@ -190,6 +200,12 @@ impl<'path> AdmittedArchiveEntry<'path> {
     #[must_use]
     pub const fn parts(&self) -> (&'path str, &'path str) {
         (self.parents, self.leaf)
+    }
+
+    /// Admitted exact traversal with stable node identities.
+    #[must_use]
+    pub const fn plan(&self) -> &NamespacePlan<'path> {
+        &self.plan
     }
 }
 
@@ -219,10 +235,9 @@ pub(crate) trait ArchivePort: Debug {
         &mut self,
         entry: &mut AdmittedArchiveEntry<'_>,
         input: &mut dyn Read,
-        budget: &mut ArchiveBudget,
     ) -> Result<(), StagingError>;
 
-    fn complete(self: Box<Self>) -> CompletedArchive;
+    fn complete(self: Box<Self>, namespace: Namespace) -> CompletedArchive;
 }
 
 pub(crate) trait CompletedArchivePort: Debug {
@@ -275,6 +290,7 @@ where
 #[derive(Debug)]
 pub struct ArchiveStaging {
     budget: ArchiveBudget,
+    namespace: Namespace,
     transaction: Transaction<dyn ArchivePort>,
 }
 
@@ -285,7 +301,7 @@ impl ArchiveStaging {
     /// Rejects an aborted transaction or changed storage.
     pub fn finish(self) -> Result<StagedArchive, StagingError> {
         Ok(StagedArchive {
-            backend: self.transaction.finish()?.complete()?,
+            backend: self.transaction.finish()?.complete(self.namespace)?,
         })
     }
 
@@ -302,6 +318,7 @@ impl ArchiveStaging {
     {
         Ok(Self {
             budget,
+            namespace: Namespace::default(),
             transaction: Transaction::new(
                 <() as ArchiveFactory>::open_archive(parent.as_ref())?,
             ),
@@ -322,9 +339,12 @@ impl ArchiveStaging {
         Source: Read,
     {
         self.transaction.apply(|backend| {
-            let mut entry =
-                AdmittedArchiveEntry::new(metadata, &mut self.budget)?;
-            backend.append_member(&mut entry, input, &mut self.budget)?;
+            let mut entry = AdmittedArchiveEntry::new(
+                metadata,
+                &mut self.budget,
+                &mut self.namespace,
+            )?;
+            backend.append_member(&mut entry, input)?;
             entry.finish()
         })
     }
@@ -591,7 +611,7 @@ pub(crate) trait AuthoredFactory {
 pub(crate) trait AuthoredPort: Debug {
     fn append_member(
         &mut self,
-        file: AdmittedAuthoredFile<'_>,
+        file: &AdmittedAuthoredFile<'_>,
     ) -> Result<(), StagingError>;
 
     fn location(&self) -> &OsStr;
@@ -599,6 +619,7 @@ pub(crate) trait AuthoredPort: Debug {
     fn publish_complete(
         self: Box<Self>,
         name: PublicationName<'_>,
+        namespace: &Namespace,
     ) -> Result<PublishedDirectory, StagingError>;
 }
 
@@ -608,6 +629,7 @@ pub(crate) trait AuthoredPort: Debug {
 /// bytes from untrusted media.
 #[derive(Debug)]
 pub struct AuthoredStaging {
+    namespace: Namespace,
     transaction: Transaction<dyn AuthoredPort>,
 }
 
@@ -621,6 +643,7 @@ impl AuthoredStaging {
         Parent: AsRef<OsStr> + ?Sized,
     {
         Ok(Self {
+            namespace: Namespace::default(),
             transaction: Transaction::new(
                 <() as AuthoredFactory>::open_authored(parent.as_ref())?,
             ),
@@ -642,7 +665,7 @@ impl AuthoredStaging {
         name: &OsStr,
     ) -> Result<PublishedDirectory, StagingError> {
         let backend = self.transaction.finish()?;
-        backend.publish_complete(PublicationName::new(name)?)
+        backend.publish_complete(PublicationName::new(name)?, &self.namespace)
     }
 
     /// Write one trusted file using the portable ASCII namespace.
@@ -657,8 +680,11 @@ impl AuthoredStaging {
         executable: bool,
     ) -> Result<(), StagingError> {
         self.transaction.apply(|backend| {
-            backend.append_member(AdmittedAuthoredFile::new(
-                path, bytes, executable,
+            backend.append_member(&AdmittedAuthoredFile::new(
+                path,
+                bytes,
+                executable,
+                &mut self.namespace,
             )?)
         })
     }
@@ -666,6 +692,7 @@ impl AuthoredStaging {
 
 #[cfg(test)]
 mod tests {
+    use std::io::sink;
     use std::mem::replace;
     use std::num::{NonZeroU64, NonZeroUsize};
 
@@ -681,7 +708,6 @@ mod tests {
             &mut self,
             entry: &mut AdmittedArchiveEntry<'_>,
             input: &mut dyn Read,
-            budget: &mut ArchiveBudget,
         ) -> Result<(), StagingError> {
             let mut bytes = Vec::new();
             let metadata = entry.metadata();
@@ -692,10 +718,7 @@ mod tests {
                 return Err(StagingError::UnsupportedPath);
             }
             match entry.parts() {
-                ("", "asset") => {},
-                ("dir", "asset") => {
-                    budget.admit("dir", EntryKind::Directory, 0)?.finish()?;
-                },
+                ("" | "dir", "asset") => {},
                 _ => return Err(StagingError::UnsupportedPath),
             }
             entry.copy_to(input, &mut bytes)?;
@@ -704,7 +727,10 @@ mod tests {
                 .ok_or(StagingError::ChangedStorage)
         }
 
-        fn complete(self: Box<Self>) -> CompletedArchive {
+        fn complete(
+            self: Box<Self>,
+            _namespace: Namespace,
+        ) -> CompletedArchive {
             Ok(self)
         }
     }
@@ -799,7 +825,7 @@ mod tests {
     impl AuthoredPort for AuthoredFake {
         fn append_member(
             &mut self,
-            file: AdmittedAuthoredFile<'_>,
+            file: &AdmittedAuthoredFile<'_>,
         ) -> Result<(), StagingError> {
             if file.parts() == ("", "program")
                 && file.bytes() == b"binary"
@@ -819,6 +845,7 @@ mod tests {
         fn publish_complete(
             self: Box<Self>,
             name: PublicationName<'_>,
+            _namespace: &Namespace,
         ) -> Result<PublishedDirectory, StagingError> {
             Ok(PublishedDirectory {
                 durability: Err(ErrorKind::Other),
@@ -827,10 +854,31 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct PermissiveArchive;
+
+    impl ArchivePort for PermissiveArchive {
+        fn append_member(
+            &mut self,
+            entry: &mut AdmittedArchiveEntry<'_>,
+            input: &mut dyn Read,
+        ) -> Result<(), StagingError> {
+            entry.copy_to(input, &mut sink())
+        }
+
+        fn complete(
+            self: Box<Self>,
+            _namespace: Namespace,
+        ) -> CompletedArchive {
+            Ok(Box::new(ArchiveFake))
+        }
+    }
+
     fn archive_fixture() -> ArchiveStaging {
         let four = NonZeroU64::MIN.saturating_add(3);
         ArchiveStaging {
             budget: ArchiveBudget::new(four, four, NonZeroU64::MIN),
+            namespace: Namespace::default(),
             transaction: Transaction::new(Box::new(ArchiveFake)),
         }
     }
@@ -841,12 +889,14 @@ mod tests {
         let four = NonZeroU64::MIN.saturating_add(3);
         let initial = ArchiveBudget::new(four, four, NonZeroU64::MIN);
         let mut budget = initial;
+        let mut namespace = Namespace::default();
         let metadata = StagingEntry {
             kind: EntryKind::File,
             path: "caf\u{e9}",
             size: 4,
         };
-        if AdmittedArchiveEntry::new(metadata, &mut budget).err()
+        if AdmittedArchiveEntry::new(metadata, &mut budget, &mut namespace)
+            .err()
             != Some(StagingError::UnsupportedPath)
             || budget != initial
         {
@@ -858,6 +908,7 @@ mod tests {
                 ..metadata
             },
             &mut budget,
+            &mut namespace,
         )?;
         let mut output = Vec::new();
         entry.copy_to(&mut b"tile".as_slice(), &mut output)?;
@@ -889,6 +940,117 @@ mod tests {
     }
 
     #[test]
+    fn namespace_plans_reopen_implicit_directories_without_duplicate_nodes()
+    -> Result<(), StagingError> {
+        let mut namespace = Namespace::default();
+        let maximum = NonZeroU64::MIN.saturating_add(15);
+        let mut budget = ArchiveBudget::new(maximum, maximum, maximum);
+        let plan = namespace.admit(
+            ("dir/nested", "asset"),
+            EntryKind::File,
+            Some(&mut budget),
+        )?;
+        if budget.remaining_entries() != 14 {
+            return Err(StagingError::ChangedStorage);
+        }
+        let mut parents = plan.parents().iter();
+        let outer = parents.next().ok_or(StagingError::ChangedStorage)?;
+        let inner = parents.next().ok_or(StagingError::ChangedStorage)?;
+        if !outer.created()
+            || !inner.created()
+            || !plan.leaf().created()
+            || outer.name() != "dir"
+            || inner.name() != "nested"
+            || outer.id() != 0
+            || inner.id() != 1
+            || plan.leaf().id() != 2
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let explicit = namespace.admit(
+            ("dir", "nested"),
+            EntryKind::Directory,
+            Some(&mut budget),
+        )?;
+        if explicit.leaf().created()
+            || explicit.leaf().id() != inner.id()
+            || budget.remaining_entries() != 14
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let sibling = namespace.admit(
+            ("dir/nested", "other"),
+            EntryKind::File,
+            Some(&mut budget),
+        )?;
+        (sibling.leaf().id() == 3
+            && budget.remaining_entries() == 14
+            && namespace.root().children().len() == 1
+            && namespace.entry_count() == 4)
+            .then_some(())
+            .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn portable_namespace_rejects_collisions_before_streaming()
+    -> Result<(), StagingError> {
+        let maximum = NonZeroU64::MIN.saturating_add(63);
+        for (first, first_kind, second, second_kind) in [
+            ("a/file", EntryKind::File, "A/other", EntryKind::File),
+            ("a/file", EntryKind::File, "a/FILE", EntryKind::File),
+            ("a/file", EntryKind::File, "a/file", EntryKind::File),
+            ("a/file", EntryKind::File, "a/file/sub", EntryKind::File),
+            ("a/file", EntryKind::File, "a/file", EntryKind::Directory),
+            ("a", EntryKind::Directory, "a", EntryKind::Directory),
+            ("a", EntryKind::Directory, "a", EntryKind::File),
+        ] {
+            let mut stage = ArchiveStaging {
+                budget: ArchiveBudget::new(maximum, maximum, maximum),
+                namespace: Namespace::default(),
+                transaction: Transaction::new(Box::new(PermissiveArchive)),
+            };
+            let mut bytes = if first_kind == EntryKind::File {
+                b"tile".as_slice()
+            } else {
+                b"".as_slice()
+            };
+            let first_size = if first_kind == EntryKind::File {
+                4
+            } else {
+                0
+            };
+            stage.write_entry(
+                StagingEntry {
+                    kind: first_kind,
+                    path: first,
+                    size: first_size,
+                },
+                &mut bytes,
+            )?;
+            let mut input = b"tile".as_slice();
+            let second_size = if second_kind == EntryKind::File {
+                4
+            } else {
+                0
+            };
+            if stage.write_entry(
+                StagingEntry {
+                    kind: second_kind,
+                    path: second,
+                    size: second_size,
+                },
+                &mut input,
+            ) != Err(StagingError::Collision)
+                || input != b"tile"
+                || !matches!(stage.finish(), Err(StagingError::Aborted))
+            {
+                return Err(StagingError::ChangedStorage);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn implicit_directories_charge_the_same_archive_budget()
     -> Result<(), StagingError> {
         let four = NonZeroU64::MIN.saturating_add(3);
@@ -912,6 +1074,7 @@ mod tests {
                 four,
                 NonZeroU64::MIN.saturating_add(1),
             ),
+            namespace: Namespace::default(),
             transaction: Transaction::new(Box::new(ArchiveFake)),
         };
         stage.write_entry(metadata, &mut input)?;
@@ -1254,6 +1417,7 @@ mod tests {
 
     fn authored() -> AuthoredStaging {
         AuthoredStaging {
+            namespace: Namespace::default(),
             transaction: Transaction::new(Box::new(AuthoredFake)),
         }
     }
@@ -1286,8 +1450,12 @@ mod tests {
     fn authored_file_admission_preserves_nested_bytes_and_mode()
     -> Result<(), StagingError> {
         let bytes = b"independently authored";
-        let member =
-            AdmittedAuthoredFile::new("nested/bin/program.exe", bytes, true)?;
+        let member = AdmittedAuthoredFile::new(
+            "nested/bin/program.exe",
+            bytes,
+            true,
+            &mut Namespace::default(),
+        )?;
         let mut stage = authored();
         (member.parts() == ("nested/bin", "program.exe")
             && member.bytes() == bytes

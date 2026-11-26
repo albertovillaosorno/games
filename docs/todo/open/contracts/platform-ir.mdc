@@ -527,3 +527,13 @@ failed native transitions, changed and unavailable geometry, and subsequent
 successful presentation. Fresh X11 and dummy-audio validation
 1795656308654803759-2791903 passed 1,610 aggregate test executions and all
 six portable core checks.
+
+Archive and authored staging now admit a single shared portable namespace
+before native writes. Its traversal plans bind case-sensitive spellings,
+case-insensitive collision keys, implicit directory charges and stable
+transaction-local entry identities. Native staging retains only filesystem
+metadata indexed by those identities and verifies the exact admitted tree.
+Regressions exercise implicit directory reuse and portable collision
+rejection before streaming even with a permissive backend. Fresh native
+validation 1795656535543811233-2829651 passed 1,614 aggregate test
+executions and all six portable core checks.
