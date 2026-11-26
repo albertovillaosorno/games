@@ -327,3 +327,19 @@ admitted ELF and Wasm fixtures with target-specific receipt trees, refuses
 repeat publication, verifies each receipt again after the other target
 is published, rejects cross-target readback and checks that the sole
 external asset remains unchanged. No original files are used.
+
+At 51025e8, independent native and WebAssembly publications reproduced
+byte-identical receipts of the packages exercised in the native reset
+and browser entry gameplay checks. Native readback verified 109 files
+and 4,148,889 bytes with receipt SHA-256
+`aa41e5d1af7a829e956f6835cea4dc2fcacebea30633c5782eaaf07ab97a3e29`.
+Browser readback verified 88 files and 1,506,682 bytes with receipt
+SHA-256
+`4ca51f37aad85ba5726c48c0b6b949700d55fd5953da372e3c039cb5d7bf3d10`.
+Independent SHA-256 checks matched every listed entry in both packages.
+Native contained 108 mode-0600 files and one mode-0700 executable;
+all browser files were mode-0600. The browser project licence and
+notices matched the workspace, Node accepted the bound Wasm, and
+native-target readback rejected the browser package. These checks
+establish reproducibility on the current host, not independent-host
+build reproducibility, full target compatibility or legal clearance.
