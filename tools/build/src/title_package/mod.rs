@@ -307,6 +307,9 @@ fn admit_document(bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
+    use games_platform::ir::storage::directory_entries;
     use games_platform::ir::storage::fixtures::TestRoot;
 
     use super::*;
@@ -419,9 +422,40 @@ mod tests {
         title: Distribution,
         output: &OsStr,
     ) -> Result<(), String> {
+        use games_platform::ir::security::toolchain::artifact::fixtures;
+
         let mut prepared = Prepared::default();
-        prepared.add(title.binary().into(), b"executable".to_vec(), true)?;
-        prepared.add(RECEIPT.into(), b"receipt".to_vec(), false)?;
+        if title.is_browser() {
+            prepared.add(
+                title.binary().into(),
+                fixtures::browser_module_fixture().to_vec(),
+                false,
+            )?;
+            prepared.add(
+                BROWSER_INDEX.into(),
+                INDEX_HTML.as_bytes().to_vec(),
+                false,
+            )?;
+            prepared.add(
+                BROWSER_SCRIPT.into(),
+                b"export default function init() {}".to_vec(),
+                false,
+            )?;
+        } else {
+            prepared.add(
+                title.binary().into(),
+                fixtures::executable_fixture()?.to_vec(),
+                true,
+            )?;
+        }
+        for name in [
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
+            "licenses/DEPENDENCIES.tsv",
+        ] {
+            prepared.add(name.into(), b"fixture".to_vec(), false)?;
+        }
+        prepared.finish_receipt(title)?;
         prepared.publish(output)
     }
 
@@ -429,7 +463,6 @@ mod tests {
     fn configured_publication_preserves_the_shared_asset_namespace()
     -> Result<(), String> {
         let root = TestRoot::new().map_err(|error| error.to_string())?;
-        fixture_configuration(&root, "deploy", "deploy", "linux-x86-64")?;
         let title = Title::SimpsonsArcade;
         let assets = "deploy/simpsons-arcade/assets";
         let bin = "deploy/simpsons-arcade/bin";
@@ -440,29 +473,48 @@ mod tests {
         root.write_file(&format!("{assets}/payload"), b"asset")
             .map_err(|error| error.to_string())?;
         let expected_assets = local_path(root.location(), assets)?;
-        let package =
-            local_path(root.location(), &format!("{bin}/linux-x86-64"))?;
-        require(
-            configured_with(root.location(), title, fixture_package)?
-                == expected_assets,
-        )?;
-        require(
-            configured_with(root.location(), title, fixture_package).is_err(),
-        )?;
-        require(
-            snapshot(&local_path(&package, title.binary())?, MAX_DOCUMENT)
-                .map_err(|error| format!("{error:?}"))?
-                == b"executable",
-        )?;
-        require(
-            path_kind(&local_path(&package, "assets")?)
-                .map_err(|error| error.to_string())?
-                == PathKind::Missing,
-        )?;
+        let mut published = Vec::new();
+        for target in ["linux-x86-64", "webassembly"] {
+            fixture_configuration(&root, "deploy", "deploy", target)?;
+            let selection =
+                Distribution::parse(title.binary(), &[target.into()])?;
+            let package =
+                local_path(root.location(), &format!("{bin}/{target}"))?;
+            require(
+                configured_with(root.location(), title, fixture_package)?
+                    == expected_assets,
+            )?;
+            let report = Receipt::verify(selection, &package)?;
+            require(
+                configured_with(root.location(), title, fixture_package)
+                    .is_err(),
+            )?;
+            require(
+                path_kind(&local_path(&package, "assets")?)
+                    .map_err(|error| error.to_string())?
+                    == PathKind::Missing,
+            )?;
+            published.push((selection, package, report));
+        }
+        // Publishing the second target must not alter the first one.
+        for (selection, package, report) in &published {
+            require(Receipt::verify(*selection, package)? == *report)?;
+            for (other, _, _) in
+                published.iter().filter(|(other, _, _)| other != selection)
+            {
+                require(Receipt::verify(*other, package).is_err())?;
+            }
+        }
         require(
             snapshot(&local_path(&expected_assets, "payload")?, MAX_DOCUMENT)
                 .map_err(|error| format!("{error:?}"))?
                 == b"asset",
+        )?;
+        require(
+            directory_entries(&expected_assets, NonZeroUsize::MIN)
+                .map_err(|error| error.to_string())?
+                .len()
+                == 1,
         )
     }
 

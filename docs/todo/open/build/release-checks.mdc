@@ -276,3 +276,54 @@ movement and 20 combat frames with zero 16.667 ms host-work budget
 misses. The package receipt remained unchanged. This demonstrates
 one alternate local Linux userspace, not portable ABI compatibility
 across arbitrary hosts or physical display, input or audio acceptance.
+
+At c27b664, the explicit WebAssembly package and independent readback
+verified 88 files, totalling 1,467,554 bytes, including a 967,727-byte
+bound Wasm module, 41,036-byte JavaScript and 568-byte bootstrap.
+The receipt SHA-256 was
+8df1787978d4afa08d60faf70b2ccd39717b265702d79cbf0e98896870eec13d.
+Wrong-target readback and repeat publication failed; the original receipt
+remained unchanged. Firefox headless in an isolated loopback network
+loaded the exact published files, reported Preview ready and presented
+a directory picker with no canvas before asset selection. Separate
+asset-backed browser launch evidence is in the mobile-web task.
+No original media or binding tools are distributed.
+
+The native package at the same commit verified 109 files totalling
+4,148,633 bytes, including a 3,622,960-byte executable, with receipt
+e9b6a7a8b4b16050cf3d45242dd21c5aea61486b15e94de12c1d11ac899d66dc.
+The packaged executable passed hidden Xvfb/OpenGL and dummy-audio
+Fill+touch smoke from an unrelated working directory against the
+configured shared-store catalogue. It verified 444 camera columns,
+48 synthetic axis directions, the protected 960x240 panel in a
+1280x912 drawable, two cooperative pose families and six reinforcement
+meters. All 600 movement and 20 combat submissions met the measured
+16.667 ms host-work budget. These checks do not establish physical
+input, screen, audible playback or arbitrary host compatibility.
+
+Independent sha256sum readback of every receipt entry matched both
+packages. The browser package contained 88 mode-0600 files; the native
+package contained 108 mode-0600 files and one mode-0700 executable.
+Project notices matched the workspace copies. An isolated package copy
+rejected executable Wasm, changed bootstrap bytes and an unlisted file;
+restoring the pristine copy restored the same receipt. A second native
+fullscreen adaptive smoke verified 106 additional logical columns and
+all 620 measured movement/combat submissions met the host-work budget.
+
+The explicit raw browser build succeeded. A second independent browser
+package produced the byte-identical receipt, and both native and
+browser receipts were independently checked from an unrelated working
+directory. Each package rejected readback under the other target;
+the native executable rejected startup without a catalogue. The
+browser licence inventory excludes SDL2 and includes the locked
+wasm-bindgen dependency set.
+
+Node.js engine validation accepted both the raw 2,020,415-byte and bound
+967,727-byte authored modules. This does not establish runtime ABI.
+
+The configured-publication fixture now exercises both supported targets
+against one shared asset directory. It publishes minimal independently
+admitted ELF and Wasm fixtures with target-specific receipt trees, refuses
+repeat publication, verifies each receipt again after the other target
+is published, rejects cross-target readback and checks that the sole
+external asset remains unchanged. No original files are used.
