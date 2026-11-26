@@ -35,7 +35,7 @@ use std::io::{Error, ErrorKind, Read};
 use std::num::NonZeroU64;
 
 use games::safety::{
-    SAVE_HEADER, SafetyError, admit_save_size, encode_save_header,
+    SAVE_HEADER, SafetyError, admit_save_size, decode_save, encode_save_header,
     save_envelope_limit, validate_save_header,
 };
 
@@ -46,11 +46,11 @@ use super::file::{FileReadError, admit_size, read_exact_snapshot};
 pub enum SaveError {
     /// The save envelope is invalid or exceeds its payload limit.
     Envelope(SafetyError),
-    /// A native storage operation failed before publication.
+    /// A host storage operation failed before publication.
     Io(ErrorKind),
     /// Bounded file admission rejected the requested slot.
     Read(FileReadError),
-    /// The directory or destination is linked or otherwise untrusted.
+    /// The selected storage location or destination is unsafe.
     UnsafeStorage,
 }
 
@@ -124,6 +124,20 @@ impl<'payload> PreparedSave<'payload> {
 pub struct VerifiedSave(Vec<u8>);
 
 impl VerifiedSave {
+    /// Verify an owned memory-resident envelope and reuse its allocation.
+    ///
+    /// # Errors
+    /// Rejects malformed, corrupt or oversized envelopes.
+    pub fn from_encoded(
+        mut bytes: Vec<u8>,
+        maximum: NonZeroU64,
+    ) -> Result<Self, SaveError> {
+        let length = decode_save(&bytes, maximum)?.len();
+        bytes.copy_within(SAVE_HEADER.., 0);
+        bytes.truncate(length);
+        Ok(Self(bytes))
+    }
+
     /// Transfer the verified payload without copying it.
     #[must_use]
     pub fn into_payload(self) -> Vec<u8> {

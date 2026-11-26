@@ -122,3 +122,50 @@ comparison; their 240 by 160 screenshots had green and red centre
 pixels, respectively. This is execution of portable engine behavior,
 not browser API, physical touch, persistent storage, graphics
 presentation or distribution acceptance.
+
+The official wasm-bindgen release is now a fixed reference catalogue
+entry pinned to the existing 0.2.127 binding ABI. The latest 0.2.130
+release introduces a second major version of syn and was rejected by
+the unchanged dependency gate. The matching Linux CLI archive was
+fetched with `cargo download wasm-bindgen-release` and verified against
+both the upstream checksum file and release asset SHA-256
+61d4a7dc85acfa0d2354ccc0b8361928c7e52a746d17f28ebaa795ed3dc1614a.
+The CLI is not installed or executed automatically by the downloader.
+
+The WebAssembly save-slot adapter now uses browser local storage with
+a dedicated 1-to-64-byte ASCII namespace and numeric slots. It bounds
+the raw JavaScript string before transferring it into Rust and rejects
+noncanonical text, malformed envelopes and excess sizes using the
+shared portable save contract. Each write replaces one origin-local
+value. Successful writes report unsupported crash durability instead
+of a filesystem sync guarantee; quota, disabled storage, browser
+eviction and same-origin writers remain limitations.
+
+Fresh validation 1795676590731272457-2618033 passed 1,864 aggregate
+test executions, all six portable library targets, the Node.js core
+smoke and linking a separate opt-in browser storage diagnostic. The
+raw storage module was 589,394 bytes; the official 0.2.127 CLI
+produced 76,269 bytes of WebAssembly and 11,010 bytes of browser
+JavaScript. The generated module SHA-256 was
+8b9a4fa537b2db32e3656f860b3e652503a0cb00482608e2795b9ebe72c7392a,
+matching the module embedded in the local diagnostic page.
+
+Firefox 160.0 ran the storage diagnostic over a loopback HTTP origin
+within an isolated network namespace and a fresh private profile.
+Six independent browser launches verified first publication, reload,
+checksum damage, oversized text, noncanonical uppercase text and
+restoration. The harness independently computed the exact portable
+envelopes, observed storage both before and after binding startup
+(which invokes main), and checked a second explicit main return.
+Successful cases returned zero and negative cases returned one without
+replacing the rejected data. All six screenshot indicators were green.
+The initial first-launch indicator was red because the harness only
+observed the second invocation; the corrected harness observed both.
+The executable also verified numeric slot and namespace separation,
+publication of binary payloads, rejection of oversized writes and
+the explicit unsupported durability receipt.
+
+This establishes a real browser persistence slice, not browser title
+packaging, physical touch, graphics presentation, audio, portable save
+transfer between origins or crash-durability acceptance. Android
+SDK/NDK and attached device remain unavailable.

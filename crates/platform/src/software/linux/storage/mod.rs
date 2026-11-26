@@ -102,8 +102,13 @@ use crate::ir::storage::bundle::{BundleFactory, OpenBundle};
 use crate::ir::storage::file::{
     AuthoredFileKind, FileReadError, SecretSnapshot, SnapshotBackend,
 };
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    all(target_arch = "wasm32", target_os = "unknown"),
+)))]
 use crate::ir::storage::save::SaveError;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::ir::storage::save::{OpenSave, SaveFactory};
 use crate::ir::storage::{
     DirectoryEntry, PathKind, PathObservation, PathResolution,
@@ -120,7 +125,11 @@ impl SaveFactory for () {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    all(target_arch = "wasm32", target_os = "unknown"),
+)))]
 impl SaveFactory for () {
     fn open(_directory: &OsStr, _maximum: NonZeroU64) -> OpenSave {
         Err(SaveError::Io(io::ErrorKind::Unsupported))

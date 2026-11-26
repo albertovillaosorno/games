@@ -118,6 +118,7 @@ for the current lockfile. They are not a completed distribution audit.
 | `wasm-bindgen-macro` | MIT OR Apache-2.0 |
 | `wasm-bindgen-shared` | MIT OR Apache-2.0 |
 | `wasm-bindgen` | MIT OR Apache-2.0 |
+| `web-sys` | MIT OR Apache-2.0 |
 | `windows-link` | MIT OR Apache-2.0 |
 | `windows-sys` | MIT OR Apache-2.0 |
 | `windows-targets` | MIT OR Apache-2.0 |

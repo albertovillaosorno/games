@@ -19,6 +19,7 @@ games-platform = { workspace = true, optional = true }
 workspace = true
 
 [features]
+browser-storage-smoke = ["dep:games-platform"]
 native-preview = [
     "dep:games-assets",
     "dep:games-platform",
@@ -38,3 +39,8 @@ required-features = ["native-preview"]
 [[bin]]
 name = "simpsons-arcade-core-smoke"
 path = "src/bin/core-smoke.rs"
+
+[[bin]]
+name = "simpsons-arcade-browser-storage-smoke"
+path = "src/bin/browser-storage-smoke.rs"
+required-features = ["browser-storage-smoke"]

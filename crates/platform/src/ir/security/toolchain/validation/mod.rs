@@ -140,6 +140,8 @@ pub enum Request<'input> {
         package: &'input str,
         /// Authored smoke executable name.
         binary: &'input str,
+        /// Optional capability feature; default features remain disabled.
+        feature: Option<&'input str>,
     },
     /// Execute a linked, import-free WebAssembly smoke artifact.
     WasmSmokeRun(&'input str),
@@ -331,8 +333,8 @@ impl<'input> Request<'input> {
             Self::TestWorkspace { all_features } => {
                 Ok(workspace("test", all_features, false))
             },
-            Self::WasmSmokeBuild { package, binary } => {
-                wasm_smoke_build(package, binary)
+            Self::WasmSmokeBuild { package, binary, feature } => {
+                wasm_smoke_build(package, binary, feature)
             },
             Self::WorkspaceMetadata => Ok(WORKSPACE_METADATA.to_vec()),
         }
@@ -594,11 +596,15 @@ fn graph<'input>(
 fn wasm_smoke_build<'input>(
     package: &'input str,
     binary: &'input str,
+    feature: Option<&'input str>,
 ) -> Result<Vec<&'input str>, InvalidRequest> {
-    if !identifier(package) || !identifier(binary) {
+    if !identifier(package)
+        || !identifier(binary)
+        || feature.is_some_and(|value| !identifier(value))
+    {
         return Err(InvalidRequest);
     }
-    Ok(vec![
+    let mut args = vec![
         "build",
         "--locked",
         "--release",
@@ -611,7 +617,11 @@ fn wasm_smoke_build<'input>(
         package,
         "--bin",
         binary,
-    ])
+    ];
+    if let Some(selected_feature) = feature {
+        args.extend(["--features", selected_feature]);
+    }
+    Ok(args)
 }
 
 fn wasm_smoke_runner(binary: &str) -> Result<Arguments, InvalidRequest> {
@@ -773,8 +783,18 @@ mod tests {
             assert!(Request::WasmSmokeRun(invalid).admit().is_err());
             assert!(
                 Request::WasmSmokeBuild {
+                    package: "title",
+                    binary: "smoke",
+                    feature: Some(invalid),
+                }
+                .admit()
+                .is_err()
+            );
+            assert!(
+                Request::WasmSmokeBuild {
                     package: invalid,
                     binary: "smoke",
+                    feature: None,
                 }
                 .admit()
                 .is_err()
@@ -783,6 +803,7 @@ mod tests {
                 Request::WasmSmokeBuild {
                     package: "title",
                     binary: invalid,
+                    feature: None,
                 }
                 .admit()
                 .is_err()
@@ -858,6 +879,7 @@ mod tests {
         let build = Request::WasmSmokeBuild {
             package: "game-example",
             binary: "core-smoke",
+            feature: None,
         }
         .admit()?;
         if build.program() != "cargo"
@@ -877,6 +899,18 @@ mod tests {
                     "core-smoke",
                 ]
         {
+            return Err(InvalidRequest);
+        }
+        let browser = Request::WasmSmokeBuild {
+            package: "game-example",
+            binary: "storage-smoke",
+            feature: Some("browser-storage-smoke"),
+        }
+        .admit()?;
+        if !browser.args().ends_with(&[
+            OsString::from("--features"),
+            OsString::from("browser-storage-smoke"),
+        ]) {
             return Err(InvalidRequest);
         }
         let run = Request::WasmSmokeRun("core-smoke").admit()?;

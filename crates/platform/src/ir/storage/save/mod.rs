@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Open host paths, expose descriptors or interpret title payloads.
 // - Allows:
-//   - Inputs: Explicit directory value, budget, slot and payload.
+//   - Inputs: Explicit storage location, budget, slot and payload.
 //   - Outputs: Verified payloads, durability receipts and typed failures.
 //   - Side effects: Explicit selected backend operations only.
 // - Split-When:
@@ -25,7 +25,7 @@
 // - Description:
 //   - Keep envelope limits consistent before and after backend dispatch.
 // - Usage:
-//   - Open a dedicated directory and read or replace a numeric slot.
+//   - Open a dedicated store and read or replace a numeric slot.
 // - Defaults:
 //   - Reject unsupported storage, malformed envelopes and excess sizes.
 
@@ -39,7 +39,7 @@ use std::num::NonZeroU64;
 use crate::ir::security::save::admit_payload;
 pub use crate::ir::security::save::{PreparedSave, SaveError, VerifiedSave};
 
-/// Save publication succeeded; directory sync can fail after publication.
+/// Save publication succeeded; crash durability is a separate observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SaveReceipt {
     /// Error here means the new save is visible but crash durability is
@@ -49,7 +49,7 @@ pub struct SaveReceipt {
 
 pub(crate) type OpenSave = Result<Box<dyn SaveBackend>, SaveError>;
 
-/// Private selected backend for opening a dedicated save directory.
+/// Private selected backend for opening a dedicated save location.
 pub(crate) trait SaveFactory {
     fn open(directory: &OsStr, maximum: NonZeroU64) -> OpenSave;
 }
@@ -87,10 +87,13 @@ impl SaveStore {
         Ok(payload)
     }
 
-    /// Open an explicitly selected, trusted save directory.
+    /// Open an explicitly selected, trusted save location.
+    /// Native callers select a directory. Browser callers select an
+    /// origin-local ASCII namespace (1–64 alphanumeric, hyphen or underscore
+    /// bytes, starting with an alphanumeric byte).
     ///
     /// # Errors
-    /// Rejects unsupported storage and unsafe directory values.
+    /// Rejects unsupported storage and unsafe location values.
     pub fn open(
         directory: &OsStr,
         maximum: NonZeroU64,

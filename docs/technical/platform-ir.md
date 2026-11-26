@@ -131,6 +131,14 @@ WebAssembly, Windows and macOS are planned and require runtime and packaging
 adapters. Every target must use the same portable contracts, not a
 separate game engine. No native Windows runtime is verified here.
 
+The browser save-slot backend uses the shared verified envelope with a
+bounded, lowercase hexadecimal representation in origin-local storage. It
+accepts a dedicated ASCII namespace instead of a native directory. Slots
+are published as single values, and the receipt explicitly reports that
+crash durability cannot be established. Browser quota, disabled storage and
+unavailable window contexts can reject access. This does not implement
+browser asset discovery, graphics, input or a title runtime.
+
 The [P1 isolation task](../todo/completed/contracts/platform-ir.mdc) is the
 canonical migration and acceptance record. The original validator inventory
 recorded 253 occurrences in 27 files. The migration baseline has been removed:

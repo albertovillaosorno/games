@@ -33,6 +33,10 @@ sha2 = "0.11"
 zeroize = "1.9.2"
 sdl2 = { version = "0.39.0", features = ["use-pkgconfig"] }
 nix = { version = "0.31.3", features = ["fs", "user"] }
+# Match the official CLI schema and retain a single syn major version.
+js-sys = { version = "=0.3.104", default-features = false }
+wasm-bindgen = "=0.2.127"
+web-sys = { version = "=0.3.104", default-features = false }
 [workspace.dependencies.games-platform]
 path = "crates/platform"
 version = "0.1.0"

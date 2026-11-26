@@ -28,6 +28,11 @@ rcgen.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 nix.workspace = true
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = ["Window", "Storage"] }
+
 [features]
 importer = ["dep:games-importer"]
 interactive = ["dep:sdl2"]

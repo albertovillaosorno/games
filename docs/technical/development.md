@@ -58,6 +58,12 @@ dependency graphs must exclude source decoders. The installed target
 inventory and Node.js version contribute to the cache fingerprint. A fresh
 run also links and executes the Simpsons Arcade portable simulation smoke
 with the official WebAssembly Rust target and the installed Node.js runtime.
+It also links the separate browser storage smoke with its opt-in capability
+feature. The official CLI reference is available via
+`cargo download wasm-bindgen-release`; its version is pinned to the locked
+binding ABI. Verify the upstream checksum before extracting the CLI. The
+storage smoke requires generated browser bindings and is not executed by
+the Node.js core gate.
 This requires Node.js on the contributor host, but does not require a browser
 or an original asset bundle and is not a browser packaging check. Logs are
 stored under

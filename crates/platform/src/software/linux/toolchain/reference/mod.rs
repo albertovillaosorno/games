@@ -77,7 +77,7 @@ fn acquire(
         .map_err(|_error| ToolchainError::InvalidReferenceRevision)?;
     acquire_revision(directory, revision, |stage| match kind {
         ReferenceKind::Source(repo) => extract(repo, revision, stage),
-        ReferenceKind::Release { repo, pattern } => {
+        ReferenceKind::Release { repo, pattern, .. } => {
             release(repo, pattern, revision, stage)
         },
         ReferenceKind::Dependencies => {
@@ -159,6 +159,9 @@ fn resolve(kind: ReferenceKind) -> Outcome<String> {
                 "--jq",
                 ".sha",
             ]);
+        },
+        ReferenceKind::Release { tag: Some(tag), .. } => {
+            return Ok(tag.to_owned());
         },
         ReferenceKind::Release { repo, .. } => {
             let _: &mut Command = command.args([

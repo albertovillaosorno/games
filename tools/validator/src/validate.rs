@@ -203,12 +203,22 @@ fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
         Request::WasmSmokeBuild {
             package: "games-simpsons-arcade",
             binary: "simpsons-arcade-core-smoke",
+            feature: None,
         },
         log,
     )?;
     execute(
         root,
         Request::WasmSmokeRun("simpsons-arcade-core-smoke"),
+        log,
+    )?;
+    execute(
+        root,
+        Request::WasmSmokeBuild {
+            package: "games-simpsons-arcade",
+            binary: "simpsons-arcade-browser-storage-smoke",
+            feature: Some("browser-storage-smoke"),
+        },
         log,
     )?;
     let paths = files::authored(root)?;

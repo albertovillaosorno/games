@@ -51,13 +51,20 @@ const TOOLS: &[ReferenceTool] = &[
         "ghidra-release",
         "NationalSecurityAgency/ghidra",
         "ghidra_*_PUBLIC_*.zip",
+        None,
     ),
-    release("jadx-release", "skylot/jadx", "jadx-[0-9]*.zip"),
-    release("apktool-release", "iBotPeaches/Apktool", "apktool_*.jar"),
+    release("jadx-release", "skylot/jadx", "jadx-[0-9]*.zip", None),
+    release(
+        "apktool-release",
+        "iBotPeaches/Apktool",
+        "apktool_*.jar",
+        None,
+    ),
     release(
         "wasm-bindgen-release",
         "wasm-bindgen/wasm-bindgen",
         "wasm-bindgen-*-x86_64-unknown-linux-musl.tar.gz*",
+        Some("0.2.127"),
     ),
 ];
 
@@ -74,6 +81,7 @@ pub(crate) enum ReferenceKind {
     Release {
         pattern: &'static str,
         repo: &'static str,
+        tag: Option<&'static str>,
     },
     Source(&'static str),
 }
@@ -131,7 +139,9 @@ impl ReferenceTool {
                 value.len() == 40
                     && value.bytes().all(|byte| byte.is_ascii_hexdigit())
             },
-            ReferenceKind::Release { .. } => release_tag(value),
+            ReferenceKind::Release { tag, .. } => {
+                release_tag(value) && tag.is_none_or(|fixed| value == fixed)
+            },
         };
         if valid {
             Ok(ReferenceRevision(value))
@@ -165,9 +175,10 @@ const fn release(
     name: &'static str,
     repo: &'static str,
     pattern: &'static str,
+    tag: Option<&'static str>,
 ) -> ReferenceTool {
     ReferenceTool {
-        kind: ReferenceKind::Release { repo, pattern },
+        kind: ReferenceKind::Release { repo, pattern, tag },
         name,
     }
 }
@@ -214,6 +225,13 @@ mod tests {
         let source = ReferenceTool::parse("mame").ok_or("source missing")?;
         let release =
             ReferenceTool::parse("ghidra-release").ok_or("release missing")?;
+        let binding = ReferenceTool::parse("wasm-bindgen-release")
+            .ok_or("binding release missing")?;
+        if binding.revision("0.2.127").is_err()
+            || binding.revision("0.2.130").is_ok()
+        {
+            return Err("incorrect binding release admission".into());
+        }
         let hash = "0123456789abcdef0123456789abcdef01234567";
         if source.revision(hash) != Ok(ReferenceRevision(hash))
             || release.revision("Ghidra_11.4.1_build")

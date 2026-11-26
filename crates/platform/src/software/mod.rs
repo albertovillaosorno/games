@@ -32,6 +32,8 @@
 //! Private software implementation and current host selection.
 
 mod linux;
+#[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
+mod web;
 
 /// Explicit absence of authenticated LAN; no backend handles can exist.
 #[cfg(any(not(feature = "secure-lan"), target_arch = "wasm32"))]
