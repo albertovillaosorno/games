@@ -241,3 +241,21 @@ X11/OpenGL runs used dummy audio; no new physical device, visible
 maximized display or audible output acceptance is claimed. Other
 titles' legacy stores, native control remapping, physical input and
 audio, portable ABI and gameplay parity remain separate open work.
+
+Offline digital control editing passed the native release smoke on
+2026-11-25. The explicit settings-directory command edits keyboard,
+mouse, controller-button and touch-slot assignments through the shared
+profile editor. The entire validated profile is saved atomically in
+the existing control slot, with other mappings retained. Tests cover
+relaunch, button and slot swaps, global key and mouse conflicts,
+invalid seat and action selection, and the sole Escape pause binding.
+An isolated settings directory was edited in all four input families.
+Duplicate key and Escape-removal requests failed and preserved the
+saved file hash. The edited profile passed the hidden touch-enabled
+Xvfb/OpenGL smoke against the configured shared assets, with 600
+movement and 20 combat submissions, zero 16.667 ms budget misses,
+444 camera columns, two cooperative pose families and six reinforcement
+meters. The saved hash remained unchanged through smoke. The initial
+display connection was unavailable; virtual X11 and dummy audio were
+used instead. Interactive remapping, physical device acceptance and
+audible output remain open.

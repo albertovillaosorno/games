@@ -1566,6 +1566,9 @@ fn project_contact(
 /// # Errors
 /// Rejects invalid inputs, missing art, unsupported native device or input.
 pub fn run(args: Vec<OsString>) -> Result<(), String> {
+    if args.first().is_some_and(|arg| arg == "--edit-control") {
+        return launch::edit_control(&args);
+    }
     if matches!(args.as_slice(), [arg] if arg == "--list-audio-devices") {
         return audio::list_devices().map_err(|error| format!("{error:?}"));
     }
@@ -1575,6 +1578,10 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
     if args.first().is_some_and(|arg| arg == "--lan-controller") {
         return controller::run(args);
     }
+    run_preview(args)
+}
+
+fn run_preview(args: Vec<OsString>) -> Result<(), String> {
     let load_started = now().map_err(|error| error.to_string())?;
     let launch::Launch {
         assets,

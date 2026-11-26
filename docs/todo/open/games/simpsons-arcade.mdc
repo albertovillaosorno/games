@@ -2529,6 +2529,27 @@ atomically saves defaults, without changing the active profile or world.
 The row is unavailable during smoke, or when resetting touch seats would
 conflict with the current remote reservations. Restart without an explicit
 control override to activate the defaults. Live remapping remains open.
+
+With the game and controller client closed, edit one saved binding
+without opening the display or assets:
+
+```text
+simpsons-arcade --edit-control SETTINGS_DIR 1 right key Q
+simpsons-arcade --edit-control SETTINGS_DIR 1 primary mouse right
+simpsons-arcade --edit-control SETTINGS_DIR 1 primary button b
+simpsons-arcade --edit-control SETTINGS_DIR 1 primary touch secondary
+```
+
+The existing trusted settings directory supplies the saved profile, or
+defaults if no profile has been saved. This offline command does not
+read a launch catalogue fallback or edit its source file. To retain a
+custom fallback, first save it through a normal launch with
+`--controls FILE`. Key and mouse edits accept `none`; button and touch
+edits swap occupied bindings within the selected seat. Touch binding
+names identify physical slots by their default action names. Every
+successful edit preserves other bindings, validates the complete
+profile and atomically saves slot-1.gms. Conflicting edits fail without
+changing the saved profile. Restart to activate the changes.
 The settings directory stores
 the profile separately from display settings in slot-1.gms. Smoke can
 select a profile without replacing saved controls. The bounded UTF-8

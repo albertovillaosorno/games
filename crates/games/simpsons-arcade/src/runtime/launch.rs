@@ -36,15 +36,21 @@ use std::num::NonZeroU64;
 use std::{str, vec};
 
 use games::audio::MasterVolume;
+use games::input::physical::{ControllerButton, PointerButton};
+use games::input::profile::DigitalBinding;
 use games::presentation::{DisplaySettings, PresentationMode};
 use games_assets::ContentHash;
+use games_platform::ir::input::{key_from_name, key_name};
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, VolumeStore,
 };
 use games_platform::ir::storage::{executable_path, join_path, parent_path};
 
-use super::{Profiles, configured_profiles, profile_limit, read_profile};
+use super::{
+    ACTION_NAMES, MAX_PROFILE_BYTES, Profiles, configured_profiles,
+    profile_limit, read_profile, validate_keyboard_pause,
+};
 
 const DEFAULT_PROFILE: &str = "version=1\n";
 const FILE_NAME: &str = "simpsons-arcade.local";
@@ -63,7 +69,9 @@ const USAGE: &str = concat!(
     "beside the binary.\n",
     "usage: simpsons-arcade --lan-controller FILE [--settings DIR] ",
     "[--controls FILE | --reset-controls]\n",
-    "usage: simpsons-arcade --list-audio-devices"
+    "usage: simpsons-arcade --list-audio-devices\n",
+    "usage: simpsons-arcade --edit-control DIR SEAT ACTION ",
+    "key|mouse|button|touch BINDING"
 );
 
 type Arguments = Peekable<vec::IntoIter<OsString>>;
@@ -484,6 +492,67 @@ impl Launch {
     }
 }
 
+pub(super) fn edit_control(args: &[OsString]) -> Result<(), String> {
+    let [flag, directory, seat, action, kind, name] = args else {
+        return Err(USAGE.into());
+    };
+    if flag != "--edit-control" {
+        return Err(USAGE.into());
+    }
+    let station = seat
+        .to_str()
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|value| value.checked_sub(1))
+        .filter(|value| *value < super::DEFAULT_PROFILES.keys.len())
+        .ok_or("invalid control seat")?;
+    let action_slot = action_index(action.to_str().ok_or("invalid action")?)?;
+    let binding = edit_binding(
+        kind.to_str().ok_or("invalid binding kind")?,
+        name.to_str().ok_or("invalid binding name")?,
+    )?;
+    let store = ControlStore::open(directory, profile_limit()?)
+        .map_err(|error| format!("control preferences: {error:?}"))?;
+    let stored = store
+        .load()
+        .map_err(|error| format!("control preferences: {error:?}"))?;
+    let current =
+        configured_profiles(stored.as_deref().unwrap_or(DEFAULT_PROFILE))?;
+    let candidate = current.edited(station, action_slot, binding)?;
+    validate_keyboard_pause(&candidate)?;
+    let encoded = candidate.encoded(
+        ACTION_NAMES,
+        MAX_PROFILE_BYTES,
+        (key_name, key_from_name),
+    )?;
+    ResolvedControls::store_profile(&store, &encoded)
+}
+
+fn action_index(name: &str) -> Result<usize, String> {
+    ACTION_NAMES
+        .iter()
+        .position(|action| *action == name)
+        .ok_or_else(|| "unknown control action".into())
+}
+
+fn edit_binding(kind: &str, name: &str) -> Result<DigitalBinding, String> {
+    let invalid = || "unknown control binding".to_owned();
+    match kind {
+        "button" => ControllerButton::from_profile_name(name)
+            .map(DigitalBinding::Button)
+            .ok_or_else(invalid),
+        "key" if name == "none" => Ok(DigitalBinding::Key(None)),
+        "key" => key_from_name(name)
+            .map(|key| DigitalBinding::Key(Some(key)))
+            .ok_or_else(invalid),
+        "mouse" if name == "none" => Ok(DigitalBinding::Mouse(None)),
+        "mouse" => PointerButton::from_profile_name(name)
+            .map(|button| DigitalBinding::Mouse(Some(button)))
+            .ok_or_else(invalid),
+        "touch" => action_index(name).map(DigitalBinding::TouchSlot),
+        _ => Err(invalid()),
+    }
+}
+
 fn enemy_hashes(values: &mut Fields<'_>) -> Result<EnemyHashes, String> {
     match (
         values.remove("enemy_approach"),
@@ -689,6 +758,22 @@ mod tests {
     struct ProfileFixture(TestRoot);
 
     impl ProfileFixture {
+        fn edit(
+            &self,
+            seat: &str,
+            action: &str,
+            binding: (&str, &str),
+        ) -> Result<(), String> {
+            edit_control(&[
+                "--edit-control".into(),
+                self.0.location().to_owned(),
+                seat.into(),
+                action.into(),
+                binding.0.into(),
+                binding.1.into(),
+            ])
+        }
+
         fn new() -> Result<Self, String> {
             let fixture =
                 Self(TestRoot::new().map_err(|error| error.to_string())?);
@@ -1138,6 +1223,82 @@ mod tests {
             || fixture.resolve(&[])?.profiles != DEFAULT_PROFILES
         {
             return Err("reset did not survive relaunch".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn offline_edits_persist_across_relaunch() -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let mut expected = DEFAULT_PROFILES;
+        for (seat, action, kind, name, binding) in [
+            (
+                "1",
+                "right",
+                "key",
+                "Q",
+                DigitalBinding::Key(key_from_name("Q")),
+            ),
+            (
+                "1",
+                "primary",
+                "mouse",
+                "right",
+                DigitalBinding::Mouse(Some(PointerButton::Right)),
+            ),
+            (
+                "2",
+                "primary",
+                "button",
+                "b",
+                DigitalBinding::Button(ControllerButton::East),
+            ),
+            (
+                "2",
+                "primary",
+                "touch",
+                "secondary",
+                DigitalBinding::TouchSlot(action_index("secondary")?),
+            ),
+        ] {
+            fixture.edit(seat, action, (kind, name))?;
+            let index = seat
+                .parse::<usize>()
+                .map_err(|error| error.to_string())?
+                .checked_sub(1)
+                .ok_or("invalid seat")?;
+            expected =
+                expected.edited(index, action_index(action)?, binding)?;
+            if fixture.resolve(&[])?.profiles != expected {
+                return Err("edited binding did not survive relaunch".into());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn offline_edits_reject_conflicts() -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        fixture.edit("1", "right", ("key", "Q"))?;
+        fixture.edit("1", "primary", ("mouse", "right"))?;
+        let store = fixture.store()?;
+        let before = store.load().map_err(|error| format!("{error:?}"))?;
+        for (seat, action, kind, name) in [
+            ("0", "right", "key", "Q"),
+            ("5", "right", "key", "Q"),
+            ("1", "pause", "key", "none"),
+            ("2", "pause", "key", "E"),
+            ("2", "right", "key", "Q"),
+            ("2", "primary", "mouse", "right"),
+            ("1", "unknown", "key", "E"),
+            ("1", "right", "touch", "unknown"),
+        ] {
+            if fixture.edit(seat, action, (kind, name)).is_ok() {
+                return Err("invalid edit was accepted".into());
+            }
+        }
+        if before != store.load().map_err(|error| format!("{error:?}"))? {
+            return Err("rejected edit changed saved controls".into());
         }
         Ok(())
     }
