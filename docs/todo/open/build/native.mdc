@@ -298,3 +298,15 @@ binding. Modal capture releases existing holds without submitting new
 gameplay presses or releases. Synthetic editor and title integration
 regressions verify the navigation, cancel/confirm flow and reserved-seat
 close routing. Physical controller hardware acceptance remains open.
+
+The interactive editor now accepts the active touch panel's logical
+buttons as explicit menu commands. Arrows select the station, action
+or pending touch slot; B cycles the family, A starts or confirms
+capture, Start clears an optional binding and Pause cancels or exits.
+The displayed hints match these commands even when touch slots have
+been remapped. Shared editor tests verify touch selection, cancellation,
+confirmation and separation from raw controller capture. Title routing
+tests exercise all eight commands through the actual remapped panel
+geometry, with no gameplay edges on taps, motion or release. The
+existing fixed panel atlas budget is retained. Physical touchscreen
+and analogue editing acceptance remain open.

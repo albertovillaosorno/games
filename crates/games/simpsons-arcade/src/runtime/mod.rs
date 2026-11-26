@@ -51,7 +51,7 @@ use std::time::Duration;
 use games::audio::MasterVolume;
 use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
 use games::input::profile::editor::{
-    ControlEditor, EditorEffect, EditorStatus,
+    ControlEditor, EditorEffect, EditorNavigation,
 };
 use games::input::profile::{
     AxisProfile, DigitalBinding, DigitalProfiles, ProfileText,
@@ -220,6 +220,7 @@ const DEFAULT_PROFILES: Profiles = Profiles {
     touch_slots: [[0, 1, 2, 3, 4, 5, 6, 7]; 4],
 };
 type LocalActions = Vec<LogicalAction<Action>>;
+type ModalActions = (LocalActions, Option<EditorNavigation>);
 type Profiles = DigitalProfiles<4, 8>;
 
 #[derive(Debug)]
@@ -291,6 +292,27 @@ impl Controls {
         Ok(())
     }
 
+    fn close_editor(
+        &self,
+        releases: &mut LocalActions,
+    ) -> Result<(), RenderError> {
+        // Closing is independent of the active gameplay binding and the
+        // selected editing station.
+        let player = Player::ALL
+            .into_iter()
+            .zip(self.reserved)
+            .find_map(|(player, remote)| (!remote).then_some(player))
+            .ok_or(RenderError::InvalidSprite)?;
+        releases.extend([true, false].map(|down| LogicalAction {
+            action: Action {
+                control: Control::Pause,
+                player,
+            },
+            down,
+        }));
+        Ok(())
+    }
+
     fn detach(&mut self, device: u64) {
         if let Some(slot) =
             self.devices.iter_mut().find(|slot| **slot == Some(device))
@@ -320,39 +342,27 @@ impl Controls {
     fn modal_actions(
         &mut self,
         event: InputEvent,
-        request_close: bool,
-        touch_can_close: bool,
-    ) -> Result<LocalActions, RenderError> {
+    ) -> Result<ModalActions, RenderError> {
         // Release only holds already delivered to the running simulation.
         // Modal capture itself must not emit gameplay presses or releases.
-        let mut releases = self.router.release_all();
+        let releases = self.router.release_all();
         let actions = self.actions(event)?;
         drop(self.router.release_all());
-        let touch_close = touch_can_close
-            && actions.iter().any(|change| {
-                change.down
-                    && matches!(
-                        change.action.control,
-                        Control::Pause | Control::Start
-                    )
-            });
-        if request_close || touch_close {
-            // The editor's physical navigation is independent of the
-            // current profile, so a remapped gamepad can still close it.
-            let player = Player::ALL
-                .into_iter()
-                .zip(self.reserved)
-                .find_map(|(player, remote)| (!remote).then_some(player))
-                .ok_or(RenderError::InvalidSprite)?;
-            releases.extend([true, false].map(|down| LogicalAction {
-                action: Action {
-                    control: Control::Pause,
-                    player,
-                },
-                down,
-            }));
-        }
-        Ok(releases)
+        let navigation = if matches!(
+            event,
+            InputEvent::Contact {
+                phase: ContactPhase::Down(_),
+                ..
+            } | InputEvent::Touch { down: true, .. }
+        ) {
+            actions
+                .iter()
+                .find(|change| change.down)
+                .map(|change| touch_editor_command(change.action.control))
+        } else {
+            None
+        };
+        Ok((releases, navigation))
     }
 
     fn new(touch_enabled: bool) -> Result<Self, RenderError> {
@@ -543,7 +553,11 @@ impl Scene {
                     usize::from(source.shadow.is_some()).saturating_mul(4),
                 ),
             ),
-            editor: load_editor(scene, options.can_reset_controls(reserved))?,
+            editor: load_editor(
+                scene,
+                options.can_reset_controls(reserved),
+                touch_enabled,
+            )?,
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
             menu: load_menu(scene, world_art.is_some(), options, reserved)?,
             panel: if touch_enabled {
@@ -988,30 +1002,22 @@ impl<'preferences> Interactive<'preferences> {
         &mut self,
         event: InputEvent,
     ) -> Result<LocalActions, RenderError> {
-        let modal = matches!(
-            self.editor.status(),
-            EditorStatus::Capturing | EditorStatus::Reviewing(_)
-        );
-        let effect = if matches!(event, InputEvent::Button { device, .. }
+        let (mut releases, navigation) = self.controls.modal_actions(event)?;
+        let effect = if let Some(command) = navigation {
+            self.editor.navigate(command, &self.next_profiles)
+        } else if matches!(event, InputEvent::Button { device, .. }
             if !self.controls.devices.contains(&Some(device)))
         {
             EditorEffect::None
         } else {
             self.editor.input(event, &self.next_profiles)
         };
-        if let EditorEffect::Propose(binding) = effect {
-            self.edit_binding(binding)?;
+        match effect {
+            EditorEffect::Propose(binding) => self.edit_binding(binding)?,
+            EditorEffect::Close => self.controls.close_editor(&mut releases)?,
+            EditorEffect::None => {},
         }
-        let touch_can_close = !modal
-            && matches!(
-                event,
-                InputEvent::Contact { .. } | InputEvent::Touch { .. }
-            );
-        self.controls.modal_actions(
-            event,
-            effect == EditorEffect::Close,
-            touch_can_close,
-        )
+        Ok(releases)
     }
 
     fn measure_presented(
@@ -1500,21 +1506,42 @@ fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 3] {
     ]
 }
 
+const fn touch_editor_command(control: Control) -> EditorNavigation {
+    match control {
+        Control::Pause => EditorNavigation::Cancel,
+        Control::Start => EditorNavigation::Clear,
+        Control::Primary => EditorNavigation::Confirm,
+        Control::Secondary => EditorNavigation::Family,
+        Control::Left => EditorNavigation::Left,
+        Control::Right => EditorNavigation::Right,
+        Control::Up => EditorNavigation::Up,
+        Control::Down => EditorNavigation::Down,
+    }
+}
+
 fn load_editor(
     scene: &mut SceneSession<'_, '_>,
     enabled: bool,
+    touch_enabled: bool,
 ) -> Result<Option<ControlEditorArt>, RenderError> {
     enabled
         .then(|| {
-            ControlEditorArt::load(scene, PlateLayout {
-                background: [24, 22, 30, 255],
-                height: MENU_HEIGHT,
-                max_bytes: size(ControlEditorArt::bytes(
-                    MENU_WIDTH,
-                    MENU_HEIGHT,
-                ))?,
-                width: MENU_WIDTH,
-            })
+            ControlEditorArt::load(
+                scene,
+                PlateLayout {
+                    background: [24, 22, 30, 255],
+                    height: MENU_HEIGHT,
+                    max_bytes: size(ControlEditorArt::bytes(
+                        MENU_WIDTH,
+                        MENU_HEIGHT,
+                    ))?,
+                    width: MENU_WIDTH,
+                },
+                touch_enabled.then_some([
+                    "TOUCH: ARROWS, B SOURCE, A EDIT",
+                    "TOUCH: START CLEAR, PAUSE BACK",
+                ]),
+            )
         })
         .transpose()
 }
@@ -3019,6 +3046,7 @@ mod tests {
     use games::input::physical::{
         ControllerAxis, ControllerButton, KeyboardKey,
     };
+    use games::input::profile::editor::EditorNavigation;
     use games::input::{InputEvent, LogicalAction};
     use games::replay::{InputStep as _, LiveSimulation};
     use games_platform::ir::frame::RenderError;
@@ -3053,14 +3081,13 @@ mod tests {
         {
             return Err(failure("initial key not routed"));
         }
-        let modal = controls.modal_actions(
-            InputEvent::Key {
-                code: KeyboardKey::LETTER_D.code(),
-                down: true,
-            },
-            false,
-            false,
-        )?;
+        let (modal, navigation) = controls.modal_actions(InputEvent::Key {
+            code: KeyboardKey::LETTER_D.code(),
+            down: true,
+        })?;
+        if navigation.is_some() {
+            return Err(failure("non-touch event produced touch command"));
+        }
         if modal.iter().any(|change| change.down)
             || !modal.contains(&LogicalAction {
                 action: Action {
@@ -3076,14 +3103,15 @@ mod tests {
     }
 
     fn verify_editor_close(controls: &mut Controls) -> Result<(), RenderError> {
-        let close = controls.modal_actions(
-            InputEvent::Key {
+        let (mut close, navigation) =
+            controls.modal_actions(InputEvent::Key {
                 code: KeyboardKey::ESCAPE.code(),
                 down: true,
-            },
-            true,
-            false,
-        )?;
+            })?;
+        if navigation.is_some() {
+            return Err(failure("non-touch event produced touch command"));
+        }
+        controls.close_editor(&mut close)?;
         if close
             != [true, false].map(|down| LogicalAction {
                 action: Action {
@@ -3115,15 +3143,16 @@ mod tests {
                 true, false, true, true,
             ])?;
         drop(controls.actions(InputEvent::Attached { device: 1 })?);
-        let close = controls.modal_actions(
-            InputEvent::Button {
+        let (mut close, navigation) =
+            controls.modal_actions(InputEvent::Button {
                 code: ControllerButton::East.code(),
                 device: 1,
                 down: true,
-            },
-            true,
-            false,
-        )?;
+            })?;
+        if navigation.is_some() {
+            return Err(failure("non-touch event produced touch command"));
+        }
+        controls.close_editor(&mut close)?;
         if close
             != [true, false].map(|down| LogicalAction {
                 action: Action {
@@ -3136,6 +3165,54 @@ mod tests {
             return Err(failure(
                 "modal close was routed through an active binding",
             ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remapped_touch_panel_navigates_editor_without_gameplay_edges()
+    -> Result<(), RenderError> {
+        use games::input::profile::DigitalBinding;
+        let profiles = DEFAULT_PROFILES
+            .edited(0, 2, DigitalBinding::TouchSlot(3))
+            .map_err(failure)?;
+        let mut controls = Controls::with_profiles(true, &profiles)?;
+        for (control, command) in [
+            (Control::Primary, EditorNavigation::Confirm),
+            (Control::Secondary, EditorNavigation::Family),
+            (Control::Pause, EditorNavigation::Cancel),
+            (Control::Start, EditorNavigation::Clear),
+            (Control::Right, EditorNavigation::Right),
+            (Control::Left, EditorNavigation::Left),
+            (Control::Up, EditorNavigation::Up),
+            (Control::Down, EditorNavigation::Down),
+        ] {
+            verify_modal_touch(&mut controls, control, command)?;
+        }
+        Ok(())
+    }
+
+    fn verify_modal_touch(
+        controls: &mut Controls,
+        control: Control,
+        command: EditorNavigation,
+    ) -> Result<(), RenderError> {
+        use games::input::touch::{ContactId, ContactPhase};
+        let point =
+            super::touch::center(Player::Marge, control, &controls.profiles)?;
+        let id = ContactId { device: 1, finger: 1 };
+        for (phase, expected) in [
+            (ContactPhase::Down(point), Some(command)),
+            (ContactPhase::Motion(Some(point)), None),
+            (ContactPhase::Up, None),
+        ] {
+            let (edges, navigation) =
+                controls.modal_actions(InputEvent::Contact { id, phase })?;
+            if !edges.is_empty() || navigation != expected {
+                return Err(failure(
+                    "touch editor routed unexpected command or edge",
+                ));
+            }
         }
         Ok(())
     }

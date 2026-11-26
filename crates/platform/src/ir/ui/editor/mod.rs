@@ -28,7 +28,8 @@
 // - Usage:
 //   - Reserve the reported bytes and sprites before loading the panel.
 // - Defaults:
-//   - Keyboard and gamepad navigation with explicit persistence feedback.
+//   - Keyboard, gamepad and touch navigation with explicit persistence
+//     feedback.
 
 //! Portable presentation for the shared digital control editor.
 
@@ -92,6 +93,7 @@ impl ControlEditorArt {
     pub fn load<Upload>(
         scene: &mut Upload,
         spec: PlateLayout,
+        touch_hints: Option<[&str; 2]>,
     ) -> Result<Self, RenderError>
     where
         Upload: AtlasUpload,
@@ -108,7 +110,7 @@ impl ControlEditorArt {
                 max_bytes: panel_budget,
                 ..spec
             },
-            &[panel_lines(spec.width)],
+            &[panel_lines(spec.width, touch_hints)],
         )?;
         let labels = (b' '..=b'~')
             .map(|byte| String::from(char::from(byte)))
@@ -269,12 +271,12 @@ const fn status_label(
     family: BindingFamily,
 ) -> &'static str {
     match status {
-        EditorStatus::Ready => "ENTER TO CHANGE",
+        EditorStatus::Ready => "ENTER / A TO CHANGE",
         EditorStatus::Capturing => match family {
             BindingFamily::Keyboard => "PRESS A KEY",
             BindingFamily::Mouse => "CLICK A MOUSE BUTTON",
             BindingFamily::Controller => "PRESS A GAMEPAD BUTTON",
-            BindingFamily::Touch => "CHOOSE SLOT / ENTER",
+            BindingFamily::Touch => "CHOOSE SLOT / CONFIRM",
         },
         EditorStatus::Saved => "SAVED FOR NEXT LAUNCH",
         EditorStatus::Rejected => "CONFLICT OR INVALID BINDING",
@@ -282,25 +284,36 @@ const fn status_label(
     }
 }
 
-fn panel_lines(width: u16) -> Vec<TextLine<'static>> {
-    [
+fn panel_lines(
+    width: u16,
+    touch_hints: Option<[&str; 2]>,
+) -> Vec<TextLine<'_>> {
+    let lines = [
         (8, "EDIT CONTROLS - NEXT LAUNCH"),
-        (130, "ARROWS / DPAD: PLAYER AND ACTION"),
-        (146, "TAB / RB: SOURCE - ENTER / A: EDIT"),
-        (162, "DEL / X: CLEAR KEY OR MOUSE"),
-        (178, "ESC / B: CANCEL OR RETURN"),
-    ]
-    .into_iter()
-    .map(|(top, text)| {
-        TextLine {
-            color: [220, 222, 232, 255],
-            scale: 2,
-            text,
-            top,
-        }
-        .fit_width(width)
-    })
-    .collect()
+        (120, "ARROWS / DPAD: PLAYER AND ACTION"),
+        (132, "TAB / RB: SOURCE - ENTER / A: EDIT"),
+        (144, "DEL / X: CLEAR KEY OR MOUSE"),
+        (156, "ESC / B: CANCEL OR RETURN"),
+    ];
+    lines
+        .into_iter()
+        .chain(
+            touch_hints
+                .into_iter()
+                .flatten()
+                .zip([168, 180])
+                .map(|(text, top)| (top, text)),
+        )
+        .map(|(top, text)| {
+            TextLine {
+                color: [220, 222, 232, 255],
+                scale: 2,
+                text,
+                top,
+            }
+            .fit_width(width)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -341,7 +354,14 @@ mod tests {
                 .unwrap_or(NonZeroUsize::MIN),
             width: 280,
         };
-        let result = ControlEditorArt::load(&mut capture, spec);
+        let result = ControlEditorArt::load(
+            &mut capture,
+            spec,
+            Some([
+                "TOUCH: ARROWS, B SOURCE, A EDIT",
+                "TOUCH: START CLEAR, PAUSE BACK",
+            ]),
+        );
         let Ok(art) = result else {
             assert!(result.is_ok(), "{result:?}");
             return;

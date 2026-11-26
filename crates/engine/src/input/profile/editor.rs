@@ -21,7 +21,8 @@
 // - Merge-When:
 //   - Another editor duplicates digital binding selection or capture.
 // - Summary:
-//   - Shared keyboard and gamepad editor for all digital binding families.
+//   - Shared keyboard, gamepad and touch editor for all digital binding
+//     families.
 // - Description:
 //   - Capture presses, not releases; never mutate the running input router.
 // - Usage:
@@ -98,20 +99,28 @@ pub enum EditorEffect {
     Propose(DigitalBinding),
 }
 
-/// Navigation uses physical identities independently of gameplay bindings.
+/// Menu command, independent of physical binding capture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Navigation {
+pub enum EditorNavigation {
+    /// Cancel capture or close the editor.
     Cancel,
+    /// Clear an optional binding.
     Clear,
+    /// Begin capture or confirm a pending binding.
     Confirm,
+    /// Select the following action or touch slot.
     Down,
+    /// Cycle the input family.
     Family,
+    /// Select the previous station or touch slot.
     Left,
+    /// Select the following station or touch slot.
     Right,
+    /// Select the previous action or touch slot.
     Up,
 }
 
-impl Navigation {
+impl EditorNavigation {
     const fn button(button: ControllerButton) -> Option<Self> {
         match button {
             ControllerButton::East
@@ -188,7 +197,7 @@ impl ControlEditor {
         // the navigation controls. Confirmation is a separate edge.
         if key == Some(KeyboardKey::ESCAPE)
             || (self.family != BindingFamily::Controller
-                && navigation == Some(Navigation::Cancel))
+                && navigation == Some(EditorNavigation::Cancel))
         {
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
@@ -213,23 +222,9 @@ impl ControlEditor {
                 None
             },
             (BindingFamily::Touch, _) => {
-                match navigation {
-                    Some(Navigation::Left | Navigation::Up) => {
-                        self.touch_slot =
-                            cycle(self.touch_slot, actions, false);
-                    },
-                    Some(Navigation::Right | Navigation::Down) => {
-                        self.touch_slot = cycle(self.touch_slot, actions, true);
-                    },
-                    Some(Navigation::Confirm) => {
-                        self.status = EditorStatus::Ready;
-                        return EditorEffect::Propose(
-                            DigitalBinding::TouchSlot(self.touch_slot),
-                        );
-                    },
-                    _ => {},
-                }
-                None
+                return navigation.map_or(EditorEffect::None, |command| {
+                    self.capture_navigation(command, actions)
+                });
             },
             _ => None,
         };
@@ -237,6 +232,38 @@ impl ControlEditor {
             self.status = EditorStatus::Ready;
             EditorEffect::Propose(proposal)
         })
+    }
+
+    fn capture_navigation(
+        &mut self,
+        command: EditorNavigation,
+        actions: usize,
+    ) -> EditorEffect {
+        if command == EditorNavigation::Cancel {
+            self.status = EditorStatus::Ready;
+            return EditorEffect::None;
+        }
+        if self.family != BindingFamily::Touch {
+            return EditorEffect::None;
+        }
+        match command {
+            EditorNavigation::Left | EditorNavigation::Up => {
+                self.touch_slot = cycle(self.touch_slot, actions, false);
+            },
+            EditorNavigation::Right | EditorNavigation::Down => {
+                self.touch_slot = cycle(self.touch_slot, actions, true);
+            },
+            EditorNavigation::Confirm => {
+                self.status = EditorStatus::Ready;
+                return EditorEffect::Propose(DigitalBinding::TouchSlot(
+                    self.touch_slot,
+                ));
+            },
+            EditorNavigation::Cancel
+            | EditorNavigation::Clear
+            | EditorNavigation::Family => {},
+        }
+        EditorEffect::None
     }
 
     /// Resolve the current admitted binding at the editor selection.
@@ -291,9 +318,29 @@ impl ControlEditor {
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
         }
-        let command = navigation(event);
+        if self.status == EditorStatus::Capturing {
+            return self.capture(event, ACTIONS);
+        }
+        navigation(event).map_or(EditorEffect::None, |command| {
+            self.navigate(command, profiles)
+        })
+    }
+
+    /// Process an explicit menu command from a title's touch interface.
+    ///
+    /// Commands never become captured physical keys or controller buttons.
+    pub fn navigate<const PLAYERS: usize, const ACTIONS: usize>(
+        &mut self,
+        command: EditorNavigation,
+        profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
+    ) -> EditorEffect {
+        if self.current(profiles).is_none() {
+            return EditorEffect::None;
+        }
         match self.status {
-            EditorStatus::Capturing => return self.capture(event, ACTIONS),
+            EditorStatus::Capturing => {
+                return self.capture_navigation(command, ACTIONS);
+            },
             EditorStatus::Reviewing(button) => {
                 return self.review(button, command);
             },
@@ -302,21 +349,21 @@ impl ControlEditor {
             | EditorStatus::Saved => {},
         }
         match command {
-            Some(Navigation::Cancel) => return EditorEffect::Close,
-            Some(Navigation::Left) => {
+            EditorNavigation::Cancel => return EditorEffect::Close,
+            EditorNavigation::Left => {
                 self.station = cycle(self.station, PLAYERS, false);
             },
-            Some(Navigation::Right) => {
+            EditorNavigation::Right => {
                 self.station = cycle(self.station, PLAYERS, true);
             },
-            Some(Navigation::Up) => {
+            EditorNavigation::Up => {
                 self.action = cycle(self.action, ACTIONS, false);
             },
-            Some(Navigation::Down) => {
+            EditorNavigation::Down => {
                 self.action = cycle(self.action, ACTIONS, true);
             },
-            Some(Navigation::Family) => self.family = self.family.next(),
-            Some(Navigation::Confirm) => {
+            EditorNavigation::Family => self.family = self.family.next(),
+            EditorNavigation::Confirm => {
                 if let Some(DigitalBinding::TouchSlot(slot)) =
                     self.current(profiles)
                 {
@@ -325,7 +372,7 @@ impl ControlEditor {
                 self.status = EditorStatus::Capturing;
                 return EditorEffect::None;
             },
-            Some(Navigation::Clear) => {
+            EditorNavigation::Clear => {
                 let binding = match self.family {
                     BindingFamily::Keyboard => DigitalBinding::Key(None),
                     BindingFamily::Mouse => DigitalBinding::Mouse(None),
@@ -335,7 +382,6 @@ impl ControlEditor {
                 };
                 return EditorEffect::Propose(binding);
             },
-            _ => return EditorEffect::None,
         }
         self.status = EditorStatus::Ready;
         EditorEffect::None
@@ -344,18 +390,23 @@ impl ControlEditor {
     const fn review(
         &mut self,
         button: ControllerButton,
-        command: Option<Navigation>,
+        command: EditorNavigation,
     ) -> EditorEffect {
         match command {
-            Some(Navigation::Confirm) => {
+            EditorNavigation::Confirm => {
                 self.status = EditorStatus::Ready;
                 EditorEffect::Propose(DigitalBinding::Button(button))
             },
-            Some(Navigation::Cancel) => {
+            EditorNavigation::Cancel => {
                 self.status = EditorStatus::Ready;
                 EditorEffect::None
             },
-            _ => EditorEffect::None,
+            EditorNavigation::Clear
+            | EditorNavigation::Down
+            | EditorNavigation::Family
+            | EditorNavigation::Left
+            | EditorNavigation::Right
+            | EditorNavigation::Up => EditorEffect::None,
         }
     }
 
@@ -378,10 +429,10 @@ impl ControlEditor {
     }
 }
 
-fn navigation(event: InputEvent) -> Option<Navigation> {
+fn navigation(event: InputEvent) -> Option<EditorNavigation> {
     pressed_key(event)
-        .and_then(Navigation::key)
-        .or_else(|| pressed_button(event).and_then(Navigation::button))
+        .and_then(EditorNavigation::key)
+        .or_else(|| pressed_button(event).and_then(EditorNavigation::button))
 }
 
 fn pressed_button(event: InputEvent) -> Option<ControllerButton> {
@@ -573,6 +624,54 @@ mod tests {
         );
         editor.acknowledge(true);
         assert_eq!(button(editor, East), EditorEffect::Close);
+    }
+
+    #[test]
+    fn explicit_touch_commands_can_edit_and_cancel_without_raw_capture() {
+        use EditorNavigation::{Down, Family, Right};
+        let mut editor = ControlEditor::default();
+        for command in [Right, Down, Family, Family, Family] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        assert_eq!((editor.station(), editor.action()), (1, 1));
+        assert_eq!(editor.family(), BindingFamily::Touch);
+        cancel_touch_proposal(&mut editor);
+        verify_touch_proposal(&mut editor);
+    }
+
+    fn cancel_touch_proposal(editor: &mut ControlEditor) {
+        use EditorNavigation::{Cancel, Confirm, Right};
+        assert_eq!(editor.navigate(Confirm, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.touch_slot(), 1);
+        assert_eq!(editor.navigate(Right, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.touch_slot(), 0);
+        assert_eq!(editor.navigate(Cancel, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.status(), EditorStatus::Ready);
+    }
+
+    fn verify_touch_proposal(editor: &mut ControlEditor) {
+        use EditorNavigation::{Cancel, Confirm, Right};
+        assert_eq!(editor.navigate(Confirm, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.navigate(Right, &PROFILE), EditorEffect::None);
+        assert_eq!(
+            editor.navigate(Confirm, &PROFILE),
+            EditorEffect::Propose(DigitalBinding::TouchSlot(0))
+        );
+        editor.acknowledge(true);
+        assert_eq!(editor.navigate(Cancel, &PROFILE), EditorEffect::Close);
+    }
+
+    #[test]
+    fn explicit_cancel_does_not_capture_a_controller_navigation_button() {
+        use EditorNavigation::{Cancel, Confirm, Family};
+        let mut editor = ControlEditor::default();
+        for command in [Family, Family, Confirm] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        assert_eq!(editor.family(), BindingFamily::Controller);
+        assert_eq!(editor.status(), EditorStatus::Capturing);
+        assert_eq!(editor.navigate(Cancel, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.status(), EditorStatus::Ready);
     }
 
     fn capture_touch(editor: &mut ControlEditor) {
