@@ -464,3 +464,26 @@ implicit directory charges, skipped streams, truncation and overrun.
 Fresh native X11 and dummy audio validation
 1795655204639250516-2483599 passed 1,587 aggregate test executions and
 all six portable core checks.
+
+Shared staging admission subsequently moved canonical payload integrity,
+aggregate budgets and exact manifest inventory checks before dispatch.
+Copying preflights the complete inventory before opening destination
+storage. Authored package writes bind their portable paths, bytes and
+explicit execute intent, while publication admits only a single portable
+destination component. Archive and authored staging now share one
+portable namespace with case-insensitive collision keys and implicit
+directory charges. Native metadata is indexed by admitted entry identity
+and completion verifies the exact recorded tree. Regressions demonstrate
+rejection before dispatch or streaming even with permissive fake adapters.
+Fresh native validation runs 1795655806715162809-2586816,
+1795656170216363487-2757491 and 1795656535543811233-2829651 passed
+1,597, 1,604 and 1,614 aggregate test executions respectively, each with
+all six portable core checks. Trusted ancestors, same-user concurrency
+limitations and physical-device acceptance remain unchanged.
+
+Directory observations now pin the native directory without following its
+final link, reject duplicate backend names and reuse pinned enumeration for
+staged tree and shared object-pool checks. A synthetic rename fixture
+preserves the original directory observation after path replacement.
+Fresh native validation 1795656875146521310-2913759 passed 1,620
+aggregate test executions and all six portable core checks.

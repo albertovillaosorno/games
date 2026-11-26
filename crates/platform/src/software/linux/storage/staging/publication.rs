@@ -30,14 +30,13 @@
 //   - Keep the temporary directory private and reject existing destinations.
 
 use std::ffi::OsStr;
-use std::fs;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io::Write as _;
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use std::mem::take;
-use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::path::Path;
 
 use games_assets::ContentHash;
@@ -58,6 +57,7 @@ use super::super::file::{
     DIRECTORY_FLAGS, FileReadError, same_inode, sync_regular,
     trusted_directory_stat, verify_staged_regular,
 };
+use super::super::pinned_directory_entries;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use super::pool::SharedPool;
 use super::{ArchiveStaging, StagedArchive, StagingError, Stamps};
@@ -367,9 +367,8 @@ fn check_entry_count(
     directory: &OwnedFd,
     expected: usize,
 ) -> Result<(), StagingError> {
-    let path = format!("/proc/self/fd/{}", directory.as_raw_fd());
     let mut remaining = expected;
-    for result in fs::read_dir(path)? {
+    for result in pinned_directory_entries(directory)? {
         let _entry = result?;
         remaining = remaining
             .checked_sub(1)

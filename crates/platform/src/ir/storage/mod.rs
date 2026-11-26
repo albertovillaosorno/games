@@ -129,16 +129,17 @@ pub fn canonical_path(path: &OsStr) -> IoResult<OsString> {
 }
 
 /// Observe the direct entries of a directory without following final links.
+/// Membership and metadata may change during observation.
 /// # Errors
-/// Reports unavailable observation, excessive entries or invalid names.
+/// Reports unavailable observation, excess entries or invalid or duplicate
+/// names.
 pub fn directory_entries(
     path: &OsStr,
     maximum: NonZeroUsize,
 ) -> IoResult<Vec<DirectoryEntry>> {
     let mut entries =
         <() as PathObservation>::directory_entries(path, maximum)?;
-    admit_entries(&entries, maximum)?;
-    entries.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    admit_entries(&mut entries, maximum)?;
     Ok(entries)
 }
 
@@ -242,7 +243,7 @@ pub fn path_kind(path: &OsStr) -> IoResult<PathKind> {
 }
 
 fn admit_entries(
-    entries: &[DirectoryEntry],
+    entries: &mut [DirectoryEntry],
     maximum: NonZeroUsize,
 ) -> IoResult<()> {
     if entries.len() > maximum.get()
@@ -255,35 +256,61 @@ fn admit_entries(
     {
         return Err(ErrorKind::InvalidData.into());
     }
+    entries.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+    if entries
+        .iter()
+        .zip(entries.iter().skip(1))
+        .any(|(left, right)| left.name == right.name)
+    {
+        return Err(ErrorKind::InvalidData.into());
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::slice::from_ref;
+    use std::slice::from_mut;
 
     use super::*;
 
     #[test]
     fn directory_admission_rejects_invalid_names_and_counts() {
-        let valid = DirectoryEntry {
+        let mut valid = DirectoryEntry {
             kind: PathKind::RegularFile,
             name: OsString::from("file"),
         };
         let maximum = NonZeroUsize::MIN;
-        assert!(admit_entries(from_ref(&valid), maximum).is_ok());
-        assert!(admit_entries(&[valid.clone(), valid], maximum).is_err());
+        assert!(admit_entries(from_mut(&mut valid), maximum).is_ok());
+        assert!(
+            admit_entries(&mut [valid.clone(), valid.clone()], maximum)
+                .is_err()
+        );
+        let two = maximum.saturating_add(1);
+        let mut distinct = [
+            DirectoryEntry {
+                kind: PathKind::Directory,
+                name: OsString::from("z"),
+            },
+            valid.clone(),
+        ];
+        assert!(admit_entries(&mut distinct, two).is_ok());
+        assert_eq!(distinct.first(), Some(&valid));
+        let duplicate = DirectoryEntry {
+            kind: PathKind::Directory,
+            name: valid.name.clone(),
+        };
+        assert!(admit_entries(&mut [valid, duplicate], two).is_err());
         for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
             let entry = DirectoryEntry {
                 kind: PathKind::Directory,
                 name: OsString::from(name),
             };
-            assert!(admit_entries(&[entry], maximum).is_err());
+            assert!(admit_entries(&mut [entry], maximum).is_err());
         }
         let missing = DirectoryEntry {
             kind: PathKind::Missing,
             name: OsString::from("missing"),
         };
-        assert!(admit_entries(&[missing], maximum).is_err());
+        assert!(admit_entries(&mut [missing], maximum).is_err());
     }
 }

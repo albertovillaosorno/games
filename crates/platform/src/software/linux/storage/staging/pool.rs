@@ -35,7 +35,9 @@ use std::fs;
 use std::io::Read as _;
 use std::num::NonZeroU64;
 use std::os::fd::OwnedFd;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use games_assets::archive::ArchiveBudget;
 use games_assets::{AssetError, ContentHash};
@@ -51,6 +53,7 @@ use super::super::file::{
     DIRECTORY_FLAGS, read_regular_with, trusted_directory,
     verify_staged_regular,
 };
+use super::super::pinned_directory_entries;
 use super::publication::publish_directory;
 use super::{ArchiveStaging, PrivateDirectory, StagingError, same_directory};
 
@@ -67,7 +70,7 @@ impl SharedPool {
         stage.verify_location()?;
         let parent =
             stage.path.parent().ok_or(StagingError::UnsupportedPath)?;
-        reject_legacy(stage, parent)?;
+        reject_legacy(stage)?;
         match openat(
             &stage.parent,
             OBJECTS_DIRECTORY,
@@ -143,9 +146,7 @@ impl SharedPool {
         stage: &PrivateDirectory,
     ) -> Result<(), StagingError> {
         stage.verify_location()?;
-        let parent =
-            stage.path.parent().ok_or(StagingError::UnsupportedPath)?;
-        reject_legacy(stage, parent)?;
+        reject_legacy(stage)?;
         let current = open(&self.path, DIRECTORY_FLAGS, Mode::empty())?;
         if !same_directory(&self.root, &current)?
             || !trusted_directory(&self.root)?
@@ -225,13 +226,10 @@ pub(super) fn reject_shared(parent: &Path) -> Result<(), StagingError> {
     }
 }
 
-fn reject_legacy(
-    stage: &PrivateDirectory,
-    parent: &Path,
-) -> Result<(), StagingError> {
+fn reject_legacy(stage: &PrivateDirectory) -> Result<(), StagingError> {
     // Check metadata, not payload bytes. Even an existing shared store
     // must reject a legacy payload directory inserted alongside it.
-    for entry in fs::read_dir(parent)? {
+    for entry in pinned_directory_entries(&stage.parent)? {
         let name = entry?.file_name();
         if !name
             .to_str()

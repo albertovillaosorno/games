@@ -78,12 +78,20 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, Metadata};
 use std::io;
 use std::num::{NonZeroU64, NonZeroUsize};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::{AsRawFd as _, OwnedFd};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::path::{Component, Path};
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use file::DIRECTORY_FLAGS;
 use games_assets::ContentHash;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use nix::fcntl::open;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use nix::sys::stat::Mode;
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use crate::ir::storage::bundle::BundleError;
@@ -179,22 +187,8 @@ impl PathObservation for () {
         path: &OsStr,
         maximum: NonZeroUsize,
     ) -> io::Result<Vec<DirectoryEntry>> {
-        if Self::path_kind(path)? != PathKind::Directory {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        let mut entries = Vec::new();
-        for result in fs::read_dir(Path::new(path))? {
-            if entries.len() >= maximum.get() {
-                return Err(io::ErrorKind::InvalidData.into());
-            }
-            let entry = result?;
-            entries.try_reserve(1).map_err(io::Error::other)?;
-            entries.push(DirectoryEntry {
-                kind: entry_kind(&entry.metadata()?),
-                name: entry.file_name(),
-            });
-        }
-        Ok(entries)
+        let directory = open(Path::new(path), DIRECTORY_FLAGS, Mode::empty())?;
+        observe_directory(&directory, maximum)
     }
 
     fn path_kind(path: &OsStr) -> io::Result<PathKind> {
@@ -346,6 +340,32 @@ fn entry_kind(kind: &Metadata) -> PathKind {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn observe_directory(
+    directory: &OwnedFd,
+    maximum: NonZeroUsize,
+) -> io::Result<Vec<DirectoryEntry>> {
+    let mut entries = Vec::new();
+    for result in pinned_directory_entries(directory)? {
+        if entries.len() >= maximum.get() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let entry = result?;
+        entries.try_reserve(1).map_err(io::Error::other)?;
+        entries.push(DirectoryEntry {
+            kind: entry_kind(&entry.metadata()?),
+            name: entry.file_name(),
+        });
+    }
+    Ok(entries)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn pinned_directory_entries(directory: &OwnedFd) -> io::Result<fs::ReadDir> {
+    let path = format!("/proc/self/fd/{}", directory.as_raw_fd());
+    fs::read_dir(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +476,34 @@ mod tests {
         valid
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn directory_observation_remains_bound_to_open_directory() -> io::Result<()>
+    {
+        use crate::ir::storage::directory_entries;
+        let root = fixtures::TestRoot::new()?;
+        let original = root.path().join("original");
+        let moved = root.path().join("moved");
+        let alternate = root.path().join("alternate");
+        fs::create_dir_all(&original)?;
+        fs::create_dir_all(&alternate)?;
+        fs::write(original.join("expected"), b"data")?;
+        fs::write(alternate.join("other"), b"data")?;
+        let pinned = open(&original, DIRECTORY_FLAGS, Mode::empty())?;
+        fs::rename(&original, &moved)?;
+        fixtures::file_link(&alternate, &original)?;
+        let maximum = NonZeroUsize::MIN;
+        let entries = observe_directory(&pinned, maximum)?;
+        (entries
+            == [DirectoryEntry {
+                kind: PathKind::RegularFile,
+                name: OsString::from("expected"),
+            }]
+            && directory_entries(original.as_os_str(), maximum).is_err())
+        .then_some(())
+        .ok_or_else(|| io::ErrorKind::InvalidData.into())
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
