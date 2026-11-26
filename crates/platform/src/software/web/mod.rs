@@ -38,6 +38,15 @@
     feature = "interactive"
 ))]
 pub(super) mod audio;
+#[cfg(any(
+    test,
+    all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "interactive"
+    )
+))]
+mod audio_timeline;
 pub(super) mod controller_mapping;
 #[cfg(all(
     target_arch = "wasm32",

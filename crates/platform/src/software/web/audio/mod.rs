@@ -53,6 +53,7 @@ use web_sys::{
     AudioContextState, AudioScheduledSourceNode, Event,
 };
 
+use super::audio_timeline;
 use crate::ir::audio::{
     AudioDevices, PlaybackBackend, PlaybackControl, PlaybackError, PlaybackPort,
 };
@@ -105,16 +106,11 @@ impl BrowserAudio {
         let spec = self.layout.spec();
         let lead = f64::from(spec.buffer_frames.get())
             / f64::from(spec.sample_rate.get());
-        let earliest = now + lead;
-        if !earliest.is_finite() || now.is_sign_negative() {
-            return Err(PlaybackError::InvalidState);
-        }
-        Ok(queue
+        let tail = queue
             .iter()
             .filter_map(|chunk| chunk.source.as_ref().map(|source| source.end))
-            .next_back()
-            .unwrap_or(earliest)
-            .max(earliest))
+            .next_back();
+        audio_timeline::next_start(now, lead, tail)
     }
 
     fn schedule_pending(&self) -> Result<(), PlaybackError> {
