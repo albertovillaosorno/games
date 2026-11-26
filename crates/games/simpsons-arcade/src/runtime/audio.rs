@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Local attack cue selection and bounded native audio presentation.
+//   - Local attack cue selection and bounded host audio presentation.
 // - Must-Not:
 //   - Interpret ROM bytes, duplicate mixing or influence simulation time.
 // - Allows:
@@ -40,14 +40,14 @@ use games::audio::{
 };
 use games::input::{InputEvent, LogicalAction};
 use games::replay::LiveSimulation;
-use games_assets::ManifestLimits;
 use games_assets::pcm::PcmSamples;
+use games_assets::{ContentHash, ManifestLimits};
 use games_platform::ir::audio::{NativeAudio, PlaybackControl, PlaybackSpec};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::process::write_status;
 use games_platform::ir::storage::bundle::{BundleSource, MediaOverlay};
 
-use super::launch::AudioSelection;
+use super::launch::AudioSelection as LocalAudioSelection;
 use super::{
     Controls, failure, live, open_selected_bundle, parse_hash, size,
     smoke_press,
@@ -89,6 +89,30 @@ const CLIPS: [(&str, u64); 4] = [
     ("audio/sample-0007", 3828),
 ];
 
+/// Pinned canonical attack samples and an optional selective replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AudioSelection {
+    /// Manifest providing the four observed attack clips.
+    pub base: ContentHash,
+    /// Optional compatible replacement manifest.
+    pub replacement: Option<ContentHash>,
+}
+
+impl AudioSelection {
+    pub(super) fn from_local(
+        selection: &LocalAudioSelection,
+    ) -> Result<Self, RenderError> {
+        Ok(Self {
+            base: parse_hash(&selection.base)?,
+            replacement: selection
+                .replacement
+                .as_deref()
+                .map(parse_hash)
+                .transpose()?,
+        })
+    }
+}
+
 pub(super) struct Samples {
     clips: [Rc<[i16]>; 4],
 }
@@ -105,27 +129,19 @@ impl Samples {
 
     pub(super) fn load(
         store: BundleSource<'_>,
-        selection: &AudioSelection,
+        selection: AudioSelection,
     ) -> Result<Self, RenderError> {
-        let bundle = open_selected_bundle(
-            store,
-            parse_hash(&selection.base)?,
-            ManifestLimits {
+        let bundle =
+            open_selected_bundle(store, selection.base, ManifestLimits {
                 manifest_bytes: size(65_536)?,
                 payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
                 records: size(161)?,
                 total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
-            },
-        )?;
+            })?;
         let replacement = selection
             .replacement
-            .as_ref()
             .map(|hash| {
-                open_selected_bundle(
-                    store,
-                    parse_hash(hash)?,
-                    replacement_limits()?,
-                )
+                open_selected_bundle(store, hash, replacement_limits()?)
             })
             .transpose()?;
         let allowed = CLIPS.map(|(key, _frames)| key);
@@ -167,9 +183,9 @@ pub(super) struct Playback {
     clips: [OwnedClip; 4],
     cues: [u64; 4],
     device: NativeAudio,
+    discard_queued: bool,
     live_output: bool,
     mixer: OwnedMixer,
-    running: bool,
     scratch: [[i16; 2]; CHUNK],
     volume: MasterVolume,
 }
@@ -215,10 +231,10 @@ impl Playback {
             clips: samples.clips()?,
             cues: [0; 4],
             device,
+            discard_queued: false,
             live_output: false,
             mixer: OwnedMixer::new(RATE, NonZeroU16::MIN.saturating_add(15))
                 .map_err(failure)?,
-            running: false,
             scratch: [[0; 2]; CHUNK],
             volume: MasterVolume::default(),
         })
@@ -228,20 +244,22 @@ impl Playback {
         self.device.queued_frames().map_err(failure)
     }
 
-    fn set_running(&mut self, running: bool) -> Result<(), RenderError> {
-        if self.running != running {
-            let receipt = if running {
-                self.device.resume()
-            } else {
-                self.device.pause()
+    fn ready(&mut self, running: bool) -> Result<bool, RenderError> {
+        if self.discard_queued {
+            // A host must settle its earlier control before any queue
+            // operation. Never enqueue stale-volume or reset-session PCM.
+            if self.device.poll_control().map_err(failure)?
+                == PlaybackControl::Pending
+            {
+                return Ok(false);
             }
-            .map_err(failure)?;
-            if receipt != PlaybackControl::Complete {
-                return Err(failure("native audio control pending"));
+            if self.queued_frames()? != 0 {
+                self.device.clear().map_err(failure)?;
             }
-            self.running = running;
+            self.discard_queued = false;
         }
-        Ok(())
+        Ok(self.device.reconcile_running(running).map_err(failure)?
+            == PlaybackControl::Complete)
     }
 
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
@@ -383,21 +401,19 @@ impl Playback {
         let volume = cabinet.session().volume();
         if self.volume != volume {
             // Pending frames were already mixed at the previous volume.
-            self.device.clear().map_err(failure)?;
+            self.discard_queued = true;
             self.mixer.set_volume(volume);
             self.volume = volume;
         }
         let current = cabinet.stations().map(|station| station.attack_cues);
         let phase = cabinet.phase();
         let playing = phase == Phase::Playing;
-        self.set_running(self.live_output && playing)?;
         if matches!(phase, Phase::MainMenu | Phase::Exited) {
             self.cues = current;
-            if self.queued_frames()? != 0 {
-                self.device.clear().map_err(failure)?;
-            }
+            self.discard_queued = true;
             self.mixer.clear();
         }
+        let ready = self.ready(self.live_output && playing)?;
         if !playing {
             return Ok(());
         }
@@ -418,7 +434,11 @@ impl Playback {
                 play(&mut self.mixer, clip.clone(), gain)?;
             }
         }
-        self.fill()
+        if ready {
+            self.fill()
+        } else {
+            Ok(())
+        }
     }
 
     fn verify_quiet(&self) -> Result<(), RenderError> {
@@ -545,11 +565,11 @@ fn smoke_join(
 #[cfg(test)]
 mod tests {
     use std::array;
-    use std::ffi::{OsStr, OsString};
+    use std::ffi::OsStr;
 
     use games_assets::archive::ArchiveBudget;
     use games_assets::{
-        AssetFormat, AssetManifest, AssetRecord, ContentHash, SourceIdentity,
+        AssetFormat, AssetManifest, AssetRecord, SourceIdentity,
     };
     use games_platform::ir::storage::fixtures::TestRoot;
     use games_platform::ir::storage::staging::CanonicalStaging;
@@ -561,7 +581,7 @@ mod tests {
     fn publish_fixture(
         parent: &OsStr,
         clips: &[FixtureClip<'_>],
-    ) -> Result<OsString, RenderError> {
+    ) -> Result<ContentHash, RenderError> {
         let limits = replacement_limits()?;
         let maximum = NonZeroU64::MIN.saturating_add(65_535);
         let budget = ArchiveBudget::new(
@@ -600,13 +620,13 @@ mod tests {
         )
         .map_err(failure)?;
         let staged = stage.finish(&manifest, limits).map_err(failure)?;
-        let digest = staged.digest().to_string();
+        let digest = staged.digest();
         staged
             .publish()
             .map_err(failure)?
             .durability
             .map_err(failure)?;
-        Ok(digest.into())
+        Ok(digest)
     }
 
     #[test]
@@ -619,7 +639,7 @@ mod tests {
             base: publish_fixture(parent, &base)?,
             replacement: None,
         };
-        let original = Samples::load(BundleSource::Local(parent), &selection)?;
+        let original = Samples::load(BundleSource::Local(parent), selection)?;
         if original
             .clips
             .iter()
@@ -634,7 +654,7 @@ mod tests {
             .ok_or_else(|| failure("missing fixture clip"))?;
         selection.replacement =
             Some(publish_fixture(parent, &[(key, frames, -7)])?);
-        let modified = Samples::load(BundleSource::Local(parent), &selection)?;
+        let modified = Samples::load(BundleSource::Local(parent), selection)?;
         let [first, rest @ ..] = &modified.clips;
         if first.iter().any(|sample| *sample != -7)
             || rest
@@ -652,7 +672,7 @@ mod tests {
                 invalid_frames,
                 -7,
             )])?);
-            if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
+            if Samples::load(BundleSource::Local(parent), selection).is_ok() {
                 return Err(failure("invalid replacement accepted"));
             }
         }

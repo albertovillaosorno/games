@@ -17,7 +17,7 @@
 //   - Outputs: Live title frames and one terminal completion result.
 //   - Side effects: Delegated window, input and callback registration.
 // - Split-When:
-//   - Independently owned audio or preference admission is required.
+//   - Independent preference admission is required.
 // - Merge-When:
 //   - Native and event-driven launch can share the same ownership contract.
 // - Summary:
@@ -27,7 +27,7 @@
 // - Usage:
 //   - Select pinned canonical manifest hashes and an explicit memory store.
 // - Defaults:
-//   - No local paths, audio, persistence or network access.
+//   - No local paths, persistence or network access.
 
 //! Event-driven title preview from a caller-provided memory snapshot.
 
@@ -41,17 +41,20 @@ use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::{NativeWindow, frame_loop};
 use games_platform::ir::storage::bundle::{BundleSource, MemoryBundleStore};
 
+pub use super::audio::AudioSelection;
 use super::{
     Interactive, OptionalSources, PreviewOptions, Scene, Sources,
-    WindowSwitching, dimension, launch, poses, preview_layout, scene_limits,
-    size, world,
+    WindowSwitching, audio, dimension, launch, poses, preview_layout,
+    scene_limits, size, world,
 };
 
-/// Explicit selection for the silent local event-driven preview.
+/// Explicit selection for the local event-driven preview.
 #[derive(Clone, Copy, Debug)]
 pub struct Selection<'text> {
     /// Four actor manifests in cabinet order.
     pub actors: [ContentHash; 4],
+    /// Optional pinned attack samples.
+    pub audio: Option<AudioSelection>,
     /// Initial presentation policy.
     pub display: DisplaySettings,
     /// Optional enemy approach and strike manifests.
@@ -87,7 +90,7 @@ where
         BundleSource::Memory(store),
         selection.actors,
         OptionalSources {
-            audio: None,
+            audio: selection.audio,
             enemy: selection.enemy,
             poses: selection
                 .poses
@@ -132,8 +135,14 @@ where
     ))?;
     let mut art = Scene::load(&mut scene, &source, options, reserved)?;
     let mut preview = Interactive::for_scene(startup, options, &art, None)?;
+    let mut playback = audio::open_optional(source.audio.as_ref(), None)?;
+    if let Some(output) = &mut playback {
+        output.enable_output();
+    }
     frame_loop::start(
-        move |_timestamp| preview.step(&mut scene, (&mut art, None), 0),
+        move |_timestamp| {
+            preview.step(&mut scene, (&mut art, playback.as_mut()), 0)
+        },
         complete,
     )
 }

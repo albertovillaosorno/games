@@ -414,6 +414,34 @@ impl NativeAudio {
         self.layout.queued_frames(self.backend.queued_bytes())
     }
 
+    /// Poll any outstanding control, then admit the desired consumption state.
+    ///
+    /// Repeated requests for the confirmed state do not dispatch another
+    /// control. A new desired state waits for an earlier pending receipt.
+    /// # Errors
+    /// Reports an invalid observation, queue receipt or backend failure.
+    pub fn reconcile_running(
+        &self,
+        running: bool,
+    ) -> Result<PlaybackControl, PlaybackError> {
+        if self.pending.get().is_some()
+            && self.poll_control()? == PlaybackControl::Pending
+        {
+            return Ok(PlaybackControl::Pending);
+        }
+        let next = if running {
+            PlaybackState::Running
+        } else {
+            PlaybackState::Paused
+        };
+        if self.state.get() == next {
+            self.observe_state()?;
+            Ok(PlaybackControl::Complete)
+        } else {
+            self.transition(next)
+        }
+    }
+
     /// Request consumption of software-queued frames.
     ///
     /// A pending receipt requires polling; it does not confirm playback.
@@ -680,6 +708,56 @@ mod tests {
             return Err(PlaybackError::InvalidState);
         }
         Ok(())
+    }
+
+    #[test]
+    fn desired_control_waits_and_reverses_without_duplicate_dispatch()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        handle.queue_samples(&[1, -1])?;
+        backend.control_pending.set(true);
+        verify(
+            &handle.reconcile_running(false)?,
+            &PlaybackControl::Complete,
+        )?;
+        for running in [true, true, false] {
+            verify(
+                &handle.reconcile_running(running)?,
+                &PlaybackControl::Pending,
+            )?;
+            verify(&handle.clear(), &Err(PlaybackError::TransitionPending))?;
+        }
+        backend.state.set(PlaybackState::Running);
+        drop(
+            backend
+                .control_result
+                .replace(Some(Ok(PlaybackControl::Complete))),
+        );
+        verify(&handle.reconcile_running(false)?, &PlaybackControl::Pending)?;
+        verify(&handle.reconcile_running(false)?, &PlaybackControl::Pending)?;
+        verify(
+            &handle.queued_frames(),
+            &Err(PlaybackError::TransitionPending),
+        )?;
+        backend.state.set(PlaybackState::Paused);
+        drop(
+            backend
+                .control_result
+                .replace(Some(Ok(PlaybackControl::Complete))),
+        );
+        for _attempt in 0..2u8 {
+            verify(
+                &handle.reconcile_running(false)?,
+                &PlaybackControl::Complete,
+            )?;
+        }
+        verify(&handle.queued_frames()?, &1)?;
+        verify(backend.samples.borrow().as_slice(), &[1, -1])?;
+        backend.state.set(PlaybackState::Stopped);
+        verify(
+            &handle.reconcile_running(false),
+            &Err(PlaybackError::InvalidState),
+        )
     }
 
     #[test]

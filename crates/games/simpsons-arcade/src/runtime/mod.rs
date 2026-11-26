@@ -846,8 +846,8 @@ impl Scene {
     }
 }
 
-struct OptionalSources<'selection> {
-    audio: Option<&'selection launch::AudioSelection>,
+struct OptionalSources {
+    audio: Option<audio::AudioSelection>,
     enemy: Option<[ContentHash; 2]>,
     poses: poses::Catalogue,
     shadow: Option<ContentHash>,
@@ -868,7 +868,7 @@ impl<'source> Sources<'source> {
     fn load(
         store: BundleSource<'source>,
         actors: [ContentHash; 4],
-        options: OptionalSources<'_>,
+        options: OptionalSources,
     ) -> Result<Self, RenderError> {
         Ok(Self {
             actors: open_bundles(store, actors)?,
@@ -901,7 +901,11 @@ impl<'source> Sources<'source> {
             BundleSource::Local(&assets.directory),
             parse_hashes(&assets.actors)?,
             OptionalSources {
-                audio: assets.audio.as_ref(),
+                audio: assets
+                    .audio
+                    .as_ref()
+                    .map(audio::AudioSelection::from_local)
+                    .transpose()?,
                 enemy: assets.enemy.as_ref().map(parse_hashes).transpose()?,
                 poses: assets
                     .poses
