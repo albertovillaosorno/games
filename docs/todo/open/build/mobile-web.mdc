@@ -1005,3 +1005,19 @@ reinforcement meters. All 620 measured movement/combat submissions met
 the 16.667 ms host-work budget and both save hashes remained unchanged.
 These observations cover compatible settings envelopes, not a shipped
 transfer UI, browser fullscreen support, physical input or audibility.
+
+The same verified 1ce354b browser package also passed the ordinary
+asset-backed Firefox entry workflow without a test observer page or
+injected DOM events. A loopback-only HTTP server returned the unmodified
+576-byte index, 45,123-byte JavaScript and 1,002,758-byte Wasm. In two
+isolated Xvfb sessions, the visible page reported readiness, accepted the
+trusted directory selection, rendered the free-play menu and touch
+panel, joined station one using Enter and moved its actor left using
+X11 keyboard input. The game exit command restored the page and its
+visible `browser-preview: ended` status without a remaining visible
+picker or canvas. Screenshot observations do not measure callback or
+file-read counts. Firefox's separate browser-quit confirmation caused
+a harness timeout; terminating the isolated harness after the game
+exit permitted cleanup. The package receipt and all 88 files still
+verified afterward. This covers the published entry page on virtual
+Firefox, not physical devices or broader browser compatibility.
