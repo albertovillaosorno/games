@@ -443,11 +443,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
     /// Every previously held logical action emits one release.
     pub fn release_all(&mut self) -> Vec<LogicalAction<Action>> {
         self.contacts.clear();
-        self.held.clear();
-        take(&mut self.pressed)
-            .into_keys()
-            .map(|action| LogicalAction { action, down: false })
-            .collect()
+        self.release_holds()
     }
 
     fn release_controller(
@@ -462,6 +458,19 @@ impl<Action: Clone + Ord> InputRouter<Action> {
             Source::Button(device, u16::MIN)..=Source::Button(device, u16::MAX),
         ));
         changes
+    }
+
+    /// Release all logical holds while preserving admitted contacts.
+    ///
+    /// Modal touch commands may consume the first press without admitting
+    /// a duplicate contact or restarting its bounded lifetime. A host
+    /// must clear all contacts when leaving the modal interface.
+    pub fn release_holds(&mut self) -> Vec<LogicalAction<Action>> {
+        self.held.clear();
+        take(&mut self.pressed)
+            .into_keys()
+            .map(|action| LogicalAction { action, down: false })
+            .collect()
     }
 
     fn release_range(

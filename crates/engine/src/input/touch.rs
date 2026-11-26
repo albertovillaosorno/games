@@ -725,6 +725,29 @@ mod tests {
     }
 
     #[test]
+    fn releasing_modal_holds_preserves_bounded_contact_admission() {
+        let mut router = router(1);
+        assert_eq!(router.handle(event(1, 1, ContactPhase::Down(LEFT))), [
+            action("left", true)
+        ]);
+        assert_eq!(router.release_holds(), [action("left", false)]);
+        for input in [
+            event(1, 1, ContactPhase::Down(LEFT)),
+            event(1, 2, ContactPhase::Down(RIGHT)),
+        ] {
+            assert_eq!(router.handle(input), []);
+        }
+        assert_eq!(router.handle(InputEvent::TouchCancelled), []);
+        assert_eq!(
+            router.handle(event(1, 1, ContactPhase::Motion(Some(LEFT)))),
+            []
+        );
+        assert_eq!(router.handle(event(1, 2, ContactPhase::Down(RIGHT))), [
+            action("right", true)
+        ]);
+    }
+
+    #[test]
     fn geometry_change_cancels_touch_without_releasing_other_sources() {
         let mut router = router(2);
         let key = |down| InputEvent::Key { code: 42, down };

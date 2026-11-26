@@ -296,9 +296,10 @@ impl Controls {
     }
 
     fn close_editor(
-        &self,
+        &mut self,
         releases: &mut LocalActions,
     ) -> Result<(), RenderError> {
+        drop(self.router.release_all());
         // Closing is independent of the active gameplay binding and the
         // selected editing station.
         let player = Player::ALL
@@ -348,9 +349,9 @@ impl Controls {
     ) -> Result<ModalActions, RenderError> {
         // Release only holds already delivered to the running simulation.
         // Modal capture itself must not emit gameplay presses or releases.
-        let releases = self.router.release_all();
+        let releases = self.router.release_holds();
         let actions = self.actions(event)?;
-        drop(self.router.release_all());
+        drop(self.router.release_holds());
         let navigation = if matches!(
             event,
             InputEvent::Contact {
@@ -3234,7 +3235,10 @@ mod tests {
         let id = ContactId { device: 1, finger: 1 };
         for (phase, expected) in [
             (ContactPhase::Down(point), Some(command)),
+            (ContactPhase::Down(point), None),
             (ContactPhase::Motion(Some(point)), None),
+            (ContactPhase::Up, None),
+            (ContactPhase::Down(point), Some(command)),
             (ContactPhase::Up, None),
         ] {
             let (edges, navigation) =
@@ -3243,6 +3247,37 @@ mod tests {
                 return Err(failure(
                     "touch editor routed unexpected command or edge",
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn closing_editor_rejects_stale_touch_motion_after_return()
+    -> Result<(), RenderError> {
+        use games::input::touch::{ContactId, ContactPhase};
+        let mut controls = Controls::new(true)?;
+        let point = super::touch::center(
+            Player::Marge,
+            Control::Pause,
+            &controls.profiles,
+        )?;
+        let id = ContactId { device: 1, finger: 1 };
+        let (mut edges, navigation) =
+            controls.modal_actions(InputEvent::Contact {
+                id,
+                phase: ContactPhase::Down(point),
+            })?;
+        if !edges.is_empty() || navigation != Some(EditorNavigation::Cancel) {
+            return Err(failure("touch close did not produce cancel"));
+        }
+        controls.close_editor(&mut edges)?;
+        for phase in [ContactPhase::Motion(Some(point)), ContactPhase::Up] {
+            if !controls
+                .actions(InputEvent::Contact { id, phase })?
+                .is_empty()
+            {
+                return Err(failure("closed editor leaked a stale contact"));
             }
         }
         Ok(())

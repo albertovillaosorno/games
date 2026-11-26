@@ -346,3 +346,11 @@ zero frame-budget misses, 444 camera columns, two cooperative pose
 families and six reinforcement meters. The saved-profile run left
 its settings hash unchanged. These are synthetic input events and
 do not replace physical device or audible-output acceptance.
+
+Modal touch commands preserve the shared bounded contact lifetime
+while discarding their logical holds. Duplicate downs cannot repeat
+a command or exceed the admitted contact limit. Geometry cancellation
+clears contacts, and closing the editor requires fresh contacts
+before gameplay can receive input again. Inline regressions verify
+all remapped touch regions, duplicate and post-release taps, bounded
+admission and rejection of stale motion after editor exit.
