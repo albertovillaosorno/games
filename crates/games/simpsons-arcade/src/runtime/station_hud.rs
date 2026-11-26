@@ -31,12 +31,13 @@
 
 //! Station join, verified remote status and free-rejoin presentation.
 
+use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
 
-use super::{Profiles, failure, key_label, size};
+use super::{Profiles, failure, key_label, mouse_label, size};
 use crate::{CONTINUE_TICKS, Participation, Player};
 
 const WIDTH: u16 = 64;
@@ -118,11 +119,9 @@ impl StationHud {
             .keys
             .into_iter()
             .zip(profiles.buttons)
-            .map(|([_, key, ..], [_, button, ..])| {
-                [
-                    binding_hint("JOIN", key.map_or("NONE", key_label)),
-                    binding_hint("PAD", button.profile_name()),
-                ]
+            .zip(profiles.mouse)
+            .map(|(([_, key, ..], [_, button, ..]), [_, mouse, ..])| {
+                join_hints(key, mouse, button)
             })
             .collect();
         let prompts = (1..=LAST_SECONDS)
@@ -242,7 +241,7 @@ fn offline_plates<'text>(
 
 fn join_plates<'text>(
     labels: &'text [String],
-    joins: &'text [[String; 2]],
+    joins: &'text [Vec<String>],
     reserved: [bool; 4],
 ) -> Vec<Vec<TextLine<'text>>> {
     let mut plates = Vec::with_capacity(JOIN_TILES);
@@ -265,6 +264,24 @@ fn join_plates<'text>(
 fn station_x(player: Player) -> Result<i32, RenderError> {
     i32::try_from(player.index().saturating_mul(80).saturating_add(8))
         .map_err(failure)
+}
+
+fn join_hints(
+    key: Option<KeyboardKey>,
+    mouse: Option<PointerButton>,
+    controller: ControllerButton,
+) -> Vec<String> {
+    let mut hints = Vec::with_capacity(3);
+    if let Some(binding) = key {
+        hints.push(binding_hint("JOIN", key_label(binding)));
+    } else if mouse.is_none() {
+        hints.push(String::from("JOIN NONE"));
+    }
+    if let Some(button) = mouse {
+        hints.push(binding_hint("MOUSE", mouse_label(button)));
+    }
+    hints.push(binding_hint("PAD", controller.profile_name()));
+    hints
 }
 
 fn binding_hint(prefix: &str, name: &str) -> String {
@@ -290,30 +307,37 @@ fn binding_hint(prefix: &str, name: &str) -> String {
 
 fn binding_plate<'text>(
     name: &'text str,
-    hints: &'text [String; 2],
+    hints: &'text [String],
 ) -> Vec<TextLine<'text>> {
-    let [keyboard, controller] = hints;
-    vec![
+    let compact = hints.len() > 2;
+    let mut lines = vec![
         TextLine {
             color: INK,
-            scale: 2,
+            scale: if compact {
+                1
+            } else {
+                2
+            },
             text: name,
             top: 1,
         }
         .fit_width(WIDTH),
-        TextLine {
+    ];
+    let mut top = if compact {
+        7
+    } else {
+        BINDING_TOP
+    };
+    for hint in hints {
+        lines.push(TextLine {
             color: INK,
             scale: 1,
-            text: keyboard,
-            top: BINDING_TOP,
-        },
-        TextLine {
-            color: INK,
-            scale: 1,
-            text: controller,
-            top: BINDING_TOP + 6,
-        },
-    ]
+            text: hint,
+            top,
+        });
+        top = top.saturating_add(6);
+    }
+    lines
 }
 
 fn plate<'text>(top: &'text str, bottom: &'text str) -> Vec<TextLine<'text>> {
@@ -469,7 +493,11 @@ pub(super) mod tests {
         for row in first.as_chunks::<STRIDE>().0.iter().skip(14).take(12) {
             check_binding_row(row, 248, 0, &[])?;
         }
-        let hints = [String::from("JOIN F1"), String::from("P rightshoulder")];
+        let hints = [
+            String::from("JOIN F1"),
+            String::from("MOUSE RIGHT"),
+            String::from("P rightshoulder"),
+        ];
         let expected = binding_plate("P1 LISA", &hints);
         for (row, pixels) in joined
             .as_chunks::<STRIDE>()
@@ -531,6 +559,35 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn join_hints_show_admitted_mouse_and_keyboard_bindings() {
+        let controller = ControllerButton::Start;
+        let key = Some(KeyboardKey::ENTER);
+        let mouse = Some(PointerButton::Right);
+        assert_eq!(join_hints(key, None, controller), [
+            "JOIN ENTER",
+            "PAD start"
+        ],);
+        assert_eq!(join_hints(None, mouse, controller), [
+            "MOUSE RIGHT",
+            "PAD start"
+        ],);
+        let both = join_hints(key, mouse, controller);
+        assert_eq!(both, ["JOIN ENTER", "MOUSE RIGHT", "PAD start"]);
+        let plate = binding_plate("P1 MARGE", &both);
+        assert_eq!(plate.iter().map(|line| line.text).collect::<Vec<_>>(), [
+            "P1 MARGE",
+            "JOIN ENTER",
+            "MOUSE RIGHT",
+            "PAD start"
+        ],);
+        assert!(plate.iter().all(|line| {
+            line.scale > 0
+                && line.top.saturating_add(line.scale.saturating_mul(5))
+                    <= HEIGHT
+        }));
+    }
+
+    #[test]
     fn reserves_extra_plates_only_for_hosted_sessions() {
         assert_eq!(atlas_bytes([false; 4]), 221_184);
         assert_eq!(extra_bytes([false; 4]), 0);
@@ -557,9 +614,10 @@ pub(super) mod tests {
                 sprites: size(2)?,
             },
             |scene| {
-                let profiles = configured_profiles(
-                    "version=1\nkey 1 start=F1\nbutton 1 start=rightshoulder",
-                )
+                let profiles = configured_profiles(concat!(
+                    "version=1\nkey 1 start=F1\n",
+                    "button 1 start=rightshoulder\nmouse 1 start=right\n",
+                ))
                 .map_err(failure)?;
                 let mut hud = StationHud::load(scene, &profiles, reserved)?;
                 check_remote(scene, &mut hud)?;
