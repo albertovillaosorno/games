@@ -372,3 +372,16 @@ The prior 1,005,295-byte Wasm grew by 33,243 bytes while measured
 asset transfers fell from 43,211,303 to 24,937,054 bytes.
 This is host-local reproducibility and virtual browser acceptance,
 not an independent-host or physical-device release qualification.
+
+At 4c2c270, two independent native publications matched each other
+byte-for-byte. The native package contained 109 files and 4,151,385
+bytes, with receipt SHA-256
+`488b91a71b1c51c50fcfaade52f3790ecff885f07ed5f3bee8f3a217e2d836f0`.
+The rebuilt 88-file, 1,542,991-byte WebAssembly publication matched
+the preference-preflight package exactly, with receipt SHA-256
+`56fb21b6d99fe1911ed80057ebe4bcfaf8dad91eaa014ac2cfdeb1886a31b42b`.
+Independent SHA-256 checks matched all receipt entries and Node
+accepted the 1,039,067-byte bound Wasm. Current native smoke and
+unchanged browser entry gameplay passed with isolated settings and
+dummy audio; both receipts verified again afterward. These results
+do not close the physical-device or independent-host release gates.

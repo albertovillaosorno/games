@@ -1121,3 +1121,13 @@ This is an injected concurrent preference change, not proof of
 cross-tab write coordination or durability. Package readback after
 both controls remained unchanged; no owner assets or preferences were
 modified.
+
+The independently rebuilt 4c2c270 package also passed the unchanged
+published entry workflow in Firefox/Xvfb. The served index,
+JavaScript and bound Wasm were 576, 45,123 and 1,039,067 bytes.
+Trusted virtual X11 selection, joining, left movement and menu exit
+produced captures matching the preceding ready, menu and terminal
+screens within 0.0017% normalized mean absolute error. The joined
+capture differed by 0.102% and the subsequent movement capture
+differed from it by 0.837%. Package readback remained unchanged.
+This is current-package virtual gameplay, not physical acceptance.

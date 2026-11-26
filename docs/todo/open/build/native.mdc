@@ -600,3 +600,16 @@ without session policy could not connect the SDL stream; the policy
 profile resolved that harness limitation. No physical audio hardware
 was monitored, no owner audio or settings were accessed, and actual
 audible output remains unverified.
+
+At 4c2c270, the independently rebuilt native package passed the
+original-backed adaptive touch smoke from an unrelated working
+directory using private settings, Xvfb/X11 software OpenGL and dummy
+audio. The 3,625,712-byte executable verified the 426x304 adaptive
+scene, 106 added logical columns, 444 camera columns, 48 synthetic
+axis directions, two cooperative pose families and six reinforcement
+meters. The 600 movement and 20 combat submissions had zero misses
+against the 16.667 ms host-work budget; maxima were 4.160 ms and
+1.948 ms respectively. The whole-smoke RSS peak was 143,364,096
+bytes. Subsequent package readback verified 109 files and 4,151,385
+bytes. The measured synthetic workload is not a physical acceptance
+run or a controlled comparison against earlier binaries.
