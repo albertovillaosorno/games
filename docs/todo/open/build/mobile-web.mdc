@@ -781,3 +781,33 @@ with storage disabled and malformed-save failure both replaced the
 marked status text with the console message; a malformed-save failure
 with an unmarked element retained its original text. All three reported
 one completion and released their picker, canvas and frame callback.
+
+A subsequent pair of isolated, asset-backed Firefox launches verified the
+persisted remap's actual gameplay effect, closing the earlier observer
+gap. Each selected 743 files through the trusted directory chooser and
+admitted 740 reads totalling 43,211,303 bytes. The edit launch made three
+preference writes; the restored launch made none. Both rendered the
+same settings framebuffer hash (1111782472), confirming the restored
+integer/windowed presentation and 75% volume. The restored station-one
+actor was observed at logical x=110 initially and after holding the old
+D binding; holding the saved Q binding moved it to x=158. The two
+launches delivered 93 and 111 callbacks and ended successfully once
+each, with no pending callback, picker or canvas. The bound preview
+included the lifecycle controller fix. The preliminary observer runs
+had chooser geometry, confirmation timing and repeated-click sequencing
+failures before the successful two-launch run. These checks use
+synthetic DOM keys, Xvfb rendering and dummy audio; they do not establish
+physical keyboard, screen or audio acceptance.
+
+An isolated asset-backed Firefox session intentionally lost its actual
+WebGL context after station-one movement and a primary attack. The
+trusted directory selection admitted the same 740 reads. The actor
+moved from logical x=110 to x=158, and the run observed 51 blits,
+55 frame callbacks, 46 Web Audio source starts and one context-loss
+event. The audio context close resolved without error. The title
+reported the expected explicit WebGL-context-loss failure exactly once,
+removed its picker and canvas, and left no pending frame callback.
+The initial movement-only run reached the same teardown outcome but
+did not start an audio source, so it could not establish teardown after
+audio playback had started. These runs used the bound lifecycle-fixed
+preview, synthetic DOM keys, software rendering and dummy audio.
