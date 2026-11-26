@@ -507,3 +507,16 @@ logical frame from 320x544 to 512x544, verifying 192 added columns.
 The same alternate SDL2 userspace passed a separate visible
 Escape/Delete modal-close reproduction and a normal menu exit without
 creating a control save, repeating the earlier Fedora race fix check.
+
+The packaged settings flow was exercised on 2026-11-26 at b82ea10.
+Package readback verified 109 files and 4,116,161 bytes. Three visible
+Xvfb/X11 launches from an unrelated working directory used the existing
+asset catalogue and SDL dummy audio. With no settings directory, display
+and volume changes stayed session-only and the control editor was absent.
+With an explicit private settings directory, display and volume changes
+created owner-only save slots, and the control editor opened and closed
+without creating a control save. The next launch without a display mode
+override reproduced the edited settings screen pixel-for-pixel at
+960x672 and left both save hashes unchanged. The installed catalogue,
+package, owner settings and original media were untouched. Physical
+input, screen and audible output remain unverified.
