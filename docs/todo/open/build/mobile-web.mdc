@@ -1489,3 +1489,20 @@ pending frame, 616 exact reads (24,937,054 bytes), one closed audio
 context and no residual picker or canvas. The test establishes contact
 scope and protected panel projection under virtual input; physical
 mobile device and wider browser acceptance remain open.
+
+A further isolated Wayland Firefox run at DPR 1.5 exercised actual
+browser tab visibility while a keyboard movement remained held. After
+joining by trusted touch, the actor moved from x=110 to x=74 with A
+held. A compositor-generated Ctrl+T switched to another tab, where A
+was released without a corresponding release on the game's canvas.
+The observer measured 3,581 ms of hidden visibility and four frame
+callbacks while hidden. Ctrl+Shift+Tab restored the game and focused
+its canvas. The actor settled at x=68 twice, moved to x=102 with a
+fresh D press, and settled at x=110 twice after release. The session
+exited normally through the menu after 253 callbacks and 154 blits,
+with one peak pending frame, one completion, no remaining picker or
+canvas and one closed audio context. It selected 743 files and read
+exactly 616 entries (24,937,054 bytes). Package verification still
+matched the 88-file c1cfce6 receipt recorded above. This establishes
+visibility-loss cancellation and renewed keyboard input under trusted
+virtual browser input, not physical keyboard or mobile acceptance.
