@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Scoped browser keyboard, touch and focus event subscription.
+//   - Scoped browser keyboard, pointer and focus event subscription.
 // - Must-Not:
 //   - Own game actions, rendering or controller discovery policy.
 // - Allows:
@@ -29,6 +29,7 @@
 // - Defaults:
 //   - Ignore unknown keys and autorepeat; no gamepad support.
 
+mod mouse;
 mod pointer;
 
 use std::cell::RefCell;
@@ -191,19 +192,23 @@ impl EventSource {
         Ok(source)
     }
 
-    fn listen(
+    fn listen<Transitions: IntoIterator<Item = InputTransition>>(
         &mut self,
         target: &EventTarget,
         kind: &'static str,
-        mut translate: impl FnMut(&Event) -> Option<InputTransition> + 'static,
+        mut translate: impl FnMut(&Event) -> Transitions + 'static,
     ) -> Result<(), RenderError> {
         let sink = Rc::clone(&self.queue);
         let scope = self.scope;
         let callback = Closure::<dyn FnMut(Event)>::new(move |event| {
-            if let Some(transition) = translate(&event) {
-                let stamp =
-                    super::performance::timestamp(event.time_stamp()).ok();
-                sink.borrow_mut().push(stamp, transition, scope);
+            let mut transitions = translate(&event).into_iter();
+            let Some(first) = transitions.next() else {
+                return;
+            };
+            let stamp = super::performance::timestamp(event.time_stamp()).ok();
+            let mut queue = sink.borrow_mut();
+            for transition in std::iter::once(first).chain(transitions) {
+                queue.push(stamp, transition, scope);
             }
         });
         target

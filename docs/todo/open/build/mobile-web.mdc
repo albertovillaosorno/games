@@ -399,3 +399,25 @@ with permissive autoplay preferences. This is host API behavior, not an
 authored PCM queue, actual physical input or audible playback. Browser
 audio must represent asynchronous transition receipts instead of
 reporting immediate success.
+
+The scoped browser pointer source now routes all five standard mouse
+button identities, including chord changes reported through pointermove.
+A bounded five-bit state releases only held mouse buttons on cancellation,
+lost capture or uncaptured leave; blur clears that state after the shared
+focus-loss event. A cancellation batch uses one observed timestamp and
+shares the existing queue overflow admission. The source rejects ordinary
+motion, unsupported buttons and unadmitted chords, and suppresses the
+context menu on the attached game surface.
+
+Fresh validation 1795679687054651839-3179963 passed. The pinned bindings
+produced 120,678 bytes of WebAssembly and 20,075 bytes of JavaScript;
+module SHA-256 was
+90678e29c60fbc1eee88ff79fbd200a7ef00455658ac1d711af6870e4cd1787e.
+Two isolated Firefox successes each registered and removed 24 canvas
+listeners, dispatched 88 canvas events and removed every diagnostic
+surface. The invalid-clock and seventh-listener failure cases still
+returned the expected failures with no leaked surfaces or listeners.
+All four indicators were green. The first compile caught an unused
+normalised point result, corrected before the fresh gate. Mouse presses,
+chords, cancellation and capture loss were synthetic DOM events; physical
+mouse input and trusted capture still need an actual running host.

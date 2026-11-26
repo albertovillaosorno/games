@@ -9,13 +9,13 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Browser touch observations scoped to one presented element.
+//   - Browser pointer subscriptions and CSS-relative touch observations.
 // - Must-Not:
 //   - Own logical actions, presentation transforms or contact budgets.
 // - Allows:
 //   - Inputs: DOM pointer events and the element's client rectangle.
-//   - Outputs: Normalized portable contact transitions.
-//   - Side effects: Suppress touch defaults and request pointer capture.
+//   - Outputs: Normalized portable contact and mouse button transitions.
+//   - Side effects: Suppress handled defaults and request pointer capture.
 // - Split-When:
 //   - Different pointer devices require independent lifecycle handling.
 // - Merge-When:
@@ -29,14 +29,18 @@
 // - Defaults:
 //   - Ignore other pointer types and presses outside the client rectangle.
 
+use std::cell::RefCell;
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::rc::Rc;
 
 use games::input::touch::{ContactId, ContactPhase, TouchPoint};
 use games::presentation::{Dimensions, PresentationMode};
 use wasm_bindgen::JsCast as _;
-use web_sys::{Element, Event, PointerEvent, PointerEventInit};
+use web_sys::{Element, PointerEvent, PointerEventInit};
 
-use super::{BrowserInput, EventSource, SCOPE, dom_error, next_event, verify};
+use super::{
+    BrowserInput, EventSource, SCOPE, dom_error, mouse, next_event, verify,
+};
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputEvent, InputTransition};
 use crate::ir::input::InputStartup;
@@ -51,7 +55,10 @@ fn contact(id: i32, phase: ContactPhase) -> HostEvent {
     })
 }
 
-fn point(element: &Element, event: &PointerEvent) -> Option<TouchPoint> {
+pub(super) fn point(
+    element: &Element,
+    event: &PointerEvent,
+) -> Option<TouchPoint> {
     let rect = element.get_bounding_client_rect();
     let width = rect.width();
     let height = rect.height();
@@ -68,23 +75,22 @@ fn point(element: &Element, event: &PointerEvent) -> Option<TouchPoint> {
     )
 }
 
-fn transition(
+pub(super) fn capture(element: &Element, event: &PointerEvent) -> bool {
+    !event.is_trusted()
+        || element.has_pointer_capture(event.pointer_id())
+        || element.set_pointer_capture(event.pointer_id()).is_ok()
+}
+
+fn touch_transition(
     element: &Element,
     kind: &str,
-    event: &Event,
+    pointer: &PointerEvent,
 ) -> Option<InputTransition> {
-    let pointer = event.dyn_ref::<PointerEvent>()?;
-    if pointer.pointer_type() != "touch" {
-        return None;
-    }
     let id = pointer.pointer_id();
     let phase = match kind {
         "pointerdown" => {
             let position = point(element, pointer)?;
-            if event.is_trusted()
-                && !element.has_pointer_capture(id)
-                && element.set_pointer_capture(id).is_err()
-            {
+            if !capture(element, pointer) {
                 return None;
             }
             ContactPhase::Down(position)
@@ -95,7 +101,7 @@ fn transition(
         | "pointerleave" => ContactPhase::Up,
         _ => return None,
     };
-    event.prevent_default();
+    pointer.prevent_default();
     Some(InputTransition::Event(contact(id, phase)))
 }
 
@@ -103,6 +109,7 @@ fn subscribe(
     source: &mut EventSource,
     element: &Element,
 ) -> Result<(), RenderError> {
+    let mouse = Rc::new(RefCell::new(mouse::MouseButtons::default()));
     for kind in [
         "pointerdown",
         "pointermove",
@@ -112,11 +119,35 @@ fn subscribe(
         "pointerleave",
     ] {
         let canvas = element.clone();
+        let mouse = Rc::clone(&mouse);
         source.listen(element, kind, move |event| {
-            transition(&canvas, kind, event)
+            let changes = match event.dyn_ref::<PointerEvent>() {
+                Some(pointer) => match pointer.pointer_type().as_str() {
+                    "mouse" => {
+                        mouse.borrow_mut().transition(&canvas, kind, pointer)
+                    },
+                    "touch" => [
+                        touch_transition(&canvas, kind, pointer),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
+                    _ => [None; 5],
+                },
+                None => [None; 5],
+            };
+            changes.into_iter().flatten()
         })?;
     }
-    Ok(())
+    source.listen(element, "blur", move |_| {
+        mouse.borrow_mut().clear();
+        None
+    })?;
+    source.listen(element, "contextmenu", |event| {
+        event.prevent_default();
+        None
+    })
 }
 
 // The diagnostic owns a real, attached CSS-sized surface independently of
@@ -165,7 +196,15 @@ fn send_pointer(
     init.set_client_x(position[0]);
     init.set_client_y(position[1]);
     init.set_cancelable(true);
-    let event = PointerEvent::new_with_event_init_dict(kind, &init)
+    dispatch(element, kind, &init)
+}
+
+pub(super) fn dispatch(
+    element: &Element,
+    kind: &str,
+    init: &PointerEventInit,
+) -> Result<bool, RenderError> {
+    let event = PointerEvent::new_with_event_init_dict(kind, init)
         .map_err(dom_error)?;
     element.dispatch_event(&event).map_err(dom_error)
 }
@@ -226,7 +265,7 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
         "out-of-surface touch press",
     )?;
     verify(
-        send_pointer(canvas, "pointerdown", "mouse", 3, [110, 55])?
+        send_pointer(canvas, "pointerdown", "pen", 3, [110, 55])?
             && next_event(&source, &mut input)?.is_none(),
         "foreign pointer kind",
     )?;
@@ -236,6 +275,12 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
         send_pointer(&sibling.0, "pointerdown", "touch", 3, [110, 55])?
             && next_event(&source, &mut input)?.is_none(),
         "foreign touch surface",
+    )?;
+    mouse::verify_source(&source, canvas, &mut input)?;
+    verify(
+        !send_pointer(canvas, "contextmenu", "mouse", 1, [110, 55])?
+            && next_event(&source, &mut input)?.is_none(),
+        "context menu default",
     )?;
     drop(source);
     verify(
