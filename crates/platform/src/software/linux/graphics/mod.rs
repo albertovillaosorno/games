@@ -63,10 +63,14 @@ use crate::ir::input::InputPort;
 
 // SDL_RENDERER_ACCELERATED in the public SDL2 renderer flags.
 const ACCELERATED_FLAG: u32 = 2;
+// SDL_WINDOW_HIDDEN and SDL_WINDOW_MINIMIZED in public SDL2 window flags.
+const HIDDEN_FLAG: u32 = 8;
+const MINIMIZED_FLAG: u32 = 64;
 
 /// A native window with an explicitly accelerated renderer.
 struct LinuxWindow {
     canvas: WindowCanvas,
+    diagnostic_hidden: bool,
     mode: PresentationMode,
     sdl: Sdl,
 }
@@ -130,6 +134,7 @@ impl WindowBackend for LinuxWindow {
         let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
         let mut backend = LinuxFrame {
             canvas: &mut self.canvas,
+            diagnostic_hidden: self.diagnostic_hidden,
             events,
             presentation: FramePresentation { layout, mode: self.mode },
             texture,
@@ -153,7 +158,7 @@ impl WindowBackend for LinuxWindow {
         let events = self.sdl.event_pump().map_err(RenderError::Backend)?;
         let textures = SceneTextures::new(&creator, layout, self.mode)?;
         let mut backend = LinuxScene::new(
-            &mut self.canvas,
+            (&mut self.canvas, self.diagnostic_hidden),
             events,
             textures,
             self.sdl.timer().map_err(RenderError::Backend)?,
@@ -201,6 +206,7 @@ impl LinuxWindow {
         }
         Ok(Self {
             canvas,
+            diagnostic_hidden: hidden,
             mode: PresentationMode::default(),
             sdl,
         })
@@ -218,6 +224,7 @@ impl LinuxWindow {
 /// A persistent frame texture and native event pump owned by one window.
 struct LinuxFrame<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
+    diagnostic_hidden: bool,
     events: EventPump,
     presentation: FramePresentation,
     texture: Texture<'texture>,
@@ -242,12 +249,21 @@ impl FrameBackend for LinuxFrame<'_, '_> {
 
     /// Upload and present a complete logical frame using nearest sampling.
     ///
-    /// Returns false for a zero-sized drawable rather than stretching,
+    /// Returns false for an unavailable drawable rather than stretching,
     /// allocating a replacement texture or advancing simulation.
     ///
     /// # Errors
     /// Rejects incorrect frame lengths or failed native operations.
     fn present(&mut self, pixels: &[u8]) -> Result<bool, RenderError> {
+        if !drawable_allowed(
+            self.canvas.window().window_flags(),
+            self.diagnostic_hidden,
+        ) {
+            if pixels.len() != self.presentation.layout.bytes() {
+                return Err(RenderError::InvalidLength);
+            }
+            return Ok(false);
+        }
         let drawn = draw_frame(
             self.canvas,
             &mut self.texture,
@@ -342,6 +358,14 @@ where
     Ok(true)
 }
 
+// Explicit hidden diagnostics may render; an ordinary hidden or minimized
+// window is not an available presentation surface.
+const fn drawable_allowed(flags: u32, diagnostic_hidden: bool) -> bool {
+    let minimized = flags & MINIMIZED_FLAG != 0;
+    let hidden = flags & HIDDEN_FLAG != 0;
+    !minimized && (diagnostic_hidden || !hidden)
+}
+
 fn drawable_viewport<Target>(
     canvas: &Canvas<Target>,
     layout: FrameLayout,
@@ -417,8 +441,9 @@ mod tests {
     use sdl2::{EventSubsystem, TimerSubsystem};
 
     use super::{
-        FrameLayout, FramePresentation, LinuxWindow, RenderError,
-        WindowBackend as _, create_texture, draw_frame, sample,
+        FrameLayout, FramePresentation, HIDDEN_FLAG, LinuxWindow,
+        MINIMIZED_FLAG, RenderError, WindowBackend as _, create_texture,
+        draw_frame, drawable_allowed, sample,
     };
     use crate::ir::graphics::FrameSession;
     use crate::ir::graphics::scene_renderer::SceneSession;
@@ -505,6 +530,18 @@ mod tests {
             live.state().last == Some((target, true)),
             "wrong action tick",
         )
+    }
+
+    #[test]
+    fn unavailable_windows_do_not_admit_ordinary_submissions() {
+        let hidden = HIDDEN_FLAG;
+        let shown = 4; // SDL_WINDOW_SHOWN
+        let minimized = MINIMIZED_FLAG;
+        assert!(drawable_allowed(shown, false));
+        assert!(!drawable_allowed(hidden, false));
+        assert!(drawable_allowed(hidden, true));
+        assert!(!drawable_allowed(shown | minimized, false));
+        assert!(!drawable_allowed(hidden | minimized, true));
     }
 
     #[test]

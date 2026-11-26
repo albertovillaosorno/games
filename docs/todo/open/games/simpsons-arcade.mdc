@@ -2761,3 +2761,32 @@ it contributes no interval or FPS sample. Applied input survives a lost
 drawable until the next successful submission, while cadence restarts.
 They exclude menu-only and failed submissions, client-side input and
 network transit, physical scanout and GPU-completion timing.
+
+A virtual-display regression reproduced continuous rendering while the
+window manager reported a minimized preview. The native adapter now
+skips presentation and invalidates touch geometry while minimized or
+ordinarily hidden; deliberate hidden smoke windows still render.
+The title uses an event wait of up to eight milliseconds after an
+unavailable submission while fixed-step gameplay continues.
+
+The 3,461,280-byte optimized Linux preview passed a visible original-
+backed Xvfb and Xfwm4 run with dummy audio and synthetic keyboard input.
+Minimizing and restoring at 960 by 912 split gameplay into separate
+773-frame and 778-frame segments; resizing to 1000 by 740 produced
+another 714-frame segment at 410 by 304 logical pixels. Each segment
+reported exactly one fewer submission interval than frames. Captures
+before and after restoration, and before and after pause, differed.
+One-second process CPU samples while minimized were 967.7 percent on the
+earlier 3,454,824-byte preview and 1.0 percent on the changed preview.
+These are individual virtual-display observations, not a controlled
+physical performance comparison.
+
+The same new preview passed hidden NVIDIA OpenGL ES touch/dummy-audio
+smokes in adaptive 426 by 304 and aspect-fit 320 by 304 modes. Each
+verified 444 camera columns, 600 movement and 20 combat submissions,
+both cooperative families, six reinforcement meters, and dedicated
+and combined restraint recovery. Neither exceeded the 16.667 ms
+host work budget. Whole-smoke peak RSS was 101,892,096 and 100,794,368
+bytes respectively. Native validation 1795653139586277029-1875658
+passed 1,527 aggregate test executions and six portable core checks.
+Physical input, display, audio and gameplay parity remain unverified.

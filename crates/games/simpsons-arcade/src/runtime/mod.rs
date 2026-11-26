@@ -1027,7 +1027,10 @@ impl<'preferences> Interactive<'preferences> {
                 .map(|_| now())
                 .transpose()
                 .map_err(failure)?;
-            let wait_ms = presentation_wait(self.simulation.state());
+            let wait_ms = presentation_wait(
+                self.simulation.state(),
+                scene.last_presented_layout().is_some(),
+            );
             let batch = self.poll(scene, wait_ms)?;
             if batch == EventBatch::Stopped {
                 break;
@@ -1070,10 +1073,9 @@ impl<'preferences> Interactive<'preferences> {
                 self.measure_presented(started, submitted)?;
             }
         }
-        if let Some(measurement) = &mut self.measurement {
-            measurement.finish()?;
-        }
-        Ok(())
+        self.measurement
+            .as_mut()
+            .map_or(Ok(()), measurement::LiveMeasurement::finish)
     }
 }
 
@@ -1178,8 +1180,11 @@ fn frame_due(
         || presented != Some(current)
 }
 
-const fn presentation_wait(current: &HostedCabinet) -> u32 {
-    if matches!(current.state().phase(), Phase::Playing) {
+const fn presentation_wait(
+    current: &HostedCabinet,
+    drawable_available: bool,
+) -> u32 {
+    if drawable_available && matches!(current.state().phase(), Phase::Playing) {
         0
     } else {
         IDLE_EVENT_WAIT_MS
@@ -3006,7 +3011,7 @@ mod tests {
             HostedCabinet::new(&cabinet, [false, true, false, false])
                 .ok_or_else(|| failure("invalid hosted fixture"))?;
         let initial = hosted;
-        if presentation_wait(&hosted) == 0
+        if presentation_wait(&hosted, true) == 0
             || !frame_due(&hosted, None, EventBatch::Empty)
             || frame_due(&hosted, Some(&initial), EventBatch::Empty)
             || !frame_due(&hosted, Some(&initial), EventBatch::Drained)
@@ -3029,7 +3034,8 @@ mod tests {
         };
         hosted.input_step(1, &[action(Control::Start)]);
         if hosted.state().phase() != Phase::Playing
-            || presentation_wait(&hosted) != 0
+            || presentation_wait(&hosted, true) != 0
+            || presentation_wait(&hosted, false) == 0
             || !frame_due(&hosted, Some(&hosted), EventBatch::Empty)
         {
             return Err(failure("gameplay was not uncapped"));
@@ -3037,7 +3043,7 @@ mod tests {
         let playing = hosted;
         hosted.input_step(2, &[action(Control::Pause)]);
         if hosted.state().phase() != Phase::Paused
-            || presentation_wait(&hosted) == 0
+            || presentation_wait(&hosted, true) == 0
             || !frame_due(&hosted, Some(&playing), EventBatch::Empty)
             || frame_due(&hosted, Some(&hosted), EventBatch::Empty)
         {

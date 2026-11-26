@@ -48,7 +48,8 @@ use sdl2::{EventPump, TimerSubsystem};
 
 use super::super::input::sample;
 use super::{
-    apply_window_mode, copy_to_viewport, drawable_viewport, validate_dimensions,
+    apply_window_mode, copy_to_viewport, drawable_allowed, drawable_viewport,
+    validate_dimensions,
 };
 use crate::ir::frame::{FrameLayout, RenderError};
 use crate::ir::graphics::scene_renderer::SceneBackend;
@@ -219,6 +220,7 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
 /// A logical render target, persistent atlases and a native event pump.
 pub(super) struct LinuxScene<'canvas, 'texture> {
     canvas: &'canvas mut WindowCanvas,
+    diagnostic_hidden: bool,
     events: EventPump,
     last_presented: Option<PresentationLayout>,
     textures: SceneTextures<'texture, WindowContext>,
@@ -315,6 +317,14 @@ impl SceneBackend for LinuxScene<'_, '_> {
         background: [u8; 3],
         sprites: &[SpriteDraw],
     ) -> Result<bool, RenderError> {
+        if !drawable_allowed(
+            self.canvas.window().window_flags(),
+            self.diagnostic_hidden,
+        ) {
+            self.textures.atlases.validate(sprites)?;
+            self.last_presented = None;
+            return Ok(false);
+        }
         let drawable = self.textures.draw(self.canvas, background, sprites)?;
         if drawable.is_some() {
             self.canvas.present();
@@ -341,6 +351,12 @@ impl SceneBackend for LinuxScene<'_, '_> {
     fn visible_layout(
         &self,
     ) -> Result<Option<PresentationLayout>, RenderError> {
+        if !drawable_allowed(
+            self.canvas.window().window_flags(),
+            self.diagnostic_hidden,
+        ) {
+            return Ok(None);
+        }
         let current = drawable_viewport(
             self.canvas,
             self.textures.layout,
@@ -356,7 +372,7 @@ impl SceneBackend for LinuxScene<'_, '_> {
 
 impl<'canvas, 'texture> LinuxScene<'canvas, 'texture> {
     pub(super) fn new(
-        canvas: &'canvas mut WindowCanvas,
+        (canvas, diagnostic_hidden): (&'canvas mut WindowCanvas, bool),
         events: EventPump,
         textures: SceneTextures<'texture, WindowContext>,
         timer: TimerSubsystem,
@@ -368,6 +384,7 @@ impl<'canvas, 'texture> LinuxScene<'canvas, 'texture> {
         }
         Ok(Self {
             canvas,
+            diagnostic_hidden,
             events,
             last_presented: None,
             textures,

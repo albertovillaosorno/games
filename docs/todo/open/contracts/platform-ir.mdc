@@ -404,3 +404,13 @@ errors. Native conversion preserves the maximum duration. Fresh native
 X11 and dummy audio validation 1795652720063938322-1773839 passed
 1,514 aggregate test executions and six portable core checks. Physical
 haptic operation and native conformance on other targets remain open.
+
+The native frame and scene adapters now reject presentation to ordinary
+hidden or minimized windows, preserving explicit hidden diagnostics.
+Unavailable scenes invalidate their last presentation and touch geometry;
+length and rectangle admission still precede submission. The title uses
+the existing bounded event wait after unavailable submissions without
+changing fixed-step simulation. Visible play remains uncapped. Fresh
+native validation 1795653139586277029-1875658 passed 1,527 aggregate
+test executions and six portable core checks. Original-backed X11 and
+offscreen OpenGL ES observations are in the Simpsons task record.
