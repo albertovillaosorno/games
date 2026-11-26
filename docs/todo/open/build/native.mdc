@@ -578,3 +578,25 @@ budget miss (17.749 ms maximum). All three exited normally. These are
 injected X11 input and private actor-only catalogue checks, not physical
 mouse, keyboard, controller or audible output acceptance. No owner
 preferences, installed package or canonical assets were changed.
+
+The same fixed native package also passed live PCM attenuation on
+2026-11-26 using a separate private PipeWire server, its PulseAudio
+compatibility socket, policy-only WirePlumber and a virtual null sink.
+The SDL PulseAudio backend used the private sink as system default at
+100% and 50% game volume. A menu-generated 0% save then restored on a
+clean launch with the explicitly enumerated GamesValidation output.
+Each actor-only-plus-audio session joined station one and triggered
+its primary attack through X11 keyboard input. The monitor stream
+was observed only for aggregate signed-16 stereo statistics; no raw
+recordings were retained. Full-volume channel peaks were 5386 and
+2414; half-volume peaks were exactly 2693 and 1207. Channel RMS levels
+fell by 6.023 and 6.027 dB respectively. At restored mute, both channel
+minima and maxima were zero across 102,400 observed samples. The
+half-volume and mute save bytes remained unchanged. All launches
+exited through the menu. The three measured runs submitted 3,838,
+3,623 and 3,748 frames with zero, three and zero host-work budget
+misses respectively (maximum 19.600 ms). The initial private server
+without session policy could not connect the SDL stream; the policy
+profile resolved that harness limitation. No physical audio hardware
+was monitored, no owner audio or settings were accessed, and actual
+audible output remains unverified.
