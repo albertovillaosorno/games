@@ -1170,3 +1170,34 @@ frame callbacks, 107 blits, no outstanding callback or canvas, one
 control-slot observation, no writes and the stored envelope unchanged.
 These checks establish profile admission and synthetic DOM gameplay,
 not physical keyboard, display or audible-output acceptance.
+
+Immutable canonical memory bundles now lend verified payload bytes to
+transient title consumers instead of allocating a second payload buffer.
+Native file-backed reads retain bounded owned snapshots; the existing
+owned-read API still provides independent storage. Both paths verify
+payloads against pinned descriptors on every read. Inline regressions
+cover borrowed shared objects, independent owned reads, replacement and
+base selection, and corruption rejection without fallback.
+
+Fresh validation 1795697595615260833-2349746 passed with virtual native
+rendering and dummy audio; the commit hook also passed. The independently
+built df0307b browser package verified 88 files and 1,545,168 bytes,
+with receipt SHA-256
+`7e6788c122fa2967ed039b73f99c2783209c52783034af8219910369e3c8313c`.
+The isolated Firefox/Xvfb observer confirmed exactly 616 reads of the
+selected closure (24,937,054 bytes) from 743 enumerated files. Trusted
+input joined at x=110, moved left through x=92 and settled at x=48 after
+release. Pointer capture, outside release, a second click and normal
+menu exit passed. There were 251 callbacks, 172 blits, at most one
+pending callback, 158 audio source starts, one audio-context close and
+one successful completion with no remaining picker or canvas.
+
+A separate run used the unmodified published entry page. The ready,
+joined and terminal captures differed from the preceding accepted run
+by 0.0021% normalized mean absolute error or less. The menu differed
+by 0.456%; left movement changed the joined capture by 0.837%.
+Both package readbacks matched the original receipt. Two earlier
+chooser attempts used incorrect virtual-display geometry and did not
+establish acceptance; the successful runs used 1600x1200 Xvfb. These
+checks do not establish measured peak-memory savings, physical device
+compatibility, accelerated presentation or audible playback.
