@@ -709,3 +709,23 @@ profile remained unchanged. The locked SDL2 reference also uses the
 XFree86 table for non-virtual Wayland keyboards, where entry 121 maps
 to keypad period. This is an observed backend limitation on two local
 userspaces, not a universal Linux mapping or a physical-device test.
+
+A disposable Mutter 51.1 Wayland compositor also admitted native
+touch through its private RemoteDesktop and PipeWire sessions. At
+1920x1080 fullscreen Fill, the 320x304 logical scene accepted a touch
+start, simultaneous right/up contacts, motion of one held contact
+into the protected panel's letterbox, both releases, and primary
+attack. Touch alone paused gameplay, traversed the menu and exited
+normally. SDL logged the separate finger identities and motion,
+together with synthetic mouse events bearing its touch-mouse ID.
+The matched negative control started and exited by touch and tapped
+only the letterbox during gameplay. It recorded two applied local
+input samples, versus seven in the chord and attack run. These
+counts describe executed ticks, not individual input events. The
+two touch-only runs submitted 6,660 and 11,193 gameplay frames,
+respectively, all within the 16.667 ms work budget (maximum
+8.516 ms). Initial contacts required device initialization; a
+letterbox warm-up established the touch seat before measurements.
+An optional private screencast capture timed out, so this evidence
+does not establish pixel-exact movement, visual settling, physical
+touch or presentation latency. The owner desktop was not accessed.
