@@ -886,3 +886,27 @@ and mute preference bytes remained unchanged. All three launches
 exited through the menu, submitting 4,663, 4,696 and 3,992 frames
 respectively without a host-work budget miss (maximum 9.736 ms).
 No physical sink was monitored; audible output remains unverified.
+
+A further private two-sink audio matrix at 267b77e distinguished actual
+output routing from the requested-name diagnostic. Upstream SDL2
+PipeWire and PulseAudio, and the installed SDL2 compatibility library's
+PipeWire driver, each enumerated GamesDefault and GamesExplicit. For
+all three combinations, an absent name returned a device-open error.
+The system-default launch connected only to GamesDefault and the
+explicit launch connected only to GamesExplicit without changing the
+system default. Each selected sink's attack had stereo channel peaks
+of 5386 and 2414; the unselected monitor was entirely zero across
+102,400 samples. Both launches exited through the menu, retaining
+empty private settings directories. A further upstream PipeWire run
+with identical sink descriptions enumerated GamesDefault and
+GamesDefault (2); the exact second name selected the other sink and
+left the default monitor silent. Names describe the current backend
+inventory, not persistent hardware identifiers. All eight gameplay
+runs met the host-work budget (maximum 9.399 ms). The monitors were
+private virtual sinks, not physical audio devices.
+Fresh validation 1795702035937061388-3212382 also passed against the
+upstream SDL2 PipeWire driver and isolated X11, with both optional
+native gates active. It drained the 1,024-frame queue using the
+system default and named GamesDefault, verified the two mapped
+surface sizes and passed 1,960 aggregate test executions without
+failure.
