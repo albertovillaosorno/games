@@ -43,8 +43,8 @@ use games_platform::ir::storage::staging::migration::{
     StagedMigration,
 };
 use games_platform::ir::storage::{
-    PathKind, canonical_path, join_path, parent_path, path_has_prefix,
-    path_is_absolute, path_kind, path_leaf,
+    PathKind, canonical_future_directory, canonical_path, join_path,
+    parent_path, path_is_absolute, path_kind, path_leaf, paths_overlap,
 };
 use games_platform::ir::toolchain;
 
@@ -317,31 +317,10 @@ fn configured_destination(
     let canonical_source =
         canonical_path(source).map_err(|error| error.to_string())?;
     reject_overlap(&destination, &canonical_source)?;
-    reject_overlap(&destination, &future_path(&output)?)?;
+    let canonical_output = canonical_future_directory(&output)
+        .map_err(|error| error.to_string())?;
+    reject_overlap(&destination, &canonical_output)?;
     Ok(destination)
-}
-
-fn future_path(path: &OsStr) -> Result<OsString, String> {
-    let mut ancestor = path;
-    let mut suffix = Vec::new();
-    while path_kind(ancestor).map_err(|error| error.to_string())?
-        == PathKind::Missing
-    {
-        suffix.push(path_leaf(ancestor).map_err(|error| error.to_string())?);
-        ancestor = parent_path(ancestor).map_err(|error| error.to_string())?;
-    }
-    let mut resolved =
-        canonical_path(ancestor).map_err(|error| error.to_string())?;
-    if path_kind(&resolved).map_err(|error| error.to_string())?
-        != PathKind::Directory
-    {
-        return Err(String::from("invalid configured binary directory"));
-    }
-    for child in suffix.into_iter().rev() {
-        resolved =
-            join_path(&resolved, child).map_err(|error| error.to_string())?;
-    }
-    Ok(resolved)
 }
 
 fn publish(
@@ -372,9 +351,7 @@ fn read(path: &OsStr, limit: NonZeroU64) -> Result<Vec<u8>, String> {
 }
 
 fn reject_overlap(left: &OsStr, right: &OsStr) -> Result<(), String> {
-    if path_has_prefix(left, right).map_err(|error| error.to_string())?
-        || path_has_prefix(right, left).map_err(|error| error.to_string())?
-    {
+    if paths_overlap(left, right).map_err(|error| error.to_string())? {
         return Err(String::from("migration paths overlap"));
     }
     Ok(())

@@ -42,8 +42,8 @@ use games_platform::ir::security::toolchain::artifact::admit_executable;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::AuthoredStaging;
 use games_platform::ir::storage::{
-    PathKind, parent_path, path_has_prefix, path_is_absolute, path_kind,
-    path_leaf,
+    PathKind, canonical_future_directory, parent_path, path_is_absolute,
+    path_kind, path_leaf, paths_overlap,
 };
 use games_platform::ir::toolchain::write_line;
 
@@ -201,10 +201,7 @@ where
     {
         return Err(String::from("persistent roots must be absolute"));
     }
-    if path_has_prefix(&output, &assets).map_err(|error| error.to_string())?
-        || path_has_prefix(&assets, &output)
-            .map_err(|error| error.to_string())?
-    {
+    if paths_overlap(&output, &assets).map_err(|error| error.to_string())? {
         return Err(String::from("package and asset paths overlap"));
     }
     let parent = parent_path(&output).map_err(|error| error.to_string())?;
@@ -213,8 +210,17 @@ where
     {
         return Err(String::from("create the configured bin directory first"));
     }
-    publish(title, &output)?;
-    Ok(assets)
+    let canonical_assets = canonical_future_directory(&assets)
+        .map_err(|error| format!("configured asset directory: {error}"))?;
+    let canonical_output = canonical_future_directory(&output)
+        .map_err(|error| format!("configured package directory: {error}"))?;
+    if paths_overlap(&canonical_output, &canonical_assets)
+        .map_err(|error| error.to_string())?
+    {
+        return Err(String::from("package and asset paths overlap"));
+    }
+    publish(title, &canonical_output)?;
+    Ok(canonical_assets)
 }
 
 /// Build and package one admitted native title in a new local directory.
@@ -443,6 +449,82 @@ mod tests {
                 )),
         )?;
         require(root.entry_count().map_err(|error| error.to_string())? == 1)
+    }
+
+    #[test]
+    fn configured_publication_rejects_both_resolved_containment_orders()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let title = Title::SimpsonsArcade;
+        let unexpected =
+            |_, _: &OsStr| Err(String::from("unexpected publication"));
+        let asset = "deploy/simpsons-arcade/assets";
+        let output = "other/simpsons-arcade/bin/linux-x86-64";
+        root.create_directories(&format!("{asset}/simpsons-arcade/bin"))
+            .map_err(|error| error.to_string())?;
+        root.create_directories(output)
+            .map_err(|error| error.to_string())?;
+        root.link(&local_path(root.location(), asset)?, "output-alias")
+            .map_err(|error| error.to_string())?;
+        root.link(&local_path(root.location(), output)?, "asset-alias")
+            .map_err(|error| error.to_string())?;
+        for (assets, binaries) in
+            [("deploy", "output-alias"), ("asset-alias", "other")]
+        {
+            fixture_configuration(&root, assets, binaries, "linux-x86-64")?;
+            require(
+                configured_with(root.location(), title, unexpected)
+                    == Err(String::from("package and asset paths overlap")),
+            )?;
+        }
+        require(
+            path_kind(&local_path(
+                root.location(),
+                &format!("{asset}/simpsons-arcade/bin/linux-x86-64"),
+            )?)
+            .map_err(|error| error.to_string())?
+                == PathKind::Missing,
+        )
+    }
+
+    #[test]
+    fn configured_publication_admits_independent_trusted_aliases()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let bin = "deploy/simpsons-arcade/bin";
+        root.create_directories(bin)
+            .map_err(|error| error.to_string())?;
+        let deploy = local_path(root.location(), "deploy")?;
+        for alias in ["asset-alias", "output-alias"] {
+            root.link(&deploy, alias)
+                .map_err(|error| error.to_string())?;
+        }
+        fixture_configuration(
+            &root,
+            "asset-alias",
+            "output-alias",
+            "linux-x86-64",
+        )?;
+        let expected =
+            local_path(root.location(), "deploy/simpsons-arcade/assets")?;
+        let package =
+            local_path(root.location(), &format!("{bin}/linux-x86-64"))?;
+        let title = Title::SimpsonsArcade;
+        require(
+            configured_with(root.location(), title, fixture_package)?
+                == expected,
+        )?;
+        require(
+            path_kind(&expected).map_err(|error| error.to_string())?
+                == PathKind::Missing,
+        )?;
+        require(
+            path_kind(&package).map_err(|error| error.to_string())?
+                == PathKind::Directory,
+        )?;
+        require(
+            configured_with(root.location(), title, fixture_package).is_err(),
+        )
     }
 
     fn require(condition: bool) -> Result<(), String> {

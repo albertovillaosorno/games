@@ -144,6 +144,14 @@ unchanged. Unsupported target, absent bin parent and both containment
 orders fail before publication. These are lexical checks; trusted local
 ancestors remain required.
 
+Configured packaging now also resolves existing directory aliases and
+missing destination suffixes before comparing the two namespaces. The
+same storage IR observation is used by configured migration. Tiny
+fixtures cover both resolved containment orders, distinct destinations
+under trusted aliases, repeat rejection, and absent or invalid
+ancestors. Package admission does not create the asset directory.
+Trusted, unchanged ancestors remain necessary for publication.
+
 On 2026-11-25 the owner-configured GNU/Linux x86-64 output was created
 under its existing trusted parent. The 3,529,168-byte executable and
 108 supporting files totalled 4,043,088 bytes; the independent SHA-256

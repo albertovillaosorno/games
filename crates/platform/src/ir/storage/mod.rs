@@ -47,7 +47,7 @@ pub mod save;
 pub mod staging;
 
 use std::ffi::{OsStr, OsString};
-use std::io::Result as IoResult;
+use std::io::{ErrorKind, Result as IoResult};
 use std::num::NonZeroUsize;
 
 use crate::ir::security::file::admit_directory_entries;
@@ -130,6 +130,34 @@ pub fn canonical_path(path: &OsStr) -> IoResult<OsString> {
     <() as PathObservation>::canonical_path(path)
 }
 
+/// Observe the canonical location of an existing or future directory.
+///
+/// Resolve the deepest existing ancestor, then append the missing names.
+/// Existing links are followed. This is a preflight observation, not a
+/// guarantee of containment if ancestors change before publication.
+/// # Errors
+/// Rejects relative paths, invalid components, non-directory ancestors,
+/// unresolved links and unavailable native path observations.
+pub fn canonical_future_directory(path: &OsStr) -> IoResult<OsString> {
+    if !path_is_absolute(path)? {
+        return Err(ErrorKind::InvalidInput.into());
+    }
+    let mut ancestor = path;
+    let mut suffix = Vec::new();
+    while path_kind(ancestor)? == PathKind::Missing {
+        suffix.push(path_leaf(ancestor)?);
+        ancestor = parent_path(ancestor)?;
+    }
+    let mut resolved = canonical_path(ancestor)?;
+    if path_kind(&resolved)? != PathKind::Directory {
+        return Err(ErrorKind::NotADirectory.into());
+    }
+    for child in suffix.into_iter().rev() {
+        resolved = join_path(&resolved, child)?;
+    }
+    Ok(resolved)
+}
+
 /// Observe the direct entries of a directory without following final links.
 /// Membership and metadata may change during observation.
 /// # Errors
@@ -193,6 +221,16 @@ pub fn path_has_prefix(path: &OsStr, prefix: &OsStr) -> IoResult<bool> {
     <() as PathResolution>::has_prefix(path, prefix)
 }
 
+/// Test whether either local path is a lexical prefix of the other.
+///
+/// Resolve directory locations first when comparing trusted linked roots.
+/// This is not a file identity or access guarantee.
+/// # Errors
+/// Reports unavailable local path interpretation.
+pub fn paths_overlap(left: &OsStr, right: &OsStr) -> IoResult<bool> {
+    Ok(path_has_prefix(left, right)? || path_has_prefix(right, left)?)
+}
+
 /// Identify an absolute local path using host syntax.
 /// # Errors
 /// Reports unavailable local path interpretation.
@@ -242,4 +280,60 @@ pub fn strip_path_prefix<'path>(
 /// Returns metadata or unavailable capability errors.
 pub fn path_kind(path: &OsStr) -> IoResult<PathKind> {
     <() as PathObservation>::path_kind(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn future_directories_resolve_existing_ancestors_without_creation()
+    -> IoResult<()> {
+        if !fixtures::AVAILABLE {
+            return Ok(());
+        }
+        let root = fixtures::TestRoot::new()?;
+        root.create_directories("existing")?;
+        let existing = join_path(root.location(), "existing")?;
+        root.link(&existing, "alias")?;
+        let alias = join_path(root.location(), "alias")?;
+        let missing = join_path(&alias, "new/nested")?;
+        let resolved = join_path(&canonical_path(&existing)?, "new/nested")?;
+        let valid = canonical_future_directory(&alias)?
+            == canonical_path(&existing)?
+            && canonical_future_directory(&missing)? == resolved
+            && path_kind(&resolved)? == PathKind::Missing
+            && paths_overlap(&resolved, &canonical_path(&existing)?)?
+            && paths_overlap(&canonical_path(&existing)?, &resolved)?
+            && paths_overlap(&resolved, &resolved)?
+            && !paths_overlap(
+                &resolved,
+                &join_path(&canonical_path(&existing)?, "new/nested-other")?,
+            )?;
+        valid
+            .then_some(())
+            .ok_or_else(|| ErrorKind::InvalidData.into())
+    }
+
+    #[test]
+    fn future_directories_reject_non_directory_and_unresolved_ancestors()
+    -> IoResult<()> {
+        if !fixtures::AVAILABLE {
+            return Ok(());
+        }
+        let root = fixtures::TestRoot::new()?;
+        root.write_file("file", b"data")?;
+        let missing = join_path(root.location(), "missing")?;
+        root.link(&missing, "dangling")?;
+        let valid = ["file", "file/child", "dangling", "dangling/child"]
+            .into_iter()
+            .map(|name| join_path(root.location(), name))
+            .collect::<IoResult<Vec<_>>>()?
+            .iter()
+            .all(|path| canonical_future_directory(path).is_err())
+            && canonical_future_directory(OsStr::new("relative")).is_err();
+        valid
+            .then_some(())
+            .ok_or_else(|| ErrorKind::InvalidData.into())
+    }
 }
