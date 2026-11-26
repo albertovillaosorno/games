@@ -1066,3 +1066,26 @@ the picker and canvas. The observer recorded 256 delivered callbacks,
 181 blits, at most one pending callback and one successful completion.
 Readback still verified the same receipt afterward. These are transfer
 and virtual gameplay measurements, not physical hardware acceptance.
+
+The selective-ingress package also passed five isolated overlay
+controls. An invalid launch catalogue stopped after two sidecar reads
+and no manifest or object reads. Masking one selected object or
+replacing it with wrong-length bytes stopped after two sidecars and
+198 manifests (157,062 bytes), before reading any object. A same-length
+corrupted selected payload was rejected on its content check after 276
+object reads. Each rejection completed once, without a frame callback,
+and removed the picker and canvas. Replacing an unused object instead
+left the exact 616-read, 24,937,054-byte closure unchanged and allowed
+normal trusted-input movement, capture, attack and menu exit.
+These controls used private read-only mounts and synthetic overlays,
+not modifications to the canonical asset store.
+
+The independently rebuilt d8ce420 package also passed the unmodified
+entry page in Firefox/Xvfb. The 576-byte index, 45,123-byte JavaScript
+and 1,038,538-byte Wasm were served over loopback; trusted X11 input
+selected assets, joined, moved left and exited. The ready, menu, joined
+and terminal captures differed from the preceding accepted entry run
+by 0.0025% normalized mean absolute error, and the movement capture
+differed from the joined capture by 0.837%. Package readback after
+exit was unchanged. Neither this entry check nor the overlay tests
+establish physical input, accelerated graphics or audible playback.

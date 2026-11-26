@@ -359,3 +359,16 @@ reported readiness and exposed a directory picker with no canvas
 before selection. The exact current browser package has not yet been
 asset-backed gameplay-tested. Android linking and physical-device
 acceptance remain open.
+
+At d8ce420, a second independent WebAssembly publication exactly
+matched the first selective-ingress package, including every file
+and its receipt. Both contained 88 files and 1,542,462 bytes, with
+receipt SHA-256
+`ea324beb41b96f16bc0f1495b36263c53641b4fadb8156b3d20a001a65d8ad40`.
+Independent SHA-256 readback matched every listed file and Node
+accepted the bound 1,038,538-byte Wasm. Asset-backed observer,
+negative-control and unchanged-entry runs are recorded in mobile-web.
+The prior 1,005,295-byte Wasm grew by 33,243 bytes while measured
+asset transfers fell from 43,211,303 to 24,937,054 bytes.
+This is host-local reproducibility and virtual browser acceptance,
+not an independent-host or physical-device release qualification.
