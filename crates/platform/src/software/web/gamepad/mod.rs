@@ -38,28 +38,13 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use games::input::InputEvent;
-use games::input::physical::{ControllerAxis, ControllerButton};
+use games::input::physical::ControllerAxis;
+#[cfg(test)]
+use games::input::physical::ControllerButton;
 
+use super::controller_mapping::BUTTONS;
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
-
-const BUTTONS: [(u32, ControllerButton); 15] = [
-    (0, ControllerButton::South),
-    (1, ControllerButton::East),
-    (2, ControllerButton::West),
-    (3, ControllerButton::North),
-    (4, ControllerButton::LeftShoulder),
-    (5, ControllerButton::RightShoulder),
-    (8, ControllerButton::Back),
-    (9, ControllerButton::Start),
-    (10, ControllerButton::LeftStick),
-    (11, ControllerButton::RightStick),
-    (12, ControllerButton::DPadUp),
-    (13, ControllerButton::DPadDown),
-    (14, ControllerButton::DPadLeft),
-    (15, ControllerButton::DPadRight),
-    (16, ControllerButton::Guide),
-];
 
 const MAX_DEVICES: usize = 64;
 const MAX_TRANSITIONS: usize = BUTTONS.len() + ControllerAxis::ALL.len();

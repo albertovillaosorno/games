@@ -38,6 +38,7 @@
     feature = "interactive"
 ))]
 pub(super) mod audio;
+pub(super) mod controller_mapping;
 #[cfg(all(
     target_arch = "wasm32",
     target_os = "unknown",

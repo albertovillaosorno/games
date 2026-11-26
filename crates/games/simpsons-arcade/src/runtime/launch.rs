@@ -49,7 +49,8 @@ use games_platform::ir::storage::{executable_path, join_path, parent_path};
 
 use super::{
     ACTION_NAMES, DEFAULT_PROFILES, MAX_PROFILE_BYTES, Profiles,
-    configured_profiles, profile_limit, read_profile, validate_keyboard_pause,
+    configured_profiles, profile_limit, read_profile,
+    validate_control_bindings,
 };
 
 const DEFAULT_PROFILE: &str = "version=1\n";
@@ -655,7 +656,7 @@ fn admit_edit(
 }
 
 fn admit_candidate(candidate: &Profiles) -> Result<AdmittedEdit, String> {
-    validate_keyboard_pause(candidate)?;
+    validate_control_bindings(candidate)?;
     let encoded = candidate.encoded(
         ACTION_NAMES,
         MAX_PROFILE_BYTES,

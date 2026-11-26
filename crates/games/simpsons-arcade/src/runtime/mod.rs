@@ -83,7 +83,8 @@ use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::NativeWindow;
 use games_platform::ir::graphics::scene_renderer::{SceneSession, SceneView};
 use games_platform::ir::input::{
-    HostEvent, InputStartup, NativeInput, key_from_name, key_name,
+    HostEvent, InputStartup, NativeInput, controller_button_supported,
+    key_from_name, key_name,
 };
 use games_platform::ir::measurement::{
     FrameMeter, elapsed_between, executable_bytes, now, peak_resident_bytes,
@@ -412,7 +413,7 @@ impl Controls {
         reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
         profiles.validate().map_err(failure)?;
-        validate_keyboard_pause(profiles).map_err(failure)?;
+        validate_control_bindings(profiles).map_err(failure)?;
         let mut mapping = desktop_mapping(profiles, reserved);
         if let Some(role) = panel {
             if touch::reserved(profiles, reserved) {
@@ -1404,8 +1405,22 @@ fn configured_profiles(text: &str) -> Result<Profiles, String> {
         },
         key_from_name,
     )?;
-    validate_keyboard_pause(&profiles)?;
+    validate_control_bindings(&profiles)?;
     Ok(profiles)
+}
+
+fn validate_control_bindings(profiles: &Profiles) -> Result<(), String> {
+    validate_keyboard_pause(profiles)?;
+    if !profiles
+        .buttons
+        .iter()
+        .flatten()
+        .copied()
+        .all(controller_button_supported)
+    {
+        return Err("unsupported controller button binding".into());
+    }
+    Ok(())
 }
 
 fn validate_keyboard_pause(profiles: &Profiles) -> Result<(), String> {

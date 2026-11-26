@@ -39,7 +39,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
-use games::input::physical::KeyboardKey;
+use games::input::physical::{ControllerButton, KeyboardKey};
 use games::presentation::PresentationLayout;
 
 use super::frame::RenderError;
@@ -77,8 +77,9 @@ pub(crate) trait InputBackend: Debug {
     fn window_scope(&self) -> u64;
 }
 
-/// Platform-specific resolution of existing physical keyboard names.
+/// Platform-specific physical input profile correspondence.
 pub(crate) trait InputNames {
+    fn controller_button_supported(button: ControllerButton) -> bool;
     fn key_from_name(name: &str) -> Option<KeyboardKey>;
     fn key_name(key: KeyboardKey) -> &'static str;
 }
@@ -285,6 +286,13 @@ impl Haptics for NativeInput {
         }
         self.backend.feedback_support(device)
     }
+}
+
+/// Whether a button is representable by the selected profile mapping.
+/// This does not establish that a particular device has the button.
+#[must_use]
+pub fn controller_button_supported(button: ControllerButton) -> bool {
+    <() as InputNames>::controller_button_supported(button)
 }
 
 /// Resolve a physical profile name translated by the selected input adapter.

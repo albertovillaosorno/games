@@ -145,7 +145,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use games::input::physical::KeyboardKey;
+use games::input::physical::{ControllerButton, KeyboardKey};
 
 #[cfg(any(test, feature = "test-fixtures"))]
 use crate::ir::audio::fixtures::AudioFixturePort;
@@ -326,6 +326,10 @@ impl WindowFactory for () {
 
 #[cfg(all(feature = "interactive", target_os = "linux"))]
 impl InputNames for () {
+    fn controller_button_supported(_button: ControllerButton) -> bool {
+        true
+    }
+
     fn key_from_name(name: &str) -> Option<KeyboardKey> {
         KeyboardKey::from_profile_name(name)
             .or_else(|| linux::input::key_from_name(name))
@@ -338,6 +342,10 @@ impl InputNames for () {
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 impl InputNames for () {
+    fn controller_button_supported(button: ControllerButton) -> bool {
+        web::controller_mapping::supports(button)
+    }
+
     fn key_from_name(name: &str) -> Option<KeyboardKey> {
         web::keyboard::profile_key(name)
     }
@@ -352,6 +360,10 @@ impl InputNames for () {
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 impl InputNames for () {
+    fn controller_button_supported(_button: ControllerButton) -> bool {
+        true
+    }
+
     fn key_from_name(name: &str) -> Option<KeyboardKey> {
         KeyboardKey::from_profile_name(name)
     }
