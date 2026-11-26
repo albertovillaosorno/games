@@ -55,8 +55,10 @@ use super::{
 use crate::{Action, Cabinet, Control, Phase, Player, TICK_INTERVAL};
 
 const CHUNK: usize = 256;
-const MAX_CHUNKS: u8 = 4;
-const QUEUE_FRAMES: u32 = 1024;
+// Cover two nominal presentation intervals plus a submission period.
+// A shorter queue starved attack cues on the observed browser cadence.
+const MAX_CHUNKS: u8 = 8;
+const QUEUE_FRAMES: u32 = 2048;
 const RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(47_999);
 const SOURCE_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
 // Observed PCM pitch 0xe9b with the 3,579,545 Hz chip clock:
@@ -581,6 +583,21 @@ mod tests {
     use super::*;
 
     type FixtureClip<'key> = (&'key str, u64, i16);
+
+    #[test]
+    fn attack_queue_covers_two_ticks_and_a_submission()
+    -> Result<(), RenderError> {
+        let frames = u32::try_from(CHUNK).map_err(failure)?;
+        let rate = f64::from(RATE.get());
+        let buffered = Duration::from_secs_f64(f64::from(QUEUE_FRAMES) / rate);
+        let period = Duration::from_secs_f64(f64::from(frames) / rate);
+        if buffered < TICK_INTERVAL.saturating_mul(2).saturating_add(period)
+            || QUEUE_FRAMES != frames.saturating_mul(u32::from(MAX_CHUNKS))
+        {
+            return Err(failure("attack audio refill budget is insufficient"));
+        }
+        Ok(())
+    }
 
     fn publish_fixture(
         parent: &OsStr,
