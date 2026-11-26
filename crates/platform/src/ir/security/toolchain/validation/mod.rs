@@ -381,6 +381,56 @@ impl FixtureDelegate {
     }
 }
 
+/// Admit a successful Git object identity without changing its wire bytes.
+///
+/// # Errors
+/// Rejects incomplete, noncanonical or unsupported object identifiers.
+pub(crate) fn admit_head(bytes: &[u8]) -> Result<(), InvalidRequest> {
+    let id = bytes.strip_suffix(b"\n").ok_or(InvalidRequest)?;
+    if !matches!(id.len(), 40 | 64)
+        || !id
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || id.iter().all(|byte| *byte == b'0')
+    {
+        return Err(InvalidRequest);
+    }
+    Ok(())
+}
+
+/// Admit a symbolic branch observation for an exact reference lookup.
+///
+/// # Errors
+/// Rejects non-branch, malformed or ambiguous reference names.
+pub(crate) fn reference_exists(
+    bytes: &[u8],
+) -> Result<Arguments, InvalidRequest> {
+    let line = bytes.strip_suffix(b"\n").ok_or(InvalidRequest)?;
+    let name = from_utf8(line).map_err(|_error| InvalidRequest)?;
+    let branch = name.strip_prefix("refs/heads/").ok_or(InvalidRequest)?;
+    if branch.contains("..")
+        || branch.contains("@{")
+        || branch.ends_with('.')
+        || branch.split('/').any(|part| {
+            part.is_empty()
+                || part.starts_with('.')
+                || part.as_bytes().ends_with(b".lock")
+        })
+        || branch.chars().any(|character| {
+            character.is_ascii_control() || " ~^:?*[\\".contains(character)
+        })
+    {
+        return Err(InvalidRequest);
+    }
+    Ok(Arguments {
+        args: ["show-ref", "--exists", name]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        program: "git",
+    })
+}
+
 /// Admit complete NUL-delimited relative paths from an inventory tool.
 ///
 /// Empty inventories are valid; malformed framing and unsafe names are not.
@@ -475,7 +525,9 @@ fn git(request: GitRequest) -> Vec<&'static str> {
             git_diff(&["--cached", "--diff-filter=ACMRT"])
         },
         GitRequest::DeletedStaged => git_diff(&["--cached", "--diff-filter=D"]),
-        GitRequest::Head => vec!["rev-parse", "--verify", "--quiet", "HEAD"],
+        GitRequest::Head => {
+            vec!["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]
+        },
         GitRequest::History => vec!["log", "-z", "--format=%H%n%B", "HEAD"],
         GitRequest::Inventory => vec![
             "ls-files",
@@ -484,7 +536,9 @@ fn git(request: GitRequest) -> Vec<&'static str> {
             "--exclude-from=.gitignore",
             "-z",
         ],
-        GitRequest::SymbolicHead => vec!["symbolic-ref", "--quiet", "HEAD"],
+        GitRequest::SymbolicHead => {
+            vec!["symbolic-ref", "--quiet", "--no-recurse", "HEAD"]
+        },
         GitRequest::Unstaged => git_diff(&[]),
     }
 }
@@ -565,6 +619,61 @@ fn workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_head_requires_one_canonical_object_identity() {
+        for valid in [
+            b"0123456789abcdef0123456789abcdef01234567\n".as_slice(),
+            concat!(
+                "0123456789abcdef0123456789abcdef",
+                "0123456789abcdef0123456789abcdef\n"
+            )
+            .as_bytes(),
+        ] {
+            assert_eq!(admit_head(valid), Ok(()));
+        }
+        for invalid in [
+            b"".as_slice(),
+            b"0123456789abcdef0123456789abcdef01234567",
+            b"0123456789ABCDEF0123456789abcdef01234567\n",
+            b"0123456789abcdef0123456789abcdef0123456g\n",
+            b"0000000000000000000000000000000000000000\n",
+            b"0123456789abcdef0123456789abcdef01234567\n\n",
+        ] {
+            assert_eq!(admit_head(invalid), Err(InvalidRequest));
+        }
+    }
+
+    #[test]
+    fn symbolic_head_lookup_requires_one_exact_branch()
+    -> Result<(), InvalidRequest> {
+        let args = reference_exists(b"refs/heads/team/main\n")?;
+        if args.program() != "git"
+            || args.args() != ["show-ref", "--exists", "refs/heads/team/main"]
+        {
+            return Err(InvalidRequest);
+        }
+        for invalid in [
+            b"--option\n".as_slice(),
+            b"refs/tags/main\n",
+            b"refs/heads/\n",
+            b"refs/heads/main",
+            b"refs/heads/main\nother\n",
+            b"refs/heads/.private\n",
+            b"refs/heads/a//b\n",
+            b"refs/heads/a..b\n",
+            b"refs/heads/a.lock/b\n",
+            b"refs/heads/a@{b\n",
+            b"refs/heads/a b\n",
+            b"refs/heads/a\\b\n",
+            b"refs/heads/a\xff\n",
+        ] {
+            if reference_exists(invalid).is_ok() {
+                return Err(InvalidRequest);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn completion_derives_success_from_exit_code() -> Result<(), InvalidRequest>

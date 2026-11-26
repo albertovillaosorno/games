@@ -440,3 +440,13 @@ and ordinary bytes are preserved; portable fixtures exercise zero, nonzero
 and unavailable exit codes. Fresh Xvfb/X11 and dummy-audio validation
 1795658740942250934-3372735 passed 1,658 aggregate test executions and all
 six portable core checks.
+
+Repository HEAD observations now require a canonical Git commit identity.
+An unresolved branch is considered unborn only after admitting its exact
+symbolic name and observing Git's missing-reference status. Invalid
+identities, unresolved existing references and lookup failures reject
+validation rather than skipping history checks. The unborn-repository
+path requires Git support for `show-ref --exists`. Portable observations
+and an isolated native Git fixture cover the failure cases. Fresh Xvfb/X11
+and dummy-audio validation 1795659416225028052-3521714 passed 1,670
+aggregate test executions and all six portable core checks.
