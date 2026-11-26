@@ -42,15 +42,23 @@ const MAX_DEVICE_NAME: usize = 512;
 /// Maximum number of admitted playback devices.
 pub const MAX_DEVICES: u32 = 64;
 
-/// Actual application-facing playback format and initial device state.
+/// Portable observation of the application-facing playback state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlaybackState {
+    Paused,
+    Running,
+    Stopped,
+}
+
+/// Actual application-facing playback format and device state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlaybackObservation {
     pub buffer_bytes: u32,
     pub buffer_frames: u16,
     pub channels: u8,
     pub frequency: i32,
-    pub paused: bool,
     pub signed_native_16: bool,
+    pub state: PlaybackState,
 }
 
 /// Device open request whose name and layout have passed shared admission.
@@ -74,23 +82,9 @@ impl<'device> PlaybackRequest<'device> {
         if reported_name != self.name {
             return Err(PlaybackError::InvalidDevice);
         }
-        if observed.frequency != self.layout.frequency()
-            || observed.channels != self.layout.spec().channels.get()
-            || !observed.signed_native_16
-            || observed.buffer_frames == 0
-            || u32::from(observed.buffer_frames)
-                .checked_mul(self.layout.frame_bytes)
-                != Some(observed.buffer_bytes)
-        {
-            return Err(PlaybackError::FormatMismatch);
-        }
-        if !observed.paused {
-            return Err(PlaybackError::InvalidState);
-        }
-        if queued_bytes != 0 {
-            return Err(PlaybackError::InvalidQueue);
-        }
-        Ok(())
+        self.layout
+            .admit_observation(observed, PlaybackState::Paused)?;
+        self.layout.admit_queue_receipt(0, queued_bytes, false)
     }
 
     /// Admitted queue geometry.
@@ -125,6 +119,7 @@ impl<'device> PlaybackRequest<'device> {
 /// Complete interleaved samples admitted against the current queue budget.
 #[derive(Clone, Copy, Debug)]
 pub struct AdmittedSamples<'samples> {
+    maximum_frames: u32,
     samples: &'samples [i16],
 }
 
@@ -147,14 +142,14 @@ pub struct QueueLayout {
 }
 
 impl QueueLayout {
-    /// Admit complete interleaved samples within remaining queue capacity.
+    /// Admit samples and return the maximum resulting queued frame count.
     /// # Errors
     /// Rejects partial frames, invalid observations or exceeded queue limits.
     pub fn admit(
         self,
         samples: usize,
         queued_bytes: u32,
-    ) -> Result<(), PlaybackError> {
+    ) -> Result<u32, PlaybackError> {
         if samples == 0 || !samples.is_multiple_of(self.channels) {
             return Err(PlaybackError::InvalidFrames);
         }
@@ -163,8 +158,47 @@ impl QueueLayout {
             .checked_div(self.channels)
             .and_then(|count| u32::try_from(count).ok())
             .ok_or(PlaybackError::Capacity)?;
-        if frames > self.spec.max_queued_frames.get().saturating_sub(queued) {
-            return Err(PlaybackError::Capacity);
+        queued
+            .checked_add(frames)
+            .filter(|total| *total <= self.spec.max_queued_frames.get())
+            .ok_or(PlaybackError::Capacity)
+    }
+
+    /// Admit the current application-facing format and requested state.
+    pub(crate) fn admit_observation(
+        self,
+        observed: PlaybackObservation,
+        expected: PlaybackState,
+    ) -> Result<(), PlaybackError> {
+        if observed.frequency != self.frequency()
+            || observed.channels != self.spec().channels.get()
+            || !observed.signed_native_16
+            || observed.buffer_frames == 0
+            || u32::from(observed.buffer_frames).checked_mul(self.frame_bytes)
+                != Some(observed.buffer_bytes)
+        {
+            return Err(PlaybackError::FormatMismatch);
+        }
+        if expected == PlaybackState::Stopped || observed.state != expected {
+            return Err(PlaybackError::InvalidState);
+        }
+        Ok(())
+    }
+
+    /// Admit a queue receipt. Only running playback may consume frames
+    /// between observation and submission; no operation can create extra
+    /// frames beyond its admitted maximum.
+    pub(crate) fn admit_queue_receipt(
+        self,
+        maximum_frames: u32,
+        queued_bytes: u32,
+        may_consume: bool,
+    ) -> Result<(), PlaybackError> {
+        let observed = self.queued_frames(queued_bytes)?;
+        if observed > maximum_frames
+            || (!may_consume && observed != maximum_frames)
+        {
+            return Err(PlaybackError::InvalidQueue);
         }
         Ok(())
     }
@@ -177,8 +211,21 @@ impl QueueLayout {
         samples: &[i16],
         queued_bytes: u32,
     ) -> Result<AdmittedSamples<'_>, PlaybackError> {
-        self.admit(samples.len(), queued_bytes)?;
-        Ok(AdmittedSamples { samples })
+        let maximum_frames = self.admit(samples.len(), queued_bytes)?;
+        Ok(AdmittedSamples { maximum_frames, samples })
+    }
+
+    pub(crate) fn admit_submission(
+        self,
+        submitted: AdmittedSamples<'_>,
+        queued_bytes: u32,
+        state: PlaybackState,
+    ) -> Result<(), PlaybackError> {
+        self.admit_queue_receipt(
+            submitted.maximum_frames,
+            queued_bytes,
+            state == PlaybackState::Running,
+        )
     }
 
     /// Checked signed sample rate for the backend request.
@@ -343,8 +390,8 @@ mod tests {
         for (samples, queued, expected) in [
             (0, 0, Err(PlaybackError::InvalidFrames)),
             (1, 0, Err(PlaybackError::InvalidFrames)),
-            (6, 0, Ok(())),
-            (4, 4, Ok(())),
+            (6, 0, Ok(3)),
+            (4, 4, Ok(3)),
             (4, 8, Err(PlaybackError::Capacity)),
             (4, 5, Err(PlaybackError::InvalidQueue)),
             (2, u32::MAX, Err(PlaybackError::InvalidQueue)),

@@ -217,15 +217,16 @@ impl<'samples> Playback<'samples> {
         self.device.queued_frames().map_err(failure)
     }
 
-    fn set_running(&mut self, running: bool) {
+    fn set_running(&mut self, running: bool) -> Result<(), RenderError> {
         if self.running != running {
             if running {
-                self.device.resume();
+                self.device.resume().map_err(failure)?;
             } else {
-                self.device.pause();
+                self.device.pause().map_err(failure)?;
             }
             self.running = running;
         }
+        Ok(())
     }
 
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
@@ -245,7 +246,7 @@ impl<'samples> Playback<'samples> {
         self.update(simulation.state())?;
         self.verify_submission(2)?;
         let _second = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-        self.device.clear();
+        self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
         self.verify_submission(4)?;
         self.smoke_pause(&mut simulation)?;
@@ -260,7 +261,7 @@ impl<'samples> Playback<'samples> {
         simulation: &mut LiveSimulation<Cabinet>,
     ) -> Result<(), RenderError> {
         for _ in 0..60u8 {
-            self.device.clear();
+            self.device.clear().map_err(failure)?;
             let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
             self.update(simulation.state())?;
         }
@@ -305,7 +306,7 @@ impl<'samples> Playback<'samples> {
     ) -> Result<(), RenderError> {
         let mut controls = Controls::new(false)?;
         smoke_press(&mut controls, simulation, Control::Pause)?;
-        self.device.clear();
+        self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
         if self.queued_frames()? != 0 || self.mixer.active() != 4 {
             return Err(failure("paused audio advanced"));
@@ -363,18 +364,18 @@ impl<'samples> Playback<'samples> {
         let volume = cabinet.session().volume();
         if self.volume != volume {
             // Pending frames were already mixed at the previous volume.
-            self.device.clear();
+            self.device.clear().map_err(failure)?;
             self.mixer.set_volume(volume);
             self.volume = volume;
         }
         let current = cabinet.stations().map(|station| station.attack_cues);
         let phase = cabinet.phase();
         let playing = phase == Phase::Playing;
-        self.set_running(self.live_output && playing);
+        self.set_running(self.live_output && playing)?;
         if matches!(phase, Phase::MainMenu | Phase::Exited) {
             self.cues = current;
             if self.queued_frames()? != 0 {
-                self.device.clear();
+                self.device.clear().map_err(failure)?;
             }
             self.mixer.clear();
         }

@@ -588,3 +588,14 @@ verifies the updated aspect-fit geometry after initial stretch.
 Fresh validation 1795657753691193803-3126486 passed 1,640 aggregate test
 executions and all six portable core checks with native rendering and
 dummy audio.
+
+Playback retains the admitted portable state and verifies observed format
+and state around submissions and control operations. Queue receipts require
+exact growth while paused and bounded growth while running, where consumption
+may occur between observations. Clear, pause and resume now report rejected
+receipts through title and build-tool callers. A failed receipt cannot retract
+samples already submitted or played. Fake-backend regressions exercise
+inconsistent growth, stopped devices, format drift and rejected controls.
+Fresh native validation 1795658080680134292-3205498 passed 1,648 aggregate
+test executions and all six portable core checks. Physical audio-device
+disconnect and recovery remain unverified.

@@ -31,14 +31,15 @@
 
 //! Portable PCM playback requests and outcomes.
 
+use std::cell::Cell;
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32};
 
 use games_assets::pcm::PcmSamples;
 
 use super::security::audio::{
-    AdmittedSamples, PlaybackObservation, PlaybackRequest, QueueLayout,
-    validate_devices,
+    AdmittedSamples, PlaybackObservation, PlaybackRequest, PlaybackState,
+    QueueLayout, validate_devices,
 };
 
 /// Explicit audio playback configuration and software-queue budget.
@@ -73,7 +74,7 @@ pub enum PlaybackError {
     InvalidQueue,
     /// The requested playback configuration is not representable.
     InvalidSpec,
-    /// The backend did not open the device in its initial paused state.
+    /// The observed device state does not match the admitted playback state.
     InvalidState,
     /// No playback adapter is available for the selected host.
     Unsupported,
@@ -92,8 +93,8 @@ pub struct AudioDevices {
 pub(crate) trait PlaybackBackend: Debug {
     /// Clear pending frames without changing pause state.
     fn clear(&self);
-    /// Observe the actual application-facing format and initial pause state.
-    fn observe_open(&self) -> PlaybackObservation;
+    /// Observe the application-facing format and current device state.
+    fn observe_playback(&self) -> PlaybackObservation;
     /// Backend and requested device diagnostics.
     fn output(&self) -> (&str, Option<&str>);
     /// Stop consuming queued samples.
@@ -123,10 +124,13 @@ pub(crate) trait PlaybackFactory {
 ///
 /// The backend and device are private. The reported queue size excludes
 /// samples already transferred to the physical device or audio server.
+/// A failed receipt reports an inconsistent device; it cannot retract
+/// samples already copied by the adapter or played by the device.
 pub struct NativeAudio {
     backend: PlaybackPort,
     layout: QueueLayout,
     scratch: Vec<i16>,
+    state: Cell<PlaybackState>,
 }
 
 impl Debug for NativeAudio {
@@ -143,7 +147,7 @@ impl NativeAudio {
         backend: PlaybackPort,
     ) -> Result<Self, PlaybackError> {
         request.admit_opened(
-            backend.observe_open(),
+            backend.observe_playback(),
             backend.output().1,
             backend.queued_bytes(),
         )?;
@@ -151,12 +155,26 @@ impl NativeAudio {
             backend,
             layout: request.layout(),
             scratch: Vec::new(),
+            state: Cell::new(PlaybackState::Paused),
         })
     }
 
-    /// Discard pending software-queued frames without changing pause state.
-    pub fn clear(&self) {
+    /// Discard pending software-queued frames without changing playback state.
+    /// # Errors
+    /// Rejects unexpected device state or a nonempty queue receipt.
+    pub fn clear(&self) -> Result<(), PlaybackError> {
+        self.observe_state()?;
         self.backend.clear();
+        self.observe_state()?;
+        self.layout
+            .admit_queue_receipt(0, self.backend.queued_bytes(), false)
+    }
+
+    fn observe_state(&self) -> Result<(), PlaybackError> {
+        self.layout.admit_observation(
+            self.backend.observe_playback(),
+            self.state.get(),
+        )
     }
 
     /// Open the default device at the explicitly requested signed PCM format.
@@ -186,8 +204,10 @@ impl NativeAudio {
     }
 
     /// Stop consuming software-queued frames.
-    pub fn pause(&self) {
-        self.backend.pause();
+    /// # Errors
+    /// Rejects unexpected device state or queue receipt.
+    pub fn pause(&self) -> Result<(), PlaybackError> {
+        self.transition(PlaybackState::Paused)
     }
 
     /// Enumerate playback devices without opening or playing on them.
@@ -211,16 +231,17 @@ impl NativeAudio {
         frames: NonZeroU32,
     ) -> Result<(), PlaybackError> {
         let range = self.layout.pcm_range(pcm, start, frames)?;
-        let queued = self.backend.queued_bytes();
-        self.layout.admit(range.len(), queued)?;
+        self.observe_state()?;
+        let _maximum = self
+            .layout
+            .admit(range.len(), self.backend.queued_bytes())?;
         self.scratch.clear();
         self.scratch
             .try_reserve_exact(range.len())
             .map_err(|_error| PlaybackError::Allocation)?;
         self.scratch
             .extend(pcm.samples().skip(range.start).take(range.len()));
-        let admitted = self.layout.admit_samples(&self.scratch, queued)?;
-        self.backend.queue_samples(admitted)
+        self.queue_samples(&self.scratch)
     }
 
     /// Enqueue already mixed interleaved signed 16-bit sample frames.
@@ -228,22 +249,54 @@ impl NativeAudio {
     /// # Errors
     /// Rejects empty or incomplete frames, queue or backend failure.
     pub fn queue_samples(&self, samples: &[i16]) -> Result<(), PlaybackError> {
+        self.observe_state()?;
+        let state = self.state.get();
         let admitted = self
             .layout
             .admit_samples(samples, self.backend.queued_bytes())?;
-        self.backend.queue_samples(admitted)
+        self.backend.queue_samples(admitted)?;
+        self.observe_state()?;
+        self.layout.admit_submission(
+            admitted,
+            self.backend.queued_bytes(),
+            state,
+        )
     }
 
     /// Number of complete sample frames pending in the software queue.
     /// # Errors
     /// Rejects malformed or out-of-budget backend observations.
     pub fn queued_frames(&self) -> Result<u32, PlaybackError> {
+        self.observe_state()?;
         self.layout.queued_frames(self.backend.queued_bytes())
     }
 
     /// Begin consuming software-queued frames.
-    pub fn resume(&self) {
-        self.backend.resume();
+    /// # Errors
+    /// Rejects unexpected device state or queue receipt.
+    pub fn resume(&self) -> Result<(), PlaybackError> {
+        self.transition(PlaybackState::Running)
+    }
+
+    fn transition(&self, next: PlaybackState) -> Result<(), PlaybackError> {
+        self.observe_state()?;
+        let previous = self.state.get();
+        let before = self.layout.queued_frames(self.backend.queued_bytes())?;
+        match next {
+            PlaybackState::Paused => self.backend.pause(),
+            PlaybackState::Running => self.backend.resume(),
+            PlaybackState::Stopped => return Err(PlaybackError::InvalidState),
+        }
+        self.layout
+            .admit_observation(self.backend.observe_playback(), next)?;
+        self.layout.admit_queue_receipt(
+            before,
+            self.backend.queued_bytes(),
+            previous == PlaybackState::Running
+                || next == PlaybackState::Running,
+        )?;
+        self.state.set(next);
+        Ok(())
     }
 }
 
@@ -292,7 +345,7 @@ pub mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use super::fixtures::{configuration, pcm};
@@ -300,22 +353,27 @@ mod tests {
 
     #[derive(Debug)]
     struct FakeBackend {
+        after_submission: Cell<Option<u32>>,
+        control_ignored: Cell<bool>,
         observation: Cell<Option<u32>>,
         obtained: Cell<PlaybackObservation>,
-        paused: Cell<bool>,
         requested_name: Option<&'static str>,
         samples: RefCell<Vec<i16>>,
+        state: Cell<PlaybackState>,
+        state_after_submission: Cell<Option<PlaybackState>>,
         submission_fails: Cell<bool>,
     }
 
     impl PlaybackBackend for Rc<FakeBackend> {
         fn clear(&self) {
-            self.samples.borrow_mut().clear();
+            if !self.control_ignored.get() {
+                self.samples.borrow_mut().clear();
+            }
         }
 
-        fn observe_open(&self) -> PlaybackObservation {
+        fn observe_playback(&self) -> PlaybackObservation {
             PlaybackObservation {
-                paused: self.paused.get(),
+                state: self.state.get(),
                 ..self.obtained.get()
             }
         }
@@ -325,7 +383,9 @@ mod tests {
         }
 
         fn pause(&self) {
-            self.paused.set(true);
+            if !self.control_ignored.get() {
+                self.state.set(PlaybackState::Paused);
+            }
         }
 
         fn queue_samples(
@@ -338,6 +398,12 @@ mod tests {
             self.samples
                 .borrow_mut()
                 .extend_from_slice(samples.samples());
+            if let Some(bytes) = self.after_submission.take() {
+                self.observation.set(Some(bytes));
+            }
+            if let Some(state) = self.state_after_submission.take() {
+                self.state.set(state);
+            }
             Ok(())
         }
 
@@ -350,7 +416,9 @@ mod tests {
         }
 
         fn resume(&self) {
-            self.paused.set(false);
+            if !self.control_ignored.get() {
+                self.state.set(PlaybackState::Running);
+            }
         }
     }
 
@@ -358,18 +426,21 @@ mod tests {
 
     fn fake_backend(requested_name: Option<&'static str>) -> Rc<FakeBackend> {
         Rc::new(FakeBackend {
+            after_submission: Cell::new(None),
+            control_ignored: Cell::new(false),
             observation: Cell::new(None),
             obtained: Cell::new(PlaybackObservation {
                 buffer_bytes: 8,
                 buffer_frames: 2,
                 channels: 2,
                 frequency: 48_000,
-                paused: true,
                 signed_native_16: true,
+                state: PlaybackState::Paused,
             }),
-            paused: Cell::new(true),
             requested_name,
             samples: RefCell::new(Vec::new()),
+            state: Cell::new(PlaybackState::Paused),
+            state_after_submission: Cell::new(None),
             submission_fails: Cell::new(false),
         })
     }
@@ -380,6 +451,101 @@ mod tests {
         let handle =
             NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend)))?;
         Ok((handle, backend))
+    }
+
+    #[test]
+    fn queue_receipts_allow_only_admitted_frames_and_running_consumption()
+    -> Result<(), PlaybackError> {
+        for (running, bytes, expected) in [
+            (false, 0, Err(PlaybackError::InvalidQueue)),
+            (false, 4, Err(PlaybackError::InvalidQueue)),
+            (false, 8, Ok(())),
+            (false, 12, Err(PlaybackError::InvalidQueue)),
+            (true, 0, Ok(())),
+            (true, 4, Ok(())),
+            (true, 8, Ok(())),
+            (true, 12, Err(PlaybackError::InvalidQueue)),
+            (true, 6, Err(PlaybackError::InvalidQueue)),
+            (true, 16, Err(PlaybackError::InvalidQueue)),
+        ] {
+            let (mut handle, backend) = fake()?;
+            handle.queue_samples(&[2, 3])?;
+            if running {
+                handle.resume()?;
+            }
+            backend.after_submission.set(Some(bytes));
+            let source = pcm()?;
+            let actual = handle.queue_pcm(&source, 1, NonZeroU32::MIN);
+            if actual != expected
+                || backend.samples.borrow().as_slice() != [2, 3, 1, -1]
+            {
+                return Err(PlaybackError::Backend(format!(
+                    "{running}, {bytes}: {actual:?} != {expected:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_controls_do_not_commit_playback_state()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        handle.queue_samples(&[1, -1])?;
+        backend.control_ignored.set(true);
+        if handle.resume() != Err(PlaybackError::InvalidState)
+            || handle.clear() != Err(PlaybackError::InvalidQueue)
+            || handle.queued_frames()? != 1
+        {
+            return Err(PlaybackError::InvalidState);
+        }
+        backend.control_ignored.set(false);
+        handle.resume()?;
+        backend.control_ignored.set(true);
+        if handle.pause() != Err(PlaybackError::InvalidState) {
+            return Err(PlaybackError::InvalidState);
+        }
+        handle.queue_samples(&[2, 3])?;
+        backend.control_ignored.set(false);
+        handle.pause()?;
+        handle.clear()?;
+        if handle.queued_frames()? != 0
+            || backend.state.get() != PlaybackState::Paused
+        {
+            return Err(PlaybackError::InvalidState);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn changed_format_or_stopped_device_rejects_dispatch()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        let admitted = backend.obtained.get();
+        backend.obtained.set(PlaybackObservation {
+            frequency: 44_100,
+            ..admitted
+        });
+        if handle.queue_samples(&[1, -1]) != Err(PlaybackError::FormatMismatch)
+            || !backend.samples.borrow().is_empty()
+        {
+            return Err(PlaybackError::FormatMismatch);
+        }
+        backend.obtained.set(admitted);
+        handle.resume()?;
+        backend
+            .state_after_submission
+            .set(Some(PlaybackState::Stopped));
+        if handle.queue_samples(&[1, -1]) != Err(PlaybackError::InvalidState)
+            || handle.queue_samples(&[2, 3]) != Err(PlaybackError::InvalidState)
+            || handle.pause() != Err(PlaybackError::InvalidState)
+            || handle.clear() != Err(PlaybackError::InvalidState)
+            || handle.queued_frames() != Err(PlaybackError::InvalidState)
+            || backend.samples.borrow().as_slice() != [1, -1]
+        {
+            return Err(PlaybackError::InvalidState);
+        }
+        Ok(())
     }
 
     #[test]
@@ -442,14 +608,14 @@ mod tests {
         ) {
             return Err(PlaybackError::InvalidDevice);
         }
-        backend.paused.set(false);
+        backend.state.set(PlaybackState::Running);
         if !matches!(
             NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend))),
             Err(PlaybackError::InvalidState)
         ) {
             return Err(PlaybackError::InvalidState);
         }
-        backend.paused.set(true);
+        backend.state.set(PlaybackState::Paused);
         backend.observation.set(Some(4));
         if !matches!(
             NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend))),
@@ -560,20 +726,24 @@ mod tests {
     fn playback_control_is_independent_of_queued_frames()
     -> Result<(), PlaybackError> {
         let (handle, state) = fake()?;
-        if handle.output() != ("fake", None) || !state.paused.get() {
+        if handle.output() != ("fake", None)
+            || state.state.get() != PlaybackState::Paused
+        {
             return Err(PlaybackError::InvalidSpec);
         }
         handle.queue_samples(&[1, -1])?;
-        handle.resume();
-        if state.paused.get() {
+        handle.resume()?;
+        if state.state.get() != PlaybackState::Running {
             return Err(PlaybackError::InvalidSpec);
         }
-        handle.clear();
-        if handle.queued_frames()? != 0 || state.paused.get() {
+        handle.clear()?;
+        if handle.queued_frames()? != 0
+            || state.state.get() != PlaybackState::Running
+        {
             return Err(PlaybackError::InvalidFrames);
         }
-        handle.pause();
-        if !state.paused.get() {
+        handle.pause()?;
+        if state.state.get() != PlaybackState::Paused {
             return Err(PlaybackError::InvalidSpec);
         }
         Ok(())

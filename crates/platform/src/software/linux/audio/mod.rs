@@ -39,7 +39,8 @@ use crate::ir::audio::{
     AudioDevices, PlaybackBackend, PlaybackError, PlaybackPort,
 };
 use crate::ir::security::audio::{
-    AdmittedSamples, PlaybackObservation, PlaybackRequest, admit_device_count,
+    AdmittedSamples, PlaybackObservation, PlaybackRequest, PlaybackState,
+    admit_device_count,
 };
 
 /// Native device ownership; format and queue admission belong to the IR.
@@ -60,15 +61,19 @@ impl PlaybackBackend for AudioBackend {
         self.device.clear();
     }
 
-    fn observe_open(&self) -> PlaybackObservation {
+    fn observe_playback(&self) -> PlaybackObservation {
         let obtained = self.device.spec();
         PlaybackObservation {
             buffer_bytes: obtained.size,
             buffer_frames: obtained.samples,
             channels: obtained.channels,
             frequency: obtained.freq,
-            paused: self.device.status() == AudioStatus::Paused,
             signed_native_16: obtained.format == AudioFormat::s16_sys(),
+            state: match self.device.status() {
+                AudioStatus::Paused => PlaybackState::Paused,
+                AudioStatus::Playing => PlaybackState::Running,
+                AudioStatus::Stopped => PlaybackState::Stopped,
+            },
         }
     }
 
@@ -194,10 +199,12 @@ mod tests {
             "queue overflow accepted",
         )?;
         require(audio.queued_frames()? == 3, "queue size changed")?;
-        audio.clear();
+        audio.clear()?;
         require(audio.queued_frames()? == 0, "expected empty queue")?;
-        audio.resume();
-        audio.pause();
+        audio.resume()?;
+        audio.queue_samples(&[1, -1])?;
+        audio.pause()?;
+        audio.clear()?;
         drop(audio);
         if let Some(name) =
             devices.names.as_ref().and_then(|names| names.first())

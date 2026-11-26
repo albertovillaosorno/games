@@ -242,7 +242,9 @@ fn verify_mix(
         {
             return Err(String::from("native queue extent differs"));
         }
-        device.clear();
+        device
+            .clear()
+            .map_err(|error| format!("clear: {error:?}"))?;
         remaining = remaining.saturating_sub(count);
     }
     Ok(MixReport { audible, mixing })
