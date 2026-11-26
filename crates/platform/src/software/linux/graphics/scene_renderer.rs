@@ -35,6 +35,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
+    WindowMode,
 };
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Rect, max_int_value, min_int_value};
@@ -222,10 +223,10 @@ impl SceneBackend for LinuxScene<'_, '_> {
     fn apply_display_settings(
         &mut self,
         settings: DisplaySettings,
-    ) -> Result<(), RenderError> {
-        apply_window_mode(self.canvas, settings.window)?;
+    ) -> Result<WindowMode, RenderError> {
+        let observed = apply_window_mode(self.canvas, settings.window)?;
         self.textures.mode = settings.presentation;
-        Ok(())
+        Ok(observed)
     }
 
     fn drawable_available(&self) -> bool {

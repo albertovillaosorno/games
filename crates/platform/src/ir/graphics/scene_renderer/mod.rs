@@ -37,6 +37,7 @@ use std::num::NonZeroUsize;
 use games::input::touch::TouchPoint;
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
+    WindowMode,
 };
 
 use crate::ir::frame::{AdaptiveWidthRequest, FrameLayout, RenderError};
@@ -44,6 +45,7 @@ use crate::ir::hardware::InputSample;
 use crate::ir::scene::{
     AtlasId, AtlasUpload, EventBatch, SceneLimits, SpriteDraw,
 };
+use crate::ir::security::frame::validate_window_mode;
 use crate::ir::security::scene::{
     AdmittedAtlas, AdmittedDraws, PresentationAdmission, SceneAdmission,
 };
@@ -53,7 +55,7 @@ pub(crate) trait SceneBackend: Debug {
     fn apply_display_settings(
         &mut self,
         settings: DisplaySettings,
-    ) -> Result<(), RenderError>;
+    ) -> Result<WindowMode, RenderError>;
     fn drawable_available(&self) -> bool;
     fn layout(&self) -> FrameLayout;
     // Commit the supplied atlas identity only after a successful upload.
@@ -181,7 +183,8 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
         self.presentation.invalidate();
-        self.backend.apply_display_settings(settings)?;
+        let observed = self.backend.apply_display_settings(settings)?;
+        validate_window_mode(settings.window, observed)?;
         SceneView {
             mode: settings.presentation,
             ..self.view()
@@ -404,7 +407,7 @@ mod tests {
         AdmittedAtlas, AdmittedDraws, AtlasId, Dimensions, DisplaySettings,
         EventBatch, FrameLayout, InputSample, PresentationAdmission,
         PresentationLayout, PresentationMode, RenderError, SceneBackend,
-        SceneLimits, SceneSession, SceneView, SpriteDraw,
+        SceneLimits, SceneSession, SceneView, SpriteDraw, WindowMode,
     };
     use crate::ir::check;
     use crate::ir::hardware::{HostEvent, InputTransition};
@@ -429,7 +432,7 @@ mod tests {
         resize_outcome: Result<bool, RenderError>,
         resizes: Vec<FrameLayout>,
         settings_applied: bool,
-        settings_outcome: Result<(), RenderError>,
+        settings_outcome: Result<WindowMode, RenderError>,
         surface: Option<Dimensions>,
         surface_queries: Cell<usize>,
         uploads: Vec<RecordedUpload>,
@@ -465,7 +468,7 @@ mod tests {
                 resize_outcome: Ok(true),
                 resizes: Vec::new(),
                 settings_applied: true,
-                settings_outcome: Ok(()),
+                settings_outcome: Ok(WindowMode::Windowed),
                 surface: None,
                 surface_queries: Cell::new(0),
                 uploads: Vec::new(),
@@ -478,7 +481,7 @@ mod tests {
         fn apply_display_settings(
             &mut self,
             settings: DisplaySettings,
-        ) -> Result<(), RenderError> {
+        ) -> Result<WindowMode, RenderError> {
             if self.settings_applied {
                 self.mode = settings.presentation;
             }
@@ -995,6 +998,49 @@ mod tests {
         check(&scene.present([0; 3], &[]), &Ok(true))?;
         check(&scene.visible_layout()?, &Some(expected))?;
         Ok(())
+    }
+
+    #[test]
+    fn rejected_window_receipt_invalidates_scene_and_retains_mode()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        let base = backend.layout;
+        let surface = Dimensions::new(base.width(), base.height());
+        let expected =
+            base.presentation(PresentationMode::AspectFit, surface)?;
+        backend.surface = Some(surface);
+        backend.presentations =
+            VecDeque::from([Ok(Some(expected)), Ok(Some(expected))]);
+        let mut scene = SceneSession::new(
+            &mut backend,
+            base,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(
+            &scene.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::AspectFit,
+                window: WindowMode::Fullscreen,
+            }),
+            &Err(RenderError::InvalidWindowMode),
+        )?;
+        check(&scene.visible_layout()?, &None)?;
+        check(
+            &scene.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::Stretch,
+                window: WindowMode::Fullscreen,
+            }),
+            &Err(RenderError::InvalidWindowMode),
+        )?;
+        check(&scene.mode(), &PresentationMode::AspectFit)?;
+        check(
+            &scene.present([0; 3], &[]),
+            &Err(RenderError::InvalidDimensions),
+        )?;
+        scene.apply_display_settings(DisplaySettings::default())?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(&scene.visible_layout()?, &Some(expected))
     }
 
     #[test]

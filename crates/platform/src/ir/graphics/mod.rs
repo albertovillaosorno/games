@@ -44,6 +44,7 @@ use super::frame::{AdmittedRgba, FrameLayout, RenderError, validate_extent};
 use super::hardware::InputSample;
 use super::input::{InputPort, InputStartup};
 use super::scene::SceneLimits;
+use super::security::frame::validate_window_mode;
 
 pub(crate) type FrameRun<'run> =
     dyn FnMut(&mut dyn FrameBackend) -> Result<(), RenderError> + 'run;
@@ -57,7 +58,7 @@ pub(crate) trait WindowBackend: Debug {
     fn apply_window_mode(
         &mut self,
         mode: WindowMode,
-    ) -> Result<(), RenderError>;
+    ) -> Result<WindowMode, RenderError>;
     fn input(&self, limit: NonZeroUsize) -> Result<InputPort, RenderError>;
     fn renderer_name(&self) -> String;
     fn with_frame(
@@ -106,7 +107,8 @@ impl NativeWindow {
         &mut self,
         settings: DisplaySettings,
     ) -> Result<(), RenderError> {
-        self.backend.apply_window_mode(settings.window)?;
+        let observed = self.backend.apply_window_mode(settings.window)?;
+        validate_window_mode(settings.window, observed)?;
         self.mode = settings.presentation;
         Ok(())
     }
@@ -360,17 +362,18 @@ mod tests {
     #[derive(Debug)]
     struct TestWindow {
         observed: Rc<Cell<PresentationMode>>,
+        window_mode: WindowMode,
     }
 
     impl WindowBackend for TestWindow {
         fn apply_window_mode(
             &mut self,
             mode: WindowMode,
-        ) -> Result<(), RenderError> {
+        ) -> Result<WindowMode, RenderError> {
             if mode == WindowMode::Fullscreen {
                 Err(RenderError::Unsupported)
             } else {
-                Ok(())
+                Ok(self.window_mode)
             }
         }
 
@@ -421,6 +424,7 @@ mod tests {
         let mut window = NativeWindow {
             backend: Box::new(TestWindow {
                 observed: Rc::clone(&observed),
+                window_mode: WindowMode::Windowed,
             }),
             mode: PresentationMode::default(),
         };
@@ -461,6 +465,33 @@ mod tests {
         )?;
         check(&observed.get(), &PresentationMode::Stretch)?;
         Ok(())
+    }
+
+    #[test]
+    fn unconfirmed_window_transition_retains_previous_presentation_policy()
+    -> Result<(), RenderError> {
+        let observed = Rc::new(Cell::new(PresentationMode::Adaptive));
+        let mut window = NativeWindow {
+            backend: Box::new(TestWindow {
+                observed: Rc::clone(&observed),
+                window_mode: WindowMode::Fullscreen,
+            }),
+            mode: PresentationMode::Integer,
+        };
+        check(
+            &window.apply_display_settings(DisplaySettings {
+                presentation: PresentationMode::Stretch,
+                window: WindowMode::Windowed,
+            }),
+            &Err(RenderError::InvalidWindowMode),
+        )?;
+        let layout = FrameLayout::new(
+            NonZeroU32::MIN,
+            NonZeroU32::MIN,
+            NonZeroUsize::MAX,
+        )?;
+        window.with_frame(layout, |_| Ok(()))?;
+        check(&observed.get(), &PresentationMode::Integer)
     }
 
     #[test]

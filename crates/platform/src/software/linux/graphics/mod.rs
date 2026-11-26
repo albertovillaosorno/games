@@ -87,7 +87,7 @@ impl WindowBackend for LinuxWindow {
     fn apply_window_mode(
         &mut self,
         mode: WindowMode,
-    ) -> Result<(), RenderError> {
+    ) -> Result<WindowMode, RenderError> {
         apply_window_mode(&mut self.canvas, mode)
     }
 
@@ -286,18 +286,22 @@ struct FramePresentation {
 fn apply_window_mode(
     canvas: &mut WindowCanvas,
     mode: WindowMode,
-) -> Result<(), RenderError> {
+) -> Result<WindowMode, RenderError> {
     let fullscreen = match mode {
         WindowMode::Fullscreen => FullscreenType::Desktop,
         WindowMode::Windowed => FullscreenType::Off,
     };
-    if canvas.window().fullscreen_state() == fullscreen {
-        return Ok(());
+    if canvas.window().fullscreen_state() != fullscreen {
+        canvas
+            .window_mut()
+            .set_fullscreen(fullscreen)
+            .map_err(RenderError::Backend)?;
     }
-    canvas
-        .window_mut()
-        .set_fullscreen(fullscreen)
-        .map_err(RenderError::Backend)
+    match canvas.window().fullscreen_state() {
+        FullscreenType::Desktop => Ok(WindowMode::Fullscreen),
+        FullscreenType::Off => Ok(WindowMode::Windowed),
+        FullscreenType::True => Err(RenderError::InvalidWindowMode),
+    }
 }
 
 fn copy_to_viewport<Target>(
@@ -1031,13 +1035,17 @@ mod tests {
             (WindowMode::Fullscreen, FullscreenType::Desktop),
             (WindowMode::Windowed, FullscreenType::Off),
         ] {
-            window.apply_window_mode(mode)?;
+            require(window.apply_window_mode(mode)? == mode, "wrong receipt")?;
             require(
                 window.canvas.window().fullscreen_state() == expected,
                 "wrong fullscreen state",
             )?;
         }
-        window.apply_window_mode(WindowMode::default())
+        require(
+            window.apply_window_mode(WindowMode::default())?
+                == WindowMode::default(),
+            "wrong default receipt",
+        )
     }
 
     fn observed_key(event: &InputSample) -> Option<KeyboardKey> {

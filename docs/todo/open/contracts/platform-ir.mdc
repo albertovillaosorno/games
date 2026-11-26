@@ -599,3 +599,12 @@ inconsistent growth, stopped devices, format drift and rejected controls.
 Fresh native validation 1795658080680134292-3205498 passed 1,648 aggregate
 test executions and all six portable core checks. Physical audio-device
 disconnect and recovery remain unverified.
+
+Window and scene settings now require the observed native window mode to
+match the requested mode before committing portable presentation policy.
+The SDL adapter observes the fullscreen state after the transition and
+rejects exclusive fullscreen, which is outside the portable contract.
+Fake-adapter fixtures cover an unconfirmed window transition and scene
+receipt invalidation and recovery. Fresh native validation
+1795658576663604872-3331962 passed 1,656 aggregate test executions and all
+six portable core checks. Physical display transitions remain unverified.

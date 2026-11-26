@@ -35,7 +35,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::presentation::{
-    Dimensions, PresentationLayout, PresentationMode, SpriteRect,
+    Dimensions, PresentationLayout, PresentationMode, SpriteRect, WindowMode,
 };
 
 // Keep both ends of a signed rectangle representable.
@@ -54,6 +54,8 @@ pub enum RenderError {
     InvalidSprite,
     /// A session observation clock moved backwards.
     InvalidTimestamp,
+    /// The observed window mode does not match the requested mode.
+    InvalidWindowMode,
     /// The frame requires more bytes than permitted.
     TooLarge,
     /// The selected platform has no implementation of this capability.
@@ -258,6 +260,20 @@ pub fn validate_rectangle(rectangle: SpriteRect) -> Result<(), RenderError> {
         return Err(RenderError::InvalidSprite);
     }
     Ok(())
+}
+
+/// Require the observed window mode to match the requested transition.
+/// # Errors
+/// Rejects an unconfirmed window mode.
+pub(crate) fn validate_window_mode(
+    requested: WindowMode,
+    observed: WindowMode,
+) -> Result<(), RenderError> {
+    if requested == observed {
+        Ok(())
+    } else {
+        Err(RenderError::InvalidWindowMode)
+    }
 }
 
 #[cfg(test)]
