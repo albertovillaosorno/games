@@ -1622,3 +1622,34 @@ with explicit autoplay permission and a private null sink. Several
 visible reruns did not receive the activation gesture and are not
 counted as successful checks. No owner browser preference was changed.
 Fresh validation 1795735915564835357-80352 passed.
+
+An alternate-engine rerun of the expanded silent fixture reached trusted
+activation in isolated Epiphany/WebKitGTK with a private 48 kHz stereo
+PulseAudio-compatible null sink. The browser reported 48,000 Hz but
+zero maximum destination channels during context admission. The fixture
+reported FormatMismatch, scheduled no sources and closed the context.
+The same result occurred with both private runtime-directory layouts,
+including after a separate silent GStreamer stereo pipeline succeeded.
+GStreamer diagnostics showed a stereo negotiation in the WebKit process,
+but the synchronous Web Audio observation still reported zero channels.
+The earlier fixture binary also rejected this observation under the
+same isolation, so these runs do not demonstrate a new scheduling
+regression. Exact format admission remains unchanged. Alternate-engine
+playback acceptance in this private audio environment remains open.
+A separate trusted activation resumed an empty Web Audio context and
+observed zero maximum destination channels both initially and after
+500 ms. A second trusted activation after its closure again produced
+FormatMismatch in the expanded fixture. This does not establish that
+waiting for a running context would resolve admission on this host.
+
+Two additional negative controls of the expanded fixture in isolated
+headless Firefox passed using the private stereo null sink and explicit
+autoplay permission. Injected resume-promise rejection reported the
+backend control error after pending admission, scheduled no sources,
+installed no listeners and closed both contexts. Injected second-channel
+copy failure reported the backend copy error before pending admission,
+scheduled no sources, installed no listeners and closed its context.
+An injected source connection failure reported InvalidState after pending
+admission, installed and removed one listener, attempted disconnection,
+scheduled no source and closed both contexts. The reported error is the
+observed public diagnostic result, not the injected host error text.
