@@ -99,11 +99,50 @@ fn os(token: &str) -> bool {
     )
 }
 
+fn wire_layout(
+    words: &[&str],
+    index: usize,
+    word: &str,
+) -> Option<&'static str> {
+    if matches!(word, "to_ne_bytes" | "from_ne_bytes") {
+        return Some("native-endian-bytes");
+    }
+    if !matches!(word, "usize" | "isize") {
+        return None;
+    }
+    let tail = words.get(index.checked_add(1)?..)?;
+    let ([":", ":", path @ ..] | [">", ":", ":", path @ ..]) = tail else {
+        return None;
+    };
+    let member = match path {
+        ["r", "#", member, ..] | [member, ..] => *member,
+        [] => return None,
+    };
+    matches!(
+        member,
+        "BITS"
+            | "to_le_bytes"
+            | "from_le_bytes"
+            | "to_be_bytes"
+            | "from_be_bytes"
+    )
+    .then_some("pointer-width-layout")
+}
+
+fn wire_layout_counts(words: &[&str], result: &mut Counts) {
+    for (index, word) in words.iter().copied().enumerate() {
+        if let Some(rule) = wire_layout(words, index, word) {
+            record(result, rule);
+        }
+    }
+}
+
 fn rust(source: &str) -> Counts {
     let parsed = tokens(source);
     let words: Vec<_> =
         parsed.iter().map(|token| token.text.as_str()).collect();
     let mut result = Counts::new();
+    wire_layout_counts(&words, &mut result);
     for (index, word) in words.iter().copied().enumerate() {
         let next = words.get(index.saturating_add(1)).copied();
         let prev = index.checked_sub(1).and_then(|i| words.get(i)).copied();
@@ -356,6 +395,35 @@ mod tests {
             )
             .is_ok_and(|cargo| cargo.get("sdk:sdl2") == Some(&1))
         );
+    }
+
+    #[test]
+    fn wire_layout_must_not_depend_on_native_integer_representation() {
+        for source in [
+            "let _ = value.to_ne_bytes();",
+            "let _ = u32::from_ne_bytes(bytes);",
+            "let _ = u32::r#from_ne_bytes(bytes);",
+            "macro_rules! decode { () => { u32::from_ne_bytes(bytes) }; }",
+        ] {
+            assert_eq!(rust(source).get("native-endian-bytes"), Some(&1));
+        }
+        for source in [
+            "let _ = usize::BITS;",
+            "let _ = isize::from_be_bytes(bytes);",
+            "let _ = core::primitive::usize::to_le_bytes(value);",
+            "let _ = <usize>::r#to_be_bytes(value);",
+        ] {
+            assert_eq!(rust(source).get("pointer-width-layout"), Some(&1));
+        }
+        let admitted = concat!(
+            "let _ = u32::from_le_bytes(bytes);",
+            "let _ = u64::to_be_bytes(value);",
+            "let _ = usize::try_from(value);",
+            "let _ = usize::MAX;",
+            "let _ = \"usize::BITS and from_ne_bytes\";",
+            "/* isize::from_be_bytes(bytes) */",
+        );
+        assert!(rust(admitted).is_empty());
     }
 
     #[test]

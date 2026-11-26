@@ -458,3 +458,13 @@ neutral references and rejected concrete software references. The lexical
 policy reserves the private namespace; it is not semantic name resolution.
 Fresh validation 1795661058670401049-4022657 passed 1695 aggregate test
 executions and all six portable core checks.
+
+The strict portability preflight now rejects explicit native-endian byte
+conversion APIs and pointer-width integer associated byte or bit-width
+APIs. Fixtures cover qualified paths, raw identifiers, macro bodies,
+fixed-width byte order, ordinary checked size arithmetic and comments.
+The check is lexical; inferred receiver types and arbitrary aliases
+remain outside its proof. Fresh Xvfb/X11 and dummy-audio validation
+1795664506404809950-412744 passed 1,731 test executions and all six
+portable core checks. An initial Xvfb invocation without explicit X11
+selection failed display admission; no rendering gate was suppressed.
