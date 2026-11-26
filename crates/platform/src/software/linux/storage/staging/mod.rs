@@ -38,15 +38,13 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use games_assets::archive::{
-    ArchiveBudget, ArchiveError, EntryBudget, EntryKind,
-};
+use games_assets::archive::{ArchiveBudget, ArchiveError, EntryKind};
 use games_assets::{AssetError, ContentHash};
 #[cfg(test)]
 use games_assets::{AssetManifest, ManifestLimits};
@@ -65,10 +63,12 @@ use super::file::{
 };
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::PublishedBundle;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::ir::storage::staging::staging_path;
 use crate::ir::storage::staging::{
-    ArchiveFactory, ArchivePort, CanonicalFactory, CanonicalPort,
-    CompletedArchive, CompletedArchivePort, CompletedBundle, OpenArchive,
-    OpenCanonical, PreparedManifest, StagingEntry, StagingError, staging_path,
+    AdmittedArchiveEntry, ArchiveFactory, ArchivePort, CanonicalFactory,
+    CanonicalPort, CompletedArchive, CompletedArchivePort, CompletedBundle,
+    OpenArchive, OpenCanonical, PreparedManifest, StagingEntry, StagingError,
 };
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -314,6 +314,64 @@ impl Drop for PrivateDirectory {
     }
 }
 
+#[derive(Debug)]
+struct ArchiveTree {
+    registry: Directory,
+    temporary: PrivateDirectory,
+}
+
+impl ArchiveTree {
+    fn finish(self, sync: bool) -> Result<StagedArchive, StagingError> {
+        self.temporary.verify_tree(&self.registry, sync)?;
+        Ok(StagedArchive {
+            registry: self.registry,
+            temporary: self.temporary,
+        })
+    }
+
+    fn new(parent: &Path) -> Result<Self, StagingError> {
+        Ok(Self {
+            registry: Directory::default(),
+            temporary: PrivateDirectory::create_in(parent)?,
+        })
+    }
+
+    fn write_member(
+        &mut self,
+        entry: &mut AdmittedArchiveEntry<'_>,
+        input: &mut dyn Read,
+        budget: &mut ArchiveBudget,
+    ) -> Result<(), StagingError> {
+        let metadata = entry.metadata();
+        let (parents, leaf) = entry.parts();
+        let (directory, descriptor) = self.registry.descend(
+            &self.temporary.root,
+            parents,
+            Some(budget),
+        )?;
+        let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
+        match metadata.kind {
+            EntryKind::Directory => {
+                entry.copy_to(input, &mut io::sink())?;
+                let _directory = directory.open_child(
+                    parent,
+                    leaf,
+                    DirectoryAdmission::Explicit,
+                )?;
+                Ok(())
+            },
+            EntryKind::File => {
+                let (mut output, node) = directory.create_file(parent, leaf)?;
+                entry.copy_to(input, &mut output)?;
+                node.record_file(&output, metadata.size)
+            },
+            EntryKind::Hardlink | EntryKind::Other | EntryKind::Symlink => {
+                Err(ArchiveError::LinkOrSpecial.into())
+            },
+        }
+    }
+}
+
 /// An incomplete private archive transaction.
 ///
 /// The parent and its ancestors must be trusted host-controlled directories.
@@ -323,8 +381,7 @@ impl Drop for PrivateDirectory {
 struct ArchiveStaging {
     budget: ArchiveBudget,
     failed: bool,
-    registry: Directory,
-    temporary: PrivateDirectory,
+    tree: ArchiveTree,
 }
 
 impl ArchiveStaging {
@@ -332,6 +389,7 @@ impl ArchiveStaging {
     ///
     /// # Errors
     /// Rejects an aborted transaction and discards its partial output.
+    #[cfg(test)]
     fn finish(self) -> Result<StagedArchive, StagingError> {
         self.finish_with(false)
     }
@@ -340,11 +398,7 @@ impl ArchiveStaging {
         if self.failed {
             return Err(StagingError::Aborted);
         }
-        self.temporary.verify_tree(&self.registry, sync)?;
-        Ok(StagedArchive {
-            registry: self.registry,
-            temporary: self.temporary,
-        })
+        self.tree.finish(sync)
     }
 
     /// Create a private temporary directory under a trusted parent.
@@ -354,12 +408,12 @@ impl ArchiveStaging {
     /// # Errors
     /// Rejects parents not owned by the current effective user,
     /// writable-by-others parents, symbolic-link parents and I/O failures.
+    #[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
     fn new(parent: &Path, budget: ArchiveBudget) -> Result<Self, StagingError> {
         Ok(Self {
             budget,
             failed: false,
-            registry: Directory::default(),
-            temporary: PrivateDirectory::create_in(parent)?,
+            tree: ArchiveTree::new(parent)?,
         })
     }
 
@@ -411,34 +465,10 @@ impl ArchiveStaging {
     where
         Source: Read,
     {
-        let StagingEntry { kind, path, size } = metadata;
-        let entry = self.budget.admit(path, kind, size)?;
-        let (parents, leaf) = staging_path(path)?;
-        let (directory, descriptor) = self.registry.descend(
-            &self.temporary.root,
-            parents,
-            Some(&mut self.budget),
-        )?;
-        let parent = descriptor.as_ref().unwrap_or(&self.temporary.root);
-        match kind {
-            EntryKind::Directory => {
-                copy_bounded(input, &mut io::sink(), entry)?;
-                let _directory = directory.open_child(
-                    parent,
-                    leaf,
-                    DirectoryAdmission::Explicit,
-                )?;
-                Ok(())
-            },
-            EntryKind::File => {
-                let (mut output, node) = directory.create_file(parent, leaf)?;
-                copy_bounded(input, &mut output, entry)?;
-                node.record_file(&output, size)
-            },
-            EntryKind::Hardlink | EntryKind::Other | EntryKind::Symlink => {
-                Err(ArchiveError::LinkOrSpecial.into())
-            },
-        }
+        let mut entry = AdmittedArchiveEntry::new(metadata, &mut self.budget)?;
+        self.tree
+            .write_member(&mut entry, input, &mut self.budget)?;
+        entry.finish()
     }
 }
 
@@ -553,7 +583,7 @@ impl CanonicalStaging {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn new(parent: &Path, budget: ArchiveBudget) -> Result<Self, StagingError> {
         let stage = ArchiveStaging::new(parent, budget)?;
-        let pool = pool::SharedPool::open(&stage.temporary)?;
+        let pool = pool::SharedPool::open(&stage.tree.temporary)?;
         Ok(Self {
             #[cfg(test)]
             legacy: false,
@@ -699,22 +729,23 @@ impl StagedArchive {
 }
 
 impl ArchiveFactory for () {
-    fn open_archive(parent: &OsStr, budget: ArchiveBudget) -> OpenArchive {
-        Ok(Box::new(ArchiveStaging::new(Path::new(parent), budget)?))
+    fn open_archive(parent: &OsStr) -> OpenArchive {
+        Ok(Box::new(ArchiveTree::new(Path::new(parent))?))
     }
 }
 
-impl ArchivePort for ArchiveStaging {
+impl ArchivePort for ArchiveTree {
     fn append_member(
         &mut self,
-        metadata: StagingEntry<'_>,
-        mut input: &mut dyn Read,
+        entry: &mut AdmittedArchiveEntry<'_>,
+        input: &mut dyn Read,
+        budget: &mut ArchiveBudget,
     ) -> Result<(), StagingError> {
-        self.write_entry(metadata, &mut input)
+        self.write_member(entry, input, budget)
     }
 
     fn complete(self: Box<Self>) -> CompletedArchive {
-        Ok(Box::new((*self).finish()?))
+        Ok(Box::new((*self).finish(false)?))
     }
 }
 
@@ -799,31 +830,6 @@ fn manifest_size(bytes: &[u8]) -> Result<u64, AssetError> {
 
 fn payload_path(digest: ContentHash) -> String {
     format!("{PAYLOADS_DIRECTORY}/{digest}")
-}
-
-fn copy_bounded<Source, Destination>(
-    input: &mut Source,
-    output: &mut Destination,
-    mut budget: EntryBudget,
-) -> Result<(), StagingError>
-where
-    Source: Read,
-    Destination: Write,
-{
-    let mut buffer = [0; 8192];
-    loop {
-        match input.read(&mut buffer) {
-            Ok(0) => return Ok(budget.finish()?),
-            Ok(count) => {
-                let chunk =
-                    buffer.get(..count).ok_or(ArchiveError::InvalidEntry)?;
-                budget.record(chunk.len())?;
-                output.write_all(chunk)?;
-            },
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
-            Err(error) => return Err(error.into()),
-        }
-    }
 }
 
 fn same_directory(left: &OwnedFd, right: &OwnedFd) -> nix::Result<bool> {
@@ -1102,7 +1108,7 @@ mod tests {
                 member("sprites/empty", EntryKind::Directory, 0),
                 &mut io::empty(),
             )?;
-            let path = stage.temporary.path.clone();
+            let path = stage.tree.temporary.path.clone();
             let original = parent.path.join("original");
             match alteration {
                 "file" => {
@@ -1157,7 +1163,7 @@ mod tests {
             member("asset", EntryKind::File, 4),
             &mut b"tile".as_slice(),
         )?;
-        let named = stage.temporary.path.clone();
+        let named = stage.tree.temporary.path.clone();
         let original = parent.path.join("original");
         fs::rename(&named, &original)?;
         fs::create_dir_all(&named)?;
@@ -1238,7 +1244,7 @@ mod tests {
                 member(first, EntryKind::File, 0),
                 &mut io::empty(),
             )?;
-            let root = stage.temporary.path.clone();
+            let root = stage.tree.temporary.path.clone();
             require(
                 stage.write_entry(
                     member(second, EntryKind::File, 0),
@@ -1263,7 +1269,7 @@ mod tests {
             member("assets", EntryKind::Directory, 0),
             &mut io::empty(),
         )?;
-        let directory = stage.temporary.path.join("assets");
+        let directory = stage.tree.temporary.path.join("assets");
         fs::remove_dir(&directory)?;
         symlink(&outside.path, &directory)?;
         require(
@@ -1277,7 +1283,7 @@ mod tests {
         require(!outside.path.join("escape").exists())?;
         require(matches!(stage.finish(), Err(StagingError::Aborted)))?;
         let mut other = ArchiveStaging::new(&parent.path, budget(8))?;
-        symlink(&sentinel, other.temporary.path.join("output"))?;
+        symlink(&sentinel, other.tree.temporary.path.join("output"))?;
         require(
             other
                 .write_entry(
@@ -1296,7 +1302,7 @@ mod tests {
         let parent = fixture()?;
         for size in [1, 3] {
             let mut stage = ArchiveStaging::new(&parent.path, budget(8))?;
-            let root = stage.temporary.path.clone();
+            let root = stage.tree.temporary.path.clone();
             require(
                 stage
                     .write_entry(
@@ -1341,7 +1347,7 @@ mod tests {
                     .write_entry(member(path, kind, 0), &mut io::empty())
                     .is_err(),
             )?;
-            require(fs::read_dir(&stage.temporary.path)?.count() == 0)?;
+            require(fs::read_dir(&stage.tree.temporary.path)?.count() == 0)?;
             require(matches!(stage.finish(), Err(StagingError::Aborted)))?;
         }
         Ok(())
@@ -1383,7 +1389,7 @@ mod tests {
         let outside = parent.path.join("sentinel");
         fs::write(&outside, b"untouched")?;
         let mut other = ArchiveStaging::new(&parent.path, budget(8))?;
-        fs::hard_link(&outside, other.temporary.path.join("file"))?;
+        fs::hard_link(&outside, other.tree.temporary.path.join("file"))?;
         require(
             other
                 .write_entry(
@@ -1482,7 +1488,7 @@ mod tests {
             let mut stage =
                 CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
             stage.write_payload(digest, b"tile")?;
-            let path = stage.stage.temporary.path.clone();
+            let path = stage.stage.tree.temporary.path.clone();
             let payload = path.join(payload_path(digest));
             let _original = File::open(&payload)?;
             fs::remove_file(&payload)?;
@@ -1523,7 +1529,7 @@ mod tests {
             let mut stage =
                 CanonicalStaging::new_legacy(&parent.path, canonical_budget())?;
             stage.write_payload(digest, b"tile")?;
-            let path = stage.stage.temporary.path.clone();
+            let path = stage.stage.tree.temporary.path.clone();
             if extra.is_empty() {
                 let payload = path.join(payload_path(digest));
                 fs::write(&payload, b"evil")?;
@@ -1633,7 +1639,7 @@ mod tests {
             ),
         ] {
             let mut stage = CanonicalStaging::new_legacy(&parent.path, limits)?;
-            let path = stage.stage.temporary.path.clone();
+            let path = stage.stage.tree.temporary.path.clone();
             require(
                 stage.write_payload(wrong, b"tile")
                     == Err(StagingError::Safety(ArchiveError::TooLarge)),
@@ -1662,7 +1668,7 @@ mod tests {
         );
         let mut stage = CanonicalStaging::new_legacy(&parent.path, limits)?;
         stage.write_payload(digest, b"tile")?;
-        let path = stage.stage.temporary.path.clone();
+        let path = stage.stage.tree.temporary.path.clone();
         require(matches!(
             stage.finish(&manifest, canonical_limits()),
             Err(StagingError::Safety(ArchiveError::TooLarge))

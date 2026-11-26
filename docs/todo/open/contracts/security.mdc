@@ -452,3 +452,15 @@ remain intact. Portable fixtures exercise correct and incorrect completion
 identities, oversized manifests and copy receipts. Fresh native X11 and
 dummy audio validation 1795654917146423573-2410267 passed 1,575 aggregate
 test executions and six portable core checks.
+
+Archive staging now reserves the declared member and admits its portable
+path in the shared IR before dispatch. Its single-use entry reader checks
+actual decoded bytes before writing, requires exact completion and rejects
+a backend result that skipped streaming. The native tree charges implicit
+directories against the same budget and retains descriptor-relative
+creation, metadata verification and cleanup. Portable regressions cover
+unsafe metadata before dispatch, unchanged budget on unsupported paths,
+implicit directory charges, skipped streams, truncation and overrun.
+Fresh native X11 and dummy audio validation
+1795655204639250516-2483599 passed 1,587 aggregate test executions and
+all six portable core checks.

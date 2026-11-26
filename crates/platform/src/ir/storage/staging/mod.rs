@@ -34,10 +34,10 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind, Read, Write};
 
 use games_assets::archive::{
-    ArchiveBudget, ArchiveError, EntryKind, validate_path,
+    ArchiveBudget, ArchiveError, EntryBudget, EntryKind, validate_path,
 };
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 
@@ -101,6 +101,94 @@ pub struct StagingEntry<'path> {
     pub size: u64,
 }
 
+/// One member admitted against the portable archive budget and namespace.
+#[derive(Debug)]
+pub struct AdmittedArchiveEntry<'path> {
+    budget: Option<EntryBudget>,
+    leaf: &'path str,
+    metadata: StagingEntry<'path>,
+    parents: &'path str,
+    verified: bool,
+}
+
+impl<'path> AdmittedArchiveEntry<'path> {
+    /// Stream exactly the reserved byte count without buffering the member.
+    ///
+    /// # Errors
+    /// Rejects truncation, excess decoded bytes and read or write errors.
+    pub fn copy_to(
+        &mut self,
+        input: &mut dyn Read,
+        output: &mut dyn Write,
+    ) -> Result<(), StagingError> {
+        self.verified = false;
+        let mut budget = self.budget.take().ok_or(StagingError::Aborted)?;
+        let mut buffer = [0; 8192];
+        loop {
+            match input.read(&mut buffer) {
+                Ok(0) => {
+                    budget.finish()?;
+                    self.verified = true;
+                    return Ok(());
+                },
+                Ok(count) => {
+                    let chunk = buffer
+                        .get(..count)
+                        .ok_or(ArchiveError::InvalidEntry)?;
+                    budget.record(chunk.len())?;
+                    output.write_all(chunk)?;
+                },
+                Err(error) if error.kind() == ErrorKind::Interrupted => {},
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Require successful exact streaming before accepting the backend result.
+    ///
+    /// # Errors
+    /// Rejects a skipped or unsuccessfully consumed entry.
+    pub fn finish(self) -> Result<(), StagingError> {
+        self.verified
+            .then_some(())
+            .ok_or(StagingError::Safety(ArchiveError::InvalidEntry))
+    }
+
+    /// The admitted entry's original metadata.
+    #[must_use]
+    pub const fn metadata(&self) -> StagingEntry<'path> {
+        self.metadata
+    }
+
+    /// Reserve declared resources before opening the member output.
+    ///
+    /// # Errors
+    /// Rejects unsafe metadata, exhausted budgets and nonportable paths.
+    pub fn new(
+        metadata: StagingEntry<'path>,
+        budget: &mut ArchiveBudget,
+    ) -> Result<Self, StagingError> {
+        let mut available = *budget;
+        let entry =
+            available.admit(metadata.path, metadata.kind, metadata.size)?;
+        let (parents, leaf) = staging_path(metadata.path)?;
+        *budget = available;
+        Ok(Self {
+            budget: Some(entry),
+            leaf,
+            metadata,
+            parents,
+            verified: false,
+        })
+    }
+
+    /// The admitted parent path and final component.
+    #[must_use]
+    pub const fn parts(&self) -> (&'path str, &'path str) {
+        (self.parents, self.leaf)
+    }
+}
+
 /// Publication succeeded; the directory is visible and is not auto-deleted.
 #[derive(Debug)]
 pub struct PublishedDirectory {
@@ -119,14 +207,15 @@ pub(crate) type CompletedArchive =
     Result<Box<dyn CompletedArchivePort>, StagingError>;
 
 pub(crate) trait ArchiveFactory {
-    fn open_archive(parent: &OsStr, budget: ArchiveBudget) -> OpenArchive;
+    fn open_archive(parent: &OsStr) -> OpenArchive;
 }
 
 pub(crate) trait ArchivePort: Debug {
     fn append_member(
         &mut self,
-        metadata: StagingEntry<'_>,
+        entry: &mut AdmittedArchiveEntry<'_>,
         input: &mut dyn Read,
+        budget: &mut ArchiveBudget,
     ) -> Result<(), StagingError>;
 
     fn complete(self: Box<Self>) -> CompletedArchive;
@@ -181,6 +270,7 @@ where
 /// Incomplete private archive transaction, removed on drop.
 #[derive(Debug)]
 pub struct ArchiveStaging {
+    budget: ArchiveBudget,
     transaction: Transaction<dyn ArchivePort>,
 }
 
@@ -207,8 +297,9 @@ impl ArchiveStaging {
         Parent: AsRef<OsStr> + ?Sized,
     {
         Ok(Self {
+            budget,
             transaction: Transaction::new(
-                <() as ArchiveFactory>::open_archive(parent.as_ref(), budget)?,
+                <() as ArchiveFactory>::open_archive(parent.as_ref())?,
             ),
         })
     }
@@ -226,8 +317,12 @@ impl ArchiveStaging {
     where
         Source: Read,
     {
-        self.transaction
-            .apply(|backend| backend.append_member(metadata, input))
+        self.transaction.apply(|backend| {
+            let mut entry =
+                AdmittedArchiveEntry::new(metadata, &mut self.budget)?;
+            backend.append_member(&mut entry, input, &mut self.budget)?;
+            entry.finish()
+        })
     }
 }
 
@@ -569,15 +664,27 @@ mod tests {
     impl ArchivePort for ArchiveFake {
         fn append_member(
             &mut self,
-            metadata: StagingEntry<'_>,
+            entry: &mut AdmittedArchiveEntry<'_>,
             input: &mut dyn Read,
+            budget: &mut ArchiveBudget,
         ) -> Result<(), StagingError> {
-            let mut bytes = [0; 4];
-            if metadata.path != "asset" || metadata.size != 4 {
+            let mut bytes = Vec::new();
+            let metadata = entry.metadata();
+            if metadata.path == "ignore" {
+                return Ok(());
+            }
+            if metadata.size != 4 {
                 return Err(StagingError::UnsupportedPath);
             }
-            input.read_exact(&mut bytes)?;
-            (bytes == *b"tile")
+            match entry.parts() {
+                ("", "asset") => {},
+                ("dir", "asset") => {
+                    budget.admit("dir", EntryKind::Directory, 0)?.finish()?;
+                },
+                _ => return Err(StagingError::UnsupportedPath),
+            }
+            entry.copy_to(input, &mut bytes)?;
+            (bytes == b"tile")
                 .then_some(())
                 .ok_or(StagingError::ChangedStorage)
         }
@@ -704,12 +811,157 @@ mod tests {
         }
     }
 
+    fn archive_fixture() -> ArchiveStaging {
+        let four = NonZeroU64::MIN.saturating_add(3);
+        ArchiveStaging {
+            budget: ArchiveBudget::new(four, four, NonZeroU64::MIN),
+            transaction: Transaction::new(Box::new(ArchiveFake)),
+        }
+    }
+
+    #[test]
+    fn unsupported_archive_path_does_not_charge_the_portable_budget()
+    -> Result<(), StagingError> {
+        let four = NonZeroU64::MIN.saturating_add(3);
+        let initial = ArchiveBudget::new(four, four, NonZeroU64::MIN);
+        let mut budget = initial;
+        let metadata = StagingEntry {
+            kind: EntryKind::File,
+            path: "caf\u{e9}",
+            size: 4,
+        };
+        if AdmittedArchiveEntry::new(metadata, &mut budget).err()
+            != Some(StagingError::UnsupportedPath)
+            || budget != initial
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        let mut entry = AdmittedArchiveEntry::new(
+            StagingEntry {
+                path: "asset",
+                ..metadata
+            },
+            &mut budget,
+        )?;
+        let mut output = Vec::new();
+        entry.copy_to(&mut b"tile".as_slice(), &mut output)?;
+        (entry.finish().is_ok() && output == b"tile")
+            .then_some(())
+            .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn portable_archive_rejects_metadata_before_backend_dispatch()
+    -> Result<(), StagingError> {
+        for (path, kind, size, error) in [
+            ("../escape", EntryKind::File, 4, ArchiveError::UnsafePath),
+            ("asset", EntryKind::Symlink, 4, ArchiveError::LinkOrSpecial),
+            ("asset.exe", EntryKind::File, 4, ArchiveError::Executable),
+            ("asset", EntryKind::File, 5, ArchiveError::TooLarge),
+        ] {
+            let mut stage = archive_fixture();
+            let metadata = StagingEntry { kind, path, size };
+            let mut input = b"tile".as_slice();
+            if stage.write_entry(metadata, &mut input) != Err(error.into())
+                || input != b"tile"
+                || stage.finish().err() != Some(StagingError::Aborted)
+            {
+                return Err(StagingError::ChangedStorage);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn implicit_directories_charge_the_same_archive_budget()
+    -> Result<(), StagingError> {
+        let four = NonZeroU64::MIN.saturating_add(3);
+        let metadata = StagingEntry {
+            kind: EntryKind::File,
+            path: "dir/asset",
+            size: 4,
+        };
+        let mut rejected = archive_fixture();
+        let mut input = b"tile".as_slice();
+        if rejected.write_entry(metadata, &mut input)
+            != Err(ArchiveError::TooLarge.into())
+            || input != b"tile"
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+
+        let mut stage = ArchiveStaging {
+            budget: ArchiveBudget::new(
+                four,
+                four,
+                NonZeroU64::MIN.saturating_add(1),
+            ),
+            transaction: Transaction::new(Box::new(ArchiveFake)),
+        };
+        stage.write_entry(metadata, &mut input)?;
+        let empty = StagingEntry {
+            kind: EntryKind::File,
+            path: "asset",
+            size: 0,
+        };
+        (stage.write_entry(empty, &mut b"".as_slice())
+            == Err(ArchiveError::TooLarge.into()))
+        .then_some(())
+        .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn portable_archive_rejects_a_skipped_backend_stream()
+    -> Result<(), StagingError> {
+        let mut stage = archive_fixture();
+        let metadata = StagingEntry {
+            kind: EntryKind::File,
+            path: "ignore",
+            size: 4,
+        };
+        let mut input = b"tile".as_slice();
+        (stage.write_entry(metadata, &mut input)
+            == Err(ArchiveError::InvalidEntry.into())
+            && input == b"tile"
+            && stage.finish().err() == Some(StagingError::Aborted))
+        .then_some(())
+        .ok_or(StagingError::ChangedStorage)
+    }
+
+    #[test]
+    fn portable_archive_streams_require_exact_size_and_available_budget()
+    -> Result<(), StagingError> {
+        let metadata = StagingEntry {
+            kind: EntryKind::File,
+            path: "asset",
+            size: 4,
+        };
+        for (mut bytes, error) in [
+            (b"til".as_slice(), ArchiveError::InvalidEntry),
+            (b"tiles".as_slice(), ArchiveError::TooLarge),
+        ] {
+            let mut stage = archive_fixture();
+            let result = stage.write_entry(metadata, &mut bytes);
+            if result != Err(error.into())
+                || stage.finish().err() != Some(StagingError::Aborted)
+            {
+                return Err(StagingError::ChangedStorage);
+            }
+        }
+        let mut stage = archive_fixture();
+        stage.write_entry(metadata, &mut b"tile".as_slice())?;
+        let mut input = b"tile".as_slice();
+        (stage.write_entry(metadata, &mut input)
+            == Err(ArchiveError::TooLarge.into())
+            && input == b"tile")
+            .then_some(())
+            .ok_or(StagingError::ChangedStorage)
+    }
+
     #[test]
     fn archive_stream_and_recheck_use_the_selected_port()
     -> Result<(), StagingError> {
-        let mut stage = ArchiveStaging {
-            transaction: Transaction::new(Box::new(ArchiveFake)),
-        };
+        let mut stage = archive_fixture();
         let entry = StagingEntry {
             kind: EntryKind::File,
             path: "asset",

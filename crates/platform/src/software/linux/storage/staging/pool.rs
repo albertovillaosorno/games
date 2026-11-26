@@ -107,7 +107,7 @@ impl SharedPool {
         let maximum = NonZeroU64::new(size).unwrap_or(NonZeroU64::MIN);
         let budget = ArchiveBudget::new(maximum, maximum, NonZeroU64::MIN);
         let mut stage = ArchiveStaging::new(&self.path, budget)?;
-        if !same_directory(&stage.temporary.parent, &self.root)? {
+        if !same_directory(&stage.tree.temporary.parent, &self.root)? {
             return Err(StagingError::ChangedStorage);
         }
         let mut input = bytes;

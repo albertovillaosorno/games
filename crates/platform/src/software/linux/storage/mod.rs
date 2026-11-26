@@ -531,7 +531,7 @@ use crate::ir::storage::staging::{
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl ArchiveFactory for () {
-    fn open_archive(_parent: &OsStr, _budget: ArchiveBudget) -> OpenArchive {
+    fn open_archive(_parent: &OsStr) -> OpenArchive {
         Err(StagingError::Io(io::ErrorKind::Unsupported))
     }
 }
