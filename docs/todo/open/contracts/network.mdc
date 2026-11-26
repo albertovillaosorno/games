@@ -739,3 +739,13 @@ independent client credentials and rejects a mismatched reservation.
 Fresh native smoke and six portable core targets passed in run
 1795653317927704378-1930893 (1,538 aggregate test executions).
 Physical multi-device acceptance remains open.
+
+The native title regression now provisions three independently approved
+client identities and connects all three to one local host over loopback.
+All four stations join the same fixed-step cabinet and move independently.
+Disconnecting the middle remote releases only its held direction; local
+and other remote movement continue, and the same identity rejoins and
+reverses its station. Fresh validation passed in run
+1795653536950945801-1989943 (1,541 aggregate test executions) with native
+rendering, dummy audio and six portable core targets. This does not verify
+separate physical devices, physical controllers or real network partitions.

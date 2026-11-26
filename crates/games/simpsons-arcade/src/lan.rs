@@ -398,7 +398,7 @@ mod tests {
     use games::input::LogicalAction;
     use games::replay::LiveInputLimits;
     use games::timing::StepClock;
-    use games_platform::ir::lan::identity::LocalIdentity;
+    use games_platform::ir::lan::identity::{LocalIdentity, PublicIdentity};
     use games_platform::ir::lan::{ClientTls, LanConfig};
     use games_platform::ir::process::fixtures::{with_worker, yield_execution};
     use rcgen::{
@@ -412,6 +412,7 @@ mod tests {
     };
 
     const HOST: &str = "games.test";
+    type FourStationFixture = (HostLan, [ClientTls; 3]);
 
     fn identity(host: bool) -> IoResult<LocalIdentity> {
         let mut authority = CertificateParams::default();
@@ -686,6 +687,129 @@ mod tests {
         require(
             reversed.position.x < stopped.position.x,
             "same authenticated identity reclaimed its station",
+        )
+    }
+
+    fn three_remote_host() -> IoResult<FourStationFixture> {
+        let server = identity(true)?;
+        let clients = [identity(false)?, identity(false)?, identity(false)?];
+        let approved = clients.each_ref().map(|client| client.public().clone());
+        let tls = server.server_tls(session_config(), &approved)?;
+        let [homer, bart, lisa] =
+            approved.each_ref().map(PublicIdentity::fingerprint);
+        let host =
+            HostLan::bind(SocketAddr::from(([127, 0, 0, 1], 0)), tls, &[
+                None,
+                Some(homer),
+                Some(bart),
+                Some(lisa),
+            ])?;
+        let [first, second, third] = clients;
+        let credentials = [
+            first.client_tls(server.public())?,
+            second.client_tls(server.public())?,
+            third.client_tls(server.public())?,
+        ];
+        Ok((host, credentials))
+    }
+
+    fn join_four_stations(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        clients: [&mut SecureFrameStream; 3],
+    ) -> IoResult<()> {
+        require(
+            live.state().connected_remotes() == [false, true, true, true],
+            "all three approved remote identities admitted",
+        )?;
+        local(live, Control::Start)?;
+        advance(live)?;
+        for client in clients {
+            send(client, host, live, Control::Start)?;
+        }
+        require(
+            live.state()
+                .state()
+                .stations()
+                .into_iter()
+                .all(|station| station.participation == Participation::Playing),
+            "all four stations joined one cabinet",
+        )
+    }
+
+    fn move_four_stations(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        clients: [&mut SecureFrameStream; 3],
+    ) -> IoResult<()> {
+        let [marge, homer, bart, lisa] = live.state().state().stations();
+        local(live, Control::Right)?;
+        advance(live)?;
+        for (client, control) in clients.into_iter().zip([
+            Control::Right,
+            Control::Up,
+            Control::Down,
+        ]) {
+            send(client, host, live, control)?;
+        }
+        let [moving_marge, moving_homer, moving_bart, moving_lisa] =
+            live.state().state().stations();
+        require(
+            moving_marge.position.x > marge.position.x
+                && moving_homer.position.x > homer.position.x
+                && moving_bart.position.y < bart.position.y
+                && moving_lisa.position.y > lisa.position.y,
+            "all four local and remote holds move their assigned stations",
+        )
+    }
+
+    fn lose_middle_station(
+        host: &mut HostLan,
+        live: &mut LiveSimulation<HostedCabinet>,
+        client: SecureFrameStream,
+    ) -> IoResult<()> {
+        drop(client);
+        await_poll(host, live, |_host, state| state.pending_actions() == 1)?;
+        advance(live)?;
+        require(
+            live.state().connected_remotes() == [false, true, false, true],
+            "only the disconnected remote station is offline",
+        )?;
+        let [marge, homer, bart, lisa] = live.state().state().stations();
+        advance(live)?;
+        let [moving_marge, moving_homer, stopped_bart, moving_lisa] =
+            live.state().state().stations();
+        require(
+            moving_marge.position.x > marge.position.x
+                && moving_homer.position.x > homer.position.x
+                && stopped_bart.position == bart.position
+                && moving_lisa.position.y > lisa.position.y,
+            "remote disconnect releases only its own held direction",
+        )
+    }
+
+    #[test]
+    fn real_tls_cabinet_retains_four_independent_stations() -> IoResult<()> {
+        let (mut host, [first, second, third]) = three_remote_host()?;
+        let mut live = live(&host)?;
+        let mut homer = connect(&mut host, &mut live, &first)?;
+        let mut bart = connect(&mut host, &mut live, &second)?;
+        let mut lisa = connect(&mut host, &mut live, &third)?;
+        join_four_stations(&mut host, &mut live, [
+            &mut homer, &mut bart, &mut lisa,
+        ])?;
+        move_four_stations(&mut host, &mut live, [
+            &mut homer, &mut bart, &mut lisa,
+        ])?;
+        lose_middle_station(&mut host, &mut live, bart)?;
+        let [_, _, stopped, _] = live.state().state().stations();
+        let mut rejoined = connect(&mut host, &mut live, &second)?;
+        send(&mut rejoined, &mut host, &mut live, Control::Down)?;
+        let [_, _, reversed, _] = live.state().state().stations();
+        require(
+            live.state().connected_remotes() == [false, true, true, true]
+                && reversed.position.y > stopped.position.y,
+            "same middle identity rejoined without affecting other peers",
         )
     }
 
