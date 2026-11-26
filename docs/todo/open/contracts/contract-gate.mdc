@@ -450,3 +450,11 @@ path requires Git support for `show-ref --exists`. Portable observations
 and an isolated native Git fixture cover the failure cases. Fresh Xvfb/X11
 and dummy-audio validation 1795659416225028052-3521714 passed 1,670
 aggregate test executions and all six portable core checks.
+
+The unified IR gate now rejects private software namespace references
+inside portable IR, including grouped imports, raw identifiers and macro
+paths. Synthetic source and authored-inventory fixtures exercise accepted
+neutral references and rejected concrete software references. The lexical
+policy reserves the private namespace; it is not semantic name resolution.
+Fresh validation 1795661058670401049-4022657 passed 1695 aggregate test
+executions and all six portable core checks.

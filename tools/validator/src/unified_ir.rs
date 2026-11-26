@@ -130,6 +130,15 @@ fn device_source(source: &str) -> Result<(), String> {
     Ok(())
 }
 
+// The private software namespace is reserved within portable IR source.
+// Match identifiers, including raw identifiers, but not string literals.
+fn ir_source(source: &str) -> Result<(), String> {
+    if tokens(source).iter().any(|token| token.text == "software") {
+        return Err(String::from("portable IR may not reference software"));
+    }
+    Ok(())
+}
+
 fn external_members(source: &str) -> BTreeSet<String> {
     let parsed = tokens(source);
     let mut found = BTreeSet::new();
@@ -275,6 +284,8 @@ pub(crate) fn validate(
             device_source(&source)
         } else if name == "crates/platform/src/lib.rs" {
             public_root(&source)
+        } else if name.starts_with("crates/platform/src/ir/") {
+            ir_source(&source)
         } else if name.starts_with("crates/platform/") {
             capability_source(&name, &source)
         } else if name.starts_with("crates/games/")
@@ -298,7 +309,7 @@ mod tests {
 
     use super::{
         capability_source, consumer_source, device_source, external_members,
-        import_boundary, public_root, validate, vendor_free,
+        import_boundary, ir_source, public_root, validate, vendor_free,
     };
     use crate::fixtures::{directory, require};
 
@@ -334,6 +345,50 @@ mod tests {
             require(failure.contains(diagnostic), diagnostic)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn portable_ir_does_not_name_the_private_software_namespace() {
+        for source in [
+            "use crate::software::Host;",
+            "use crate::{ir::Clock, software as backend};",
+            "use super::super::r#software::Selection;",
+            "macro_rules! port { () => { crate::software::open() } }",
+        ] {
+            assert!(ir_source(source).is_err(), "{source}");
+        }
+        for source in [
+            "use crate::ir::hardware::Report;",
+            "use super::hardware::HostEvent;",
+            "fn read() { <() as Clock>::now(); }",
+            "// crate::software::open()",
+            "const QUEUE: &str = \"software\";",
+        ] {
+            assert!(ir_source(source).is_ok(), "{source}");
+        }
+    }
+
+    #[test]
+    fn ir_inventory_rejects_backend_dependency() -> Result<(), String> {
+        let root = directory()?;
+        let parent = "crates/platform/src/ir/clock";
+        root.create_directories(parent)
+            .map_err(|error| error.to_string())?;
+        let name = format!("{parent}/mod.rs");
+        let authored = [OsString::from(&name)];
+        root.write_file(&name, b"use crate::ir::measurement::Clock;")
+            .map_err(|error| error.to_string())?;
+        validate(root.location(), &authored)?;
+        root.write_file(&name, b"pub use crate::software::{Clock, open};")
+            .map_err(|error| error.to_string())?;
+        let failure = validate(root.location(), &authored)
+            .err()
+            .ok_or("accepted a portable IR backend reference")?;
+        require(failure.contains(&name), "missing IR path")?;
+        require(
+            failure.contains("portable IR may not reference software"),
+            "missing IR diagnostic",
+        )
     }
 
     #[test]
