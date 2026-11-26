@@ -40,6 +40,7 @@ use games::input::InputEvent;
 use games::presentation::PresentationLayout;
 
 use crate::ir::frame::RenderError;
+use crate::ir::hardware::keyboard::KeyboardReportError;
 use crate::ir::hardware::{HostEvent, InputSample, InputTransition};
 
 /// Session-relative time and window scope over raw monotonic observations.
@@ -256,6 +257,24 @@ impl ControllerAdmission {
             | HostEvent::Quit => Some(event),
         }
     }
+}
+
+/// Admit an exact boot report before physical protocol dispatch.
+pub(crate) fn admit_boot_keyboard(
+    bytes: &[u8],
+) -> Result<&[u8; 8], KeyboardReportError> {
+    let report: &[u8; 8] = bytes
+        .try_into()
+        .map_err(|_error| KeyboardReportError::Length)?;
+    let [_, _, keys @ ..] = *report;
+    for usage in keys {
+        match usage {
+            1..=3 => return Err(KeyboardReportError::UncertainKeys),
+            224..=231 => return Err(KeyboardReportError::Modifier),
+            _ => {},
+        }
+    }
+    Ok(report)
 }
 
 #[cfg(test)]

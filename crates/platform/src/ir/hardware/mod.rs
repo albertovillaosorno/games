@@ -31,6 +31,9 @@
 
 //! Portable host input and feedback exchange.
 
+/// Portable boot keyboard report capability.
+pub mod keyboard;
+
 use std::time::Duration;
 
 pub use games::capability::{

@@ -23,10 +23,12 @@
 // - Summary:
 //   - Host-independent physical device protocol ownership.
 // - Description:
-//   - No device-specific protocol implementation is admitted yet.
+//   - Physical protocols decode admitted reports without opening devices.
 // - Usage:
 //   - Extend the shared IR and verified protocol fixtures first.
 // - Defaults:
 //   - No device family support is implied.
 
 //! Private owner for physical device-specific protocol implementations.
+
+mod keyboard;
