@@ -44,6 +44,15 @@ pub(super) mod audio;
     feature = "interactive"
 ))]
 pub(super) mod frame_loop;
+#[cfg(any(
+    test,
+    all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "interactive"
+    )
+))]
+mod gamepad;
 
 #[cfg(all(
     target_arch = "wasm32",

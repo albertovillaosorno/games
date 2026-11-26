@@ -27,11 +27,10 @@
 // - Usage:
 //   - Subscribe to a host target, drain samples and route through input IR.
 // - Defaults:
-//   - Ignore unknown keys and autorepeat; no gamepad support.
+//   - Ignore unknown keys, autorepeat and nonstandard controllers.
 
 mod mouse;
 mod pointer;
-
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
@@ -45,6 +44,8 @@ use wasm_bindgen::{JsCast as _, JsValue};
 use web_sys::KeyboardEventInit;
 use web_sys::{Event, EventTarget, KeyboardEvent};
 
+#[cfg(feature = "interactive")]
+use super::gamepad::browser::{Gamepads, Samples};
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::sensor::{MotionError, MotionSensor};
 use crate::ir::hardware::{
@@ -61,6 +62,8 @@ const SCOPE: u64 = 7;
 
 #[derive(Debug)]
 struct BrowserInput {
+    #[cfg(feature = "interactive")]
+    gamepads: Option<Gamepads>,
     scope: u64,
 }
 
@@ -71,6 +74,8 @@ struct EventQueue {
 }
 
 pub(super) struct EventSource {
+    #[cfg(feature = "interactive")]
+    controller_samples: Samples,
     listeners: Vec<Listener>,
     queue: Rc<RefCell<EventQueue>>,
     scope: u64,
@@ -82,8 +87,13 @@ struct Listener {
     target: EventTarget,
 }
 
+#[cfg(feature = "test-fixtures")]
 pub(super) fn browser_input(scope: u64) -> crate::ir::input::InputPort {
-    Box::new(BrowserInput { scope })
+    Box::new(BrowserInput {
+        #[cfg(feature = "interactive")]
+        gamepads: None,
+        scope,
+    })
 }
 
 impl InputBackend for BrowserInput {
@@ -92,10 +102,14 @@ impl InputBackend for BrowserInput {
     }
 
     fn discover_after_drain(&mut self) -> Result<Vec<InputEvent>, RenderError> {
-        Ok(Vec::new())
+        self.discover_available()
     }
 
     fn discover_available(&mut self) -> Result<Vec<InputEvent>, RenderError> {
+        #[cfg(feature = "interactive")]
+        if let Some(gamepads) = &self.gamepads {
+            return gamepads.poll();
+        }
         Ok(Vec::new())
     }
 
@@ -123,6 +137,10 @@ impl InputBackend for BrowserInput {
     }
 
     fn translate(&mut self, sample: &InputSample) -> Option<HostEvent> {
+        #[cfg(feature = "interactive")]
+        if let InputTransition::Disconnected(device) = sample.transition() {
+            return self.gamepads.as_ref()?.remove(device);
+        }
         if let InputTransition::Event(event) = sample.transition() {
             Some(event)
         } else {
@@ -190,6 +208,8 @@ impl EventSource {
         capacity: NonZeroUsize,
     ) -> Result<Self, RenderError> {
         let mut source = Self {
+            #[cfg(feature = "interactive")]
+            controller_samples: Rc::new(RefCell::new(VecDeque::new())),
             listeners: Vec::new(),
             queue: Rc::new(RefCell::new(EventQueue::new(capacity)?)),
             scope,
@@ -244,7 +264,32 @@ impl EventSource {
         Ok(source)
     }
 
+    #[cfg(feature = "interactive")]
+    pub(super) fn input(
+        &self,
+        element: &web_sys::Element,
+        limit: NonZeroUsize,
+    ) -> Result<crate::ir::input::InputPort, RenderError> {
+        if Rc::strong_count(&self.controller_samples) != 1 {
+            return Err(RenderError::Unsupported);
+        }
+        let gamepads = Gamepads::new(
+            element,
+            limit,
+            Rc::clone(&self.controller_samples),
+            self.scope,
+        )?;
+        Ok(Box::new(BrowserInput {
+            gamepads: Some(gamepads),
+            scope: self.scope,
+        }))
+    }
+
     pub(super) fn pop(&self) -> Option<InputSample> {
+        #[cfg(feature = "interactive")]
+        if let Some(sample) = self.controller_samples.borrow_mut().pop_front() {
+            return Some(sample);
+        }
         self.queue.borrow_mut().pop()
     }
 }
@@ -415,11 +460,8 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
     let target = EventTarget::new().map_err(dom_error)?;
     let cap = NonZeroUsize::MIN.saturating_add(1);
     let source = EventSource::new(&target, SCOPE, cap)?;
-    let mut input = InputStartup::new(
-        Box::new(BrowserInput { scope: SCOPE }),
-        NonZeroUsize::MIN,
-    )?
-    .input;
+    let mut input =
+        InputStartup::new(browser_input(SCOPE), NonZeroUsize::MIN)?.input;
     for (code, expected) in [
         ("KeyA", KeyboardKey::LETTER_A),
         ("ArrowLeft", KeyboardKey::LEFT),

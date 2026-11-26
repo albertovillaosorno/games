@@ -45,7 +45,6 @@ use crate::ir::graphics::{
     FrameRun, ResidentScenePort, SceneRun, WindowBackend, WindowPort,
 };
 use crate::ir::input::InputPort;
-use crate::software::web::input::browser_input;
 
 thread_local! {
     static NEXT_SCOPE: Cell<u64> = const { Cell::new(1) };
@@ -54,7 +53,6 @@ thread_local! {
 struct WebGlWindow {
     gl: Gl,
     limits: Limits,
-    scope: u64,
     surface: BrowserSurface,
 }
 
@@ -75,8 +73,8 @@ impl WindowBackend for WebGlWindow {
         }
     }
 
-    fn input(&self, _limit: NonZeroUsize) -> Result<InputPort, RenderError> {
-        Ok(browser_input(self.scope))
+    fn input(&self, limit: NonZeroUsize) -> Result<InputPort, RenderError> {
+        self.surface.input(limit)
     }
 
     fn into_scene(
@@ -151,10 +149,5 @@ pub(in crate::software) fn open_window(
         SurfaceKind::Window,
     )?;
     let _observed = observed_dimensions(&gl, limits, &surface)?;
-    Ok(Box::new(WebGlWindow {
-        gl,
-        limits,
-        scope,
-        surface,
-    }))
+    Ok(Box::new(WebGlWindow { gl, limits, surface }))
 }

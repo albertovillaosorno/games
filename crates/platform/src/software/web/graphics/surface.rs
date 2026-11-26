@@ -156,6 +156,14 @@ impl BrowserSurface {
         &self.document
     }
 
+    #[cfg(feature = "interactive")]
+    pub(super) fn input(
+        &self,
+        limit: NonZeroUsize,
+    ) -> Result<crate::ir::input::InputPort, RenderError> {
+        self.events.input(&self.attached.0, limit)
+    }
+
     pub(super) fn pop(&self) -> Option<InputSample> {
         self.events.pop()
     }

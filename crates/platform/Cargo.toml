@@ -65,6 +65,11 @@ interactive = [
     "web-sys/Blob",
     "web-sys/File",
     "web-sys/FileList",
+    "web-sys/Gamepad",
+    "web-sys/GamepadButton",
+    "web-sys/GamepadEvent",
+    "web-sys/GamepadMappingType",
+    "web-sys/Navigator",
     "web-sys/HtmlInputElement",
 ]
 secure-lan = ["dep:rustls"]

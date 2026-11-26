@@ -42,9 +42,9 @@ use web_sys::{Element, HtmlElement, PointerEvent};
 #[cfg(feature = "test-fixtures")]
 use web_sys::{Event, PointerEventInit};
 
-#[cfg(feature = "test-fixtures")]
-use super::{BrowserInput, SCOPE, dom_error, next_event, verify};
 use super::{EventSource, focus_lost, mouse};
+#[cfg(feature = "test-fixtures")]
+use super::{SCOPE, browser_input, dom_error, next_event, verify};
 use crate::ir::frame::RenderError;
 use crate::ir::hardware::{HostEvent, InputEvent, InputTransition};
 #[cfg(feature = "test-fixtures")]
@@ -255,11 +255,8 @@ pub(super) fn verify_touch_source() -> Result<(), RenderError> {
     let canvas = &surface.0;
     let capacity = NonZeroUsize::MIN.saturating_add(7);
     let source = EventSource::for_element(canvas, SCOPE, capacity)?;
-    let mut input = InputStartup::new(
-        Box::new(BrowserInput { scope: SCOPE }),
-        NonZeroUsize::MIN,
-    )?
-    .input;
+    let mut input =
+        InputStartup::new(browser_input(SCOPE), NonZeroUsize::MIN)?.input;
     input.enable_touch();
     let size = Dimensions::new(
         NonZeroU32::new(360).ok_or(RenderError::InvalidLength)?,
