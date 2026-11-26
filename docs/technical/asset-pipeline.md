@@ -57,8 +57,8 @@ payload inventory. It prints the old-to-current address mapping and
 verified distinct-object counts. Regular sidecars are counted but not
 interpreted or migrated. Preserve the mapping in a private reference
 ledger and account for sidecars and every consumer catalogue before
-cutover. The private migration staging capability is tested with tiny
-fixtures; it does not yet publish a migrated store.
+cutover. The staging capability re-opens every normalized manifest and
+supports no-replace publication of a verified candidate.
 
 Translate explicitly selected catalogue addresses without writing to the
 source file or trusting an externally supplied address map:
@@ -95,10 +95,36 @@ rejected. The tool stages normalized manifests and unique objects,
 re-opens all staged manifests, translates the catalogue and optional
 pose sidecar against that exact map, and invokes the selected authored
 release title's fixed smoke command. It rechecks the store afterward
-and removes both temporary stages on ordinary completion or error.
+and removes the private stage on ordinary completion or error. The
+catalogue resides beside the content and uses relative paths so it
+does not depend on the temporary directory name.
 The caller provides a compatible native graphics and audio environment.
 This is consumer compatibility evidence, not a persistent cutover or
 physical-device acceptance.
+
+Publish the verified candidate to the configured asset root:
+
+```text
+bundle migration-publish TITLE LEGACY_ROOT STORE_ENTRIES STORE_BYTES \
+  MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT TEMPLATE TEMPLATE_BYTES \
+  fields:KEY,... STAGE_ENTRY STAGE_TOTAL STAGE_COUNT last-token \
+  SIDECAR_BYTES [POSE_FILE POSE_BYTES]
+```
+
+The configured title directory must exist, but its assets directory
+must not. Source and output must be disjoint. Every direct regular
+legacy sidecar must use the explicitly selected final-token digest
+schema; malformed or unknown references fail closed. The optional
+active pose catalogue is translated independently. All generated
+metadata shares the candidate's entry and byte budgets. The tool
+publishes the complete stage only after the authored consumer passes,
+then runs the same smoke from the published relative launch catalogue.
+A post-rename sync or smoke failure reports that the directory is
+already visible; do not retry over it. Source files remain unchanged.
+The published launch catalogue is `assets/launch.local`; point the
+authored executable at it using `--config`. Account for other launch
+catalogues and verify retirement separately before removing legacy
+content. This command does not remove or overwrite historical files.
 
 Downloaded originals and tools remain in `.reference/games/` and
 `.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
