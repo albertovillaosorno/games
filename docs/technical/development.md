@@ -133,6 +133,10 @@ cargo run --locked -p games-build -- package-check simpsons-arcade \
 Serve the package directory through a trusted local HTTP server with
 JavaScript and Wasm MIME types; open `index.html` in a compatible browser.
 Select the local canonical assets directory containing `launch.local`.
+Firefox on GNU/Linux has passed this workflow. On the tested Epiphany
+51.2/WebKitGTK 2.54.2 host, the GTK portal offered only file selection
+and supplied no canonical relative paths; use the verified browser
+workflow instead. Directory selection on that host remains unsupported.
 After normal exit or asynchronous launch failure, the packaged status
 region reports the terminal message; reload the page to launch again.
 The catalogue must use `parent=.`, windowed presentation, no native
