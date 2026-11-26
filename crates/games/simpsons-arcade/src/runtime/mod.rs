@@ -407,6 +407,49 @@ impl Controls {
             .map_err(|rejected| failure(rejected.reason))
     }
 
+    fn smoke_event(
+        &self,
+        player: Player,
+        control: Control,
+        down: bool,
+    ) -> Result<InputEvent, RenderError> {
+        let index = CONTROLS
+            .iter()
+            .position(|item| *item == control)
+            .ok_or(RenderError::InvalidSprite)?;
+        let seat = player.index();
+        if let Ok(key) = self.key(player, control) {
+            return Ok(InputEvent::Key { code: key.code(), down });
+        }
+        if let Some(mouse) = self
+            .profiles
+            .mouse
+            .get(seat)
+            .and_then(|buttons| buttons.get(index))
+            .copied()
+            .flatten()
+        {
+            return Ok(InputEvent::Mouse { code: mouse.code(), down });
+        }
+        let device = self
+            .devices
+            .get(seat)
+            .copied()
+            .flatten()
+            .ok_or_else(|| failure("smoke controller not assigned"))?;
+        let button = self
+            .profiles
+            .buttons
+            .get(seat)
+            .and_then(|buttons| buttons.get(index))
+            .ok_or(RenderError::InvalidSprite)?;
+        Ok(InputEvent::Button {
+            device,
+            code: button.code(),
+            down,
+        })
+    }
+
     fn with_panel(
         panel: Option<touch::PanelRole>,
         profiles: &Profiles,
@@ -446,6 +489,25 @@ impl Controls {
             profiles,
             reserved,
         )
+    }
+
+    fn with_smoke_profiles(
+        touch_enabled: bool,
+        profiles: &Profiles,
+    ) -> Result<Self, RenderError> {
+        let mut controls = Self::with_profiles(touch_enabled, profiles)?;
+        for player in Player::ALL {
+            let device = u64::try_from(player.index())
+                .map_err(failure)?
+                .saturating_add(1);
+            if !controls
+                .actions(InputEvent::Attached { device })?
+                .is_empty()
+            {
+                return Err(failure("smoke controller attached with holds"));
+            }
+        }
+        Ok(controls)
     }
 }
 
@@ -2028,7 +2090,7 @@ fn smoke(
     let before = scene
         .readback()
         .map_err(|error| failure(format!("initial readback: {error:?}")))?;
-    let mut controls = Controls::with_profiles(touch_enabled, profiles)?;
+    let mut controls = Controls::with_smoke_profiles(touch_enabled, profiles)?;
     smoke_admission(scene, &mut controls, &mut simulation, touch_enabled)?;
     let _advanced = simulation.advance(TICK_INTERVAL).map_err(failure)?;
     if simulation
@@ -2075,9 +2137,8 @@ fn smoke_special(
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
     for down in [true, false] {
         for control in [Control::Primary, Control::Secondary] {
-            let code = controls.key(Player::Marge, control)?.code();
             controls.route(
-                InputEvent::Key { code, down },
+                controls.smoke_event(Player::Marge, control, down)?,
                 TICK_INTERVAL.saturating_mul(tick),
                 simulation,
             )?;
@@ -2173,7 +2234,7 @@ fn smoke_character_selection(
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
-    let mut controls = Controls::with_profiles(
+    let mut controls = Controls::with_smoke_profiles(
         options.touch_enabled,
         &options.controls.profiles,
     )?;
@@ -2304,7 +2365,7 @@ fn smoke_settings(
 ) -> Result<(), RenderError> {
     let session = LocalSession::with_display(DisplaySettings::default(), false);
     let mut simulation = live_with_session(false, session)?;
-    let mut controls = Controls::with_profiles(
+    let mut controls = Controls::with_smoke_profiles(
         options.touch_enabled,
         &options.controls.profiles,
     )?;
@@ -2378,10 +2439,9 @@ fn smoke_press(
     control: Control,
 ) -> Result<(), RenderError> {
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
-    let code = controls.key(Player::Marge, control)?.code();
     for down in [true, false] {
         controls.route(
-            InputEvent::Key { code, down },
+            controls.smoke_event(Player::Marge, control, down)?,
             TICK_INTERVAL.saturating_mul(tick),
             simulation,
         )?;
@@ -2397,11 +2457,7 @@ fn smoke_admission(
     touch_enabled: bool,
 ) -> Result<(), RenderError> {
     let profiles = controls.profiles;
-    for ((player, keys), touch) in Player::ALL
-        .into_iter()
-        .zip(profiles.keys)
-        .zip(profiles.touch_players)
-    {
+    for (player, touch) in Player::ALL.into_iter().zip(profiles.touch_players) {
         if touch_enabled && touch {
             smoke_touch(
                 scene,
@@ -2411,11 +2467,9 @@ fn smoke_admission(
             )?;
             continue;
         }
-        let [_, start, ..] = keys;
-        let key = start.ok_or(RenderError::InvalidSprite)?;
         for down in [true, false] {
             controls.route(
-                InputEvent::Key { code: key.code(), down },
+                controls.smoke_event(player, Control::Start, down)?,
                 Duration::ZERO,
                 simulation,
             )?;
@@ -2501,10 +2555,7 @@ fn smoke_jump_edge(
 ) -> Result<(), RenderError> {
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
     controls.route(
-        InputEvent::Key {
-            code: controls.key(Player::Marge, Control::Secondary)?.code(),
-            down,
-        },
+        controls.smoke_event(Player::Marge, Control::Secondary, down)?,
         TICK_INTERVAL.saturating_mul(tick),
         simulation,
     )?;
@@ -2621,18 +2672,15 @@ fn smoke_movement_inputs(
     elapsed: Duration,
     rightward: bool,
 ) -> Result<(), RenderError> {
-    for [_, _, _, _, left_binding, right_binding, ..] in controls.profiles.keys
-    {
-        let left = left_binding.ok_or(RenderError::InvalidSprite)?;
-        let right = right_binding.ok_or(RenderError::InvalidSprite)?;
+    for player in Player::ALL {
         let (release, press) = if rightward {
-            (left, right)
+            (Control::Left, Control::Right)
         } else {
-            (right, left)
+            (Control::Right, Control::Left)
         };
-        for (key, down) in [(release, false), (press, true)] {
+        for (control, down) in [(release, false), (press, true)] {
             controls.route(
-                InputEvent::Key { code: key.code(), down },
+                controls.smoke_event(player, control, down)?,
                 elapsed,
                 simulation,
             )?;
@@ -2669,13 +2717,10 @@ fn smoke_poses(
     let _drawn = art.present(scene, simulation.state())?;
     let idle = scene.readback().map_err(failure)?;
     let tick = u32::try_from(simulation.next_tick()).map_err(failure)?;
-    for [_, _, primary, ..] in controls.profiles.keys {
+    for player in Player::ALL {
         for down in [true, false] {
             controls.route(
-                InputEvent::Key {
-                    code: primary.ok_or(RenderError::InvalidSprite)?.code(),
-                    down,
-                },
+                controls.smoke_event(player, Control::Primary, down)?,
                 TICK_INTERVAL.saturating_mul(tick),
                 simulation,
             )?;
@@ -3265,7 +3310,7 @@ mod tests {
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
     use games::input::physical::{
-        ControllerAxis, ControllerButton, KeyboardKey,
+        ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
     };
     use games::input::profile::editor::EditorNavigation;
     use games::input::{InputEvent, LogicalAction};
@@ -3281,7 +3326,7 @@ mod tests {
     };
 
     use super::{
-        Action, Cabinet, Control, Controls, DEFAULT_PROFILES, KEYS,
+        Action, CONTROLS, Cabinet, Control, Controls, DEFAULT_PROFILES, KEYS,
         LiveInputLimits, NativeBatch, OptionalSources, Phase, Player, Profiles,
         Sources, Station, StepClock, StreetLayout, TICK_INTERVAL,
         configured_profiles, dimension, failure, frame_due, live, poses,
@@ -3800,6 +3845,49 @@ mod tests {
     }
 
     #[test]
+    fn smoke_inputs_route_admitted_mixed_bindings_for_all_stations()
+    -> Result<(), RenderError> {
+        let profiles = configured_profiles(concat!(
+            "version=1\nkey 1 primary=none\nkey 1 secondary=none\n",
+            "key 2 start=none\nbutton 2 start=y\n",
+            "key 3 left=none\nkey 4 right=none\n",
+        ))
+        .map_err(failure)?;
+        let mut controls = Controls::with_smoke_profiles(false, &profiles)?;
+        if controls.smoke_event(Player::Marge, Control::Primary, true)?
+            != (InputEvent::Mouse {
+                code: PointerButton::Left.code(),
+                down: true,
+            })
+            || !matches!(
+                controls.smoke_event(Player::Homer, Control::Start, true)?,
+                InputEvent::Button { code, down: true, .. }
+                    if code == ControllerButton::North.code()
+            )
+        {
+            return Err(failure("smoke ignored a configured fallback"));
+        }
+        let bindings = Player::ALL
+            .into_iter()
+            .flat_map(|player| CONTROLS.map(|control| (player, control)))
+            .flat_map(|(player, control)| {
+                [true, false].map(|down| (player, control, down))
+            });
+        for (player, control, down) in bindings {
+            let event = controls.smoke_event(player, control, down)?;
+            if controls.actions(event)?
+                != [LogicalAction {
+                    action: Action { control, player },
+                    down,
+                }]
+            {
+                return Err(failure("smoke routed the wrong binding"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn desktop_defaults_join_one_player_and_attack_with_mouse()
     -> Result<(), RenderError> {
         let mut simulation = live(false)?;
@@ -3815,7 +3903,7 @@ mod tests {
         }
         for down in [true, false] {
             route_now(&mut controls, &mut simulation, InputEvent::Mouse {
-                code: super::PointerButton::Left.code(),
+                code: PointerButton::Left.code(),
                 down,
             })?;
         }

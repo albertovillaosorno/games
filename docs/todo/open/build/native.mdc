@@ -942,3 +942,29 @@ sessions exited normally. The package receipt remained unchanged.
 Debugger stops affected the measured frame intervals; these runs do not
 establish performance, physical gamepad input, haptics or device-specific
 mapping. No owner settings, display or physical devices were accessed.
+
+The retained package rejected hidden smoke with `InvalidSprite` when a
+valid profile cleared several keyboard bindings. The smoke had assumed
+that every tested action had a key, even when the live profile routed
+that action through a mouse or controller. The smoke now uses the
+configured key, mapped mouse button or assigned synthetic controller
+button through the same input router. Touch admission and the separate
+signed-axis checks retain their existing paths. An inline regression
+checks both edges of all eight controls on all four stations and the
+configured mouse and controller fallbacks.
+
+Fresh validation 1795703315914590848-3568711 passed with 1,961 test
+executions. The rebuilt package verified 109 files and 4,150,657 bytes;
+its receipt SHA-256 is
+`07304d9aa235e67b597b1e20d1d380a414190f9f701a6c3181f7a934d35f11ae`.
+The exact previously rejected mixed profile passed actor-only smoke
+from an unrelated working directory. With the complete configured
+catalogue, the same profile passed adaptive touch smoke, and a profile
+with every gameplay key and mouse binding cleared (retaining Escape)
+passed without touch. Both complete runs verified 106 added scene
+columns, 444 camera columns, 48 signed axis directions, two cooperative
+pose families and six reinforcement meters. All 1,840 movement and
+combat submissions met the 16.667 ms work budget (maximum 5.841 ms).
+The private settings directory remained empty throughout. These are
+hidden X11/OpenGL checks with upstream SDL2 and dummy audio, not new
+physical-device evidence. The configured catalogue was read only.

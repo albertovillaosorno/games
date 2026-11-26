@@ -279,7 +279,7 @@ pub(super) fn smoke(
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
     let mut simulation = live(false)?;
-    let mut controls = Controls::with_profiles(
+    let mut controls = Controls::with_smoke_profiles(
         art.panel.is_some(),
         &options.controls.profiles,
     )?;
