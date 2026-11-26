@@ -2837,3 +2837,28 @@ performance comparison. Physical input, audible output, visible desktop
 behaviour and full gameplay parity remain open. Fresh native validation
 1795657228495677731-2999073 passed 1,634 aggregate test executions and
 all six portable core checks.
+
+The 3,484,280-byte optimized Linux preview at 38834aa passed the
+original-backed 218-pose selection after window, playback, storage,
+render callback and touch admission changes. Six NVIDIA EGL/OpenGL ES
+dummy-audio runs passed adaptive, aspect-fit, integer and stretch with
+touch, fill without touch, and fullscreen adaptive with touch. Fill
+with touch rejected startup. Each passed 600 movement and 20 combat
+submissions, six reinforcement meters, cooperative and restraint
+recovery checks, with zero host-work budget misses. Whole-smoke peak
+RSS ranged from 100,540,416 to 101,588,992 bytes.
+
+A separate visible Xvfb/Xfwm4 run with synthetic WASD, Space and mouse
+input used SDL PipeWire (only Dummy Output was enumerated). Resizing
+from 960 by 672 to 1200 by 672 extended the adaptive logical scene from
+320 by 224 to 400 by 224. Window-manager observations confirmed
+desktop fullscreen and subsequent windowed mode. Pause, settings,
+resume, menu return and re-entry completed normally. An isolated
+settings directory retained aspect-fit, windowed and 75 percent master
+volume; a second launch without display overrides reported aspect-fit
+and left both saved files byte-identical. The wide virtual-display
+segment had two 16.667 ms host-work budget misses. These are synthetic
+observations, not physical input, display or audible playback
+acceptance. Fresh native-enabled workspace validation
+1795659161981143416-3455725 passed 1,664 aggregate test executions and
+six portable core checks.
