@@ -33,6 +33,8 @@
 
 //! Bounded, reusable portable digital input profiles.
 
+mod encode;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::AxisBinding;
@@ -118,6 +120,22 @@ impl AxisProfile {
 pub type ControllerAxes<Action> = BTreeMap<u16, AxisBinding<Action>>;
 /// Adapter-provided resolution of a persisted physical keyboard name.
 pub type KeyResolver = fn(&str) -> Option<KeyboardKey>;
+
+/// Adapter-provided canonical name of a physical keyboard key.
+pub type KeyNamer = fn(KeyboardKey) -> &'static str;
+
+/// A selected action's editable digital binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DigitalBinding {
+    /// Assign a gamepad button, swapping an occupied same-seat button.
+    Button(ControllerButton),
+    /// Assign or clear a globally unique keyboard key.
+    Key(Option<KeyboardKey>),
+    /// Assign or clear a globally unique physical pointer button.
+    Mouse(Option<PointerButton>),
+    /// Move to a physical touch slot, swapping the occupied slot.
+    TouchSlot(usize),
+}
 
 /// Digital bindings in title-supplied station and action order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -224,6 +242,68 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         }
         self.validate()?;
         Ok(self)
+    }
+
+    /// Return an edited copy, retaining all other bindings and assignments.
+    ///
+    /// Controller buttons and touch slots swap within the selected station
+    /// when occupied. Keyboard and mouse collisions are rejected.
+    /// # Errors
+    /// Rejects unknown stations, actions or slots and ambiguous profiles.
+    pub fn edited(
+        &self,
+        station: usize,
+        action: usize,
+        binding: DigitalBinding,
+    ) -> Result<Self, String> {
+        self.validate()?;
+        let invalid = || String::from("invalid control edit");
+        let mut candidate = *self;
+        match binding {
+            DigitalBinding::Button(button) => {
+                let row =
+                    candidate.buttons.get_mut(station).ok_or_else(invalid)?;
+                swap_binding(row, action, button)?;
+            },
+            DigitalBinding::Key(key) => {
+                *candidate
+                    .keys
+                    .get_mut(station)
+                    .and_then(|row| row.get_mut(action))
+                    .ok_or_else(invalid)? = key;
+            },
+            DigitalBinding::Mouse(mouse) => {
+                *candidate
+                    .mouse
+                    .get_mut(station)
+                    .and_then(|row| row.get_mut(action))
+                    .ok_or_else(invalid)? = mouse;
+            },
+            DigitalBinding::TouchSlot(slot) => {
+                let row = candidate
+                    .touch_slots
+                    .get_mut(station)
+                    .ok_or_else(invalid)?;
+                swap_binding(row, action, slot)?;
+            },
+        }
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
+    /// Encode all bindings using the version-one persisted profile format.
+    ///
+    /// The existing decoder must recover the identical profile using the
+    /// supplied physical key name resolver. The byte budget is caller-owned.
+    /// # Errors
+    /// Rejects invalid, unrepresentable or over-budget mappings.
+    pub fn encoded(
+        &self,
+        actions: [&str; ACTIONS],
+        maximum: usize,
+        key_names: (KeyNamer, KeyResolver),
+    ) -> Result<String, String> {
+        encode::encode(self, actions, maximum, key_names)
     }
 
     fn override_binding(
@@ -352,6 +432,26 @@ enum Kind {
 }
 
 type Record<'text> = (Kind, usize, usize, &'text str);
+
+fn swap_binding<Value>(
+    row: &mut [Value],
+    action: usize,
+    binding: Value,
+) -> Result<(), String>
+where
+    Value: Copy + Eq,
+{
+    let invalid = || String::from("invalid control edit");
+    if row.get(action).is_none() {
+        return Err(invalid());
+    }
+    if let Some(other) = row.iter().position(|value| *value == binding) {
+        row.swap(action, other);
+    } else {
+        *row.get_mut(action).ok_or_else(invalid)? = binding;
+    }
+    Ok(())
+}
 
 fn touch_selection(line: &str, selected: bool) -> Result<Option<&str>, String> {
     if let Some(value) = line.strip_prefix("touch-player=") {
@@ -634,6 +734,90 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn edited_profiles_preserve_other_bindings_and_reject_conflicts()
+    -> Result<(), String> {
+        let edited = DEFAULT
+            .edited(0, 0, DigitalBinding::Button(ControllerButton::East))?
+            .edited(1, 0, DigitalBinding::TouchSlot(1))?
+            .edited(0, 1, DigitalBinding::Key(None))?
+            .edited(1, 1, DigitalBinding::Mouse(Some(PointerButton::Left)))?;
+        let expected = DigitalProfiles {
+            buttons: [[ControllerButton::East, ControllerButton::South], [
+                ControllerButton::South,
+                ControllerButton::East,
+            ]],
+            keys: [[Some(KeyboardKey::LETTER_A), None], [
+                Some(KeyboardKey::LETTER_C),
+                Some(KeyboardKey::LETTER_D),
+            ]],
+            mouse: [[None, None], [None, Some(PointerButton::Left)]],
+            touch_slots: [[0, 1], [1, 0]],
+            ..DEFAULT
+        };
+        if edited != expected {
+            return Err(String::from("unrelated bindings changed"));
+        }
+        for result in [
+            edited.edited(
+                0,
+                0,
+                DigitalBinding::Key(Some(KeyboardKey::LETTER_C)),
+            ),
+            edited.edited(
+                0,
+                0,
+                DigitalBinding::Mouse(Some(PointerButton::Left)),
+            ),
+            edited.edited(2, 0, DigitalBinding::Key(None)),
+            edited.edited(0, 2, DigitalBinding::Key(None)),
+            edited.edited(1, 0, DigitalBinding::TouchSlot(2)),
+        ] {
+            if result.is_ok() {
+                return Err(String::from("invalid edit accepted"));
+            }
+        }
+        Ok(())
+    }
+
+    fn key_name(key: KeyboardKey) -> &'static str {
+        key.profile_name().unwrap_or("unknown")
+    }
+
+    #[test]
+    fn complete_encoding_round_trips_every_profile_field_and_budget()
+    -> Result<(), String> {
+        let profiles = configure(concat!(
+            "version=1\nkey 1 primary=Q\nkey 2 secondary=none\n",
+            "mouse 1 primary=left\nmouse 2 secondary=right\n",
+            "button 2 primary=x\ntouch-players=2,1\n",
+            "touch 2 primary=secondary\ntouch 2 secondary=primary\n",
+            "axis 2 rightx=secondary/primary\n",
+            "axis-threshold 2 rightx=20000/5000\n",
+            "axis 2 lefttrigger=none/primary\n",
+        ))?;
+        let encoded =
+            profiles.encoded(ACTIONS, 8192, (key_name, resolve_key))?;
+        if configure(&encoded) != Ok(profiles)
+            || profiles.encoded(
+                ACTIONS,
+                encoded.len(),
+                (key_name, resolve_key),
+            )? != encoded
+            || profiles
+                .encoded(ACTIONS, encoded.len() - 1, (key_name, resolve_key))
+                .is_ok()
+            || profiles
+                .encoded(ACTIONS, 8192, (|_key| "unknown", resolve_key))
+                .is_ok()
+        {
+            return Err(String::from(
+                "profile encoding failed round-trip or bounds",
+            ));
+        }
+        Ok(())
     }
 
     #[test]

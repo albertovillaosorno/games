@@ -469,6 +469,10 @@ pub enum PointerButton {
 }
 
 impl PointerButton {
+    /// All admitted physical pointer buttons.
+    pub const ALL: [Self; 5] =
+        [Self::Left, Self::Middle, Self::Right, Self::X1, Self::X2];
+
     /// Stable routing code.
     #[must_use]
     pub const fn code(self) -> u8 {
@@ -484,13 +488,20 @@ impl PointerButton {
     /// Resolve a version-one pointer profile name.
     #[must_use]
     pub fn from_profile_name(name: &str) -> Option<Self> {
-        match name {
-            "left" => Some(Self::Left),
-            "middle" => Some(Self::Middle),
-            "right" => Some(Self::Right),
-            "x1" => Some(Self::X1),
-            "x2" => Some(Self::X2),
-            _ => None,
+        Self::ALL
+            .into_iter()
+            .find(|button| button.profile_name() == name)
+    }
+
+    /// Stable version-one pointer profile name.
+    #[must_use]
+    pub const fn profile_name(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Middle => "middle",
+            Self::Right => "right",
+            Self::X1 => "x1",
+            Self::X2 => "x2",
         }
     }
 }
