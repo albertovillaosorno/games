@@ -33,7 +33,7 @@
 
 use std::cell::Cell;
 
-use games::presentation::{Dimensions, PresentationLayout, PresentationMode};
+use games::presentation::{Dimensions, PresentationLayout};
 
 use crate::ir::frame::{
     AdmittedRgba, FrameLayout, RenderError, validate_rectangle,
@@ -139,15 +139,17 @@ pub(crate) struct PresentationAdmission {
 }
 
 impl PresentationAdmission {
-    pub(crate) fn complete(
+    pub(crate) fn complete<Expected>(
         &self,
         receipt: Option<PresentationLayout>,
-        layout: FrameLayout,
-        mode: PresentationMode,
-    ) -> Result<bool, RenderError> {
+        expected: Expected,
+    ) -> Result<bool, RenderError>
+    where
+        Expected: FnOnce(Dimensions) -> Result<PresentationLayout, RenderError>,
+    {
         self.invalidate();
         if let Some(presented) = receipt
-            && presented != layout.presentation(mode, presented.surface)?
+            && presented != expected(presented.surface)?
         {
             return Err(RenderError::InvalidDimensions);
         }

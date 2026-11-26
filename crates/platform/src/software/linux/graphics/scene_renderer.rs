@@ -32,6 +32,7 @@
 //! Ordered native sprite composition over persistent texture atlases.
 
 use std::fmt::{self, Debug, Formatter};
+use std::num::NonZeroU32;
 
 use games::presentation::{
     Dimensions, DisplaySettings, PresentationLayout, PresentationMode,
@@ -108,6 +109,12 @@ impl<'texture, Context> Atlases<'texture, Context> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ScenePresentation {
+    background: [u8; 3],
+    protected_bottom: Option<NonZeroU32>,
+}
+
 pub(super) struct SceneTextures<'texture, Context> {
     atlases: Atlases<'texture, Context>,
     layout: FrameLayout,
@@ -119,15 +126,24 @@ impl<'texture, Context> SceneTextures<'texture, Context> {
     fn draw<Target>(
         &mut self,
         canvas: &mut Canvas<Target>,
-        background: [u8; 3],
+        presentation: ScenePresentation,
         admitted: AdmittedDraws<'_>,
     ) -> Result<Option<PresentationLayout>, RenderError>
     where
         Target: RenderTarget,
     {
+        let ScenePresentation {
+            background,
+            protected_bottom,
+        } = presentation;
         let sprites = admitted.as_slice();
         self.atlases.validate(sprites)?;
-        let Some(drawable) = drawable_viewport(canvas, self.layout, self.mode)?
+        let Some(drawable) = drawable_viewport(
+            canvas,
+            self.layout,
+            self.mode,
+            protected_bottom,
+        )?
         else {
             return Ok(None);
         };
@@ -271,12 +287,20 @@ impl SceneBackend for LinuxScene<'_, '_> {
         &mut self,
         background: [u8; 3],
         sprites: AdmittedDraws<'_>,
+        protected_bottom: Option<NonZeroU32>,
     ) -> Result<Option<PresentationLayout>, RenderError> {
         if !self.drawable_available() {
             self.textures.atlases.validate(sprites.as_slice())?;
             return Ok(None);
         }
-        let drawable = self.textures.draw(self.canvas, background, sprites)?;
+        let drawable = self.textures.draw(
+            self.canvas,
+            ScenePresentation {
+                background,
+                protected_bottom,
+            },
+            sprites,
+        )?;
         if drawable.is_some() {
             self.canvas.present();
         }
@@ -421,8 +445,8 @@ mod tests {
     use sdl2::surface::{Surface, SurfaceContext};
 
     use super::{
-        Atlases, FrameLayout, RenderError, SceneTextures, SpriteDraw,
-        SpriteRect, native_rectangle,
+        Atlases, FrameLayout, RenderError, ScenePresentation, SceneTextures,
+        SpriteDraw, SpriteRect, native_rectangle,
     };
     use crate::ir::frame::AdaptiveWidthRequest;
     use crate::ir::scene::{AtlasId, SceneLimits};
@@ -521,9 +545,62 @@ mod tests {
     }
 
     #[test]
+    fn protected_fill_crops_upper_scene_but_draws_all_panel_pixels()
+    -> Result<(), RenderError> {
+        let mut canvas = Surface::new(8, 4, PixelFormatEnum::RGBA32)
+            .map_err(RenderError::Backend)?
+            .into_canvas()
+            .map_err(RenderError::Backend)?;
+        let creator = canvas.texture_creator();
+        let design = FrameLayout::new(nz(4), nz(4), budget(64))?;
+        let mut scene =
+            SceneTextures::new(&creator, design, PresentationMode::Fill)?;
+        let mut admission = SceneAdmission::new(SceneLimits {
+            atlas_bytes: budget(64),
+            atlases: budget(1),
+            sprites: budget(1),
+        });
+        let pixels = [[RED; 4], [GREEN; 4], [BLUE; 4], [RED, GREEN, BLUE, RED]];
+        let atlas = admission.load(
+            design,
+            pixels.as_flattened().as_flattened(),
+            |upload| scene.atlases.load(upload),
+        )?;
+        let sprite = SpriteDraw {
+            atlas,
+            destination: rect(0, 0, 4, 4),
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rect(0, 0, 4, 4),
+        };
+        let receipt = scene.draw(
+            &mut canvas,
+            ScenePresentation {
+                protected_bottom: Some(nz(1)),
+                ..ScenePresentation::default()
+            },
+            admission.draws(&[sprite])?,
+        )?;
+        let expected = design.presentation_with_protected_bottom(
+            PresentationMode::Fill,
+            Dimensions::new(nz(8), nz(4)),
+            Some(nz(1)),
+        )?;
+        require(receipt == Some(expected), "incorrect protected receipt")?;
+        let expected_pixels = [[GREEN; 8], [GREEN; 8], [GREEN; 8], [
+            BLACK, BLACK, RED, GREEN, BLUE, RED, BLACK, BLACK,
+        ]];
+        require(
+            read(&canvas)? == expected_pixels.as_flattened().as_flattened(),
+            "crop or protected pixel mismatch",
+        )
+    }
+
+    #[test]
     fn adaptive_target_changes_extent_and_preserves_atlases()
     -> Result<(), RenderError> {
         let mut canvas = canvas()?;
+        let display = ScenePresentation::default();
         let creator = canvas.texture_creator();
         let base = layout()?;
         let maximum = FrameLayout::new(nz(6), nz(2), budget(48))?;
@@ -541,7 +618,7 @@ mod tests {
             ..sprite
         };
         require(
-            scene.draw(&mut canvas, [0; 3], admission.draws(&[edge])?)?
+            scene.draw(&mut canvas, display, admission.draws(&[edge])?)?
                 == Some(PresentationMode::Adaptive.layout(
                     Dimensions::new(nz(4), nz(2)),
                     Dimensions::new(nz(6), nz(2)),
@@ -569,7 +646,7 @@ mod tests {
         require(scene.layout == base, "base not restored")?;
         require(
             scene
-                .draw(&mut canvas, [0; 3], admission.draws(&[sprite])?)?
+                .draw(&mut canvas, display, admission.draws(&[sprite])?)?
                 .is_some(),
             "atlas lost",
         )?;
@@ -627,7 +704,11 @@ mod tests {
         let [base, overlay] = commands(&mut admission, &mut scene.atlases)?;
         require(
             scene
-                .draw(&mut canvas, [0; 3], admission.draws(&[base, overlay])?)?
+                .draw(
+                    &mut canvas,
+                    ScenePresentation::default(),
+                    admission.draws(&[base, overlay])?,
+                )?
                 .is_some(),
             "scene not drawn",
         )?;
@@ -647,7 +728,11 @@ mod tests {
         };
         require(
             scene
-                .draw(&mut canvas, [0; 3], admission.draws(&[clipped])?)?
+                .draw(
+                    &mut canvas,
+                    ScenePresentation::default(),
+                    admission.draws(&[clipped])?,
+                )?
                 .is_some(),
             "clipped scene not drawn",
         )?;
@@ -662,6 +747,7 @@ mod tests {
     #[test]
     fn invalid_commands_preserve_the_display() -> Result<(), RenderError> {
         let mut canvas = canvas()?;
+        let display = ScenePresentation::default();
         let creator = canvas.texture_creator();
         let mut scene = SceneTextures::new(
             &creator,
@@ -672,7 +758,7 @@ mod tests {
         let [base, overlay] = commands(&mut admission, &mut scene.atlases)?;
         require(
             scene
-                .draw(&mut canvas, [0; 3], admission.draws(&[base, overlay])?)?
+                .draw(&mut canvas, display, admission.draws(&[base, overlay])?)?
                 .is_some(),
             "scene not drawn",
         )?;
@@ -682,18 +768,16 @@ mod tests {
             ..base
         };
         require(
-            admission
-                .draws(&[base, invalid])
-                .and_then(|admitted| scene.draw(&mut canvas, [0; 3], admitted))
-                == Err(RenderError::InvalidSprite),
+            admission.draws(&[base, invalid]).and_then(|admitted| {
+                scene.draw(&mut canvas, display, admitted)
+            }) == Err(RenderError::InvalidSprite),
             "invalid source accepted",
         )?;
         let oversized = [base, base, overlay];
         require(
-            admission
-                .draws(&oversized)
-                .and_then(|admitted| scene.draw(&mut canvas, [0; 3], admitted))
-                == Err(RenderError::TooLarge),
+            admission.draws(&oversized).and_then(|admitted| {
+                scene.draw(&mut canvas, display, admitted)
+            }) == Err(RenderError::TooLarge),
             "command limit exceeded",
         )?;
         let invalid_native = SpriteDraw {
@@ -703,7 +787,9 @@ mod tests {
         require(
             admission
                 .draws(&[base, invalid_native])
-                .and_then(|admitted| scene.draw(&mut canvas, [0; 3], admitted))
+                .and_then(|admitted| {
+                    scene.draw(&mut canvas, display, admitted)
+                })
                 == Err(RenderError::InvalidSprite),
             "portable coordinate overflow accepted",
         )?;

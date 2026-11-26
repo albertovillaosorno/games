@@ -92,7 +92,7 @@ transforms. Touch projection uses the same rendered source and destination,
 including a logical-to-surface inverse used by synthetic contact smoke.
 Adaptive world extension, responsive HUD, high-DPI hardware, independent
 touch overlays, automatic settings persistence and remapping remain open.
-The current title rejects fill with its fixed touch panel to avoid
+The title initially rejected fill with its fixed touch panel to avoid
 cropping essential controls.
 
 The native digital profile parser now admits bounded per-station keyboard
@@ -354,3 +354,23 @@ clears contacts, and closing the editor requires fresh contacts
 before gameplay can receive input again. Inline regressions verify
 all remapped touch regions, duplicate and post-release taps, bounded
 admission and rejection of stale motion after editor exit.
+
+On 2026-11-26 Fill became available with touch, including an explicit
+launch override, stored display preference and the in-game settings
+cycle. The portable presentation reserves a proportional bottom strip,
+crops only the upper scene and fits the complete control strip without
+cropping. The same admitted two-region receipt governs both native
+texture copies and forward/inverse touch projection. Settings menus
+retain whole-frame aspect-fit; a one-row drawable falls back to fit.
+Geometry changes invalidate the receipt before accepting new contacts.
+Inline tests cover wide, portrait and tiny geometry, touch round trips,
+panel bars, crop and panel pixel output, and receipt invalidation.
+Fresh validation passed in run 1795674419306414554-2246802.
+The rebuilt release passed hidden OpenGL smoke with `--touch --display
+fill`, in windowed and requested fullscreen modes, using the owner's
+existing local catalogue and dummy audio. All three runs reported a
+1280x912 drawable with the complete 960x240 panel at (160,672), including
+the Xvfb displays of 1920x1080 and 720x1280. They verified menu selection,
+synthetic touch admission and movement, 600 four-player submissions,
+controller axes and original-media combat smoke. This is not physical
+touch, high-DPI or actual wide/portrait fullscreen drawable acceptance.

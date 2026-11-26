@@ -314,13 +314,16 @@ where
 {
     canvas.set_draw_color(Color::RGB(0, 0, 0));
     canvas.clear();
-    canvas
-        .copy(
-            texture,
-            native_rect(layout.source)?,
-            native_rect(layout.destination)?,
-        )
-        .map_err(RenderError::Backend)
+    for region in layout.regions().into_iter().flatten() {
+        canvas
+            .copy(
+                texture,
+                native_rect(region.source)?,
+                native_rect(region.destination)?,
+            )
+            .map_err(RenderError::Backend)?;
+    }
+    Ok(())
 }
 
 fn create_texture<Context>(
@@ -352,7 +355,7 @@ where
     if frame.layout() != layout {
         return Err(RenderError::InvalidDimensions);
     }
-    let Some(drawable) = drawable_viewport(canvas, layout, mode)? else {
+    let Some(drawable) = drawable_viewport(canvas, layout, mode, None)? else {
         return Ok(false);
     };
     texture
@@ -374,12 +377,19 @@ fn drawable_viewport<Target>(
     canvas: &Canvas<Target>,
     layout: FrameLayout,
     mode: PresentationMode,
+    protected_bottom: Option<NonZeroU32>,
 ) -> Result<Option<PresentationLayout>, RenderError>
 where
     Target: RenderTarget,
 {
     output_dimensions(canvas)?
-        .map(|surface| layout.presentation(mode, surface))
+        .map(|surface| {
+            layout.presentation_with_protected_bottom(
+                mode,
+                surface,
+                protected_bottom,
+            )
+        })
         .transpose()
 }
 

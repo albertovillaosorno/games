@@ -35,7 +35,10 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
-use crate::presentation::{PresentationLayout, Viewport, centered_expansion};
+use crate::presentation::{
+    Dimensions, PresentationLayout, PresentationRegion, Viewport,
+    centered_expansion,
+};
 
 /// A position in the normalized control surface, inclusive at both edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,25 +74,14 @@ impl TouchPoint {
     /// retains its position within the complete logical frame.
     #[must_use]
     pub fn in_presentation(self, layout: PresentationLayout) -> Option<Self> {
-        let relative = self.in_viewport(
-            layout.destination,
-            layout.surface.width,
-            layout.surface.height,
-        )?;
-        Some(Self {
-            x: source_axis(
-                relative.x,
-                layout.source.x,
-                layout.source.width,
-                layout.design.width,
-            )?,
-            y: source_axis(
-                relative.y,
-                layout.source.y,
-                layout.source.height,
-                layout.design.height,
-            )?,
-        })
+        layout
+            .regions()
+            .into_iter()
+            .rev()
+            .flatten()
+            .find_map(|region| {
+                self.through_region(region, layout.surface, layout.design)
+            })
     }
 
     /// Project surface-normalized coordinates into a fitted viewport.
@@ -135,11 +127,47 @@ impl TouchPoint {
     /// Returns None for cropped-out content or invalid geometry.
     #[must_use]
     pub fn on_presentation(self, layout: PresentationLayout) -> Option<Self> {
-        self.in_presentation(PresentationLayout {
-            design: layout.surface,
-            destination: layout.source,
-            source: layout.destination,
-            surface: layout.design,
+        layout
+            .regions()
+            .into_iter()
+            .rev()
+            .flatten()
+            .find_map(|region| {
+                self.through_region(
+                    PresentationRegion {
+                        destination: region.source,
+                        source: region.destination,
+                    },
+                    layout.design,
+                    layout.surface,
+                )
+            })
+    }
+
+    fn through_region(
+        self,
+        region: PresentationRegion,
+        surface: Dimensions,
+        design: Dimensions,
+    ) -> Option<Self> {
+        let relative = self.in_viewport(
+            region.destination,
+            surface.width,
+            surface.height,
+        )?;
+        Some(Self {
+            x: source_axis(
+                relative.x,
+                region.source.x,
+                region.source.width,
+                design.width,
+            )?,
+            y: source_axis(
+                relative.y,
+                region.source.y,
+                region.source.height,
+                design.height,
+            )?,
         })
     }
 }
@@ -612,6 +640,62 @@ mod tests {
         let mut invalid = fill;
         invalid.source.width = u32::MAX;
         assert_eq!(center.in_presentation(invalid), None);
+    }
+
+    #[test]
+    fn protected_fill_projects_panel_contacts_across_drawable_shapes() {
+        let nz = |value| NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
+        let design = Dimensions::new(nz(320), nz(304));
+        for (width, height) in [(1920, 1080), (720, 1280), (320, 304)] {
+            let geometry = PresentationMode::Fill.layout_with_protected_bottom(
+                Dimensions::new(nz(width), nz(height)),
+                design,
+                Some(nz(80)),
+            );
+            assert!(geometry.is_some_and(|layout| {
+                [
+                    TouchPoint { x: 5000, y: 50000 },
+                    TouchPoint { x: 32768, y: 57000 },
+                    TouchPoint { x: 60000, y: 64000 },
+                ]
+                .into_iter()
+                .all(|point| round_trip_matches(point, layout))
+            }));
+        }
+    }
+
+    fn round_trip_matches(
+        point: TouchPoint,
+        layout: super::PresentationLayout,
+    ) -> bool {
+        point
+            .on_presentation(layout)
+            .and_then(|screen| screen.in_presentation(layout))
+            .is_some_and(|projected| {
+                projected.x.abs_diff(point.x) <= 8
+                    && projected.y.abs_diff(point.y) <= 8
+            })
+    }
+
+    #[test]
+    fn protected_fill_rejects_panel_letterbox_bars() {
+        let nz = |value| NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN);
+        let design = Dimensions::new(nz(320), nz(304));
+        for (width, height, point) in [
+            (1920, 1080, TouchPoint { x: 0, y: 57000 }),
+            (720, 1280, TouchPoint { x: 32768, y: 50000 }),
+        ] {
+            let geometry = PresentationMode::Fill.layout_with_protected_bottom(
+                Dimensions::new(nz(width), nz(height)),
+                design,
+                Some(nz(80)),
+            );
+            assert!(
+                geometry.is_some_and(|layout| point
+                    .in_presentation(layout)
+                    .is_none())
+            );
+        }
     }
 
     #[test]

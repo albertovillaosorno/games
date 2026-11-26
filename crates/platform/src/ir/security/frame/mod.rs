@@ -143,8 +143,25 @@ impl FrameLayout {
         mode: PresentationMode,
         surface: Dimensions,
     ) -> Result<PresentationLayout, RenderError> {
+        self.presentation_with_protected_bottom(mode, surface, None)
+    }
+
+    /// Select drawable geometry with an optional uncropped bottom strip.
+    /// # Errors
+    /// Rejects unsupported dimensions or a strip consuming the logical frame.
+    pub fn presentation_with_protected_bottom(
+        self,
+        mode: PresentationMode,
+        surface: Dimensions,
+        bottom: Option<NonZeroU32>,
+    ) -> Result<PresentationLayout, RenderError> {
         validate_extent(surface.width, surface.height)?;
-        Ok(mode.layout(surface, Dimensions::new(self.width, self.height)))
+        mode.layout_with_protected_bottom(
+            surface,
+            Dimensions::new(self.width, self.height),
+            bottom,
+        )
+        .ok_or(RenderError::InvalidDimensions)
     }
 
     /// Logical width of the frame.

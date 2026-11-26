@@ -65,7 +65,8 @@ use games::performance::{
     FrameObservation, PerformanceCollector, QualityProfile,
 };
 use games::presentation::{
-    DisplaySettings, FramePacing, PresentationLayout, WindowMode,
+    DisplaySettings, FramePacing, PresentationLayout, PresentationMode,
+    WindowMode,
 };
 use games::replay::{
     InputStep, LiveInputLimits, LiveSimulation, QueueRejection, RejectedInput,
@@ -910,12 +911,8 @@ impl PreviewOptions<'_> {
     }
 
     fn session(self, reserved: [bool; 4]) -> LocalSession {
-        LocalSession::with_preferences(
-            self.display,
-            self.volume,
-            self.touch_enabled,
-        )
-        .with_control_reset(self.can_reset_controls(reserved))
+        LocalSession::with_preferences(self.display, self.volume, false)
+            .with_control_reset(self.can_reset_controls(reserved))
     }
 }
 
@@ -1061,7 +1058,7 @@ impl<'preferences> Interactive<'preferences> {
                 return meter.close_segment();
             };
             let completed = now().map_err(failure)?;
-            meter.observe(measurement::FrameSample {
+            meter.observe(&measurement::FrameSample {
                 completed,
                 display: self.applied,
                 elapsed: self.input.elapsed()?,
@@ -2082,8 +2079,12 @@ fn smoke_controller_selection(profiles: &Profiles) -> Result<(), RenderError> {
 
 fn smoke_touch_selection(
     scene: &SceneSession<'_, '_>,
-    profiles: &Profiles,
+    options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
+    if options.display.presentation == PresentationMode::Fill {
+        smoke_protected_touch(scene)?;
+    }
+    let profiles = &options.controls.profiles;
     let mut simulation = live(false)?;
     let mut controls = Controls::with_profiles(true, profiles)?;
     let player = touch::seats(profiles)
@@ -2110,15 +2111,40 @@ fn smoke_touch_selection(
     Ok(())
 }
 
+fn smoke_protected_touch(
+    scene: &SceneSession<'_, '_>,
+) -> Result<(), RenderError> {
+    let layout = scene
+        .visible_layout()?
+        .ok_or(RenderError::InvalidDimensions)?;
+    let panel = layout.protected.ok_or(RenderError::InvalidDimensions)?;
+    if panel.source.y != world::BASE_HEIGHT
+        || panel.source.x != 0
+        || panel.source.width != layout.design.width.get()
+        || panel.source.y.checked_add(panel.source.height)
+            != Some(layout.design.height.get())
+        || layout.destination.height > panel.destination.y
+    {
+        return Err(failure("Fill did not preserve the full touch panel"));
+    }
+    write_status(format_args!(
+        "Protected Fill touch: {}x{} drawable; {}x{} panel at {},{}",
+        layout.surface.width,
+        layout.surface.height,
+        panel.destination.width,
+        panel.destination.height,
+        panel.destination.x,
+        panel.destination.y,
+    ))
+    .map_err(failure)
+}
+
 fn smoke_settings(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
-    let session = LocalSession::with_display(
-        DisplaySettings::default(),
-        options.touch_enabled,
-    );
+    let session = LocalSession::with_display(DisplaySettings::default(), false);
     let mut simulation = live_with_session(false, session)?;
     let mut controls = Controls::with_profiles(
         options.touch_enabled,
@@ -2127,20 +2153,28 @@ fn smoke_settings(
     scene.apply_display_settings(session.effective_display())?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene.readback()?;
-    for control in [Control::Down, Control::Primary, Control::Primary] {
+    for control in [Control::Down, Control::Primary] {
         smoke_press(&mut controls, &mut simulation, control)?;
     }
-    let settings = simulation.state().session();
-    if settings.phase() != Phase::Settings
-        || settings.display().presentation
-            != session.display().presentation.next(options.touch_enabled)
-    {
-        return Err(failure("display menu selection failed"));
-    }
-    scene.apply_display_settings(settings.effective_display())?;
-    let _updated = art.present(scene, simulation.state())?;
-    if scene.readback()? == before {
-        return Err(failure("settings were not visibly presented"));
+    for mode in [PresentationMode::Integer, PresentationMode::Fill] {
+        smoke_press(&mut controls, &mut simulation, Control::Primary)?;
+        let settings = simulation.state().session();
+        if settings.phase() != Phase::Settings
+            || settings.display().presentation != mode
+        {
+            return Err(failure("display menu selection failed"));
+        }
+        if mode == PresentationMode::Fill
+            && settings.effective_display().presentation
+                != PresentationMode::AspectFit
+        {
+            return Err(failure("Fill settings menu must remain visible"));
+        }
+        scene.apply_display_settings(settings.effective_display())?;
+        let _updated = art.present(scene, simulation.state())?;
+        if scene.readback()? == before {
+            return Err(failure("settings were not visibly presented"));
+        }
     }
     smoke_window_toggle(scene, art, &mut controls, &mut simulation)?;
     scene.apply_display_settings(options.display)
@@ -2939,6 +2973,9 @@ fn window(
     let renderer =
         (options.hidden || options.measure).then(|| window.renderer_name());
     window.with_scene(layout, limits, |scene| {
+        scene.protect_bottom(NonZeroU32::new(
+            layout.height().get().saturating_sub(world::BASE_HEIGHT),
+        ))?;
         let mut art = Scene::load(scene, source, options, reserved)?;
         if let Some(name) = renderer.as_deref() {
             startup_report(scene, name, load_started)?;
@@ -2951,7 +2988,7 @@ fn window(
             smoke_character_selection(scene, &mut art, options)?;
             smoke_controller_selection(&options.controls.profiles)?;
             if touch_enabled {
-                smoke_touch_selection(scene, &options.controls.profiles)?;
+                smoke_touch_selection(scene, options)?;
             }
             smoke(scene, &mut art, touch_enabled, &options.controls.profiles)?;
             smoke_optional(scene, &mut art, touch_enabled, playback.as_mut())?;

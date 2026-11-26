@@ -38,7 +38,7 @@ use std::{str, vec};
 use games::audio::MasterVolume;
 use games::input::physical::{ControllerAxis, ControllerButton, PointerButton};
 use games::input::profile::{AxisProfile, DigitalBinding};
-use games::presentation::{DisplaySettings, PresentationMode};
+use games::presentation::DisplaySettings;
 use games_assets::ContentHash;
 use games_platform::ir::input::{key_from_name, key_name};
 use games_platform::ir::storage::file::snapshot;
@@ -508,12 +508,10 @@ impl Launch {
             .map_err(|error| format!("display preferences: {error:?}"))?
             .flatten();
         let (volume_store, volume) = load_volume(settings.as_deref())?;
-        let display = resolve_display(
-            defaults,
-            stored,
-            [mode.as_deref(), window.as_deref()],
-            touch_enabled,
-        )?;
+        let display = resolve_display(defaults, stored, [
+            mode.as_deref(),
+            window.as_deref(),
+        ])?;
 
         Ok(Self {
             assets,
@@ -678,22 +676,11 @@ fn resolve_display(
     defaults: DisplaySettings,
     stored: Option<DisplaySettings>,
     [mode, window]: [Option<&str>; 2],
-    touch_enabled: bool,
 ) -> Result<DisplaySettings, String> {
-    let mut base = stored.unwrap_or(defaults);
-    if touch_enabled
-        && stored.is_some()
-        && base.presentation == PresentationMode::Fill
-    {
-        base.presentation = PresentationMode::AspectFit;
-    }
-    let display = base.configured(mode, window)?;
-    if touch_enabled && display.presentation == PresentationMode::Fill {
-        return Err(String::from(
-            "fill can crop touch controls; choose another display mode",
-        ));
-    }
-    Ok(display)
+    stored
+        .unwrap_or(defaults)
+        .configured(mode, window)
+        .map_err(String::from)
 }
 
 pub(super) fn fields(text: &str) -> Result<Fields<'_>, String> {
@@ -801,7 +788,7 @@ fn sibling_catalogue(executable: &OsStr) -> Result<OsString, String> {
 #[cfg(test)]
 mod tests {
 
-    use games::presentation::WindowMode;
+    use games::presentation::{PresentationMode, WindowMode};
     use games_platform::ir::storage::fixtures::TestRoot;
 
     use super::super::DEFAULT_PROFILES;
@@ -1182,7 +1169,6 @@ mod tests {
             vec!["--config"],
             vec!["--config", "local", "extra"],
             vec!["--poses"],
-            vec!["--touch", "--display", "fill", "parent", "m", "h", "b", "l"],
             vec!["parent", "m", "h", "b"],
         ] {
             assert!(
@@ -1203,45 +1189,39 @@ mod tests {
             window: WindowMode::Fullscreen,
         };
         assert_eq!(
-            resolve_display(defaults, Some(stored), [None, None], false),
+            resolve_display(defaults, Some(stored), [None, None]),
             Ok(stored)
         );
         assert_eq!(
-            resolve_display(
-                defaults,
-                Some(stored),
-                [Some("adaptive"), None],
-                false,
-            ),
+            resolve_display(defaults, Some(stored), [Some("adaptive"), None],),
             Ok(DisplaySettings {
                 presentation: PresentationMode::Adaptive,
                 ..stored
             })
         );
-        assert_eq!(
-            resolve_display(defaults, None, [None, None], false),
-            Ok(defaults)
-        );
+        assert_eq!(resolve_display(defaults, None, [None, None]), Ok(defaults));
     }
 
     #[test]
-    fn stored_fill_can_open_touch_without_accepting_explicit_fill() {
+    fn stored_and_explicit_fill_remain_available_with_touch()
+    -> Result<(), String> {
         let stored = DisplaySettings {
             presentation: PresentationMode::Fill,
             window: WindowMode::Fullscreen,
         };
         let defaults = DisplaySettings::default();
-        assert_eq!(
-            resolve_display(defaults, Some(stored), [None, None], true),
-            Ok(DisplaySettings {
-                presentation: PresentationMode::AspectFit,
-                ..stored
-            })
-        );
-        assert!(
-            resolve_display(defaults, Some(stored), [Some("fill"), None], true)
-                .is_err()
-        );
+        if resolve_display(defaults, Some(stored), [None, None])? != stored {
+            return Err(String::from("stored Fill preference lost"));
+        }
+        let args =
+            ["--touch", "--display", "fill", "parent", "m", "h", "b", "l"];
+        let launch = Launch::parse(args.map(OsString::from).into())?;
+        if !launch.touch_enabled
+            || launch.display.presentation != PresentationMode::Fill
+        {
+            return Err(String::from("explicit Fill with touch rejected"));
+        }
+        Ok(())
     }
     #[test]
     fn controls_precedence_and_reset_survive_relaunch() -> Result<(), String> {

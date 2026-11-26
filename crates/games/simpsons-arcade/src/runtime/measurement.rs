@@ -89,7 +89,7 @@ impl Segment {
 
     fn observe(
         &mut self,
-        sample: FrameSample,
+        sample: &FrameSample,
         input_latency: Option<Duration>,
         remote_received: Option<Duration>,
     ) -> Result<(), RenderError> {
@@ -203,7 +203,7 @@ impl LiveMeasurement {
     /// Do not combine gameplay intervals with menus or changed settings.
     pub(super) fn observe(
         &mut self,
-        sample: FrameSample,
+        sample: &FrameSample,
     ) -> Result<(), RenderError> {
         let profile = QualityProfile {
             frame_pacing: FramePacing::Uncapped,
@@ -284,10 +284,10 @@ mod tests {
         };
         measurement.admit(1, Duration::from_millis(10));
         measurement.advance(1);
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
         measurement.advance(2);
-        measurement.observe(sample)?;
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
+        measurement.observe(&sample)?;
         let segment = measurement
             .segment
             .as_ref()
@@ -317,7 +317,7 @@ mod tests {
         let future = Duration::from_millis(31);
         measurement.admit(1, future);
         measurement.advance(2);
-        if measurement.observe(sample).is_ok()
+        if measurement.observe(&sample).is_ok()
             || measurement.segment.is_some()
             || measurement.local.applied() != Some(future)
         {
@@ -330,14 +330,14 @@ mod tests {
             elapsed: future,
             ..sample
         };
-        if measurement.observe(corrected).is_ok()
+        if measurement.observe(&corrected).is_ok()
             || measurement.segment.is_some()
             || measurement.local.applied() != Some(future)
             || measurement.remote.applied() != Some(future_remote)
         {
             return Err(RenderError::InvalidSprite);
         }
-        measurement.observe(FrameSample {
+        measurement.observe(&FrameSample {
             completed: future_remote,
             ..corrected
         })?;
@@ -367,12 +367,12 @@ mod tests {
             layout: PresentationMode::AspectFit.layout(design, design),
             work: Duration::from_millis(3),
         };
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
         measurement.admit(1, Duration::from_millis(30));
         measurement.admit_remote(1, sample.completed);
         measurement.advance(2);
         measurement.close_segment()?;
-        measurement.observe(FrameSample {
+        measurement.observe(&FrameSample {
             completed: Duration::from_millis(200),
             elapsed: Duration::from_millis(130),
             ..sample
@@ -406,10 +406,10 @@ mod tests {
             layout: PresentationMode::AspectFit.layout(first, design),
             work: Duration::from_millis(3),
         };
-        measurement.observe(sample)?;
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
+        measurement.observe(&sample)?;
         let resized = PresentationMode::AspectFit.layout(second, design);
-        measurement.observe(FrameSample {
+        measurement.observe(&FrameSample {
             layout: resized,
             ..sample
         })?;
@@ -424,7 +424,7 @@ mod tests {
             return Err(RenderError::InvalidSprite);
         }
         measurement.finish()?;
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
         if measurement.segment.as_ref().is_none_or(|next| {
             next.cadence.collector().report().frame_time.samples() != 0
         }) {
@@ -467,7 +467,7 @@ mod tests {
         measurement.admit_remote(1, completed);
         measurement.admit_remote(1, decoded);
         measurement.advance(2);
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
         let segment = measurement
             .segment
             .as_ref()
@@ -481,7 +481,7 @@ mod tests {
         {
             return Err(RenderError::InvalidSprite);
         }
-        measurement.observe(sample)?;
+        measurement.observe(&sample)?;
         let following = measurement
             .segment
             .as_ref()
@@ -538,15 +538,15 @@ mod tests {
             layout: PresentationMode::AspectFit.layout(surface, design),
             work: Duration::from_millis(3),
         };
-        measurement.observe(sample)?;
-        measurement.observe(FrameSample {
+        measurement.observe(&sample)?;
+        measurement.observe(&FrameSample {
             completed: sample
                 .completed
                 .checked_add(Duration::from_millis(20))
                 .ok_or(RenderError::InvalidSprite)?,
             ..sample
         })?;
-        measurement.observe(FrameSample {
+        measurement.observe(&FrameSample {
             completed: sample
                 .completed
                 .checked_add(Duration::from_millis(30))

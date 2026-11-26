@@ -32,7 +32,7 @@
 //! Portable ordered rendering sessions and presentation geometry.
 
 use std::fmt::{self, Debug, Formatter};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use games::input::touch::TouchPoint;
 use games::presentation::{
@@ -69,6 +69,7 @@ pub(crate) trait SceneBackend: Debug {
         &mut self,
         background: [u8; 3],
         sprites: AdmittedDraws<'_>,
+        protected_bottom: Option<NonZeroU32>,
     ) -> Result<Option<PresentationLayout>, RenderError>;
     fn presentation_mode(&self) -> PresentationMode;
     fn readback(&mut self, layout: FrameLayout)
@@ -85,6 +86,7 @@ pub struct SceneView<'session> {
     layout: FrameLayout,
     mode: PresentationMode,
     presentation: &'session PresentationAdmission,
+    protected_bottom: Option<NonZeroU32>,
 }
 
 impl Debug for SceneView<'_> {
@@ -150,7 +152,13 @@ impl SceneView<'_> {
             let observed = self.backend.surface_dimensions()?;
             self.verify_geometry()?;
             observed
-                .map(|surface| self.layout().presentation(self.mode, surface))
+                .map(|surface| {
+                    self.layout().presentation_with_protected_bottom(
+                        self.mode,
+                        surface,
+                        self.protected_bottom,
+                    )
+                })
                 .transpose()
         })
     }
@@ -164,6 +172,7 @@ pub struct SceneSession<'session, 'backend> {
     layout: FrameLayout,
     mode: PresentationMode,
     presentation: PresentationAdmission,
+    protected_bottom: Option<NonZeroU32>,
 }
 
 impl Debug for SceneSession<'_, '_> {
@@ -314,6 +323,7 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
             layout: base,
             mode,
             presentation: PresentationAdmission::default(),
+            protected_bottom: None,
         })
     }
 
@@ -328,9 +338,19 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         let admitted = self.admission.draws(sprites)?;
         self.view().verify_geometry()?;
         self.presentation.invalidate();
-        let receipt = self.backend.present(background, admitted)?;
+        let receipt = self.backend.present(
+            background,
+            admitted,
+            self.protected_bottom,
+        )?;
         self.view().verify_geometry()?;
-        self.presentation.complete(receipt, self.layout, self.mode)
+        self.presentation.complete(receipt, |surface| {
+            self.layout.presentation_with_protected_bottom(
+                self.mode,
+                surface,
+                self.protected_bottom,
+            )
+        })
     }
 
     /// Whether the last presented frame still matches current geometry.
@@ -338,6 +358,24 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
     /// Reports a failed drawable query.
     pub fn presentation_is_current(&self) -> Result<bool, RenderError> {
         Ok(self.visible_layout()?.is_some())
+    }
+
+    /// Protect a logical bottom strip from cropping in Fill mode.
+    /// Changed geometry must be presented again before admitting touch.
+    /// # Errors
+    /// Rejects a strip that leaves no upper scene.
+    pub fn protect_bottom(
+        &mut self,
+        height: Option<NonZeroU32>,
+    ) -> Result<(), RenderError> {
+        if height.is_some_and(|strip| strip >= self.base.height()) {
+            return Err(RenderError::InvalidDimensions);
+        }
+        if self.protected_bottom != height {
+            self.presentation.invalidate();
+            self.protected_bottom = height;
+        }
+        Ok(())
     }
 
     /// Read back a complete logical RGBA frame for diagnostics only.
@@ -372,6 +410,7 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
             layout: self.layout,
             mode: self.mode,
             presentation: &self.presentation,
+            protected_bottom: self.protected_bottom,
         }
     }
 
@@ -522,6 +561,7 @@ mod tests {
             &mut self,
             _background: [u8; 3],
             _sprites: AdmittedDraws<'_>,
+            _protected_bottom: Option<NonZeroU32>,
         ) -> Result<Option<PresentationLayout>, RenderError> {
             self.draws = self.draws.saturating_add(1);
             if let Some(layout) = self.present_layout.take() {
@@ -969,6 +1009,54 @@ mod tests {
     }
 
     #[test]
+    fn protected_bottom_requires_a_new_matching_presentation_receipt()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        let four = NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN);
+        let eight = NonZeroU32::new(8).unwrap_or(NonZeroU32::MIN);
+        let base = FrameLayout::new(four, four, NonZeroUsize::MAX)?;
+        let surface = Dimensions::new(eight, four);
+        let mode = PresentationMode::Fill;
+        let bottom = Some(NonZeroU32::MIN);
+        let plain = base.presentation(mode, surface)?;
+        let protected =
+            base.presentation_with_protected_bottom(mode, surface, bottom)?;
+        backend.layout = base;
+        backend.mode = mode;
+        backend.surface = Some(surface);
+        backend.presentations = VecDeque::from([
+            Ok(Some(plain)),
+            Ok(Some(plain)),
+            Ok(Some(protected)),
+            Ok(Some(plain)),
+        ]);
+        let mut scene = SceneSession::new(&mut backend, base, limits(), mode)?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(&scene.visible_layout()?, &Some(plain))?;
+        check(
+            &scene.protect_bottom(Some(four)),
+            &Err(RenderError::InvalidDimensions),
+        )?;
+        check(&scene.visible_layout()?, &Some(plain))?;
+        scene.protect_bottom(bottom)?;
+        check(&scene.visible_layout()?, &None)?;
+        check(
+            &scene.present([0; 3], &[]),
+            &Err(RenderError::InvalidDimensions),
+        )?;
+        check(&scene.visible_layout()?, &None)?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(&scene.visible_layout()?, &Some(protected))?;
+        scene.protect_bottom(bottom)?;
+        check(&scene.visible_layout()?, &Some(protected))?;
+        scene.protect_bottom(None)?;
+        check(&scene.visible_layout()?, &None)?;
+        check(&scene.present([0; 3], &[]), &Ok(true))?;
+        check(&scene.visible_layout()?, &Some(plain))?;
+        Ok(())
+    }
+
+    #[test]
     fn display_success_requires_the_requested_presentation_mode()
     -> Result<(), RenderError> {
         let mut backend = TestScene::new(0)?;
@@ -1150,6 +1238,7 @@ mod tests {
                 layout: base,
                 mode: PresentationMode::AspectFit,
                 presentation: &presentation,
+                protected_bottom: None,
             }
             .visible_layout()
         };
@@ -1166,11 +1255,10 @@ mod tests {
                 Err(RenderError::InvalidDimensions),
             ),
         ] {
-            let admitted = presentation.complete(
-                Some(expected),
-                base,
-                PresentationMode::AspectFit,
-            )?;
+            let admitted =
+                presentation.complete(Some(expected), |observed| {
+                    base.presentation(PresentationMode::AspectFit, observed)
+                })?;
             check(&admitted, &true)?;
             check(&visible(&backend)?, &Some(expected))?;
             backend.surface = unavailable;
@@ -1196,17 +1284,17 @@ mod tests {
             base.presentation(PresentationMode::AspectFit, surface)?;
         let visible = |adapter: &TestScene| {
             let presentation = PresentationAdmission::default();
-            let admitted = presentation.complete(
-                Some(expected),
-                base,
-                PresentationMode::AspectFit,
-            )?;
+            let admitted =
+                presentation.complete(Some(expected), |observed| {
+                    base.presentation(PresentationMode::AspectFit, observed)
+                })?;
             check(&admitted, &true)?;
             SceneView {
                 backend: adapter,
                 layout: base,
                 mode: PresentationMode::AspectFit,
                 presentation: &presentation,
+                protected_bottom: None,
             }
             .visible_layout()
         };

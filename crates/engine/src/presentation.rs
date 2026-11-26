@@ -175,6 +175,15 @@ impl Dimensions {
     }
 }
 
+/// A source rectangle and its corresponding drawable destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PresentationRegion {
+    /// Physical pixels occupied by the selected region.
+    pub destination: Viewport,
+    /// Logical pixels selected from the complete frame.
+    pub source: Viewport,
+}
+
 /// The exact source and destination rectangles used for presentation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PresentationLayout {
@@ -182,10 +191,26 @@ pub struct PresentationLayout {
     pub design: Dimensions,
     /// Destination rectangle within the physical surface.
     pub destination: Viewport,
+    /// Optional uncropped region drawn after the primary rectangle.
+    pub protected: Option<PresentationRegion>,
     /// Source rectangle within the complete logical frame.
     pub source: Viewport,
     /// Complete physical surface dimensions.
     pub surface: Dimensions,
+}
+
+impl PresentationLayout {
+    /// Regions in drawing order, with the primary region first.
+    #[must_use]
+    pub const fn regions(self) -> [Option<PresentationRegion>; 2] {
+        [
+            Some(PresentationRegion {
+                destination: self.destination,
+                source: self.source,
+            }),
+            self.protected,
+        ]
+    }
 }
 
 impl PresentationMode {
@@ -305,9 +330,70 @@ impl PresentationMode {
         PresentationLayout {
             design,
             destination,
+            protected: None,
             source,
             surface,
         }
+    }
+
+    /// Keep a logical bottom strip visible while cropping the upper scene.
+    ///
+    /// Fill reserves a proportional drawable height for the strip and fits
+    /// it without cropping. Other modes already preserve the whole frame.
+    /// A one-pixel-tall surface cannot split, so it fits the whole frame.
+    /// Returns None if the strip would consume the entire logical frame.
+    #[must_use]
+    pub fn layout_with_protected_bottom(
+        self,
+        surface: Dimensions,
+        design: Dimensions,
+        protected_bottom: Option<NonZeroU32>,
+    ) -> Option<PresentationLayout> {
+        let Some(bottom) = protected_bottom else {
+            return Some(self.layout(surface, design));
+        };
+        let top =
+            NonZeroU32::new(design.height.get().checked_sub(bottom.get())?)?;
+        if self != Self::Fill {
+            return Some(self.layout(surface, design));
+        }
+        if surface.height.get() == 1 {
+            return Some(Self::AspectFit.layout(surface, design));
+        }
+        let rows = NonZeroU64::from(surface.height)
+            .get()
+            .checked_mul(NonZeroU64::from(bottom).get())?
+            .checked_div(NonZeroU64::from(design.height).get())?;
+        let reserved = u32::try_from(rows)
+            .ok()?
+            .clamp(1, surface.height.get().checked_sub(1)?);
+        let upper =
+            NonZeroU32::new(surface.height.get().checked_sub(reserved)?)?;
+        let lower = NonZeroU32::new(reserved)?;
+        let primary = self.layout(
+            Dimensions::new(surface.width, upper),
+            Dimensions::new(design.width, top),
+        );
+        let panel = Self::AspectFit.layout(
+            Dimensions::new(surface.width, lower),
+            Dimensions::new(design.width, bottom),
+        );
+        Some(PresentationLayout {
+            design,
+            destination: primary.destination,
+            protected: Some(PresentationRegion {
+                destination: Viewport {
+                    y: upper.get().checked_add(panel.destination.y)?,
+                    ..panel.destination
+                },
+                source: Viewport {
+                    y: top.get(),
+                    ..panel.source
+                },
+            }),
+            source: primary.source,
+            surface,
+        })
     }
 
     /// Cycle presentation, optionally skipping modes that crop controls.
@@ -800,6 +886,91 @@ mod tests {
             x: 0,
             y: 0,
         });
+    }
+
+    #[test]
+    fn fill_protects_the_entire_bottom_strip_across_drawable_shapes() {
+        let design = Dimensions::new(nz(320), nz(304));
+        for (width, height) in [(1920, 1080), (720, 1280), (2, 2)] {
+            let surface = Dimensions::new(nz(width), nz(height));
+            let layout = PresentationMode::Fill.layout_with_protected_bottom(
+                surface,
+                design,
+                Some(nz(80)),
+            );
+            assert!(layout.is_some_and(|value| {
+                value.design == design
+                    && value.surface == surface
+                    && value.destination.x == 0
+                    && value.destination.y == 0
+                    && value.destination.width == width
+                    && value.source.y.saturating_add(value.source.height) <= 224
+                    && value.regions().into_iter().flatten().count() == 2
+            }));
+            assert!(layout.and_then(|value| value.protected).is_some_and(
+                |panel| {
+                    panel.source
+                        == (Viewport {
+                            height: 80,
+                            width: 320,
+                            x: 0,
+                            y: 224,
+                        })
+                        && panel.destination.width > 0
+                        && panel.destination.height > 0
+                        && panel
+                            .destination
+                            .x
+                            .saturating_add(panel.destination.width)
+                            <= width
+                        && panel
+                            .destination
+                            .y
+                            .saturating_add(panel.destination.height)
+                            <= height
+                }
+            ));
+            assert!(layout.is_some_and(|value| value.protected.is_some_and(
+                |panel| { value.destination.height <= panel.destination.y }
+            )));
+        }
+    }
+
+    #[test]
+    fn protected_bottom_preserves_existing_modes_and_handles_tiny_drawables() {
+        let design = Dimensions::new(nz(320), nz(304));
+        let surface = Dimensions::new(nz(1920), nz(1080));
+        let bottom = Some(nz(80));
+        for mode in [
+            PresentationMode::Adaptive,
+            PresentationMode::AspectFit,
+            PresentationMode::Integer,
+            PresentationMode::Stretch,
+        ] {
+            assert_eq!(
+                mode.layout_with_protected_bottom(surface, design, bottom),
+                Some(mode.layout(surface, design))
+            );
+        }
+        let tiny = Dimensions::new(nz(20), nz(1));
+        assert_eq!(
+            PresentationMode::Fill
+                .layout_with_protected_bottom(tiny, design, bottom),
+            Some(PresentationMode::AspectFit.layout(tiny, design))
+        );
+        assert_eq!(
+            PresentationMode::Fill.layout_with_protected_bottom(
+                tiny,
+                design,
+                Some(design.height)
+            ),
+            None
+        );
+        assert_eq!(
+            PresentationMode::Fill
+                .layout_with_protected_bottom(tiny, design, None),
+            Some(PresentationMode::Fill.layout(tiny, design))
+        );
     }
 
     #[test]
