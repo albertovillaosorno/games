@@ -760,3 +760,26 @@ public facade. Fresh validation passed in run
 1795653669351514168-2041456 (1,545 aggregate test executions), including
 native mutual TLS, the four-station regression, rendering, dummy audio
 and all six portable core targets. Physical LAN acceptance remains open.
+
+The title controller now checks monotonic lease and send observations and
+removes a queued control only after transport admission succeeds. A
+rejected send preserves its pending release and prior timestamp. The
+loopback regression covers reversed receipt and send time and a busy
+transport. Fresh Xvfb/X11 and dummy-audio validation
+1795660662637264767-3953010 passed 1675 aggregate test executions and
+all six portable core checks.
+
+The previously validated native release at 38834aa was exercised again
+with three independently configured loopback controllers in an Xvfb
+window and a host-controlled local station. All remote windows joined,
+moved, released and remained responsive after 256 repeated input pairs.
+A held-direction disconnect of the middle remote stopped the movement;
+the other remotes continued to accept controls, and reconnecting the
+same identity restored movement. The corrected diagnostic uses the
+current default A/D bindings and does not require a visible HUD change
+for a connected but absent station. This is process-level evidence using
+virtual display and local credentials, not physical-device acceptance.
+A further process run rejected a controller configured with the wrong
+host name, while an existing controller remained responsive. Two
+initial runs used superseded visual or keyboard assumptions; the
+corrected legacy-art diagnostic passed its observable gameplay checks.

@@ -42,7 +42,7 @@ use games_platform::ir::lan::pump::{
     HostInputConfig, HostInputPump, PumpProgress, RemoteEvent,
 };
 use games_platform::ir::lan::{PeerFingerprint, SecureFrameStream, ServerTls};
-use games_platform::ir::measurement::now;
+use games_platform::ir::measurement::{elapsed_between, now};
 
 use super::Cabinet;
 use super::remote::{
@@ -69,7 +69,8 @@ pub(crate) struct ClientLan {
 
 impl ClientLan {
     fn check_lease(&self, observed_at: Duration) -> IoResult<()> {
-        if observed_at.saturating_sub(self.last_received) >= self.idle_timeout {
+        if elapsed_since(self.last_received, observed_at)? >= self.idle_timeout
+        {
             return Err(ErrorKind::TimedOut.into());
         }
         Ok(())
@@ -112,8 +113,7 @@ impl ClientLan {
         let reply = self.stream.poll_receive()?;
         self.observe_reply(reply.as_deref(), now()?)?;
         for _step in 0..POLL_BUDGET {
-            self.check_lease(now()?)?;
-            if !self.stream.has_pending_send() && !self.queue_next()? {
+            if !self.stream.has_pending_send() && !self.queue_next(now()?)? {
                 break;
             }
             self.poll_queued_send(now()?)?;
@@ -130,18 +130,20 @@ impl ClientLan {
         Ok(())
     }
 
-    fn queue_next(&mut self) -> IoResult<bool> {
-        let message = match self.pending.pop_front() {
+    fn queue_next(&mut self, observed_at: Duration) -> IoResult<bool> {
+        self.check_lease(observed_at)?;
+        let elapsed = elapsed_since(self.last_sent, observed_at)?;
+        let control = self.pending.front().copied();
+        let message = match control {
             Some(value) => RemoteMessage::Control(value),
-            None if now()?.saturating_sub(self.last_sent)
-                >= HEARTBEAT_INTERVAL =>
-            {
-                RemoteMessage::Heartbeat
-            },
+            None if elapsed >= HEARTBEAT_INTERVAL => RemoteMessage::Heartbeat,
             None => return Ok(false),
         };
         self.stream.queue_send(message.encode().to_vec())?;
-        self.last_sent = now()?;
+        if control.is_some() {
+            let _admitted = self.pending.pop_front();
+        }
+        self.last_sent = observed_at;
         Ok(true)
     }
 
@@ -298,9 +300,10 @@ impl HostLan {
             return Ok(());
         }
         let now = now()?;
-        if last.is_none_or(|previous| {
-            now.saturating_sub(previous) >= REPLY_INTERVAL
-        }) {
+        let elapsed = last
+            .map(|previous| elapsed_since(previous, now))
+            .transpose()?;
+        if elapsed.is_none_or(|duration| duration >= REPLY_INTERVAL) {
             self.pump.queue_reply(peer, HOST_ACK.to_vec())?;
             *last = Some(now);
         }
@@ -389,6 +392,11 @@ const fn hosted_input(
         } => Some(HostedInput::Remote { peer, value }),
         RemoteEvent::Message { .. } => None,
     }
+}
+
+fn elapsed_since(previous: Duration, observed: Duration) -> IoResult<Duration> {
+    elapsed_between(previous, observed)
+        .map_err(|_error| ErrorKind::InvalidData.into())
 }
 
 #[cfg(test)]
@@ -949,6 +957,13 @@ mod tests {
         )?;
         client.observe_reply(Some(&HOST_ACK), timely)?;
         require(client.last_received == timely, "valid reply renews lease")?;
+        require(
+            client
+                .observe_reply(Some(&HOST_ACK), original)
+                .is_err_and(|error| error.kind() == ErrorKind::InvalidData)
+                && client.last_received == timely,
+            "reversed receipt time cannot change the active lease",
+        )?;
         let deadline =
             timely.checked_add(timeout).ok_or(ErrorKind::InvalidInput)?;
         for observed in [
@@ -968,6 +983,45 @@ mod tests {
     }
 
     #[test]
+    fn invalid_send_time_and_busy_queue_preserve_pending_control()
+    -> IoResult<()> {
+        let (mut host, credentials) = host()?;
+        let mut live = live(&host)?;
+        let stream = connect(&mut host, &mut live, &credentials)?;
+        let mut client = ClientLan::new(stream)?;
+        let right = RemoteControl::new(Control::Right, true)
+            .ok_or(ErrorKind::InvalidInput)?;
+        let release = RemoteControl::new(Control::Right, false)
+            .ok_or(ErrorKind::InvalidInput)?;
+        client
+            .enqueue_batch(vec![right, release])
+            .map_err(|_rejected| ErrorKind::WouldBlock)?;
+        let start = client.last_sent;
+        let sent = start
+            .checked_add(Duration::from_millis(1))
+            .ok_or(ErrorKind::InvalidInput)?;
+        require(client.queue_next(sent)?, "first control queued")?;
+        require(
+            client
+                .queue_next(start)
+                .is_err_and(|error| error.kind() == ErrorKind::InvalidData),
+            "reversed send time rejected",
+        )?;
+        require(
+            client
+                .queue_next(sent)
+                .is_err_and(|error| error.kind() == ErrorKind::AlreadyExists),
+            "outstanding send cannot be replaced",
+        )?;
+        require(
+            client.pending.front() == Some(&release)
+                && client.pending.len() == 1
+                && client.last_sent == sent,
+            "rejected send preserves the release and prior timestamp",
+        )
+    }
+
+    #[test]
     fn expired_client_lease_rejects_queued_control_before_dispatch()
     -> IoResult<()> {
         let (mut host, credentials) = host()?;
@@ -980,7 +1034,10 @@ mod tests {
         client
             .enqueue_batch(vec![right])
             .map_err(|_rejected| ErrorKind::WouldBlock)?;
-        require(client.queue_next()?, "control queued without transport I/O")?;
+        require(
+            client.queue_next(now()?)?,
+            "control queued without transport I/O",
+        )?;
         let deadline = client
             .last_received
             .checked_add(timeout)
