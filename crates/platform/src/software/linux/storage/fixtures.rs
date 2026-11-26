@@ -47,13 +47,18 @@ use nix::fcntl::{AtFlags, OFlag, open, openat};
 use nix::sys::stat::{Mode, fchmod, fstat, fstatat, mkdirat};
 use nix::unistd::{UnlinkatFlags, mkdtemp, symlinkat, unlinkat};
 
-use super::file::{DIRECTORY_FLAGS, private_regular, trusted_directory};
+use super::file::{
+    DIRECTORY_FLAGS, private_regular, same_inode, trusted_directory,
+    trusted_directory_stat,
+};
+use super::pinned_directory_entries;
 use crate::ir::storage::fixtures::{FixtureFactory, FixtureStorage};
 
-/// Unique private test directory, removed when its handle is dropped.
+/// Unique private test directory, removed on drop if still at its location.
 #[derive(Debug)]
 pub(in crate::software::linux) struct TestRoot {
     pub(super) path: PathBuf,
+    root: OwnedFd,
 }
 
 impl TestRoot {
@@ -62,16 +67,13 @@ impl TestRoot {
     /// Reports a native temporary-directory creation failure.
     pub(in crate::software::linux) fn new() -> io::Result<Self> {
         let template = env::temp_dir().join("games-fixture-XXXXXX");
-        Ok(Self {
-            path: mkdtemp(&template)?,
-        })
+        let path = mkdtemp(&template)?;
+        let root = open(&path, DIRECTORY_FLAGS, Mode::empty())?;
+        Ok(Self { path, root })
     }
 
     fn open_directory(&self, name: &str, create: bool) -> io::Result<OwnedFd> {
-        let mut directory = open(&self.path, DIRECTORY_FLAGS, Mode::empty())?;
-        if !trusted_directory(&directory)? {
-            return Err(io::ErrorKind::PermissionDenied.into());
-        }
+        let mut directory = self.verify_location()?;
         for component in name.split('/').filter(|part| !part.is_empty()) {
             if create {
                 ensure_directory(&directory, component)?;
@@ -123,11 +125,26 @@ impl TestRoot {
         )?;
         Ok(fs::File::from(file))
     }
+
+    fn verify_location(&self) -> io::Result<OwnedFd> {
+        let current = open(&self.path, DIRECTORY_FLAGS, Mode::empty())?;
+        let expected = fstat(&self.root)?;
+        let observed = fstat(&current)?;
+        if !trusted_directory_stat(&expected)
+            || !trusted_directory_stat(&observed)
+            || !same_inode(&expected, &observed)
+        {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        Ok(current)
+    }
 }
 
 impl Drop for TestRoot {
     fn drop(&mut self) {
-        let _result = fs::remove_dir_all(&self.path);
+        if self.verify_location().is_ok() {
+            let _result = fs::remove_dir_all(&self.path);
+        }
     }
 }
 
@@ -160,7 +177,8 @@ impl FixtureStorage for TestRoot {
     /// # Errors
     /// Reports an enumeration or counter overflow failure.
     fn entry_count(&self) -> io::Result<usize> {
-        fs::read_dir(&self.path)?.try_fold(0usize, |count, entry| {
+        let current = self.verify_location()?;
+        pinned_directory_entries(&current)?.try_fold(0usize, |count, entry| {
             let _entry = entry?;
             count
                 .checked_add(1)
@@ -298,6 +316,31 @@ mod tests {
         root.remove_file("local/nested/ordinary")?;
         root.remove_directory("local/nested")?;
         valid
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[test]
+    fn replaced_fixture_root_is_not_modified_or_removed() -> io::Result<()> {
+        let outer = TestRoot::new()?;
+        let path = outer.path().join("root");
+        let moved = outer.path().join("moved");
+        mkdirat(&outer.root, "root", Mode::S_IRWXU)?;
+        let pinned = open(&path, DIRECTORY_FLAGS, Mode::empty())?;
+        let root = TestRoot {
+            path: path.clone(),
+            root: pinned,
+        };
+        root.write_file("original", b"data")?;
+        fs::rename(&path, &moved)?;
+        mkdirat(&outer.root, "root", Mode::S_IRWXU)?;
+        fs::write(path.join("sentinel"), b"untouched")?;
+        let rejected = root.write_file("sentinel", b"changed").is_err()
+            && root.entry_count().is_err();
+        drop(root);
+        (rejected
+            && fs::read(path.join("sentinel"))? == b"untouched"
+            && fs::read(moved.join("original"))? == b"data")
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())
     }

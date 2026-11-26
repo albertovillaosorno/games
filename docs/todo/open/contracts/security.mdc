@@ -487,3 +487,11 @@ staged tree and shared object-pool checks. A synthetic rename fixture
 preserves the original directory observation after path replacement.
 Fresh native validation 1795656875146521310-2913759 passed 1,620
 aggregate test executions and all six portable core checks.
+
+Private test fixture roots retain their opened directory identity. Fixture
+operations and cleanup reject an observed replacement at the original
+path, and entry counting reuses the pinned enumeration mechanism. A
+synthetic rename regression verifies that both the moved original fixture
+and the unrelated replacement directory retain their contents.
+Fresh native validation 1795657110629996850-2971554 passed 1,626
+aggregate test executions and all six portable core checks.
