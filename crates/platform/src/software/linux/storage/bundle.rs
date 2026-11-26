@@ -42,13 +42,13 @@ use nix::sys::stat::Mode;
 use super::file::{DIRECTORY_FLAGS, read_regular, trusted_directory};
 #[cfg(test)]
 pub(super) use crate::ir::storage::bundle::CanonicalBundle;
-pub(super) use crate::ir::storage::bundle::{BundleError, PAYLOADS_DIRECTORY};
+pub(super) use crate::ir::storage::bundle::{
+    BundleError, OBJECT_PAYLOAD, OBJECTS_DIRECTORY, PAYLOADS_DIRECTORY,
+    bundle_name,
+};
 use crate::ir::storage::bundle::{
     BundlePort, MANIFEST_NAME, OpenBundle, OpenPayloads, PayloadSource,
 };
-
-pub(super) const OBJECTS_DIRECTORY: &str = "objects";
-pub(super) const OBJECT_PAYLOAD: &str = "payload";
 
 impl From<Errno> for BundleError {
     fn from(error: Errno) -> Self {
@@ -122,10 +122,6 @@ pub(super) fn open_bundle(parent: &Path, digest: ContentHash) -> OpenBundle {
     let parent_fd = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
     let root = open_directory(&parent_fd, &bundle_name(digest))?;
     Ok(Box::new(DirectoryBundle { parent: parent_fd, root }))
-}
-
-pub(super) fn bundle_name(digest: ContentHash) -> String {
-    format!("bundle-{digest}")
 }
 
 fn open_directory(

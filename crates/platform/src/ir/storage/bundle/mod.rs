@@ -44,6 +44,8 @@ use crate::ir::security::bundle::{VerifiedManifest, admit_overlay};
 
 pub(crate) const MANIFEST_NAME: &str = "manifest.json";
 pub(crate) const PAYLOADS_DIRECTORY: &str = "payloads";
+pub(crate) const OBJECTS_DIRECTORY: &str = "objects";
+pub(crate) const OBJECT_PAYLOAD: &str = "payload";
 
 pub(crate) type OpenBundle = Result<Box<dyn BundlePort>, BundleError>;
 pub(crate) type OpenPayloads = Result<Box<dyn PayloadSource>, BundleError>;
@@ -226,6 +228,10 @@ impl<'bundle> MediaOverlay<'bundle> {
     pub fn record(&self, key: &str) -> Option<&AssetRecord> {
         self.bundle_for(key).manifest().record(key)
     }
+}
+
+pub(crate) fn bundle_name(digest: ContentHash) -> String {
+    format!("bundle-{digest}")
 }
 
 #[cfg(test)]

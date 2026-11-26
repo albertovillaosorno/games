@@ -154,3 +154,22 @@ libraries remain SDL2, libgcc and libc. The size exceeds the previous
 3,224,528-byte local package; the cause and performance impact are
 unmeasured. This establishes publication, not portable ABI support or
 new gameplay parity. The package remains in ignored local storage.
+
+The bounded legacy-store migration audit now verifies complete per-bundle
+inventories, normalizes version-one metadata and computes every old-to-new
+manifest address. A separate private staging capability reuses the archive
+transaction, writes one payload per digest and re-opens each normalized
+bundle through the runtime reader before returning the staging handle.
+Tiny synthetic regressions verify address coalescing, duplicate content,
+rollback, sidecar preservation, corruption and explicit resource budgets.
+
+The read-only Simpsons audit on 2026-11-25 verified 321 legacy manifests
+and 122,322,568 payload bytes (955 physical payload files). The proposed
+shared store has 252 distinct normalized manifest addresses, 486 distinct
+objects and 43,026,520 object bytes. Seventy old addresses change; three
+non-bundle sidecars remain unmigrated. The exact mapping is in the ignored
+persistent reference ledger. This is a content inventory and candidate
+reduction, not actual disk savings or full native consumer acceptance.
+Fresh validation 1795665448043786584-573434 passed 1,749 aggregate test
+executions. No real assets were staged, moved, deleted or copied; actual
+consumer catalogue migration and configured-store cutover remain open.

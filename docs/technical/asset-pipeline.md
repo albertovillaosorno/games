@@ -43,6 +43,23 @@ second asset store, verify all pinned manifests and update their launch
 catalogues before removing redundant files. A legacy root is rejected
 rather than automatically copied. The physical migration remains open.
 
+Run a bounded read-only audit before cutover:
+
+```text
+bundle migration-audit TITLE LEGACY_ROOT STORE_ENTRIES STORE_BYTES \
+  MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT
+```
+
+The first two limits bound direct store entries and total legacy payload
+bytes read; the remaining four bound each manifest. The audit checks each
+legacy bundle name, exact manifest bytes, title identity and declared
+payload inventory. It prints the old-to-current address mapping and
+verified distinct-object counts. Regular sidecars are counted but not
+interpreted or migrated. Preserve the mapping in a private reference
+ledger and account for sidecars and every consumer catalogue before
+cutover. The private migration staging capability is tested with tiny
+fixtures; it does not yet publish a migrated store.
+
 Downloaded originals and tools remain in `.reference/games/` and
 `.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
 Do not store reference data in disposable `.cache/` or `.temp/`.

@@ -56,6 +56,8 @@ pub mod render_benchmark;
 #[cfg(feature = "native-preview")]
 /// Bounded native diagnostic rendering of selected imported graphics.
 pub mod render_check;
+/// Read-only verification of legacy store migration prerequisites.
+pub mod store_migration;
 
 /// Compile one admitted independently authored title.
 pub mod title_build;
@@ -81,6 +83,8 @@ use games_platform::ir::toolchain;
 const USAGE: &str = concat!(
     "usage: games-build build TITLE [linux-x86-64]\n",
     "games-build package TITLE [OUTPUT]\n",
+    "games-build bundle migration-audit TITLE PARENT STORE_ENTRIES ",
+    "STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle upgrade PARENT MANIFEST_SHA256 ",
     "MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle replace-media PARENT BASE_SHA256 KEY ",
@@ -198,6 +202,7 @@ enum Command {
     BuildTitle(title_build::Title),
     Check(ImportProfile, OsString, ContentHash),
     Import(ImportProfile, Arguments),
+    MigrationAudit(store_migration::Audit),
     ObjectCheck(Machine, OsString, OsString),
     PackageTitle(title_build::Title, Option<OsString>),
     PaletteCheck(Machine, OsString, OsString),
@@ -239,6 +244,11 @@ impl Command {
                     title_build::Title::parse(title, &[])?,
                     output,
                 ))
+            },
+            (Some("bundle"), Some("migration-audit")) => {
+                Ok(Self::MigrationAudit(store_migration::Audit::parse(
+                    args.collect(),
+                )?))
             },
             (Some("bundle"), Some("upgrade")) => {
                 Self::parse_upgrade(args.collect())
@@ -600,6 +610,7 @@ impl Command {
 
     fn run_assets(self) -> Result<(), String> {
         match self {
+            Self::MigrationAudit(audit) => audit.run(),
             Self::Upgrade(parent, digest, limits) => {
                 publication::upgrade(&parent, digest, limits)
             },

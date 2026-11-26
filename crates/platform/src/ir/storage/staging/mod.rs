@@ -30,6 +30,8 @@
 //   - Reject unsupported storage, collisions and incomplete output.
 
 //! Portable private staging and publication.
+/// Verified migration planning and private shared-store staging.
+pub mod migration;
 
 #[cfg(test)]
 use std::collections::BTreeMap;
