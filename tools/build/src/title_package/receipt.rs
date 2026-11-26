@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded native package receipt and independent readback.
+//   - Bounded target-specific package receipt and independent readback.
 // - Must-Not:
 //   - Authenticate origins, execute files or claim ABI compatibility.
 // - Allows:
@@ -46,10 +46,12 @@ use games_platform::ir::storage::file::{AuthoredFileKind, snapshot_authored};
 use games_platform::ir::storage::{PathKind, directory_entries, path_kind};
 
 use super::{
-    MAX_DOCUMENT, MAX_EXECUTABLE, MAX_FILES, MAX_PACKAGE, RECEIPT,
+    INDEX_HTML, MAX_DOCUMENT, MAX_EXECUTABLE, MAX_FILES, MAX_PACKAGE, RECEIPT,
     admit_document,
 };
-use crate::title_build::{NATIVE_TARGET, Title, local_path};
+use crate::title_build::{
+    BROWSER_INDEX, BROWSER_SCRIPT, Distribution, local_path,
+};
 
 const CONTENTS: &str = "\nContents:\n";
 const MAX_TREE_ENTRIES: usize = 1024;
@@ -74,7 +76,7 @@ pub(super) struct Receipt {
 impl Receipt {
     pub(super) fn add(
         &mut self,
-        title: Title,
+        title: Distribution,
         path: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
@@ -123,12 +125,12 @@ impl Receipt {
     }
 
     fn check_file(
-        title: Title,
+        title: Distribution,
         output: &OsStr,
         path: &str,
         entry: Entry,
     ) -> Result<(), String> {
-        let kind = if path == title.binary() {
+        let kind = if path == title.binary() && !title.is_browser() {
             AuthoredFileKind::Executable
         } else {
             AuthoredFileKind::Document
@@ -142,9 +144,15 @@ impl Receipt {
             return Err(format!("package file identity mismatch: {path}"));
         }
         if path == title.binary() {
-            admit_executable(NATIVE_TARGET, &data)
+            admit_executable(title.target(), &data)
                 .map_err(|error| error.to_string())?;
         } else {
+            if title.is_browser()
+                && path == BROWSER_INDEX
+                && data != INDEX_HTML.as_bytes()
+            {
+                return Err("unexpected browser bootstrap".into());
+            }
             admit_document(&data)
                 .map_err(|error| format!("package document {path}: {error}"))?;
         }
@@ -165,7 +173,7 @@ impl Receipt {
         Ok(())
     }
 
-    pub(super) fn encode(&self, title: Title) -> Result<String, String> {
+    pub(super) fn encode(&self, title: Distribution) -> Result<String, String> {
         let executable = self
             .entries
             .get(title.binary())
@@ -177,16 +185,36 @@ impl Receipt {
             return Err(String::from("missing required package document"));
         }
         let _tree = self.tree()?;
+        if title.is_browser()
+            && [BROWSER_INDEX, BROWSER_SCRIPT]
+                .iter()
+                .any(|path| !self.entries.contains_key(*path))
+        {
+            return Err("missing required browser binding file".into());
+        }
+        let label = if title.is_browser() {
+            "Module"
+        } else {
+            "Executable"
+        };
+        let requirements = if title.is_browser() {
+            concat!(
+                "Requires a modern browser with WebGL 2 ",
+                "and local directory selection.\n"
+            )
+        } else {
+            "Requires compatible GNU/Linux system libraries and SDL2.\n"
+        };
         let mut text = format!(
-            "Title: {}\nTarget: {}\nExecutable bytes: {}\n\
-             Executable SHA-256: {}\n\
-             Requires compatible GNU/Linux system libraries and SDL2.\n\
+            "Title: {}\nTarget: {}\n{label} bytes: {}\n\
+             {label} SHA-256: {}\n\
+             {requirements}\
              No system libraries, original media or assets included.\n\
              Obtain and import lawful original assets locally.\n\
              This is a local prototype package, not a portable release.\n\
              Receipt format: 1\n{CONTENTS}",
-            title.binary(),
-            NATIVE_TARGET.triple(),
+            title.title().binary(),
+            title.target().triple(),
             executable.bytes,
             executable.digest,
         );
@@ -209,7 +237,7 @@ impl Receipt {
 
     fn insert(
         &mut self,
-        title: Title,
+        title: Distribution,
         path: &str,
         entry: Entry,
     ) -> Result<(), String> {
@@ -222,7 +250,11 @@ impl Receipt {
         }
         let limit = if path == title.binary() {
             MAX_EXECUTABLE
-        } else if REQUIRED.contains(&path) || path.starts_with("licenses/") {
+        } else if REQUIRED.contains(&path)
+            || path.starts_with("licenses/")
+            || (title.is_browser()
+                && [BROWSER_INDEX, BROWSER_SCRIPT].contains(&path))
+        {
             MAX_DOCUMENT
         } else {
             return Err(String::from("unrecognized package receipt path"));
@@ -239,7 +271,7 @@ impl Receipt {
         Ok(())
     }
 
-    fn parse(title: Title, bytes: &[u8]) -> Result<Self, String> {
+    fn parse(title: Distribution, bytes: &[u8]) -> Result<Self, String> {
         let text = str::from_utf8(bytes).map_err(|error| error.to_string())?;
         let (_header, contents) = text
             .split_once(CONTENTS)
@@ -282,7 +314,7 @@ impl Receipt {
     }
 
     pub(super) fn verify(
-        title: Title,
+        title: Distribution,
         output: &OsStr,
     ) -> Result<String, String> {
         if path_kind(output).map_err(|error| error.to_string())?
@@ -332,8 +364,9 @@ mod tests {
 
     use super::super::Prepared;
     use super::*;
+    use crate::title_build::Title;
 
-    const TITLE: Title = Title::SimpsonsArcade;
+    const TITLE: Distribution = Distribution::native(Title::SimpsonsArcade);
     const LICENCE: &str = "licenses/example-1/LICENSE-MIT";
     const FIXTURE_FILES: [FixtureFile; 4] = [
         ("LICENSE", b"licence"),
@@ -361,6 +394,46 @@ mod tests {
         }
         prepared.finish_receipt(TITLE)?;
         prepared.publish(&local_path(root.location(), "package")?)
+    }
+
+    #[test]
+    fn browser_receipt_requires_exact_binding_tree() -> Result<(), String> {
+        let selection =
+            Distribution::parse("simpsons-arcade", &["webassembly".into()])?;
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let output = local_path(root.location(), "browser")?;
+        let module = fixtures::browser_module_fixture();
+        let mut prepared = Prepared::default();
+        prepared.add(selection.binary().into(), module.to_vec(), false)?;
+        prepared.add(
+            BROWSER_INDEX.into(),
+            INDEX_HTML.as_bytes().to_vec(),
+            false,
+        )?;
+        for (path, bytes) in FIXTURE_FILES {
+            prepared.add(path.into(), bytes.to_vec(), false)?;
+        }
+        require(prepared.finish_receipt(selection).is_err())?;
+        prepared.add(
+            BROWSER_SCRIPT.into(),
+            b"export default function init() {}".to_vec(),
+            false,
+        )?;
+        prepared.finish_receipt(selection)?;
+        prepared.publish(&output)?;
+        let report = Receipt::verify(selection, &output)?;
+        require(report.starts_with("Verified 8 package files ("))?;
+        require(Receipt::verify(TITLE, &output).is_err())?;
+        let program = format!("browser/{}", selection.binary());
+        root.make_executable(&program)
+            .map_err(|error| error.to_string())?;
+        require(Receipt::verify(selection, &output).is_err())?;
+        root.write_file(&program, module)
+            .map_err(|error| error.to_string())?;
+        require(Receipt::verify(selection, &output) == Ok(report))?;
+        root.write_file("browser/asset.bin", b"unexpected")
+            .map_err(|error| error.to_string())?;
+        require(Receipt::verify(selection, &output).is_err())
     }
 
     #[test]

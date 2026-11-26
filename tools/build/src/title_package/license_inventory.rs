@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Selected native title dependency licence-text inventory.
+//   - Selected title distribution dependency licence-text inventory.
 // - Must-Not:
 //   - Copy original media, resolve new dependencies or claim legal clearance.
 // - Allows:
@@ -38,7 +38,7 @@ use games_platform::ir::storage::{
 };
 use serde::Deserialize;
 
-use crate::title_build::{Title, local_path};
+use crate::title_build::{Distribution, local_path};
 
 const REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const SDL_VERSION: &str = "0.39.0";
@@ -96,8 +96,11 @@ impl Inventory {
         Ok(())
     }
 
-    pub(super) fn load(root: &OsStr, title: Title) -> Result<Self, String> {
-        let manifest = local_path(root, title.manifest())?;
+    pub(super) fn load(
+        root: &OsStr,
+        title: Distribution,
+    ) -> Result<Self, String> {
+        let manifest = local_path(root, title.title().manifest())?;
         let bytes = title
             .request()?
             .metadata(root, &manifest)
@@ -384,7 +387,7 @@ struct Resolve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::title_build::workspace_root;
+    use crate::title_build::{Title, workspace_root};
 
     fn package(name: &str, license: &str) -> Package {
         Package {
@@ -408,10 +411,32 @@ mod tests {
     }
 
     #[test]
+    fn browser_inventory_uses_browser_dependency_selection()
+    -> Result<(), String> {
+        let root = workspace_root()?;
+        let selection =
+            Distribution::parse("simpsons-arcade", &["webassembly".into()])?;
+        let inventory = Inventory::load(&root, selection)?;
+        if !inventory.report.contains("wasm-bindgen\t")
+            || inventory.report.contains("sdl2\t")
+            || inventory.documents.is_empty()
+        {
+            return Err(
+                "browser licence inventory has unexpected target dependencies"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn current_title_inventory_uses_the_registered_manifest()
     -> Result<(), String> {
         let root = workspace_root()?;
-        let inventory = Inventory::load(&root, Title::SimpsonsArcade)?;
+        let inventory = Inventory::load(
+            &root,
+            Distribution::native(Title::SimpsonsArcade),
+        )?;
         if !inventory.report.contains("games-simpsons-arcade\t")
             || inventory.documents.is_empty()
         {

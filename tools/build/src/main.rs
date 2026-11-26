@@ -62,7 +62,7 @@ pub mod store_migration;
 /// Compile one admitted independently authored title.
 pub mod title_build;
 
-/// Package the selected authored native executable.
+/// Package the selected authored distribution.
 pub mod title_package;
 
 use std::ffi::{OsStr, OsString};
@@ -81,9 +81,9 @@ use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
-    "usage: games-build build TITLE [linux-x86-64]\n",
-    "games-build package TITLE [OUTPUT]\n",
-    "games-build package-check TITLE OUTPUT\n",
+    "usage: games-build build TITLE [linux-x86-64|webassembly]\n",
+    "games-build package TITLE [OUTPUT [TARGET]]\n",
+    "games-build package-check TITLE OUTPUT [TARGET]\n",
     "games-build bundle migration-audit TITLE PARENT STORE_ENTRIES ",
     "STORE_BYTES MANIFEST_BYTES PAYLOAD_BYTES TOTAL_BYTES COUNT\n",
     "games-build bundle migration-catalogue TITLE PARENT STORE_ENTRIES ",
@@ -218,15 +218,16 @@ enum Command {
     #[cfg(feature = "native-preview")]
     AudioCheck(Machine, audio_check::Arguments),
     BackgroundCheck(Machine, reference_background::Arguments),
-    BuildTitle(title_build::Title),
+    BuildTitle(title_build::Distribution),
     Check(ImportProfile, OsString, ContentHash),
     Import(ImportProfile, Arguments),
     MigrationAudit(store_migration::Audit),
     MigrationCatalogue(Box<store_migration::Catalogue>),
     MigrationRehearsal(Box<store_migration::rehearsal::Rehearsal>),
     ObjectCheck(Machine, OsString, OsString),
-    PackageCheck(title_build::Title, OsString),
-    PackageTitle(title_build::Title, Option<OsString>),
+    PackageCheck(title_build::Distribution, OsString),
+    PackageExplicit(title_build::Distribution, OsString),
+    PackageTitle(title_build::Title),
     PaletteCheck(Machine, OsString, OsString),
     PriorityCheck(Machine, OsString, OsString),
     Publish(ImportProfile, OsString, Arguments),
@@ -254,25 +255,34 @@ impl Command {
             (Some("import"), Some(source_format)) => {
                 Self::parse_import(source_format, args)
             },
-            (Some("build"), Some(title)) => Ok(Self::BuildTitle(
-                title_build::Title::parse(title, &args.collect::<Vec<_>>())?,
-            )),
+            (Some("build"), Some(title)) => {
+                Ok(Self::BuildTitle(title_build::Distribution::parse(
+                    title,
+                    &args.collect::<Vec<_>>(),
+                )?))
+            },
             (Some("package-check"), Some(title)) => {
-                let [output] =
-                    <[OsString; 1]>::try_from(args.collect::<Vec<_>>())
-                        .map_err(|_args| String::from(USAGE))?;
+                let output = args.next().ok_or_else(|| String::from(USAGE))?;
                 Ok(Self::PackageCheck(
-                    title_build::Title::parse(title, &[])?,
+                    title_build::Distribution::parse(
+                        title,
+                        &args.collect::<Vec<_>>(),
+                    )?,
                     output,
                 ))
             },
             (Some("package"), Some(title)) => {
-                let output = args.next();
-                if args.next().is_some() {
-                    return Err(String::from(USAGE));
-                }
-                Ok(Self::PackageTitle(
-                    title_build::Title::parse(title, &[])?,
+                let Some(output) = args.next() else {
+                    return Ok(Self::PackageTitle(title_build::Title::parse(
+                        title,
+                        &[],
+                    )?));
+                };
+                Ok(Self::PackageExplicit(
+                    title_build::Distribution::parse(
+                        title,
+                        &args.collect::<Vec<_>>(),
+                    )?,
                     output,
                 ))
             },
@@ -622,10 +632,10 @@ impl Command {
             Self::PackageCheck(title, output) => {
                 title_package::check(title, &output)
             },
-            Self::PackageTitle(title, Some(output)) => {
+            Self::PackageExplicit(title, output) => {
                 title_package::run(title, &output)
             },
-            Self::PackageTitle(title, None) => title_package::configured(title),
+            Self::PackageTitle(title) => title_package::configured(title),
             Self::ArtPublish(machine, args) => args.run(machine),
             Self::StripPublish(machine, args) => args.run(machine),
             #[cfg(feature = "native-preview")]
@@ -694,6 +704,7 @@ impl Command {
             | Self::ObjectCheck(..)
             | Self::PackageCheck(..)
             | Self::PackageTitle(..)
+            | Self::PackageExplicit(..)
             | Self::PaletteCheck(..)
             | Self::PriorityCheck(..)
             | Self::SampleCheck(..)
@@ -848,7 +859,8 @@ mod tests {
         let args = ["build", "simpsons-arcade", "linux-x86-64"];
         assert!(matches!(
             Command::parse(args.into_iter().map(OsString::from)),
-            Ok(Command::BuildTitle(title_build::Title::SimpsonsArcade))
+            Ok(Command::BuildTitle(selection))
+                if !selection.is_browser()
         ));
         for invalid in [["build", "metal-slug", "linux-x86-64"], [
             "build",
@@ -867,7 +879,8 @@ mod tests {
         let args = ["package", "simpsons-arcade", "local-package"];
         assert!(matches!(
             Command::parse(args.into_iter().map(OsString::from)),
-            Ok(Command::PackageTitle(title_build::Title::SimpsonsArcade, _))
+            Ok(Command::PackageExplicit(selection, _))
+                if !selection.is_browser()
         ));
         assert!(matches!(
             Command::parse(
@@ -875,10 +888,7 @@ mod tests {
                     .map(OsString::from)
                     .into_iter()
             ),
-            Ok(Command::PackageTitle(
-                title_build::Title::SimpsonsArcade,
-                None
-            ))
+            Ok(Command::PackageTitle(title_build::Title::SimpsonsArcade))
         ));
         let invalid: [&[&str]; 2] = [&["package", "metal-slug", "out"], &[
             "package",
@@ -894,11 +904,30 @@ mod tests {
     }
 
     #[test]
+    fn browser_commands_admit_only_the_explicit_webassembly_target() {
+        for command in ["build", "package", "package-check"] {
+            let mut args = vec![command, "simpsons-arcade"];
+            if command != "build" {
+                args.push("local-package");
+            }
+            args.push("webassembly");
+            let parsed = Command::parse(args.into_iter().map(OsString::from));
+            assert!(matches!(
+                parsed,
+                Ok(Command::BuildTitle(selection)
+                    | Command::PackageExplicit(selection, _)
+                    | Command::PackageCheck(selection, _))
+                    if selection.is_browser()
+            ));
+        }
+    }
+
+    #[test]
     fn package_check_requires_a_title_and_explicit_directory() {
         let args = ["package-check", "simpsons-arcade", "local-package"];
         assert!(matches!(
             Command::parse(args.into_iter().map(OsString::from)),
-            Ok(Command::PackageCheck(title_build::Title::SimpsonsArcade, _))
+            Ok(Command::PackageCheck(selection, _)) if !selection.is_browser()
         ));
         let invalid: [&[&str]; 3] = [
             &["package-check", "simpsons-arcade"],

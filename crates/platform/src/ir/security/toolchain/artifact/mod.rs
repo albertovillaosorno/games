@@ -34,6 +34,13 @@
 /// Authored structural fixtures, never executable programs.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures {
+    /// Minimal version-one Wasm module with one defined function.
+    #[must_use]
+    pub const fn browser_module_fixture() -> &'static [u8] {
+        b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\
+            \x03\x02\x01\0\x0a\x04\x01\x02\0\x0b"
+    }
+
     /// Construct a minimal structurally admitted x86-64 ELF snapshot.
     /// # Errors
     /// Reports an invalid fixture field.
@@ -71,6 +78,8 @@ pub mod fixtures {
     }
 }
 
+mod wasm;
+
 use std::fmt;
 
 use crate::ir::toolchain::Target;
@@ -95,7 +104,7 @@ impl fmt::Display for ExecutableAdmissionError {
                 f.write_str("executable format unavailable for target")
             },
             Self::InvalidStructure => {
-                f.write_str("expected an x86-64 ELF executable")
+                f.write_str("invalid authored executable structure")
             },
         }
     }
@@ -113,9 +122,10 @@ pub fn admit_executable(
     match target {
         Target::LinuxX86_64Gnu => native_entry(bytes)
             .ok_or(ExecutableAdmissionError::InvalidStructure),
+        Target::WebAssembly => wasm::module(bytes)
+            .ok_or(ExecutableAdmissionError::InvalidStructure),
         Target::AndroidArm64
         | Target::LinuxArm64Gnu
-        | Target::WebAssembly
         | Target::WindowsArm64Gnullvm
         | Target::WindowsX86_64Gnu => {
             Err(ExecutableAdmissionError::UnsupportedTarget)
@@ -251,8 +261,12 @@ mod tests {
                 == Err(ExecutableAdmissionError::InvalidStructure),
         )?;
         let elf = executable_fixture()?;
+        require(
+            admit_executable(Target::WebAssembly, &elf)
+                == Err(ExecutableAdmissionError::InvalidStructure),
+        )?;
         for target in Target::portable_checks() {
-            if target != Target::LinuxX86_64Gnu {
+            if !matches!(target, Target::LinuxX86_64Gnu | Target::WebAssembly) {
                 require(
                     admit_executable(target, &elf)
                         == Err(ExecutableAdmissionError::UnsupportedTarget),

@@ -2,8 +2,8 @@
 
 ## Native prerequisites and smoke tests
 
-Android ARM64, browser WASM (WebGPU or compatible fallback) and Windows are
-planned targets; no blanket compatibility is promised.
+Linux x86-64 and a WebGL 2 browser preview are available. Android ARM64
+and Windows remain planned targets; no blanket compatibility is promised.
 
 Linux development requires the system SDL2 library and its pkg-config
 development metadata. The native graphics adapter requests acceleration
@@ -86,8 +86,9 @@ Build the available GNU/Linux x86-64 title preview with:
 cargo run --locked -p games-build -- build simpsons-arcade
 ```
 
-The optional target is `linux-x86-64`; other targets and unknown titles are
-rejected. This produces a release executable without original assets.
+The optional native target is `linux-x86-64`. The browser target is
+`webassembly`; other targets and unknown titles are rejected. The build
+produces an authored release executable or an unbound Wasm module.
 Create a local prototype package in a new directory with:
 
 ```sh
@@ -115,9 +116,33 @@ with the receipt, not provenance,
 licence sufficiency, concurrent filesystem isolation or runtime ABI.
 The title requires explicit local art bundles; see the
 [title TODO](../../docs/todo/open/games/simpsons-arcade.mdc).
-For persistent native packaging, set the owner-only local `.env` from
+On a GNU/Linux x86-64 contributor host, download the pinned binding CLI
+with `cargo download wasm-bindgen-release`, verify the archive checksum,
+and extract the official release into its downloaded version directory
+under `.reference/tools/wasm-bindgen-release/0.2.127/`. Packaging checks
+the executable identity before staging and invoking it. Build and check
+an asset-free browser package with:
+
+```sh
+cargo run --locked -p games-build -- package simpsons-arcade \
+  .temp/local-web webassembly
+cargo run --locked -p games-build -- package-check simpsons-arcade \
+  .temp/local-web webassembly
+```
+
+Serve the package directory through a trusted local HTTP server with
+JavaScript and Wasm MIME types; open `index.html` in a compatible browser.
+Select the local canonical assets directory containing `launch.local`.
+The catalogue must use `parent=.`, windowed presentation, no native
+settings/control/device paths, and `launch-poses.txt` if poses are used.
+No original assets are included in the package or automatically uploaded.
+Browser preferences remain session-only; physical device acceptance and
+broader browser compatibility are not established.
+
+For persistent packaging, set the owner-only local `.env` from
 `.env.example`. Use absolute asset and output roots and
-`GAMES_TARGET=linux-x86-64`. Create the trusted private
+`GAMES_TARGET=linux-x86-64` or `GAMES_TARGET=webassembly`. Create the trusted
+private
 `<output-root>/simpsons-arcade/bin/` parent, then omit the explicit
 output argument:
 
@@ -126,7 +151,7 @@ cargo run --locked -p games-build -- package simpsons-arcade
 ```
 
 The resulting package is at
-`<output-root>/simpsons-arcade/bin/linux-x86-64/`. Asset and executable
+`<output-root>/simpsons-arcade/bin/<target>/`. Asset and executable
 roots may be equal, but the resolved asset and package locations must
 not overlap. Packaging does not import, search, copy or modify assets.
 An existing package is rejected rather than overwritten. Supply a local

@@ -610,3 +610,35 @@ no file reads or frames and no remaining picker or canvas. The initial
 folder-selection automation did not complete successfully; original
 asset-backed launch is not yet verified. Browser distribution packaging,
 persistent preferences and physical-device acceptance remain open.
+
+Subsequent isolated Firefox/Xvfb checks of ea49249 completed real
+trusted chooser selection and explicit confirmation with the local
+canonical assets. The movement run selected 743 files, admitted 740
+reads totalling 43,211,303 bytes, delivered 71 callbacks (peak one
+outstanding), 59 blits and changed movement framebuffer hashes. It
+completed once with no picker or canvas left. The attack run delivered
+91 callbacks (peak one) and 79 blits, submitted and ended 126 nonzero PCM
+buffers, settled one resume, suspend and close, and left the context
+closed. A trusted invalid-folder selection admitted no reads or frames;
+a deliberately wrong manifest digest admitted exactly one 22-byte read,
+returned PayloadMismatch, and admitted no frames or audio. Both failed
+selections completed once and removed the picker and canvas. These
+checks used software rendering and do not establish physical audibility
+or device compatibility.
+
+The authored build command now supports the explicit webassembly target
+and produces an unbound Wasm module. Packaging verifies the pinned
+wasm-bindgen 0.2.127 executable identity, binds an admitted authored
+module inside private staging, and publishes only the browser bootstrap,
+generated JavaScript, bound Wasm and selected licence documents with an
+independent exact-tree receipt check. Original assets and the binding
+tool are not packaged. Native packaging retains its receipt contract.
+
+Fresh validation 1795684066442881974-3935563 passed. An actual browser
+package and independent package-check each verified 88 files totalling
+1,467,554 bytes, including 967,727 bytes of Wasm, 41,036 bytes of
+JavaScript and a 568-byte bootstrap. Receipt SHA-256:
+8df1787978d4afa08d60faf70b2ccd39717b265702d79cbf0e98896870eec13d.
+This checks package contents, not complete runtime ABI or release
+acceptance. Android SDK/NDK, Android packages, physical-device checks,
+durable title preferences and broader browser acceptance remain open.

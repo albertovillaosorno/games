@@ -31,6 +31,7 @@
 
 //! Linux toolchain execution for independently authored workspace artifacts.
 
+mod browser;
 mod environment;
 mod reference;
 mod validation;
@@ -43,13 +44,14 @@ use crate::ir::identification::{self, Architecture, OperatingSystem};
 use crate::ir::security::toolchain::CargoArguments;
 use crate::ir::toolchain::reference::ReferenceTool;
 use crate::ir::toolchain::{
-    Target, ToolVersion, ToolchainError, ToolchainFactory, ValidationTool,
+    BrowserBindings, Target, ToolVersion, ToolchainError, ToolchainFactory,
+    ValidationTool,
 };
 
 impl ToolchainFactory for () {
     fn available(target: Target) -> bool {
         match target {
-            Target::LinuxX86_64Gnu => {
+            Target::LinuxX86_64Gnu | Target::WebAssembly => {
                 let identity = identification::execution();
                 identity.architecture == Architecture::X86_64
                     && identity.system == OperatingSystem::Linux
@@ -57,10 +59,18 @@ impl ToolchainFactory for () {
             },
             Target::AndroidArm64
             | Target::LinuxArm64Gnu
-            | Target::WebAssembly
             | Target::WindowsArm64Gnullvm
             | Target::WindowsX86_64Gnu => false,
         }
+    }
+
+    fn bind_browser(
+        args: CargoArguments<'_>,
+        root: &OsStr,
+        parent: &OsStr,
+    ) -> Result<BrowserBindings, ToolchainError> {
+        let module = Self::compile(args, root, Target::WebAssembly)?;
+        browser::bind(root, parent, &module)
     }
 
     fn compile(
@@ -193,10 +203,15 @@ fn executable_path(
     args: CargoArguments<'_>,
     target: Target,
 ) -> PathBuf {
-    target_dir
+    let artifact = target_dir
         .join(target.triple())
         .join("release")
-        .join(args.binary())
+        .join(args.binary());
+    if target == Target::WebAssembly {
+        artifact.with_extension("wasm")
+    } else {
+        artifact
+    }
 }
 
 #[cfg(test)]
@@ -218,6 +233,21 @@ mod tests {
             .join("release/demo");
         if executable_path(Path::new("target"), args, target) != expected {
             return Err("unexpected Cargo artifact path".into());
+        }
+        let browser = Target::WebAssembly;
+        let request = CargoArguments::new(
+            "games-demo",
+            "demo-browser",
+            "preview",
+            browser.triple(),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+        if executable_path(Path::new("target"), request, browser)
+            != Path::new("target")
+                .join(browser.triple())
+                .join("release/demo-browser.wasm")
+        {
+            return Err("unexpected Wasm artifact path".into());
         }
         Ok(())
     }

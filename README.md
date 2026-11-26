@@ -23,9 +23,9 @@ developers or publishers.
 
 ## Platforms
 
-Linux x86-64 is the primary development target. Windows, Android ARM64
-and WebAssembly are planned through shared adapters. No title has
-completed release acceptance.
+Linux x86-64 is the primary development target. An asset-free WebAssembly
+browser preview package is also available. Windows and Android ARM64 remain
+planned through shared adapters. No title has completed release acceptance.
 
 ## Getting started
 

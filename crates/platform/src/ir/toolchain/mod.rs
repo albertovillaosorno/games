@@ -55,7 +55,7 @@ pub enum Target {
     LinuxArm64Gnu,
     /// GNU/Linux x86-64 distribution target.
     LinuxX86_64Gnu,
-    /// Browser-independent WebAssembly core target.
+    /// WebAssembly target for browser distribution and portable checks.
     WebAssembly,
     /// Windows ARM64 core target.
     WindowsArm64Gnullvm,
@@ -167,9 +167,23 @@ impl fmt::Display for ToolchainError {
     }
 }
 
+/// Authored browser binding artifacts, without original media.
+#[derive(Debug)]
+pub struct BrowserBindings {
+    /// Generated browser JavaScript module.
+    pub javascript: Vec<u8>,
+    /// Corresponding bound WebAssembly module.
+    pub module: Vec<u8>,
+}
+
 /// Private adapter for admitted workspace toolchain requests.
 pub(crate) trait ToolchainFactory {
     fn available(target: Target) -> bool;
+    fn bind_browser(
+        args: CargoArguments<'_>,
+        root: &OsStr,
+        parent: &OsStr,
+    ) -> Result<BrowserBindings, ToolchainError>;
     fn compile(
         args: CargoArguments<'_>,
         root: &OsStr,
@@ -203,6 +217,25 @@ pub struct CargoTitle<'name> {
 }
 
 impl<'name> CargoTitle<'name> {
+    /// Compile and bind the selected authored browser binary.
+    ///
+    /// The parent is trusted private staging space. No references are
+    /// downloaded automatically. The pinned binding tool must be present.
+    /// # Errors
+    /// Rejects non-browser targets, missing tools and unsuccessful binding.
+    pub fn bind_browser(
+        self,
+        root: &OsStr,
+        parent: &OsStr,
+    ) -> Result<BrowserBindings, ToolchainError> {
+        if self.target != Target::WebAssembly
+            || !<() as ToolchainFactory>::available(self.target)
+        {
+            return Err(ToolchainError::UnsupportedHost);
+        }
+        <() as ToolchainFactory>::bind_browser(self.args, root, parent)
+    }
+
     /// Compile the selected authored executable using the local toolchain.
     ///
     /// # Errors
@@ -288,7 +321,9 @@ impl<'name> CargoTitle<'name> {
     where
         Factory: ToolchainFactory,
     {
-        if !Factory::available(self.target) {
+        if self.target != Target::LinuxX86_64Gnu
+            || !Factory::available(self.target)
+        {
             return Err(ToolchainError::UnsupportedHost);
         }
         Factory::smoke(self.args, root, catalogue)
@@ -350,6 +385,14 @@ mod tests {
     impl<const AVAILABLE: bool> ToolchainFactory for Recording<AVAILABLE> {
         fn available(_target: Target) -> bool {
             AVAILABLE
+        }
+
+        fn bind_browser(
+            _args: CargoArguments<'_>,
+            _root: &OsStr,
+            _parent: &OsStr,
+        ) -> Result<BrowserBindings, ToolchainError> {
+            Err(ToolchainError::UnsupportedHost)
         }
 
         fn compile(
@@ -442,7 +485,7 @@ mod tests {
             "wasm32-unknown-unknown",
         ],);
         for target in Target::portable_checks() {
-            if target != Target::LinuxX86_64Gnu {
+            if !matches!(target, Target::LinuxX86_64Gnu | Target::WebAssembly) {
                 assert!(!target.available(), "unsupported executable target");
             }
         }

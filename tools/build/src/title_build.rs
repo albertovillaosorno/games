@@ -42,6 +42,11 @@ use games_platform::ir::toolchain::{self, CargoTitle, Target};
 
 pub(crate) const NATIVE_TARGET: Target = Target::LinuxX86_64Gnu;
 const PREVIEW_FEATURE: &str = "native-preview";
+const BROWSER_FEATURE: &str = "browser-preview";
+const BROWSER_BINARY: &str = "simpsons-arcade-browser-preview";
+pub(crate) const BROWSER_MODULE: &str = "game_bg.wasm";
+pub(crate) const BROWSER_SCRIPT: &str = "game.js";
+pub(crate) const BROWSER_INDEX: &str = "index.html";
 
 /// Buildable title in the current workspace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,12 +60,6 @@ impl Title {
         match self {
             Self::SimpsonsArcade => "simpsons-arcade",
         }
-    }
-
-    pub(crate) fn compile(self, root: &OsStr) -> Result<OsString, String> {
-        self.request()?
-            .compile(root)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) const fn manifest(self) -> &'static str {
@@ -103,19 +102,103 @@ impl Title {
         CargoTitle::new(package, self.binary(), PREVIEW_FEATURE, NATIVE_TARGET)
             .map_err(|error| error.to_string())
     }
+}
 
-    /// Build the release executable using the selected host toolchain.
-    ///
+/// A selected authored title and one of its supported distributions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Distribution {
+    target: Target,
+    title: Title,
+}
+
+impl Distribution {
+    pub(crate) const fn binary(self) -> &'static str {
+        if self.is_browser() {
+            BROWSER_MODULE
+        } else {
+            self.title.binary()
+        }
+    }
+
+    pub(crate) const fn is_browser(self) -> bool {
+        matches!(self.target, Target::WebAssembly)
+    }
+
+    pub(crate) const fn native(title: Title) -> Self {
+        Self {
+            target: NATIVE_TARGET,
+            title,
+        }
+    }
+
+    pub(crate) fn new(title: Title, target: Target) -> Result<Self, String> {
+        if target == NATIVE_TARGET {
+            Ok(Self::native(title))
+        } else if target == Target::WebAssembly {
+            Ok(Self { target, title })
+        } else {
+            Err(format!(
+                "target {} is unavailable for distribution; core only",
+                target.name()
+            ))
+        }
+    }
+
+    /// Admit a title and optional supported target identifier.
     /// # Errors
-    ///
-    /// Returns an error for an unsupported host or an unsuccessful build.
+    /// Rejects unknown titles, targets and additional arguments.
+    pub fn parse(title: &str, args: &[OsString]) -> Result<Self, String> {
+        let selected = Title::parse(title, &[])?;
+        let target = match args {
+            [] => NATIVE_TARGET,
+            [name] => Target::portable_checks()
+                .into_iter()
+                .find(|target| name == target.name())
+                .ok_or(
+                    "expected optional target linux-x86-64 or webassembly",
+                )?,
+            _ => return Err("expected one optional target".into()),
+        };
+        Self::new(selected, target)
+    }
+
+    pub(crate) fn request(self) -> Result<CargoTitle<'static>, String> {
+        if !self.is_browser() {
+            return self.title.request();
+        }
+        let package = match self.title {
+            Title::SimpsonsArcade => "games-simpsons-arcade",
+        };
+        CargoTitle::new(package, BROWSER_BINARY, BROWSER_FEATURE, self.target)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Compile the selected release artifact.
+    /// # Errors
+    /// Rejects unsupported hosts and unsuccessful builds.
     pub fn run(self) -> Result<(), String> {
-        let executable = self.compile(&workspace_root()?)?;
+        let executable = self
+            .request()?
+            .compile(&workspace_root()?)
+            .map_err(|error| error.to_string())?;
+        let kind = if self.is_browser() {
+            "Unbound Wasm module"
+        } else {
+            "Executable"
+        };
         toolchain::write_line(&format!(
-            "Executable: {}",
+            "{kind}: {}",
             executable.to_string_lossy()
         ))
         .map_err(|error| error.to_string())
+    }
+
+    pub(crate) const fn target(self) -> Target {
+        self.target
+    }
+
+    pub(crate) const fn title(self) -> Title {
+        self.title
     }
 }
 

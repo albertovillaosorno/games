@@ -197,8 +197,8 @@ use crate::ir::toolchain::validation::ValidationBackend;
 use crate::ir::toolchain::validation::state::{StateFactory, StatePort};
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::{
-    Target, ToolVersion, ToolchainError, ToolchainFactory, ValidationTool,
-    reference::ReferenceTool,
+    BrowserBindings, Target, ToolVersion, ToolchainError, ToolchainFactory,
+    ValidationTool, reference::ReferenceTool,
 };
 
 #[cfg(all(feature = "interactive", target_os = "linux"))]
@@ -463,6 +463,14 @@ impl FixturePort for () {
 impl ToolchainFactory for () {
     fn available(_target: Target) -> bool {
         false
+    }
+
+    fn bind_browser(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _parent: &OsStr,
+    ) -> Result<BrowserBindings, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
     }
 
     fn compile(

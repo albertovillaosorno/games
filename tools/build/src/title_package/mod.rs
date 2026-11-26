@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Local packaging of the selected authored native executable.
+//   - Local packaging of the selected authored title distribution.
 // - Must-Not:
 //   - Package original media, search asset directories or bundle system libs.
 // - Allows:
@@ -21,11 +21,11 @@
 // - Merge-When:
 //   - Another tool duplicates authored native executable packaging.
 // - Summary:
-//   - Stage the release executable and dependency licence texts.
+//   - Stage authored release files and dependency licence texts.
 // - Description:
 //   - Preflight bounded sources; never overwrite an existing output.
 // - Usage:
-//   - games-build package TITLE OUTPUT
+//   - games-build package TITLE OUTPUT [TARGET]
 // - Defaults:
 //   - Local GNU/Linux x86-64 package, no assets or portability claim.
 
@@ -50,7 +50,8 @@ use games_platform::ir::toolchain::write_line;
 use self::license_inventory::Inventory;
 use self::receipt::Receipt;
 use crate::title_build::{
-    NATIVE_TARGET, Title, local_layout, local_path, workspace_root,
+    BROWSER_INDEX, BROWSER_MODULE, BROWSER_SCRIPT, Distribution, Title,
+    local_layout, local_path, workspace_root,
 };
 
 const MAX_DOCUMENT: NonZeroU64 = NonZeroU64::MIN.saturating_add(1_048_575);
@@ -58,6 +59,21 @@ const MAX_EXECUTABLE: NonZeroU64 = NonZeroU64::MIN.saturating_add(33_554_431);
 const MAX_FILES: usize = 256;
 const MAX_PACKAGE: usize = 67_108_864;
 const RECEIPT: &str = "PACKAGE.txt";
+const INDEX_HTML: &str = concat!(
+    "<!doctype html>\n<html lang=\"en\"><head>\n",
+    "<meta charset=\"utf-8\">\n",
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n",
+    "<title>Games title preview</title>\n</head><body>\n",
+    "<p>Select your locally imported canonical assets to start.</p>\n",
+    "<p id=\"status\" role=\"status\">Loading preview...</p>\n",
+    "<script type=\"module\">\n",
+    "import init from './game.js';\n",
+    "const status = document.getElementById('status');\n",
+    "try { await init(); status.textContent = 'Preview ready.'; }\n",
+    "catch (error) { status.textContent = 'Preview unavailable.'; ",
+    "console.error(error); }\n",
+    "</script>\n</body></html>\n",
+);
 
 #[derive(Debug)]
 struct PackageFile {
@@ -97,7 +113,7 @@ impl Prepared {
             .ok_or_else(|| String::from("package byte budget exceeded"))
     }
 
-    fn finish_receipt(&mut self, title: Title) -> Result<(), String> {
+    fn finish_receipt(&mut self, title: Distribution) -> Result<(), String> {
         let mut receipt = Receipt::default();
         for (path, file) in &self.files {
             receipt.add(title, path, &file.bytes)?;
@@ -107,16 +123,32 @@ impl Prepared {
 
     fn prepare(
         root: &OsStr,
-        title: Title,
-        executable: &OsStr,
+        title: Distribution,
+        parent: &OsStr,
         inventory: Inventory,
     ) -> Result<Self, String> {
-        let bytes = snapshot(executable, MAX_EXECUTABLE)
-            .map_err(|error| format!("authored executable: {error:?}"))?;
-        admit_executable(NATIVE_TARGET, &bytes)
-            .map_err(|error| error.to_string())?;
+        let request = title.request()?;
         let mut prepared = Self::default();
-        prepared.add(title.binary().into(), bytes, true)?;
+        if title.is_browser() {
+            let bindings = request
+                .bind_browser(root, parent)
+                .map_err(|error| error.to_string())?;
+            prepared.add(BROWSER_MODULE.into(), bindings.module, false)?;
+            prepared.add(BROWSER_SCRIPT.into(), bindings.javascript, false)?;
+            prepared.add(
+                BROWSER_INDEX.into(),
+                INDEX_HTML.as_bytes().to_vec(),
+                false,
+            )?;
+        } else {
+            let executable =
+                request.compile(root).map_err(|error| error.to_string())?;
+            let bytes = snapshot(&executable, MAX_EXECUTABLE)
+                .map_err(|error| format!("authored executable: {error:?}"))?;
+            admit_executable(title.target(), &bytes)
+                .map_err(|error| error.to_string())?;
+            prepared.add(title.binary().into(), bytes, true)?;
+        }
         for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
             prepared.add(
                 name.into(),
@@ -185,12 +217,10 @@ fn configured_with<Publish>(
     publish: Publish,
 ) -> Result<OsString, String>
 where
-    Publish: FnOnce(Title, &OsStr) -> Result<(), String>,
+    Publish: FnOnce(Distribution, &OsStr) -> Result<(), String>,
 {
     let layout = local_layout(root)?;
-    if layout.target() != NATIVE_TARGET {
-        return Err(String::from("configured package target is unsupported"));
-    }
+    let selection = Distribution::new(title, layout.target())?;
     let output = OsString::from(layout.binaries(title.binary())?);
     let assets = OsString::from(layout.assets(title.binary())?);
     if !path_is_absolute(&output).map_err(|error| error.to_string())?
@@ -216,25 +246,30 @@ where
     {
         return Err(String::from("package and asset paths overlap"));
     }
-    publish(title, &canonical_output)?;
+    publish(selection, &canonical_output)?;
     Ok(canonical_assets)
 }
 
-/// Build and package one admitted native title in a new local directory.
+/// Build and package one admitted title in a new local directory.
 ///
 /// # Errors
 /// Rejects build, licence inventory, source admission and filesystem errors.
 /// Publication is atomic; a post-rename sync failure is reported separately.
-pub fn run(title: Title, output: &OsStr) -> Result<(), String> {
+pub fn run(title: Distribution, output: &OsStr) -> Result<(), String> {
     if path_kind(output).map_err(|error| error.to_string())?
         != PathKind::Missing
     {
         return Err(String::from("package destination already exists"));
     }
     let root = workspace_root()?;
-    let executable = title.compile(&root)?;
     let inventory = Inventory::load(&root, title)?;
-    let prepared = Prepared::prepare(&root, title, &executable, inventory)?;
+    let parent = parent_path(output).map_err(|error| error.to_string())?;
+    let stage_parent = if parent.is_empty() {
+        OsStr::new(".")
+    } else {
+        parent
+    };
+    let prepared = Prepared::prepare(&root, title, stage_parent, inventory)?;
     prepared.publish(output)?;
     write_line(&format!("Package: {}", output.to_string_lossy()))
         .map_err(|error| error.to_string())?;
@@ -247,7 +282,7 @@ pub fn run(title: Title, output: &OsStr) -> Result<(), String> {
 ///
 /// # Errors
 /// Rejects unsupported receipts, inconsistent identities and extra entries.
-pub fn check(title: Title, output: &OsStr) -> Result<(), String> {
+pub fn check(title: Distribution, output: &OsStr) -> Result<(), String> {
     let report = Receipt::verify(title, output)?;
     write_line(&report).map_err(|error| error.to_string())
 }
@@ -380,7 +415,10 @@ mod tests {
             .map_err(|error| error.to_string())
     }
 
-    fn fixture_package(title: Title, output: &OsStr) -> Result<(), String> {
+    fn fixture_package(
+        title: Distribution,
+        output: &OsStr,
+    ) -> Result<(), String> {
         let mut prepared = Prepared::default();
         prepared.add(title.binary().into(), b"executable".to_vec(), true)?;
         prepared.add(RECEIPT.into(), b"receipt".to_vec(), false)?;
@@ -448,9 +486,10 @@ mod tests {
         fixture_configuration(&root, "assets", "output", "android-arm64")?;
         require(
             configured_with(root.location(), title, unexpected)
-                == Err(String::from(
-                    "configured package target is unsupported",
-                )),
+                == Err(String::from(concat!(
+                    "target android-arm64 is unavailable ",
+                    "for distribution; core only"
+                ))),
         )?;
         fixture_configuration(&root, "assets", "output", "linux-x86-64")?;
         require(
