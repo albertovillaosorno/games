@@ -9,23 +9,23 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Fixed contributor validation commands and their argument admission.
+//   - Fixed contributor validation requests and completion admission.
 // - Must-Not:
-//   - Access a filesystem, execute a process or interpret tool output.
+//   - Access a filesystem, execute a process or parse diagnostic bytes.
 // - Allows:
-//   - Inputs: Authored package identifiers, targets and Markdown names.
-//   - Outputs: Admitted executable and argument selections.
+//   - Inputs: Authored identifiers, selected targets and exit observations.
+//   - Outputs: Admitted arguments and consistent captured reports.
 //   - Side effects: None.
 // - Split-When:
 //   - A different validation protocol needs independent argument policy.
 // - Merge-When:
 //   - A shared request contract provides the same admission semantics.
 // - Summary:
-//   - Admit only the fixed workspace validation operations.
+//   - Admit fixed workspace operations and observed outcomes.
 // - Description:
-//   - Prevent options and arbitrary executable selection in dynamic inputs.
+//   - Bind report labels and success to admitted arguments and exit code.
 // - Usage:
-//   - Select a validation request before native process dispatch.
+//   - Admit a request before dispatch and construct its report afterward.
 // - Defaults:
 //   - Locked Cargo operations; reject unsafe or empty dynamic inputs.
 
@@ -36,6 +36,57 @@ use games_assets::archive::validate_path;
 
 use super::identifier;
 use crate::ir::toolchain::Target;
+
+/// Captured result of one admitted validation subprocess.
+#[derive(Debug)]
+pub struct Report {
+    /// Human-readable command for the local validation log.
+    pub command: String,
+    /// Exit status or other completion diagnostic.
+    pub diagnostic: String,
+    /// Numeric process exit code, absent if no code is available.
+    pub exit_code: Option<i32>,
+    /// Diagnostic output, in original bytes.
+    pub stderr: Vec<u8>,
+    /// Ordinary output, in original bytes.
+    pub stdout: Vec<u8>,
+    /// Whether the process exited successfully.
+    pub success: bool,
+}
+
+/// Native exit and byte-stream observations, without a claimed success flag.
+#[derive(Debug)]
+pub(crate) struct Completion {
+    pub(crate) diagnostic: String,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) stdout: Vec<u8>,
+}
+
+impl Report {
+    pub(crate) fn from_completion(
+        args: &Arguments,
+        completion: Completion,
+    ) -> Self {
+        let command = format!(
+            "{} {}",
+            args.program(),
+            args.args()
+                .iter()
+                .map(|arg| arg.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        Self {
+            command,
+            diagnostic: completion.diagnostic,
+            exit_code: completion.exit_code,
+            stderr: completion.stderr,
+            stdout: completion.stdout,
+            success: completion.exit_code == Some(0),
+        }
+    }
+}
 
 /// Framed path bytes that have not passed name admission.
 pub type PathRecords<'input> = Vec<&'input [u8]>;
@@ -514,6 +565,36 @@ fn workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_derives_success_from_exit_code() -> Result<(), InvalidRequest>
+    {
+        let args = Request::WorkspaceMetadata.admit()?;
+        for (exit_code, success) in [
+            (Some(0i32), true),
+            (Some(1i32), false),
+            (None, false),
+            (Some(-1i32), false),
+        ] {
+            let report = Report::from_completion(&args, Completion {
+                diagnostic: String::from("diagnostic"),
+                exit_code,
+                stderr: vec![0xff],
+                stdout: b"output".to_vec(),
+            });
+            if report.command
+                != "cargo metadata --no-deps --locked --format-version 1"
+                || report.exit_code != exit_code
+                || report.success != success
+                || report.diagnostic != "diagnostic"
+                || report.stderr != [0xff]
+                || report.stdout != b"output"
+            {
+                return Err(InvalidRequest);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn package_inputs_cannot_select_options_or_paths() {

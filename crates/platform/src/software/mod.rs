@@ -132,14 +132,14 @@ use crate::ir::security::audio::PlaybackRequest;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::security::toolchain::CargoArguments;
 #[cfg(not(target_os = "linux"))]
-use crate::ir::security::toolchain::validation::Arguments;
+use crate::ir::security::toolchain::validation::{Arguments, Completion};
 use crate::ir::storage::ExecutableLocation;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::environment::{Environment, EnvironmentBackend};
 #[cfg(not(target_os = "linux"))]
-use crate::ir::toolchain::validation::state::{StateFactory, StatePort};
+use crate::ir::toolchain::validation::ValidationBackend;
 #[cfg(not(target_os = "linux"))]
-use crate::ir::toolchain::validation::{Report, ValidationBackend};
+use crate::ir::toolchain::validation::state::{StateFactory, StatePort};
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::{
     Target, ToolVersion, ToolchainError, ToolchainFactory, ValidationTool,
@@ -359,8 +359,7 @@ impl ValidationBackend for () {
     fn execute_validation(
         _root: &OsStr,
         _args: &Arguments,
-        _command: String,
-    ) -> Result<Report, ToolchainError> {
+    ) -> Result<Completion, ToolchainError> {
         Err(ToolchainError::UnsupportedHost)
     }
 }

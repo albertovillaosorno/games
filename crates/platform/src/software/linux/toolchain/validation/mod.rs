@@ -37,16 +37,15 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
-use crate::ir::security::toolchain::validation::Arguments;
+use crate::ir::security::toolchain::validation::{Arguments, Completion};
 use crate::ir::toolchain::ToolchainError;
-use crate::ir::toolchain::validation::{Report, ValidationBackend};
+use crate::ir::toolchain::validation::ValidationBackend;
 
 impl ValidationBackend for () {
     fn execute_validation(
         root: &OsStr,
         args: &Arguments,
-        command: String,
-    ) -> Result<Report, ToolchainError> {
+    ) -> Result<Completion, ToolchainError> {
         let program = args.program();
         let output = command_for(root, args).output().map_err(|source| {
             ToolchainError::Io {
@@ -54,13 +53,11 @@ impl ValidationBackend for () {
                 source,
             }
         })?;
-        Ok(Report {
-            command,
+        Ok(Completion {
             diagnostic: output.status.to_string(),
             exit_code: output.status.code(),
             stderr: output.stderr,
             stdout: output.stdout,
-            success: output.status.success(),
         })
     }
 }

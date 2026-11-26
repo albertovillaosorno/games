@@ -432,3 +432,11 @@ roots. Positive and negative synthetic inventories cover both rules.
 Fresh Xvfb/X11 and dummy-audio validation
 1795657849795133218-3149203 passed 1,642 aggregate test executions
 and all six portable core checks. No native capability was added.
+
+Validation subprocess results now derive the log command from the admitted
+arguments and success from the observed exit code. Native adapters cannot
+supply contradictory success or a different command label. Exact diagnostic
+and ordinary bytes are preserved; portable fixtures exercise zero, nonzero
+and unavailable exit codes. Fresh Xvfb/X11 and dummy-audio validation
+1795658740942250934-3372735 passed 1,658 aggregate test executions and all
+six portable core checks.

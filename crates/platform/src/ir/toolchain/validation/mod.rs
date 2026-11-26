@@ -38,32 +38,16 @@ pub mod state;
 use std::ffi::OsStr;
 
 use super::ToolchainError;
-use crate::ir::security::toolchain::validation::Arguments;
-pub use crate::ir::security::toolchain::validation::{GitRequest, Request};
-
-/// Captured result of one admitted validation subprocess.
-#[derive(Debug)]
-pub struct Report {
-    /// Human-readable command for the local validation log.
-    pub command: String,
-    /// Exit status or other completion diagnostic.
-    pub diagnostic: String,
-    /// Numeric process exit code, absent if no code is available.
-    pub exit_code: Option<i32>,
-    /// Diagnostic output, in original bytes.
-    pub stderr: Vec<u8>,
-    /// Ordinary output, in original bytes.
-    pub stdout: Vec<u8>,
-    /// Whether the process exited successfully.
-    pub success: bool,
-}
+use crate::ir::security::toolchain::validation::{Arguments, Completion};
+pub use crate::ir::security::toolchain::validation::{
+    GitRequest, Report, Request,
+};
 
 pub(crate) trait ValidationBackend {
     fn execute_validation(
         root: &OsStr,
         args: &Arguments,
-        command: String,
-    ) -> Result<Report, ToolchainError>;
+    ) -> Result<Completion, ToolchainError>;
 }
 
 /// A committed HEAD identifier, or an unborn symbolic branch.
@@ -123,16 +107,8 @@ where
     let args = request
         .admit()
         .map_err(|_error| ToolchainError::InvalidValidationRequest)?;
-    let command = format!(
-        "{} {}",
-        args.program(),
-        args.args()
-            .iter()
-            .map(|arg| arg.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    Backend::execute_validation(root, &args, command)
+    let completion = Backend::execute_validation(root, &args)?;
+    Ok(Report::from_completion(&args, completion))
 }
 
 #[cfg(test)]
@@ -145,8 +121,7 @@ mod tests {
         fn execute_validation(
             root: &OsStr,
             args: &Arguments,
-            command: String,
-        ) -> Result<Report, ToolchainError> {
+        ) -> Result<Completion, ToolchainError> {
             if args.program() != "git" {
                 return Err(ToolchainError::InvalidValidationRequest);
             }
@@ -166,13 +141,11 @@ mod tests {
             } else {
                 (Some(128i32), Vec::new())
             };
-            Ok(Report {
-                command,
+            Ok(Completion {
                 diagnostic: String::from("fixture"),
                 exit_code,
                 stderr: Vec::new(),
                 stdout,
-                success: exit_code == Some(0i32),
             })
         }
     }
@@ -183,8 +156,7 @@ mod tests {
         fn execute_validation(
             root: &OsStr,
             args: &Arguments,
-            command: String,
-        ) -> Result<Report, ToolchainError> {
+        ) -> Result<Completion, ToolchainError> {
             if root != OsStr::new("workspace")
                 || args.program() != "cargo"
                 || args.args()
@@ -198,13 +170,11 @@ mod tests {
             {
                 return Err(ToolchainError::MissingArtifact);
             }
-            Ok(Report {
-                command,
+            Ok(Completion {
                 diagnostic: String::from("fixture failed"),
                 exit_code: Some(1i32),
                 stderr: b"diagnostic".to_vec(),
                 stdout: b"ordinary".to_vec(),
-                success: false,
             })
         }
     }
@@ -243,6 +213,9 @@ mod tests {
             || result.stdout != b"ordinary"
             || result.stderr != b"diagnostic"
             || result.diagnostic != "fixture failed"
+            || result.command
+                != "cargo metadata --no-deps --locked --format-version 1"
+            || result.exit_code != Some(1i32)
         {
             return Err("completion changed".into());
         }
