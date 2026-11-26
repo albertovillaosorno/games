@@ -532,3 +532,10 @@ bytes and additional payloads; existing native corruption and legacy
 fixtures remain active. Fresh Xvfb/X11 and dummy-audio validation
 1795658409829745779-3291153 passed 1,652 aggregate test executions
 and all six portable core checks.
+
+Canonical publication metadata preparation now shares the staging admission
+owner. The public facade retains the existing prepared-manifest type;
+the security owner binds encoded bytes, digest and unique payload sizes.
+A portable fixture verifies exact-byte limits, deduplication and rejection
+of insufficient manifest budgets. Fresh native Xvfb/X11 and dummy-audio
+validation 1795658907068485111-3411052 passed with all six portable checks.

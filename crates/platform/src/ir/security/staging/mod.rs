@@ -38,12 +38,55 @@ use std::io::{ErrorKind, Read, Write};
 use games_assets::archive::{
     ArchiveBudget, ArchiveError, EntryBudget, EntryKind, validate_path,
 };
-use games_assets::{AssetError, ContentHash};
+use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 
 use crate::ir::storage::bundle::{MANIFEST_NAME, PAYLOADS_DIRECTORY};
-use crate::ir::storage::staging::{
-    PreparedManifest, StagingEntry, StagingError,
-};
+use crate::ir::storage::staging::{StagingEntry, StagingError};
+
+/// Exact encoded metadata and distinct payload inventory for publication.
+#[derive(Debug)]
+pub struct PreparedManifest {
+    bytes: Vec<u8>,
+    digest: ContentHash,
+    payload_sizes: BTreeMap<ContentHash, u64>,
+}
+
+impl PreparedManifest {
+    /// The canonical bytes to write without re-encoding.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Identity of those exact bytes.
+    #[must_use]
+    pub const fn digest(&self) -> ContentHash {
+        self.digest
+    }
+
+    /// Encode the manifest within caller-selected resource limits.
+    ///
+    /// # Errors
+    /// Rejects invalid or oversized canonical metadata.
+    pub fn new(
+        manifest: &AssetManifest,
+        limits: ManifestLimits,
+    ) -> Result<Self, StagingError> {
+        let bytes = manifest.encode(limits)?;
+        let digest = ContentHash::calculate(&bytes);
+        Ok(Self {
+            bytes,
+            digest,
+            payload_sizes: manifest.payload_sizes(),
+        })
+    }
+
+    /// The complete inventory of distinct expected payloads.
+    #[must_use]
+    pub const fn payload_sizes(&self) -> &BTreeMap<ContentHash, u64> {
+        &self.payload_sizes
+    }
+}
 
 /// Portable accounting and integrity admission for canonical staging.
 #[derive(Debug)]
@@ -634,9 +677,58 @@ fn reserve_payload(
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, sink};
-    use std::num::NonZeroU64;
+    use std::num::{NonZeroU64, NonZeroUsize};
+
+    use games_assets::{AssetFormat, AssetRecord, SourceIdentity};
 
     use super::*;
+
+    #[test]
+    fn prepared_manifest_preserves_exact_inventory_and_limit()
+    -> Result<(), StagingError> {
+        let limits = ManifestLimits {
+            manifest_bytes: NonZeroUsize::MIN.saturating_add(4095),
+            payload_bytes: NonZeroU64::MIN.saturating_add(15),
+            records: NonZeroUsize::MIN.saturating_add(3),
+            total_bytes: NonZeroU64::MIN.saturating_add(63),
+        };
+        let payload = ContentHash::calculate(b"tile");
+        let records = ["first", "second"]
+            .into_iter()
+            .map(|key| AssetRecord {
+                digest: payload,
+                format: AssetFormat::Data,
+                key: String::from(key),
+                size: 4,
+            })
+            .collect();
+        let manifest = AssetManifest::new(
+            SourceIdentity {
+                revision: String::from("fixture"),
+                title: String::from("test"),
+            },
+            records,
+            limits,
+        )?;
+        let bytes = manifest.encode(limits)?;
+        let manifest_bytes = NonZeroUsize::new(bytes.len())
+            .ok_or(StagingError::ChangedStorage)?;
+        let exact = ManifestLimits { manifest_bytes, ..limits };
+        let prepared = PreparedManifest::new(&manifest, exact)?;
+        let strict = ManifestLimits {
+            manifest_bytes: NonZeroUsize::MIN,
+            ..limits
+        };
+        if prepared.bytes() != bytes
+            || prepared.digest() != ContentHash::calculate(&bytes)
+            || prepared.payload_sizes() != &BTreeMap::from([(payload, 4u64)])
+            || PreparedManifest::new(&manifest, strict).err()
+                != Some(AssetError::TooLarge.into())
+        {
+            return Err(StagingError::ChangedStorage);
+        }
+        Ok(())
+    }
 
     #[test]
     fn unsupported_archive_path_does_not_charge_the_portable_budget()

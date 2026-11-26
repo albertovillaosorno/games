@@ -63,13 +63,11 @@ use crate::ir::security::staging::{
 };
 #[cfg(test)]
 use crate::ir::security::staging::{
-    CanonicalAdmission, manifest_size, payload_path,
+    CanonicalAdmission, PreparedManifest, manifest_size, payload_path,
 };
 use crate::ir::storage::bundle::MANIFEST_NAME;
 #[cfg(test)]
 use crate::ir::storage::bundle::PAYLOADS_DIRECTORY;
-#[cfg(test)]
-use crate::ir::storage::staging::PreparedManifest;
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 use crate::ir::storage::staging::PublishedBundle;
 use crate::ir::storage::staging::{

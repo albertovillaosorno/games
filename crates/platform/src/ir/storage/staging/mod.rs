@@ -31,6 +31,7 @@
 
 //! Portable private staging and publication.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
@@ -40,7 +41,9 @@ use games_assets::archive::{ArchiveBudget, ArchiveError, EntryKind};
 use games_assets::{AssetError, AssetManifest, ContentHash, ManifestLimits};
 
 use super::bundle::{BundleError, CanonicalBundle};
-pub use crate::ir::security::staging::AdmittedArchiveEntry;
+pub use crate::ir::security::staging::{
+    AdmittedArchiveEntry, PreparedManifest,
+};
 use crate::ir::security::staging::{
     AdmittedAuthoredFile, AdmittedManifest, AdmittedPayload,
     CanonicalAdmission, Namespace, PublicationName,
@@ -264,51 +267,6 @@ impl StagedArchive {
     /// Rejects observed storage changes or filesystem failures.
     pub fn verify(&self) -> Result<(), StagingError> {
         self.backend.recheck()
-    }
-}
-
-/// Exact encoded metadata and distinct payload inventory for publication.
-#[derive(Debug)]
-pub struct PreparedManifest {
-    bytes: Vec<u8>,
-    digest: ContentHash,
-    payload_sizes: BTreeMap<ContentHash, u64>,
-}
-
-impl PreparedManifest {
-    /// The canonical bytes to write without re-encoding.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    /// Identity of those exact bytes.
-    #[must_use]
-    pub const fn digest(&self) -> ContentHash {
-        self.digest
-    }
-
-    /// Encode the manifest within caller-selected resource limits.
-    ///
-    /// # Errors
-    /// Rejects invalid or oversized canonical metadata.
-    pub fn new(
-        manifest: &AssetManifest,
-        limits: ManifestLimits,
-    ) -> Result<Self, StagingError> {
-        let bytes = manifest.encode(limits)?;
-        let digest = ContentHash::calculate(&bytes);
-        Ok(Self {
-            bytes,
-            digest,
-            payload_sizes: manifest.payload_sizes(),
-        })
-    }
-
-    /// The complete inventory of distinct expected payloads.
-    #[must_use]
-    pub const fn payload_sizes(&self) -> &BTreeMap<ContentHash, u64> {
-        &self.payload_sizes
     }
 }
 
