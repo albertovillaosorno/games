@@ -56,6 +56,7 @@ struct Index<'document> {
 
 #[derive(Debug)]
 struct Task {
+    area: String,
     dependencies: Vec<String>,
     path: String,
     priority: String,
@@ -222,6 +223,7 @@ fn record(text: &str, path: &str) -> Result<IdentifiedTask, String> {
     sections(body, &title, &status)?;
     let dependencies = fields.get("depends_on").cloned().unwrap_or_default();
     Ok((id, Task {
+        area,
         dependencies,
         path: String::from(path),
         priority,
@@ -422,13 +424,61 @@ fn unique_roadmap(authored: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
+fn title_manifest(path: &OsStr) -> Option<(&str, &str)> {
+    let mut parts = path.to_str()?.split('/');
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (
+            Some("crates"),
+            Some(area @ ("games" | "apps")),
+            Some(id),
+            Some("Cargo.toml"),
+            None,
+        ) => Some((area, id)),
+        _ => None,
+    }
+}
+
+fn title_task_links(
+    authored: &[OsString],
+    tasks: &BTreeMap<String, Task>,
+) -> Result<(), String> {
+    let mut packages = BTreeSet::new();
+    for (area, id) in authored.iter().filter_map(|path| title_manifest(path)) {
+        let task = tasks.get(id).ok_or_else(|| {
+            format!("title package has no canonical task: {area}/{id}")
+        })?;
+        if task.area != area {
+            return Err(format!(
+                "title package task area mismatch: {area}/{id}"
+            ));
+        }
+        require(packages.insert(id), "duplicate title package ID")?;
+    }
+    for (id, task) in tasks {
+        if matches!(task.area.as_str(), "games" | "apps")
+            && task.status == "completed"
+            && !packages.contains(id.as_str())
+        {
+            return Err(format!("completed title has no package: {id}"));
+        }
+    }
+    Ok(())
+}
+
 /// Validate the roadmap and all typed task records.
 ///
 /// # Errors
 ///
 /// Returns diagnostics for inconsistent or malformed task records.
 pub fn validate(root: &OsStr) -> Result<(), String> {
-    unique_roadmap(&files::authored(root)?)?;
+    let authored = files::authored(root)?;
+    unique_roadmap(&authored)?;
     let mut inventory = TaskInventory {
         remaining: MAX_TASK_ENTRIES.get(),
         tasks: BTreeMap::new(),
@@ -441,6 +491,7 @@ pub fn validate(root: &OsStr) -> Result<(), String> {
     )?;
     let tasks = inventory.tasks;
     require(!tasks.is_empty(), "missing task inventory")?;
+    title_task_links(&authored, &tasks)?;
     for task in tasks.values() {
         predecessors(task, &tasks)?;
     }
@@ -458,8 +509,8 @@ mod tests {
 
     use super::{
         MAX_TASK_DEPTH, Task, TaskInventory, collect, dependency_order,
-        direct_link, index, metadata, record, section, unique_roadmap,
-        validate,
+        direct_link, index, metadata, record, section, title_task_links,
+        unique_roadmap, validate,
     };
     use crate::fixtures::{directory, require};
 
@@ -551,6 +602,85 @@ mod tests {
     }
 
     #[test]
+    fn title_packages_match_canonical_task_ids_and_areas() {
+        let task = |area: &str, status: &str| Task {
+            area: String::from(area),
+            dependencies: Vec::new(),
+            path: String::new(),
+            priority: String::from("p4"),
+            status: String::from(status),
+            title: String::from("TODO - Fixture"),
+        };
+        let tasks = BTreeMap::from([
+            (String::from("game"), task("games", "open")),
+            (String::from("app"), task("apps", "completed")),
+            (String::from("future"), task("games", "open")),
+        ]);
+        let mut authored = [
+            "crates/engine/Cargo.toml",
+            "tools/build/Cargo.toml",
+            "crates/games/game/Cargo.toml",
+            "crates/apps/app/Cargo.toml",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        assert!(title_task_links(&authored, &tasks).is_ok());
+        for path in [
+            "crates/games/orphan/Cargo.toml",
+            "crates/games/app/Cargo.toml",
+        ] {
+            let mut invalid = authored.clone();
+            invalid.push(OsString::from(path));
+            assert!(title_task_links(&invalid, &tasks).is_err(), "{path}");
+        }
+        assert!(authored.pop().is_some());
+        assert!(title_task_links(&authored, &tasks).is_err());
+    }
+
+    #[test]
+    fn real_task_gate_rejects_unlinked_title_manifest() -> Result<(), String> {
+        let fixture = directory()?;
+        fixture
+            .create_directories("docs/todo/open/games")
+            .map_err(|error| error.to_string())?;
+        fixture
+            .create_directories("crates/games/example")
+            .map_err(|error| error.to_string())?;
+        fixture
+            .write_file(
+                "TODO.md",
+                concat!(
+                    "# Games TODO\n## P4 - Titles\n### TODO - Example\n",
+                    "[TODO - Example](docs/todo/open/games/example.mdc)\n",
+                )
+                .as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
+        fixture.write_file("docs/todo/open/games/example.mdc", concat!(
+            "---\nid: \"example\"\nstatus: \"open\"\nlane: \"4\"\n",
+            "priority: \"p4\"\narea: \"games\"\ntask: \"TODO - Example\"\n",
+            "validation:\n  - \"cargo validate\"\n---\n# TODO - Example\n",
+            "## Objective\nFixture\n## Acceptance\n- Link\n## Evidence\nOpen\n",
+        ).as_bytes()).map_err(|error| error.to_string())?;
+        fixture
+            .write_file("crates/games/example/Cargo.toml", b"")
+            .map_err(|error| error.to_string())?;
+        require(validate(fixture.location()).is_ok(), "linked title")?;
+        fixture
+            .create_directories("crates/apps/orphan")
+            .map_err(|error| error.to_string())?;
+        fixture
+            .write_file("crates/apps/orphan/Cargo.toml", b"")
+            .map_err(|error| error.to_string())?;
+        require(
+            validate(fixture.location()).is_err_and(|error| {
+                error == "title package has no canonical task: apps/orphan"
+            }),
+            "untracked orphan package",
+        )
+    }
+
+    #[test]
     fn duplicate_metadata_rejected() {
         assert!(
             metadata("id: \"a\"\nid: \"b\"").is_err(),
@@ -595,6 +725,7 @@ mod tests {
     #[test]
     fn orphan_and_cycle_rejected() {
         let task = Task {
+            area: String::from("foundation"),
             dependencies: vec![String::from("a")],
             path: String::from("a.mdc"),
             priority: String::from("p0"),
