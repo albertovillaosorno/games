@@ -228,7 +228,9 @@ impl ControllerAdmission {
             return None;
         }
         match event {
-            HostEvent::Input(InputEvent::Attached { .. }) => None,
+            HostEvent::Input(
+                InputEvent::Attached { .. } | InputEvent::Touch { .. },
+            ) => None,
             HostEvent::Input(InputEvent::Detached { device }) => {
                 let index = self.devices.iter().position(|id| *id == device)?;
                 let _removed = self.devices.swap_remove(index);
@@ -244,7 +246,6 @@ impl ControllerAdmission {
                 | InputEvent::FocusLost
                 | InputEvent::Key { .. }
                 | InputEvent::Mouse { .. }
-                | InputEvent::Touch { .. }
                 | InputEvent::TouchCancelled,
             )
             | HostEvent::Quit => Some(event),

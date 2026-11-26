@@ -608,3 +608,14 @@ Fake-adapter fixtures cover an unconfirmed window transition and scene
 receipt invalidation and recovery. Fresh native validation
 1795658576663604872-3331962 passed 1,656 aggregate test executions and all
 six portable core checks. Physical display transitions remain unverified.
+
+Rejected frame and scene construction now consumes the one-shot render
+callback attempt. A fake adapter cannot retry a rejected frame admission
+and invoke the user callback on its second attempt. The sole construction
+error is preserved even if the adapter swallows it. Ordinary validation
+1795659086302470243-3437715 passed 1,662 aggregate test executions.
+
+Native input routing also rejects preprojected logical touch-zone events;
+only geometry- and clock-admitted physical contacts reach title routing.
+A portable fixture checks disabled, unobserved and valid geometry states
+and retains the existing touch-cancellation event.

@@ -195,8 +195,9 @@ impl NativeInput {
     /// Admit one portable input sample through the owning device session.
     ///
     /// Discovery notifications and unknown controllers do not fabricate
-    /// attachment events. Touch requires a current presented geometry and
-    /// a timestamp at or after its observation before routing.
+    /// attachment events. Native touch contacts require a current presented
+    /// geometry and a timestamp at or after its observation before routing.
+    /// Logical touch-zone events belong to the title and are not admitted.
     #[must_use]
     pub fn translate(&mut self, event: &InputSample) -> Option<HostEvent> {
         if !self.clock.matches(event) {
@@ -518,6 +519,41 @@ mod tests {
         check(&session.translate(&sample(None)), &None)?;
         check(&session.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
         check(&session.translate(&sample(Some(clock))), &Some(contact))?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_input_never_routes_title_touch_zones()
+    -> Result<(), super::RenderError> {
+        use super::{HostEvent, InputEvent, InputSample, InputTransition};
+
+        let mut input = super::InputStartup::new(
+            Box::new(TestInput::default()),
+            NonZeroUsize::MIN,
+        )?
+        .input;
+        let zone = HostEvent::Input(InputEvent::Touch { zone: 1, down: true });
+        let sample = InputSample::new(
+            Some(Duration::ZERO),
+            InputTransition::Event(zone),
+            None,
+        );
+        check(&input.translate(&sample), &None)?;
+        input.enable_touch();
+        check(&input.translate(&sample), &None)?;
+        let size = Dimensions::new(NonZeroU32::MIN, NonZeroU32::MIN);
+        let geometry = PresentationMode::AspectFit.layout(size, size);
+        check(&input.synchronize_touch(|| Ok(Some(geometry)))?, &None)?;
+        check(&input.translate(&sample), &None)?;
+        let cancelled = HostEvent::Input(InputEvent::TouchCancelled);
+        check(
+            &input.translate(&InputSample::new(
+                None,
+                InputTransition::Event(cancelled),
+                None,
+            )),
+            &Some(cancelled),
+        )?;
         Ok(())
     }
 
