@@ -336,6 +336,7 @@ impl Controls {
         reserved: [bool; 4],
     ) -> Result<Self, RenderError> {
         profiles.validate().map_err(failure)?;
+        validate_keyboard_pause(profiles).map_err(failure)?;
         let mut mapping = desktop_mapping(profiles, reserved);
         if let Some(role) = panel {
             if touch::reserved(profiles, reserved) {
@@ -1130,14 +1131,27 @@ impl<'preferences> Interactive<'preferences> {
 type LocalAdmission<Input> = Result<Option<u64>, RejectedInput<Input>>;
 
 fn configured_profiles(text: &str) -> Result<Profiles, String> {
-    DEFAULT_PROFILES.configured(
+    let profiles = DEFAULT_PROFILES.configured(
         ACTION_NAMES,
         ProfileText {
             max_bytes: MAX_PROFILE_BYTES,
             text,
         },
         key_from_name,
-    )
+    )?;
+    validate_keyboard_pause(&profiles)?;
+    Ok(profiles)
+}
+
+fn validate_keyboard_pause(profiles: &Profiles) -> Result<(), String> {
+    let [first, others @ ..] = profiles.keys;
+    let [pause, ..] = first;
+    if pause != Some(KeyboardKey::ESCAPE)
+        || others.iter().any(|[key, ..]| key.is_some())
+    {
+        return Err("Escape is the sole keyboard pause binding".into());
+    }
+    Ok(())
 }
 
 fn load_actors(
@@ -3031,6 +3045,34 @@ mod tests {
         super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
         if simulation.state().phase() != Phase::Playing {
             return Err(failure("Escape did not resume"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn profiles_keep_escape_as_the_only_keyboard_pause()
+    -> Result<(), RenderError> {
+        for text in [
+            "version=1\nkey 1 pause=none\n",
+            "version=1\nkey 1 pause=F1\n",
+            "version=1\nkey 2 pause=F1\n",
+            "version=1\nkey 1 pause=F1\nkey 1 primary=Escape\n",
+        ] {
+            if configured_profiles(text).is_ok() {
+                return Err(failure("accepted a conflicting keyboard pause"));
+            }
+        }
+        let profiles = configured_profiles(concat!(
+            "version=1\nkey 1 pause=Escape\n",
+            "key 2 pause=none\nkey 1 right=Q\n"
+        ))
+        .map_err(failure)?;
+        let mut controls = Controls::with_profiles(false, &profiles)?;
+        let mut simulation = live(false)?;
+        super::smoke_press(&mut controls, &mut simulation, Control::Start)?;
+        super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        if simulation.state().phase() != Phase::Paused {
+            return Err(failure("custom profile lost global Escape pause"));
         }
         Ok(())
     }

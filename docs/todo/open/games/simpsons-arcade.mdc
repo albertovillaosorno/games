@@ -2547,7 +2547,11 @@ portable physical key identities; extended legacy names use the adapter.
 Controller button names retain the established mapping spelling.
 Unspecified controls keep the defaults. Use `none` for an unbound key or
 mouse button. Mouse names are left, middle, right, x1 and x2.
-Only seat 1 defines the global keyboard pause binding. Duplicate
+Escape is the sole keyboard pause binding and is routed to the first
+unreserved local seat. Profiles cannot disable or reassign this binding
+or define a separate keyboard pause for another seat. Edit older
+incompatible profiles or use `--reset-controls` with a settings directory.
+Duplicate
 keyboard or mouse bindings across stations and duplicate buttons within
 a station are rejected, as are unknown names and repeated overrides.
 Controller replacement inherits the vacant station's profile.
@@ -2894,3 +2898,13 @@ host-work budget misses. Fresh native-enabled workspace validation
 1795662082554524617-58037 passed 1,719 aggregate test executions and all
 six portable core checks. Live remapping, physical input, display,
 audible output and full gameplay parity remain unverified.
+
+Custom control admission now preserves Escape as the sole keyboard
+pause control. Inline regressions reject disabling it, reassigning it,
+using it for another action and defining per-seat keyboard pause.
+A valid custom movement binding still pauses the running simulation;
+invalid explicit profiles cannot replace persisted controls. Fresh
+validation 1795666435332980540-770777 passed 1,761 aggregate test
+executions, strict Clippy and all six portable core targets. This is
+profile admission and simulated input evidence, not physical-device
+or interactive remapping acceptance.

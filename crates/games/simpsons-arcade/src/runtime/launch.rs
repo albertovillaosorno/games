@@ -316,10 +316,6 @@ impl ControlSelection {
             DEFAULT_PROFILE.to_owned()
         };
         let profiles = configured_profiles(&text)?;
-        let [_, other @ ..] = profiles.keys;
-        if other.iter().any(|[pause, ..]| pause.is_some()) {
-            return Err("keyboard pause belongs to seat 1 only".into());
-        }
         let persistent_store = if smoke {
             None
         } else {
@@ -1204,6 +1200,33 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn invalid_keyboard_pause_cannot_replace_persisted_controls()
+    -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let store = fixture.store()?;
+        let _receipt = store
+            .store(FALLBACK_PROFILE)
+            .map_err(|error| format!("{error:?}"))?;
+        let explicit = resolve_local(fixture.0.location(), "explicit.txt")?;
+        let path = explicit.to_str().ok_or("invalid test path")?;
+        for profile in [
+            "version=1\nkey 1 pause=none\n",
+            "version=1\nkey 1 pause=F1\n",
+            "version=1\nkey 2 pause=F1\n",
+        ] {
+            fixture.write("explicit.txt", profile)?;
+            if fixture.resolve(&["--controls", path]).is_ok()
+                || fixture.resolve(&[])?.profiles
+                    != configured_profiles(FALLBACK_PROFILE)?
+            {
+                return Err("invalid pause replaced persisted controls".into());
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn controller_controls_share_persistence_and_reset() -> Result<(), String> {
         let fixture = ProfileFixture::new()?;
