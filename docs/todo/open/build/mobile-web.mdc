@@ -1466,3 +1466,26 @@ at one outstanding frame, closed the private stereo audio context and
 removed both the picker and canvas. The four-seat fixture tests admitted
 portable preference bytes, not a browser UI for selecting touch seats.
 The compositor events are trusted by Firefox but not physical hardware.
+
+Three further four-seat Wayland runs used trusted captured motion to
+cycle held contacts into neighboring seats, then back into their
+original panels. In the landscape run, all four actor centers settled
+at 64, 84, 108, 130 while the contacts remained across the boundaries,
+resumed leftward motion to 46, 64, 92, 116 after returning to their
+original controls, and settled at 42, 60, 86, 108 after release.
+
+Two portrait repeats used the admitted canonical Fill/windowed native
+preference and a 960-by-1153 backing surface at DPR 1.5. The initial
+fit blit covered the entire logical scene; during gameplay the two
+observed blits independently filled the 960-by-475 world area and
+preserved the centered 678-by-678 touch panel. Both repeats passed:
+in the second, actor centers settled at 62, 86, 108, 130 during the
+cross-panel hold, moved to 42, 66, 90, 114 after return, then settled
+at 36, 62, 84, 106 after release. Each run saw 13 trusted touch downs,
+eight captured motions, 12 observed releases and 12 capture losses,
+without compatibility mouse events. All three completed once after
+208 callbacks, with 118, 220 and 219 blits respectively, one peak
+pending frame, 616 exact reads (24,937,054 bytes), one closed audio
+context and no residual picker or canvas. The test establishes contact
+scope and protected panel projection under virtual input; physical
+mobile device and wider browser acceptance remain open.
