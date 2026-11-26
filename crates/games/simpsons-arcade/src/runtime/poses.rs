@@ -117,6 +117,10 @@ impl Catalogue {
         self.entries.len()
     }
 
+    pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
+        self.entries.values().copied()
+    }
+
     pub(super) fn load(
         &self,
         store: BundleSource<'_>,

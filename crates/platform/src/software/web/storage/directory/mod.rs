@@ -43,7 +43,7 @@ use crate::ir::security::file::allocation_length;
 use crate::ir::storage::bundle::BundleError;
 use crate::ir::storage::bundle::directory::{
     DirectoryComplete, DirectoryPicker, DirectoryPlan, DirectoryRead,
-    PlannedFile, SelectedDirectory,
+    DirectorySelectionError, DirectorySelector, PlannedFile, SelectedDirectory,
 };
 
 type Transfer = (File, PlannedFile);
@@ -130,47 +130,68 @@ impl Drop for Picker {
 }
 
 impl DirectoryPicker for () {
-    fn select(
+    fn select<Error>(
         plan: DirectoryPlan,
-        complete: DirectoryComplete,
-    ) -> Result<(), BundleError> {
+        choose: DirectorySelector<Error>,
+        complete: DirectoryComplete<Error>,
+    ) -> Result<(), BundleError>
+    where
+        Error: 'static,
+    {
         let (picker, event) = Picker::new()?;
         spawn_local(async move {
-            let result = drive(picker, event, plan).await;
+            let result = drive(picker, event, plan, choose).await;
             complete(result);
         });
         Ok(())
     }
 }
 
-async fn drive(
+async fn drive<Error>(
     picker: Picker,
     event_promise: Promise,
     plan: DirectoryPlan,
-) -> Result<SelectedDirectory, BundleError> {
+    choose: DirectorySelector<Error>,
+) -> Result<SelectedDirectory, DirectorySelectionError<Error>> {
     let event = event_promise
         .await
         .map_err(host_failure)?
         .dyn_into::<Event>()
         .map_err(host_failure)?;
     if !event.is_trusted() {
-        return Err(BundleError::UnsafeStorage);
+        return Err(BundleError::UnsafeStorage.into());
     }
     match event.type_().as_str() {
-        "cancel" => return Err(BundleError::Io(ErrorKind::Interrupted)),
+        "cancel" => return Err(BundleError::Io(ErrorKind::Interrupted).into()),
         "change" => {},
-        _ => return Err(BundleError::UnsafeStorage),
+        _ => return Err(BundleError::UnsafeStorage.into()),
     }
     let files = property(picker.input.as_ref(), "files")?
         .dyn_into::<FileList>()
         .map_err(host_failure)?;
     let (mut reader, transfers) = preflight(plan, &files)?;
     drop(picker);
+    read_pending(&mut reader, &transfers).await?;
+    let requests = choose(reader.sidecars()?)
+        .map_err(DirectorySelectionError::Selection)?;
+    reader.request_manifests(&requests)?;
+    read_pending(&mut reader, &transfers).await?;
+    reader.request_objects()?;
+    read_pending(&mut reader, &transfers).await?;
+    Ok(reader.finish()?)
+}
+
+async fn read_pending(
+    reader: &mut DirectoryRead,
+    transfers: &[Transfer],
+) -> Result<(), BundleError> {
     for (file, planned) in transfers {
-        let bytes = read_file(&file, planned.size()).await?;
-        reader.receive(planned, bytes)?;
+        if reader.wants(planned) {
+            let bytes = read_file(file, planned.size()).await?;
+            reader.receive(planned, bytes)?;
+        }
     }
-    reader.finish()
+    Ok(())
 }
 
 fn preflight(

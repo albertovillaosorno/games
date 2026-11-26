@@ -1832,19 +1832,22 @@ fn parse_hashes<const COUNT: usize>(
         .map_err(|_error| failure("bundle count"))
 }
 
-fn open_bundle(
-    store: BundleSource<'_>,
-    digest: ContentHash,
-) -> Result<CanonicalBundle, RenderError> {
-    let limits = ManifestLimits {
+fn art_bundle_limits() -> Result<ManifestLimits, RenderError> {
+    Ok(ManifestLimits {
         manifest_bytes: size(32_768)?,
         payload_bytes: NonZeroU64::new(1_048_576)
             .ok_or(RenderError::TooLarge)?,
         records: size(33)?,
         total_bytes: NonZeroU64::new(33_554_432)
             .ok_or(RenderError::TooLarge)?,
-    };
-    open_selected_bundle(store, digest, limits)
+    })
+}
+
+fn open_bundle(
+    store: BundleSource<'_>,
+    digest: ContentHash,
+) -> Result<CanonicalBundle, RenderError> {
+    open_selected_bundle(store, digest, art_bundle_limits()?)
 }
 
 fn open_selected_bundle(

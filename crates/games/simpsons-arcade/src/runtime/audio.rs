@@ -132,12 +132,7 @@ impl Samples {
         selection: AudioSelection,
     ) -> Result<Self, RenderError> {
         let bundle =
-            open_selected_bundle(store, selection.base, ManifestLimits {
-                manifest_bytes: size(65_536)?,
-                payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
-                records: size(161)?,
-                total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
-            })?;
+            open_selected_bundle(store, selection.base, base_limits()?)?;
         let replacement = selection
             .replacement
             .map(|hash| {
@@ -490,7 +485,16 @@ pub(super) fn open_optional(
     Ok(None)
 }
 
-fn replacement_limits() -> Result<ManifestLimits, RenderError> {
+pub(super) fn base_limits() -> Result<ManifestLimits, RenderError> {
+    Ok(ManifestLimits {
+        manifest_bytes: size(65_536)?,
+        payload_bytes: NonZeroU64::MIN.saturating_add(264_323),
+        records: size(161)?,
+        total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
+    })
+}
+
+pub(super) fn replacement_limits() -> Result<ManifestLimits, RenderError> {
     let frames = CLIPS.map(|(_key, count)| count);
     let bytes = |count: u64| {
         count

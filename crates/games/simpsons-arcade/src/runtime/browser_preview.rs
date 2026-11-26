@@ -41,7 +41,8 @@ use games::presentation::{DisplaySettings, WindowMode};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::storage::bundle::MemoryBundleLimits;
 use games_platform::ir::storage::bundle::directory::{
-    DirectoryLimits, SelectedDirectory, select,
+    DirectoryLimits, DirectorySelectionError, ManifestRequest,
+    SelectedDirectory, SidecarSnapshot, select,
 };
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, PreferenceError, PublicationPolicy, VolumeStore,
@@ -54,7 +55,10 @@ use super::launch::{
 use super::memory_preview::{
     AudioSelection, Preferences, Selection, start_with_preferences,
 };
-use super::{failure, parse_hash, parse_hashes, profile_limit};
+use super::{
+    art_bundle_limits, audio, failure, parse_hash, parse_hashes, poses,
+    profile_limit,
+};
 
 const CATALOGUE: &str = "launch.local";
 const POSES: &str = "launch-poses.txt";
@@ -115,14 +119,27 @@ pub fn start(
     touch_enabled: bool,
     complete: Completion,
 ) -> Result<(), RenderError> {
-    select(limits(), &[CATALOGUE, POSES], move |result| {
-        let opened = result.map_err(failure).and_then(|directory| {
-            start_selected(&directory, touch_enabled, complete)
-        });
-        if let Err(error) = opened {
-            complete(Err(error));
-        }
-    })
+    select(
+        limits(),
+        &[CATALOGUE, POSES],
+        move |sidecars| {
+            let options = selection_from(sidecars, touch_enabled)?;
+            manifest_requests(&options)
+        },
+        move |result| {
+            let opened = result
+                .map_err(|rejected| match rejected {
+                    DirectorySelectionError::Bundle(error) => failure(error),
+                    DirectorySelectionError::Selection(error) => error,
+                })
+                .and_then(|directory| {
+                    start_selected(&directory, touch_enabled, complete)
+                });
+            if let Err(error) = opened {
+                complete(Err(error));
+            }
+        },
+    )
     .map_err(failure)
 }
 
@@ -192,23 +209,63 @@ fn selection<'text>(
     })
 }
 
-fn start_selected(
-    directory: &SelectedDirectory,
+fn selection_from(
+    sidecars: &SidecarSnapshot,
     touch_enabled: bool,
-    complete: Completion,
-) -> Result<(), RenderError> {
-    let bytes = directory
-        .sidecar(CATALOGUE)
+) -> Result<Selection<'_>, RenderError> {
+    let bytes = sidecars
+        .get(CATALOGUE)
         .ok_or_else(|| failure("missing launch.local"))?;
     let catalogue = Catalogue::parse(str::from_utf8(bytes).map_err(failure)?)
         .map_err(failure)?;
     let pose_text = catalogue
         .poses
-        .and_then(|name| directory.sidecar(name))
+        .and_then(|name| sidecars.get(name))
         .map(str::from_utf8)
         .transpose()
         .map_err(failure)?;
-    let options = selection(&catalogue, pose_text, touch_enabled)?;
+    selection(&catalogue, pose_text, touch_enabled)
+}
+
+fn manifest_requests(
+    selection: &Selection<'_>,
+) -> Result<Vec<ManifestRequest>, RenderError> {
+    let catalogue = selection
+        .poses
+        .map(poses::Catalogue::parse)
+        .transpose()?
+        .unwrap_or_default();
+    let art = art_bundle_limits()?;
+    let mut requests: Vec<_> = selection
+        .actors
+        .into_iter()
+        .chain(selection.enemy.into_iter().flatten())
+        .chain(selection.shadow)
+        .chain(selection.world)
+        .chain(catalogue.digests())
+        .map(|digest| ManifestRequest { digest, limits: art })
+        .collect();
+    if let Some(audio) = selection.audio {
+        requests.push(ManifestRequest {
+            digest: audio.base,
+            limits: audio::base_limits()?,
+        });
+        if let Some(digest) = audio.replacement {
+            requests.push(ManifestRequest {
+                digest,
+                limits: audio::replacement_limits()?,
+            });
+        }
+    }
+    Ok(requests)
+}
+
+fn start_selected(
+    directory: &SelectedDirectory,
+    touch_enabled: bool,
+    complete: Completion,
+) -> Result<(), RenderError> {
+    let options = selection_from(directory.sidecars(), touch_enabled)?;
     let preferences = preferences(options.display)?;
     start_with_preferences(
         directory.bundles(),
@@ -243,7 +300,7 @@ const fn unavailable(error: PreferenceError) -> bool {
 #[cfg(test)]
 mod tests {
     use games::presentation::PresentationMode;
-    use games_assets::ContentHash;
+    use games_assets::{ContentHash, ManifestLimits};
 
     use super::*;
 
@@ -374,6 +431,82 @@ mod tests {
             || !result.touch_enabled
         {
             return Err(failure("browser selection differs from catalogue"));
+        }
+        Ok(())
+    }
+
+    fn has_manifest_requests(
+        requests: &[ManifestRequest],
+        digest: ContentHash,
+        count: usize,
+        limit: ManifestLimits,
+    ) -> bool {
+        requests
+            .iter()
+            .filter(|request| {
+                request.digest == digest
+                    && request.limits.manifest_bytes == limit.manifest_bytes
+                    && request.limits.payload_bytes == limit.payload_bytes
+                    && request.limits.records == limit.records
+                    && request.limits.total_bytes == limit.total_bytes
+            })
+            .count()
+            == count
+    }
+
+    #[test]
+    fn manifest_selection_includes_every_art_and_audio_role()
+    -> Result<(), RenderError> {
+        let actor = ContentHash::calculate(b"actor");
+        let enemy = ContentHash::calculate(b"enemy");
+        let shadow = ContentHash::calculate(b"shadow");
+        let world = ContentHash::calculate(b"world");
+        let pose = ContentHash::calculate(b"pose");
+        let base = ContentHash::calculate(b"base");
+        let replacement = ContentHash::calculate(b"replacement");
+        let poses: String = ["marge", "homer", "bart", "lisa"]
+            .into_iter()
+            .flat_map(|name| {
+                ["attack", "jump"]
+                    .map(|kind| format!("{name} {kind} 0 {pose}\n"))
+            })
+            .collect();
+        let selection = Selection {
+            actors: [actor; 4],
+            audio: Some(AudioSelection {
+                base,
+                replacement: Some(replacement),
+            }),
+            display: DisplaySettings::default(),
+            enemy: Some([enemy; 2]),
+            poses: Some(&poses),
+            shadow: Some(shadow),
+            touch_enabled: false,
+            world: Some(world),
+        };
+        let requests = manifest_requests(&selection)?;
+        for (digest, count, limit) in [
+            (actor, 4, art_bundle_limits()?),
+            (enemy, 2, art_bundle_limits()?),
+            (shadow, 1, art_bundle_limits()?),
+            (world, 1, art_bundle_limits()?),
+            (pose, 8, art_bundle_limits()?),
+            (base, 1, audio::base_limits()?),
+            (replacement, 1, audio::replacement_limits()?),
+        ] {
+            if !has_manifest_requests(&requests, digest, count, limit) {
+                return Err(failure(
+                    "missing or incorrectly bounded browser manifest",
+                ));
+            }
+        }
+        if manifest_requests(&Selection {
+            poses: Some("invalid"),
+            ..selection
+        })
+        .is_ok()
+        {
+            return Err(failure("invalid pose catalogue admitted"));
         }
         Ok(())
     }

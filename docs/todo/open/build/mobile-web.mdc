@@ -1036,3 +1036,33 @@ No observer page or injected DOM event was used. The private browser
 harness was terminated after game exit and left the package unchanged.
 Physical devices, hardware acceleration, audible output and Android
 runtime acceptance remain open.
+
+Directory ingress now preflights every relative name and observed size,
+then transfers named sidecars, the pinned manifests selected by the
+shared launch and pose catalogues, and the distinct objects declared
+by those verified manifests. The manifest selection uses the same
+per-role limits as native title loading; repeated selections intersect
+their limits. Unreferenced manifests and objects consume inventory
+entries but do not consume the transfer budget or require payload reads.
+All pending manifest and object lengths and aggregate budgets are checked
+before the respective phase begins; corrupt, incomplete and unrequested
+transfers are rejected. Regression tests cover the exact shared-object
+closure, unused content, missing and corrupted files, unsafe namespaces,
+and count, size and aggregate-budget failures.
+
+Fresh validation 1795693810371975371-1375296 passed. Independent package
+readback verified 88 files and 1,542,462 bytes (receipt SHA-256
+ea324beb41b96f16bc0f1495b36263c53641b4fadb8156b3d20a001a65d8ad40).
+In an isolated Firefox/Xvfb run, the trusted chooser enumerated 743
+files and transferred precisely two sidecars, 198 distinct manifests
+and 416 distinct objects, matching a separately enumerated catalogue
+closure and its phase order, with no repeated reads. The 616 file reads
+totalled 24,937,054 bytes, compared with 740 reads and 43,211,303 bytes
+before selective ingress. Trusted keyboard input joined and moved the
+first actor from x=110 to x=92 and then stopped at x=48. Trusted mouse
+capture and outside release worked, the attack submitted Web Audio
+sources, and the normal menu exit closed the audio context and removed
+the picker and canvas. The observer recorded 256 delivered callbacks,
+181 blits, at most one pending callback and one successful completion.
+Readback still verified the same receipt afterward. These are transfer
+and virtual gameplay measurements, not physical hardware acceptance.

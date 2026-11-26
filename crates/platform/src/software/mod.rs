@@ -187,7 +187,9 @@ use crate::ir::storage::ExecutableLocation;
 )))]
 use crate::ir::storage::bundle::{
     BundleError,
-    directory::{DirectoryComplete, DirectoryPicker, DirectoryPlan},
+    directory::{
+        DirectoryComplete, DirectoryPicker, DirectoryPlan, DirectorySelector,
+    },
 };
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::environment::{Environment, EnvironmentBackend};
@@ -634,11 +636,15 @@ impl FrameLoopPort for () {
     target_os = "unknown"
 )))]
 impl DirectoryPicker for () {
-    fn select(
+    fn select<Error>(
         plan: DirectoryPlan,
-        complete: DirectoryComplete,
-    ) -> Result<(), BundleError> {
-        drop((plan, complete));
+        choose: DirectorySelector<Error>,
+        complete: DirectoryComplete<Error>,
+    ) -> Result<(), BundleError>
+    where
+        Error: 'static,
+    {
+        drop((plan, choose, complete));
         Err(BundleError::Io(ErrorKind::Unsupported))
     }
 }
