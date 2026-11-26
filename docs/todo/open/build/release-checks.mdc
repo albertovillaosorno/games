@@ -525,3 +525,41 @@ observed positive near-tail refill remained contiguous. No larger queue
 was introduced solely to conceal the host stalls. All package receipts
 verified unchanged afterward. These are virtual-host observations and
 same-host reproduction, not independent-host or physical acceptance.
+
+The native 88dffde asset/settings separation was independently
+verified in a fresh package containing 109 files (4,154,377 bytes)
+with receipt SHA-256
+`abb7e1d692d68b8c41b81c077b3730a0ca91b9cce16fe9bd6121a7661a6ada1a`.
+The 3,628,704-byte executable's digest was
+`9a5a21d1c6a70ae163131d55f667621882a8c1275da8e296d4be5ed93905d122`.
+Independent length and SHA-256 readback matched all 108 receipt
+entries. The package contained one mode-0700 executable and 108
+mode-0600 files; its notices matched the workspace. Direct dependencies
+remained SDL2, libgcc_s and libc with GLIBC_2.34 the highest referenced
+glibc symbol version.
+
+With the package and configured assets mounted read-only in an
+isolated process and filesystem namespace without network, launch
+rejected four settings locations: the asset root, its ancestor, an
+object-directory descendant and a linked descendant. A separate
+private settings directory admitted the complete adaptive touch
+smoke on Xvfb/OpenGL software rendering and dummy audio. It verified
+106 added scene columns, 444 camera columns, 48 synthetic controller
+axis directions, two cooperative pose families and six reinforcement
+meters. All 620 movement and combat submissions met the 16.667 ms
+host-work budget (maximum 9.329 ms). Settings remained empty and
+post-run package verification matched the same receipt. These are
+host-local and synthetic observations, not physical-device,
+independent-host or concurrent-path isolation acceptance.
+
+Independent package readback now requires the root and every listed
+directory to remain owner-controlled before and after enumeration.
+The ordinary bounded directory observation policy is unchanged.
+A native backend regression verifies rejection of group-only,
+other-only and shared write modes. On disposable copies of the
+109-file native and 88-file browser packages, package-check rejected
+modes 0770, 0702 and 0777 on the root and on the licenses directory
+(12 negative cases). Both copies accepted the owner-controlled
+mode 0755 licenses directory and returned their original receipt
+identities after restoration to mode 0700. This is access-policy
+admission, not isolation against concurrent directory replacement.

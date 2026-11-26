@@ -43,7 +43,9 @@ use games_platform::ir::security::toolchain::artifact::admit_executable;
 #[cfg(test)]
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::file::{AuthoredFileKind, snapshot_authored};
-use games_platform::ir::storage::{PathKind, directory_entries, path_kind};
+use games_platform::ir::storage::{
+    PathKind, path_kind, trusted_directory_entries,
+};
 
 use super::{
     INDEX_HTML, MAX_DOCUMENT, MAX_EXECUTABLE, MAX_FILES, MAX_PACKAGE, RECEIPT,
@@ -96,7 +98,7 @@ impl Receipt {
         pending: &mut Vec<(OsString, &'namespace NamespaceDirectory)>,
     ) -> Result<(), String> {
         let maximum = NonZeroUsize::MIN.saturating_add(MAX_TREE_ENTRIES - 1);
-        let observed = directory_entries(path, maximum)
+        let observed = trusted_directory_entries(path, maximum)
             .map_err(|error| format!("package directory: {error}"))?;
         if observed.len() != expected.children().len() {
             return Err(String::from("unexpected package directory size"));

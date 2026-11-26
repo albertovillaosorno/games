@@ -89,8 +89,14 @@ pub(crate) trait PathObservation {
     fn directory_entries(
         path: &OsStr,
         maximum: NonZeroUsize,
+        access: DirectoryAccess,
     ) -> IoResult<Vec<DirectoryEntry>>;
     fn path_kind(path: &OsStr) -> IoResult<PathKind>;
+}
+
+pub(crate) enum DirectoryAccess {
+    Observed,
+    OwnerControlled,
 }
 
 /// A lexical component of a relative local path.
@@ -167,8 +173,30 @@ pub fn directory_entries(
     path: &OsStr,
     maximum: NonZeroUsize,
 ) -> IoResult<Vec<DirectoryEntry>> {
+    entries_with(path, maximum, DirectoryAccess::Observed)
+}
+
+/// Observe a directory controlled by the current owner.
+///
+/// Backends must reject directories writable by other users and check
+/// the pinned directory's access policy before and after enumeration.
+/// As with other snapshots, ancestors must remain trusted.
+/// # Errors
+/// Reports unavailable or unsafe directories and invalid entry observations.
+pub fn trusted_directory_entries(
+    path: &OsStr,
+    maximum: NonZeroUsize,
+) -> IoResult<Vec<DirectoryEntry>> {
+    entries_with(path, maximum, DirectoryAccess::OwnerControlled)
+}
+
+fn entries_with(
+    path: &OsStr,
+    maximum: NonZeroUsize,
+    access: DirectoryAccess,
+) -> IoResult<Vec<DirectoryEntry>> {
     let mut entries =
-        <() as PathObservation>::directory_entries(path, maximum)?;
+        <() as PathObservation>::directory_entries(path, maximum, access)?;
     admit_directory_entries(&mut entries, maximum)?;
     Ok(entries)
 }

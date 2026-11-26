@@ -110,8 +110,9 @@ cargo run --locked -p games-build -- package-check simpsons-arcade \
 
 The checker requires a pristine package tree and rejects earlier receipt
 formats, missing or added files (including private launch catalogues),
-links, incorrect owner-only file modes and changed content. It reports
-a receipt SHA-256 for independent comparison. This checks consistency
+links, directories not controlled by the current owner, incorrect
+owner-only file modes and changed content. It reports a receipt SHA-256
+for independent comparison. This checks consistency
 with the receipt, not provenance,
 licence sufficiency, concurrent filesystem isolation or runtime ABI.
 The title requires explicit local art bundles; see the

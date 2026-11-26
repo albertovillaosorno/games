@@ -110,7 +110,7 @@ use crate::ir::storage::save::SaveError;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::ir::storage::save::{OpenSave, SaveFactory};
 use crate::ir::storage::{
-    DirectoryEntry, PathKind, PathObservation, PathResolution,
+    DirectoryAccess, DirectoryEntry, PathKind, PathObservation, PathResolution,
     RelativeComponent,
 };
 
@@ -213,9 +213,18 @@ impl PathObservation for () {
     fn directory_entries(
         path: &OsStr,
         maximum: NonZeroUsize,
+        access: DirectoryAccess,
     ) -> io::Result<Vec<DirectoryEntry>> {
         let directory = open(Path::new(path), DIRECTORY_FLAGS, Mode::empty())?;
-        observe_directory(&directory, maximum)
+        let trusted = matches!(access, DirectoryAccess::OwnerControlled);
+        if trusted && !file::trusted_directory(&directory)? {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let entries = observe_directory(&directory, maximum)?;
+        if trusted && !file::trusted_directory(&directory)? {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        Ok(entries)
     }
 
     fn path_kind(path: &OsStr) -> io::Result<PathKind> {
@@ -239,6 +248,7 @@ impl PathObservation for () {
     fn directory_entries(
         _path: &OsStr,
         _maximum: NonZeroUsize,
+        _access: DirectoryAccess,
     ) -> io::Result<Vec<DirectoryEntry>> {
         Err(io::ErrorKind::Unsupported.into())
     }
@@ -501,6 +511,40 @@ mod tests {
             && canonical_path(link.as_os_str())?
                 == canonical_path(nested.as_os_str())?;
         valid
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn trusted_directory_observation_rejects_shared_write_access()
+    -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::ir::storage::{
+            directory_entries, trusted_directory_entries,
+        };
+
+        let root = fixtures::TestRoot::new()?;
+        let nested = root.path().join("nested");
+        fs::create_dir_all(&nested)?;
+        fs::write(nested.join("file"), b"data")?;
+        let maximum = NonZeroUsize::MIN;
+        let expected = directory_entries(nested.as_os_str(), maximum)?;
+        for mode in [0o770, 0o702, 0o777] {
+            fs::set_permissions(&nested, fs::Permissions::from_mode(mode))?;
+            let observed = directory_entries(nested.as_os_str(), maximum);
+            let rejected =
+                trusted_directory_entries(nested.as_os_str(), maximum)
+                    .is_err_and(|error| {
+                        error.kind() == io::ErrorKind::PermissionDenied
+                    });
+            fs::set_permissions(&nested, fs::Permissions::from_mode(0o700))?;
+            if !rejected || observed? != expected {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+        }
+        (trusted_directory_entries(nested.as_os_str(), maximum)? == expected)
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())
     }
