@@ -171,12 +171,14 @@ impl NativeWindow {
         Run: FnOnce(&mut FrameSession<'_, '_>) -> Result<Output, RenderError>,
     {
         let mode = self.mode;
-        run_once(run, |once| {
-            self.backend.with_frame(layout, mode, &mut |backend| {
+        let mut once = OnceRun::new(run);
+        self.backend.with_frame(layout, mode, &mut |backend| {
+            once.call(|callback| {
                 let mut session = FrameSession::new(backend, layout, mode)?;
-                once.call(|callback| callback(&mut session))
+                callback(&mut session)
             })
-        })
+        })?;
+        once.finish()
     }
 
     /// Reuse a bounded ordered scene for the duration of the callback.
@@ -192,15 +194,17 @@ impl NativeWindow {
         Run: FnOnce(&mut SceneSession<'_, '_>) -> Result<Output, RenderError>,
     {
         let mode = &mut self.mode;
-        run_once(run, |once| {
-            self.backend.with_scene(layout, *mode, &mut |backend| {
+        let mut once = OnceRun::new(run);
+        self.backend.with_scene(layout, *mode, &mut |backend| {
+            once.call(|callback| {
                 let mut session =
                     SceneSession::new(backend, layout, limits, *mode)?;
-                let result = once.call(|callback| callback(&mut session));
+                let result = callback(&mut session);
                 *mode = session.mode();
                 result
             })
-        })
+        })?;
+        once.finish()
     }
 }
 
@@ -219,6 +223,17 @@ impl<Run, Output> OnceRun<Run, Output> {
         let status = outcome.as_ref().map(|_| ()).map_err(Clone::clone);
         self.outcome = Some(outcome);
         status
+    }
+
+    fn finish(self) -> Result<Output, RenderError> {
+        self.outcome.unwrap_or_else(|| Err(callback_error()))
+    }
+
+    const fn new(run: Run) -> Self {
+        Self {
+            outcome: None,
+            run: Some(run),
+        }
     }
 }
 
@@ -288,18 +303,6 @@ fn callback_error() -> RenderError {
     RenderError::Backend(String::from("render session must run exactly once"))
 }
 
-fn run_once<Output, Run>(
-    run: Run,
-    invoke: impl FnOnce(&mut OnceRun<Run, Output>) -> Result<(), RenderError>,
-) -> Result<Output, RenderError> {
-    let mut once = OnceRun {
-        outcome: None,
-        run: Some(run),
-    };
-    invoke(&mut once)?;
-    once.outcome.unwrap_or_else(|| Err(callback_error()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -308,9 +311,9 @@ mod tests {
 
     use super::{
         AdmittedRgba, DisplaySettings, FrameBackend, FrameLayout, FrameRun,
-        FrameSession, InputPort, InputSample, NativeWindow, PresentationMode,
-        RenderError, SceneRun, WindowBackend, WindowMode, callback_error,
-        run_once,
+        FrameSession, InputPort, InputSample, NativeWindow, OnceRun,
+        PresentationMode, RenderError, SceneRun, WindowBackend, WindowMode,
+        callback_error,
     };
     use crate::ir::check;
 
@@ -361,6 +364,7 @@ mod tests {
 
     #[derive(Debug)]
     struct TestWindow {
+        frame_attempts: Vec<PresentationMode>,
         observed: Rc<Cell<PresentationMode>>,
         window_mode: WindowMode,
     }
@@ -395,7 +399,7 @@ mod tests {
             run: &mut FrameRun<'_>,
         ) -> Result<(), RenderError> {
             self.observed.set(mode);
-            run(&mut TestFrame {
+            let mut frame = TestFrame {
                 layout,
                 layout_after_poll: None,
                 layout_after_present: None,
@@ -403,7 +407,15 @@ mod tests {
                 mode_after_poll: None,
                 mode_after_present: None,
                 presented: Vec::new(),
-            })
+            };
+            if self.frame_attempts.is_empty() {
+                return run(&mut frame);
+            }
+            for attempt in &self.frame_attempts {
+                frame.mode = *attempt;
+                let _ignored = run(&mut frame);
+            }
+            Ok(())
         }
 
         fn with_scene(
@@ -417,12 +429,25 @@ mod tests {
         }
     }
 
+    fn run_once<Output, Run, Invoke>(
+        run: Run,
+        invoke: Invoke,
+    ) -> Result<Output, RenderError>
+    where
+        Invoke: FnOnce(&mut OnceRun<Run, Output>) -> Result<(), RenderError>,
+    {
+        let mut once = OnceRun::new(run);
+        invoke(&mut once)?;
+        once.finish()
+    }
+
     #[test]
     fn window_dispatches_only_admitted_presentation_mode()
     -> Result<(), RenderError> {
         let observed = Rc::new(Cell::new(PresentationMode::Adaptive));
         let mut window = NativeWindow {
             backend: Box::new(TestWindow {
+                frame_attempts: Vec::new(),
                 observed: Rc::clone(&observed),
                 window_mode: WindowMode::Windowed,
             }),
@@ -473,6 +498,7 @@ mod tests {
         let observed = Rc::new(Cell::new(PresentationMode::Adaptive));
         let mut window = NativeWindow {
             backend: Box::new(TestWindow {
+                frame_attempts: Vec::new(),
                 observed: Rc::clone(&observed),
                 window_mode: WindowMode::Fullscreen,
             }),
@@ -621,13 +647,49 @@ mod tests {
     }
 
     #[test]
+    fn callback_attempts_include_rejected_session_construction()
+    -> Result<(), RenderError> {
+        let mode = PresentationMode::Integer;
+        let wrong = PresentationMode::Stretch;
+        let layout = FrameLayout::new(
+            NonZeroU32::MIN,
+            NonZeroU32::MIN,
+            NonZeroUsize::MAX,
+        )?;
+        for (attempts, expected, calls) in [
+            (vec![wrong], RenderError::InvalidDimensions, 0),
+            (vec![wrong, mode], callback_error(), 0),
+            (vec![mode, wrong], callback_error(), 1),
+        ] {
+            let mut window = NativeWindow {
+                backend: Box::new(TestWindow {
+                    frame_attempts: attempts,
+                    observed: Rc::new(Cell::new(mode)),
+                    window_mode: WindowMode::Windowed,
+                }),
+                mode,
+            };
+            let invoked = Cell::new(0u8);
+            check(
+                &window.with_frame(layout, |_| {
+                    invoked.set(invoked.get().saturating_add(1));
+                    Ok(())
+                }),
+                &Err(expected),
+            )?;
+            check(&invoked.get(), &calls)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn session_requires_exactly_one_callback() {
         assert_eq!(
             run_once(|| Ok(42i32), |once| once.call(|run| run())),
             Ok(42i32)
         );
         assert_eq!(
-            run_once::<i32, _>(|| Ok::<i32, RenderError>(42i32), |_| Ok(())),
+            run_once::<i32, _, _>(|| Ok::<i32, RenderError>(42i32), |_| Ok(())),
             Err(callback_error())
         );
         assert_eq!(
