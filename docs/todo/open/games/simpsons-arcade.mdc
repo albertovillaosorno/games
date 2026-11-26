@@ -2520,7 +2520,13 @@ overrides the catalogue selection. With a settings directory, an explicit
 profile is saved after successful native startup and takes precedence over
 the catalogue on future launches. Use `--reset-controls` instead of
 `--controls FILE` to persist the default bindings; reset requires a settings
-directory and is unavailable in smoke mode. The settings directory stores
+directory and is unavailable in smoke mode. With a settings directory,
+the shared settings menu also offers RESET CONTROLS NEXT LAUNCH: Primary
+atomically saves defaults, without changing the active profile or world.
+The row is unavailable during smoke, or when resetting touch seats would
+conflict with the current remote reservations. Restart without an explicit
+control override to activate the defaults. Live remapping remains open.
+The settings directory stores
 the profile separately from display settings in slot-1.gms. Smoke can
 select a profile without replacing saved controls. The bounded UTF-8
 profile uses:
@@ -2536,8 +2542,9 @@ button 2 right=x
 
 Seat numbers 1-4 default to Marge, Homer, Bart and Lisa. Actions are
 pause, start, primary, secondary, left, right, up and down. Key names
-retain the version-one SDL scancode spelling, resolved by the native
-adapter; controller button names retain the established mapping spelling.
+retain the version-one SDL scancode spelling. Common names resolve from
+portable physical key identities; extended legacy names use the adapter.
+Controller button names retain the established mapping spelling.
 Unspecified controls keep the defaults. Use `none` for an unbound key or
 mouse button. Mouse names are left, middle, right, x1 and x2.
 Only seat 1 defines the global keyboard pause binding. Duplicate
@@ -2862,3 +2869,28 @@ observations, not physical input, display or audible playback
 acceptance. Fresh native-enabled workspace validation
 1795659161981143416-3455725 passed 1,664 aggregate test executions and
 six portable core checks.
+
+The 3,522,368-byte optimized Linux preview at 1b64256 passed the
+original-backed 218-pose selection on Xvfb/X11 OpenGL with dummy audio:
+adaptive, aspect-fit, integer and stretch with touch, and fill without
+touch. Fill with touch was rejected. Each admitted run verified 444
+camera columns, 600 movement and 20 combat submissions, two cooperative
+families, six reinforcement meters and both restraint recovery paths;
+all recorded zero 16.667 ms host-work budget misses. Whole-smoke peak
+RSS ranged from 125,026,304 to 130,093,056 bytes.
+
+The shared settings menu now supports a persistent next-launch control
+reset without changing current mappings or the active world. A visible
+Xvfb/X11 diagnostic with a 3,525,752-byte optimized executable and
+isolated preferences selected a custom right=E binding, confirmed
+RESET CONTROLS NEXT LAUNCH, and verified that the stored profile changed
+to the version-one default. The second launch without an explicit
+override left the saved file byte-identical. Current-session and
+relaunch pause hints differed; the profile-resolution regression test
+also verifies that the in-memory custom mappings survive the save.
+An adaptive touch smoke with an explicit custom profile then preserved
+the default saved file and passed all 218-pose recovery checks with no
+host-work budget misses. Fresh native-enabled workspace validation
+1795662082554524617-58037 passed 1,719 aggregate test executions and all
+six portable core checks. Live remapping, physical input, display,
+audible output and full gameplay parity remain unverified.

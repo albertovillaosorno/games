@@ -62,7 +62,7 @@ use games::presentation::{
 use games::replay::{
     InputStep, LiveInputLimits, LiveSimulation, QueueRejection, RejectedInput,
 };
-use games::session::LocalSession;
+use games::session::{ControlReset, LocalSession};
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform::ir::frame::{FrameLayout, RenderError};
@@ -496,7 +496,7 @@ impl Scene {
                 ),
             ),
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
-            menu: load_menu(scene, world_art.is_some(), profiles, reserved)?,
+            menu: load_menu(scene, world_art.is_some(), options, reserved)?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles, touch::PanelRole::Cabinet)?)
             } else {
@@ -811,6 +811,24 @@ struct PreviewOptions<'profiles> {
     volume_store: Option<&'profiles VolumeStore>,
 }
 
+impl PreviewOptions<'_> {
+    fn can_reset_controls(self, reserved: [bool; 4]) -> bool {
+        !self.hidden
+            && self.controls.can_reset()
+            && (!self.touch_enabled
+                || !touch::reserved(&DEFAULT_PROFILES, reserved))
+    }
+
+    fn session(self, reserved: [bool; 4]) -> LocalSession {
+        LocalSession::with_preferences(
+            self.display,
+            self.volume,
+            self.touch_enabled,
+        )
+        .with_control_reset(self.can_reset_controls(reserved))
+    }
+}
+
 /// One already translated native event, retained across fixed-step catch-up.
 ///
 /// Stop consuming the native queue while this batch cannot enter the live
@@ -844,6 +862,7 @@ impl NativeBatch {
 
 struct Interactive<'preferences> {
     applied: DisplaySettings,
+    control_preferences: &'preferences launch::ResolvedControls,
     controls: Controls,
     deferred: Option<NativeBatch>,
     host: Option<HostLan>,
@@ -852,6 +871,7 @@ struct Interactive<'preferences> {
     preferences: Option<&'preferences DisplayStore>,
     previous: Duration,
     requested: DisplaySettings,
+    reset_persisted: bool,
     simulation: LiveSimulation<HostedCabinet>,
     volume: MasterVolume,
     volume_store: Option<&'preferences VolumeStore>,
@@ -919,6 +939,7 @@ impl<'preferences> Interactive<'preferences> {
         }
         Ok(Self {
             applied: options.display,
+            control_preferences: options.controls,
             controls,
             deferred: None,
             host,
@@ -929,6 +950,7 @@ impl<'preferences> Interactive<'preferences> {
             preferences: options.preferences,
             previous: Duration::ZERO,
             requested: cabinet.session().display(),
+            reset_persisted: false,
             simulation,
             volume: cabinet.session().volume(),
             volume_store: options.volume_store,
@@ -942,6 +964,31 @@ impl<'preferences> Interactive<'preferences> {
             .ok_or(RenderError::InvalidTimestamp)?;
         self.previous = elapsed;
         Ok(delta)
+    }
+
+    fn persist_preferences(
+        &mut self,
+        session: LocalSession,
+    ) -> Result<(), RenderError> {
+        let requested = session.display();
+        if requested != self.requested {
+            save_display(self.preferences, requested)?;
+            self.requested = requested;
+        }
+        let volume = session.volume();
+        if volume != self.volume {
+            save_volume(self.volume_store, volume)?;
+            self.volume = volume;
+        }
+        if !self.reset_persisted
+            && session.control_reset() == ControlReset::Requested
+        {
+            self.control_preferences
+                .persist_defaults()
+                .map_err(failure)?;
+            self.reset_persisted = true;
+        }
+        Ok(())
     }
 
     fn poll(
@@ -1050,24 +1097,16 @@ impl<'preferences> Interactive<'preferences> {
             let delta = self.next_delta()?;
             let advanced = self.simulation.advance(delta).map_err(failure)?;
             self.advance_measurement(advanced.next_tick)?;
-            let hosted = self.simulation.state();
-            let cabinet = hosted.state();
-            art.hud.update_connections(hosted.connected_remotes());
-            let desired = cabinet.session().effective_display();
+            let session = self.simulation.state().state().session();
+            let desired = session.effective_display();
             if desired != self.applied {
                 scene.apply_display_settings(desired)?;
                 self.applied = desired;
             }
-            let requested = cabinet.session().display();
-            if requested != self.requested {
-                save_display(self.preferences, requested)?;
-                self.requested = requested;
-            }
-            let volume = cabinet.session().volume();
-            if volume != self.volume {
-                save_volume(self.volume_store, volume)?;
-                self.volume = volume;
-            }
+            self.persist_preferences(session)?;
+            let hosted = self.simulation.state();
+            let cabinet = hosted.state();
+            art.hud.update_connections(hosted.connected_remotes());
             if let Some(audio) = &mut playback {
                 audio.update(cabinet)?;
             }
@@ -1314,10 +1353,10 @@ fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 3] {
 fn load_menu(
     scene: &mut SceneSession<'_, '_>,
     world_available: bool,
-    profiles: &Profiles,
+    options: PreviewOptions<'_>,
     reserved: [bool; 4],
 ) -> Result<MenuArt, RenderError> {
-    let hints = pause_hints(profiles, reserved);
+    let hints = pause_hints(&options.controls.profiles, reserved);
     let pause = hints.each_ref().map(String::as_str);
     MenuArt::load(
         scene,
@@ -1328,6 +1367,7 @@ fn load_menu(
             width: 280,
         },
         MenuContent {
+            control_reset: options.can_reset_controls(reserved),
             main_hints: main_menu_hints(reserved.contains(&true)),
             pause_hints: &pause,
             settings_hints: &[
@@ -2684,11 +2724,7 @@ fn window(
         }
         let scroll_limit =
             art.world_art.map_or(Ok(0), world::WorldArt::scroll_limit)?;
-        let session = LocalSession::with_preferences(
-            options.display,
-            options.volume,
-            touch_enabled,
-        );
+        let session = options.session(reserved);
         let cabinet = art.poses.configure_cabinet(&cabinet_with_scroll(
             source.enemy.is_some(),
             session,
@@ -2722,6 +2758,11 @@ fn scene_limits(
     Ok(SceneLimits {
         atlas_bytes: size(
             3_607_872usize
+                .saturating_add(if options.can_reset_controls(reserved) {
+                    71_680
+                } else {
+                    0
+                })
                 .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
                     touch::extra_bytes(&options.controls.profiles)
@@ -2746,6 +2787,9 @@ fn scene_limits(
         )?,
         sprites: size(
             enemy_sprites
+                .saturating_add(usize::from(
+                    options.can_reset_controls(reserved),
+                ))
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
                 .saturating_add(if touch_enabled {

@@ -36,7 +36,7 @@ use std::num::NonZeroUsize;
 
 use games::audio::MasterVolume;
 use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
-use games::session::{LocalSession, MenuItem, SessionPhase};
+use games::session::{ControlReset, LocalSession, MenuItem, SessionPhase};
 
 use crate::ir::frame::RenderError;
 use crate::ir::scene::{AtlasUpload, SpriteDraw};
@@ -49,7 +49,7 @@ const PHASES: [SessionPhase; 3] = [
 ];
 const ROW_HEIGHT: u16 = 16;
 const ROW_TOP: u16 = 48;
-const ROWS: [Row; 18] = [
+const ROWS: [Row; 20] = [
     Row::Choice(MenuItem::Back),
     Row::Choice(MenuItem::Exit),
     Row::Choice(MenuItem::MainMenu),
@@ -68,6 +68,8 @@ const ROWS: [Row; 18] = [
     Row::Volume(MasterVolume::Full),
     Row::Window(WindowMode::Fullscreen),
     Row::Window(WindowMode::Windowed),
+    Row::ControlReset(false),
+    Row::ControlReset(true),
 ];
 const SELECTED: [u8; 4] = [248, 228, 168, 255];
 const TEXT: [u8; 4] = [220, 222, 232, 255];
@@ -75,6 +77,8 @@ const TEXT: [u8; 4] = [220, 222, 232, 255];
 /// Title-owned text, without duplicating the shared menu choices.
 #[derive(Clone, Copy, Debug)]
 pub struct MenuContent<'text> {
+    /// Whether the host offers a next-launch control reset.
+    pub control_reset: bool,
     /// Explanatory lines for the main menu.
     pub main_hints: &'text [&'text str],
     /// Explanatory lines for the pause menu.
@@ -88,6 +92,7 @@ pub struct MenuContent<'text> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Row {
     Choice(MenuItem),
+    ControlReset(bool),
     Presentation(PresentationMode),
     Volume(MasterVolume),
     Window(WindowMode),
@@ -98,9 +103,14 @@ impl Row {
         item: MenuItem,
         display: DisplaySettings,
         volume: MasterVolume,
+        control_reset: ControlReset,
     ) -> Self {
         match item {
             MenuItem::Display => Self::Presentation(display.presentation),
+            MenuItem::ResetControls => Self::ControlReset(matches!(
+                control_reset,
+                ControlReset::Requested
+            )),
             MenuItem::Volume => Self::Volume(volume),
             MenuItem::Window => Self::Window(display.window),
             MenuItem::Back
@@ -120,12 +130,17 @@ impl Row {
                 MenuItem::Exit => "EXIT",
                 MenuItem::MainMenu => "MAIN MENU",
                 MenuItem::Play => "PLAY",
+                MenuItem::ResetControls => "RESET CONTROLS",
                 MenuItem::Resume => "RESUME",
                 MenuItem::Settings => "SETTINGS",
                 MenuItem::Volume => "VOLUME",
                 MenuItem::Window => "WINDOW",
             }
             .to_owned(),
+            Self::ControlReset(false) => {
+                "RESET CONTROLS NEXT LAUNCH".to_owned()
+            },
+            Self::ControlReset(true) => "DEFAULTS NEXT LAUNCH".to_owned(),
             Self::Presentation(mode) => format!("DISPLAY: {}", mode.as_str()),
             Self::Volume(level) => format!("VOLUME: {}%", level.percent()),
             Self::Window(mode) => format!("WINDOW: {}", mode.as_str()),
@@ -144,6 +159,7 @@ impl Row {
 /// Portable menu backgrounds and compact rows shared across all selections.
 #[derive(Clone, Copy, Debug)]
 pub struct MenuArt {
+    control_reset: bool,
     panels: TextAtlas,
     rows: TextAtlas,
 }
@@ -174,6 +190,9 @@ impl MenuArt {
         let panels = PHASES.map(|phase| panel(spec.width, content, phase));
         let labels = ROWS
             .into_iter()
+            .take_while(|row| {
+                content.control_reset || !matches!(row, Row::ControlReset(_))
+            })
             .flat_map(|row| {
                 let label = row.label();
                 let highlighted = format!("> {label}");
@@ -188,6 +207,7 @@ impl MenuArt {
             })
             .collect::<Vec<_>>();
         Ok(Self {
+            control_reset: content.control_reset,
             panels: TextAtlas::load(scene, spec, &panels)?,
             rows: TextAtlas::load(
                 scene,
@@ -214,6 +234,12 @@ impl MenuArt {
         let Some(selected) = session.selected() else {
             return Ok(());
         };
+        if session.phase() == SessionPhase::Settings
+            && self.control_reset
+                == matches!(session.control_reset(), ControlReset::Disabled)
+        {
+            return Err(RenderError::InvalidSprite);
+        }
         let (left, top) = origin;
         let panel = PHASES
             .iter()
@@ -221,9 +247,14 @@ impl MenuArt {
             .ok_or(RenderError::InvalidSprite)?;
         draws.push(self.panels.draw(panel, left, top)?);
         for (index, item) in session.items().iter().copied().enumerate() {
-            let tile = Row::for_item(item, session.display(), session.volume())
-                .tile(item == selected)
-                .ok_or(RenderError::InvalidSprite)?;
+            let tile = Row::for_item(
+                item,
+                session.display(),
+                session.volume(),
+                session.control_reset(),
+            )
+            .tile(item == selected)
+            .ok_or(RenderError::InvalidSprite)?;
             let offset = i32::try_from(index)
                 .map_err(|_error| RenderError::InvalidDimensions)?
                 .saturating_mul(i32::from(ROW_HEIGHT));
@@ -263,7 +294,8 @@ fn panel(
         }
         .fit_width(width),
     ];
-    let count = u16::try_from(phase.items().len()).unwrap_or(u16::MAX);
+    let count = u16::try_from(phase.items(content.control_reset).len())
+        .unwrap_or(u16::MAX);
     let mut top = ROW_TOP
         .saturating_add(count.saturating_mul(ROW_HEIGHT))
         .saturating_add(12);
@@ -329,7 +361,7 @@ mod tests {
     #[test]
     fn every_phase_choice_has_both_row_variants_for_all_display_modes() {
         for phase in PHASES {
-            for item in phase.items().iter().copied() {
+            for item in phase.items(true).iter().copied() {
                 verify_rows(item);
             }
         }
@@ -348,7 +380,8 @@ mod tests {
 
     fn verify_volume_rows(item: MenuItem, display: DisplaySettings) {
         for volume in MasterVolume::ALL {
-            let row = Row::for_item(item, display, volume);
+            let row =
+                Row::for_item(item, display, volume, ControlReset::Available);
             let plain = row.tile(false);
             assert!(plain.is_some());
             assert_eq!(
@@ -365,18 +398,33 @@ mod tests {
             window: WindowMode::Fullscreen,
         };
         assert_eq!(
-            Row::for_item(MenuItem::Display, display, MasterVolume::Full)
-                .label(),
+            Row::for_item(
+                MenuItem::Display,
+                display,
+                MasterVolume::Full,
+                ControlReset::Disabled
+            )
+            .label(),
             "DISPLAY: integer"
         );
         assert_eq!(
-            Row::for_item(MenuItem::Window, display, MasterVolume::Full)
-                .label(),
+            Row::for_item(
+                MenuItem::Window,
+                display,
+                MasterVolume::Full,
+                ControlReset::Disabled
+            )
+            .label(),
             "WINDOW: fullscreen"
         );
         assert_eq!(
-            Row::for_item(MenuItem::Volume, display, MasterVolume::Half)
-                .label(),
+            Row::for_item(
+                MenuItem::Volume,
+                display,
+                MasterVolume::Half,
+                ControlReset::Disabled
+            )
+            .label(),
             "VOLUME: 50%"
         );
     }
@@ -394,6 +442,7 @@ mod tests {
                 width: 160,
             },
             MenuContent {
+                control_reset: true,
                 main_hints: &["START"],
                 pause_hints: &["RESUME"],
                 settings_hints: &["BACK"],
@@ -406,12 +455,37 @@ mod tests {
         };
         assert_eq!(capture.layouts.len(), 2);
         verify_menu_commands(art);
+        verify_reset_commands(art);
         assert_eq!(capture.layouts.len(), 2);
+    }
+
+    fn select_reset() -> LocalSession {
+        let mut session = LocalSession::default().with_control_reset(true);
+        assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        for _ in 0u8..3 {
+            assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        }
+        session
+    }
+
+    fn verify_reset_commands(art: MenuArt) {
+        let mut session = select_reset();
+        let mut initial = Vec::new();
+        assert_eq!(art.queue(session, (0i32, 0i32), &mut initial), Ok(()));
+        assert_eq!(initial.len(), 6);
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        let mut requested = Vec::new();
+        assert_eq!(art.queue(session, (0i32, 0i32), &mut requested), Ok(()));
+        assert_eq!(initial.get(..4), requested.get(..4));
+        assert_ne!(initial.get(4), requested.get(4));
+        assert_eq!(initial.get(5), requested.get(5));
     }
 
     fn verify_menu_commands(art: MenuArt) {
         let mut session =
-            LocalSession::with_display(DisplaySettings::default(), false);
+            LocalSession::with_display(DisplaySettings::default(), false)
+                .with_control_reset(true);
         let origin = (4i32, 7i32);
         let mut initial = Vec::new();
         assert_eq!(art.queue(session, origin, &mut initial), Ok(()));

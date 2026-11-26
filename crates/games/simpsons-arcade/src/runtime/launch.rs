@@ -320,32 +320,51 @@ impl ControlSelection {
         if other.iter().any(|[pause, ..]| pause.is_some()) {
             return Err("keyboard pause belongs to seat 1 only".into());
         }
-        let pending = if update && !smoke {
-            store.map(|preferences| (preferences, text))
-        } else {
+        let persistent_store = if smoke {
             None
+        } else {
+            store
         };
-        Ok(ResolvedControls { pending, profiles })
+        let pending = (update && persistent_store.is_some()).then_some(text);
+        Ok(ResolvedControls {
+            pending,
+            profiles,
+            store: persistent_store,
+        })
     }
 }
 
 #[derive(Debug)]
 pub(super) struct ResolvedControls {
-    pending: Option<(ControlStore, String)>,
+    pending: Option<String>,
     pub(super) profiles: Profiles,
+    store: Option<ControlStore>,
 }
 
 impl ResolvedControls {
+    pub(super) const fn can_reset(&self) -> bool {
+        self.store.is_some()
+    }
+
     pub(super) fn persist(&self) -> Result<(), String> {
-        if let Some((store, text)) = &self.pending {
-            let receipt = store
-                .store(text)
-                .map_err(|error| format!("control preferences: {error:?}"))?;
-            receipt.durability.map_err(|error| {
-                format!("control preferences durability: {error:?}")
-            })?;
+        if let (Some(store), Some(text)) = (&self.store, &self.pending) {
+            Self::store_profile(store, text)?;
         }
         Ok(())
+    }
+
+    pub(super) fn persist_defaults(&self) -> Result<(), String> {
+        let store = self.store.as_ref().ok_or("control store unavailable")?;
+        Self::store_profile(store, DEFAULT_PROFILE)
+    }
+
+    fn store_profile(store: &ControlStore, text: &str) -> Result<(), String> {
+        let receipt = store
+            .store(text)
+            .map_err(|error| format!("control preferences: {error:?}"))?;
+        receipt.durability.map_err(|error| {
+            format!("control preferences durability: {error:?}")
+        })
     }
 }
 
@@ -1123,6 +1142,28 @@ mod tests {
             || fixture.resolve(&[])?.profiles != DEFAULT_PROFILES
         {
             return Err("reset did not survive relaunch".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn next_launch_reset_preserves_current_controls() -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let resolved = fixture.resolve(&[])?;
+        if !resolved.can_reset()
+            || resolved.profiles != configured_profiles(FALLBACK_PROFILE)?
+        {
+            return Err("control reset unavailable or fallback lost".into());
+        }
+        resolved.persist_defaults()?;
+        if fixture.resolve(&[])?.profiles != DEFAULT_PROFILES
+            || resolved.profiles != configured_profiles(FALLBACK_PROFILE)?
+        {
+            return Err("next-launch reset changed current controls".into());
+        }
+        let smoke = fixture.resolve(&["--smoke"])?;
+        if smoke.can_reset() || smoke.persist_defaults().is_ok() {
+            return Err("smoke can reset controls".into());
         }
         Ok(())
     }

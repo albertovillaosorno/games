@@ -48,6 +48,25 @@ const SETTINGS_ITEMS: [MenuItem; 4] = [
     MenuItem::Volume,
     MenuItem::Back,
 ];
+const SETTINGS_WITH_CONTROL_RESET: [MenuItem; 5] = [
+    MenuItem::Display,
+    MenuItem::Window,
+    MenuItem::Volume,
+    MenuItem::ResetControls,
+    MenuItem::Back,
+];
+
+/// Availability and requested next-launch reset of a control profile.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ControlReset {
+    /// A host can persist defaults for the next launch.
+    Available,
+    /// The host does not offer a persistent reset.
+    #[default]
+    Disabled,
+    /// The user has requested defaults; the host must persist them.
+    Requested,
+}
 
 /// Current screen of a local gameplay session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -78,6 +97,8 @@ pub enum MenuItem {
     MainMenu,
     /// Start a new session.
     Play,
+    /// Request default controls for the next launch.
+    ResetControls,
     /// Resume the suspended world.
     Resume,
     /// Open settings.
@@ -119,10 +140,11 @@ pub enum SessionEffect {
 impl SessionPhase {
     /// Visible menu choices, empty while playing or after exit.
     #[must_use]
-    pub const fn items(self) -> &'static [MenuItem] {
+    pub const fn items(self, control_reset: bool) -> &'static [MenuItem] {
         match self {
             Self::MainMenu => &MAIN_ITEMS,
             Self::Paused => &PAUSE_ITEMS,
+            Self::Settings if control_reset => &SETTINGS_WITH_CONTROL_RESET,
             Self::Settings => &SETTINGS_ITEMS,
             Self::Playing | Self::Exited => &[],
         }
@@ -132,6 +154,7 @@ impl SessionPhase {
 /// Deterministic local session state with no device or title dependencies.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalSession {
+    control_reset: ControlReset,
     display: DisplaySettings,
     phase: SessionPhase,
     restrict_fill: bool,
@@ -159,6 +182,9 @@ impl LocalSession {
                 self.display.window = self.display.window.toggled();
             },
             Some(MenuItem::Play) => return self.start(),
+            Some(MenuItem::ResetControls) => {
+                self.control_reset = ControlReset::Requested;
+            },
             Some(MenuItem::Resume) => {
                 self.transition(SessionPhase::Playing);
             },
@@ -173,6 +199,12 @@ impl LocalSession {
             None => {},
         }
         SessionEffect::None
+    }
+
+    /// Requested control reset, not an acknowledgement of persistence.
+    #[must_use]
+    pub const fn control_reset(self) -> ControlReset {
+        self.control_reset
     }
 
     const fn cycle_display(&mut self) {
@@ -220,7 +252,8 @@ impl LocalSession {
     /// Visible choices for the current screen, empty while playing.
     #[must_use]
     pub const fn items(self) -> &'static [MenuItem] {
-        self.phase.items()
+        self.phase
+            .items(!matches!(self.control_reset, ControlReset::Disabled))
     }
 
     fn navigate(&mut self, input: MenuInput) {
@@ -295,6 +328,17 @@ impl LocalSession {
         self.volume
     }
 
+    /// Offer the optional next-launch control reset at session creation.
+    #[must_use]
+    pub const fn with_control_reset(mut self, enabled: bool) -> Self {
+        self.control_reset = if enabled {
+            ControlReset::Available
+        } else {
+            ControlReset::Disabled
+        };
+        self
+    }
+
     /// Initialise a session with portable display preferences and whether
     /// centered cropping must be excluded to keep controls reachable.
     #[must_use]
@@ -323,6 +367,7 @@ impl LocalSession {
             display
         };
         Self {
+            control_reset: ControlReset::Disabled,
             display: adjusted,
             phase: SessionPhase::MainMenu,
             restrict_fill,
@@ -345,6 +390,41 @@ impl LocalSession {
 mod tests {
     use super::*;
     use crate::presentation::WindowMode;
+
+    #[test]
+    fn control_reset_is_hidden_without_host_support() {
+        let mut session = LocalSession::default();
+        assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert_eq!(session.items(), &SETTINGS_ITEMS);
+        assert_eq!(session.control_reset(), ControlReset::Disabled);
+    }
+
+    fn select_reset_in_pause() -> LocalSession {
+        let mut session = LocalSession::default().with_control_reset(true);
+        assert_eq!(session.input(MenuInput::Start), SessionEffect::Join);
+        for input in [MenuInput::Pause, MenuInput::Next, MenuInput::Confirm] {
+            assert_eq!(session.input(input), SessionEffect::None);
+        }
+        assert_eq!(session.items(), &SETTINGS_WITH_CONTROL_RESET);
+        for _ in 0u8..3 {
+            assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        }
+        assert_eq!(session.selected(), Some(MenuItem::ResetControls));
+        assert_eq!(session.control_reset(), ControlReset::Available);
+        session
+    }
+
+    #[test]
+    fn control_reset_preserves_the_session() {
+        let mut session = select_reset_in_pause();
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert_eq!(session.control_reset(), ControlReset::Requested);
+        assert_eq!(session.phase(), SessionPhase::Settings);
+        assert_eq!(session.input(MenuInput::Pause), SessionEffect::None);
+        assert_eq!(session.phase(), SessionPhase::Paused);
+        assert_eq!(session.control_reset(), ControlReset::Requested);
+    }
 
     #[test]
     fn start_joins_without_prerequisites_and_pause_is_reversible() {
