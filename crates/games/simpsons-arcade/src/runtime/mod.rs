@@ -107,6 +107,7 @@ use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
     DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
+use games_platform::ir::ui::TextAtlas;
 use games_platform::ir::ui::editor::ControlEditorView;
 use title_messages::{LaunchNotice, launch_error, launch_label};
 
@@ -597,6 +598,7 @@ struct Scene {
     locales: Vec<title_messages::LocaleArt>,
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
+    score_digits: Option<TextAtlas>,
     shadow: Option<shadow::ShadowArt>,
     world: Vec<(i16, SpriteDraw)>,
     world_art: Option<world::WorldArt>,
@@ -641,6 +643,11 @@ impl Scene {
             )?,
             panel: touch::shared_panel(scene, profiles, touch_enabled)?,
             poses: source.poses.load(source.store, scene)?,
+            score_digits: source
+                .enemy
+                .is_some()
+                .then(|| station_hud::load_digits(scene))
+                .transpose()?,
             shadow: source
                 .shadow
                 .as_ref()
@@ -963,6 +970,14 @@ impl Scene {
         }
         if let Some(combat) = &self.combat {
             combat.station_health(&mut self.draws, icon.x, station)?;
+            if let Some(digits) = &self.score_digits {
+                station_hud::queue_score(
+                    digits,
+                    player,
+                    (station.score, offset, prompted),
+                    &mut self.draws,
+                )?;
+            }
         }
         if !paired
             && station.participation == Participation::Playing
@@ -3428,7 +3443,7 @@ fn scene_limits(
         0
     };
     let enemy_sprites: usize = if source.enemy.is_some() {
-        encounter::EXTRA_SPRITES
+        encounter::EXTRA_SPRITES.saturating_add(station_hud::SCORE_SPRITES)
     } else {
         0
     };
@@ -3445,6 +3460,10 @@ fn scene_limits(
                 .saturating_add(touch_bytes)
                 .saturating_add(source.poses.atlas_bytes())
                 .saturating_add(enemy_atlases.saturating_mul(65_536))
+                .saturating_add(
+                    usize::from(source.enemy.is_some())
+                        .saturating_mul(station_hud::SCORE_BYTES),
+                )
                 .saturating_add(shadows.saturating_mul(shadow::MAX_BYTES))
                 .saturating_add(extension.saturating_mul(
                     usize::try_from(world::atlas_budget()).map_err(failure)?,
@@ -3455,6 +3474,7 @@ fn scene_limits(
                 .saturating_add(extension)
                 .saturating_add(shadows)
                 .saturating_add(language.atlases)
+                .saturating_add(usize::from(source.enemy.is_some()))
                 .saturating_add(5usize.saturating_add(touch_atlases)),
         )?,
         sprites: size(
@@ -3475,7 +3495,9 @@ fn scene_limits(
 
 fn draw_capacity(source: &Sources<'_>) -> usize {
     let base = if source.enemy.is_some() {
-        21usize.saturating_add(encounter::EXTRA_SPRITES)
+        21usize
+            .saturating_add(encounter::EXTRA_SPRITES)
+            .saturating_add(station_hud::SCORE_SPRITES)
     } else {
         21usize
     };

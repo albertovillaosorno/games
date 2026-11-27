@@ -4263,3 +4263,24 @@ semantics remain unresolved. Modern native settings are not asserted
 as equivalent to that original format. The unchanged 1,050-identity
 inventory now has 1,022 unresolved, three intentional replacements and
 25 non-runtime dispositions. No new playable milestone is claimed.
+
+### Regular enemy score
+
+Fresh isolated lethal-hit and idle-control observations for all four
+stations show the active station's score increasing from zero to one
+at the disappearance of the defeated enemy, 66 reference frames after
+its defeat onset. The repeat Marge observation also shows the displayed
+last digit changing on the same frame; the matched idle control does
+not. Only the successful station changes in the four solo observations.
+
+The fixed-step native regular enemy model now retains the successful
+character until disappearance and awards one point exactly once. The
+HUD uses a single small resident decimal glyph atlas, shared between
+locales, only when combat is enabled. It displays the score without
+adding a control prompt. Tests cover all four characters, delayed
+credit, multiple regular enemy defeats, pause, and campaign transition.
+The native four-digit counter and current free-play policies retain a
+score through continuing and stage transitions and reset new joins.
+These lifecycle and simultaneous-hit choices remain provisional; boss,
+bonus, other award amounts and original multiplayer attribution are
+not yet mapped. No complete scoring or campaign parity is claimed.

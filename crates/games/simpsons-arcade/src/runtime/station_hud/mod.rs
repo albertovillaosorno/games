@@ -9,19 +9,19 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native selection, active remote status and free-rejoin indicators.
+//   - Native selection, remote status, free-rejoin indicators and score.
 // - Must-Not:
 //   - Modify connection state, the countdown or title simulation.
 // - Allows:
-//   - Inputs: Station index, verified connection, profile and remaining ticks.
+//   - Inputs: Station index, connection, profile, remaining ticks and score.
 //   - Outputs: Bounded atlas sprites for the applicable message.
-//   - Side effects: One small persistent atlas allocation.
+//   - Side effects: Bounded persistent atlas allocations.
 // - Split-When:
 //   - General text, localisation or dynamic HUD layout is required.
 // - Merge-When:
 //   - A title-local HUD already owns these continue indicators.
 // - Summary:
-//   - Present selection, rejoin and active remote availability.
+//   - Present selection, rejoin, remote availability and score.
 // - Description:
 //   - Uses independently drawn compact glyphs, not original HUD pixels.
 // - Usage:
@@ -29,7 +29,7 @@
 // - Defaults:
 //   - Hide vacant stations and control bindings during play.
 
-//! Station join, verified remote status and free-rejoin presentation.
+//! Station join, remote status, free-rejoin and score presentation.
 
 mod messages;
 
@@ -48,6 +48,13 @@ use crate::{CONTINUE_TICKS, Participation, Player};
 
 const WIDTH: u16 = 64;
 const HEIGHT: u16 = 24;
+const DIGIT_WIDTH: u16 = 6;
+const DIGIT_HEIGHT: u16 = 10;
+// Ten 6-by-10 RGBA glyph plates shared across locales.
+pub(super) const SCORE_BYTES: usize = 10 * 6 * 10 * 4;
+
+/// At most four decimal glyphs per active station.
+pub(super) const SCORE_SPRITES: usize = 4 * 4;
 const BINDING_TOP: u16 = 12;
 const SECOND_TICKS: u16 = 60;
 const LAST_SECONDS: u16 = CONTINUE_TICKS.div_ceil(SECOND_TICKS);
@@ -186,6 +193,55 @@ impl StationHud {
     pub(super) const fn update_connections(&mut self, connected: [bool; 4]) {
         self.connected = connected;
     }
+}
+
+pub(super) fn queue_score(
+    digits: &TextAtlas,
+    player: Player,
+    (score, offset, prompted): (u16, i32, bool),
+    draws: &mut Vec<SpriteDraw>,
+) -> Result<(), RenderError> {
+    let mut remaining = score;
+    let mut left = station_x(player)?.saturating_add(offset).saturating_add(64);
+    let top = if prompted {
+        28i32
+    } else {
+        2i32
+    };
+    for _ in 0..4u8 {
+        left = left.saturating_sub(i32::from(DIGIT_WIDTH));
+        let digit = usize::from(remaining.checked_rem(10).unwrap_or_default());
+        draws.push(digits.draw(digit, left, top)?);
+        remaining = remaining.checked_div(10).unwrap_or_default();
+        if remaining == 0 {
+            break;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn load_digits(
+    scene: &mut SceneSession<'_, '_>,
+) -> Result<TextAtlas, RenderError> {
+    let plates =
+        ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"].map(|digit| {
+            vec![TextLine {
+                color: INK,
+                scale: 2,
+                text: digit,
+                top: 0,
+            }]
+        });
+    TextAtlas::load(
+        scene,
+        PlateLayout {
+            background: BACKGROUND,
+            height: DIGIT_HEIGHT,
+            max_bytes: size(SCORE_BYTES)?,
+            width: DIGIT_WIDTH,
+        },
+        &plates,
+    )
 }
 
 fn rejoin_prompts(
@@ -777,9 +833,13 @@ pub(super) mod tests {
         window.with_scene(
             layout,
             SceneLimits {
-                atlas_bytes: size(atlas_bytes(reserved).saturating_mul(2))?,
-                atlases: size(2)?,
-                sprites: size(2)?,
+                atlas_bytes: size(
+                    atlas_bytes(reserved)
+                        .saturating_mul(2)
+                        .saturating_add(SCORE_BYTES),
+                )?,
+                atlases: size(3)?,
+                sprites: size(4)?,
             },
             |scene| {
                 let profiles = configured_profiles(concat!(
@@ -787,9 +847,53 @@ pub(super) mod tests {
                     "button 1 start=rightshoulder\nmouse 1 start=right\n",
                 ))
                 .map_err(failure)?;
+                let digits = load_digits(scene)?;
+                check_scores(scene, &digits)?;
                 check_localised_stations(scene, &profiles, reserved)
             },
         )
+    }
+
+    fn check_scores(
+        scene: &mut SceneSession<'_, '_>,
+        digits: &TextAtlas,
+    ) -> Result<(), RenderError> {
+        let mut draws = Vec::with_capacity(4);
+        queue_score(digits, Player::Marge, (0, 0i32, false), &mut draws)?;
+        if draws.len() != 1 {
+            return Err(failure("zero score must be one glyph"));
+        }
+        if !scene.present([0, 0, 0], &draws)? {
+            return Err(failure("zero score not rendered"));
+        }
+        let zero = scene.readback()?;
+        draws.clear();
+        queue_score(digits, Player::Marge, (1, 0i32, false), &mut draws)?;
+        if !scene.present([0, 0, 0], &draws)? || scene.readback()? == zero {
+            return Err(failure("score increment not rendered"));
+        }
+        draws.clear();
+        queue_score(digits, Player::Lisa, (1_029, 0i32, true), &mut draws)?;
+        if draws.len() != 4 || !scene.present([0, 0, 0], &draws)? {
+            return Err(failure("four-digit score not rendered"));
+        }
+        if !draws
+            .iter()
+            .zip([
+                (90i32, 306i32),
+                (20i32, 300i32),
+                (0i32, 294i32),
+                (10i32, 288i32),
+            ])
+            .all(|(draw, (source_top, left))| {
+                draw.source.y == source_top
+                    && draw.destination.y == 28i32
+                    && draw.destination.x == left
+            })
+        {
+            return Err(failure("incorrect score digit order or placement"));
+        }
+        Ok(())
     }
 
     fn check_localised_stations(

@@ -35,8 +35,8 @@ use super::{
     BASE_WIDTH, ENEMY_CAPACITY, Encounter, FAR_STREET_ADMISSION, Facing,
     LATER_COMBAT_GATE, MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE,
     MID_STREET_ENEMY_COUNT, Maneuver, OPENING_ENEMY_COUNT,
-    OPPOSING_ENEMY_COUNT, Point, Slot, StreetLayout, distance, hurt_slot,
-    in_range, player_strike, step_toward, strip_width, view_origin,
+    OPPOSING_ENEMY_COUNT, Player, Point, Slot, StreetLayout, distance,
+    hurt_slot, in_range, player_strike, step_toward, strip_width, view_origin,
     viewport_width,
 };
 
@@ -313,6 +313,8 @@ impl RestraintMotion {
 pub struct Enemy {
     /// Current action, including the noninteractive defeat timeline.
     pub action: EnemyAction,
+    /// Successful character awaiting score credit at disappearance.
+    pub defeat_credit: Option<Player>,
     /// Current horizontal facing.
     pub facing: Facing,
     /// Remaining health; zero means defeated.
@@ -331,7 +333,7 @@ impl Enemy {
         (restraint, restraint_edge): (bool, bool),
     ) {
         if self.health == 0 {
-            self.advance_defeat(layout);
+            self.advance_defeat(layout, slots);
             return;
         }
         match self.action {
@@ -351,7 +353,7 @@ impl Enemy {
         }
     }
 
-    fn advance_defeat(&mut self, layout: StreetLayout) {
+    fn advance_defeat(&mut self, layout: StreetLayout, slots: &mut [Slot; 4]) {
         let EnemyAction::Defeat { tick } = self.action else {
             return;
         };
@@ -361,6 +363,12 @@ impl Enemy {
         let next = tick.saturating_add(1);
         self.knockback(layout, next, DEFEAT_KNOCKBACK_TICKS);
         self.action = EnemyAction::Defeat { tick: next };
+        if next == ENEMY_DEFEAT_TICKS
+            && let Some(player) = self.defeat_credit.take()
+            && let Some(slot) = slots.get_mut(player.index())
+        {
+            slot.station.award_regular_defeat();
+        }
     }
 
     fn advance_repelled(&mut self, layout: StreetLayout, tick: u8) {
@@ -518,6 +526,7 @@ impl Enemy {
     pub(super) const fn new(position: Point) -> Self {
         Self {
             action: EnemyAction::Approach { tick: 0 },
+            defeat_credit: None,
             facing: Facing::Left,
             health: ENEMY_HEALTH,
             position,
@@ -526,7 +535,7 @@ impl Enemy {
     }
 
     fn receive_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
-        for slot in slots {
+        for (player, slot) in Player::ALL.into_iter().zip(slots) {
             let station = &mut slot.station;
             if player_strike(station, self.position, (32, 12)) {
                 self.health = 0;
@@ -536,6 +545,7 @@ impl Enemy {
                     Facing::Right => Facing::Left,
                 };
                 self.action = EnemyAction::Defeat { tick: 0 };
+                self.defeat_credit = Some(player);
                 return true;
             }
         }
@@ -611,7 +621,7 @@ mod tests {
     use super::*;
     use crate::{
         Action, CONTINUE_TICKS, Cabinet, Control, LayoutError, PLAYER_HEALTH,
-        PLAYER_STOCKS, PLAYER_STRIKE, Participation, Phase, Player, Station,
+        PLAYER_STOCKS, PLAYER_STRIKE, Participation, Phase, Station,
     };
 
     fn pulse(control: Control) -> [LogicalAction<Action>; 2] {
@@ -827,10 +837,14 @@ mod tests {
         assert_eq!(cabinet.impact_cues(), 0);
         cabinet.input_step(11, &[]);
         assert!(cabinet.enemies().map(|enemy| enemy.health).eq([0, 0]));
+        assert_eq!(cabinet.stations().map(|station| station.score), [0; 4]);
         assert_eq!(cabinet.impact_cues(), 2);
         for tick in 12..100 {
             cabinet.input_step(tick, &[]);
         }
+        assert_eq!(cabinet.stations().map(|station| station.score), [
+            2, 0, 0, 0
+        ]);
         assert_eq!(cabinet.impact_cues(), 2);
     }
 
@@ -1379,6 +1393,12 @@ mod tests {
             };
             assert_eq!(enemy.action, EnemyAction::Defeat { tick });
             assert_eq!(enemy.health, 0);
+            assert_eq!(cabinet.stations().map(|station| station.score), [
+                u16::from(tick == ENEMY_DEFEAT_TICKS),
+                0,
+                0,
+                0
+            ]);
             assert_eq!(
                 enemy.visible(),
                 tick < 52
@@ -1427,7 +1447,12 @@ mod tests {
         for tick in 25..40 {
             cabinet.input_step(tick, &[]);
         }
+        assert_eq!(cabinet.stations().map(|station| station.score), [0; 4]);
         assert_eq!(cabinet.enemy(), frozen);
+        assert_resume_defeat(&mut cabinet);
+    }
+
+    fn assert_resume_defeat(cabinet: &mut Cabinet) {
         cabinet.input_step(40, &pulse(Control::Pause));
         cabinet.input_step(41, &pulse(Control::Primary));
         for tick in 42..52 {
@@ -1498,7 +1523,43 @@ mod tests {
                 Some(ENEMY_HEALTH.saturating_sub(1))
             );
             assert_eq!(cabinet.impact_cues(), 1);
+            assert_station_defeat_credit(&mut cabinet, player);
         }
+    }
+
+    fn assert_station_defeat_credit(cabinet: &mut Cabinet, player: Player) {
+        let expected = Player::ALL.map(|seat| u16::from(seat == player));
+        for tick in 14..79 {
+            assert_eq!(cabinet.stations().map(|station| station.score), [0; 4]);
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations().map(|station| station.score), [0; 4]);
+        cabinet.input_step(79, &[]);
+        assert_eq!(cabinet.stations().map(|station| station.score), expected);
+        cabinet.input_step(80, &[]);
+        assert_eq!(cabinet.stations().map(|station| station.score), expected);
+        cabinet.reset_world();
+        assert_eq!(cabinet.stations().map(|station| station.score), [0; 4]);
+    }
+
+    #[test]
+    fn score_retains_continue_but_resets_new_participation() {
+        let mut slot = Slot::new(Point { x: 132, y: 190 });
+        slot.start(0, false);
+        slot.station.score = 9_999;
+        slot.station.award_regular_defeat();
+        assert_eq!(slot.station.score, 0);
+        slot.station.award_regular_defeat();
+        slot.station.participation =
+            Participation::Continuing { ticks_left: 1 };
+        slot.start(0, true);
+        assert_eq!(slot.station.score, 1);
+        slot.station.participation =
+            Participation::Continuing { ticks_left: 1 };
+        slot.advance_participation(0);
+        assert_eq!(slot.station.participation, Participation::Absent);
+        slot.start(0, true);
+        assert_eq!(slot.station.score, 0);
     }
 
     #[test]

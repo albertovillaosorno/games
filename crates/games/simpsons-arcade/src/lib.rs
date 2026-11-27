@@ -293,6 +293,8 @@ pub struct Station {
     pub participation: Participation,
     /// Current foot position.
     pub position: Point,
+    /// Score from completed regular enemy defeats in this campaign.
+    pub score: u16,
     /// Remaining health stocks, including the active stock.
     pub stocks: u8,
     /// Walking phase and direction, absent outside admitted walking.
@@ -300,6 +302,15 @@ pub struct Station {
 }
 
 impl Station {
+    const fn award_regular_defeat(&mut self) {
+        // The original station counter uses four packed decimal digits.
+        self.score = if self.score >= 9_999 {
+            0
+        } else {
+            self.score.saturating_add(1)
+        };
+    }
+
     const fn can_fight(self) -> bool {
         matches!(self.participation, Participation::Playing) && self.health > 0
     }
@@ -635,6 +646,7 @@ impl Slot {
                 maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
+                score: 0,
                 stocks: PLAYER_STOCKS,
                 walking: None,
             },
@@ -659,6 +671,9 @@ impl Slot {
             Participation::Playing | Participation::Recovering { .. }
         ) {
             return;
+        }
+        if matches!(self.station.participation, Participation::Absent) {
+            self.station.score = 0;
         }
         self.station.health = PLAYER_HEALTH;
         // In-game Start admits control immediately. Only the HUD refills.
@@ -726,8 +741,8 @@ struct Encounter {
 
 /// Deterministic arcade title state, independent of the host platform.
 ///
-/// The prototype omits the original intro, full stage progression, collision
-/// and scoring. Optional combat, continuing and maneuver timings are
+/// The prototype omits the original intro, full stage progression, complete
+/// collision and scoring rules. Optional combat, continuing and timings are
 /// provisional. It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
@@ -3240,6 +3255,7 @@ mod tests {
         let [marge, ..] = &mut state.slots;
         marge.station.health = PLAYER_HEALTH.saturating_sub(1);
         marge.station.stocks = 1;
+        marge.station.score = 11;
         state.wrestler = Some(Wrestler {
             action: WrestlerAction::Cleared,
             health: 0,
@@ -3277,6 +3293,7 @@ mod tests {
             assert_eq!(old.stocks, new.stocks);
             assert_eq!(old.participation, new.participation);
             assert_eq!(old.display_health, new.display_health);
+            assert_eq!(old.score, new.score);
         }
     }
 
@@ -3289,6 +3306,7 @@ mod tests {
         state.reset_world();
         assert!(!state.stage_two());
         assert_eq!(state.active_scroll_limit(), 1360);
+        assert_eq!(state.stations().map(|station| station.score), [0; 4]);
         assert_eq!(state.enemies().count(), 1);
     }
 
