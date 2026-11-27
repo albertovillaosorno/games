@@ -44,10 +44,14 @@ const READY_TICKS: u16 = 98;
 // Neutral timeout includes the packed-decimal countdown and entry.
 const PUMP_TICKS: u16 = 492;
 const RESULT_TICKS: u16 = 480;
-const DECAY_TICKS: u16 = 12;
-const INFLATION_PER_PRESS: u8 = 2;
+const REST_TICKS: u8 = 16;
+const INVERSE_BASE: u16 = 0xb000;
+const MIN_WIDTH: u16 = 0x4000;
+const MIN_HEIGHT: u16 = 0x2000;
+const PUMP_STRENGTH: u32 = 0x1c00;
+const LEAK_STRENGTH: u32 = 0x1800;
 
-/// Maximum provisional balloon inflation.
+/// Maximum balloon inflation score.
 pub const BONUS_MAX_INFLATION: u8 = 64;
 
 /// Fixed-step phase of the optional first bonus.
@@ -67,13 +71,85 @@ pub enum BonusPhase {
     Victory,
 }
 
+/// Inverse balloon axes in fixed-point units, with a brief leak delay.
+/// Axis selection is deterministic rather than emulating the board's RNG.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Balloon {
+    height: u16,
+    rest: u8,
+    turn: u8,
+    width: u16,
+}
+
+impl Balloon {
+    // The observed response is quadratic in the current inverse axis.
+    // Two fixed-point products retain the intermediate truncation.
+    fn adjust(axis: &mut u16, minimum: u16, growing: bool) -> bool {
+        let inverse = u32::from(*axis);
+        let squared = inverse.saturating_mul(inverse) >> 16u32;
+        let strength = if growing {
+            PUMP_STRENGTH
+        } else {
+            LEAK_STRENGTH
+        };
+        let delta = u16::try_from(squared.saturating_mul(strength) >> 16u32)
+            .unwrap_or_default();
+        let candidate = if growing {
+            axis.saturating_sub(delta)
+        } else {
+            axis.saturating_add(delta)
+        };
+        let bounded = candidate.clamp(minimum, INVERSE_BASE);
+        *axis = bounded;
+        bounded == candidate
+    }
+
+    fn advance(&mut self, pressed: bool) {
+        if pressed {
+            self.rest = REST_TICKS;
+        } else if self.rest != 0 {
+            self.rest = self.rest.saturating_sub(1);
+            return;
+        }
+        // Prefer the vertical axis in three out of four updates, without
+        // coupling stations through an unrelated global random stream.
+        let width_first = self.turn == 0;
+        self.turn = self.turn.wrapping_add(1) & 3;
+        if width_first {
+            if !Self::adjust(&mut self.width, MIN_WIDTH, pressed) {
+                let _bounded =
+                    Self::adjust(&mut self.height, MIN_HEIGHT, pressed);
+            }
+        } else if !Self::adjust(&mut self.height, MIN_HEIGHT, pressed) {
+            let _bounded = Self::adjust(&mut self.width, MIN_WIDTH, pressed);
+        }
+    }
+
+    fn inflation(self) -> u8 {
+        let [width, _] = self.width.to_be_bytes();
+        let [height, _] = self.height.to_be_bytes();
+        let total = u16::from(0u8.wrapping_sub(width))
+            .saturating_add(u16::from(0u8.wrapping_sub(height)));
+        u8::try_from(total.saturating_sub(160) >> 2).unwrap_or_default()
+    }
+
+    const fn new() -> Self {
+        Self {
+            height: INVERSE_BASE,
+            rest: 0,
+            turn: 0,
+            width: INVERSE_BASE,
+        }
+    }
+}
+
 /// Read-only bonus state, in character rather than physical-seat order.
 ///
-/// Inflation and duration are independently tuned from sparse original
-/// observations; exact score, animation and next-stage rules remain open.
+/// Axis scheduling and result duration are provisional; the bonus score
+/// uses the observed inverse-axis bounds and response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Bonus {
-    inflation: [u8; 4],
+    balloons: [Balloon; 4],
     participants: [bool; 4],
     phase: BonusPhase,
     tick: u16,
@@ -128,12 +204,12 @@ impl Bonus {
             .get(index)
             .copied()
             .filter(|admitted| *admitted)?;
-        self.inflation.get(index).copied()
+        self.balloons.get(index).copied().map(Balloon::inflation)
     }
 
     pub(super) const fn new(participants: [bool; 4]) -> Self {
         Self {
-            inflation: [0; 4],
+            balloons: [Balloon::new(); 4],
             participants,
             phase: BonusPhase::Victory,
             tick: 0,
@@ -147,24 +223,21 @@ impl Bonus {
     }
 
     fn pump(&mut self, presses: [bool; 4]) -> BonusPhase {
-        let decay = self.tick.is_multiple_of(DECAY_TICKS);
-        for ((admitted, size), pressed) in self
+        for ((admitted, balloon), pressed) in self
             .participants
             .iter()
-            .zip(&mut self.inflation)
+            .zip(&mut self.balloons)
             .zip(presses)
         {
             if *admitted {
-                *size = size
-                    .saturating_sub(u8::from(decay))
-                    .saturating_add(
-                        u8::from(pressed).saturating_mul(INFLATION_PER_PRESS),
-                    )
-                    .min(BONUS_MAX_INFLATION);
+                balloon.advance(pressed);
             }
         }
         if self.tick >= PUMP_TICKS
-            || self.inflation.contains(&BONUS_MAX_INFLATION)
+            || self
+                .balloons
+                .iter()
+                .any(|balloon| balloon.inflation() == BONUS_MAX_INFLATION)
         {
             BonusPhase::Results
         } else {
@@ -237,6 +310,42 @@ mod tests {
         let result = bonus;
         bonus.advance([true; 4]);
         assert_eq!(bonus, result);
+    }
+
+    #[test]
+    fn single_pump_retains_size_then_leaks_to_neutral() {
+        let mut balloon = Balloon::new();
+        balloon.advance(true);
+        assert_eq!(balloon.width, 0xa2c4);
+        assert_eq!(balloon.inflation(), 3);
+        for _ in 0..REST_TICKS {
+            balloon.advance(false);
+            assert_eq!(balloon.inflation(), 3);
+        }
+        balloon.advance(false);
+        assert_eq!(balloon.width, 0xac77);
+        assert_eq!(balloon.inflation(), 1);
+        balloon.advance(false);
+        assert_eq!(balloon.inflation(), 0);
+    }
+
+    #[test]
+    fn rapid_edges_end_early_but_sparse_edges_do_not() {
+        let mut rapid = start_pump([true, true, false, false]);
+        let mut sparse = rapid;
+        for tick in 0..200u16 {
+            rapid.advance([tick.is_multiple_of(2), false, false, false]);
+            sparse.advance([tick.is_multiple_of(24), false, false, false]);
+            if rapid.phase() == BonusPhase::Results {
+                break;
+            }
+        }
+        assert_eq!(rapid.phase(), BonusPhase::Results);
+        assert_eq!(rapid.inflation(Player::Marge), Some(BONUS_MAX_INFLATION));
+        assert_eq!(rapid.rank(Player::Marge), Some(1));
+        assert_eq!(rapid.inflation(Player::Homer), Some(0));
+        assert_eq!(sparse.phase(), BonusPhase::Pumping);
+        assert!(matches!(sparse.inflation(Player::Marge), Some(0..=3)));
     }
 
     #[test]

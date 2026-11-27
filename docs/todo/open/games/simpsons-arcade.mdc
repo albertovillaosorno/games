@@ -4464,3 +4464,26 @@ ticks. These constants retain the logical countdowns and deterministic
 neutral pumping duration; they do not model the original scheduler's
 instruction setup/exit overhead or its one-frame pumping variation.
 Result choreography and inflation remain separate acceptance work.
+
+### Balloon response and score bounds
+
+The per-frame held-button control produced one inflation step, held its
+size for 16 further frames, then leaked back to neutral. The neutral
+control reached zero for every station; the rapid two-frame edge
+control reached the maximum score of 64 and entered Results after
+163 pumping frames, while sparse 24-frame edges timed out.
+
+The static review identifies independent inverse width and height,
+a quadratic fixed-point response with a truncated intermediate product,
+distinct pump and leak strengths, a 16-frame leak delay, and clamped
+axis bounds. The displayed score is the sum of the two inverse-axis
+high-byte complements above their neutral baseline, divided by four.
+The title now reconstructs those rules without emulating the original
+processor. Independent deterministic four-update axis scheduling prefers
+the vertical axis three times in four instead of the board's random
+selection; this intentionally preserves equal-input ties and does not
+claim per-frame balloon parity. Sprite scaling and result choreography
+remain provisional. Tests cover the measured single-step/first-leak
+values, leak delay and neutral recovery, sparse and rapid inputs,
+independent participants and tied results. The routed winning-result
+smoke uses a larger bounded press budget for the non-linear response.

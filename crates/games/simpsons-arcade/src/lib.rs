@@ -3342,7 +3342,7 @@ mod tests {
             state
                 .bonus()
                 .and_then(|bonus| bonus.inflation(Player::Marge)),
-            Some(2)
+            Some(3)
         );
         state.input_step(2022, &[change(
             Player::Marge,
@@ -3355,7 +3355,7 @@ mod tests {
             state
                 .bonus()
                 .and_then(|bonus| bonus.inflation(Player::Marge)),
-            Some(2)
+            Some(3)
         );
         assert_eq!(
             state

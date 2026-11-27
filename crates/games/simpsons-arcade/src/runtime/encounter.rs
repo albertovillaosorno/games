@@ -661,7 +661,7 @@ fn smoke_bonus(
         return Err(failure("routed bonus inputs did not change readback"));
     }
     verify_bonus_pause(controls, simulation)?;
-    pump_bonus(controls, simulation, 64)?;
+    pump_bonus(controls, simulation, 128)?;
     if !simulation.state().bonus().is_some_and(|bonus| {
         bonus.phase() == BonusPhase::Results
             && bonus.rank(Player::Marge) == Some(1)
