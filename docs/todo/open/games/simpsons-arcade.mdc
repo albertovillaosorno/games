@@ -2247,8 +2247,9 @@ the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
 record or maneuver end. Regular poses remain limited to 220 records.
-Two optional scenic tracks add at most 44 records within a shared
-22 KiB byte limit. The original four-hash command works without a catalogue.
+Two optional scenic tracks add at most 44 records and the optional late
+backdrop adds 15 records within a shared 24 KiB byte limit. The original
+four-hash command works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
 pose for each of the four characters. When present, the preview retains
@@ -3421,3 +3422,120 @@ the sampled 16.667 ms budget; peak RSS was 148,115,456 bytes.
 Fresh workspace validation passed. Exact original reentry motion,
 late encounter interactions, physical input and audio acceptance
 remain open.
+
+### Late damage and alternative approach controls
+
+Two further isolated captures reproduce all 1,261 previous
+health-row samples per control from device frames 8240 through
+9500 while also capturing the object DMA on every frame.
+Across the eight visible damage-burst onsets in these captures,
+the settled palette-0D composite has identical normalized
+records from two frames before through one frame after each
+onset. The palette-0C composite also remains unchanged across
+six of those eight windows. The other two windows contain a
+pose change one frame before the meter begins to decline.
+A direct collision or damage attribution to either composite
+remains unproved, and neither should replace ordinary enemy
+behavior without an isolated interaction control.
+
+Four additional controls turn Left for 30, 60 or 90 device
+frames, or hold Up and Left together for 30 frames, before
+resuming periodic Primary. Each begins with 25 health columns;
+all reach an empty meter followed by the same exact continue
+prompt row:
+
+| Approach | Empty meter | Continue text |
+| --- | --- | --- |
+| Left 30 | 9372 | 9551 |
+| Left 60 | 9005 | 9191 |
+| Left 90 | 9199 | 9391 |
+| Up and Left 30 | 9691 | 9871 |
+
+The raw camera remains at 245 during the observed continue
+intervals. These alternative inputs do not establish a victory
+condition. No new combat rule or asset is selected from them.
+
+### Optional late encounter backdrop presentation
+
+Two additional isolated original-edition controls fill the previous
+gap with all 442 aligned complete-frame comparisons matching
+71,680 pixels each. Tile and palette observations are aligned
+independently to the displayed frame, with object DMA from the
+preceding device frame. All 221 normalized digests per control
+agree from relative ticks 30 through 250, holding the same
+background as tick 24. Combined with the previous dense captures,
+the original sprite-free sequence is established through tick 331.
+nTwelve additional exact complete-frame checks across the two
+controls from device frame 8600 through 9300 also reproduce the
+held final phase. Intervening unsampled ticks after 331 and the
+scene changes following loss remain unproved.
+
+The strict publication command uses the same full-frame verification
+as the digest diagnostic before creating one cropped canonical
+background bundle. The HUD remains excluded:
+
+```sh
+cargo run --locked -p games-build -- mame scene-background-publish \
+  simpsons world-4p-set-1 OUTPUT PARENT SHA256 RAM REGISTERS SCROLL \
+  PALETTE RGB32 OBJECTS CONTROLS 28
+```
+
+The optional `backdrop TICK SHA256` records select all 15 distinct
+320 by 196 opaque phases. Each pinned local bundle reproduces the
+digest of its measured reference phase. The complete track requires
+the verified 1,360-column street. The cabinet begins this provisional
+visual timing at camera 1,360, freezes it with gameplay, and clears
+it on reset. The eight-tick observed cycle is preserved through
+tick 319; the last observed phase is held from tick 320. The
+original camera's one-column retreat to 1,359 is not simulated.
+No boss combat or successful stage-transition rule is introduced.
+Adaptive presentation falls back to the verified 320 logical
+columns at admission rather than fabricating additional backdrop
+pixels. Live actors and HUD continue to be composed independently.
+An omitted track preserves existing street presentation.
+
+The 3,737,616-byte optimized Linux executable passed original-backed
+offscreen touch smoke in all five display modes with 275 catalogue
+records (218 regular, 42 scenic and 15 backdrop; 22,583 bytes).
+Every run verified the original-width phase raster pixel-for-pixel,
+its composition in the unoccluded upper scene rows, and the existing
+1,360-column street. All sampled movement and combat submissions
+met their 16.667 ms budgets. Lifetime peak RSS ranged from
+152,330,240 to 152,637,440 bytes. The complete catalogue capacity
+of 220 regular, 44 scenic and 15 backdrop records is tested within
+24 KiB. Backdrop atlases add 3,763,200 bytes of bounded RGBA8 data
+only when selected.
+
+The extended Firefox diagnostic passed on the original-backed
+directory with 970 files selected by the trusted folder chooser.
+It verified both existing scenic tracks and all 15 backdrop phases
+with 36 WebGL readbacks and blits, released the canvas, and made
+no preference writes. The adaptive browser test used the ordinary
+asset ingress with external networking isolated.
+
+Fresh workspace validation passed for both runtime and browser
+diagnostic changes. Original captures, derived images and selected
+catalogues remain private; the default selection is unchanged.
+Exact late actor interactions, victory and stage progression,
+post-admission camera behavior and physical acceptance remain open.
+
+### Mid-game seat admission meter
+
+Three original-edition early-join controls admit the three extra seats
+at device frame 2600. The first restored column appears at frame 2604
+and the full 32-column meter at 2666. Neutral input and two held-Right
+durations (20 and 90 frames) reproduce the same HUD trace; movement
+diverges by frame 2664. The independent late-join observation has the
+same visible refill cadence.
+
+The modern in-game join now uses the existing continue-meter timing
+when combat is configured, while initial session admission and
+automatic stock recovery retain their existing behavior. Control
+and logical health are available immediately. Fixed-step regressions
+check each extra seat at every tick of the refill, including a
+repeated Start. The optimized original-backed adaptive touch smoke
+of this change passed the empty and first-filled-column readbacks,
+both scenic tracks and all 15 backdrop phases. Its executable was
+3,740,624 bytes; lifetime peak RSS was 152,588,288 bytes. All sampled
+movement and combat submissions met the 16.667 ms budget. Exact
+original join movement and physical acceptance remain open.
