@@ -1096,3 +1096,17 @@ decoded bytes, 4,494 reciprocal pairs, 5,084 flow observations, 263
 interior entries and 190 unresolved flows. There remain 43 partial
 mappings, three intentional replacements, 25 non-runtime dispositions
 and 1,644 unresolved dispositions.
+
+The second-stage boss mapping review now connects 13 reviewed bodies
+to partial Rust implementations of entrance timers, scale response,
+target retention and terminal motion. Regression tests additionally
+verify a valid station survives the 64-tick hold, an invalid target
+is replaced, and the terminal shrink retains its minimum scale
+without awarding an early point. All 13 original dispositions remain
+unresolved: native selection, shared gates, linked requests, scheduler
+flags and exact credit policy are not established. A candidate audit
+verified that no other ledger fields changed. The checker retains
+1,672 identities, 60,807 bytes, 4,494 reciprocal pairs, 5,084 flows,
+263 interior entries and 190 unresolved flows, now with 56 partial
+mappings and the same three intentional replacements, 25 non-runtime
+and 1,644 unresolved dispositions.

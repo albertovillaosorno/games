@@ -571,6 +571,53 @@ mod tests {
     }
 
     #[test]
+    fn target_hold_retains_a_valid_station_and_expires() {
+        let mut boss = BalloonBoss::new(0);
+        let mut slots = active_slots();
+        let [_, initial_homer, ..] = &mut slots;
+        initial_homer.station.position.x = 120;
+        assert_eq!(boss.refresh_target(&slots), Some(Point { x: 136, y: 200 }));
+        assert_eq!(boss.target, Some(Player::Marge));
+
+        let [marge, homer, ..] = &mut slots;
+        marge.station.position.x = 100;
+        homer.station.position.x = 145;
+        for _ in 0..64u8 {
+            assert_eq!(
+                boss.refresh_target(&slots),
+                Some(Point { x: 100, y: 200 })
+            );
+            assert_eq!(boss.target, Some(Player::Marge));
+        }
+        assert_eq!(boss.refresh_target(&slots), Some(Point { x: 145, y: 200 }));
+        assert_eq!(boss.target, Some(Player::Homer));
+        let [_, departing_homer, ..] = &mut slots;
+        departing_homer.station.participation = Participation::Absent;
+        assert_eq!(boss.refresh_target(&slots), Some(Point { x: 136, y: 200 }));
+        assert_eq!(boss.target, Some(Player::Bart));
+    }
+
+    #[test]
+    fn terminal_shrink_retains_scale_through_the_observed_hold() {
+        let mut boss = BalloonBoss::new(0);
+        let mut slots = active_slots();
+        boss.quantity = 0;
+        boss.scale = (64, 64);
+        boss.start_terminal(Player::Marge, 136);
+        for tick in 1..=99u8 {
+            assert!(!boss.advance(StreetLayout::DOWNTOWN, &mut slots));
+            let scale = match tick {
+                1..=33 => 64,
+                34..=66 => 97u8.saturating_sub(tick),
+                _ => 31,
+            };
+            assert_eq!(boss.scale, (scale, scale));
+            assert_eq!(slots.map(|slot| slot.station.score), [0; 4]);
+        }
+        assert_eq!(boss.terminal_elevation(), 128);
+    }
+
+    #[test]
     fn contact_can_be_evaded_and_no_attack_means_no_defeat() {
         let mut boss = BalloonBoss::new(0);
         boss.action = BalloonAction::Contact {
