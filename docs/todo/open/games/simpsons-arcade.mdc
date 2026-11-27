@@ -4213,3 +4213,12 @@ are separate requirements.
 The audio startup checksum and nominal timer-B period are independently
 verified. Eight FM and four PCM records receive sequence opportunities
 every eight modeled timer ticks. Physical cadence remains unverified.
+
+Further conditional transitions add 18 main-CPU identities and 454
+owned instruction bytes. Fixed tail entries and a shared bank
+continuation have explicit ownership, with no lost earlier
+instructions. The newly reviewed signed quarter-wave component
+helper is not yet assigned to a gameplay mechanic. The main inventory
+now contains 275 identities and 13,308 bytes; the combined private
+checker reports 964 identities, 945 unresolved dispositions and 65
+unresolved flow observations. Campaign equivalence remains open.

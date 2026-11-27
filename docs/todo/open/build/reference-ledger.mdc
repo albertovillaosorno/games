@@ -349,3 +349,18 @@ The audio startup review verifies the complete reset checksum and
 nominal timer-B period of 7,168 clocks. Eight FM and four PCM service
 records receive sequence opportunities every eight timer ticks.
 This is a nominal model, not verified physical playback cadence.
+
+Three further selector checkpoints admit 18 main-CPU identities and
+454 additional decoded instruction bytes. Two newly decoded fixed
+tail-entry spans have explicit owners, and a shared bank continuation
+is reassigned without dropping any previously decoded instruction.
+The signed quarter-wave component helper and its paired record
+updates are semantically reviewed without claiming their gameplay
+roles. Every decoded instruction still has an owner.
+
+The main inventory contains 275 identities and 13,308 decoded bytes,
+247 possible bank/table observations and 65 unresolved observations.
+The combined inventory has 964 identities, 31,706 bytes, 3,187
+reciprocal pairs, 3,499 detailed flow observations and 71 interior
+entries. Dispositions are 945 unresolved, three intentional
+replacements and 16 non-runtime. Discovery remains incomplete.
