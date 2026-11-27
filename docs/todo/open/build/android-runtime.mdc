@@ -70,6 +70,21 @@ The emulator shut down cleanly. The working headless configuration used
 no cameras and no snapshot. This proves execution through translation,
 not native ARM64 hardware equivalence.
 
-The shared Android capability adapters and game APK remain open. No game
-startup, graphics, touch, persistence, audio or physical ARM64 acceptance
-is claimed. A usable emulated test target is now demonstrated.
+The release engine, title core and platform libraries also link into a
+disposable ARM64-only JNI probe using the NDK API 24 target. The Rust
+link uses thin LTO to consume the workspace's bitcode with Rust's LLVM
+rather than the NDK's older LLVM reader. The existing core smoke runs
+unchanged except for its private entry point; it exercises deterministic
+frame partitioning, four-station movement, pause, logical touch
+projection and save-envelope rejection. The probe also calls the shared
+monotonic clock, native save slots and display preference stores in
+dedicated app-private directories. Three cold starts reported 201, 202
+and 203, verifying first publication, replacement, slot isolation,
+oversized-payload rejection, successful durability receipts and
+preference reload across separate processes. No original media was used.
+
+The remaining work is the Android application lifecycle, graphics,
+audio, physical input and storage-location integration, and the game
+APK. Core execution and app-private persistence are established only
+through translated emulation, not a playable title or native ARM64
+hardware acceptance.
