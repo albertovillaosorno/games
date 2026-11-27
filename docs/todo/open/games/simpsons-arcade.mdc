@@ -3363,3 +3363,28 @@ The original captures, derived images and digest logs remain
 private. No new runtime stage art, encounter rule or default
 selection was introduced. Complete timing, dynamic background
 placement, combat and eventual stage completion remain open.
+
+### Late encounter player-loss controls
+
+Four original-edition controls start with the same 25 of 32 visible
+health columns at device frame 8240. Two isolated replays of each
+control produce byte-identical 5,761-row HUD traces through frame
+14000. The measured final meter depletion and first pixel-exact
+match with the previously verified idle continue text row are:
+
+| Input after admission | Empty meter | Continue text |
+| --- | --- | --- |
+| Right and periodic Primary | 9376 | 9551 |
+| No input | 9439 | 9631 |
+| Jump and Primary | 9647 | 9837 |
+| Vertical motion, Jump and Primary | 9360 | 9551 |
+
+In every control the raw scroll remains 245 through the continue
+interval. The later register changes therefore follow a confirmed
+player-loss outcome, not demonstrated boss defeat or completion.
+The final meter declines at the established one-column-per-two-frame
+cadence. Distinct damage bursts remove three, six or nine visible
+columns; these measurements alone do not attribute a burst to a
+particular collision or actor. The late encounter's victory
+condition, exact attack and damage rules, successful stage
+transition and modern free-continue behavior remain open.
