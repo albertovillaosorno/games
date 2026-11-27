@@ -4413,3 +4413,16 @@ uses real strike and Start inputs to distinguish station-local expiry
 and rejoin from a campaign reset. The original coin admission rules
 remain reference-only; exact multiplayer simultaneous-hit ordering
 and full campaign parity remain unresolved.
+
+### Station initializer reference
+
+Two targeted original replays reproduce the accepted-continue and
+station-local rejoin score and health traces. Paired immutable
+callback-table reads identify the same station initialization routine
+under fresh-admission and accepted-continue selectors. Static review
+shows a conditional skip over the station score clear for the latter;
+the fresh-admission path clears the selected score before continuing.
+The global campaign reset is a separate original path. These findings
+support the existing native free-play lifecycle tests without adopting
+the original coin, dispatch or configuration mechanisms. Additional
+callback semantics and complete original function coverage remain open.
