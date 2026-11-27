@@ -207,7 +207,13 @@ impl InputBackend for LinuxInput {
         };
         if matches!(
             routed,
-            Some(HostEvent::Quit | HostEvent::Input(InputEvent::FocusLost))
+            Some(
+                HostEvent::Quit
+                    | HostEvent::Input(
+                        InputEvent::ApplicationSuspended
+                            | InputEvent::FocusLost
+                    )
+            )
         ) {
             self.stop_all_feedback();
         }
@@ -504,9 +510,25 @@ pub(super) fn sample(event: &Event, window: u32, now: u64) -> InputSample {
     )
 }
 
-fn route(event: &Event, window: u32) -> Option<HostEvent> {
-    if matches!(event, Event::Quit { .. }) {
+const fn route_application(event: &Event) -> Option<HostEvent> {
+    if matches!(event, Event::Quit { .. } | Event::AppTerminating { .. }) {
         return Some(HostEvent::Quit);
+    }
+    // Either background boundary can replace window focus loss. Repeated
+    // releases are idempotent. Foreground alone does not grant focus.
+    if matches!(
+        event,
+        Event::AppWillEnterBackground { .. }
+            | Event::AppDidEnterBackground { .. }
+    ) {
+        return Some(HostEvent::Input(InputEvent::ApplicationSuspended));
+    }
+    None
+}
+
+fn route(event: &Event, window: u32) -> Option<HostEvent> {
+    if let Some(lifecycle) = route_application(event) {
+        return Some(lifecycle);
     }
     if let Event::Window { window_id, win_event, .. } = *event
         && window_id == window
@@ -1182,6 +1204,71 @@ mod tests {
     }
 
     #[test]
+    fn application_background_releases_held_input_globally() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_key(KeyboardKey::SPACE.code(), "jump");
+        let mut router = InputRouter::new(mapping);
+        assert_eq!(
+            router.handle(InputEvent::Key {
+                code: KeyboardKey::SPACE.code(),
+                down: true,
+            }),
+            [LogicalAction {
+                action: "jump",
+                down: true,
+            }]
+        );
+        for (event, expected) in [
+            (
+                Event::AppWillEnterBackground { timestamp: 1 },
+                &[LogicalAction {
+                    action: "jump",
+                    down: false,
+                }][..],
+            ),
+            (Event::AppDidEnterBackground { timestamp: 2 }, &[][..]),
+        ] {
+            let observation = sample(&event, 2, 2);
+            assert!(observation.matches_window(2));
+            assert!(observation.matches_window(3));
+            assert_eq!(
+                observation.transition(),
+                InputTransition::Event(HostEvent::Input(
+                    InputEvent::ApplicationSuspended
+                ))
+            );
+            assert_eq!(
+                router.handle(InputEvent::ApplicationSuspended),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn application_foreground_does_not_grant_window_focus() {
+        for event in [
+            Event::AppWillEnterForeground { timestamp: 1 },
+            Event::AppDidEnterForeground { timestamp: 2 },
+            Event::AppLowMemory { timestamp: 3 },
+        ] {
+            assert_eq!(
+                sample(&event, 2, 3).transition(),
+                InputTransition::Ignored
+            );
+        }
+        let focus = Event::Window {
+            timestamp: 4,
+            window_id: 2,
+            win_event: WindowEvent::FocusGained,
+        };
+        assert_eq!(
+            sample(&focus, 2, 4).transition(),
+            InputTransition::FocusGained
+        );
+        assert_eq!(sample(&focus, 3, 4).transition(), InputTransition::Ignored);
+    }
+
+    #[test]
     fn controller_codes_preserve_instance_identity() {
         let down = Event::ControllerButtonDown {
             timestamp: 0,
@@ -1238,5 +1325,13 @@ mod tests {
             route(&Event::Quit { timestamp: 0 }, 3),
             Some(HostEvent::Quit)
         );
+        let terminate = Event::AppTerminating { timestamp: 1 };
+        let observation = sample(&terminate, 3, 1);
+        assert_eq!(
+            observation.transition(),
+            InputTransition::Event(HostEvent::Quit)
+        );
+        assert!(observation.matches_window(3));
+        assert!(observation.matches_window(4));
     }
 }

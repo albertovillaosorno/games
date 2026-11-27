@@ -50,6 +50,8 @@ use self::touch::{
 /// A platform-neutral input event from a native host adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputEvent {
+    /// The application suspended; all held physical inputs must be released.
+    ApplicationSuspended,
     /// A controller became available to the host.
     Attached {
         /// Stable host-local device identifier.
@@ -360,6 +362,7 @@ impl<Action: Clone + Ord> InputRouter<Action> {
     /// disconnecting one controller cannot release another held control.
     pub fn handle(&mut self, event: InputEvent) -> Vec<LogicalAction<Action>> {
         match event {
+            InputEvent::ApplicationSuspended => self.release_all(),
             InputEvent::Attached { device } => {
                 let _connected = self.connected.insert(device);
                 Vec::new()
@@ -1107,6 +1110,37 @@ mod tests {
             }),
             [LogicalAction { action: 1, down: false }]
         );
+    }
+
+    #[test]
+    fn application_suspension_releases_all_sources_without_detaching() {
+        let mut mapping = InputMapping::new();
+        mapping.bind_key(1, 1u16);
+        mapping.bind_button(1, 1);
+        mapping.bind_touch(1, 2);
+        let mut router = InputRouter::new(mapping);
+        let button = InputEvent::Button {
+            device: 1,
+            code: 1,
+            down: true,
+        };
+        for event in [
+            InputEvent::Attached { device: 1 },
+            InputEvent::Key { code: 1, down: true },
+            InputEvent::Touch { zone: 1, down: true },
+            button,
+        ] {
+            drop(router.handle(event));
+        }
+        assert_eq!(router.handle(InputEvent::ApplicationSuspended), [
+            LogicalAction { action: 1, down: false },
+            LogicalAction { action: 2, down: false },
+        ]);
+        assert_eq!(router.handle(InputEvent::ApplicationSuspended), []);
+        assert_eq!(router.handle(button), [LogicalAction {
+            action: 1,
+            down: true
+        }]);
     }
 
     #[test]

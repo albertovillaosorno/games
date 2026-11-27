@@ -122,9 +122,12 @@ impl FeedbackFocus {
             *self = Self::Closed;
         } else if transition == InputTransition::FocusGained {
             *self = Self::Foreground;
-        } else if transition
-            == InputTransition::Event(HostEvent::Input(InputEvent::FocusLost))
-        {
+        } else if matches!(
+            transition,
+            InputTransition::Event(HostEvent::Input(
+                InputEvent::ApplicationSuspended | InputEvent::FocusLost
+            ))
+        ) {
             *self = Self::Background;
         }
     }
@@ -249,7 +252,8 @@ impl ControllerAdmission {
                 | InputEvent::ControllerRemapped { device },
             ) => self.contains(device).then_some(event),
             HostEvent::Input(
-                InputEvent::Contact { .. }
+                InputEvent::ApplicationSuspended
+                | InputEvent::Contact { .. }
                 | InputEvent::FocusLost
                 | InputEvent::Key { .. }
                 | InputEvent::Mouse { .. }

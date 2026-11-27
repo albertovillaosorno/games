@@ -386,8 +386,12 @@ impl ControlEditor {
         {
             return EditorEffect::None;
         }
-        if matches!(event, InputEvent::FocusLost | InputEvent::Detached { .. })
-        {
+        if matches!(
+            event,
+            InputEvent::ApplicationSuspended
+                | InputEvent::FocusLost
+                | InputEvent::Detached { .. }
+        ) {
             self.axes.cancel();
             self.status = EditorStatus::Ready;
             return EditorEffect::None;
@@ -846,22 +850,24 @@ mod tests {
     }
 
     #[test]
-    fn axis_draft_is_discarded_on_focus_loss() {
+    fn axis_draft_is_discarded_on_focus_or_application_loss() {
         use EditorNavigation::{Confirm, Family, Right};
-        let mut editor = ControlEditor::default();
-        for command in [Family, Family, Family, Family, Confirm, Right] {
-            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        for event in [InputEvent::FocusLost, InputEvent::ApplicationSuspended] {
+            let mut editor = ControlEditor::default();
+            for command in [Family, Family, Family, Family, Confirm, Right] {
+                assert_eq!(
+                    editor.navigate(command, &PROFILE),
+                    EditorEffect::None
+                );
+            }
+            assert_eq!(editor.status(), EditorStatus::Capturing);
+            assert_eq!(editor.input(event, &PROFILE), EditorEffect::None);
+            assert_eq!(editor.status(), EditorStatus::Ready);
+            assert_eq!(
+                editor.axis_view(&PROFILE).map(|view| view.profile),
+                Some(AxisProfile::UNBOUND)
+            );
         }
-        assert_eq!(editor.status(), EditorStatus::Capturing);
-        assert_eq!(
-            editor.input(InputEvent::FocusLost, &PROFILE),
-            EditorEffect::None
-        );
-        assert_eq!(editor.status(), EditorStatus::Ready);
-        assert_eq!(
-            editor.axis_view(&PROFILE).map(|view| view.profile),
-            Some(AxisProfile::UNBOUND)
-        );
     }
 
     fn capture_touch(editor: &mut ControlEditor) {

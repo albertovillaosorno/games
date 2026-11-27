@@ -252,7 +252,9 @@ impl NativeInput {
             event.transition(),
             InputTransition::Event(
                 HostEvent::Input(
-                    InputEvent::TouchCancelled | InputEvent::FocusLost
+                    InputEvent::ApplicationSuspended
+                        | InputEvent::TouchCancelled
+                        | InputEvent::FocusLost
                 ) | HostEvent::Quit
             )
         );
@@ -400,7 +402,8 @@ mod tests {
         ) -> Option<super::HostEvent> {
             match event.transition() {
                 super::InputTransition::Event(super::HostEvent::Input(
-                    super::InputEvent::TouchCancelled
+                    super::InputEvent::ApplicationSuspended
+                    | super::InputEvent::TouchCancelled
                     | super::InputEvent::FocusLost,
                 )) if self.suppress_cancellation => None,
                 super::InputTransition::Event(routed) => Some(routed),
@@ -511,20 +514,17 @@ mod tests {
                 milliseconds: NonZeroU16::MIN,
             },
         };
-        let lost =
-            InputTransition::Event(HostEvent::Input(InputEvent::FocusLost));
-        let mouse_cancelled = InputTransition::Event(HostEvent::Input(
-            InputEvent::MouseCancelled,
-        ));
-        let quit = InputTransition::Event(HostEvent::Quit);
+        let event = |value| InputTransition::Event(HostEvent::Input(value));
         check(&input.submit(command), &Ok(()))?;
         for (scope, transition, admitted) in [
-            (Some(7), mouse_cancelled, true),
-            (Some(8), lost, true),
-            (Some(7), lost, false),
+            (Some(7), event(InputEvent::MouseCancelled), true),
+            (Some(8), event(InputEvent::FocusLost), true),
+            (Some(7), event(InputEvent::FocusLost), false),
             (Some(8), InputTransition::FocusGained, false),
             (Some(7), InputTransition::FocusGained, true),
-            (None, quit, false),
+            (None, event(InputEvent::ApplicationSuspended), false),
+            (Some(7), InputTransition::FocusGained, true),
+            (None, InputTransition::Event(HostEvent::Quit), false),
             (Some(7), InputTransition::FocusGained, false),
         ] {
             let _routed =
@@ -679,6 +679,8 @@ mod tests {
             (InputEvent::TouchCancelled, true),
             (InputEvent::FocusLost, false),
             (InputEvent::FocusLost, true),
+            (InputEvent::ApplicationSuspended, false),
+            (InputEvent::ApplicationSuspended, true),
         ] {
             let cancellation = HostEvent::Input(event);
             let clock = Rc::new(Cell::new(Duration::ZERO));
