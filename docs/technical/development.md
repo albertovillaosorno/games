@@ -10,7 +10,8 @@ development metadata. The native graphics adapter requests acceleration
 without requiring vertical synchronization. A display-enabled smoke test
 can be explicitly included with the following command. The gate briefly maps
 and resizes a small test window, reports its actual drawable dimensions,
-and checks all presentation modes and protected touch projection:
+and checks all presentation modes, protected touch projection and the
+Simpsons Arcade language selector using procedural assets:
 
 ```sh
 GAMES_NATIVE_RENDER_SMOKE=1 cargo validate --no-cache
@@ -148,12 +149,16 @@ region reports the terminal message; reload the page to launch again.
 The catalogue must use `parent=.`, windowed presentation, no native
 settings/control/device paths, and `launch-poses.txt` if poses are used.
 No original assets are included in the package or automatically uploaded.
-Display mode, master volume, admitted effects and music levels, and control
-edits use a fixed origin-local preference namespace. Control edits take
+Display mode, selected language, master volume, admitted effects and music
+levels, and control edits use a fixed origin-local preference namespace.
+Control edits take
 effect on the next launch; fullscreen remains unavailable. If storage is
-unavailable at startup, display and volume remain session-only and control
-editing is not offered. Incompatible stored values are rejected rather
-than replaced.
+unavailable at startup, display, volume and language remain session-only
+and control editing is not offered. Incompatible stored values are rejected
+rather than replaced; an invalid locale preference is left untouched, with
+a session-only language choice. A well-formed but unsupported locale
+falls back to the title default without changing the saved tag until
+the player explicitly selects a language.
 Browser control profiles reject keyboard names the adapter cannot translate.
 They also reject controller buttons outside the standard Gamepad mapping;
 extended native paddles, miscellaneous and touchpad buttons remain native-only.
@@ -187,7 +192,8 @@ launch catalogue pointing at independently verified assets; see the
 [asset pipeline](asset-pipeline.md) for shared content storage and
 migration limitations.
 
-For persistent display, volume and control profiles, create an existing
+For persistent display, language, volume and control profiles, create an
+existing
 owner-only settings directory outside the package and asset store. Set
 `settings=DIR` in the private local launch catalogue, or launch with
 `--settings DIR`. Relative catalogue paths are anchored to that file.
@@ -197,8 +203,12 @@ controller launch and direct control editing, reject settings directories
 that overlap the running executable's directory. Both checks resolve paths
 before comparison, including links. These are preflights, not isolation
 guarantees against concurrent filesystem changes.
-Without this selection, display and volume changes are session-only and
-control editing/reset is unavailable. The Audio submenu of Settings cycles
+Without this selection, display, language and volume changes are
+session-only and control editing/reset is unavailable. Simpsons Arcade
+currently offers English (default) and Mexican Spanish in Settings.
+The standalone LAN controller restores the locale of its own admitted
+settings directory; it does not own the host's settings menu.
+The Audio submenu of Settings cycles
 master and admitted source levels through 100, 75, 50, 25 and 0 percent.
 Saved effects and music levels override their launch defaults independently
 when the matching source is admitted; unavailable sources have no row and

@@ -2426,9 +2426,11 @@ fn smoke_language_menu(
         ));
     }
     let _updated = art.present(scene, simulation.state())?;
-    if scene.readback()? == before {
-        return Err(failure("selected language did not change menu pixels"));
-    }
+    let localised_panel = art
+        .locales
+        .get(initial.language_index())
+        .is_some_and(|locale| locale.panel.is_some());
+    verify_locale_pixels(scene, &before, localised_panel)?;
     smoke_press(controls, simulation, Control::Primary)?;
     let restored = simulation.state().session();
     if restored.language_index() != initial.language_index() {
@@ -2439,6 +2441,34 @@ fn smoke_language_menu(
         return Err(failure("language selection did not restore menu pixels"));
     }
     Ok(changed)
+}
+
+fn verify_locale_pixels(
+    scene: &mut SceneSession<'_, '_>,
+    before: &[u8],
+    localised_panel: bool,
+) -> Result<(), RenderError> {
+    let updated = scene.readback()?;
+    if updated == before {
+        return Err(failure("selected language did not change menu pixels"));
+    }
+    if localised_panel {
+        let offset = usize::try_from(
+            scene
+                .layout()
+                .width()
+                .get()
+                .saturating_mul(world::BASE_HEIGHT)
+                .saturating_mul(4),
+        )
+        .map_err(failure)?;
+        if before.get(offset..) == updated.get(offset..) {
+            return Err(failure(
+                "selected language did not change touch labels",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn smoke_window_toggle(

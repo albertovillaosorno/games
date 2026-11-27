@@ -97,10 +97,43 @@ Shared infrastructure progress, 2026-11-26:
   layout test.
 
 All above changes passed `cargo validate`, including the final fresh
-commit-hook run and WebAssembly smoke builds. The task remains open:
-the title does not yet load its declared catalogues, switch the actual
-runtime menu/editor atlases, restore or publish locale preferences on
-native and browser paths, or localise all required title surfaces.
-The title's own supported-language declaration, integrated readbacks,
-persistence and presentation-mode checks are next. No gameplay parity,
-full script support or title localisation acceptance is claimed.
+commit-hook run and WebAssembly smoke builds.
+
+Title integration, 2026-11-26:
+
+- `87c31ed`: Simpsons Arcade declares English (`en`, default) and
+  Mexican Spanish (`es-MX`). The native and browser runtimes select
+  resident menu and control-editor art, publish locale changes via the
+  shared store and restore the setting. Unsupported stored tags fall
+  back without rewriting the stored value; malformed preferences remain
+  untouched and language selection becomes session-only.
+- `8c06683`: the title localisation diagnostic uses procedural assets,
+  the actual settings navigation and renderer readback. It checks
+  visible language changes, exact restoration on cycling, an unsupported
+  locale, persistence on reopening, unchanged unrelated preferences and
+  all five presentation policies. The Linux opt-in render gate and
+  Firefox WebAssembly execution passed.
+- `ef11219`: authored station, remote availability, join/rejoin countdown,
+  and compact control prompts use the same selected catalogue, with
+  bounded per-locale atlas accounting and unchanged character identity.
+  The native render gate and repeated Firefox execution passed.
+- `66d2435`: standalone controller hints, caption and runtime transport
+  recovery messages use the locale from its admitted settings directory.
+  Multi-seat touch labels are localised, with identical button pixels and
+  hit geometry; a single unlabelled panel stays shared. Physical binding
+  identities and LAN protocol identifiers remain unchanged. The fresh
+  native render gate and commit-hook validation passed.
+
+The subsequent two-seat procedural diagnostic verifies that switching
+languages changes the rendered bottom touch strip and cycling restores
+the entire frame. The native render gate passed with this fixture; the
+Firefox execution reported both localisation and title smoke success,
+49 delivered callbacks, 55 blits and clean canvas removal. Native and
+browser diagnostics use isolated preference locations.
+
+The task remains open. Remaining scope includes startup and asset-admission
+diagnostics, localised original-media resource metadata where applicable,
+and evaluation of additional script coverage, shaping, bidirectional text
+and pluralisation before admitting languages that require them. The
+procedural readbacks do not establish physical touchscreen/controller
+acceptance, original-edition gameplay parity or broader browser support.

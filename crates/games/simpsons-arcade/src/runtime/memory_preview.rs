@@ -268,7 +268,7 @@ pub(super) fn verify_scenery(
 /// Exercise locale switching, renderer readbacks and isolated persistence.
 ///
 /// The supplied location must be reserved for diagnostics. A valid existing
-/// locale at that location is intentionally replaced by the fixture.
+/// locale and control profile at that location are replaced by the fixture.
 /// # Errors
 /// Rejects unavailable rendering or storage, unexpected fallback, changed
 /// unrelated settings, missing visible changes, or failed restoration.
@@ -355,6 +355,13 @@ fn localisation_preferences(
     let control_store =
         ControlStore::open(location, profile_limit().map_err(failure)?)
             .map_err(failure)?;
+    publication
+        .confirm(
+            control_store
+                .store("version=1\ntouch-players=1,3\n")
+                .map_err(failure)?,
+        )
+        .map_err(failure)?;
     let controls =
         launch::ResolvedControls::from_store(control_store, publication)
             .map_err(failure)?;

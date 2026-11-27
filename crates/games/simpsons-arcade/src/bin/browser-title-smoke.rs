@@ -61,7 +61,10 @@ fn main() -> Result<(), RenderError> {
     let selection = selection(digest, audio);
     verify_localisation(
         &store,
-        &selection,
+        &Selection {
+            touch_enabled: true,
+            ..selection
+        },
         (
             OsStr::new("simpsons-arcade-localisation-smoke"),
             PublicationPolicy::BestEffort,
@@ -228,7 +231,10 @@ mod tests {
         let (store, digest, audio) = fixture()?;
         verify_localisation(
             &store,
-            &selection(digest, audio),
+            &Selection {
+                touch_enabled: true,
+                ..selection(digest, audio)
+            },
             (root.location(), PublicationPolicy::Durable),
             DiagnosticScene::Borrowed,
         )
