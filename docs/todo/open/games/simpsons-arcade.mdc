@@ -4324,3 +4324,12 @@ reached the wrestler, completed the balloon bonus and traversed the
 admitted second stage; the 600 movement and 20 combat submissions
 had no frame-budget misses. These are routed diagnostic observations,
 not physical device or full campaign parity claims.
+
+The same complete campaign configuration additionally passed integer,
+fill and stretch offscreen rendering. Across all five display modes,
+each run preserved routed score readbacks, boss and bonus progression
+and second-stage travel, with zero movement and strike submission
+budget misses. The optimized executable measured 3,968,912 bytes;
+whole-smoke peak RSS ranged from 181,141,504 to 181,399,552 bytes.
+These measurements do not establish an improvement or physical display,
+controller, touch or audio acceptance.
