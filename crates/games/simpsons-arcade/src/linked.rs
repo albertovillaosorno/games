@@ -196,7 +196,7 @@ pub enum ChildPose {
     Active,
     /// Initial emergence.
     Emerging,
-    /// Second emergence hold.
+    /// Initial motion after both emergence holds.
     Holding,
     /// Hit recovery (also used provisionally for defeat).
     Hurt,
@@ -274,7 +274,7 @@ impl LinkedChild {
     #[must_use]
     pub const fn pose(self) -> Option<ChildPose> {
         match self.phase {
-            ChildPhase::Entering(0..=65) => Some(ChildPose::Emerging),
+            ChildPhase::Entering(0..=97) => Some(ChildPose::Emerging),
             ChildPhase::Entering(_) => Some(ChildPose::Holding),
             ChildPhase::Fighting => Some(ChildPose::Active),
             ChildPhase::Recovering(_) | ChildPhase::Defeated(0..=32) => {
@@ -497,6 +497,25 @@ mod tests {
     }
 
     #[test]
+    fn child_preserves_emergence_pose_through_both_holds() {
+        let mut child = LinkedChild::new(150);
+        let mut slots = StreetLayout::DOWNTOWN.spawn.map(Slot::new);
+        for (ticks, pose) in [
+            (0, ChildPose::Emerging),
+            (65, ChildPose::Emerging),
+            (1, ChildPose::Emerging),
+            (31, ChildPose::Emerging),
+            (1, ChildPose::Holding),
+            (1, ChildPose::Holding),
+            (1, ChildPose::Active),
+        ] {
+            advance_child(&mut child, &mut slots, ticks);
+            assert_eq!(child.pose(), Some(pose));
+            assert_eq!(child.can_fight(), pose == ChildPose::Active);
+        }
+    }
+
+    #[test]
     fn child_emerges_then_requires_three_separated_strikes() {
         use crate::{Facing, Maneuver, PLAYER_STRIKE, Participation};
         let mut child = LinkedChild::new(150);
@@ -511,9 +530,7 @@ mod tests {
             tick: PLAYER_STRIKE,
         };
         assert!(!child.resolve_strikes(&mut slots));
-        advance_child(&mut child, &mut slots, 66);
-        assert_eq!(child.pose(), Some(ChildPose::Holding));
-        advance_child(&mut child, &mut slots, 34);
+        advance_child(&mut child, &mut slots, 100);
         assert!(child.can_fight());
         assert_child_recovery(&mut child, &mut slots, 8);
         assert_child_recovery(&mut child, &mut slots, 4);
