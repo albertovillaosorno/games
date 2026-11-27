@@ -4944,3 +4944,19 @@ not complete original raster equivalence. Ordinary body cadence,
 direction-dependent retirement, post-landing maneuver-specific
 marker motion, exact priority and physical-device acceptance remain
 open.
+
+### Balloon winner health reward
+
+Three matched original replays reproduce the retained phase, result and
+score traces. A sole positive first-place winner and three tied positive
+first-place winners each receive half a full health meter once when the
+results conclude. The neutral all-zero result grants no reward. Health
+is capped at the full meter; lower-ranked stations receive no award.
+
+The native results-to-complete transition now grants 16 of 32 health
+units to each admitted first-place station, capped at full. It
+synchronizes the displayed meter at handoff and preserves stocks, score
+and all other station state. The regression exercises positive ties,
+a capped winner, a lower-ranked station, an absent station, pause,
+zero scores and later ticks without a second award. Exact original
+meter presentation and complete bonus equivalence remain open.

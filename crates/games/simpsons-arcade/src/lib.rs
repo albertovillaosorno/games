@@ -477,6 +477,17 @@ impl Slot {
         }
     }
 
+    fn award_bonus_health(&mut self, rank: Option<u8>) {
+        if rank != Some(1) || !self.station.can_fight() {
+            return;
+        }
+        // The reference award is half of the 32-unit full health meter.
+        self.station.health =
+            self.station.health.saturating_add(16).min(PLAYER_HEALTH);
+        self.station.display_health = self.station.health;
+        self.meter_wait = 0;
+    }
+
     fn begin_maneuver(&mut self, maneuver: Maneuver) {
         if self.station.can_fight()
             && self.station.maneuver == Maneuver::Idle
@@ -829,8 +840,14 @@ impl Cabinet {
             if bonus.advance_stage_card(presses) {
                 self.enter_stage_two(limit);
             }
-        } else {
-            bonus.advance(presses);
+            return true;
+        }
+        let was_results = bonus.phase() == BonusPhase::Results;
+        bonus.advance(presses);
+        if was_results && bonus.phase() == BonusPhase::Complete {
+            for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
+                slot.award_bonus_health(bonus.rank(player));
+            }
         }
         true
     }
@@ -3533,6 +3550,93 @@ mod tests {
         assert_eq!(state.stations(), stations);
         assert_bonus_inputs(state);
         assert_bonus_chord(state);
+    }
+
+    fn bonus_health_fixture() -> Cabinet {
+        let mut state = cabinet();
+        for (tick, player) in [Player::Marge, Player::Homer, Player::Bart]
+            .into_iter()
+            .enumerate()
+        {
+            state.input_step(
+                u64::try_from(tick).unwrap_or_default(),
+                &pulse(player, Control::Start),
+            );
+        }
+        let [marge, homer, bart, ..] = &mut state.slots;
+        marge.station.health = 4;
+        homer.station.health = 28;
+        bart.station.health = 12;
+        for slot in [marge, homer, bart] {
+            slot.station.display_health = slot.station.health;
+            slot.station.stocks = 1;
+            slot.station.score = 11;
+        }
+        state.bonus =
+            Some(Bonus::new(state.slots.map(|slot| slot.station.can_fight())));
+        for tick in 3..2000 {
+            if state.bonus().map(Bonus::phase) == Some(BonusPhase::Pumping) {
+                break;
+            }
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Pumping));
+        state
+    }
+
+    fn finish_bonus_health_fixture(state: &mut Cabinet) {
+        for tick in 3000..5000 {
+            if state.bonus().map(Bonus::phase) == Some(BonusPhase::Complete) {
+                break;
+            }
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Complete));
+    }
+
+    #[test]
+    fn bonus_health_rewards_positive_tied_winners_once() {
+        let mut state = bonus_health_fixture();
+        let before = state.stations();
+        for tick in 2000..2500 {
+            if state.bonus().map(Bonus::phase) == Some(BonusPhase::Results) {
+                break;
+            }
+            state.input_step(tick, &[
+                change(Player::Marge, Control::Primary, true),
+                change(Player::Homer, Control::Primary, true),
+                change(Player::Marge, Control::Primary, false),
+                change(Player::Homer, Control::Primary, false),
+            ]);
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Results));
+        let rank = |player| state.bonus().and_then(|bonus| bonus.rank(player));
+        assert_eq!(Player::ALL.map(rank), [Some(1), Some(1), Some(4), None]);
+        assert_eq!(state.stations(), before);
+        state.input_step(2500, &pulse(Player::Marge, Control::Pause));
+        let paused = state.bonus();
+        advance_empty(&mut state, 2501..2600);
+        assert_eq!(state.bonus(), paused);
+        assert_eq!(state.stations(), before);
+        state.input_step(2600, &pulse(Player::Marge, Control::Pause));
+        finish_bonus_health_fixture(&mut state);
+        let mut expected = before;
+        let [marge, homer, ..] = &mut expected;
+        marge.health = 20;
+        marge.display_health = 20;
+        homer.health = PLAYER_HEALTH;
+        homer.display_health = PLAYER_HEALTH;
+        assert_eq!(state.stations(), expected);
+        advance_empty(&mut state, 5000..5100);
+        assert_eq!(state.stations(), expected);
+    }
+
+    #[test]
+    fn bonus_health_does_not_reward_zero_scores() {
+        let mut state = bonus_health_fixture();
+        let before = state.stations();
+        finish_bonus_health_fixture(&mut state);
+        assert_eq!(state.stations(), before);
     }
 
     #[test]
