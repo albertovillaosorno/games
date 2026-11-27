@@ -53,7 +53,7 @@ use super::{
 pub(super) const BASE_WIDTH: u32 = crate::BASE_WIDTH;
 use crate::{MAX_VIEW_WIDTH, SIDE, view_origin, viewport_width};
 pub(super) const BASE_HEIGHT: u32 = TOP + HEIGHT;
-const MAX_STRIP_WIDTH: u32 = 1664;
+const MAX_STRIP_WIDTH: u32 = 1704;
 const HEIGHT: u32 = 196;
 const TOP: u32 = 28;
 
@@ -633,17 +633,17 @@ mod tests {
         assert!(validate_prefix(&base, &strip, 732).is_ok());
         let extended = [0, 0, 0, 255].repeat(1647 * 196);
         assert!(validate_prefix(&base, &extended, 1647).is_ok());
-        let maximum = [0, 0, 0, 255].repeat(1664 * 196);
-        assert!(validate_prefix(&base, &maximum, 1664).is_ok());
-        let oversized = [0, 0, 0, 255].repeat(1665 * 196);
-        assert!(validate_prefix(&base, &oversized, 1665).is_err());
-        assert_eq!(atlas_budget(), 1_304_576);
+        let maximum = [0, 0, 0, 255].repeat(1704 * 196);
+        assert!(validate_prefix(&base, &maximum, 1704).is_ok());
+        let oversized = [0, 0, 0, 255].repeat(1705 * 196);
+        assert!(validate_prefix(&base, &oversized, 1705).is_err());
+        assert_eq!(atlas_budget(), 1_335_936);
     }
 
     #[test]
     fn extended_camera_reaches_both_old_and_new_limits()
     -> Result<(), RenderError> {
-        for limit in [80u16, 444, 1002, 1359] {
+        for limit in [80u16, 444, 1002, 1359, 1416] {
             let camera = camera_at_limit(limit)?;
             if u16::try_from(camera.camera_origin()).ok() != Some(limit) {
                 return Err(failure("incorrect extended camera limit"));

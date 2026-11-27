@@ -5048,3 +5048,35 @@ using isolated Xvfb software OpenGL and dummy audio. The unchanged
 arrival cadence and subsequent routed combat and travel also pass.
 Physical input, audible playback and exact loaded-source scheduling
 remain unverified by this smoke.
+
+### Extended second-stage world admission
+
+A four-station original replay continues the established movement and
+primary attacks beyond the previous release at frame 17,500. The
+shared frame 17,499 raster, object DMA and tile RAM match the previous
+capture byte-for-byte. The two horizontal scroll layers advance
+jointly from the neutral origin 422 through two wraps to 302, giving
+1,416 columns of forward travel. The vertical scroll stays at 240.
+The last sampled scroll position persists through frame 26,000;
+this route does not establish a boss defeat or another stage handoff.
+
+A separate replay captures seven later aligned scenes. Each compares
+exactly against all 71,680 original pixels. The established neutral
+entry, an earlier travel sample and six of the new scenes join with
+exact overlapping interiors after the normal HUD and side exclusions.
+The resulting canonical 1,704 by 196 strip contains the previous
+558-column strip as an exact prefix in all 196 rows. The existing
+optional stage-two catalogue can select the extended strip without
+changing its base, entrance or soundtrack selections. The native
+world atlas bound increases by exactly 31,360 bytes per admitted
+strip; the next larger width is still rejected. No local asset
+selection or payload is tracked.
+
+Optimized native touch smoke passes at 1,416 columns in all five
+display modes with the existing provisional regular-enemy encounters.
+The older 270-column catalogue also passes in adaptive mode. This
+extends verified scenery and traversable world bounds only; later
+wave admission, enemy families, boss, exact combat gates and physical
+device acceptance remain open. The isolated Xvfb software OpenGL and
+dummy-audio checks do not establish hardware rendering or audible
+playback.
