@@ -14,7 +14,7 @@
 //   - Decode original media, draw sprites or admit the subsequent stage.
 // - Allows:
 //   - Inputs: Admitted character set and routed button edges.
-//   - Outputs: Phase, independent inflation and tied competition ranks.
+//   - Outputs: Phase, independent inflation, tied ranks and result timing.
 //   - Side effects: Deterministic in-memory state only.
 // - Split-When:
 //   - Another distinct bonus game needs its own rules.
@@ -43,7 +43,12 @@ const INSTRUCTION_MAX_TICKS: u16 = 384;
 const READY_TICKS: u16 = 98;
 // Neutral timeout includes the packed-decimal countdown and entry.
 const PUMP_TICKS: u16 = 492;
-const RESULT_TICKS: u16 = 480;
+const RESULT_GROUP_TICKS: u16 = 14;
+const RESULT_REVEAL_HOLD: u16 = 60;
+const RESULT_COUNT_TICKS: u16 = 4;
+const RESULT_INFLATION_TARGET: u16 = 192;
+const RESULT_EXIT_STAGGER: u16 = 15;
+const RESULT_EXIT_TICKS: u16 = 160;
 const REST_TICKS: u8 = 16;
 const INVERSE_BASE: u16 = 0xb000;
 const MIN_WIDTH: u16 = 0x4000;
@@ -65,7 +70,7 @@ pub enum BonusPhase {
     Pumping,
     /// Countdown before the pumping interval.
     Ready,
-    /// Show final balloon sizes and tied ranks.
+    /// Reveal ranked scores, inflate balloons and depart.
     Results,
     /// Hold the cleared street before the bonus.
     Victory,
@@ -126,11 +131,15 @@ impl Balloon {
     }
 
     fn inflation(self) -> u8 {
+        u8::try_from(self.inflation_units() >> 2).unwrap_or_default()
+    }
+
+    fn inflation_units(self) -> u16 {
         let [width, _] = self.width.to_be_bytes();
         let [height, _] = self.height.to_be_bytes();
         let total = u16::from(0u8.wrapping_sub(width))
             .saturating_add(u16::from(0u8.wrapping_sub(height)));
-        u8::try_from(total.saturating_sub(160) >> 2).unwrap_or_default()
+        total.saturating_sub(160)
     }
 
     const fn new() -> Self {
@@ -143,15 +152,162 @@ impl Balloon {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResultStage {
+    Exit,
+    Inflate,
+    Reveal,
+}
+
+/// Competition scores are frozen before the presentation inflates balloons.
+/// Each distinct score gets its own reveal, followed by parallel count-up.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResultSequence {
+    scores: [Option<u8>; 4],
+    stage: ResultStage,
+    stage_tick: u16,
+}
+
+impl ResultSequence {
+    fn advance(&mut self, balloons: &mut [Balloon; 4], tick: u16) -> bool {
+        match self.stage {
+            ResultStage::Reveal => {
+                if tick >= self.countup_end() {
+                    self.stage = ResultStage::Inflate;
+                }
+                false
+            },
+            ResultStage::Inflate => {
+                self.inflate(balloons);
+                false
+            },
+            ResultStage::Exit => {
+                self.stage_tick = self.stage_tick.saturating_add(1);
+                self.scores
+                    .into_iter()
+                    .flatten()
+                    .all(|score| self.stage_tick >= self.exit_ticks(score))
+            },
+        }
+    }
+
+    fn countup_end(self) -> u16 {
+        let maximum = self.scores.into_iter().flatten().max().unwrap_or(0);
+        self.countup_start().saturating_add(
+            u16::from(maximum)
+                .saturating_add(1)
+                .saturating_mul(RESULT_COUNT_TICKS),
+        )
+    }
+
+    fn countup_start(self) -> u16 {
+        u16::from(self.distinct_scores(None))
+            .saturating_mul(RESULT_GROUP_TICKS)
+            .saturating_add(RESULT_REVEAL_HOLD)
+            .saturating_add(1)
+    }
+
+    fn displayed(self, score: u8, tick: u16) -> Option<(u8, u8)> {
+        let rank = self.rank(score);
+        if self.stage != ResultStage::Reveal {
+            return Some((rank, score));
+        }
+        let reveal = u16::from(self.group(score).saturating_sub(1))
+            .saturating_mul(RESULT_GROUP_TICKS)
+            .saturating_add(1);
+        if tick < reveal {
+            return None;
+        }
+        let count = tick
+            .saturating_sub(self.countup_start())
+            .checked_div(RESULT_COUNT_TICKS)
+            .unwrap_or_default();
+        Some((rank, u8::try_from(count.min(u16::from(score))).ok()?))
+    }
+
+    fn distinct_scores(self, above: Option<u8>) -> u8 {
+        let bits = self
+            .scores
+            .into_iter()
+            .flatten()
+            .filter(|score| above.is_none_or(|limit| *score > limit))
+            .fold(0u128, |bits, score| {
+                bits | 1u128.checked_shl(u32::from(score)).unwrap_or_default()
+            });
+        u8::try_from(bits.count_ones()).unwrap_or_default()
+    }
+
+    fn exit_ticks(self, score: u8) -> u16 {
+        u16::from(self.rank(score))
+            .saturating_mul(RESULT_EXIT_STAGGER)
+            .saturating_add(RESULT_EXIT_TICKS)
+    }
+
+    fn group(self, score: u8) -> u8 {
+        self.distinct_scores(Some(score)).saturating_add(1)
+    }
+
+    fn inflate(&mut self, balloons: &mut [Balloon; 4]) {
+        let mut pending = false;
+        for (score, balloon) in self.scores.into_iter().zip(balloons) {
+            if score.is_some()
+                && balloon.inflation_units() <= RESULT_INFLATION_TARGET
+            {
+                pending = true;
+                balloon.advance(self.stage_tick.is_multiple_of(2));
+            }
+        }
+        if pending {
+            self.stage_tick = self.stage_tick.saturating_add(1);
+        } else {
+            self.stage = ResultStage::Exit;
+            self.stage_tick = 0;
+        }
+    }
+
+    fn new(balloons: [Balloon; 4], participants: [bool; 4]) -> Self {
+        let mut scores = [None; 4];
+        for ((score, balloon), admitted) in
+            scores.iter_mut().zip(balloons).zip(participants)
+        {
+            if admitted {
+                *score = Some(balloon.inflation());
+            }
+        }
+        Self {
+            scores,
+            stage: ResultStage::Reveal,
+            stage_tick: 0,
+        }
+    }
+
+    fn rank(self, score: u8) -> u8 {
+        if score == 0 {
+            4
+        } else {
+            self.group(score)
+        }
+    }
+
+    fn score(self, player: Player) -> Option<u8> {
+        self.scores.get(player.index()).copied().flatten()
+    }
+
+    fn visible(self, score: u8) -> bool {
+        self.stage != ResultStage::Exit
+            || self.stage_tick < self.exit_ticks(score)
+    }
+}
+
 /// Read-only bonus state, in character rather than physical-seat order.
 ///
-/// Axis scheduling and result duration are provisional; the bonus score
-/// uses the observed inverse-axis bounds and response.
+/// Axis scheduling and departure animation remain independent native choices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Bonus {
     balloons: [Balloon; 4],
     participants: [bool; 4],
     phase: BonusPhase,
+    result: Option<ResultSequence>,
     tick: u16,
 }
 
@@ -180,18 +336,25 @@ impl Bonus {
                 BonusPhase::Pumping
             },
             BonusPhase::Pumping => self.pump(presses),
-            BonusPhase::Results if self.tick >= RESULT_TICKS => {
-                BonusPhase::Complete
-            },
+            BonusPhase::Results => self.advance_results(),
             BonusPhase::Complete
             | BonusPhase::Instructions
             | BonusPhase::Ready
-            | BonusPhase::Results
             | BonusPhase::Victory => self.phase,
         };
         if next != self.phase {
             self.phase = next;
             self.tick = 0;
+        }
+    }
+
+    fn advance_results(&mut self) -> BonusPhase {
+        if let Some(result) = &mut self.result
+            && result.advance(&mut self.balloons, self.tick)
+        {
+            BonusPhase::Complete
+        } else {
+            BonusPhase::Results
         }
     }
 
@@ -218,16 +381,20 @@ impl Bonus {
         })
     }
 
-    /// Inflation for an admitted character; absent for other characters.
+    /// Revealed rank and animated point count during the results sequence.
+    #[must_use]
+    pub fn displayed_result(self, player: Player) -> Option<(u8, u8)> {
+        let result = self.result?;
+        result.displayed(result.score(player)?, self.tick)
+    }
+
+    /// Inflation for an admitted character, frozen when pumping finishes.
     #[must_use]
     pub fn inflation(self, player: Player) -> Option<u8> {
-        let index = player.index();
-        let _admitted = self
-            .participants
-            .get(index)
-            .copied()
-            .filter(|admitted| *admitted)?;
-        self.balloons.get(index).copied().map(Balloon::inflation)
+        if let Some(result) = self.result {
+            return result.score(player);
+        }
+        self.visual_inflation(player)
     }
 
     pub(super) const fn new(participants: [bool; 4]) -> Self {
@@ -235,6 +402,7 @@ impl Bonus {
             balloons: [Balloon::new(); 4],
             participants,
             phase: BonusPhase::Victory,
+            result: None,
             tick: 0,
         }
     }
@@ -262,35 +430,47 @@ impl Bonus {
                 .iter()
                 .any(|balloon| balloon.inflation() == BONUS_MAX_INFLATION)
         {
+            self.result =
+                Some(ResultSequence::new(self.balloons, self.participants));
             BonusPhase::Results
         } else {
             BonusPhase::Pumping
         }
     }
 
-    /// Competition rank for an admitted character after pumping ends.
+    /// Final rank after pumping ends.
     ///
-    /// Equal inflation receives equal rank, including an all-zero tie.
+    /// Equal positive scores share a rank. Distinct positive scores receive
+    /// consecutive ranks; zero receives fourth place.
     #[must_use]
     pub fn rank(self, player: Player) -> Option<u8> {
-        if !matches!(self.phase, BonusPhase::Results | BonusPhase::Complete) {
-            return None;
-        }
-        let value = self.inflation(player)?;
-        Some(
-            Player::ALL
-                .into_iter()
-                .filter_map(|other| self.inflation(other))
-                .fold(1u8, |rank, other| {
-                    rank.saturating_add(u8::from(other > value))
-                }),
-        )
+        let result = self.result?;
+        Some(result.rank(result.score(player)?))
     }
 
     /// Fixed playing ticks in the current phase.
     #[must_use]
     pub const fn tick(self) -> u16 {
         self.tick
+    }
+
+    /// Visible balloon inflation, which can grow after the score is frozen.
+    ///
+    /// Absent stations and departed balloons return no visual.
+    #[must_use]
+    pub fn visual_inflation(self, player: Player) -> Option<u8> {
+        let index = player.index();
+        let _admitted = self
+            .participants
+            .get(index)
+            .copied()
+            .filter(|admitted| *admitted)?;
+        if let Some(result) = self.result
+            && !result.visible(result.score(player)?)
+        {
+            return None;
+        }
+        self.balloons.get(index).copied().map(Balloon::inflation)
     }
 }
 
@@ -347,9 +527,12 @@ mod tests {
         }
         assert_eq!(bonus.phase(), BonusPhase::Results);
         assert_eq!(bonus.inflation(Player::Bart), None);
-        assert_eq!(bonus.rank(Player::Marge), Some(1));
-        assert_eq!(bonus.rank(Player::Lisa), Some(1));
-        for _ in 0..RESULT_TICKS {
+        assert_eq!(bonus.rank(Player::Marge), Some(4));
+        assert_eq!(bonus.rank(Player::Lisa), Some(4));
+        for _ in 0..600u16 {
+            if bonus.phase() == BonusPhase::Complete {
+                break;
+            }
             bonus.advance([true; 4]);
         }
         assert_eq!(bonus.phase(), BonusPhase::Complete);
@@ -407,8 +590,96 @@ mod tests {
         assert_eq!(bonus.inflation(Player::Marge), Some(BONUS_MAX_INFLATION));
         assert_eq!(bonus.rank(Player::Marge), Some(1));
         assert_eq!(bonus.rank(Player::Bart), Some(1));
-        assert_eq!(bonus.rank(Player::Lisa), Some(3));
+        assert_eq!(bonus.rank(Player::Lisa), Some(2));
         assert_eq!(bonus.rank(Player::Homer), Some(4));
+    }
+
+    fn advance_quietly(bonus: &mut Bonus, ticks: u16) {
+        for _ in 0..ticks {
+            bonus.advance([false; 4]);
+        }
+    }
+
+    fn assert_departed(bonus: Bonus) {
+        assert_eq!(bonus.phase(), BonusPhase::Complete);
+        assert_eq!(bonus.visual_inflation(Player::Homer), None);
+        assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 64)));
+    }
+
+    fn assert_other_balloon_grew(bonus: Bonus) {
+        assert!(matches!(
+            bonus.visual_inflation(Player::Homer),
+            Some(48..=64)
+        ));
+    }
+
+    fn assert_results_unchanged(bonus: Bonus, with_input: Bonus) {
+        assert_eq!(bonus, with_input);
+        assert_eq!(bonus.inflation(Player::Homer), Some(0));
+        assert_eq!(bonus.displayed_result(Player::Homer), Some((4, 0)));
+        assert_eq!(bonus.visual_inflation(Player::Bart), None);
+    }
+
+    fn winning_results() -> Bonus {
+        let mut bonus = start_pump([true, true, false, false]);
+        for tick in 0..200u16 {
+            bonus.advance([tick.is_multiple_of(2), false, false, false]);
+            if bonus.phase() == BonusPhase::Results {
+                break;
+            }
+        }
+        assert_eq!(bonus.phase(), BonusPhase::Results);
+        assert_eq!(bonus.inflation(Player::Marge), Some(64));
+        assert_eq!(bonus.rank(Player::Homer), Some(4));
+        bonus
+    }
+
+    #[test]
+    fn results_reveal_then_count_without_changing_scores() {
+        let mut bonus = winning_results();
+        assert_eq!(bonus.displayed_result(Player::Marge), None);
+        bonus.advance([false; 4]);
+        assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 0)));
+        assert_eq!(bonus.displayed_result(Player::Homer), None);
+        advance_quietly(&mut bonus, 14);
+        assert_eq!(bonus.displayed_result(Player::Homer), Some((4, 0)));
+        advance_quietly(&mut bonus, 78);
+        assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 1)));
+        assert_eq!(bonus.visual_inflation(Player::Homer), Some(0));
+        advance_quietly(&mut bonus, 256);
+        assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 64)));
+        assert_eq!(bonus.visual_inflation(Player::Homer), Some(0));
+    }
+
+    #[test]
+    fn results_grow_and_depart_independently_of_input() {
+        let mut bonus = winning_results();
+        advance_quietly(&mut bonus, 349);
+        let mut with_input = bonus;
+        let mut first_departure = None;
+        let mut last_departure = None;
+        for elapsed in 0..400u16 {
+            bonus.advance([false; 4]);
+            with_input.advance([true; 4]);
+            assert_results_unchanged(bonus, with_input);
+            if bonus.visual_inflation(Player::Marge).is_none()
+                && first_departure.is_none()
+            {
+                first_departure = Some(elapsed);
+                assert_other_balloon_grew(bonus);
+            }
+            if bonus.phase() == BonusPhase::Complete {
+                last_departure = Some(elapsed);
+                break;
+            }
+        }
+        assert_eq!(
+            last_departure
+                .zip(first_departure)
+                .map(|(last, first)| last.saturating_sub(first)),
+            Some(45)
+        );
+        assert_departed(bonus);
     }
 
     #[test]

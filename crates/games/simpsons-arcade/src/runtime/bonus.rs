@@ -268,9 +268,9 @@ impl BonusArt {
         (player, digits): (Player, &TextAtlas),
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<(), RenderError> {
-        let Some(amount) = bonus.inflation(player) else {
+        if bonus.inflation(player).is_none() {
             return Ok(());
-        };
+        }
         let index = player.index();
         let balloon = BALLOONS.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump = PUMPS.get(index).ok_or(RenderError::InvalidSprite)?;
@@ -278,9 +278,11 @@ impl BonusArt {
             self.balloons.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump_art =
             self.pumps.get(index).ok_or(RenderError::InvalidSprite)?;
-        draws.push(balloon_art.draw(balloon.destination(amount)?, false));
-        draws.push(pump_art.draw(pump.destination(0)?, false));
-        if let Some(rank) = bonus.rank(player) {
+        if let Some(amount) = bonus.visual_inflation(player) {
+            draws.push(balloon_art.draw(balloon.destination(amount)?, false));
+            draws.push(pump_art.draw(pump.destination(0)?, false));
+        }
+        if let Some((rank, score)) = bonus.displayed_result(player) {
             let tile = usize::from(rank.saturating_sub(1));
             draws.push(self.ranks.draw(
                 tile,
@@ -289,7 +291,7 @@ impl BonusArt {
             )?);
             station_hud::queue_decimal(
                 digits,
-                u16::from(amount),
+                u16::from(score),
                 (balloon.x.saturating_add(24), 52i32),
                 draws,
             )?;

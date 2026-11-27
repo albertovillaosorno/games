@@ -669,13 +669,7 @@ fn smoke_bonus(
     }) {
         return Err(failure("bonus pumping did not produce a winning result"));
     }
-    let _result = art.present(scene, simulation.state())?;
-    let result = scene.readback()?;
-    await_bonus(simulation, BonusPhase::Complete)?;
-    let _complete = art.present(scene, simulation.state())?;
-    if result == scene.readback()? {
-        return Err(failure("bonus completion did not change readback"));
-    }
+    verify_bonus_results(scene, art, simulation)?;
     if simulation.state().stations().map(|station| station.score) != scores {
         return Err(failure("bonus changed cumulative defeat score"));
     }
@@ -684,6 +678,65 @@ fn smoke_bonus(
     ))
     .map_err(failure)?;
     smoke_stage_two(scene, art, controls, simulation)
+}
+
+fn verify_bonus_results(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let _initial = art.present(scene, simulation.state())?;
+    let before = scene.readback()?;
+    advance(simulation, 1)?;
+    if simulation
+        .state()
+        .bonus()
+        .and_then(|bonus| bonus.displayed_result(Player::Marge))
+        != Some((1, 0))
+    {
+        return Err(failure("bonus rank did not reveal before counting"));
+    }
+    let _ranked = art.present(scene, simulation.state())?;
+    let ranked = scene.readback()?;
+    if ranked == before {
+        return Err(failure("bonus rank reveal did not change readback"));
+    }
+    for _ in 0..400u16 {
+        if simulation
+            .state()
+            .bonus()
+            .and_then(|bonus| bonus.displayed_result(Player::Marge))
+            == Some((1, BONUS_MAX_INFLATION))
+        {
+            break;
+        }
+        advance(simulation, 1)?;
+    }
+    if simulation
+        .state()
+        .bonus()
+        .and_then(|bonus| bonus.displayed_result(Player::Marge))
+        != Some((1, BONUS_MAX_INFLATION))
+    {
+        return Err(failure("bonus displayed count did not reach final score"));
+    }
+    let _counted = art.present(scene, simulation.state())?;
+    let counted = scene.readback()?;
+    if counted == ranked {
+        return Err(failure("bonus score count did not change readback"));
+    }
+    await_bonus(simulation, BonusPhase::Complete)?;
+    let _complete = art.present(scene, simulation.state())?;
+    if counted == scene.readback()?
+        || simulation.state().bonus().is_none_or(|bonus| {
+            bonus.visual_inflation(Player::Marge).is_some()
+                || bonus.displayed_result(Player::Marge)
+                    != Some((1, BONUS_MAX_INFLATION))
+        })
+    {
+        return Err(failure("bonus departure did not retain final score"));
+    }
+    Ok(())
 }
 
 fn smoke_stage_two(

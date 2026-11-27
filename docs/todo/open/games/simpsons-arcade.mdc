@@ -4519,3 +4519,32 @@ order. Every campaign run retained the earlier wrestler, winning bonus,
 second-stage travel, cumulative score and soundtrack checks. All 600
 movement and 20 combat submissions per mode met the 16.667 ms budget;
 whole-smoke peak RSS ranged from 181,075,968 to 181,313,536 bytes.
+
+### Balloon results choreography
+
+The neutral and rapid-pumping controls were each repeated with detailed
+result observations, including a rapid control releasing the pump button
+before results. The retained score transitions and repeated result samples
+match byte-for-byte. Releasing the button does not change the subsequent
+automatic results sequence. Static review and sampled ranks confirm that
+distinct positive scores receive consecutive ranks, positive ties share
+a rank, and a zero score receives fourth place, including an all-zero tie.
+
+The native results now freeze competitive scores, reveal distinct score
+groups 14 ticks apart, hold for 60 ticks, and count points in parallel at
+four-tick intervals. The neutral, sparse baseline and rapid reference
+reveal/count intervals were 79, 105 and 350 frames, respectively; the
+native timing formula gives 79, 105 and 349 ticks for those score sets.
+The remaining one-frame scheduling variation is not reproduced.
+
+After counting, balloons below the observed raw inflation threshold
+(equivalent to 48 points) grow on alternating ticks without changing the
+final scores. The existing independent deterministic axis rule remains in
+use instead of the original random selection. Once all admitted balloons
+cross the threshold, their departures are staggered by rank, 15 ticks per
+rank plus 160 ticks. Native presentation hides departing balloons and keeps
+final rank and points visible. Nonparticipants remain absent; original
+departure motion, exact scaling and subsequent stage-cue timing remain
+unresolved. Regression coverage checks delayed rank and point readouts,
+input-independent results, visual growth without scoring changes and
+staggered departures.
