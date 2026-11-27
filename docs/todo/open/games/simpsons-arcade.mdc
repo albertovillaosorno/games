@@ -4859,3 +4859,15 @@ clipping and withdrawal, bubble registration, and depth ordering
 before extending native presentation beyond the bounded descent.
 No gameplay change or additional parity claim follows from these
 neutral observations.
+
+A separate four-direction landing replay captured 156 consecutive
+frames and verified eleven full scenes exactly. Five initial
+overlapping frames match the neutral capture. With simultaneous
+left, right, up and down input on the four stations, the station
+bubble coordinates follow their respective moving characters.
+Rope coordinates remain independent of those movements through
+displayed tick 317; the final withdrawal then matches the
+preceding neutral sample, and both object retirement boundaries
+occur one tick later. The timing shift's cause is unconfirmed.
+Do not hard-code the neutral retirement ticks as unconditional
+gameplay events. Selective admission remains unverified.
