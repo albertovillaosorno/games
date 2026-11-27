@@ -340,7 +340,7 @@ impl MenuArt {
             .ok_or(RenderError::TooLarge)?;
         let panels = PHASES
             .into_iter()
-            .map(|phase| panel(spec.width, content, phase, text))
+            .map(|phase| panel(spec, content, phase, text))
             .collect::<Result<Vec<_>, _>>()?;
         let limit =
             NonZeroUsize::new(usize::from(spec.width).saturating_mul(4))
@@ -448,7 +448,7 @@ fn available_rows(
 }
 
 fn panel<'text>(
-    width: u16,
+    spec: PlateLayout,
     content: MenuContent<'text>,
     phase: SessionPhase,
     text: MenuText<'text>,
@@ -479,14 +479,14 @@ fn panel<'text>(
             text: content.title,
             top: 8,
         }
-        .fit_width(width),
+        .fit_width(spec.width),
         TextLine {
             color: TEXT,
             scale: 2,
             text: subtitle,
             top: 28,
         }
-        .fit_width(width),
+        .fit_width(spec.width),
     ];
     let count = u16::try_from(
         phase
@@ -501,31 +501,53 @@ fn panel<'text>(
     let rows = count.saturating_add(u16::from(
         matches!(phase, SessionPhase::Settings) && text.language_name.is_some(),
     ));
-    append_hints(&mut lines, width, hints, rows);
+    append_hints(&mut lines, spec, hints, rows)?;
     Ok(lines)
 }
 
 fn append_hints<'text>(
     lines: &mut Vec<TextLine<'text>>,
-    width: u16,
+    spec: PlateLayout,
     hints: &[&'text str],
     count: u16,
-) {
+) -> Result<(), RenderError> {
     let mut top = ROW_TOP
         .saturating_add(count.saturating_mul(ROW_HEIGHT))
         .saturating_add(12);
     for hint in hints.iter().copied() {
-        lines.push(
-            TextLine {
-                color: TEXT,
-                scale: 2,
-                text: hint,
-                top,
+        let line = TextLine {
+            color: TEXT,
+            scale: 2,
+            text: hint,
+            top,
+        }
+        .fit_width(spec.width);
+        let next = top.saturating_add(12);
+        if line.scale > 0 {
+            if !line.fits(spec.width, spec.height) {
+                return Err(RenderError::InvalidDimensions);
             }
-            .fit_width(width),
-        );
-        top = top.saturating_add(12);
+            lines
+                .try_reserve(1)
+                .map_err(|_error| RenderError::TooLarge)?;
+            lines.push(line);
+            top = next;
+        } else {
+            // Retain the ordinary single-line layout whenever it fits.
+            let wrapped = TextLine { scale: 1, ..line }.wrap(
+                spec.width,
+                spec.height,
+                1,
+            )?;
+            let last = wrapped.last().ok_or(RenderError::InvalidDimensions)?;
+            top = next.max(last.top.saturating_add(7));
+            lines
+                .try_reserve(wrapped.len())
+                .map_err(|_error| RenderError::TooLarge)?;
+            lines.extend(wrapped);
+        }
     }
+    Ok(())
 }
 
 const fn choice_key(item: MenuItem) -> &'static str {
@@ -619,6 +641,54 @@ mod tests {
             self.layouts.push(layout);
             Ok(id)
         }
+    }
+
+    #[test]
+    fn overlong_hints_wrap_without_overlapping_following_hints() {
+        let spec = PlateLayout {
+            background: [0, 0, 0, 255],
+            height: 96,
+            max_bytes: NonZeroUsize::new(40 * 96 * 4)
+                .unwrap_or(NonZeroUsize::MIN),
+            width: 40,
+        };
+        let hints = ["ABCD EFGHIJ KLMNOP QRST", "OK"];
+        let mut lines = Vec::new();
+        assert!(append_hints(&mut lines, spec, &hints, 0).is_ok());
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| (line.text, line.scale, line.top))
+                .collect::<Vec<_>>(),
+            [
+                ("ABCD", 1, 60),
+                ("EFGHIJ", 1, 66),
+                ("KLMNOP", 1, 72),
+                ("QRST", 1, 78),
+                ("OK", 2, 85),
+            ]
+        );
+        let mut capture = Capture::default();
+        assert!(TextAtlas::load(&mut capture, spec, &[lines]).is_ok());
+        assert_eq!(
+            capture
+                .layouts
+                .iter()
+                .map(|layout| layout.bytes())
+                .sum::<usize>(),
+            spec.max_bytes.get()
+        );
+
+        let mut clipped = Vec::new();
+        assert!(matches!(
+            append_hints(
+                &mut clipped,
+                PlateLayout { height: 94, ..spec },
+                &hints,
+                0,
+            ),
+            Err(RenderError::InvalidDimensions)
+        ));
     }
 
     #[test]
