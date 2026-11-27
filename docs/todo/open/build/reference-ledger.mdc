@@ -1060,3 +1060,17 @@ movement schedules; all sixteen full-frame reconstructions match.
 Two additional cropped action candidates did not match and are
 excluded. The exact native interaction and full visual sequences
 remain open.
+
+Four original four-station third-stage arrival schedules distinguish
+station identity from the rank-selection timing. Two instruction-time
+replays retain all 1,601 dense transition rows in each control and
+verify 309 complete wrapping-word recurrence updates apiece. The
+placement routine consumes selector bits to choose among four cyclic
+rank permutations; all eight observed table reads and the initial
+coordinate writes agree. An independent trajectory comparison matches
+2,080 station coordinate and elevation samples across the four
+schedules. The recurrence does not update on every sampled video
+frame, and participation-subset behavior is unverified. Two existing
+semantic reviews retain this evidence without admitting new bodies,
+graph edges or Rust dispositions. The checker retains 1,611 reviewed
+identities and all preceding graph and disposition counts.
