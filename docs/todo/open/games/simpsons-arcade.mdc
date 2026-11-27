@@ -5080,3 +5080,28 @@ wave admission, enemy families, boss, exact combat gates and physical
 device acceptance remain open. The isolated Xvfb software OpenGL and
 dummy-audio checks do not establish hardware rendering or audible
 playback.
+
+### Later second-stage regular-enemy admissions
+
+Two isolated original replays trace the recurring regular object family
+through the extended route. A movement-release control changes the
+first later right-edge admission from 498 to 496 travel columns. Six
+subsequent admissions reproduce at 650, 654, 690, 698, 722 and 730
+columns, with alternating right and left approaches. They use the
+regular object and palette family already observed in the opening
+street. Other groups and later admissions remain unclassified.
+
+The title reuses the existing bounded regular-enemy slots for seven
+additional provisional arrivals. The first uses 498 columns, the
+other six use the matching travel samples, and their vertical anchors
+remain approximate. Existing smaller art extents and clearance gates
+are unchanged. No new hard gate is inferred from a scroll hold. A
+portable regression covers each boundary, monotonic admission, reset
+and unchanged travel limits. The routed native smoke now requires all
+admitted enemies to be defeated before accepting travel completion.
+
+All five optimized original-backed native touch smokes traverse 1,416
+columns with the expanded encounter and clear its admitted enemies.
+The older 270-column selection also passes in adaptive mode. Exact
+source spawn counts, anchors, hit behavior, later distinct enemy
+families and clearance conditions remain open.

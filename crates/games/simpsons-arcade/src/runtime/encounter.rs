@@ -800,6 +800,7 @@ fn smoke_stage_two(
         if cabinet.stage_two()
             && cabinet.camera_origin() == limit
             && cabinet.impact_cues() > impacts
+            && cabinet.enemies().all(|enemy| enemy.health == 0)
         {
             let _drawn = art.present(scene, cabinet)?;
             if entry_pixels == scene.readback()? {

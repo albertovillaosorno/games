@@ -77,12 +77,19 @@ const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (FAR_STREET_ADMISSION, Point { x: -18, y: 152 }),
 ];
 
-// Provisional regular-enemy waves at the observed second-stage holds.
-const STAGE_TWO_REINFORCEMENTS: [(i16, Point); 4] = [
+// Provisional regular-enemy admissions from observed second-stage groups.
+const STAGE_TWO_REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (0, Point { x: 334, y: 176 }),
     (66, Point { x: -18, y: 192 }),
     (128, Point { x: 334, y: 192 }),
     (210, Point { x: 334, y: 176 }),
+    (498, Point { x: 334, y: 184 }),
+    (650, Point { x: 334, y: 152 }),
+    (654, Point { x: -18, y: 184 }),
+    (690, Point { x: 334, y: 184 }),
+    (698, Point { x: -18, y: 208 }),
+    (722, Point { x: 334, y: 208 }),
+    (730, Point { x: -18, y: 208 }),
 ];
 
 impl Encounter {
@@ -713,6 +720,39 @@ mod tests {
         encounter.admit(210);
         assert_eq!(encounter.enemies().count(), 5);
         assert_eq!(encounter.limit_travel(270), 270);
+        encounter.restart();
+        assert_eq!(encounter.enemies().count(), 1);
+    }
+
+    #[test]
+    fn extended_second_stage_admission_is_monotonic() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, true);
+        encounter.enter_stage_two(1416);
+        encounter.admit(270);
+        assert_eq!(encounter.enemies().count(), 5);
+        defeat_prefix(&mut encounter, 5);
+        for (camera, count) in [
+            (497, 5),
+            (498, 6),
+            (649, 6),
+            (650, 7),
+            (653, 7),
+            (654, 8),
+            (689, 8),
+            (690, 9),
+            (697, 9),
+            (698, 10),
+            (721, 10),
+            (722, 11),
+            (729, 11),
+            (730, 12),
+            (1416, 12),
+            (270, 12),
+        ] {
+            encounter.admit(camera);
+            assert_eq!(encounter.enemies().count(), count);
+            assert_eq!(encounter.limit_travel(1416), 1416);
+        }
         encounter.restart();
         assert_eq!(encounter.enemies().count(), 1);
     }
