@@ -5814,3 +5814,12 @@ general party-dependent terrain, direction mapping or collision
 policy. The first non-ready state occurs at the same tick in all
 three schedules; subsequent enemy interactions remain unresolved.
 The cemetery preview continues to stop at its entrance boundary.
+
+The cemetery catalogue rejects fully transparent actor payloads as
+well as nonopaque background roles. The diagnostic shares the
+changed-pixel bounds verifier: composed body pixels must differ from
+the isolated backdrop and must not change pixels outside the body
+rectangles. The rebuilt Marge-first Firefox/WebGL route passes all
+thirteen checkpoints with 150 readbacks and 218 blits. This strengthens
+the entrance diagnostic without establishing exact full composition
+or extending the playable stage.

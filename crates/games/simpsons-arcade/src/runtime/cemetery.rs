@@ -37,7 +37,7 @@ use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::storage::bundle::BundleSource;
 
-use super::{Art, Scene, failure, open_bundle, world};
+use super::{Art, Scene, failure, open_bundle, scenery, world};
 use crate::{
     Cabinet, CemeteryEntrance, CemeteryPhase, CemeteryPose, Player, Point,
 };
@@ -136,6 +136,18 @@ impl Role {
         offset: (i32, i32),
     ) -> Self {
         Self { extent, key, offset }
+    }
+
+    fn valid_pixels(self, bytes: &[u8]) -> bool {
+        let (pixels, remainder) = bytes.as_chunks::<4>();
+        if pixels.is_empty() || !remainder.is_empty() {
+            return false;
+        }
+        if self.key == "scene/background" {
+            pixels.iter().all(|pixel| pixel.last() == Some(&255))
+        } else {
+            pixels.iter().any(|pixel| pixel.last() != Some(&0))
+        }
     }
 }
 
@@ -255,15 +267,10 @@ impl CemeteryArt {
                 let (art, pixels) =
                     Art::load_with_pixels(scene, &bundle, role.key)?;
                 if (art.rect.width.get(), art.rect.height.get()) != role.extent
-                    || (role.key == "scene/background"
-                        && !pixels
-                            .as_chunks::<4>()
-                            .0
-                            .iter()
-                            .all(|pixel| pixel.last() == Some(&255)))
+                    || !role.valid_pixels(&pixels)
                 {
                     return Err(failure(
-                        "invalid cemetery art extent or opacity",
+                        "invalid cemetery art extent or visibility",
                     ));
                 }
                 let digest = bundle
@@ -367,9 +374,17 @@ pub(super) fn verify(
         if expected.len() > 1 {
             let baseline = scene.readback()?;
             let _composed = scene.present([24, 22, 30], &expected)?;
-            if baseline == scene.readback()? {
-                return Err(failure("cemetery bodies did not change pixels"));
-            }
+            let bounds: Vec<_> = expected
+                .iter()
+                .skip(1)
+                .map(|body_draw| body_draw.destination)
+                .collect();
+            scenery::verify_pixels(
+                &scene.readback()?,
+                &baseline,
+                world::BASE_WIDTH,
+                &bounds,
+            )?;
         }
         let _restored = art.present(scene, cabinet)?;
     }
@@ -418,6 +433,21 @@ mod tests {
             });
             assert_eq!(usize::try_from(bytes).ok(), Some(budget));
         }
+    }
+
+    #[test]
+    fn cemetery_roles_require_visible_bodies_and_opaque_backdrops() {
+        let transparent = [90, 30, 20, 0];
+        let opaque = [90, 30, 20, 255];
+        let mixed = [90, 30, 20, 0, 90, 30, 20, 255];
+        let body = Role::new("actor/fall-marge", (2, 1), (0i32, 0i32));
+        assert!(BACKGROUND.valid_pixels(&opaque));
+        assert!(!BACKGROUND.valid_pixels(&transparent));
+        assert!(!BACKGROUND.valid_pixels(&mixed));
+        assert!(body.valid_pixels(&mixed));
+        assert!(!body.valid_pixels(&transparent));
+        assert!(!body.valid_pixels(&[]));
+        assert!(!body.valid_pixels(&[90, 30, 20]));
     }
 
     fn assert_animated_landing(player: Player, expected: LandingOrigins) {
