@@ -977,6 +977,9 @@ impl Scene {
             }
             self.world.sort_by_key(|(depth, _)| *depth);
             self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
+            if let Some(arrival) = &self.poses.arrival {
+                arrival.queue_markers(cabinet, view, &mut self.draws)?;
+            }
             if cabinet.stage_entrance().is_none() {
                 self.queue_enemy_meters(cabinet, view)?;
             }

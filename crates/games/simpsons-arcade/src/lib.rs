@@ -3721,8 +3721,8 @@ mod tests {
 
     fn assert_stage_formation(state: &Cabinet) {
         let [marge, homer, bart, lisa] = state.stations();
-        assert_eq!(marge.position, Point { x: 132, y: 192 });
-        assert_eq!(homer.position, Point { x: 164, y: 192 });
+        assert_eq!(marge.position, Point { x: 68, y: 192 });
+        assert_eq!(homer.position, Point { x: 100, y: 192 });
         assert_eq!(bart.participation, Participation::Absent);
         assert_eq!(lisa.participation, Participation::Absent);
     }
@@ -3732,11 +3732,11 @@ mod tests {
         state.input_step(4437, &[]);
         assert_eq!(
             held.stations().first().map(|station| station.position.x),
-            Some(134)
+            Some(70)
         );
         assert_eq!(
             state.stations().first().map(|station| station.position.x),
-            Some(132)
+            Some(68)
         );
         held.input_step(4438, &pulse(Player::Marge, Control::Pause));
         advance_empty(&mut held, 4439..4539);
@@ -3756,14 +3756,20 @@ mod tests {
             state.stations().first().map(|station| station.maneuver),
             Some(Maneuver::Idle)
         );
-        advance_empty(&mut state, 4503..4520);
-        assert_eq!(state.stage_arrival(), None);
+        assert_arrival_retirement(&mut state);
         state.reset_world();
         assert_eq!(state.stage_arrival(), None);
         assert!(!state.stage_two());
         assert_eq!(state.active_scroll_limit(), 1360);
         assert_eq!(state.stations().map(|station| station.score), [0; 4]);
         assert_eq!(state.enemies().count(), 1);
+    }
+
+    fn assert_arrival_retirement(state: &mut Cabinet) {
+        advance_empty(state, 4503..4520);
+        assert_eq!(state.stage_arrival().map(StageEntrance::tick), Some(314));
+        advance_empty(state, 4520..4589);
+        assert_eq!(state.stage_arrival(), None);
     }
 
     fn assert_released_arrival(state: &mut Cabinet) {

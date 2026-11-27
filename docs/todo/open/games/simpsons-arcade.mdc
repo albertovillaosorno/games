@@ -4902,3 +4902,45 @@ no arrival atlas at tick 315, and the subsequent routed combat and
 check at tick 232. Station bubbles, ordinary body admission cadence,
 exact selective original timing, whole-scene equivalence and physical
 input/display acceptance remain open.
+
+### Landing station marker presentation
+
+The four grounded marker crops establish station centres at logical
+X 68, 100, 132 and 164, rather than the source object's horizontally
+offset coordinates. The scripted descent now uses the same logical
+coordinate space as movement and combat. Body, rope and shadow
+registration compensate for the conversion, retaining their earlier
+verified descent origins. Portable formation and steering regressions
+verify the corrected landing positions.
+
+The optional pose record `landing-markers SHA256` selects four
+32-by-31 canonical RGBA8 payloads named
+`actor/landing-release-{marge,homer,bart,lisa}`. It requires the
+existing arrival record, rejects duplicate selections, and adds four
+atlas allocations, 15,872 atlas bytes and at most four sprite draws.
+The marker layer uses the same initial admission as the released
+ropes, the current station position and the sampled alternate-tick
+marker height during the bounce. After landing it follows the grounded
+station position; subsequent jump/attack-specific marker motion is
+not established. Markers draw above the ordinary world sprites.
+
+The single presentation clock now retires at the neutral marker
+boundary, tick 383, independently of rope clipping at tick 314 and
+the gameplay gate at tick 295. This is a bounded native presentation
+policy: the directional replay's one-tick-later source retirement and
+selective original admission are not explained. No gameplay gate
+depends on the marker deadline. Tests cover selective initial
+admission, alternate-step marker height, staggered landings,
+independent retirement, grounded registration and catalogue budgets.
+
+Fresh full workspace validation passed. The optimized original-backed
+native smoke passed adaptive, aspect-fit, integer, fill and stretch
+using isolated Xvfb software OpenGL, synthetic touch and dummy audio.
+Marker readback was absent through tick 231, visible at 232, 280,
+295, 315 and 382, and absent at 383. Rope absence at 315, routed
+combat and 270-column second-stage travel also passed in each mode.
+The marker readback establishes bounded layer visibility and geometry,
+not complete original raster equivalence. Ordinary body cadence,
+direction-dependent retirement, post-landing maneuver-specific
+marker motion, exact priority and physical-device acceptance remain
+open.

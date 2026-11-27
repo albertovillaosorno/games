@@ -39,7 +39,15 @@ const DESCENT_STEPS: u16 = 100;
 const SCRIPT_END: u16 = 229;
 const FIRST_BOUNCE: u16 = 230;
 const LAST_LANDING: u16 = 295;
+#[cfg(any(test, feature = "native-preview"))]
 const RELEASE: u16 = SCRIPT_END + 3;
+const MARKER_END: u16 = 383;
+#[cfg(any(test, feature = "native-preview"))]
+const MARKER_HEIGHTS: [i16; 32] = [
+    59, 63, 67, 70, 72, 74, 75, 75, 74, 74, 73, 72, 71, 69, 68, 66, 63, 61, 58,
+    55, 52, 48, 45, 41, 36, 32, 27, 22, 17, 11, 6, 0,
+];
+#[cfg(any(test, feature = "native-preview"))]
 const TALLEST_TETHER: i16 = 79;
 const UNITS_PER_PIXEL: i32 = 256;
 const INITIAL_HEIGHT: i32 = 192;
@@ -122,12 +130,34 @@ impl StageEntrance {
         i16::try_from(height.max(0).checked_div(UNITS_PER_PIXEL)?).ok()
     }
 
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) fn marker_elevation(self, player: Player) -> Option<i16> {
+        if self.scripted_art()
+            || self.presentation_complete()
+            || !self.admitted.get(player.index()).copied()?
+        {
+            return None;
+        }
+        if self.complete() {
+            return Some(0);
+        }
+        let step =
+            usize::from(self.tick.saturating_sub(RELEASE).checked_div(2)?);
+        let offset: i16 = match player {
+            Player::Marge => 0,
+            Player::Homer => -6,
+            Player::Bart => 7,
+            Player::Lisa => -17,
+        };
+        Some(MARKER_HEIGHTS.get(step)?.saturating_add(offset).max(0))
+    }
+
     pub(super) const fn new(admitted: [bool; 4]) -> Self {
         Self { admitted, tick: 0 }
     }
 
-    pub(super) fn presentation_complete(self) -> bool {
-        self.complete() && self.tether_withdrawal() >= TALLEST_TETHER
+    pub(super) const fn presentation_complete(self) -> bool {
+        self.tick >= MARKER_END
     }
 
     #[cfg(any(test, feature = "native-preview"))]
@@ -152,7 +182,7 @@ impl StageEntrance {
         player: Player,
     ) -> Option<(Point, i16)> {
         if self.scripted_art()
-            || self.presentation_complete()
+            || self.tether_withdrawal() >= TALLEST_TETHER
             || !self.admitted.get(player.index()).copied()?
         {
             return None;
@@ -176,10 +206,10 @@ impl StageEntrance {
             return None;
         }
         let start = match player {
-            Player::Marge => 32i16,
-            Player::Homer => 64,
-            Player::Bart => 96,
-            Player::Lisa => 128,
+            Player::Marge => -32i16,
+            Player::Homer => 0,
+            Player::Bart => 32,
+            Player::Lisa => 64,
         };
         let steps = i16::try_from(
             self.tick.saturating_sub(FIRST_ACTOR).min(DESCENT_STEPS),
@@ -195,6 +225,7 @@ impl StageEntrance {
         self.tick > FIRST_BOUNCE && self.tick.is_multiple_of(2)
     }
 
+    #[cfg(any(test, feature = "native-preview"))]
     fn tether_withdrawal(self) -> i16 {
         // The sampled ropes accelerate by 1/16 pixel per movement step.
         // Their cadence changes from alternate ticks to every tick after
@@ -278,10 +309,10 @@ mod tests {
             Some(42)
         ]);
         assert_eq!(Player::ALL.map(|player| end.scripted_position(player)), [
+            Some(Point { x: 68, y: 192 }),
+            Some(Point { x: 100, y: 192 }),
             Some(Point { x: 132, y: 192 }),
             Some(Point { x: 164, y: 192 }),
-            Some(Point { x: 196, y: 192 }),
-            Some(Point { x: 228, y: 192 }),
         ]);
         assert!(!end.steering_tick());
     }
@@ -296,7 +327,7 @@ mod tests {
         let first = sample(129);
         assert_eq!(
             first.presentation_sample(Player::Marge, 1),
-            Some((Point { x: 32, y: 192 }, 192))
+            Some((Point { x: -32, y: 192 }, 192))
         );
         assert_eq!(first.presentation_sample(Player::Marge, 2), None);
         assert_eq!(first.presentation_sample(Player::Homer, 1), None);
@@ -309,11 +340,11 @@ mod tests {
         let held = sample(231);
         assert_eq!(
             end.presentation_sample(Player::Marge, 1),
-            Some((Point { x: 132, y: 192 }, 58))
+            Some((Point { x: 68, y: 192 }, 58))
         );
         assert_eq!(
             end.presentation_sample(Player::Marge, 2),
-            Some((Point { x: 131, y: 192 }, 58))
+            Some((Point { x: 67, y: 192 }, 58))
         );
         assert_eq!(
             next.presentation_sample(Player::Marge, 1),
@@ -365,8 +396,31 @@ mod tests {
         }
         assert!(sample(295).complete());
         assert!(!sample(295).presentation_complete());
-        assert!(sample(314).presentation_complete());
+        assert!(!sample(314).presentation_complete());
+        assert!(sample(383).presentation_complete());
         assert_eq!(sample(314).released_tether(Player::Lisa), None);
+    }
+
+    #[test]
+    fn markers_follow_the_sampled_bounce_and_expire_independently() {
+        assert_eq!(sample(231).marker_elevation(Player::Marge), None);
+        assert_eq!(
+            Player::ALL.map(|player| sample(232).marker_elevation(player)),
+            [Some(59), Some(53), Some(66), Some(42)]
+        );
+        assert_eq!(sample(233).marker_elevation(Player::Marge), Some(59));
+        assert_eq!(sample(244).marker_elevation(Player::Marge), Some(75));
+        assert_eq!(sample(294).marker_elevation(Player::Bart), Some(7));
+        assert_eq!(sample(295).marker_elevation(Player::Bart), Some(0));
+        assert_eq!(sample(382).marker_elevation(Player::Marge), Some(0));
+        assert_eq!(sample(383).marker_elevation(Player::Marge), None);
+    }
+
+    #[test]
+    fn markers_belong_to_initially_admitted_characters() {
+        let selective = StageEntrance::new([false, true, false, true]).at(300);
+        assert_eq!(selective.marker_elevation(Player::Marge), None);
+        assert_eq!(selective.marker_elevation(Player::Homer), Some(0));
     }
 
     #[test]

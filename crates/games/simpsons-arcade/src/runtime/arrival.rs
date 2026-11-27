@@ -57,6 +57,13 @@ const TETHER_KEYS: [&str; 4] = [
     "actor/rope-bart",
     "actor/rope-lisa",
 ];
+const MARKER_KEYS: [&str; 4] = [
+    "actor/landing-release-marge",
+    "actor/landing-release-homer",
+    "actor/landing-release-bart",
+    "actor/landing-release-lisa",
+];
+const MARKER_EXTENTS: [(u32, u32); 4] = [(32, 31); 4];
 const BODY_EXTENTS: [(u32, u32); 4] = [(31, 76), (30, 64), (28, 48), (33, 104)];
 const TETHER_EXTENTS: [(u32, u32); 4] =
     [(54, 63), (64, 71), (57, 55), (79, 79)];
@@ -64,10 +71,14 @@ const TETHER_EXTENTS: [(u32, u32); 4] =
 pub(super) const ATLAS_COUNT: usize = 8;
 pub(super) const ATLAS_BYTES: usize = 105_496;
 pub(super) const EXTRA_SPRITES: usize = 4;
+pub(super) const MARKER_ATLAS_COUNT: usize = 4;
+pub(super) const MARKER_ATLAS_BYTES: usize = 15_872;
+pub(super) const MARKER_EXTRA_SPRITES: usize = 4;
 
 #[derive(Debug)]
 pub(super) struct ArrivalArt {
     bodies: [Art; 4],
+    markers: Option<[Art; 4]>,
     tethers: [Art; 4],
 }
 
@@ -75,11 +86,22 @@ impl ArrivalArt {
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
-        digest: ContentHash,
+        (digest, markers): (ContentHash, Option<ContentHash>),
     ) -> Result<Self, RenderError> {
         let bundle = open_bundle(store, digest)?;
         Ok(Self {
             bodies: load_layers(scene, &bundle, BODY_KEYS, BODY_EXTENTS)?,
+            markers: markers
+                .map(|hash| {
+                    let marker_bundle = open_bundle(store, hash)?;
+                    load_layers(
+                        scene,
+                        &marker_bundle,
+                        MARKER_KEYS,
+                        MARKER_EXTENTS,
+                    )
+                })
+                .transpose()?,
             tethers: load_layers(scene, &bundle, TETHER_KEYS, TETHER_EXTENTS)?,
         })
     }
@@ -134,6 +156,45 @@ impl ArrivalArt {
         }
         draws.extend(tethers.into_iter().flatten());
         draws.extend(bodies.into_iter().flatten());
+        Ok(())
+    }
+
+    pub(super) fn queue_markers(
+        &self,
+        cabinet: &Cabinet,
+        view: View,
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        let (Some(markers), Some(entrance)) =
+            (&self.markers, cabinet.stage_arrival())
+        else {
+            return Ok(());
+        };
+        for (player, station) in Player::ALL.into_iter().zip(cabinet.stations())
+        {
+            if !station.can_fight() {
+                continue;
+            }
+            let Some(elevation) = entrance.marker_elevation(player) else {
+                continue;
+            };
+            let marker = *markers
+                .get(player.index())
+                .ok_or(RenderError::InvalidSprite)?;
+            let origin = view.project(marker_position(
+                player,
+                station.position,
+                elevation,
+            ));
+            draws.push(marker.draw(
+                SpriteRect {
+                    x: i32::from(origin.x),
+                    y: i32::from(origin.y),
+                    ..marker.rect
+                },
+                false,
+            ));
+        }
         Ok(())
     }
 
@@ -198,10 +259,10 @@ impl Registration {
 
     const fn for_player(player: Player) -> Self {
         let (body_x, tether_x, tether_height) = match player {
-            Player::Marge => (57, 78, 58),
-            Player::Homer => (56, 88, 50),
-            Player::Bart => (55, 88, 66),
-            Player::Lisa => (61, 96, 42),
+            Player::Marge => (-7, 14, 58),
+            Player::Homer => (-8, 24, 50),
+            Player::Bart => (-9, 24, 66),
+            Player::Lisa => (-3, 32, 42),
         };
         Self {
             body_x,
@@ -241,9 +302,25 @@ fn load_layers(
     <[Art; 4]>::try_from(entries).map_err(|_error| RenderError::InvalidSprite)
 }
 
+const fn marker_position(
+    player: Player,
+    point: Point,
+    elevation: i16,
+) -> Point {
+    let offset = match player {
+        Player::Marge => 123,
+        Player::Homer => 105,
+        Player::Bart | Player::Lisa => 92,
+    };
+    Point {
+        x: point.x.saturating_sub(16),
+        y: point.y.saturating_sub(offset).saturating_sub(elevation),
+    }
+}
+
 const fn shadow_position(point: Point) -> Point {
     Point {
-        x: point.x.saturating_sub(56),
+        x: point.x.saturating_add(8),
         y: point.y.saturating_sub(7),
     }
 }
@@ -265,27 +342,7 @@ pub(super) fn verify(
         arrival.queue((cabinet, motion), (view, shadow), &mut expected)?;
     }
     if visible {
-        if expected.is_empty()
-            || !art
-                .draws
-                .windows(expected.len())
-                .any(|draws| draws == expected)
-        {
-            return Err(failure("arrival layer order differs"));
-        }
-        let actual = scene.readback()?;
-        let baseline_draws: Vec<_> = art
-            .draws
-            .iter()
-            .copied()
-            .filter(|draw| !expected.contains(draw))
-            .collect();
-        let bounds: Vec<_> =
-            expected.iter().map(|draw| draw.destination).collect();
-        let _baseline = scene.present([24, 22, 30], &baseline_draws)?;
-        let baseline = scene.readback()?;
-        let _restored = art.present(scene, cabinet)?;
-        scenery::verify_pixels(&actual, &baseline, view.width, &bounds)?;
+        verify_draws(scene, art, cabinet, (view, &expected))?;
     } else if !expected.is_empty()
         || art.draws.iter().any(|draw| {
             arrival
@@ -309,6 +366,66 @@ pub(super) fn verify(
     .map_err(failure)
 }
 
+fn verify_draws(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    (view, expected): (View, &[SpriteDraw]),
+) -> Result<(), RenderError> {
+    if expected.is_empty()
+        || !art
+            .draws
+            .windows(expected.len())
+            .any(|draws| draws == expected)
+    {
+        return Err(failure("arrival layer order differs"));
+    }
+    let actual = scene.readback()?;
+    let baseline_draws: Vec<_> = art
+        .draws
+        .iter()
+        .copied()
+        .filter(|draw| !expected.contains(draw))
+        .collect();
+    let bounds: Vec<_> = expected.iter().map(|draw| draw.destination).collect();
+    let _baseline = scene.present([24, 22, 30], &baseline_draws)?;
+    let baseline = scene.readback()?;
+    let _restored = art.present(scene, cabinet)?;
+    scenery::verify_pixels(&actual, &baseline, view.width, &bounds)
+}
+
+pub(super) fn verify_markers(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    visible: bool,
+) -> Result<(), RenderError> {
+    let Some(arrival) = art.poses.arrival.as_ref() else {
+        return Ok(());
+    };
+    let Some(markers) = arrival.markers.as_ref() else {
+        return Ok(());
+    };
+    let view = art.presentation_view(scene, cabinet)?;
+    let mut expected = Vec::new();
+    arrival.queue_markers(cabinet, view, &mut expected)?;
+    if visible {
+        verify_draws(scene, art, cabinet, (view, &expected))?;
+    } else if !expected.is_empty()
+        || art
+            .draws
+            .iter()
+            .any(|draw| markers.iter().any(|layer| layer.atlas == draw.atlas))
+    {
+        return Err(failure("landing markers outside their interval"));
+    }
+    write_status(format_args!(
+        "Second stage landing markers: {visible} at tick {:?}",
+        cabinet.stage_arrival().map(StageEntrance::tick)
+    ))
+    .map_err(failure)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,11 +445,33 @@ mod tests {
     }
 
     #[test]
+    fn markers_register_at_the_observed_grounded_origins() {
+        let points = Player::ALL.map(|player| {
+            let index = i16::try_from(player.index()).unwrap_or_default();
+            marker_position(
+                player,
+                Point {
+                    x: 68i16.saturating_add(32i16.saturating_mul(index)),
+                    y: 192,
+                },
+                0,
+            )
+        });
+        assert_eq!(points, [
+            Point { x: 52, y: 69 },
+            Point { x: 84, y: 87 },
+            Point { x: 116, y: 100 },
+            Point { x: 148, y: 100 },
+        ]);
+        assert_eq!(MARKER_ATLAS_BYTES, 4 * 32 * 31 * 4);
+    }
+
+    #[test]
     fn final_registration_matches_all_four_observed_origins() {
         let body_points = Player::ALL.map(|player| {
             let index = i16::try_from(player.index()).unwrap_or_default();
             Registration::for_player(player).body(Point {
-                x: 132i16.saturating_add(32i16.saturating_mul(index)),
+                x: 68i16.saturating_add(32i16.saturating_mul(index)),
                 y: 192,
             })
         });
@@ -347,7 +486,7 @@ mod tests {
             let registration = Registration::for_player(player);
             registration.tether(
                 Point {
-                    x: 131i16.saturating_add(32i16.saturating_mul(index)),
+                    x: 67i16.saturating_add(32i16.saturating_mul(index)),
                     y: 192,
                 },
                 registration.tether_height,
@@ -359,7 +498,7 @@ mod tests {
             Point { x: 107, y: 0 },
             Point { x: 131, y: 0 },
         ]);
-        assert_eq!(shadow_position(Point { x: 131, y: 192 }), Point {
+        assert_eq!(shadow_position(Point { x: 67, y: 192 }), Point {
             x: 75,
             y: 185
         });

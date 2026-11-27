@@ -119,6 +119,7 @@ pub(super) struct Catalogue {
     pub(super) backdrop: backdrop::Catalogue,
     bonus: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
+    landing_markers: Option<ContentHash>,
     scenery: scenery::Catalogue,
     stage_two: Option<[ContentHash; 2]>,
     wrestler: wrestler::Catalogue,
@@ -159,6 +160,10 @@ impl Catalogue {
                     .saturating_mul(arrival::ATLAS_BYTES),
             )
             .saturating_add(
+                usize::from(self.landing_markers.is_some())
+                    .saturating_mul(arrival::MARKER_ATLAS_BYTES),
+            )
+            .saturating_add(
                 self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
             )
             .saturating_add(
@@ -176,6 +181,11 @@ impl Catalogue {
             .saturating_add(
                 usize::from(self.arrival.is_some())
                     .saturating_mul(arrival::ATLAS_COUNT.saturating_sub(1)),
+            )
+            .saturating_add(
+                usize::from(self.landing_markers.is_some()).saturating_mul(
+                    arrival::MARKER_ATLAS_COUNT.saturating_sub(1),
+                ),
             )
             .saturating_add(
                 usize::from(self.bonus.is_some())
@@ -215,6 +225,7 @@ impl Catalogue {
             && self.scenery.complete()
             && (!(self.scenery.has_entrance() || self.arrival.is_some())
                 || self.stage_two.is_some())
+            && (self.landing_markers.is_none() || self.arrival.is_some())
             && self.backdrop.complete()
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
@@ -226,6 +237,7 @@ impl Catalogue {
             .len()
             .saturating_add(self.scenery.count())
             .saturating_add(usize::from(self.arrival.is_some()))
+            .saturating_add(usize::from(self.landing_markers.is_some()))
             .saturating_add(self.backdrop_count())
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
@@ -243,6 +255,7 @@ impl Catalogue {
             .chain(self.wrestler.digests())
             .chain(self.bonus)
             .chain(self.arrival)
+            .chain(self.landing_markers)
             .chain(self.stage_two.into_iter().flatten())
     }
 
@@ -256,6 +269,43 @@ impl Catalogue {
 
     pub(super) fn has_wrestler(&self) -> bool {
         self.wrestler.count() != 0
+    }
+
+    fn insert(&mut self, line: &str) -> Result<(), RenderError> {
+        match line.split_whitespace().next() {
+            Some("stage-two") => {
+                self.stage_two = Some(parse_stage_two(line, self.stage_two)?);
+            },
+            Some("bonus") => {
+                self.bonus =
+                    Some(parse_single_bundle("bonus", line, self.bonus)?);
+            },
+            Some("arrival") => {
+                self.arrival =
+                    Some(parse_single_bundle("arrival", line, self.arrival)?);
+            },
+            Some("landing-markers") => {
+                self.landing_markers = Some(parse_single_bundle(
+                    "landing-markers",
+                    line,
+                    self.landing_markers,
+                )?);
+            },
+            Some("wrestler") => self.wrestler.insert(line)?,
+            Some("backdrop") => self.backdrop.insert(line)?,
+            Some("scenic-entrance" | "scenic-pair" | "scenic-stationary") => {
+                self.scenery.insert(line)?;
+            },
+            _ => {
+                let (key, digest) = parse_line(line)?;
+                if self.entries.len() >= MAX_POSES
+                    || self.entries.insert(key, digest).is_some()
+                {
+                    return Err(failure("excess or duplicate poses"));
+                }
+            },
+        }
+        Ok(())
     }
 
     pub(super) fn load(
@@ -287,7 +337,13 @@ impl Catalogue {
         Ok(PoseArt {
             arrival: self
                 .arrival
-                .map(|digest| arrival::ArrivalArt::load(store, scene, digest))
+                .map(|digest| {
+                    arrival::ArrivalArt::load(
+                        store,
+                        scene,
+                        (digest, self.landing_markers),
+                    )
+                })
                 .transpose()?,
             backdrop: self.backdrop.load(store, scene)?,
             bonus: self
@@ -315,57 +371,10 @@ impl Catalogue {
         {
             return Err(failure("pose catalogue exceeds byte limit"));
         }
-        let mut entries = BTreeMap::new();
-        let mut scenery = scenery::Catalogue::default();
-        let mut backdrop = backdrop::Catalogue::default();
-        let mut wrestler = wrestler::Catalogue::default();
-        let mut bonus = None;
-        let mut arrival = None;
-        let mut stage_two = None;
+        let mut catalogue = Self::default();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if line.split_whitespace().next() == Some("stage-two") {
-                stage_two = Some(parse_stage_two(line, stage_two)?);
-                continue;
-            }
-            if line.split_whitespace().next() == Some("bonus") {
-                bonus = Some(parse_single_bundle("bonus", line, bonus)?);
-                continue;
-            }
-            if line.split_whitespace().next() == Some("arrival") {
-                arrival = Some(parse_single_bundle("arrival", line, arrival)?);
-                continue;
-            }
-            if line.split_whitespace().next() == Some("wrestler") {
-                wrestler.insert(line)?;
-                continue;
-            }
-            if line.split_whitespace().next() == Some("backdrop") {
-                backdrop.insert(line)?;
-                continue;
-            }
-            if matches!(
-                line.split_whitespace().next(),
-                Some("scenic-entrance" | "scenic-pair" | "scenic-stationary")
-            ) {
-                scenery.insert(line)?;
-                continue;
-            }
-            let (key, digest) = parse_line(line)?;
-            if entries.len() >= MAX_POSES
-                || entries.insert(key, digest).is_some()
-            {
-                return Err(failure("excess or duplicate poses"));
-            }
+            catalogue.insert(line)?;
         }
-        let catalogue = Self {
-            arrival,
-            backdrop,
-            bonus,
-            entries,
-            scenery,
-            stage_two,
-            wrestler,
-        };
         if !catalogue.complete() {
             return Err(failure("missing tick-zero pose"));
         }
@@ -373,10 +382,16 @@ impl Catalogue {
     }
 
     pub(super) fn scenic_sprite_count(&self) -> usize {
-        self.scenery.track_count().saturating_add(
-            usize::from(self.arrival.is_some())
-                .saturating_mul(arrival::EXTRA_SPRITES),
-        )
+        self.scenery
+            .track_count()
+            .saturating_add(
+                usize::from(self.arrival.is_some())
+                    .saturating_mul(arrival::EXTRA_SPRITES),
+            )
+            .saturating_add(
+                usize::from(self.landing_markers.is_some())
+                    .saturating_mul(arrival::MARKER_EXTRA_SPRITES),
+            )
     }
 
     pub(super) fn stage_two_strip(&self) -> Option<ContentHash> {
@@ -1559,6 +1574,7 @@ mod tests {
             return;
         };
         assert_arrival_budget(stage, &selected);
+        assert_marker_catalogue(stage_text, &record, &selected);
     }
 
     fn assert_arrival_budget(stage: &Catalogue, selected: &Catalogue) {
@@ -1578,6 +1594,42 @@ mod tests {
             stage
                 .scenic_sprite_count()
                 .saturating_add(arrival::EXTRA_SPRITES)
+        );
+    }
+
+    fn assert_marker_catalogue(
+        stage_text: &str,
+        arrival_record: &str,
+        arrival: &Catalogue,
+    ) {
+        let marker = format!("landing-markers {HASH}\n");
+        assert!(Catalogue::parse(&format!("{stage_text}{marker}")).is_err());
+        let text = format!("{stage_text}{arrival_record}{marker}");
+        assert!(Catalogue::parse(&format!("{text}{marker}")).is_err());
+        let parsed = Catalogue::parse(&text);
+        assert!(parsed.is_ok());
+        let Ok(selected) = parsed else {
+            return;
+        };
+        assert_eq!(selected.count(), arrival.count().saturating_add(1));
+        assert_eq!(selected.digests().count(), selected.count());
+        assert_eq!(
+            selected.atlas_bytes(),
+            arrival
+                .atlas_bytes()
+                .saturating_add(arrival::MARKER_ATLAS_BYTES)
+        );
+        assert_eq!(
+            selected.atlas_count(),
+            arrival
+                .atlas_count()
+                .saturating_add(arrival::MARKER_ATLAS_COUNT)
+        );
+        assert_eq!(
+            selected.scenic_sprite_count(),
+            arrival
+                .scenic_sprite_count()
+                .saturating_add(arrival::MARKER_EXTRA_SPRITES)
         );
     }
 
