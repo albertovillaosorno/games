@@ -5399,3 +5399,17 @@ reset do not establish a continuous fixed-height world strip. Neither
 the additional doorway actors, boardwalk, boss, stage handoff nor Stage 3
 are implemented by this evidence. The native limit remains 1,490 columns,
 and the title remains open pending its acceptance criteria.
+
+### Linked second-stage actor display attribution
+
+Independent original movement schedules reproduce 6,766 and 7,950
+retained regular-object rows. Read-only renderer observations identify
+the type-07 counted actor as a distinct sprite and palette family,
+linked to a type-FD parent. Both schedules reproduce the same 74 child
+and eight parent code/attribute pairs, as well as four pairs from the
+later secondary type-09 record. All selected pairs match nearby
+original object DMA samples. The counted child is not the previously
+modeled regular enemy family. Its observed setup includes separate
+64- and 32-tick countdowns before movement and conditional activation.
+Exact visual assemblies, combat, parent interactions and native
+admission remain open; the regular-cohort gate stays provisional.

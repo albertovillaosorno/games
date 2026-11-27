@@ -1030,3 +1030,16 @@ and 1,575 unresolved dispositions. The type-07 linked record's
 observed setup includes successive 64- and 32-tick countdowns before
 motion and conditional terrain activation; its presentation and
 native gameplay mapping remain unresolved.
+
+Two independently timed original replays directly correlate record
+identity with display-entry code and attribute writes. Their retained
+regular-object traces match 6,766 and 7,950 rows respectively. All
+2,048 paired type-07 child observations, 2,668 type-FD parent
+observations and 17 selected secondary type-09 observations match
+nearby original DMA entries. The observed code/attribute sets are
+identical across schedules (74, eight and four pairs respectively).
+The shared frame decoder, linked allocator and two initialization
+records retain the evidence without changing their dispositions.
+Visual assembly, exact native interactions and Rust mapping remain
+open. The checker retains 1,603 identities, 43 partial mappings
+and the preceding graph and dependency counts.
