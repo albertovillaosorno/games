@@ -752,3 +752,28 @@ and 25 non-runtime. Previous semantic reviews and mappings, all
 audio records and all unresolved-flow observations are preserved.
 These motion, linked-record and selector reviews do not establish
 exact actor, scheduler, presentation or native gameplay equivalence.
+
+Matched isolated first-stage control replays now identify directional
+motion and the ordinary solo jump's ascent and descent continuations.
+A neutral control, cardinal and diagonal walking, ground attack, and
+14 jump-hold durations provide bounded actor and selector evidence.
+The recorded jump height and signed velocity agree with the existing
+quarter-pixel native recurrence at every observed tick, including
+landing; the sampled one-, two- and three-frame taps share minimum
+lift, and release near the apex has a distinct boundary. Two native
+regressions verify the visible minimum-lift and near-apex trajectories.
+Four partial Rust mappings cover the observed input and movement,
+jump landing, fractional ground-attack drift and coordinate integration.
+Other maneuvers, collision surfaces, linked records and presentation
+remain unresolved; the native trajectory calculation is unchanged.
+
+Four newly observed paired-register selections confirm two interior
+jump entries and admit one 21-byte reaction continuation. The main
+inventory is 872 identities and 38,932 owned bytes, with 1,212
+possible observations. The combined checker reports 1,561 identities,
+57,330 owned bytes, 4,263 reciprocal pairs, 4,842 flow observations,
+260 interior entries and 169 unresolved flows. Dispositions are 1,533
+unresolved, three intentional replacements and 25 non-runtime.
+All prior decoded instructions, graph observations, function bodies
+and audio records are preserved; every decoded instruction has an
+owner. These are partial gameplay mappings, not completed parity.

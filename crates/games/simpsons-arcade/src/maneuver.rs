@@ -23,7 +23,7 @@
 // - Summary:
 //   - Isolated attacks and variable-height jump trajectories.
 // - Description:
-//   - Uses observed action timings and provisional fixed-point lift.
+//   - Uses observed action timings and verified isolated solo jump lift.
 // - Usage:
 //   - Advance once per tick before admitting new button edges.
 // - Defaults:
@@ -59,8 +59,9 @@ impl JumpMotion {
             self.release();
         }
         let tick = self.tick.saturating_add(1);
-        // Early release increases deceleration only during ascent.
-        // The common minimum lift preserves the observed short tap.
+        // The original solo flat-floor trace decreases vertical speed by
+        // one quarter per tick. After minimum lift, release triples the
+        // decrease only while the previous vertical speed is positive.
         let gravity = if self.released_at(tick)
             && tick >= MIN_LIFT_TICKS
             && self.velocity > 0
@@ -510,6 +511,52 @@ mod tests {
             assert!(tap.iter().max() < medium.iter().max());
             assert!(medium.iter().max() < long.iter().max());
             assert_eq!(tap.first(), Some(&7));
+        }
+    }
+
+    #[test]
+    fn minimum_lift_and_first_extended_hold_match_reference() {
+        // Independent one-, two- and three-frame taps have equal heights.
+        let minimum = [
+            7, 14, 21, 27, 33, 38, 42, 46, 48, 50, 52, 52, 52, 51, 51, 50, 48,
+            47, 45, 43, 41, 38, 36, 33, 29, 26, 22, 18, 14, 9, 5,
+        ];
+        let extended = [
+            7, 14, 21, 27, 33, 39, 44, 48, 51, 53, 55, 56, 56, 56, 55, 54, 53,
+            51, 50, 48, 45, 43, 40, 37, 34, 30, 27, 23, 18, 14, 9, 4,
+        ];
+        for hold in [1, 2, 3] {
+            assert_eq!(trajectory(Player::Marge, hold), minimum);
+        }
+        assert_eq!(trajectory(Player::Marge, 4), extended);
+    }
+
+    #[test]
+    fn release_near_apex_matches_reference() {
+        // Releasing during the last positive-speed ticks shortens the
+        // trajectory; releasing at zero retains the sustained arc.
+        let held = [
+            7, 14, 21, 27, 33, 39, 45, 51, 56, 61, 66, 70, 74, 78, 82, 86, 89,
+            92, 95, 97, 99, 101, 103, 105, 106, 107, 108, 108, 108, 108, 108,
+            108, 107, 106, 105, 103, 101, 99, 97, 95, 92, 89, 86, 82, 78, 74,
+            70, 66, 61, 56, 51, 45, 39, 33, 27, 21, 14, 7,
+        ];
+        let release_27 = [
+            7, 14, 21, 27, 33, 39, 45, 51, 56, 61, 66, 70, 74, 78, 82, 86, 89,
+            92, 95, 97, 99, 101, 103, 105, 106, 107, 108, 108, 108, 107, 107,
+            106, 104, 103, 101, 99, 97, 94, 92, 89, 85, 82, 78, 74, 70, 65, 61,
+            56, 50, 45, 39, 33, 27, 20, 14, 7,
+        ];
+        let release_28 = [
+            7, 14, 21, 27, 33, 39, 45, 51, 56, 61, 66, 70, 74, 78, 82, 86, 89,
+            92, 95, 97, 99, 101, 103, 105, 106, 107, 108, 108, 108, 108, 107,
+            106, 105, 103, 102, 100, 97, 95, 92, 89, 86, 82, 79, 75, 70, 66,
+            61, 56, 51, 45, 40, 34, 27, 21, 14, 7,
+        ];
+        assert_eq!(trajectory(Player::Marge, 27), release_27);
+        assert_eq!(trajectory(Player::Marge, 28), release_28);
+        for hold in [29, 30, 60] {
+            assert_eq!(trajectory(Player::Marge, hold), held);
         }
     }
 
