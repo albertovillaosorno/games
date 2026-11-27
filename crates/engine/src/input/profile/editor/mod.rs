@@ -117,6 +117,8 @@ pub enum EditorEffect {
         /// Complete staged profile.
         profile: AxisProfile,
     },
+    /// Validate and persist the selected seat's touch panel admission.
+    ProposeTouchPlayer(bool),
 }
 
 /// Menu command, independent of physical binding capture.
@@ -370,8 +372,9 @@ impl ControlEditor {
     /// buttons; the east face, back or start button cancels.
     /// Confirm a captured controller button before saving it.
     /// During touch capture, arrows select a physical slot and Enter applies
-    /// it. Axis mode stages both directions and thresholds; other families
-    /// capture the next pressed physical binding.
+    /// it. Clear toggles the selected seat's next-launch touch panel when
+    /// not capturing. Axis mode stages both directions and thresholds;
+    /// other families capture the next pressed physical binding.
     pub fn input<const PLAYERS: usize, const ACTIONS: usize>(
         &mut self,
         event: InputEvent,
@@ -444,9 +447,10 @@ impl ControlEditor {
                 let binding = match self.family {
                     BindingFamily::Keyboard => DigitalBinding::Key(None),
                     BindingFamily::Mouse => DigitalBinding::Mouse(None),
-                    BindingFamily::Controller
-                    | BindingFamily::Touch
-                    | BindingFamily::Axis => {
+                    BindingFamily::Touch => {
+                        return self.toggle_touch_panel(profiles);
+                    },
+                    BindingFamily::Controller | BindingFamily::Axis => {
                         return EditorEffect::None;
                     },
                 };
@@ -498,6 +502,18 @@ impl ControlEditor {
     #[must_use]
     pub const fn status(self) -> EditorStatus {
         self.status
+    }
+
+    fn toggle_touch_panel<const PLAYERS: usize, const ACTIONS: usize>(
+        self,
+        profiles: &DigitalProfiles<PLAYERS, ACTIONS>,
+    ) -> EditorEffect {
+        profiles
+            .touch_players
+            .get(self.station)
+            .map_or(EditorEffect::None, |enabled| {
+                EditorEffect::ProposeTouchPlayer(!enabled)
+            })
     }
 
     /// Pending physical slot when touch capture is active.
@@ -736,6 +752,43 @@ mod tests {
         );
         editor.acknowledge(true);
         assert_eq!(editor.navigate(Cancel, &PROFILE), EditorEffect::Close);
+    }
+
+    #[test]
+    fn touch_clear_proposes_panel_toggle_without_changing_active_profile() {
+        use EditorNavigation::{Clear, Family, Right};
+        let mut editor = ControlEditor::default();
+        for command in [Family, Family, Family] {
+            assert_eq!(editor.navigate(command, &PROFILE), EditorEffect::None);
+        }
+        assert_eq!(
+            editor.navigate(Clear, &PROFILE),
+            EditorEffect::ProposeTouchPlayer(false)
+        );
+        assert!(PROFILE.edited_touch_player(0, false).is_err());
+        editor.acknowledge(false);
+        assert_eq!(editor.navigate(Right, &PROFILE), EditorEffect::None);
+        assert_eq!(
+            editor.navigate(Clear, &PROFILE),
+            EditorEffect::ProposeTouchPlayer(true)
+        );
+        let candidate = PROFILE.edited_touch_player(1, true);
+        assert_eq!(
+            candidate,
+            Ok(DigitalProfiles {
+                touch_players: [true, true],
+                ..PROFILE
+            })
+        );
+        verify_clear_during_touch_capture(&mut editor);
+    }
+
+    fn verify_clear_during_touch_capture(editor: &mut ControlEditor) {
+        use EditorNavigation::{Clear, Confirm};
+        editor.acknowledge(true);
+        assert_eq!(editor.navigate(Confirm, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.navigate(Clear, &PROFILE), EditorEffect::None);
+        assert_eq!(editor.status(), EditorStatus::Capturing);
     }
 
     #[test]

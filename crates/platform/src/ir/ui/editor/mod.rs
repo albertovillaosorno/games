@@ -296,9 +296,25 @@ fn digital_lines<const PLAYERS: usize, const ACTIONS: usize>(
     let binding = editor.current(profiles).ok_or(RenderError::InvalidSprite)?;
     let name = binding_name(binding, actions, key_name)
         .ok_or(RenderError::InvalidSprite)?;
-    let status = status_label(editor.status(), editor.family());
+    let family = editor.family();
+    let status = status_label(editor.status(), family);
+    let player = editor.station().saturating_add(1);
+    let heading = if family == BindingFamily::Touch {
+        let enabled = profiles
+            .touch_players
+            .get(editor.station())
+            .ok_or(RenderError::InvalidSprite)?;
+        let panel = if *enabled {
+            "ON"
+        } else {
+            "OFF"
+        };
+        format!("PLAYER {player} - PANEL {panel}")
+    } else {
+        format!("PLAYER {player}")
+    };
     Ok([
-        format!("PLAYER {}", editor.station().saturating_add(1)),
+        heading,
         format!("ACTION: {action}"),
         format!("SOURCE: {}", editor.family().label()),
         format!("CURRENT: {name}"),
@@ -328,6 +344,9 @@ const fn status_label(
     family: BindingFamily,
 ) -> &'static str {
     match status {
+        EditorStatus::Ready if matches!(family, BindingFamily::Touch) => {
+            "CONFIRM SLOT / CLEAR PANEL"
+        },
         EditorStatus::Ready => "ENTER / A TO CHANGE",
         EditorStatus::Closing => "CLOSING",
         EditorStatus::Capturing => match family {

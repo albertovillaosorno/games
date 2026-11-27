@@ -1132,6 +1132,20 @@ impl Interactive {
         Ok(())
     }
 
+    fn edit_touch_player(&mut self, enabled: bool) -> Result<(), RenderError> {
+        let station = self.editor.station();
+        if enabled && self.controls.reserved.get(station) != Some(&false) {
+            self.acknowledge_edit(None);
+            return Ok(());
+        }
+        let candidate = self
+            .control_preferences
+            .persist_touch_player_edit(&self.next_profiles, station, enabled)
+            .map_err(failure)?;
+        self.acknowledge_edit(candidate.as_ref());
+        Ok(())
+    }
+
     fn editor_actions(
         &mut self,
         event: InputEvent,
@@ -1150,6 +1164,9 @@ impl Interactive {
         };
         match effect {
             EditorEffect::Propose(binding) => self.edit_binding(binding)?,
+            EditorEffect::ProposeTouchPlayer(enabled) => {
+                self.edit_touch_player(enabled)?;
+            },
             EditorEffect::ProposeAxis { axis, profile } => {
                 self.edit_axis(axis, profile)?;
             },

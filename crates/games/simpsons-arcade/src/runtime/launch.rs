@@ -481,6 +481,17 @@ impl ResolvedControls {
         )
     }
 
+    pub(super) fn persist_touch_player_edit(
+        &self,
+        current: &Profiles,
+        station: usize,
+        enabled: bool,
+    ) -> Result<Option<Profiles>, String> {
+        self.persist_candidate(
+            current.edited_touch_player(station, enabled).ok().as_ref(),
+        )
+    }
+
     fn store_profile(
         store: &ControlStore,
         text: &str,
@@ -1688,6 +1699,43 @@ mod tests {
             return Err(
                 "invalid axis edit changed the persisted profile".into()
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn touch_panel_edits_persist_without_changing_active_controls()
+    -> Result<(), String> {
+        let fixture = ProfileFixture::new()?;
+        let resolved = fixture.resolve(&[])?;
+        let original = resolved.profiles;
+        let enabled = resolved
+            .persist_touch_player_edit(&original, 1, true)?
+            .ok_or("second touch panel rejected")?;
+        let next = resolved
+            .persist_touch_player_edit(&enabled, 0, false)?
+            .ok_or("first panel could not be disabled")?;
+        let expected = Profiles {
+            touch_players: [false, true, false, false],
+            ..original
+        };
+        if next != expected
+            || fixture.resolve(&[])?.profiles != expected
+            || resolved.profiles != original
+        {
+            return Err("touch panel edit changed active bindings".into());
+        }
+        let store = fixture.store()?;
+        let before = store.load().map_err(|error| format!("{error:?}"))?;
+        if resolved
+            .persist_touch_player_edit(&next, 1, false)?
+            .is_some()
+            || resolved
+                .persist_touch_player_edit(&next, 4, true)?
+                .is_some()
+            || store.load().map_err(|error| format!("{error:?}"))? != before
+        {
+            return Err("invalid panel edit changed saved controls".into());
         }
         Ok(())
     }

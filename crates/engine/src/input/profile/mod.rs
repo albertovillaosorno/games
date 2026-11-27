@@ -316,6 +316,26 @@ impl<const PLAYERS: usize, const ACTIONS: usize>
         Ok(candidate)
     }
 
+    /// Enable or disable one next-launch touch panel.
+    ///
+    /// # Errors
+    /// Rejects an unknown seat or disabling the last enabled panel.
+    pub fn edited_touch_player(
+        &self,
+        station: usize,
+        enabled: bool,
+    ) -> Result<Self, String> {
+        self.validate()?;
+        let mut candidate = *self;
+        *candidate
+            .touch_players
+            .get_mut(station)
+            .ok_or_else(|| String::from("invalid touch player edit"))? =
+            enabled;
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
     /// Encode all bindings using the version-one persisted profile format.
     ///
     /// The existing decoder must recover the identical profile using the
