@@ -2247,8 +2247,8 @@ the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
 record or maneuver end. Regular poses remain limited to 220 records.
-An optional scenic track adds at most 41 records within a shared 22 KiB
-byte limit. The original four-hash command works without a catalogue.
+Two optional scenic tracks add at most 44 records within a shared
+22 KiB byte limit. The original four-hash command works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
 pose for each of the four characters. When present, the preview retains
@@ -3251,3 +3251,42 @@ readback passed in every mode. No sampled submission missed the
 16.667 ms budget; lifetime peak RSS ranged from 148,258,816 to
 148,393,984 bytes. The complete 220-regular plus 41-scenic capacity
 is independently exercised by the catalogue regression.
+
+### Optional stationary scenic presentation
+
+Three isolated original-edition controls establish the stationary
+actor admission at camera travel 482 and a repeating 100-tick visual
+cycle. All 534 normalized phase observations agree, including 298
+samples with the camera stopped and Primary input released. Three
+full-frame reconstructions match all 71,680 pixels and admit distinct
+26-pixel-wide composite poses with a common world X origin of 804
+and raster top 81 or 82. Other mismatched full frames remain rejected.
+Two dense independent controls establish departure exactly 65 ticks
+after the 674-column scripted pair begins.
+
+The optional `scenic-stationary FRAME X Y SHA256` records select
+all three measured poses (frames 0, 1 and 2; X 804; Y 81, 82 and 81).
+They require the verified mid-street world. The cabinet cycles the
+visual sequence on playing ticks, freezes it during pause, and clears
+it on departure or world reset. Both scenic tracks may coexist;
+their sprite and catalogue limits remain separate from the 220
+regular poses. The combined maximum of 264 records fits the existing
+22 KiB byte limit. No combat, destructibility or gate behavior is
+attributed to this actor.
+
+A 3,721,216-byte optimized Linux executable passed all five
+original-backed offscreen touch display modes with 260 records
+(218 regular, 39 paired and 3 stationary; 21,422 catalogue bytes).
+Each confined stationary and paired actor readback changes to the
+respective projected bounds. Whole-smoke peak RSS ranged from
+148,090,880 to 148,361,216 bytes. The fresh workspace gate passed
+with the combined maximum-budget and admission/expiration tests.
+Original-backed art remains private and optional; physical gameplay,
+interactive actor behavior and late encounter completion remain open.
+
+The isolated original-backed Firefox diagnostic independently admitted
+the combined local directory (769 files) using the trusted directory
+chooser and ordinary browser ingress. It performed four WebGL
+readbacks and blits, verified both scenic actors at ticks 38 and 96,
+released the canvas, and made no preference writes. This verifies
+browser composition, not physical controller or display acceptance.
