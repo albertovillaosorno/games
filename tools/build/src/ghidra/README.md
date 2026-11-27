@@ -99,3 +99,64 @@ The generator implements its own partial p-code descriptions.
 Add additional CPU profiles here only when a title needs an architecture
 that Ghidra does not already support. Reuse stock 68000 and Z80 for
 compatible Neo Geo programs after verifying the selected ROM layout.
+
+## Reproducible semantic fixtures
+
+The Java files in `fixtures/` are synthetic tests of the Ghidra p-code
+API, not a second processor implementation. The expectations are authored
+from the pinned reference model; they do not execute MAME. Generate the
+four descriptions and compile the SLA as above, then verify all five
+files against the installed module before running the tests:
+
+```sh
+installed=/opt/ghidra/ghidra_12.2_PUBLIC/Ghidra/Processors/Konami053248
+for part in ldefs pspec cspec slaspec sla; do
+  cmp ".temp/konami-extension/konami.$part" \
+    "$installed/data/languages/konami.$part" || exit 1
+done
+scratch=$(mktemp -d)
+mkdir "$scratch/project"
+printf '\\000' > "$scratch/synthetic.bin"
+analyzeHeadless "$scratch/project" konami-check \
+  -import "$scratch/synthetic.bin" \
+  -processor Konami053248:BE:16:partial -cspec default -noanalysis \
+  -scriptPath "$PWD/tools/build/src/ghidra/fixtures" \
+  -postScript VerifyKonamiIndexed.java \
+  -postScript VerifyKonamiArithmetic.java \
+  -postScript VerifyKonamiBranches.java > "$scratch/check.log" 2>&1
+! grep -q 'ERROR' "$scratch/check.log" || exit 1
+grep -q 'PASS SYNTHETIC INDEXED TOTAL: 4226 assertions' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS TOTAL SYNTHETIC P-CODE: 16203 assertions' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS BRANCH TRUTH TABLE: 2562 vectors; 5125 assertions' \
+  "$scratch/check.log" || exit 1
+```
+
+Require the explicit markers as well as headless success: a failed script
+can otherwise be reported only in the log. No original media is needed.
+The three runs share 2,633 base assertions; do not sum those duplicates.
+
+| Category | Admitted semantic evidence |
+| --- | --- |
+| EXG/TFR | 392 of 512 encodings (all non-DP selector pairs and aliases) |
+| Indexed addressing | 104 of 104 postbytes for byte loads |
+| Indexed word stores | 84 non-PC forms and selected PC forms |
+| Conditional branches | 32 of 32 opcodes; all 16 NZVC combinations |
+| Branch displacements | Five signed boundary cases per flag combination |
+| Branch target wrapping | Two explicit 16-bit overflow/underflow cases |
+| DAA | All 1,024 A/H/C combinations |
+| MUL/LMUL/DIVX | 217 deterministic product and quotient vectors |
+| ABS | 521 byte and word signed vectors |
+| Repeated shifts | 1,440 immediate and indexed vectors |
+| RTI/BMOVE/BSET | Partial and full frames; zero, overlap, wrap as applicable |
+
+The installed module passed these fixtures on 2026-11-27. The reference
+model explicitly leaves DP transfer selector 4 unimplemented: its read
+returns zero and its write has no effect. This is not a characterization
+of the physical register or its hidden byte. All 120 DP-dependent
+encodings remain undecodable; no hardware equivalence is asserted.
+The full opcode-by-addressing-mode semantic matrix, exact boundary
+instruction fetch and live differential execution against MAME remain
+open. The branch wrap cases keep instruction bytes inside the address
+space; a Ghidra p-code decode at 0xfffc failed in this environment.
