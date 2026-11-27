@@ -3188,3 +3188,25 @@ controls. The observations do not establish a combat role, damage
 rules or an exact camera-release condition. Do not substitute
 ordinary enemy combat for this scripted sequence. Its independent
 runtime presentation and interactions remain open.
+
+### Verified late-street background extension
+
+Dense baseline and independent release/resume captures verify all
+40 consecutive complete-frame reconstructions at 71,680 pixels
+per frame. Both controls briefly reach 1,360 columns before the
+late encounter settles at 1,359. The exact pre-admission background
+overlaps the preceding strip, whereas the later darkened background
+still fails strict overlap. No stitching tolerance was introduced.
+The independently reproduced canonical 1,648 by 196 strip retains
+every pixel of the previous 1,638 by 196 strip as an exact prefix.
+The new asset remains a private, optional local selection.
+
+The optimized Linux title passed original-backed offscreen touch
+smokes in adaptive, aspect-fit, integer, stretch and protected Fill
+modes. Each verified 1,360 camera columns, 600 movement frames,
+20 combat strike submissions, eleven reinforcement meters and the
+impact and four ground-hurt cues. No sampled movement or combat
+submission missed its 16.667 ms budget. Peak sampled RSS ranged
+from 133,984,256 to 134,836,224 bytes. The encounter's darkening,
+large actors, boss behavior and stage completion remain open;
+the default selection and physical acceptance are unchanged.
