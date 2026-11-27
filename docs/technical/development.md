@@ -99,6 +99,11 @@ The package includes the executable, project notices, selected Cargo
 dependency licence texts and an executable identity receipt. It requires
 compatible system libraries, excludes all game assets and is not yet a
 portable release. Supply a trusted output parent that already exists.
+When local `.env` configuration exists, explicit package output must
+not overlap the resolved asset directory. Invalid or untrusted local
+configuration prevents publication. Explicit scratch packaging without
+local configuration remains available. The path check is a preflight,
+not isolation from concurrent filesystem changes.
 The versioned receipt records the length and SHA-256 of every included
 file. Publication performs an independent bounded readback; repeat it
 without building or executing a package using:

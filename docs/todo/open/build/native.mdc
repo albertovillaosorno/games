@@ -1081,3 +1081,18 @@ the receipt above. These are two separately mounted userspaces on
 the same physical host and kernel, with dummy audio and synthetic
 keyboard input; independent-host, physical-device and audible-output
 acceptance remain open.
+
+Explicit package publication now checks the configured canonical
+asset directory before building or staging files, even when the
+operator supplies a different target or output path. Isolated tests
+rejected direct and linked descendants and an ancestor of a future
+asset directory for both native and browser targets. The sentinel
+asset and directory entry count were unchanged. With no local
+configuration, explicit scratch publication remains available;
+invalid configuration prevents publication. A distinct scratch
+destination preserves the explicit target independently of the
+configured target. This preflight does not isolate concurrent path
+changes. Real relative scratch publication and independent receipt
+readback verified the native package (109 files, 4,154,345 bytes)
+and browser package (88 files, 1,546,800 bytes) without including
+assets. Fresh validation passed both regressions.

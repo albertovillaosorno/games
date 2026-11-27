@@ -42,8 +42,8 @@ use games_platform::ir::security::toolchain::artifact::admit_executable;
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::staging::AuthoredStaging;
 use games_platform::ir::storage::{
-    PathKind, canonical_future_directory, parent_path, path_is_absolute,
-    path_kind, path_leaf, paths_overlap,
+    PathKind, canonical_future_directory, canonical_path, join_path,
+    parent_path, path_is_absolute, path_kind, path_leaf, paths_overlap,
 };
 use games_platform::ir::toolchain::write_line;
 
@@ -175,12 +175,7 @@ impl Prepared {
         }
         let name = path_leaf(output)
             .map_err(|error| format!("package destination name: {error}"))?;
-        let parent = parent_path(output).map_err(|error| error.to_string())?;
-        let destination_parent = if parent.is_empty() {
-            OsStr::new(".")
-        } else {
-            parent
-        };
+        let destination_parent = package_parent(output)?;
         let mut stage = AuthoredStaging::new(destination_parent)
             .map_err(|error| format!("package stage: {error:?}"))?;
         for (path, file) in self.files {
@@ -207,7 +202,9 @@ impl Prepared {
 /// Rejects missing or invalid local settings and unavailable output parents.
 pub fn configured(title: Title) -> Result<(), String> {
     let root = workspace_root()?;
-    let assets = configured_with(&root, title, run)?;
+    let assets = configured_with(&root, title, |selection, output| {
+        publish(&root, selection, output)
+    })?;
     write_line(&format!("Shared assets: {}", assets.to_string_lossy()))
         .map_err(|error| error.to_string())
 }
@@ -229,9 +226,7 @@ where
     {
         return Err(String::from("persistent roots must be absolute"));
     }
-    if paths_overlap(&output, &assets).map_err(|error| error.to_string())? {
-        return Err(String::from("package and asset paths overlap"));
-    }
+    reject_overlap(&output, &assets)?;
     let parent = parent_path(&output).map_err(|error| error.to_string())?;
     if path_kind(parent).map_err(|error| error.to_string())?
         != PathKind::Directory
@@ -242,35 +237,80 @@ where
         .map_err(|error| format!("configured asset directory: {error}"))?;
     let canonical_output = canonical_future_directory(&output)
         .map_err(|error| format!("configured package directory: {error}"))?;
-    if paths_overlap(&canonical_output, &canonical_assets)
-        .map_err(|error| error.to_string())?
-    {
-        return Err(String::from("package and asset paths overlap"));
-    }
+    reject_overlap(&canonical_output, &canonical_assets)?;
     publish(selection, &canonical_output)?;
     Ok(canonical_assets)
+}
+
+fn reject_overlap(output: &OsStr, assets: &OsStr) -> Result<(), String> {
+    if paths_overlap(output, assets).map_err(|error| error.to_string())? {
+        return Err(String::from("package and asset paths overlap"));
+    }
+    Ok(())
+}
+
+fn package_parent(output: &OsStr) -> Result<&OsStr, String> {
+    let parent = parent_path(output).map_err(|error| error.to_string())?;
+    Ok(if parent.is_empty() {
+        OsStr::new(".")
+    } else {
+        parent
+    })
+}
+
+fn explicit_with<Publish>(
+    root: &OsStr,
+    title: Distribution,
+    output: &OsStr,
+    publish: Publish,
+) -> Result<(), String>
+where
+    Publish: FnOnce(Distribution, &OsStr) -> Result<(), String>,
+{
+    let config = local_path(root, ".env")?;
+    if path_kind(&config).map_err(|error| error.to_string())?
+        != PathKind::Missing
+    {
+        let layout = local_layout(root)?;
+        let assets = OsString::from(layout.assets(title.title().binary())?);
+        let canonical_assets = canonical_future_directory(&assets)
+            .map_err(|error| format!("configured asset directory: {error}"))?;
+        let parent = canonical_path(package_parent(output)?)
+            .map_err(|error| format!("package parent: {error}"))?;
+        let name = path_leaf(output).map_err(|error| error.to_string())?;
+        let canonical_output =
+            join_path(&parent, name).map_err(|error| error.to_string())?;
+        reject_overlap(&canonical_output, &canonical_assets)?;
+    }
+    publish(title, output)
 }
 
 /// Build and package one admitted title in a new local directory.
 ///
 /// # Errors
 /// Rejects build, licence inventory, source admission and filesystem errors.
+/// Also rejects overlap with any configured asset directory.
 /// Publication is atomic; a post-rename sync failure is reported separately.
 pub fn run(title: Distribution, output: &OsStr) -> Result<(), String> {
+    let root = workspace_root()?;
+    explicit_with(&root, title, output, |selection, destination| {
+        publish(&root, selection, destination)
+    })
+}
+
+fn publish(
+    root: &OsStr,
+    title: Distribution,
+    output: &OsStr,
+) -> Result<(), String> {
     if path_kind(output).map_err(|error| error.to_string())?
         != PathKind::Missing
     {
         return Err(String::from("package destination already exists"));
     }
-    let root = workspace_root()?;
-    let inventory = Inventory::load(&root, title)?;
-    let parent = parent_path(output).map_err(|error| error.to_string())?;
-    let stage_parent = if parent.is_empty() {
-        OsStr::new(".")
-    } else {
-        parent
-    };
-    let prepared = Prepared::prepare(&root, title, stage_parent, inventory)?;
+    let inventory = Inventory::load(root, title)?;
+    let stage_parent = package_parent(output)?;
+    let prepared = Prepared::prepare(root, title, stage_parent, inventory)?;
     prepared.publish(output)?;
     write_line(&format!("Package: {}", output.to_string_lossy()))
         .map_err(|error| error.to_string())?;
@@ -458,6 +498,97 @@ mod tests {
         }
         prepared.finish_receipt(title)?;
         prepared.publish(output)
+    }
+
+    #[test]
+    fn explicit_publication_rejects_asset_overlap_before_build()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let asset = "deploy/simpsons-arcade/assets";
+        root.create_directories(asset)
+            .map_err(|error| error.to_string())?;
+        root.write_file(&format!("{asset}/payload"), b"asset")
+            .map_err(|error| error.to_string())?;
+        let assets = local_path(root.location(), asset)?;
+        root.link(&assets, "asset-alias")
+            .map_err(|error| error.to_string())?;
+        fixture_configuration(&root, "deploy", "deploy", "linux-x86-64")?;
+        let unexpected =
+            |_, _: &OsStr| Err(String::from("unexpected publication"));
+        for target in ["linux-x86-64", "webassembly"] {
+            let selection =
+                Distribution::parse("simpsons-arcade", &[target.into()])?;
+            for relative in [
+                format!("{asset}/preview"),
+                String::from("asset-alias/preview"),
+            ] {
+                let output = local_path(root.location(), &relative)?;
+                require(
+                    explicit_with(
+                        root.location(),
+                        selection,
+                        &output,
+                        unexpected,
+                    ) == Err(String::from("package and asset paths overlap")),
+                )?;
+            }
+            fixture_configuration(&root, "future", "deploy", "linux-x86-64")?;
+            let output = local_path(root.location(), "future")?;
+            require(
+                explicit_with(root.location(), selection, &output, unexpected)
+                    == Err(String::from("package and asset paths overlap")),
+            )?;
+            fixture_configuration(&root, "deploy", "deploy", "linux-x86-64")?;
+        }
+        require(
+            snapshot(&local_path(&assets, "payload")?, MAX_DOCUMENT)
+                .map_err(|error| format!("{error:?}"))?
+                == b"asset",
+        )?;
+        require(
+            directory_entries(&assets, NonZeroUsize::MIN)
+                .map_err(|error| error.to_string())?
+                .len()
+                == 1,
+        )
+    }
+
+    #[test]
+    fn explicit_publication_keeps_its_target_and_rejects_invalid_config()
+    -> Result<(), String> {
+        let root = TestRoot::new().map_err(|error| error.to_string())?;
+        let selection =
+            Distribution::parse("simpsons-arcade", &["webassembly".into()])?;
+        let no_config = local_path(root.location(), "without-config")?;
+        explicit_with(root.location(), selection, &no_config, fixture_package)?;
+        let _report = Receipt::verify(selection, &no_config)?;
+
+        fixture_configuration(&root, "deploy", "deploy", "linux-x86-64")?;
+        let independent = local_path(root.location(), "independent")?;
+        explicit_with(
+            root.location(),
+            selection,
+            &independent,
+            fixture_package,
+        )?;
+        let _independent_report = Receipt::verify(selection, &independent)?;
+
+        root.write_file(".env", b"invalid configuration")
+            .map_err(|error| error.to_string())?;
+        let invalid = local_path(root.location(), "invalid")?;
+        require(
+            explicit_with(
+                root.location(),
+                selection,
+                &invalid,
+                fixture_package,
+            )
+            .is_err(),
+        )?;
+        require(
+            path_kind(&invalid).map_err(|error| error.to_string())?
+                == PathKind::Missing,
+        )
     }
 
     #[test]
