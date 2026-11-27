@@ -5105,3 +5105,25 @@ columns with the expanded encounter and clear its admitted enemies.
 The older 270-column selection also passes in adaptive mode. Exact
 source spawn counts, anchors, hit behavior, later distinct enemy
 families and clearance conditions remain open.
+
+### Bonus competition admission
+
+Three matched original runs begin the first bonus with three active
+stations. The control retains its three-station mask. A fourth station
+joining during instructions becomes active and receives a competition
+flag at ready setup. A fourth station joining after pumping begins
+becomes active but does not receive that flag. A separate ready-phase
+join replay matches the control's phase trace through the pre-coin
+prefix; it likewise changes the live station mask while retaining the
+three competition flags. The original static flag routine is called
+by instruction and ready setup, rather than by the pumping loop.
+
+The native free-play Start route now admits stations during the bonus.
+The competition roster samples admitted stations at instruction and
+ready entry and remains fixed through pumping and results. New
+competition participants can pump and rank; late joins retain campaign
+participation without receiving a balloon score or rank. Portable
+regressions distinguish these boundaries, preserve pause and existing
+stations, and verify that a late join survives the stage-two handoff.
+Exact original demonstration and late-station visuals, input sampling
+and hardware meter timing remain unverified.

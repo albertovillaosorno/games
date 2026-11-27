@@ -844,6 +844,9 @@ impl Cabinet {
         }
         let was_results = bonus.phase() == BonusPhase::Results;
         bonus.advance(presses);
+        bonus.refresh_participants(
+            self.slots.map(|slot| slot.station.can_fight()),
+        );
         if was_results && bonus.phase() == BonusPhase::Complete {
             for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
                 slot.award_bonus_health(bonus.rank(player));
@@ -970,14 +973,15 @@ impl Cabinet {
         };
         let index = character.index();
         let playing = self.session.phase() == Phase::Playing;
+        let control = change.action.control;
         let interlude = playing
-            && (self.bonus.is_some() || self.stage_entrance().is_some());
+            && ((self.bonus.is_some() && control != Control::Start)
+                || self.stage_entrance().is_some());
         let (Some(slot), Some(queued)) =
             (self.slots.get_mut(index), pending.get_mut(index))
         else {
             return;
         };
-        let control = change.action.control;
         if !slot.edge(control, change.down, queued)
             || queued.capture_interlude(interlude, control)
         {
@@ -3552,6 +3556,72 @@ mod tests {
         assert_bonus_chord(state);
     }
 
+    #[test]
+    fn bonus_ready_latches_competitors_separately_from_joined_stations() {
+        let mut state = cabinet();
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.bonus =
+            Some(Bonus::new(state.slots.map(|slot| slot.station.can_fight())));
+        advance_until_bonus_phase(&mut state, BonusPhase::Instructions);
+        state.input_step(2000, &pulse(Player::Homer, Control::Start));
+        let [_, homer, ..] = state.stations();
+        assert!(homer.can_fight());
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Homer)),
+            None
+        );
+        advance_until_bonus_phase(&mut state, BonusPhase::Ready);
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Homer)),
+            Some(0)
+        );
+        state.input_step(2001, &pulse(Player::Bart, Control::Start));
+        let [_, _, bart, _] = state.stations();
+        assert!(bart.can_fight());
+        advance_until_bonus_phase(&mut state, BonusPhase::Pumping);
+        state.input_step(2002, &pulse(Player::Homer, Control::Primary));
+        state.input_step(2003, &pulse(Player::Bart, Control::Primary));
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Homer)),
+            Some(3)
+        );
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Bart)),
+            None
+        );
+        advance_until_bonus_phase(&mut state, BonusPhase::Results);
+        assert!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.rank(Player::Homer))
+                .is_some()
+        );
+        assert_eq!(
+            state.bonus().and_then(|bonus| bonus.rank(Player::Bart)),
+            None
+        );
+        let [_, _, late_bart, _] = state.stations();
+        assert!(late_bart.can_fight());
+    }
+
+    fn advance_until_bonus_phase(state: &mut Cabinet, phase: BonusPhase) {
+        for tick in 0..2000 {
+            if state.bonus().map(Bonus::phase) == Some(phase) {
+                break;
+            }
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(phase));
+    }
+
     fn bonus_health_fixture() -> Cabinet {
         let mut state = cabinet();
         for (tick, player) in [Player::Marge, Player::Homer, Player::Bart]
@@ -3662,6 +3732,7 @@ mod tests {
             ..Wrestler::new(state.camera)
         });
         state.admit_bonus();
+        assert_late_bonus_join_handoff(state);
         for tick in 2..4000 {
             if state.bonus().map(Bonus::phase) == Some(BonusPhase::Complete) {
                 break;
@@ -3673,6 +3744,44 @@ mod tests {
         state.input_step(4001, &[]);
         assert!(!state.stage_two());
         assert_stage_two_handoff(state);
+    }
+
+    fn assert_late_bonus_join_handoff(mut state: Cabinet) {
+        advance_until_bonus_phase(&mut state, BonusPhase::Pumping);
+        state.input_step(2000, &pulse(Player::Lisa, Control::Start));
+        let [_, _, _, joined] = state.stations();
+        assert!(joined.can_fight());
+        assert_eq!(joined.health, PLAYER_HEALTH);
+        assert_eq!(joined.stocks, PLAYER_STOCKS);
+        state.input_step(2001, &pulse(Player::Lisa, Control::Primary));
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Lisa)),
+            None
+        );
+        assert_late_station_after_bonus(state, joined);
+    }
+
+    fn assert_late_station_after_bonus(mut state: Cabinet, joined: Station) {
+        advance_until_bonus_phase(&mut state, BonusPhase::Complete);
+        assert_eq!(
+            state.bonus().and_then(|bonus| bonus.rank(Player::Lisa)),
+            None
+        );
+        for tick in 2002..2300 {
+            if state.stage_two() {
+                break;
+            }
+            state.input_step(tick, &[]);
+        }
+        assert!(state.stage_two());
+        assert_eq!(state.bonus(), None);
+        let [_, _, _, lisa] = state.stations();
+        assert!(lisa.can_fight());
+        assert_eq!(lisa.health, joined.health);
+        assert_eq!(lisa.stocks, joined.stocks);
+        assert_eq!(lisa.score, joined.score);
     }
 
     fn assert_stage_two_handoff(mut state: Cabinet) {
@@ -3954,7 +4063,12 @@ mod tests {
                 .and_then(|bonus| bonus.inflation(Player::Homer)),
             None
         );
-        assert_eq!(state.stations(), stations);
+        let [marge, homer, bart, lisa] = state.stations();
+        let [old_marge, _, old_bart, old_lisa] = stations;
+        assert_eq!([marge, bart, lisa], [old_marge, old_bart, old_lisa]);
+        assert_eq!(homer.participation, Participation::Playing);
+        assert_eq!(homer.health, PLAYER_HEALTH);
+        assert_eq!(homer.stocks, PLAYER_STOCKS);
         state.reset_world();
         assert_eq!(state.bonus(), None);
     }

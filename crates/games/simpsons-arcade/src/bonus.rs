@@ -488,6 +488,19 @@ impl Bonus {
         Some(result.rank(result.score(player)?))
     }
 
+    // The instructions and ready setup each sample admitted stations.
+    // Once the ready countdown starts, the competition roster is frozen.
+    pub(super) const fn refresh_participants(&mut self, admitted: [bool; 4]) {
+        if self.tick == 0
+            && matches!(
+                self.phase,
+                BonusPhase::Instructions | BonusPhase::Ready
+            )
+        {
+            self.participants = admitted;
+        }
+    }
+
     pub(super) const fn stage_setup_blank(self) -> bool {
         matches!(self.phase, BonusPhase::StageSetup)
             && self.tick >= STAGE_SETUP_BLANK
