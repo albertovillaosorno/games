@@ -1051,3 +1051,33 @@ through the default EGL vendor; selecting Mesa before launch resolved
 that harness failure. The final run used private X11, software OpenGL,
 dummy audio and read-only package and asset mounts, not physical input
 or audible output.
+
+The same 3,628,704-byte packaged executable also ran without host
+userspace libraries against the installed Freedesktop SDK 25.08.20
+runtime (glibc 2.42, upstream SDL2 soname version 2.0.3200.70, and
+the Freedesktop Mesa extension). Loader readback resolved SDL2,
+libgcc and libc inside the alternate runtime. The private namespace
+mounted the authored package and canonical assets read-only.
+Six offscreen OpenGL smokes, covering all five presentation modes
+and a repeated adaptive mode, passed 3,720 frame submissions with
+20 work-budget misses (maximum 100.842 ms). Five X11 OpenGL smokes
+against a separate private Xvfb server passed all modes, including
+106 additional adaptive logical columns and 444 street columns,
+with one miss across 3,100 submissions (maximum 23.049 ms).
+Every smoke retained the saved controller profile bytes. Mesa
+reported a device-selection warning in the offscreen runs; neither
+the measurements nor the hidden geometry establish physical GPU
+performance.
+
+A live X11 keyboard run in the alternate runtime changed the display
+from aspect-fit to integer and volume from 100% to 75%, verified both
+canonical preference payloads, and exited through the menu. A fresh
+native host process restored them without command-line overrides:
+the settings window matched pixel-for-pixel and both saved envelope
+hashes were unchanged. The preliminary observer could not connect
+to the private display; waiting for a successful X connection fixed
+the harness. Package verification still matched all 109 files and
+the receipt above. These are two separately mounted userspaces on
+the same physical host and kernel, with dummy audio and synthetic
+keyboard input; independent-host, physical-device and audible-output
+acceptance remain open.
