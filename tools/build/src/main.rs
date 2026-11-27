@@ -135,6 +135,8 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame scene-background-digest MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS TOP\n",
+    "mame scene-background-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS TOP\n",
     "native-preview: mame scene-sequence-bench MACHINE REV ",
     "PARENT SHA256 REPEATS RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS ",
     "CONTROLS [MORE SCENES...]\n",
@@ -221,6 +223,10 @@ enum Command {
     #[cfg(feature = "native-preview")]
     AudioCheck(Machine, audio_check::Arguments),
     BackgroundCheck(Machine, reference_background::Arguments),
+    BackgroundPublish(
+        Machine,
+        reference_background::art::BackgroundPublication,
+    ),
     BuildTitle(title_build::Distribution),
     Check(ImportProfile, OsString, ContentHash),
     Import(ImportProfile, Arguments),
@@ -456,6 +462,12 @@ impl Command {
             "art-publish" | "strip-publish" => {
                 Self::parse_art(action, selected, args.collect())
             },
+            "scene-background-publish" => Ok(Self::BackgroundPublish(
+                selected,
+                reference_background::art::BackgroundPublication::parse(
+                    args.collect(),
+                )?,
+            )),
             "background-check"
             | "scene-check"
             | "scene-render-check"
@@ -651,6 +663,7 @@ impl Command {
             #[cfg(feature = "native-preview")]
             Self::SceneSequence(machine, args) => args.run(machine),
             Self::BackgroundCheck(machine, args) => args.run(machine),
+            Self::BackgroundPublish(machine, args) => args.run(machine),
             Self::ObjectCheck(machine, cpu, device) => {
                 reference_objects::check(machine, &cpu, &device)
             },
@@ -709,6 +722,7 @@ impl Command {
             | Self::SceneSequence(..) => Err(String::from(USAGE)),
             Self::ArtPublish(..)
             | Self::BackgroundCheck(..)
+            | Self::BackgroundPublish(..)
             | Self::BuildTitle(..)
             | Self::ObjectCheck(..)
             | Self::PackageCheck(..)

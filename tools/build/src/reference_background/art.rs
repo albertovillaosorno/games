@@ -32,7 +32,7 @@
 //! Bounded scene art publication for locally supplied reference observations.
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use games_assets::{
@@ -168,6 +168,64 @@ impl Art {
     }
 }
 
+/// Publish one cropped background from a completely verified scene.
+#[derive(Debug)]
+pub struct BackgroundPublication {
+    output: OsString,
+    scene: Arguments,
+    top: usize,
+}
+
+impl BackgroundPublication {
+    /// Parse the output, complete scene and top exclusion.
+    /// # Errors
+    /// Rejects incomplete observations and malformed exclusion arguments.
+    pub fn parse(mut args: Vec<OsString>) -> Result<Self, String> {
+        if args.len() != 11 {
+            return Err(String::from(USAGE));
+        }
+        let raw_top = args.pop().ok_or_else(|| String::from(USAGE))?;
+        let top = text(&raw_top)?
+            .parse()
+            .map_err(|_error| String::from("invalid top exclusion"))?;
+        let output = args.remove(0);
+        Ok(Self {
+            output,
+            scene: Arguments::parse_scene(args)?,
+            top,
+        })
+    }
+
+    /// Publish the sprite-free background only after exact comparison.
+    /// # Errors
+    /// Rejects misaligned observations, invalid crops or publication failure.
+    pub fn run(&self, machine: Machine) -> Result<(), String> {
+        publication::require_asset_parent(
+            &self.output,
+            &machine.identity().title,
+        )?;
+        let bundle = graphics_bundle(&self.scene, machine)?;
+        let payloads = GraphicsPayloads::load(&bundle, true)?;
+        let assets = payloads.bind(&bundle)?;
+        let mut pens =
+            vec![Pixel::default(); machine.background_raster().pixels()];
+        let observation =
+            verified_scene(&self.scene, machine, &assets, &mut pens)?;
+        let image = background_image(
+            (machine, &assets),
+            observation,
+            &mut pens,
+            self.top,
+        )?;
+        publish_image(
+            &self.output,
+            &bundle,
+            image,
+            ("scene/background", limits()?),
+        )
+    }
+}
+
 /// Bounded adjacent scene observations for a continuous background strip.
 #[derive(Debug)]
 pub struct Strip {
@@ -255,21 +313,12 @@ impl Strip {
             previous = Some(observation);
         }
         let completed = strip.ok_or_else(|| String::from("empty strip"))?;
-        let limits = strip_limits()?;
-        let mut stage = CanonicalStaging::new(
+        publish_image(
             &self.output,
-            publication::staging_budget(limits)?,
+            &bundle,
+            completed,
+            ("scene/world-background", strip_limits()?),
         )
-        .map_err(|error| format!("stage: {error:?}"))?;
-        let mut records = Vec::new();
-        completed.stage("scene/world-background", &mut records, &mut stage)?;
-        let manifest = AssetManifest::new(
-            bundle.manifest().source().clone(),
-            records,
-            limits,
-        )
-        .map_err(|error| format!("manifest: {error:?}"))?;
-        publication::finish(stage, &manifest, limits)
     }
 }
 
@@ -477,20 +526,11 @@ impl Image {
 
 pub(super) fn report_background(
     context: (Machine, &SceneAssets<'_>),
-    mut observation: Observation,
+    observation: Observation,
     pens: &mut [Pixel],
     top: usize,
 ) -> Result<(), String> {
-    let (machine, assets) = context;
-    let _sprites = observation.sprites.take();
-    observation.reconstruct(machine, assets, pens)?;
-    let image = Image::from_pens(
-        pens,
-        machine.background_raster().extent(),
-        &observation.colors,
-        false,
-    )?
-    .without_top(top)?;
+    let image = background_image(context, observation, pens, top)?;
     toolchain::write_line(&format!(
         "Verified background: {}x{} RGBA8 {}",
         image.width,
@@ -498,6 +538,23 @@ pub(super) fn report_background(
         ContentHash::calculate(image.pixels.as_flattened()),
     ))
     .map_err(|error| error.to_string())
+}
+
+fn background_image(
+    (machine, assets): (Machine, &SceneAssets<'_>),
+    mut observation: Observation,
+    pens: &mut [Pixel],
+    top: usize,
+) -> Result<Image, String> {
+    let _sprites = observation.sprites.take();
+    observation.reconstruct(machine, assets, pens)?;
+    Image::from_pens(
+        pens,
+        machine.background_raster().extent(),
+        &observation.colors,
+        false,
+    )?
+    .without_top(top)
 }
 
 fn graphics_bundle(
@@ -589,6 +646,23 @@ fn parse_indices(
     Ok(selected)
 }
 
+fn publish_image(
+    output: &OsStr,
+    bundle: &CanonicalBundle,
+    image: Image,
+    (key, limits): (&str, ManifestLimits),
+) -> Result<(), String> {
+    let mut stage =
+        CanonicalStaging::new(output, publication::staging_budget(limits)?)
+            .map_err(|error| format!("stage: {error:?}"))?;
+    let mut records = Vec::new();
+    image.stage(key, &mut records, &mut stage)?;
+    let manifest =
+        AssetManifest::new(bundle.manifest().source().clone(), records, limits)
+            .map_err(|error| format!("manifest: {error:?}"))?;
+    publication::finish(stage, &manifest, limits)
+}
+
 fn select(ram: &[u8], indices: &BTreeSet<usize>) -> Result<Vec<u8>, String> {
     let mut selected = vec![0; ram.len()];
     for index in indices {
@@ -627,6 +701,37 @@ fn verified_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_publication_requires_complete_scene_and_crop() {
+        let digest = "0".repeat(64);
+        let mut args = [
+            "output",
+            "parent",
+            &digest,
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+            "controls",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        assert!(BackgroundPublication::parse(args.clone()).is_err());
+        args.push(OsString::from("28"));
+        assert_eq!(
+            BackgroundPublication::parse(args.clone()).map(|value| value.top),
+            Ok(28)
+        );
+        args.push(OsString::from("unexpected"));
+        assert!(BackgroundPublication::parse(args.clone()).is_err());
+        let _extra = args.pop();
+        let _top = args.pop();
+        args.push(OsString::from("-1"));
+        assert!(BackgroundPublication::parse(args).is_err());
+    }
 
     #[test]
     fn background_digest_excludes_only_explicit_top_rows() -> Result<(), String>
