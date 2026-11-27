@@ -368,6 +368,12 @@ fn manifest_requests(
                 limits: audio::music_limits()?,
             });
         }
+        if let Some(hashes) = audio.bonus_music {
+            let limits = audio::bonus_music_limits()?;
+            requests.extend(
+                hashes.map(|digest| ManifestRequest { digest, limits }),
+            );
+        }
         if let Some(digest) = audio.replacement {
             requests.push(ManifestRequest {
                 digest,
@@ -721,11 +727,14 @@ mod tests {
         let base = ContentHash::calculate(b"base");
         let replacement = ContentHash::calculate(b"replacement");
         let music = ContentHash::calculate(b"music");
+        let pump = ContentHash::calculate(b"pump");
+        let results = ContentHash::calculate(b"results");
         let poses = pose_fixture(pose, scenic, background);
         let selection = Selection {
             actors: [actor; 4],
             audio: Some(AudioSelection {
                 base,
+                bonus_music: Some([pump, results]),
                 effects_volume: MasterVolume::Full,
                 music: Some(music),
                 music_volume: MasterVolume::Full,
@@ -749,6 +758,8 @@ mod tests {
             (background, 15, art_bundle_limits()?),
             (base, 1, audio::base_limits()?),
             (music, 1, audio::music_limits()?),
+            (pump, 1, audio::bonus_music_limits()?),
+            (results, 1, audio::bonus_music_limits()?),
             (replacement, 1, audio::replacement_limits()?),
         ] {
             if !has_manifest_requests(&requests, digest, count, limit) {

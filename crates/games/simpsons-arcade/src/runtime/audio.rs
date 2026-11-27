@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Local effects and street music selection and bounded audio presentation.
+//   - Local effects and soundtrack selection and bounded audio presentation.
 // - Must-Not:
 //   - Interpret ROM bytes, duplicate mixing or influence simulation time.
 // - Allows:
@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another title-local module duplicates native cue delivery.
 // - Summary:
-//   - Optional attack, reaction, impact and street music samples.
+//   - Optional combat effects and scene music samples.
 // - Description:
 //   - Observe each fixed-step cue once and refill a short software queue.
 // - Usage:
@@ -29,7 +29,7 @@
 // - Defaults:
 //   - No device or music unless requested; no exact audio parity claim.
 
-//! Opt-in playback of observed combat effects and street music.
+//! Opt-in playback of observed combat effects and scene music.
 
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::rc::Rc;
@@ -59,8 +59,8 @@ use super::{
     parse_hash, size, smoke_press,
 };
 use crate::{
-    Action, Cabinet, Control, ENEMY_CAPACITY, Phase, Player, Point,
-    StreetLayout, TICK_INTERVAL,
+    Action, BonusPhase, Cabinet, Control, ENEMY_CAPACITY, Phase, Player, Point,
+    StreetLayout, TICK_INTERVAL, Wrestler, WrestlerAction,
 };
 
 const CHUNK: usize = 256;
@@ -72,6 +72,12 @@ const RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(47_999);
 const MUSIC_KEY: &str = "audio/street-music";
 const MUSIC_FRAMES: usize = 2_607_286;
 const MUSIC_LOOP_START: usize = 175_680;
+// Bounded service captures: ten seconds of pumping music and the
+// five-second results cue including its verified silent tail.
+const BONUS_TRACKS: [(&str, usize); 2] = [
+    ("audio/bonus-pumping", 480_000),
+    ("audio/bonus-results", 240_000),
+];
 const SOURCE_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
 // Observed PCM pitch 0xe9b with the 3,579,545 Hz chip clock:
 // round(3,579,545 / (4096 - 0xe9b)). The catalogue stays nominal.
@@ -144,6 +150,8 @@ type SharedSamples = Rc<[i16]>;
 pub struct AudioSelection {
     /// Manifest providing attack clips and optional combat effects.
     pub base: ContentHash,
+    /// Optional pumping and results music manifests, in that order.
+    pub bonus_music: Option<[ContentHash; 2]>,
     /// Independent effects attenuation before the master level.
     pub effects_volume: MasterVolume,
     /// Optional canonical opening-street music manifest.
@@ -160,6 +168,16 @@ impl AudioSelection {
     ) -> Result<Self, RenderError> {
         Ok(Self {
             base: parse_hash(&selection.base)?,
+            bonus_music: selection
+                .bonus_music
+                .as_ref()
+                .map(|[pump, results]| {
+                    Ok::<_, RenderError>([
+                        parse_hash(pump)?,
+                        parse_hash(results)?,
+                    ])
+                })
+                .transpose()?,
             effects_volume: selection.effects_volume,
             music: selection.music.as_deref().map(parse_hash).transpose()?,
             music_volume: selection.music_volume,
@@ -173,6 +191,7 @@ impl AudioSelection {
 }
 
 pub(super) struct Samples {
+    bonus_music: Option<[OwnedClip; 2]>,
     clips: [Rc<[i16]>; 4],
     effects_volume: MasterVolume,
     hurt: [Option<OwnedClip>; 4],
@@ -193,8 +212,11 @@ impl Samples {
 
     pub(super) fn load(
         store: BundleSource<'_>,
-        selection: AudioSelection,
+        selection: &AudioSelection,
     ) -> Result<Self, RenderError> {
+        if selection.bonus_music.is_some() && selection.music.is_none() {
+            return Err(failure("bonus music requires street music"));
+        }
         let bundle =
             open_selected_bundle(store, selection.base, base_limits()?)?;
         let replacement = selection
@@ -224,6 +246,10 @@ impl Samples {
             load_optional_effect(&bundle, key, HURT_RATE, frames)
         });
         Ok(Self {
+            bonus_music: selection
+                .bonus_music
+                .map(|hashes| load_bonus_music(store, hashes))
+                .transpose()?,
             clips: clips.try_into().map_err(|_error| failure("clip count"))?,
             effects_volume: selection.effects_volume,
             hurt: [marge?, homer?, bart?, lisa?],
@@ -235,7 +261,14 @@ impl Samples {
             )?,
             music: selection
                 .music
-                .map(|hash| load_music(store, hash))
+                .map(|hash| {
+                    load_music(
+                        store,
+                        hash,
+                        (MUSIC_KEY, MUSIC_FRAMES),
+                        music_limits()?,
+                    )
+                })
                 .transpose()?,
             music_volume: selection.music_volume,
         })
@@ -246,6 +279,102 @@ impl Samples {
             effects: Some(self.effects_volume),
             music: self.music.as_ref().map(|_clip| self.music_volume),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MusicCue {
+    Pumping,
+    Quiet,
+    Results,
+    Street,
+}
+
+impl MusicCue {
+    fn select(cabinet: &Cabinet) -> Self {
+        if let Some(bonus) = cabinet.bonus() {
+            return match bonus.phase() {
+                BonusPhase::Pumping => Self::Pumping,
+                BonusPhase::Results => Self::Results,
+                BonusPhase::Complete
+                | BonusPhase::Instructions
+                | BonusPhase::Ready
+                | BonusPhase::Victory => Self::Quiet,
+            };
+        }
+        if cabinet.wrestler().is_some_and(|wrestler| {
+            matches!(
+                wrestler.action,
+                WrestlerAction::Defeat { .. } | WrestlerAction::Cleared
+            )
+        }) {
+            Self::Quiet
+        } else {
+            Self::Street
+        }
+    }
+}
+
+struct Soundtrack {
+    bonus: Option<[OwnedClip; 2]>,
+    cue: MusicCue,
+    street: Option<OwnedClip>,
+}
+
+impl Soundtrack {
+    fn bonus_track(&self, cue: MusicCue) -> Option<&OwnedClip> {
+        let [pump, results] = self.bonus.as_ref()?;
+        match cue {
+            MusicCue::Pumping => Some(pump),
+            MusicCue::Results => Some(results),
+            MusicCue::Quiet | MusicCue::Street => None,
+        }
+    }
+
+    const fn has_track(&self, cue: MusicCue) -> bool {
+        match cue {
+            MusicCue::Street => self.street.is_some(),
+            MusicCue::Pumping | MusicCue::Results => self.bonus.is_some(),
+            MusicCue::Quiet => false,
+        }
+    }
+
+    fn select(
+        &mut self,
+        mixer: &mut OwnedMixer,
+        next: MusicCue,
+    ) -> Result<bool, RenderError> {
+        if self.cue == next {
+            return Ok(false);
+        }
+        let changed = self.has_track(self.cue) || self.has_track(next);
+        mixer.stop_source(AudioSource::Music);
+        let gain = SourceGain {
+            source: AudioSource::Music,
+            stereo: StereoGain::UNITY,
+        };
+        match next {
+            MusicCue::Street => {
+                if let Some(clip) = &self.street {
+                    let _voice = mixer
+                        .play_loop_on(
+                            clip.clone(),
+                            gain,
+                            MUSIC_LOOP_START..MUSIC_FRAMES,
+                        )
+                        .map_err(failure)?;
+                }
+            },
+            MusicCue::Pumping | MusicCue::Results => {
+                if let Some(track) = self.bonus_track(next) {
+                    let _voice =
+                        mixer.play_on(track.clone(), gain).map_err(failure)?;
+                }
+            },
+            MusicCue::Quiet => {},
+        }
+        self.cue = next;
+        Ok(changed)
     }
 }
 
@@ -260,8 +389,7 @@ pub(super) struct Playback {
     impact_cues: u64,
     live_output: bool,
     mixer: OwnedMixer,
-    music: Option<OwnedClip>,
-    music_started: bool,
+    music: Soundtrack,
     scratch: [[i16; 2]; CHUNK],
     sources: SourceSettings,
     volume: MasterVolume,
@@ -288,7 +416,7 @@ impl Playback {
     }
 
     fn music_voices(&self) -> usize {
-        usize::from(self.music_started)
+        self.mixer.active_on(AudioSource::Music)
     }
 
     pub(super) fn open(
@@ -342,8 +470,11 @@ impl Playback {
             impact_cues: 0,
             live_output: false,
             mixer,
-            music: samples.music.clone(),
-            music_started: false,
+            music: Soundtrack {
+                bonus: samples.bonus_music.clone(),
+                cue: MusicCue::Quiet,
+                street: samples.music.clone(),
+            },
             scratch: [[0; 2]; CHUNK],
             sources,
             volume,
@@ -438,7 +569,105 @@ impl Playback {
         self.smoke_maneuver(true)?;
         self.smoke_source_changes()?;
         self.smoke_impact()?;
-        self.smoke_hurts()
+        self.smoke_hurts()?;
+        self.smoke_bonus_music()
+    }
+
+    fn smoke_bonus_music(&mut self) -> Result<(), RenderError> {
+        if self.music.bonus.is_none() {
+            return Ok(());
+        }
+        let mut cabinet = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map_err(failure)?
+            .with_late_wrestler(true)
+            .with_bonus(true);
+        cabinet.session = self.smoke_session();
+        self.update(&cabinet)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        self.update(&cabinet)?;
+        self.verify_quiet()?;
+        cabinet.wrestler = Some(Wrestler {
+            action: WrestlerAction::Cleared,
+            health: 0,
+            ..Wrestler::new(0)
+        });
+        cabinet.admit_bonus();
+        self.update(&cabinet)?;
+        if self.music.cue != MusicCue::Quiet
+            || self.music_voices() != 0
+            || self.queued_frames()? != 0
+        {
+            return Err(failure("defeat retained queued street music"));
+        }
+        self.smoke_bonus_phase(&mut cabinet, BonusPhase::Pumping)?;
+        self.smoke_bonus_pause(&mut cabinet)?;
+        self.smoke_bonus_phase(&mut cabinet, BonusPhase::Results)?;
+        self.smoke_bonus_results(&cabinet)?;
+        self.smoke_bonus_phase(&mut cabinet, BonusPhase::Complete)?;
+        write_status(format_args!(
+            "Bonus music PCM: street, pumping, results and silence verified"
+        ))
+        .map_err(failure)
+    }
+
+    fn smoke_bonus_pause(
+        &mut self,
+        cabinet: &mut Cabinet,
+    ) -> Result<(), RenderError> {
+        self.verify_submission(0)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Pause));
+        self.device.clear().map_err(failure)?;
+        self.update(cabinet)?;
+        if cabinet.phase() != Phase::Paused
+            || self.queued_frames()? != 0
+            || self.music_voices() != 1
+        {
+            return Err(failure("paused bonus music advanced"));
+        }
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Pause));
+        self.update(cabinet)?;
+        self.verify_submission(0)
+    }
+
+    fn smoke_bonus_phase(
+        &mut self,
+        cabinet: &mut Cabinet,
+        expected: BonusPhase,
+    ) -> Result<(), RenderError> {
+        for tick in 0..2000 {
+            cabinet.input_step(tick, &[]);
+            self.update(cabinet)?;
+            if cabinet
+                .bonus()
+                .is_some_and(|bonus| bonus.phase() == expected)
+            {
+                return Ok(());
+            }
+        }
+        Err(failure(
+            "bonus music smoke did not reach the expected phase",
+        ))
+    }
+
+    fn smoke_bonus_results(
+        &mut self,
+        cabinet: &Cabinet,
+    ) -> Result<(), RenderError> {
+        if self.music.cue != MusicCue::Results {
+            return Err(failure("results music not selected"));
+        }
+        self.verify_submission(0)?;
+        // Hidden smoke has no consumer; drain the finite clip in bounded
+        // queue-sized steps without changing its fixed-step phase.
+        for _ in 0..120u8 {
+            self.device.clear().map_err(failure)?;
+            self.update(cabinet)?;
+        }
+        if self.music_voices() != 0 || self.queued_frames()? != 0 {
+            return Err(failure("finished results music restarted"));
+        }
+        Ok(())
     }
 
     fn smoke_drain(
@@ -653,7 +882,7 @@ impl Playback {
         if simulation.state().phase() != Phase::MainMenu
             || self.queued_frames()? != 0
             || self.mixer.active() != 0
-            || self.music_started
+            || self.music.cue != MusicCue::Quiet
         {
             return Err(failure(format!(
                 "reset retained stale audio: {:?}, {}, {}",
@@ -789,27 +1018,19 @@ impl Playback {
             self.impact_cues = cabinet.impact_cues();
             self.discard_queued = true;
             self.mixer.clear();
-            self.music_started = false;
+            self.music.cue = MusicCue::Quiet;
+        }
+        if playing
+            && self
+                .music
+                .select(&mut self.mixer, MusicCue::select(cabinet))?
+        {
+            // Pending frames can still contain the previous track.
+            self.discard_queued = true;
         }
         let ready = self.ready(self.live_output && playing)?;
         if !playing {
             return Ok(());
-        }
-        if !self.music_started
-            && let Some(clip) = &self.music
-        {
-            let _voice = self
-                .mixer
-                .play_loop_on(
-                    clip.clone(),
-                    SourceGain {
-                        source: AudioSource::Music,
-                        stereo: StereoGain::UNITY,
-                    },
-                    MUSIC_LOOP_START..MUSIC_FRAMES,
-                )
-                .map_err(failure)?;
-            self.music_started = true;
         }
         self.play_effects(cabinet)?;
         if ready {
@@ -820,8 +1041,8 @@ impl Playback {
     }
 
     fn verify_idle_effects(&self) -> Result<(), RenderError> {
-        if self.music.is_some() {
-            if !self.music_started {
+        if self.music.street.is_some() {
+            if self.music_voices() != 1 {
                 return Err(failure("street music did not start"));
             }
             return self.verify_submission(0);
@@ -846,7 +1067,8 @@ impl Playback {
         let levels = self.sources.levels();
         let audible = self.volume != MasterVolume::Muted
             && ((active != 0 && levels.effects != MasterVolume::Muted)
-                || (self.music_started && levels.music != MasterVolume::Muted));
+                || (self.music_voices() != 0
+                    && levels.music != MasterVolume::Muted));
         if self.mixer.active() != active.saturating_add(self.music_voices())
             || self.queued_frames()? != QUEUE_FRAMES
             || self.scratch.iter().all(|frame| *frame == [0, 0]) == audible
@@ -908,9 +1130,23 @@ pub(super) fn base_limits() -> Result<ManifestLimits, RenderError> {
 }
 
 pub(super) fn music_limits() -> Result<ManifestLimits, RenderError> {
-    let bytes = u64::try_from(MUSIC_FRAMES)
+    stereo_limits(MUSIC_FRAMES)
+}
+
+pub(super) fn bonus_music_limits() -> Result<ManifestLimits, RenderError> {
+    stereo_limits(
+        BONUS_TRACKS
+            .into_iter()
+            .map(|(_, frames)| frames)
+            .max()
+            .ok_or(RenderError::TooLarge)?,
+    )
+}
+
+fn stereo_limits(frames: usize) -> Result<ManifestLimits, RenderError> {
+    let bytes = u64::try_from(frames)
         .ok()
-        .and_then(|frames| frames.checked_mul(4))
+        .and_then(|count| count.checked_mul(4))
         .and_then(NonZeroU64::new)
         .ok_or(RenderError::TooLarge)?;
     Ok(ManifestLimits {
@@ -965,21 +1201,35 @@ fn load_optional_effect(
 fn load_music(
     store: BundleSource<'_>,
     hash: ContentHash,
+    (key, frames): (&str, usize),
+    limits: ManifestLimits,
 ) -> Result<OwnedClip, RenderError> {
-    let bundle = open_selected_bundle(store, hash, music_limits()?)?;
+    let bundle = open_selected_bundle(store, hash, limits)?;
     let record = bundle
         .manifest()
-        .record(MUSIC_KEY)
-        .ok_or_else(|| failure("missing street music PCM"))?;
-    let bytes = bundle.view_payload(MUSIC_KEY).map_err(failure)?;
+        .record(key)
+        .ok_or_else(|| failure("missing music PCM"))?;
+    let bytes = bundle.view_payload(key).map_err(failure)?;
     let pcm = PcmSamples::new(record, &bytes).map_err(failure)?;
     if pcm.channels() != NonZeroU8::MIN.saturating_add(1)
         || pcm.sample_rate() != RATE
-        || usize::try_from(pcm.frames().get()).ok() != Some(MUSIC_FRAMES)
+        || usize::try_from(pcm.frames().get()).ok() != Some(frames)
     {
-        return Err(failure("unexpected street music PCM format"));
+        return Err(failure("unexpected music PCM format"));
     }
     OwnedClip::new(copy_samples(pcm)?, Channels::Stereo, RATE).map_err(failure)
+}
+
+fn load_bonus_music(
+    store: BundleSource<'_>,
+    [pump, results]: [ContentHash; 2],
+) -> Result<[OwnedClip; 2], RenderError> {
+    let limits = bonus_music_limits()?;
+    let [first, second] = BONUS_TRACKS;
+    Ok([
+        load_music(store, pump, first, limits)?,
+        load_music(store, results, second, limits)?,
+    ])
 }
 
 pub(super) fn replacement_limits() -> Result<ManifestLimits, RenderError> {
@@ -1026,6 +1276,16 @@ fn play_cues(
         }
     }
     Ok(())
+}
+
+fn bonus_smoke_pulse(control: Control) -> [LogicalAction<Action>; 2] {
+    [true, false].map(|down| LogicalAction {
+        action: Action {
+            control,
+            player: Player::Marge,
+        },
+        down,
+    })
 }
 
 fn smoke_entry(
@@ -1170,12 +1430,13 @@ mod tests {
         let base = CLIPS.map(|(key, frames)| (key, frames, 12));
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &base)?,
+            bonus_music: None,
             effects_volume: MasterVolume::Full,
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
         };
-        let original = Samples::load(BundleSource::Local(parent), selection)?;
+        let original = Samples::load(BundleSource::Local(parent), &selection)?;
         if original.impact.is_some()
             || original.hurt.iter().any(Option::is_some)
             || original
@@ -1192,7 +1453,7 @@ mod tests {
             .ok_or_else(|| failure("missing fixture clip"))?;
         selection.replacement =
             Some(publish_fixture(parent, &[(key, frames, -7)])?);
-        let modified = Samples::load(BundleSource::Local(parent), selection)?;
+        let modified = Samples::load(BundleSource::Local(parent), &selection)?;
         let [first, rest @ ..] = &modified.clips;
         if first.iter().any(|sample| *sample != -7)
             || rest
@@ -1210,7 +1471,7 @@ mod tests {
                 invalid_frames,
                 -7,
             )])?);
-            if Samples::load(BundleSource::Local(parent), selection).is_ok() {
+            if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
                 return Err(failure("invalid replacement accepted"));
             }
         }
@@ -1226,12 +1487,13 @@ mod tests {
         clips.push((IMPACT_KEY, IMPACT_FRAMES, i16::MAX));
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
+            bonus_music: None,
             effects_volume: MasterVolume::Full,
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
         };
-        let samples = Samples::load(BundleSource::Local(parent), selection)?;
+        let samples = Samples::load(BundleSource::Local(parent), &selection)?;
         let impact = samples.impact.ok_or_else(|| failure("missing impact"))?;
         if impact.rate() != IMPACT_RATE {
             return Err(failure("impact clip rate did not match pitch"));
@@ -1246,14 +1508,14 @@ mod tests {
         }
         selection.replacement =
             Some(publish_fixture(parent, &[(IMPACT_KEY, IMPACT_FRAMES, -7)])?);
-        if Samples::load(BundleSource::Local(parent), selection).is_ok() {
+        if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
             return Err(failure("impact unexpectedly replaceable"));
         }
         let _impact = clips.pop();
         clips.push((IMPACT_KEY, IMPACT_FRAMES.saturating_sub(1), 12));
         selection.base = publish_fixture(parent, &clips)?;
         selection.replacement = None;
-        if Samples::load(BundleSource::Local(parent), selection).is_ok() {
+        if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
             return Err(failure("invalid impact format accepted"));
         }
         Ok(())
@@ -1268,12 +1530,13 @@ mod tests {
         clips.extend(HURT_CLIPS.map(|(key, frames)| (key, frames, i16::MAX)));
         let selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
+            bonus_music: None,
             effects_volume: MasterVolume::Full,
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
         };
-        let samples = Samples::load(BundleSource::Local(parent), selection)?;
+        let samples = Samples::load(BundleSource::Local(parent), &selection)?;
         let expected =
             [[14731, 6603], [8215, 5766], [8102, 11543], [5771, 12875]];
         for ((candidate, gain), frame) in
@@ -1296,9 +1559,60 @@ mod tests {
     }
 
     #[test]
+    fn bonus_music_switches_once_and_ends_without_restarting()
+    -> Result<(), RenderError> {
+        let street = OwnedClip::new(
+            Rc::from(vec![100; MUSIC_FRAMES.saturating_mul(2)]),
+            Channels::Stereo,
+            RATE,
+        )
+        .map_err(failure)?;
+        let stereo = |values: [i16; 4]| {
+            OwnedClip::new(Rc::from(values), Channels::Stereo, RATE)
+                .map_err(failure)
+        };
+        let mut soundtrack = Soundtrack {
+            bonus: Some([stereo([1, 2, 3, 4])?, stereo([5, 6, 7, 8])?]),
+            cue: MusicCue::Quiet,
+            street: Some(street),
+        };
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        let mut frame = [[0; 2]];
+        let started = soundtrack.select(&mut mixer, MusicCue::Street)?;
+        mixer.render(&mut frame);
+        if !started || frame != [[100; 2]] {
+            return Err(failure("street track was not admitted"));
+        }
+        let stopped = soundtrack.select(&mut mixer, MusicCue::Quiet)?;
+        mixer.render(&mut frame);
+        if !stopped || frame != [[0; 2]] || mixer.active() != 0 {
+            return Err(failure("street track survived defeat"));
+        }
+        for (cue, expected) in [
+            (MusicCue::Pumping, [[1, 2], [3, 4]]),
+            (MusicCue::Results, [[5, 6], [7, 8]]),
+        ] {
+            let admitted = soundtrack.select(&mut mixer, cue)?;
+            let mut output = [[0; 2]; 2];
+            mixer.render(&mut output);
+            if !admitted || output != expected || mixer.active() != 0 {
+                return Err(failure("bonus cue did not play exactly once"));
+            }
+            let repeated = soundtrack.select(&mut mixer, cue)?;
+            mixer.render(&mut frame);
+            if repeated || frame != [[0; 2]] {
+                return Err(failure("finished bonus cue restarted"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn isolated_attack_clips_use_observed_stereo_ratios_and_rate()
     -> Result<(), RenderError> {
         let samples = Samples {
+            bonus_music: None,
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
             effects_volume: MasterVolume::Full,
             hurt: array::from_fn(|_| None),

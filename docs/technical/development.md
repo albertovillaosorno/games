@@ -216,6 +216,12 @@ retain any saved setting. Audio startup reports the requested output and
 resolved master and admitted source percentages; it does not identify the
 physical output selected by a system default. A normal launch with the directory
 selected enables the next-launch control editor; smoke never writes it.
+With the optional Simpsons Arcade bonus art and existing audio/music
+selections, set `bonus_music=PUMP_SHA,RESULT_SHA` in the private launch
+catalogue to admit the two independently verified local stereo cues.
+Explicit native launch accepts `--bonus-music PUMP_SHA RESULT_SHA` after
+`--music SHA`. Both cues use the existing music volume; neither is
+distributed with the executable.
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`
 to distinguish the filename from a misplaced option.

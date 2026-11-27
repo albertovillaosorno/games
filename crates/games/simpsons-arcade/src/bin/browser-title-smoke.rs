@@ -201,6 +201,7 @@ fn selection(digest: ContentHash, audio: ContentHash) -> Selection<'static> {
         actors: [digest; 4],
         audio: Some(AudioSelection {
             base: audio,
+            bonus_music: None,
             effects_volume: MasterVolume::Full,
             music: None,
             music_volume: MasterVolume::Full,

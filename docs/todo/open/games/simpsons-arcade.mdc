@@ -3794,3 +3794,43 @@ station into one pump per fixed tick; the other timing and scoring
 rules remain provisional. A routed regression compares Primary,
 Secondary and the simultaneous chord at identical cabinet states.
 The private captures remain untracked.
+
+### Optional balloon bonus music
+
+Two independent 72-second service-mode captures per selected cue matched
+all 3,456,001 stereo PCM frames through the bounded WAV comparison path.
+The earlier four-player gameplay trace issues distinct commands for boss
+defeat, victory, instructions, pumping, results and Stage 2. Delayed
+service controls isolate the pumping and results commands from preceding
+music, with silence before onset. The local canonical selections retain
+480,000 and 240,000 frames respectively at 48 kHz, stereo signed PCM.
+The latter includes a silent tail. The former is a finite ten-second
+excerpt, not an exact looping region. No original data or digests are
+tracked.
+
+The optional `bonus_music=PUMP_SHA,RESULT_SHA` selection requires the
+existing effects and street music selections. Native explicit launch
+also accepts `--bonus-music PUMP_SHA RESULT_SHA` after `--music SHA`.
+Both roles are validated by key, exact frame count, format and source
+identity; browser manifest requests share the bounds. The street loop
+ends on wrestler defeat. Pumping and results each start their respective
+one-shot music, with no restart after exhaustion. Other unselected
+victory and bonus phases are silent. Music transitions discard pending
+mixed frames and stop only the music voices; the shared mixer preserves
+unrelated effect voice positions. Existing pause and source-volume
+controls apply without influencing simulation timing.
+
+The optimized 3,941,216-byte Linux executable passed original-backed
+offscreen OpenGL and dummy-audio diagnostics in all five display modes,
+plus a separate run with music muted and effects at 25 percent. The
+audio-specific smoke verifies scene selection, stale street queue
+removal, pumping pause/resume, results exhaustion without restart and
+completion. The existing separately routed bonus gameplay diagnostic
+also passes. All 600 movement and 20 combat-strike submissions per
+display run met the 16.667 ms budget; whole-smoke lifetime peak RSS
+ranged from 158,396,416 to 163,041,280 bytes. Fresh workspace validation
+passed with the portable WebAssembly build and core smoke. This is not
+a dedicated audio performance benchmark, browser playback observation,
+physical listening test or exact timing/parity claim. Victory,
+instructions, complete bonus effects and subsequent stage music remain
+open.

@@ -1041,6 +1041,7 @@ impl<'source> Sources<'source> {
             actors: open_bundles(store, actors)?,
             audio: options
                 .audio
+                .as_ref()
                 .map(|selection| audio::Samples::load(store, selection))
                 .transpose()?,
             enemy: options
