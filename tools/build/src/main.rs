@@ -38,6 +38,8 @@ pub mod audio_check;
 pub mod bundle_check;
 /// Generate contributor Ghidra processor descriptions.
 pub mod ghidra;
+/// Generate contributor Ghidra board mappers.
+pub mod ghidra_board;
 /// Native canonical bundle publication.
 pub mod publication;
 /// Exact bounded comparison of private PCM reference recordings.
@@ -86,6 +88,7 @@ use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
     "games-build ghidra konami cspec|ldefs|pspec|slaspec\n",
+    "games-build ghidra-board simpsons\n",
     "games-build retention plan AGE_SECONDS QUOTA_BYTES ENTRIES BYTES\n",
     "games-build retention apply AGE_SECONDS QUOTA_BYTES ENTRIES BYTES HASH\n",
     "usage: games-build build TITLE [linux-x86-64|webassembly]\n",
@@ -238,6 +241,7 @@ enum Command {
     BuildTitle(title_build::Distribution),
     Check(ImportProfile, OsString, ContentHash),
     Ghidra(ghidra::Component),
+    GhidraBoard(ghidra_board::Board),
     Import(ImportProfile, Arguments),
     MigrationAudit(store_migration::Audit),
     MigrationCatalogue(Box<store_migration::Catalogue>),
@@ -273,6 +277,9 @@ impl Command {
         let format = args.next().ok_or_else(|| String::from(USAGE))?;
         let action = args.next().ok_or_else(|| String::from(USAGE))?;
         match (format.to_str(), action.to_str()) {
+            (Some("ghidra-board"), Some(board)) => Ok(Self::GhidraBoard(
+                ghidra_board::Board::parse(board, &args.collect::<Vec<_>>())?,
+            )),
             (Some("ghidra"), Some(processor)) => Ok(Self::Ghidra(
                 ghidra::Component::parse(processor, &args.collect::<Vec<_>>())?,
             )),
@@ -676,6 +683,7 @@ impl Command {
             Self::BuildTitle(title) => title.run(),
             Self::Retention(arguments) => arguments.run(),
             Self::Ghidra(component) => component.run(),
+            Self::GhidraBoard(board) => board.run(),
             Self::PackageCheck(title, output) => {
                 title_package::check(title, &output)
             },
@@ -760,6 +768,7 @@ impl Command {
             | Self::PriorityCheck(..)
             | Self::Retention(..)
             | Self::Ghidra(..)
+            | Self::GhidraBoard(..)
             | Self::SampleCheck(..)
             | Self::StripPublish(..)
             | Self::TilemapCheck(..)
