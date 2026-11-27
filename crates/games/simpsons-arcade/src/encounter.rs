@@ -1742,6 +1742,70 @@ mod tests {
             ),
         );
         assert_eq!([other_homer, other_bart, other_lisa], [homer, bart, lisa]);
+        assert_eq!(continued.display_health, 0);
+    }
+
+    #[test]
+    fn continuing_meter_refills_without_delaying_control() {
+        let result = knocked_out();
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        let [continued, ..] = cabinet.stations();
+        assert!(continued.can_fight());
+        assert_eq!(continued.display_health, 0);
+        cabinet.input_step(1, &[LogicalAction {
+            action: Action {
+                control: Control::Left,
+                player: Player::Marge,
+            },
+            down: true,
+        }]);
+        let [moving, ..] = cabinet.stations();
+        assert!(moving.position.x < continued.position.x);
+        assert_eq!(moving.display_health, 0);
+        cabinet.input_step(2, &[]);
+        cabinet.input_step(3, &[]);
+        let [before_refill, ..] = cabinet.stations();
+        assert_eq!(before_refill.display_health, 0);
+        verify_continue_meter_pause(&mut cabinet, before_refill);
+    }
+
+    fn verify_continue_meter_pause(
+        cabinet: &mut Cabinet,
+        before_refill: crate::Station,
+    ) {
+        cabinet.input_step(4, &pulse(Control::Pause));
+        for tick in 5..15 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations().first(), Some(&before_refill));
+        cabinet.input_step(15, &pulse(Control::Pause));
+        assert_eq!(
+            cabinet
+                .stations()
+                .first()
+                .map(|station| station.display_health),
+            Some(1)
+        );
+        cabinet.input_step(16, &[]);
+        assert_eq!(
+            cabinet
+                .stations()
+                .first()
+                .map(|station| station.display_health),
+            Some(1)
+        );
+        cabinet.input_step(17, &[]);
+        assert_eq!(
+            cabinet
+                .stations()
+                .first()
+                .map(|station| station.display_health),
+            Some(2)
+        );
     }
 
     #[test]
@@ -1966,7 +2030,7 @@ mod tests {
         cabinet.input_step(0, &pulse(Control::Start));
         let [continued, ..] = cabinet.stations();
         assert_eq!(continued.stocks, PLAYER_STOCKS);
-        assert_eq!(continued.display_health, PLAYER_HEALTH);
+        assert_eq!(continued.display_health, 0);
     }
 
     #[test]

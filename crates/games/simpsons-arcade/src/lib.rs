@@ -91,6 +91,8 @@ const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;
 const FINAL_KNOCKOUT_TICKS: u16 = 168;
 const REFILL_TICKS: u16 = 64;
+// The first visible column follows the original continue edge by four ticks.
+const CONTINUE_METER_DELAY: u8 = 4;
 // Original ground-attack follow-up edges first take effect at offset 20.
 const GROUND_ATTACK_RECOVERY_TICKS: u8 = 20;
 
@@ -345,7 +347,7 @@ struct Slot {
     action_recovery: Recovery,
     attack_quarters: i16,
     held: u8,
-    meter_wait: bool,
+    meter_wait: u8,
     spawn: Point,
     station: Station,
 }
@@ -382,11 +384,12 @@ impl Slot {
     }
 
     const fn advance_meter(&mut self) {
-        if self.station.display_health == self.station.health || self.meter_wait
-        {
-            self.meter_wait = false;
+        if self.station.display_health == self.station.health {
+            self.meter_wait = 0;
+        } else if self.meter_wait > 0 {
+            self.meter_wait = self.meter_wait.saturating_sub(1);
         } else {
-            self.meter_wait = true;
+            self.meter_wait = 1;
             self.station.display_health =
                 if self.station.display_health < self.station.health {
                     self.station.display_health.saturating_add(1)
@@ -601,7 +604,7 @@ impl Slot {
             action_recovery: Recovery::Ready,
             attack_quarters: 0,
             held: 0,
-            meter_wait: false,
+            meter_wait: 0,
             spawn: position,
             station: Station {
                 attack_cues: 0,
@@ -631,16 +634,26 @@ impl Slot {
     }
 
     const fn start(&mut self, camera: i16) {
-        if !matches!(
-            self.station.participation,
-            Participation::Absent | Participation::Continuing { .. }
-        ) {
-            return;
-        }
+        let continuing = match self.station.participation {
+            Participation::Absent => false,
+            Participation::Continuing { .. } => true,
+            Participation::Playing | Participation::Recovering { .. } => {
+                return;
+            },
+        };
         self.station.health = PLAYER_HEALTH;
-        self.station.display_health = PLAYER_HEALTH;
+        // Free continue restores control immediately. Only the HUD refills.
+        self.station.display_health = if continuing {
+            0
+        } else {
+            PLAYER_HEALTH
+        };
         self.station.stocks = PLAYER_STOCKS;
-        self.meter_wait = false;
+        self.meter_wait = if continuing {
+            CONTINUE_METER_DELAY
+        } else {
+            0
+        };
         self.restore_position(camera);
         self.station.participation = Participation::Playing;
     }

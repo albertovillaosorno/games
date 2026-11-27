@@ -1080,6 +1080,7 @@ fn smoke_continue(
     if continued.health != PLAYER_HEALTH
         || continued.stocks != PLAYER_STOCKS
         || continued.participation != Participation::Playing
+        || continued.display_health != 0
     {
         return Err(failure("native free start did not continue player"));
     }
@@ -1088,6 +1089,18 @@ fn smoke_continue(
         &scene.readback().map_err(failure)?,
         Player::Marge,
         continued,
+        scene.layout().width().get(),
+    )?;
+    advance(simulation, 4)?;
+    let [refilling, ..] = simulation.state().stations();
+    if refilling.display_health != 1 {
+        return Err(failure("native free rejoin meter did not begin refill"));
+    }
+    let _refill_drawn = art.present(scene, simulation.state())?;
+    verify_station_health(
+        &scene.readback().map_err(failure)?,
+        Player::Marge,
+        refilling,
         scene.layout().width().get(),
     )
 }
