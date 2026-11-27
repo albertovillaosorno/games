@@ -863,3 +863,11 @@ dependencies without implying completeness. All 1,562 canonical
 records carry a semantic review; 129 unmapped unresolved records
 retain unknown dependency inventories. The mapped and resolved
 records already satisfy the stronger check, with unchanged counts.
+
+A focused audit then records direct dependencies for twenty unresolved
+sound-CPU functions, checking retained instruction listings and the
+pinned board device map. These cover vector transfers, sequence cursor
+and timing fields, channel continuation and FM register operations.
+The private inventory preserves all other record fields; the checker
+passes with 109 unknown dependency lists remaining. No function status,
+flow, or Rust mapping is promoted by the audit.
