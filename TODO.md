@@ -38,7 +38,7 @@ exist. Do not block supported-target title implementation.
 ### TODO - Shared internationalisation and localisation
 
 Localise all titles through one shared catalogue, text and settings
-mechanism, with English and Mexican Spanish as the initial languages.
+mechanism, with supported languages declared by each title.
 
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Shared internationalisation and localisation](docs/todo/open/build/localisation.mdc)

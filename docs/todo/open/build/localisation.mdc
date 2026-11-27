@@ -21,12 +21,12 @@ coupling gameplay, assets, platform adapters or text to a single language.
 
 - Extend the existing engine translation catalogue rather than creating
   parallel title-specific implementations. Use stable message identifiers,
-  canonical BCP 47 locale tags, explicit regional/language fallback and
-  an English default. Keep locale policy independent of host APIs.
-- Supply complete English and Mexican Spanish catalogues for shared UI
-  and the first supported title. Admit additional languages without
-  modifying engine code. Keep shared messages separate from unique title
-  messages; report missing keys and invalid catalogues.
+  admitted BCP 47 locale tags and explicit regional/language fallback.
+  Each title supplies its default and fallback. Keep policy portable.
+- Each title declares its supported locales and required translated
+  surfaces, including shared UI and unique messages. Do not impose a
+  global language list. Admit additional languages without changing
+  engine code; report missing keys and invalid catalogues.
 - Localise user-facing menus, settings, HUD, prompts, controls, errors and
   applicable subtitles. Do not translate internal identifiers, save keys,
   protocols, gameplay rules or original asset identities. Preserve the
@@ -43,10 +43,17 @@ coupling gameplay, assets, platform adapters or text to a single language.
 - Use bounded catalogue loading and typed message parameters, not
   executable translation content. Reject malformed inputs and preserve
   identical gameplay, input routing and save semantics across languages.
-- Demonstrate the first title in English and Spanish on Linux and the
-  supported browser path; test language changes, fallback, persistence,
-  missing glyphs, longer labels and all presentation modes. Record any
-  unavailable platform or additional script coverage explicitly.
+- Demonstrate the first title in its declared locales on Linux and the
+  supported browser path. Verify a real language change with at least
+  two catalogue selections, fallback, persistence, missing glyphs,
+  longer labels and presentation modes. Use synthetic fixtures for
+  additional scripts and languages not supported by the title.
+- Keep authored message catalogues distinct from imported edition media.
+  Language-dependent original text, fonts, voice and artwork enter via
+  the existing importer IR and canonical asset namespace where applicable.
+  Use typed locale/resource metadata and shared content identities; never
+  duplicate whole asset trees per language or target. Do not require
+  localised media that the selected lawful edition does not contain.
 - Require every future title and app to reuse the shared localisation
   mechanism and verify its own complete supported-language catalogues.
 
@@ -60,3 +67,11 @@ es-ES, an unsupported locale and an unknown message key. Review on
 and the compact bitmap text renderer measures UTF-8 byte length and
 draws ASCII glyphs. Language selection, persistent locale preferences,
 Unicode layout and integrated title translations are not implemented.
+
+Scope clarification, 2026-11-26: supported languages and the required
+localisation surfaces belong to each title, not the shared engine.
+The initial English and Mexican Spanish example is not a global
+mandate. Simpsons Arcade is the first integration and must demonstrate
+its declared supported locales before the next catalogue title begins.
+The shared importer remains the sole admission path for localised
+original media; authored messages may be bundled as authored data.
