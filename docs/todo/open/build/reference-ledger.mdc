@@ -977,3 +977,26 @@ threshold from the later one-survivor gate, with regression coverage
 and all five extended native display modes passing. The checker retains
 43 partial mappings and unchanged dispositions; the ambiguous earlier
 control states and exact original eligibility remain unresolved.
+
+The original secondary-record dispatcher now has a verified type-09
+path from a narrow late-stage replay. Two separately observed state
+selectors select initialization and the shared return, respectively.
+The isolated static project adds three bodies (25 decoded bytes) with
+no changed prior ownership or unowned instructions. The reciprocal
+ledger records six new caller/callee pairs, seven flow observations
+and one new interior target; the remaining computed contexts stay
+unresolved. The private checker reports 1,565 identities and semantic
+reviews, 57,458 decoded bytes, 4,276 reciprocal pairs, 4,858 flow
+observations, 263 interior targets and 170 unresolved flows. There
+are 43 partial mappings, three intentional replacements, 25
+non-runtime and 1,537 unresolved dispositions. No visual or gameplay
+role has been assigned to the new actor paths.
+
+Instruction-time count observations also distinguish two earlier
+second-stage gates from mid-scan frame snapshots. The 392-column
+gate releases with one counted actor and the 1,024-column gate with
+two; each recorded assertion is above its respective threshold.
+The earlier input prefix is shared, while the later observations
+have distinct movement timing. Both gates count nonregular actors
+that are not yet represented in the portable encounter, so adding
+redundant regular-only caps would not establish original parity.
