@@ -799,6 +799,35 @@ mod tests {
     }
 
     #[test]
+    fn one_ground_strike_emits_one_impact_per_defeated_enemy() {
+        let result = Cabinet::with_opening_street();
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        cabinet.input_step(1, &pulse(Control::Primary));
+        for tick in 2..11 {
+            cabinet.input_step(tick, &[]);
+        }
+        let Some(encounter) = &mut cabinet.encounter else {
+            return;
+        };
+        encounter.admit(50);
+        let [initial, reinforcement, ..] = &mut encounter.enemies;
+        *initial = Some(Enemy::new(Point { x: 130, y: 190 }));
+        *reinforcement = Some(Enemy::new(Point { x: 132, y: 190 }));
+        assert_eq!(cabinet.impact_cues(), 0);
+        cabinet.input_step(11, &[]);
+        assert!(cabinet.enemies().map(|enemy| enemy.health).eq([0, 0]));
+        assert_eq!(cabinet.impact_cues(), 2);
+        for tick in 12..100 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.impact_cues(), 2);
+    }
+
+    #[test]
     fn single_encounter_never_admits_reinforcements() {
         let mut encounter = Encounter::new(Point { x: 246, y: 190 }, false);
         encounter.admit(154);
@@ -1584,6 +1613,26 @@ mod tests {
         let [marge, ..] = cabinet.stations();
         assert_eq!(marge.health, 0);
         assert_eq!(marge.hurt_cues, 0);
+    }
+
+    #[test]
+    fn hurt_cues_survive_reset_and_count_a_new_session_hit() {
+        let result = playing(Point { x: 128, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        for tick in 3..17 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations().map(|slot| slot.hurt_cues), [1, 0, 0, 0]);
+        cabinet.reset_world();
+        assert_eq!(cabinet.stations().map(|slot| slot.hurt_cues), [1, 0, 0, 0]);
+        cabinet.input_step(17, &pulse(Control::Start));
+        for tick in 18..32 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations().map(|slot| slot.hurt_cues), [2, 0, 0, 0]);
     }
 
     #[test]

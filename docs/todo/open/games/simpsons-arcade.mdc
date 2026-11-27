@@ -3140,3 +3140,19 @@ reinforcement meters, one defeat-impact cue and four distinct
 ground-hit station cues, without repeated cue admission on an
 unchanged simulation state. Physical listening, original mixing
 contention and exact sound parity remain open.
+
+The rebuilt asset-free WebAssembly package passed its receipt check with
+88 files and 1,564,501 bytes. Two original-backed isolated Firefox
+launches used the trusted directory picker and virtual audio sink.
+The first launch verified independent music mute, attack output and
+persisted effects at 75 percent. The second reopened with music still
+muted: 17,152 initially submitted left-channel samples were zero.
+With no attack input, the subsequent idle encounter submitted 1,024
+nonzero samples before restoring music. This isolates the new light-hit
+path from attack cues and music. Both launches closed the audio context
+and frame loop. These observations establish browser PCM submission,
+not physical audibility or original channel contention.
+
+Two core regressions additionally exercise two simultaneous defeats
+from one ground strike without duplicate cues on later ticks, and a
+station's monotonic hurt count across world reset and another hit.
