@@ -46,15 +46,16 @@ use crate::{BONUS_MAX_INFLATION, Bonus, BonusPhase, Player};
 const HEADER_WIDTH: u16 = 288;
 const PLATE_HEIGHT: u16 = 12;
 const RANK_WIDTH: u16 = 48;
-const PHASE_KEYS: [&str; 5] = [
+const PHASE_KEYS: [&str; 6] = [
     "title.bonus.instructions",
     "title.bonus.ready",
     "title.bonus.pumping",
     "title.bonus.results",
     "title.bonus.complete",
+    "title.bonus.stage_two",
 ];
 const RANKS: [&str; 4] = ["1", "2", "3", "4"];
-const HEADER_BYTES: usize = 288 * 12 * 5 * 4;
+const HEADER_BYTES: usize = 288 * 12 * PHASE_KEYS.len() * 4;
 const RANK_BYTES: usize = 48 * 12 * 4 * 4;
 
 pub(super) const ATLAS_BYTES: usize =
@@ -241,15 +242,20 @@ impl BonusArt {
             BonusPhase::Pumping => 2,
             BonusPhase::Results => 3,
             BonusPhase::Complete => 4,
+            BonusPhase::StageCard => 5,
         };
-        draws.push(self.background.draw(self.background.rect, false));
-        for player in Player::ALL {
-            self.queue_player(bonus, (player, digits), draws)?;
-        }
         let header = self
             .headers
             .get(language)
             .ok_or(RenderError::InvalidSprite)?;
+        if bonus.phase() == BonusPhase::StageCard {
+            draws.push(header.draw(phase, 16, 100)?);
+            return Ok(());
+        }
+        draws.push(self.background.draw(self.background.rect, false));
+        for player in Player::ALL {
+            self.queue_player(bonus, (player, digits), draws)?;
+        }
         draws.push(header.draw(phase, 16, 12)?);
         if let Some(countdown) = bonus.countdown() {
             station_hud::queue_centiseconds(

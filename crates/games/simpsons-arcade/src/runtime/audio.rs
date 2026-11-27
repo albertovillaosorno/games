@@ -349,7 +349,9 @@ impl MusicCue {
                     Self::Victory
                 },
                 BonusPhase::Victory => Self::Transition,
-                BonusPhase::Complete | BonusPhase::Ready => Self::Quiet,
+                BonusPhase::Complete
+                | BonusPhase::Ready
+                | BonusPhase::StageCard => Self::Quiet,
             };
         }
         if cabinet.wrestler().is_some_and(|wrestler| {
@@ -1091,7 +1093,16 @@ impl Playback {
         if self.music.stage_two.is_none() {
             return Ok(());
         }
-        cabinet.input_step(0, &[]);
+        for tick in 0..200 {
+            cabinet.input_step(tick, &[]);
+            self.update(cabinet)?;
+            if cabinet.stage_two() {
+                break;
+            }
+            if self.music.cue != MusicCue::Quiet {
+                return Err(failure("stage card was not quiet"));
+            }
+        }
         self.update(cabinet)?;
         if !cabinet.stage_two()
             || self.music.cue != MusicCue::StageTwo

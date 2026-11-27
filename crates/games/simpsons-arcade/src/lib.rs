@@ -786,6 +786,25 @@ impl Cabinet {
         }
     }
 
+    fn advance_bonus(&mut self, presses: [bool; 4]) -> bool {
+        let Some(bonus) = &mut self.bonus else {
+            return false;
+        };
+        if let Some(limit) = self.stage_two_limit
+            && matches!(
+                bonus.phase(),
+                BonusPhase::Complete | BonusPhase::StageCard
+            )
+        {
+            if bonus.advance_stage_card(presses) {
+                self.enter_stage_two(limit);
+            }
+        } else {
+            bonus.advance(presses);
+        }
+        true
+    }
+
     fn advance_camera(&mut self) {
         if let Some(tick) = self.late_backdrop_tick {
             self.late_backdrop_tick =
@@ -1049,14 +1068,7 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
-        if let Some(bonus) = &mut self.bonus {
-            if bonus.phase() == BonusPhase::Complete
-                && let Some(limit) = self.stage_two_limit
-            {
-                self.enter_stage_two(limit);
-            } else {
-                bonus.advance(pending.map(|queued| queued.button_edges != 0));
-            }
+        if self.advance_bonus(pending.map(|queued| queued.button_edges != 0)) {
             return;
         }
         let [marge, ..] = pending;
@@ -3278,6 +3290,14 @@ mod tests {
     fn assert_stage_two_handoff(mut state: Cabinet) {
         let before = state.stations();
         state.input_step(4002, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::StageCard)
+        );
+        assert_card_input_gate(state);
+        advance_empty(&mut state, 4003..4194);
+        assert!(!state.stage_two());
+        state.input_step(4194, &[]);
         assert!(state.stage_two());
         assert_eq!(state.camera_origin(), 0);
         assert_eq!(state.bonus(), None);
@@ -3285,6 +3305,28 @@ mod tests {
         assert_eq!(state.enemies().count(), 2);
         assert_stage_two_stations(&before, &state.stations());
         assert_stage_two_restart(state);
+    }
+
+    fn assert_card_input_gate(mut state: Cabinet) {
+        state.input_step(4003, &[change(
+            Player::Marge,
+            Control::Primary,
+            true,
+        )]);
+        advance_empty(&mut state, 4004..4068);
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::StageCard)
+        );
+        state.input_step(4068, &[change(
+            Player::Marge,
+            Control::Primary,
+            false,
+        )]);
+        state.input_step(4069, &pulse(Player::Bart, Control::Primary));
+        assert!(!state.stage_two());
+        state.input_step(4070, &pulse(Player::Marge, Control::Secondary));
+        assert!(state.stage_two());
     }
 
     fn assert_stage_two_stations(before: &[Station; 4], after: &[Station; 4]) {
@@ -3298,7 +3340,7 @@ mod tests {
     }
 
     fn assert_stage_two_restart(mut state: Cabinet) {
-        state.input_step(4003, &pulse(Player::Marge, Control::Primary));
+        state.input_step(4195, &pulse(Player::Marge, Control::Primary));
         assert_ne!(
             state.stations().first().map(|station| station.maneuver),
             Some(Maneuver::Idle)

@@ -4548,3 +4548,31 @@ departure motion, exact scaling and subsequent stage-cue timing remain
 unresolved. Regression coverage checks delayed rank and point readouts,
 input-independent results, visual growth without scoring changes and
 staggered departures.
+
+The optimized 3,982,416-byte Linux build passed the original-backed
+full-campaign offscreen render, synthetic touch and dummy-audio smoke in
+all five display modes. The bonus readback checks now sample the initial
+result, rank reveal, counted score and departure separately. All 600
+movement and 20 strike submissions per mode met the 16.667 ms budget;
+whole-smoke peak RSS ranged from 180,887,552 to 181,317,632 bytes.
+
+### Second-stage title-card input gate
+
+Static analysis identifies a logical 192-tick title-card counter and an
+input gate at 64 ticks. Three isolated replay controls preserve the
+neutral bonus outcome: a single early edge and a button held across the
+gate both leave the original title card at its normal timeout. A fresh
+edge after the gate changes the original card-to-entry delay by 125
+frames. The neutral bonus completion-to-stage cue delay is 204 frames;
+the late-edge control reduces it to 79. A further observed stage setup
+and scripted entrance precede the next stable stage phase.
+
+The optional native second-stage selection now holds a separate,
+localized title card with a 65-tick fresh-edge gate and 192-tick timeout.
+It remains quiet and freezes street simulation; absent stations cannot
+skip it. The final result remains stable for legacy selections without
+Stage 2. On admission, the existing stage music and playable stage reset
+are retained. Native uses a simple localized title instead of the
+unrecovered original card art and omits the original scheduler overhead,
+stage setup and scripted entrance. This is the logical input gate, not
+exact stage-cue timing or second-stage gameplay parity.

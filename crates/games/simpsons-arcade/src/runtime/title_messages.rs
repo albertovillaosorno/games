@@ -76,6 +76,7 @@ messages! {
         "RESULTADOS - PUESTO / PUNTOS";
     "title.bonus.complete" => "BONUS COMPLETE",
         "BONO COMPLETADO";
+    "title.bonus.stage_two" => "STAGE 2", "ETAPA 2";
     "title.action.pause" => "PAUSE", "PAUSA";
     "title.action.start" => "START", "INICIO";
     "title.action.primary" => "PRIMARY", "PRINCIPAL";

@@ -739,6 +739,31 @@ fn verify_bonus_results(
     Ok(())
 }
 
+fn verify_stage_card(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    before: &[u8],
+) -> Result<(), RenderError> {
+    advance(simulation, 1)?;
+    if simulation.state().bonus().map(Bonus::phase)
+        != Some(BonusPhase::StageCard)
+    {
+        return Err(failure("second-stage card was not admitted"));
+    }
+    let _card = art.present(scene, simulation.state())?;
+    if before == scene.readback()? {
+        return Err(failure("second-stage card did not change readback"));
+    }
+    advance(simulation, 191)?;
+    if simulation.state().bonus().map(Bonus::phase)
+        != Some(BonusPhase::StageCard)
+    {
+        return Err(failure("second-stage card ended before its timeout"));
+    }
+    advance(simulation, 1)
+}
+
 fn smoke_stage_two(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -749,7 +774,8 @@ fn smoke_stage_two(
         return Ok(());
     };
     let before = scene.readback()?;
-    advance(simulation, 1)?;
+    verify_stage_card(scene, art, simulation, &before)?;
+    let card_pixels = scene.readback()?;
     let entry = simulation.state();
     if !entry.stage_two()
         || entry.camera_origin() != 0
@@ -761,7 +787,7 @@ fn smoke_stage_two(
     let impacts = entry.impact_cues();
     let _entry = art.present(scene, entry)?;
     let entry_pixels = scene.readback()?;
-    if before == entry_pixels {
+    if card_pixels == entry_pixels {
         return Err(failure("second-stage entry did not change readback"));
     }
     let limit = i16::try_from(stage.world.scroll_limit()?).map_err(failure)?;

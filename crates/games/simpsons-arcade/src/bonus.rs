@@ -49,6 +49,8 @@ const RESULT_COUNT_TICKS: u16 = 4;
 const RESULT_INFLATION_TARGET: u16 = 192;
 const RESULT_EXIT_STAGGER: u16 = 15;
 const RESULT_EXIT_TICKS: u16 = 160;
+const STAGE_CARD_MIN_TICKS: u16 = 65;
+const STAGE_CARD_MAX_TICKS: u16 = 192;
 const REST_TICKS: u8 = 16;
 const INVERSE_BASE: u16 = 0xb000;
 const MIN_WIDTH: u16 = 0x4000;
@@ -62,7 +64,7 @@ pub const BONUS_MAX_INFLATION: u8 = 64;
 /// Fixed-step phase of the optional first bonus.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BonusPhase {
-    /// Results remain available until the session is restarted.
+    /// Results remain available when no subsequent stage is selected.
     Complete,
     /// Explain the button-pumping interaction.
     Instructions,
@@ -72,6 +74,8 @@ pub enum BonusPhase {
     Ready,
     /// Reveal ranked scores, inflate balloons and depart.
     Results,
+    /// Await the next stage through a bounded, skippable title card.
+    StageCard,
     /// Hold the cleared street before the bonus.
     Victory,
 }
@@ -313,15 +317,11 @@ pub struct Bonus {
 
 impl Bonus {
     pub(super) fn advance(&mut self, presses: [bool; 4]) {
-        if self.phase == BonusPhase::Complete {
+        if matches!(self.phase, BonusPhase::Complete | BonusPhase::StageCard) {
             return;
         }
         self.tick = self.tick.saturating_add(1);
-        let any_edge = self
-            .participants
-            .iter()
-            .zip(presses)
-            .any(|(admitted, pressed)| *admitted && pressed);
+        let any_edge = self.any_admitted_edge(presses);
         let next = match self.phase {
             BonusPhase::Victory if self.tick >= VICTORY_TICKS => {
                 BonusPhase::Instructions
@@ -340,6 +340,7 @@ impl Bonus {
             BonusPhase::Complete
             | BonusPhase::Instructions
             | BonusPhase::Ready
+            | BonusPhase::StageCard
             | BonusPhase::Victory => self.phase,
         };
         if next != self.phase {
@@ -356,6 +357,26 @@ impl Bonus {
         } else {
             BonusPhase::Results
         }
+    }
+
+    /// Advance only when the optional next stage is configured.
+    pub(super) fn advance_stage_card(&mut self, presses: [bool; 4]) -> bool {
+        if self.phase == BonusPhase::Complete {
+            self.phase = BonusPhase::StageCard;
+            self.tick = 0;
+            return false;
+        }
+        self.tick = self.tick.saturating_add(1);
+        self.tick >= STAGE_CARD_MAX_TICKS
+            || (self.tick >= STAGE_CARD_MIN_TICKS
+                && self.any_admitted_edge(presses))
+    }
+
+    fn any_admitted_edge(self, presses: [bool; 4]) -> bool {
+        self.participants
+            .iter()
+            .zip(presses)
+            .any(|(admitted, pressed)| *admitted && pressed)
     }
 
     /// The displayed pumping countdown in centiseconds, if pumping.
