@@ -3290,3 +3290,28 @@ chooser and ordinary browser ingress. It performed four WebGL
 readbacks and blits, verified both scenic actors at ticks 38 and 96,
 released the canvas, and made no preference writes. This verifies
 browser composition, not physical controller or display acceptance.
+
+### Extended late encounter controls
+
+Independent 240-second original-machine replays preserve the
+same late encounter admission and diverge only in later control
+effects. With Right and Primary stopped immediately after admission,
+one initially descending group matches 658 normalized records
+through the last common sample; the other matches 2,868 records
+and settles exactly 135 ticks after admission. Neither group
+has a verified collision, damage or defeat contract.
+
+Fifty-three of 70 consecutive dense observations reconstruct all
+71,680 pixels exactly. One settled observation permits strict
+publication of two separate composite crops: 115 by 107 at raster
+origin (102, 23), and 253 by 56 at (37, 0). The latter extends
+across the upper raster and exceeds the existing scenic art extent.
+The rejected observations remain excluded. Both crops remain
+private and unselected, with no runtime classification or
+placement change.
+
+The extended continuing-input and stopped-input runs leave the
+late scene at different sampled times. Neither establishes boss
+defeat, a successful stage transition or the corresponding player
+stock and continue outcome. Do not interpret the subsequent raw
+scroll register as continuous street travel.
