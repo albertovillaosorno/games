@@ -75,3 +75,32 @@ mandate. Simpsons Arcade is the first integration and must demonstrate
 its declared supported locales before the next catalogue title begins.
 The shared importer remains the sole admission path for localised
 original media; authored messages may be bundled as authored data.
+
+Shared infrastructure progress, 2026-11-26:
+
+- `88b5429`: compact Unicode bitmap glyphs, accent composition and visible
+  replacement coverage for unsupported characters. This is not general
+  script shaping or bidirectional layout.
+- `fe07b01`: bounded locale and catalogue admission, atomic versioned
+  UTF-8 loading, exact completeness checks, deterministic fallback and
+  typed named parameters with explicit output budgets. Locale admission
+  covers language, script, region and variant subtags; extensions, private
+  use and registry alias canonicalisation are not yet admitted.
+- `13a7db9`: shared menu keys, optional English and Mexican Spanish
+  resources, catalogue-driven headings and rows, typed settings values.
+- `ff33ba9`: shared control editor catalogue with translated static and
+  dynamic labels, including scale reduction for long labels.
+- `10bb423`: canonical locale preference codec and atomic locale store
+  using the existing shared persistence contract.
+- `5f18af3`: title-configured optional language selection, deterministic
+  index cycling, exact menu atlas accounting and a seven-row settings
+  layout test.
+
+All above changes passed `cargo validate`, including the final fresh
+commit-hook run and WebAssembly smoke builds. The task remains open:
+the title does not yet load its declared catalogues, switch the actual
+runtime menu/editor atlases, restore or publish locale preferences on
+native and browser paths, or localise all required title surfaces.
+The title's own supported-language declaration, integrated readbacks,
+persistence and presentation-mode checks are next. No gameplay parity,
+full script support or title localisation acceptance is claimed.
