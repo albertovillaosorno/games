@@ -51,7 +51,7 @@ use games_platform::ir::ui::editor::{
 
 use super::{
     MENU_HEIGHT, MENU_WIDTH, PreviewOptions, Profiles, WindowSwitching,
-    failure, key_label, size,
+    failure, key_label, size, station_hud,
 };
 
 macro_rules! messages {
@@ -150,6 +150,7 @@ pub(super) struct ArtLimits {
 pub(super) struct LocaleArt {
     catalog: Rc<TranslationCatalog>,
     pub(super) editor: Option<ControlEditorArt>,
+    pub(super) hud: station_hud::StationHud,
     locale: LocaleTag,
     pub(super) menu: MenuArt,
 }
@@ -174,9 +175,19 @@ impl LocaleArt {
             LOCALES.get(index).ok_or(RenderError::InvalidSprite)?;
         let menu = load_menu(scene, name, options, text)?;
         let editor = load_editor(scene, options, &catalog, &locale)?;
+        let hud = station_hud::StationHud::load_localised(
+            scene,
+            &options.preview.controls.profiles,
+            options.reserved,
+            station_hud::StationText {
+                catalog: &catalog,
+                locale: &locale,
+            },
+        )?;
         Ok(Self {
             catalog,
             editor,
+            hud,
             locale,
             menu,
         })
@@ -233,7 +244,8 @@ pub(super) fn catalogue() -> Result<Rc<TranslationCatalog>, RenderError> {
             LOCALES.len().saturating_mul(
                 KEYS.len()
                     .saturating_add(MENU_MESSAGE_KEYS.len())
-                    .saturating_add(editor_message_keys().count()),
+                    .saturating_add(editor_message_keys().count())
+                    .saturating_add(station_hud::STATION_MESSAGE_KEYS.len()),
             ),
         )?,
         utf8_bytes: size(32_768)?,
@@ -245,11 +257,18 @@ pub(super) fn catalogue() -> Result<Rc<TranslationCatalog>, RenderError> {
             .map_err(|_error| RenderError::InvalidSprite)?;
         let editor = register_editor_messages(&mut catalog, &locale)
             .map_err(|_error| RenderError::InvalidSprite)?;
+        let station =
+            station_hud::register_station_messages(&mut catalog, &locale)
+                .map_err(failure)?;
         catalog
             .load_locale(tag, payload.as_bytes())
             .map_err(|_error| RenderError::InvalidSprite)?;
         if !menu
             || !editor
+            || !station
+            || catalog
+                .first_missing(&locale, station_hud::STATION_MESSAGE_KEYS)
+                .is_some()
             || catalog.first_missing(&locale, KEYS).is_some()
             || catalog.first_missing(&locale, MENU_MESSAGE_KEYS).is_some()
             || editor_message_keys()
@@ -332,8 +351,9 @@ pub(super) fn art_limits(
     ArtLimits {
         atlas_bytes: menu
             .saturating_add(editor_bytes)
+            .saturating_add(station_hud::atlas_bytes(reserved))
             .saturating_mul(LOCALES.len()),
-        atlases: 2usize
+        atlases: 3usize
             .saturating_add(editor_atlases)
             .saturating_mul(LOCALES.len()),
         sprites: editor_sprites.saturating_add(1),
@@ -503,7 +523,7 @@ const fn main_menu_keys(hosted: bool) -> [&'static str; 4] {
     }
 }
 
-const fn mouse_key(button: PointerButton) -> &'static str {
+pub(super) const fn mouse_key(button: PointerButton) -> &'static str {
     match button {
         PointerButton::Left => "title.binding.mouse.left",
         PointerButton::Middle => "title.binding.mouse.middle",

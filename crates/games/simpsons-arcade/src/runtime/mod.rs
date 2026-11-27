@@ -591,7 +591,6 @@ struct Scene {
     background: Art,
     combat: Option<encounter::CombatArt>,
     draws: Vec<SpriteDraw>,
-    hud: station_hud::StationHud,
     locales: Vec<title_messages::LocaleArt>,
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
@@ -647,7 +646,6 @@ impl Scene {
                     usize::from(source.shadow.is_some()).saturating_mul(4),
                 ),
             ),
-            hud: station_hud::StationHud::load(scene, profiles, reserved)?,
             locales: title_messages::load_art(
                 scene,
                 world_art.is_some(),
@@ -691,7 +689,12 @@ impl Scene {
         self.draws.clear();
         self.queue_background(cabinet, view)?;
         self.world.clear();
-        self.queue_visible_stations(cabinet, view)?;
+        let hud = self
+            .locales
+            .get(cabinet.session().language_index())
+            .ok_or(RenderError::InvalidSprite)?
+            .hud;
+        self.queue_visible_stations(cabinet, view, hud)?;
         self.queue_enemy_sprites(cabinet, view)?;
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
@@ -706,7 +709,7 @@ impl Scene {
             for (seat, character) in
                 Player::ALL.into_iter().zip(cabinet.choices())
             {
-                let mut choice = self.hud.draw_choice(seat, character)?;
+                let mut choice = hud.draw_choice(seat, character)?;
                 choice.destination.y =
                     choice.destination.y.saturating_add(shift);
                 choice.destination.x = choice
@@ -894,10 +897,10 @@ impl Scene {
         &mut self,
         (player, seat): (Player, Player),
         (station, paired): (Station, bool),
-        view: world::View,
+        (view, hud): (world::View, station_hud::StationHud),
     ) -> Result<(), RenderError> {
         let offset = world::station_offset(view.width, player)?;
-        let prompted = self.hud.queue(
+        let prompted = hud.queue(
             (player, seat),
             (station.participation, offset),
             &mut self.draws,
@@ -950,6 +953,7 @@ impl Scene {
         &mut self,
         cabinet: &Cabinet,
         view: world::View,
+        hud: station_hud::StationHud,
     ) -> Result<(), RenderError> {
         if !cabinet.session().world_visible() {
             return Ok(());
@@ -963,7 +967,11 @@ impl Scene {
             let paired =
                 cabinet.pair_pose(Pair::for_player(character)).is_some()
                     || station.maneuver == Maneuver::Restrained;
-            self.queue_station((character, seat), (station, paired), view)?;
+            self.queue_station(
+                (character, seat),
+                (station, paired),
+                (view, hud),
+            )?;
         }
         self.queue_pairs(cabinet, view)
     }
@@ -1537,7 +1545,9 @@ impl Interactive {
         self.persist_preferences(session)?;
         let hosted = self.simulation.state();
         let cabinet = hosted.state();
-        art.hud.update_connections(hosted.connected_remotes());
+        for locale in &mut art.locales {
+            locale.hud.update_connections(hosted.connected_remotes());
+        }
         if let Some(audio) = playback {
             audio.update(cabinet)?;
         }
@@ -1773,7 +1783,6 @@ const fn mouse_label(button: PointerButton) -> &'static str {
         PointerButton::X2 => "X2",
     }
 }
-
 fn key_label(key: KeyboardKey) -> &'static str {
     if key == KeyboardKey::ENTER {
         "ENTER"
@@ -3329,9 +3338,8 @@ fn scene_limits(
     let language = title_messages::art_limits(options, reserved);
     Ok(SceneLimits {
         atlas_bytes: size(
-            2_317_632usize
+            2_096_448usize
                 .saturating_add(language.atlas_bytes)
-                .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
                     touch::extra_bytes(&options.controls.profiles)
                 } else {
@@ -3350,7 +3358,7 @@ fn scene_limits(
                 .saturating_add(shadows)
                 .saturating_add(language.atlases)
                 .saturating_add(
-                    6usize.saturating_add(usize::from(touch_enabled)),
+                    5usize.saturating_add(usize::from(touch_enabled)),
                 ),
         )?,
         sprites: size(

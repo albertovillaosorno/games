@@ -31,13 +31,19 @@
 
 //! Station join, verified remote status and free-rejoin presentation.
 
+mod messages;
+
 use games::input::physical::{ControllerButton, KeyboardKey, PointerButton};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
+pub(super) use messages::{
+    STATION_MESSAGE_KEYS, StationText, register_station_messages,
+};
+use messages::{number, text};
 
-use super::{Profiles, failure, key_label, mouse_label, size};
+use super::{Profiles, failure, key_label, size, title_messages};
 use crate::{CONTINUE_TICKS, Participation, Player};
 
 const WIDTH: u16 = 64;
@@ -52,6 +58,8 @@ const INK: [u8; 4] = [248, 228, 168, 255];
 pub(super) const NAMES: [&str; 4] = ["MARGE", "HOMER", "BART", "LISA"];
 
 type OfflineTiles = ([Option<usize>; 4], Option<usize>);
+type LabelsAndPrompts<'text> = (&'text [String], &'text [String]);
+type Plates<'text> = Vec<Vec<TextLine<'text>>>;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StationHud {
@@ -110,10 +118,11 @@ impl StationHud {
         )
     }
 
-    pub(super) fn load(
+    pub(super) fn load_localised(
         scene: &mut SceneSession<'_, '_>,
         profiles: &Profiles,
         reserved: [bool; 4],
+        messages: StationText<'_>,
     ) -> Result<Self, RenderError> {
         let joins: Vec<_> = profiles
             .keys
@@ -121,26 +130,21 @@ impl StationHud {
             .zip(profiles.buttons)
             .zip(profiles.mouse)
             .map(|(([_, key, ..], [_, button, ..]), [_, mouse, ..])| {
-                join_hints(key, mouse, button)
+                join_hints(key, mouse, button, messages)
             })
-            .collect();
-        let prompts = (1..=LAST_SECONDS)
-            .map(|seconds| format!("REJOIN{seconds:02}"))
-            .collect::<Vec<_>>();
-        let labels = Player::ALL
-            .into_iter()
-            .flat_map(|seat| {
-                NAMES.map(|name| {
-                    format!("P{} {name}", seat.index().saturating_add(1))
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut plates = join_plates(&labels, &joins, reserved);
+            .collect::<Result<_, _>>()?;
+        let prompts = rejoin_prompts(messages)?;
+        let labels = station_labels(messages)?;
+        let mut plates = join_plates(&labels, &joins, reserved, messages)?;
         for timer in &prompts {
             plates.push(plate(timer, ""));
         }
-        let (offline_joins, offline_rejoin) =
-            offline_plates(&mut plates, reserved, &labels, &prompts);
+        let (offline_joins, offline_rejoin) = offline_plates(
+            &mut plates,
+            reserved,
+            (&labels, &prompts),
+            messages,
+        )?;
         Ok(Self {
             atlas: TextAtlas::load(
                 scene,
@@ -184,7 +188,38 @@ impl StationHud {
     }
 }
 
-fn atlas_bytes(reserved: [bool; 4]) -> usize {
+fn rejoin_prompts(
+    messages: StationText<'_>,
+) -> Result<Vec<String>, RenderError> {
+    (1..=LAST_SECONDS)
+        .map(|seconds| {
+            messages.format("station.rejoin", &[text(
+                "seconds",
+                &format!("{seconds:02}"),
+            )])
+        })
+        .collect()
+}
+
+fn station_labels(
+    messages: StationText<'_>,
+) -> Result<Vec<String>, RenderError> {
+    Player::ALL
+        .into_iter()
+        .flat_map(|seat| {
+            NAMES.map(|name| {
+                let player = u64::try_from(seat.index().saturating_add(1))
+                    .map_err(failure)?;
+                messages.format("station.character", &[
+                    number("seat", player),
+                    text("name", name),
+                ])
+            })
+        })
+        .collect()
+}
+
+pub(super) fn atlas_bytes(reserved: [bool; 4]) -> usize {
     bytes(JOIN_TILES.saturating_add(usize::from(LAST_SECONDS)))
         .saturating_add(extra_bytes(reserved))
 }
@@ -196,7 +231,7 @@ fn bytes(plates: usize) -> usize {
         .saturating_mul(4)
 }
 
-pub(super) fn extra_bytes(reserved: [bool; 4]) -> usize {
+fn extra_bytes(reserved: [bool; 4]) -> usize {
     let remotes = reserved.into_iter().filter(|remote| *remote).count();
     if remotes == 0 {
         return 0;
@@ -211,9 +246,11 @@ pub(super) fn extra_bytes(reserved: [bool; 4]) -> usize {
 fn offline_plates<'text>(
     plates: &mut Vec<Vec<TextLine<'text>>>,
     reserved: [bool; 4],
-    labels: &'text [String],
-    prompts: &'text [String],
-) -> OfflineTiles {
+    (labels, prompts): LabelsAndPrompts<'text>,
+    messages: StationText<'text>,
+) -> Result<OfflineTiles, RenderError> {
+    let remote_offline = messages.literal("station.remote.offline")?;
+    let offline = messages.literal("station.offline")?;
     let mut bases = [None; 4];
     for ((base, names), remote) in bases
         .iter_mut()
@@ -223,27 +260,29 @@ fn offline_plates<'text>(
         if remote {
             *base = Some(plates.len());
             for name in names {
-                plates.push(plate(name, "REMOTE OFFLINE"));
+                plates.push(plate(name, remote_offline));
             }
         }
     }
     let rejoin = if reserved.contains(&true) {
         let base = plates.len();
         for hint in prompts {
-            plates.push(plate(hint, "OFFLINE"));
+            plates.push(plate(hint, offline));
         }
         Some(base)
     } else {
         None
     };
-    (bases, rejoin)
+    Ok((bases, rejoin))
 }
 
 fn join_plates<'text>(
     labels: &'text [String],
     joins: &'text [Vec<String>],
     reserved: [bool; 4],
-) -> Vec<Vec<TextLine<'text>>> {
+    messages: StationText<'text>,
+) -> Result<Plates<'text>, RenderError> {
+    let remote_start = messages.literal("station.remote.start")?;
     let mut plates = Vec::with_capacity(JOIN_TILES);
     for ((names, hints), remote) in labels
         .as_chunks::<{ NAMES.len() }>()
@@ -253,12 +292,12 @@ fn join_plates<'text>(
         .zip(reserved)
     {
         if remote {
-            plates.extend(names.iter().map(|name| plate(name, "REMOTE START")));
+            plates.extend(names.iter().map(|name| plate(name, remote_start)));
         } else {
             plates.extend(names.iter().map(|name| binding_plate(name, hints)));
         }
     }
-    plates
+    Ok(plates)
 }
 
 fn station_x(player: Player) -> Result<i32, RenderError> {
@@ -270,38 +309,76 @@ fn join_hints(
     key: Option<KeyboardKey>,
     mouse: Option<PointerButton>,
     controller: ControllerButton,
-) -> Vec<String> {
+    messages: StationText<'_>,
+) -> Result<Vec<String>, RenderError> {
     let mut hints = Vec::with_capacity(3);
     if let Some(binding) = key {
-        hints.push(binding_hint("JOIN", key_label(binding)));
+        hints.push(binding_hint("station.join", key_label(binding), messages)?);
     } else if mouse.is_none() {
-        hints.push(String::from("JOIN NONE"));
+        hints.push(String::from(messages.literal("station.join.none")?));
     }
     if let Some(button) = mouse {
-        hints.push(binding_hint("MOUSE", mouse_label(button)));
+        hints.push(binding_hint(
+            "station.mouse",
+            messages.literal(title_messages::mouse_key(button))?,
+            messages,
+        )?);
     }
-    hints.push(binding_hint("PAD", controller.profile_name()));
-    hints
+    hints.push(binding_hint(
+        "station.pad",
+        controller.profile_name(),
+        messages,
+    )?);
+    Ok(hints)
 }
 
-fn binding_hint(prefix: &str, name: &str) -> String {
-    let compact = name.replace("Keypad ", "KP ");
-    let hint = format!("{prefix} {compact}");
-    if hint.len() <= 16 {
-        hint
-    } else if compact.len() <= 14 {
-        let short = if prefix == "PAD" {
-            "P"
-        } else {
-            "K"
-        };
-        format!("{short} {compact}")
-    } else if compact.len() <= 16 {
-        compact
+fn fits_hint(text: &str) -> bool {
+    TextLine {
+        color: INK,
+        scale: 1,
+        text,
+        top: 0,
+    }
+    .fit_width(WIDTH)
+    .scale
+        == 1
+}
+
+fn binding_hint(
+    key: &str,
+    name: &str,
+    messages: StationText<'_>,
+) -> Result<String, RenderError> {
+    let compact = if let Some(suffix) = name.strip_prefix("Keypad ") {
+        format!("{} {suffix}", messages.literal("station.keypad")?)
     } else {
-        // Some uncommon SDL names cannot fit the compact 64-pixel plate.
+        String::from(name)
+    };
+    let prefix = messages.literal(key)?;
+    let format = |kind, binding| {
+        messages.format("station.binding", &[
+            text("kind", kind),
+            text("binding", binding),
+        ])
+    };
+    let hint = format(prefix, &compact)?;
+    if fits_hint(&hint) {
+        return Ok(hint);
+    }
+    let short = if key == "station.pad" {
+        "station.short.pad"
+    } else {
+        "station.short.key"
+    };
+    let abbreviated = format(messages.literal(short)?, &compact)?;
+    if fits_hint(&abbreviated) {
+        Ok(abbreviated)
+    } else if fits_hint(&compact) {
+        Ok(compact)
+    } else {
+        // Some uncommon physical names cannot fit the compact plate.
         // Refer to the actual profile instead of suggesting a wrong key.
-        format!("{prefix} PROFILE")
+        format(prefix, messages.literal("station.profile")?)
     }
 }
 
@@ -463,6 +540,7 @@ pub(super) mod tests {
     fn check_local(
         scene: &mut SceneSession<'_, '_>,
         hud: &StationHud,
+        expected: &[TextLine<'_>],
     ) -> Result<(), RenderError> {
         let mut draws = Vec::new();
         if hud.queue(
@@ -493,12 +571,6 @@ pub(super) mod tests {
         for row in first.as_chunks::<STRIDE>().0.iter().skip(14).take(12) {
             check_binding_row(row, 248, 0, &[])?;
         }
-        let hints = [
-            String::from("JOIN F1"),
-            String::from("MOUSE RIGHT"),
-            String::from("P rightshoulder"),
-        ];
-        let expected = binding_plate("P1 LISA", &hints);
         for (row, pixels) in joined
             .as_chunks::<STRIDE>()
             .0
@@ -511,7 +583,7 @@ pub(super) mod tests {
                 pixels,
                 8,
                 u16::try_from(row).map_err(failure)?,
-                &expected,
+                expected,
             )?;
         }
         Ok(())
@@ -547,46 +619,142 @@ pub(super) mod tests {
         Ok(())
     }
 
-    #[test]
-    fn compact_binding_hints_preserve_ordinary_names() {
-        assert_eq!(binding_hint("JOIN", "Enter"), "JOIN Enter");
-        assert_eq!(binding_hint("JOIN", "Keypad Enter"), "JOIN KP Enter");
-        assert_eq!(binding_hint("PAD", "rightshoulder"), "P rightshoulder");
-        assert_eq!(
-            binding_hint("JOIN", "Keypad Memory Multiply"),
-            "JOIN PROFILE",
-        );
+    fn require(condition: bool, message: &str) -> Result<(), RenderError> {
+        condition.then_some(()).ok_or_else(|| failure(message))
     }
 
     #[test]
-    fn join_hints_show_admitted_mouse_and_keyboard_bindings() {
+    fn compact_hints_preserve_ordinary_names() -> Result<(), RenderError> {
+        let catalog = title_messages::catalogue()?;
+        let locale = title_messages::locale_tag(0)?;
+        let messages = StationText {
+            catalog: &catalog,
+            locale: &locale,
+        };
+        for (key, binding, expected) in [
+            ("station.join", "Enter", "JOIN Enter"),
+            ("station.join", "Keypad Enter", "JOIN KP Enter"),
+            ("station.pad", "rightshoulder", "P rightshoulder"),
+            ("station.join", "Keypad Memory Multiply", "JOIN PROFILE"),
+        ] {
+            require(
+                binding_hint(key, binding, messages)? == expected,
+                "incorrect compact English binding",
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn join_hints_show_admitted_mouse_and_keyboard_bindings()
+    -> Result<(), RenderError> {
+        let catalog = title_messages::catalogue()?;
+        let locale = title_messages::locale_tag(0)?;
+        let messages = StationText {
+            catalog: &catalog,
+            locale: &locale,
+        };
         let controller = ControllerButton::Start;
         let key = Some(KeyboardKey::ENTER);
         let mouse = Some(PointerButton::Right);
-        assert_eq!(join_hints(key, None, controller), [
-            "JOIN ENTER",
-            "PAD start"
-        ],);
-        assert_eq!(join_hints(None, mouse, controller), [
-            "MOUSE RIGHT",
-            "PAD start"
-        ],);
-        let both = join_hints(key, mouse, controller);
-        assert_eq!(both, ["JOIN ENTER", "MOUSE RIGHT", "PAD start"]);
+        require(
+            join_hints(key, None, controller, messages)?
+                == ["JOIN ENTER", "PAD start"],
+            "wrong keyboard-only hints",
+        )?;
+        require(
+            join_hints(None, mouse, controller, messages)?
+                == ["MOUSE RIGHT", "PAD start"],
+            "wrong mouse-only hints",
+        )?;
+        let both = join_hints(key, mouse, controller, messages)?;
+        require(
+            both == ["JOIN ENTER", "MOUSE RIGHT", "PAD start"],
+            "wrong mixed join hints",
+        )?;
         let plate = binding_plate("P1 MARGE", &both);
-        assert_eq!(plate.iter().map(|line| line.text).collect::<Vec<_>>(), [
-            "P1 MARGE",
-            "JOIN ENTER",
-            "MOUSE RIGHT",
-            "PAD start"
-        ],);
-        assert!(plate.iter().all(|line| {
-            line.scale > 0
-                && line.top.saturating_add(line.scale.saturating_mul(5))
-                    <= HEIGHT
-        }));
+        require(
+            plate.iter().map(|line| line.text).collect::<Vec<_>>()
+                == ["P1 MARGE", "JOIN ENTER", "MOUSE RIGHT", "PAD start"],
+            "wrong mixed plate lines",
+        )?;
+        require(
+            plate.iter().all(|line| {
+                line.scale > 0
+                    && line.top.saturating_add(line.scale.saturating_mul(5))
+                        <= HEIGHT
+            }),
+            "mixed plate exceeded its height",
+        )
     }
 
+    #[test]
+    fn mexican_spanish_preserves_station_identity_and_countdown()
+    -> Result<(), RenderError> {
+        let catalog = title_messages::catalogue()?;
+        let english = title_messages::locale_tag(0)?;
+        let spanish = title_messages::locale_tag(1)?;
+        for locale in [&english, &spanish] {
+            require(
+                catalog
+                    .first_missing(locale, STATION_MESSAGE_KEYS)
+                    .is_none(),
+                "missing station message",
+            )?;
+        }
+        let messages = StationText {
+            catalog: &catalog,
+            locale: &spanish,
+        };
+        let labels = station_labels(messages)?;
+        require(
+            labels.first().map(String::as_str) == Some("J1 MARGE")
+                && labels.last().map(String::as_str) == Some("J4 LISA"),
+            "translation changed station identity",
+        )?;
+        let prompts = rejoin_prompts(messages)?;
+        require(
+            prompts.first().map(String::as_str) == Some("VOLVER 01")
+                && prompts.len() == usize::from(LAST_SECONDS),
+            "translation changed countdown",
+        )?;
+        require(
+            messages.literal("station.offline")? == "SIN CONEXI\u{d3}N",
+            "missing offline label",
+        )
+    }
+
+    #[test]
+    fn mexican_spanish_bindings_fit_compact_station_plates()
+    -> Result<(), RenderError> {
+        let catalog = title_messages::catalogue()?;
+        let locale = title_messages::locale_tag(1)?;
+        let messages = StationText {
+            catalog: &catalog,
+            locale: &locale,
+        };
+        let hints = join_hints(
+            Some(KeyboardKey::ENTER),
+            Some(PointerButton::Right),
+            ControllerButton::RightShoulder,
+            messages,
+        )?;
+        require(
+            hints == ["UNIRSE ENTER", "RAT\u{d3}N DERECHO", "C rightshoulder"]
+                && hints.iter().all(|hint| fits_hint(hint)),
+            "wrong or oversized Spanish hints",
+        )?;
+        for (binding, expected) in [
+            ("Keypad Memory Multiply", "UNIRSE PERFIL"),
+            ("Keypad Enter", "UNIRSE NUM Enter"),
+        ] {
+            require(
+                binding_hint("station.join", binding, messages)? == expected,
+                "wrong compact Spanish binding",
+            )?;
+        }
+        Ok(())
+    }
     #[test]
     fn reserves_extra_plates_only_for_hosted_sessions() {
         assert_eq!(atlas_bytes([false; 4]), 221_184);
@@ -609,8 +777,8 @@ pub(super) mod tests {
         window.with_scene(
             layout,
             SceneLimits {
-                atlas_bytes: size(atlas_bytes(reserved))?,
-                atlases: size(1)?,
+                atlas_bytes: size(atlas_bytes(reserved).saturating_mul(2))?,
+                atlases: size(2)?,
                 sprites: size(2)?,
             },
             |scene| {
@@ -619,10 +787,43 @@ pub(super) mod tests {
                     "button 1 start=rightshoulder\nmouse 1 start=right\n",
                 ))
                 .map_err(failure)?;
-                let mut hud = StationHud::load(scene, &profiles, reserved)?;
-                check_remote(scene, &mut hud)?;
-                check_local(scene, &hud)
+                check_localised_stations(scene, &profiles, reserved)
             },
         )
+    }
+
+    fn check_localised_stations(
+        scene: &mut SceneSession<'_, '_>,
+        profiles: &Profiles,
+        reserved: [bool; 4],
+    ) -> Result<(), RenderError> {
+        let catalog = title_messages::catalogue()?;
+        for (index, name, hints) in [
+            (0usize, "P1 LISA", [
+                "JOIN F1",
+                "MOUSE RIGHT",
+                "P rightshoulder",
+            ]),
+            (1usize, "J1 LISA", [
+                "UNIRSE F1",
+                "RAT\u{d3}N DERECHO",
+                "C rightshoulder",
+            ]),
+        ] {
+            let locale = title_messages::locale_tag(index)?;
+            let mut hud = StationHud::load_localised(
+                scene,
+                profiles,
+                reserved,
+                StationText {
+                    catalog: &catalog,
+                    locale: &locale,
+                },
+            )?;
+            check_remote(scene, &mut hud)?;
+            let owned = hints.map(String::from);
+            check_local(scene, &hud, &binding_plate(name, &owned))?;
+        }
+        Ok(())
     }
 }
