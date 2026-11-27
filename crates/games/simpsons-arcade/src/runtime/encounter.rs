@@ -56,8 +56,8 @@ use super::{
 };
 use crate::{
     BONUS_MAX_INFLATION, Bonus, BonusPhase, CONTINUE_TICKS, Cabinet, Control,
-    DiagnosticIntent, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS, Enemy, EnemyAction,
-    FAR_STREET_ADMISSION, Facing, GROUND_ATTACK_RECOVERY_TICKS,
+    DiagnosticIntent, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS, Encounter, Enemy,
+    EnemyAction, FAR_STREET_ADMISSION, Facing, GROUND_ATTACK_RECOVERY_TICKS,
     LATER_COMBAT_GATE, MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE,
     MID_STREET_ENEMY_COUNT, Maneuver, OPPOSING_ENEMY_COUNT, PLAYER_HEALTH,
     PLAYER_STOCKS, Participation, Phase, Player, Point, REFILL_TICKS,
@@ -513,7 +513,7 @@ fn smoke_reinforcements(
         (LATER_COMBAT_GATE, OPPOSING_ENEMY_COUNT),
         (MID_STREET_ADMISSION, 10),
         (MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT),
-        (FAR_STREET_ADMISSION, ENEMY_CAPACITY),
+        (FAR_STREET_ADMISSION, Encounter::FIRST_STREET_ENEMY_COUNT),
     ] {
         if i16::try_from(limit).map_err(failure)? < gate {
             break;
@@ -587,7 +587,7 @@ fn smoke_later_reinforcements(
     {
         return Err(failure("later encounter was not reached through combat"));
     }
-    let mut seen = [false; ENEMY_CAPACITY - 1];
+    let mut seen = [false; Encounter::FIRST_STREET_ENEMY_COUNT - 1];
     for checked in seen.iter_mut().take(verified) {
         *checked = true;
     }
@@ -802,6 +802,13 @@ fn smoke_stage_two(
             && cabinet.impact_cues() > impacts
             && cabinet.enemies().all(|enemy| enemy.health == 0)
         {
+            if cabinet.enemies().count()
+                != Encounter::stage_two_enemy_count(limit)
+            {
+                return Err(failure(
+                    "second-stage admission count differs from route",
+                ));
+            }
             let _drawn = art.present(scene, cabinet)?;
             if entry_pixels == scene.readback()? {
                 return Err(failure(
@@ -1165,7 +1172,7 @@ fn walk_reinforcements(
     (controls, simulation): (&mut Controls, &mut LiveSimulation<Cabinet>),
     (target, expected): (i16, usize),
 ) -> Result<(), RenderError> {
-    let mut seen = [false; ENEMY_CAPACITY - 1];
+    let mut seen = [false; Encounter::FIRST_STREET_ENEMY_COUNT - 1];
     for checked in seen.iter_mut().take(expected.saturating_sub(1)) {
         *checked = true;
     }
@@ -1326,7 +1333,10 @@ fn verify_reinforcements(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     simulation: &mut LiveSimulation<Cabinet>,
-    (expected, seen): (usize, &mut [bool; ENEMY_CAPACITY - 1]),
+    (expected, seen): (
+        usize,
+        &mut [bool; Encounter::FIRST_STREET_ENEMY_COUNT - 1],
+    ),
 ) -> Result<(), RenderError> {
     // The widest supported view determines offscreen arrival coordinates.
     // In a narrow view, a lone stationary player can lose a stock before
@@ -1357,7 +1367,7 @@ fn observe_reinforcements(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     cabinet: &Cabinet,
-    seen: &mut [bool; ENEMY_CAPACITY - 1],
+    seen: &mut [bool; Encounter::FIRST_STREET_ENEMY_COUNT - 1],
 ) -> Result<(), RenderError> {
     let _presented = art.present(scene, cabinet)?;
     let pixels = scene.readback()?;

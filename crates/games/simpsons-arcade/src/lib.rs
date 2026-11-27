@@ -79,7 +79,7 @@ const STRIP_VIEWPORT: StripViewport = StripViewport {
     side_inset: SIDE,
 };
 
-const ENEMY_CAPACITY: usize = 12;
+const ENEMY_CAPACITY: usize = Encounter::CAPACITY;
 const PLAYER_STRIKE: u8 = 10;
 const WRESTLER_ATTACK_STRIKE: u8 = 24;
 const OPENING_ENEMY_COUNT: usize = 7;

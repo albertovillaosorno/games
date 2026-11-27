@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - First-street enemy admission, approach, strike and defeat rules.
+//   - Street enemy admission, approach, strike and defeat rules.
 // - Must-Not:
 //   - Render, interpret original media or perform host I/O.
 // - Allows:
@@ -27,17 +27,16 @@
 // - Usage:
 //   - Opt in through Cabinet::with_opening_street or with_encounter.
 // - Defaults:
-//   - At most twelve enemies; no original combat parity claim.
+//   - Bounded per-stage enemy admission; no original combat parity claim.
 
-//! Provisional fixed-step encounter for the first street.
+//! Provisional fixed-step street encounters.
 
 use super::{
-    BASE_WIDTH, ENEMY_CAPACITY, Encounter, FAR_STREET_ADMISSION, Facing,
-    LATER_COMBAT_GATE, MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE,
-    MID_STREET_ENEMY_COUNT, Maneuver, OPENING_ENEMY_COUNT,
-    OPPOSING_ENEMY_COUNT, Player, Point, Slot, StreetLayout, distance,
-    hurt_slot, in_range, player_strike, step_toward, strip_width, view_origin,
-    viewport_width,
+    BASE_WIDTH, Encounter, FAR_STREET_ADMISSION, Facing, LATER_COMBAT_GATE,
+    MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT,
+    Maneuver, OPENING_ENEMY_COUNT, OPPOSING_ENEMY_COUNT, Player, Point, Slot,
+    StreetLayout, distance, hurt_slot, in_range, player_strike, step_toward,
+    strip_width, view_origin, viewport_width,
 };
 
 const ENEMY_HEALTH: u8 = 1;
@@ -63,7 +62,7 @@ const RESTRAINT_DAMAGE_INTERVAL: u8 = 48;
 // Anchors are approximate; the observed arrivals start outside the view.
 const RESTRAINT_THRESHOLD: i16 = 154;
 const OPENING_COMBAT_LIMIT: i16 = 362;
-const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
+const REINFORCEMENTS: &[(i16, Point)] = &[
     (50, Point { x: 334, y: 176 }),
     (82, Point { x: -18, y: 208 }),
     (RESTRAINT_THRESHOLD, Point { x: 334, y: 192 }),
@@ -78,7 +77,7 @@ const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
 ];
 
 // Provisional regular-enemy admissions from observed second-stage groups.
-const STAGE_TWO_REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
+const STAGE_TWO_REINFORCEMENTS: &[(i16, Point)] = &[
     (0, Point { x: 334, y: 176 }),
     (66, Point { x: -18, y: 192 }),
     (128, Point { x: 334, y: 192 }),
@@ -90,18 +89,34 @@ const STAGE_TWO_REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (698, Point { x: -18, y: 208 }),
     (722, Point { x: 334, y: 208 }),
     (730, Point { x: -18, y: 208 }),
+    (1258, Point { x: -18, y: 208 }),
+    (1330, Point { x: 334, y: 208 }),
+    (1330, Point { x: -18, y: 152 }),
+    (1362, Point { x: 334, y: 208 }),
+    (1370, Point { x: -18, y: 208 }),
 ];
 
 impl Encounter {
+    pub(super) const CAPACITY: usize =
+        if Self::FIRST_STREET_ENEMY_COUNT > Self::SECOND_STAGE_ENEMY_COUNT {
+            Self::FIRST_STREET_ENEMY_COUNT
+        } else {
+            Self::SECOND_STAGE_ENEMY_COUNT
+        };
+    pub(super) const FIRST_STREET_ENEMY_COUNT: usize =
+        REINFORCEMENTS.len().saturating_add(1);
+    const SECOND_STAGE_ENEMY_COUNT: usize =
+        STAGE_TWO_REINFORCEMENTS.len().saturating_add(1);
+
     pub(super) fn admit(&mut self, camera: i16) {
         if !self.progressive {
             return;
         }
         let [_, remaining @ ..] = &mut self.enemies;
         let arrivals = if self.stage_two {
-            STAGE_TWO_REINFORCEMENTS.as_slice()
+            STAGE_TWO_REINFORCEMENTS
         } else {
-            REINFORCEMENTS.as_slice()
+            REINFORCEMENTS
         };
         for (entry, &(trigger, anchor)) in remaining.iter_mut().zip(arrivals) {
             if entry.is_some() || camera < trigger {
@@ -219,7 +234,7 @@ impl Encounter {
     }
 
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
-        let mut enemies = [None; ENEMY_CAPACITY];
+        let mut enemies = [None; Self::CAPACITY];
         let [initial, ..] = &mut enemies;
         *initial = Some(Enemy::new(spawn));
         Self {
@@ -237,6 +252,15 @@ impl Encounter {
         let [initial, remaining @ ..] = &mut self.enemies;
         *initial = Some(Enemy::new(self.opening_spawn));
         remaining.fill(None);
+    }
+
+    #[cfg(feature = "native-preview")]
+    pub(super) fn stage_two_enemy_count(camera: i16) -> usize {
+        STAGE_TWO_REINFORCEMENTS
+            .iter()
+            .filter(|(trigger, _)| *trigger <= camera)
+            .count()
+            .saturating_add(1)
     }
 }
 
@@ -746,13 +770,28 @@ mod tests {
             (722, 11),
             (729, 11),
             (730, 12),
-            (1416, 12),
-            (270, 12),
+            (1257, 12),
+            (1258, 13),
+            (1329, 13),
+            (1330, 15),
+            (1361, 15),
+            (1362, 16),
+            (1369, 16),
+            (1370, 17),
+            (1416, 17),
+            (270, 17),
         ] {
             encounter.admit(camera);
             assert_eq!(encounter.enemies().count(), count);
             assert_eq!(encounter.limit_travel(1416), 1416);
         }
+        assert!(encounter.enemies().skip(12).map(|enemy| enemy.facing).eq([
+            Facing::Right,
+            Facing::Left,
+            Facing::Right,
+            Facing::Left,
+            Facing::Right,
+        ]));
         encounter.restart();
         assert_eq!(encounter.enemies().count(), 1);
     }
@@ -898,12 +937,18 @@ mod tests {
     #[test]
     fn reinforcements_enter_beyond_every_supported_view() {
         for travel in [50i16, 82, 154, 362, 444, 458, 562, 770, 834, 1350] {
-            for (gate, anchor) in REINFORCEMENTS
-                .into_iter()
-                .filter(|(gate, _)| *gate <= travel)
+            for &(gate, anchor) in
+                REINFORCEMENTS.iter().filter(|(gate, _)| *gate <= travel)
             {
                 assert_arrival_outside_view(travel, gate, anchor.x);
             }
+        }
+    }
+
+    #[test]
+    fn extended_second_stage_arrivals_start_outside_every_view() {
+        for &(gate, anchor) in STAGE_TWO_REINFORCEMENTS {
+            assert_arrival_outside_view(1416, gate, anchor.x);
         }
     }
 
