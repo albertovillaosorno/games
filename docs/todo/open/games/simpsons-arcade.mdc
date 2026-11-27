@@ -3315,3 +3315,41 @@ late scene at different sampled times. Neither establishes boss
 defeat, a successful stage transition or the corresponding player
 stock and continue outcome. Do not interpret the subsequent raw
 scroll register as continuous street travel.
+
+### Late encounter background states
+
+The read-only reference diagnostic identifies the sprite-free raster
+only after all 71,680 reconstructed scene pixels match the captured
+frame. An explicit top exclusion removes the captured HUD:
+
+```sh
+cargo run --locked -p games-build -- mame scene-background-digest \
+  simpsons world-4p-set-1 PARENT SHA256 RAM REGISTERS SCROLL PALETTE \
+  RGB32 OBJECTS CONTROLS 28
+```
+
+All 90 aligned observations across five existing local runs passed,
+with a 320 by 196 RGBA8 background digest for each. The digest rejects
+both an intentionally misaligned screen observation and an exclusion
+that removes the entire raster. No stitch tolerance was introduced.
+
+The dense baseline and release/resume controls reproduce the exact
+pre-admission background at camera travel 1,360, then the same
+distinct states at the 1,359-column encounter admission and at
+relative ticks 4 and 9. Three later replays also reproduce an
+identical subsequent state, an intermediate state sampled at
+device frame 8550 in two controls, and another state sampled at
+8580 or 8600. The exact later phase boundaries remain unverified.
+
+The continuing-input and stopped-input controls have identical
+background digests at all twelve common sampled frames from 8250
+through 9300, despite the latter releasing Right and stopping
+Primary immediately after admission. They differ by frame 9600.
+The later divergent background cannot be identified as a successful
+stage transition from these observations. A single permanently
+darkened backdrop would not preserve the original sequence.
+
+The original captures, derived images and digest logs remain
+private. No new runtime stage art, encounter rule or default
+selection was introduced. Exact timing, dynamic background
+placement, combat and eventual stage completion remain open.
