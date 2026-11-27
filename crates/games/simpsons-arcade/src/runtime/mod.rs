@@ -960,7 +960,9 @@ impl<'source> Sources<'source> {
             world: options
                 .world
                 .as_ref()
-                .map(|hash| open_bundle(store, *hash))
+                .map(|hash| {
+                    open_selected_bundle(store, *hash, world::bundle_limits()?)
+                })
                 .transpose()?,
         })
     }

@@ -31,12 +31,14 @@
 
 //! Bounded opening-street art and responsive native placement.
 
+use std::num::NonZeroU64;
+
 use games::input::LogicalAction;
 use games::presentation::{
     DisplaySettings, PresentationMode, centered_expansion, expanded_anchor,
 };
 use games::replay::InputStep as _;
-use games_assets::AssetFormat;
+use games_assets::{AssetFormat, ManifestLimits};
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::process::write_status;
@@ -50,7 +52,7 @@ use super::{
 pub(super) const BASE_WIDTH: u32 = crate::BASE_WIDTH;
 use crate::{MAX_VIEW_WIDTH, SIDE, view_origin, viewport_width};
 pub(super) const BASE_HEIGHT: u32 = TOP + HEIGHT;
-const MAX_STRIP_WIDTH: u32 = 736;
+const MAX_STRIP_WIDTH: u32 = 1664;
 const HEIGHT: u32 = 196;
 const TOP: u32 = 28;
 
@@ -231,6 +233,17 @@ pub(super) const fn atlas_budget() -> u32 {
     MAX_STRIP_WIDTH * HEIGHT * 4
 }
 
+pub(super) fn bundle_limits() -> Result<ManifestLimits, RenderError> {
+    let bytes = NonZeroU64::new(u64::from(atlas_budget()))
+        .ok_or(RenderError::TooLarge)?;
+    Ok(ManifestLimits {
+        manifest_bytes: size(32_768)?,
+        payload_bytes: bytes,
+        records: size(1)?,
+        total_bytes: bytes,
+    })
+}
+
 fn camera_at_limit(limit: u16) -> Result<Cabinet, RenderError> {
     let mut cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
         .map_err(failure)?
@@ -258,8 +271,11 @@ fn camera_at_limit(limit: u16) -> Result<Cabinet, RenderError> {
             down: true,
         },
     ]);
-    for tick in 1..400 {
+    for tick in 1..=u64::from(limit).saturating_add(u64::from(BASE_WIDTH)) {
         cabinet.input_step(tick, &[]);
+        if u16::try_from(cabinet.camera_origin()).ok() == Some(limit) {
+            break;
+        }
     }
     let origin = i16::try_from(limit).map_err(failure)?;
     if cabinet.camera_origin() != origin {
@@ -562,11 +578,25 @@ mod tests {
         let base = [0, 0, 0, 255].repeat(320 * 224);
         let strip = [0, 0, 0, 255].repeat(732 * 196);
         assert!(validate_prefix(&base, &strip, 732).is_ok());
-        let maximum = [0, 0, 0, 255].repeat(736 * 196);
-        assert!(validate_prefix(&base, &maximum, 736).is_ok());
-        let oversized = [0, 0, 0, 255].repeat(737 * 196);
-        assert!(validate_prefix(&base, &oversized, 737).is_err());
-        assert_eq!(atlas_budget(), 577_024);
+        let extended = [0, 0, 0, 255].repeat(1647 * 196);
+        assert!(validate_prefix(&base, &extended, 1647).is_ok());
+        let maximum = [0, 0, 0, 255].repeat(1664 * 196);
+        assert!(validate_prefix(&base, &maximum, 1664).is_ok());
+        let oversized = [0, 0, 0, 255].repeat(1665 * 196);
+        assert!(validate_prefix(&base, &oversized, 1665).is_err());
+        assert_eq!(atlas_budget(), 1_304_576);
+    }
+
+    #[test]
+    fn extended_camera_reaches_both_old_and_new_limits()
+    -> Result<(), RenderError> {
+        for limit in [80u16, 444, 1002, 1359] {
+            let camera = camera_at_limit(limit)?;
+            if u16::try_from(camera.camera_origin()).ok() != Some(limit) {
+                return Err(failure("incorrect extended camera limit"));
+            }
+        }
+        Ok(())
     }
 
     #[test]

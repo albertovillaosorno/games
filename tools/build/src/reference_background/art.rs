@@ -245,7 +245,7 @@ impl Strip {
             previous = Some(observation);
         }
         let completed = strip.ok_or_else(|| String::from("empty strip"))?;
-        let limits = limits()?;
+        let limits = strip_limits()?;
         let mut stage = CanonicalStaging::new(
             &self.output,
             publication::staging_budget(limits)?,
@@ -350,7 +350,7 @@ impl Image {
         let width = self.width.checked_add(shift).ok_or_else(invalid)?;
         let pixels = width.checked_mul(self.height).ok_or_else(invalid)?;
         let bytes = pixels.checked_mul(4).ok_or_else(invalid)?;
-        let limit = limits()?.payload_bytes.get();
+        let limit = strip_limits()?.payload_bytes.get();
         if u64::try_from(bytes).map_or(true, |len| len > limit) {
             return Err(String::from("background strip exceeds byte budget"));
         }
@@ -518,6 +518,17 @@ fn limits() -> Result<ManifestLimits, String> {
     })
 }
 
+fn strip_limits() -> Result<ManifestLimits, String> {
+    let bytes = NonZeroU64::new(2_097_152)
+        .ok_or_else(|| String::from("zero strip limit"))?;
+    Ok(ManifestLimits {
+        payload_bytes: bytes,
+        records: NonZeroUsize::MIN,
+        total_bytes: bytes,
+        ..limits()?
+    })
+}
+
 fn parse_indices(
     value: &str,
     used: &mut BTreeSet<usize>,
@@ -601,6 +612,27 @@ mod tests {
         let final_expected = image(&[3, 4, 5, 9, 11, 6, 7, 8, 10, 12], 5, 2);
         if extended.pixels != final_expected.pixels {
             return Err(String::from("multi-scene overlap differs"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn strip_budget_admits_longer_art_without_relaxing_actor_limits()
+    -> Result<(), String> {
+        let image = |width: usize| Image {
+            height: 196,
+            pixels: vec![[0, 0, 0, 255]; width * 196],
+            width,
+        };
+        let right = image(288);
+        let combined = image(1290).join_right(&right, 188)?;
+        if combined.width != 1478
+            || combined.pixels.as_flattened().len() <= 1_048_576
+            || image(2600).join_right(&right, 100).is_ok()
+            || limits()?.payload_bytes.get() != 1_048_576
+            || strip_limits()?.records.get() != 1
+        {
+            return Err(String::from("incorrect background strip budget"));
         }
         Ok(())
     }

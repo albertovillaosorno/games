@@ -57,7 +57,7 @@ use super::memory_preview::{
 };
 use super::{
     art_bundle_limits, audio, failure, parse_hash, parse_hashes, poses,
-    profile_limit,
+    profile_limit, world,
 };
 
 const CATALOGUE: &str = "launch.local";
@@ -248,10 +248,15 @@ fn manifest_requests(
         .into_iter()
         .chain(selection.enemy.into_iter().flatten())
         .chain(selection.shadow)
-        .chain(selection.world)
         .chain(catalogue.digests())
         .map(|digest| ManifestRequest { digest, limits: art })
         .collect();
+    if let Some(digest) = selection.world {
+        requests.push(ManifestRequest {
+            digest,
+            limits: world::bundle_limits()?,
+        });
+    }
     if let Some(audio) = selection.audio {
         requests.push(ManifestRequest {
             digest: audio.base,
@@ -515,7 +520,7 @@ mod tests {
             (actor, 4, art_bundle_limits()?),
             (enemy, 2, art_bundle_limits()?),
             (shadow, 1, art_bundle_limits()?),
-            (world, 1, art_bundle_limits()?),
+            (world, 1, world::bundle_limits()?),
             (pose, 8, art_bundle_limits()?),
             (base, 1, audio::base_limits()?),
             (replacement, 1, audio::replacement_limits()?),
