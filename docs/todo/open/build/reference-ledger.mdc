@@ -881,3 +881,13 @@ FM effect functions against the retained listings and board memory map.
 The checker reports 1,562 semantic reviews, 1,480 reviewed dependency
 lists and 82 pending lists. Every other function field, graph observation
 and runtime disposition remains unchanged; no parity claim is added.
+
+A subsequent bounded review fills the remaining 82 explicit dependency
+lists for the discovered Z80 effect functions. Retained instruction
+listings verify descriptor references, callback-local counters and pitch
+words, indexed reads, and shared key, attenuation and continuation
+operations. The canonical checker now reports 1,562 semantic reviews
+and 1,562 reviewed dependency lists, with zero pending lists. All
+other record fields and the 1,534 unresolved dispositions are preserved.
+This is coverage of the current inventory, not exhaustive executable
+discovery, transitive dependency completeness or Rust equivalence.
