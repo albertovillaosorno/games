@@ -577,3 +577,45 @@ and 25 non-runtime. No decoded instruction is unowned. Of the 252
 captured nested selections, 176 are now admitted and 76 remain in
 two overlays. New indirect dispatch sites and original gameplay
 mapping remain open.
+
+The bank-22 pass admits 40 additional nested selections and 39
+reviewed main identities, adding 1,587 owned instruction bytes.
+The new reviews identify subtype-selected initializers, bounded
+wrapped map pattern writes and guarded map updates, timed motion
+and state transitions, and the shared zero-offset map sampler.
+The sampled tile values and complete stage semantics remain open.
+All previous instruction ownership and flow evidence are preserved.
+
+The main inventory is 695 identities and 29,729 owned bytes, with
+837 possible observations. The combined checker reports 1,384
+identities, 48,127 owned bytes, 3,934 reciprocal pairs, 4,380
+flow observations, 197 interior entries and 145 unresolved flows.
+Dispositions are 1,356 unresolved, three intentional replacements
+and 25 non-runtime. No decoded instruction is unowned. Of 252
+captured nested selections, 216 are now admitted and 36 remain in
+the final captured overlay. Other unobserved selectors and runtime
+mapping still require independent verification.
+
+The bank-23 pass admits the remaining 36 captured nested selections
+and 31 reviewed main identities, adding 1,262 owned instruction
+bytes. The main inventory reaches 726 identities and 30,991 owned
+bytes with 877 possible observations. All 252 captured nested
+selections now have owned targets and detailed provenance. Earlier
+instruction lines, ownership and flow observations are unchanged.
+
+A separate paired station-admission replay admits six immutable
+callback selections and six additional main identities, including
+two ranked-record helpers. The shared admission entry retains the
+station score for the accepted-continuation selector and clears it
+on fresh admission. The existing native station lifecycle regression
+tests support that partial mapping only; original paid admission,
+ranked-record updates and exact health behavior remain unresolved.
+
+The main inventory is 732 identities and 31,452 owned bytes, with
+883 possible observations. The combined checker reports 1,421
+identities, 49,850 owned bytes, 3,996 reciprocal pairs, 4,451 flow
+observations, 200 interior entries and 147 unresolved flows.
+Dispositions are 1,393 unresolved, three intentional replacements
+and 25 non-runtime. All decoded instructions are owned and all
+previous observations and audio records are retained. These bounded
+captures do not establish complete callback or executable coverage.
