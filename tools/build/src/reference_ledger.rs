@@ -274,11 +274,11 @@ impl Function {
             | "non-runtime" => {},
             _ => return Err("unrecognized function disposition"),
         }
-        if !nonempty(self.semantic_name.as_deref())
-            || !nonempty(self.behavior.as_deref())
-            || !self.test_evidence.as_ref().is_some_and(evidence)
-        {
-            return Err("resolved function lacks behavior or evidence");
+        if self.analysis_state.as_deref() != Some("semantic-reviewed") {
+            return Err("resolved function lacks semantic review");
+        }
+        if !self.test_evidence.as_ref().is_some_and(evidence) {
+            return Err("resolved function lacks test evidence");
         }
         Ok(())
     }
@@ -347,6 +347,7 @@ struct Report {
 
 fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
     let mut functions = BTreeMap::new();
+    let mut selected_edition = None;
     let mut report = Report::default();
     for (index, line) in input.lines().enumerate() {
         if index >= limit.get() {
@@ -375,6 +376,11 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
         let function: Function = serde_json::from_str(line)
             .map_err(|_error| failure("invalid function record"))?;
         function.validate().map_err(failure)?;
+        let edition =
+            selected_edition.get_or_insert_with(|| function.edition.clone());
+        if edition.as_str() != function.edition.as_str() {
+            return Err(failure("mixed selected editions"));
+        }
         report.bytes = report
             .bytes
             .checked_add(function.body_bytes.get())
@@ -773,27 +779,40 @@ mod tests {
     #[test]
     fn rejects_unsubstantiated_completion() -> Result<(), String> {
         let mut fixture = record("0001", &[], &[]);
-        let row = fixture.as_object_mut().ok_or("fixture object")?;
-        let _status = row.insert("status".into(), Value::from("implemented"));
-        let _semantic =
-            row.insert("semantic_name".into(), Value::from("fixture"));
-        let _behavior = row.insert("behavior".into(), Value::from("fixture"));
-        let _evidence =
-            row.insert("test_evidence".into(), serde_json::json!(["fixture"]));
+        for (field, value) in [
+            ("status", Value::from("implemented")),
+            ("analysis_state", Value::from("semantic-reviewed")),
+            ("semantic_name", Value::from("fixture")),
+            ("behavior", Value::from("fixture")),
+            ("semantic_evidence", Value::from("fixture")),
+            ("inputs", serde_json::json!([])),
+            ("outputs", serde_json::json!([])),
+            ("state_mutations", serde_json::json!([])),
+            ("test_evidence", serde_json::json!(["fixture"])),
+        ] {
+            set_field(&mut fixture, field, value)?;
+        }
         if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {
             return Err(String::from("accepted unmapped implementation"));
         }
-        let mapped = fixture.as_object_mut().ok_or("fixture object")?;
-        let _owner =
-            mapped.insert("rust_owner".into(), Value::from("fixture.rs"));
-        let _symbol =
-            mapped.insert("rust_symbol".into(), Value::from("fixture"));
-        let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
-        if report.statuses.get("implemented") != Some(&1)
-            || report.partial_mappings != 0
-            || report.resolved_mappings != 1
+        set_field(&mut fixture, "rust_owner", Value::from("fixture.rs"))?;
+        set_field(&mut fixture, "rust_symbol", Value::from("fixture"))?;
+        for status in
+            ["implemented", "shared-mechanism", "intentional-replacement"]
         {
-            return Err(String::from("missing implemented count"));
+            set_field(&mut fixture, "status", Value::from(status))?;
+            let mut unreviewed = fixture.clone();
+            set_field(&mut unreviewed, "analysis_state", Value::Null)?;
+            if audit(&unreviewed.to_string(), NonZeroUsize::MIN).is_ok() {
+                return Err(format!("accepted unreviewed {status}"));
+            }
+            let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
+            if report.statuses.get(status) != Some(&1)
+                || report.partial_mappings != 0
+                || report.resolved_mappings != 1
+            {
+                return Err(format!("missing resolved {status} count"));
+            }
         }
         let duplicate = fixture.to_string().replacen(
             "\"status\":",
@@ -802,6 +821,32 @@ mod tests {
         );
         if audit(&duplicate, NonZeroUsize::MIN).is_ok() {
             return Err(String::from("accepted duplicate status key"));
+        }
+
+        set_field(&mut fixture, "status", Value::from("non-runtime"))?;
+        set_field(&mut fixture, "rust_owner", Value::Null)?;
+        set_field(&mut fixture, "rust_symbol", Value::Null)?;
+        let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
+        if report.statuses.get("non-runtime") != Some(&1)
+            || report.partial_mappings != 0
+            || report.resolved_mappings != 0
+        {
+            return Err(String::from("incorrect non-runtime count"));
+        }
+        set_field(&mut fixture, "analysis_state", Value::Null)?;
+        if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {
+            return Err(String::from("accepted unreviewed non-runtime"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_mixed_selected_editions() -> Result<(), String> {
+        let limit = NonZeroUsize::new(2).ok_or("fixture limit")?;
+        let [first, mut second] = pair();
+        set_field(&mut second, "edition", Value::from("another edition"))?;
+        if audit(&lines(&[first, second]), limit).is_ok() {
+            return Err(String::from("accepted mixed selected editions"));
         }
         Ok(())
     }
