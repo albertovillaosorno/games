@@ -279,3 +279,24 @@ evidence or well-formed input, output and mutation lists. Unknown
 dependencies remain admissible without implying Rust equivalence.
 The private ledger passes this gate. Exhaustive discovery, the 61
 unresolved flow observations and native behavior mapping remain open.
+
+Three previously unclassified fixed-ROM spans decode as coherent
+candidate routines for cached FM writes, cursor reading and conditional
+attenuation reset. The bounded function bodies cover 59 bytes exactly.
+No incoming transfer is established for any candidate. They receive
+unresolved semantic dispositions, not reachability or parity claims.
+Six outgoing observations add three reciprocal graph pairs; prior
+identities and observations are retained. The combined checker reports
+928 identities, 30,600 candidate-inclusive instruction bytes, 3,117
+pairs and 3,425 observations, including 69 interior and 61 unresolved
+observations. Dispositions are 925 unresolved, one intentional
+replacement and two non-runtime.
+
+Two adjacent 84-word pitch tables have verified complete spans:
+the FM values follow an exact stride and the PCM values are monotone
+within the observed register width. Thirty additional metadata bytes
+are classified. Audio ROM accounting now covers 122,644 bytes,
+including 18,398 candidate-inclusive native bytes, 95,927 sequence
+bytes and 8,319 metadata bytes without overlap. The 8,428 remaining
+bytes include uniform runs and two nonuniform bank gaps. All 576
+modeled timing outcomes are exactly unchanged.

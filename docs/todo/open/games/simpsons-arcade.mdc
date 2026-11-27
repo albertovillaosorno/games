@@ -4159,3 +4159,13 @@ callbacks. All 925 currently identified functions have dispositions:
 922 unresolved, one intentional replacement and two non-runtime.
 This completes the review of the current inventory, not exhaustive
 function discovery or original gameplay equivalence.
+
+Three coherent but unreferenced candidate audio routines add 59
+bounded decoded bytes and six outgoing transfer observations.
+They remain explicitly unresolved, with no established incoming
+flow. Two complete 84-word pitch tables add 30 classified metadata
+bytes. The candidate-inclusive audio inventory now has 689 identities
+and 122,644 classified ROM bytes, leaving 8,428 bytes unclassified.
+All 576 timing results are unchanged. Across both processors the
+ledger reports 928 identities, 925 unresolved, one intentional
+replacement and two non-runtime, with 61 unresolved flow observations.
