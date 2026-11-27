@@ -43,7 +43,7 @@ use games_assets::ContentHash;
 use games_platform::ir::input::{key_from_name, key_name};
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
-    ControlStore, DisplayStore, PublicationPolicy, VolumeStore,
+    ControlStore, DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
 use games_platform::ir::storage::{
     canonical_path, executable_path, join_path, parent_path, paths_overlap,
@@ -607,6 +607,8 @@ pub(super) struct Launch {
     pub(super) controls: ControlSelection,
     pub(super) display: DisplaySettings,
     pub(super) host: Option<OsString>,
+    pub(super) locale_index: usize,
+    pub(super) locale_store: Option<LocaleStore>,
     pub(super) measure: bool,
     pub(super) preferences: Option<DisplayStore>,
     pub(super) smoke: bool,
@@ -651,6 +653,7 @@ impl Launch {
             .map_err(|error| format!("display preferences: {error:?}"))?
             .flatten();
         let (volume_store, volume) = load_volume(settings.as_deref())?;
+        let (locale_store, locale_index) = load_locale(settings.as_deref())?;
         let display = resolve_display(defaults, stored, [
             mode.as_deref(),
             window.as_deref(),
@@ -667,6 +670,8 @@ impl Launch {
             )?,
             display,
             host,
+            locale_index,
+            locale_store,
             measure,
             preferences,
             smoke,
@@ -820,6 +825,17 @@ fn admit_settings_paths(
         return Err("settings and executable directories overlap".into());
     }
     Ok(())
+}
+
+fn load_locale(
+    settings: Option<&OsStr>,
+) -> Result<super::title_messages::LocalePreference, String> {
+    let store = settings
+        .map(LocaleStore::open)
+        .transpose()
+        .map_err(|error| format!("locale store: {error:?}"))?;
+    super::title_messages::restore_locale(store)
+        .map_err(|error| format!("locale preferences: {error:?}"))
 }
 
 fn load_volume(settings: Option<&OsStr>) -> Result<VolumePreferences, String> {
@@ -1198,6 +1214,41 @@ mod tests {
             || paths.settings != Some(OsString::from("/package/preferences"))
         {
             return Err(String::from("incorrect catalogue selection"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn launch_restores_title_locale_and_preserves_other_preferences()
+    -> Result<(), String> {
+        use games::presentation::LocaleTag;
+
+        let fixture = ProfileFixture::new()?;
+        let args = [
+            OsString::from("--config"),
+            resolve_local(fixture.0.location(), "launch.local")?,
+        ];
+        let initial = Launch::parse(args.clone().into())?;
+        if initial.locale_index != 0 || initial.locale_store.is_none() {
+            return Err("wrong initial locale".into());
+        }
+        let store = LocaleStore::open(fixture.0.location())
+            .map_err(|error| format!("{error:?}"))?;
+        let spanish =
+            LocaleTag::parse("es-MX").map_err(|error| format!("{error:?}"))?;
+        let receipt = store
+            .store(&spanish)
+            .map_err(|error| format!("{error:?}"))?;
+        receipt.durability.map_err(|error| format!("{error:?}"))?;
+        let restored = Launch::parse(args.into())?;
+        if restored.locale_index != 1
+            || restored.locale_store.is_none()
+            || restored.display != initial.display
+            || restored.volume != initial.volume
+            || restored.controls.resolve()?.profiles
+                != configured_profiles(FALLBACK_PROFILE)?
+        {
+            return Err("locale or other preferences not restored".into());
         }
         Ok(())
     }

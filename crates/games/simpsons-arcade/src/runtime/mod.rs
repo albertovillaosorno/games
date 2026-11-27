@@ -47,6 +47,7 @@ mod poses;
 mod scenery;
 mod shadow;
 mod station_hud;
+mod title_messages;
 mod touch;
 mod world;
 
@@ -79,7 +80,7 @@ use games::presentation::{
 use games::replay::{
     InputStep, LiveInputLimits, LiveSimulation, QueueRejection, RejectedInput,
 };
-use games::session::{ControlReset, LocalSession};
+use games::session::{ControlReset, LocalSession, MenuItem};
 use games::timing::StepClock;
 use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform::ir::frame::{FrameLayout, RenderError};
@@ -93,7 +94,6 @@ use games_platform::ir::measurement::{
     FrameMeter, elapsed_between, executable_bytes, now, peak_resident_bytes,
     resident_bytes,
 };
-use games_platform::ir::menu::{MenuArt, MenuContent};
 use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
@@ -103,10 +103,9 @@ use games_platform::ir::storage::bundle::{
 };
 use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::storage::preferences::{
-    DisplayStore, PublicationPolicy, VolumeStore,
+    DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
-use games_platform::ir::ui::PlateLayout;
-use games_platform::ir::ui::editor::{ControlEditorArt, ControlEditorView};
+use games_platform::ir::ui::editor::ControlEditorView;
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Pair, Participation, Phase,
@@ -592,9 +591,8 @@ struct Scene {
     background: Art,
     combat: Option<encounter::CombatArt>,
     draws: Vec<SpriteDraw>,
-    editor: Option<ControlEditorArt>,
     hud: station_hud::StationHud,
-    menu: MenuArt,
+    locales: Vec<title_messages::LocaleArt>,
     panel: Option<SpriteDraw>,
     poses: poses::PoseArt,
     shadow: Option<shadow::ShadowArt>,
@@ -649,13 +647,13 @@ impl Scene {
                     usize::from(source.shadow.is_some()).saturating_mul(4),
                 ),
             ),
-            editor: load_editor(
-                scene,
-                options.can_reset_controls(reserved),
-                touch_enabled,
-            )?,
             hud: station_hud::StationHud::load(scene, profiles, reserved)?,
-            menu: load_menu(scene, world_art.is_some(), options, reserved)?,
+            locales: title_messages::load_art(
+                scene,
+                world_art.is_some(),
+                options,
+                reserved,
+            )?,
             panel: if touch_enabled {
                 Some(touch::load(scene, profiles, touch::PanelRole::Cabinet)?)
             } else {
@@ -698,28 +696,7 @@ impl Scene {
         self.world.sort_by_key(|(depth, _)| *depth);
         self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
         self.queue_enemy_meters(cabinet, view)?;
-        self.menu.queue(
-            cabinet.session(),
-            (20i32.saturating_add(center), 16i32),
-            &mut self.draws,
-        )?;
-        if cabinet.phase() == Phase::Controls {
-            let (selection, profiles) =
-                editor.ok_or(RenderError::InvalidSprite)?;
-            self.editor
-                .as_ref()
-                .ok_or(RenderError::InvalidSprite)?
-                .queue(
-                    ControlEditorView {
-                        actions: ACTION_NAMES,
-                        editor: selection,
-                        key_name,
-                        profiles,
-                    },
-                    (20i32.saturating_add(center), 16i32),
-                    &mut self.draws,
-                )?;
-        }
+        self.queue_menu(cabinet, center, editor)?;
         if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused) {
             let shift = if cabinet.phase() == Phase::Paused {
                 12i32
@@ -835,6 +812,42 @@ impl Scene {
                     )?,
                 ));
             }
+        }
+        Ok(())
+    }
+
+    fn queue_menu(
+        &mut self,
+        cabinet: &Cabinet,
+        center: i32,
+        editor: Option<(ControlEditor, &Profiles)>,
+    ) -> Result<(), RenderError> {
+        let locale = self
+            .locales
+            .get(cabinet.session().language_index())
+            .ok_or(RenderError::InvalidSprite)?;
+        locale.menu.queue(
+            cabinet.session(),
+            (20i32.saturating_add(center), 16i32),
+            &mut self.draws,
+        )?;
+        if cabinet.phase() == Phase::Controls {
+            let (selection, profiles) =
+                editor.ok_or(RenderError::InvalidSprite)?;
+            locale
+                .editor
+                .as_ref()
+                .ok_or(RenderError::InvalidSprite)?
+                .queue(
+                    ControlEditorView {
+                        actions: locale.actions()?,
+                        editor: selection,
+                        key_name,
+                        profiles,
+                    },
+                    (20i32.saturating_add(center), 16i32),
+                    &mut self.draws,
+                )?;
         }
         Ok(())
     }
@@ -1044,6 +1057,8 @@ struct PreviewOptions<'profiles> {
     controls: &'profiles Rc<launch::ResolvedControls>,
     display: DisplaySettings,
     hidden: bool,
+    locale_index: usize,
+    locale_store: Option<&'profiles Rc<LocaleStore>>,
     measure: bool,
     preferences: Option<&'profiles Rc<DisplayStore>>,
     publication: PublicationPolicy,
@@ -1065,6 +1080,7 @@ impl PreviewOptions<'_> {
     fn session(self, reserved: [bool; 4]) -> LocalSession {
         LocalSession::with_preferences(self.display, self.volume, false)
             .with_source_settings(self.source_settings)
+            .with_languages(title_messages::LOCALES.len(), self.locale_index)
             .with_control_reset(self.can_reset_controls(reserved))
             .with_fixed_window(self.window_switching == WindowSwitching::Fixed)
     }
@@ -1109,6 +1125,8 @@ struct Interactive {
     editor: ControlEditor,
     host: Option<HostLan>,
     input: NativeInput,
+    locale_index: usize,
+    locale_store: Option<Rc<LocaleStore>>,
     measurement: Option<measurement::LiveMeasurement>,
     next_profiles: Profiles,
     preferences: Option<Rc<DisplayStore>>,
@@ -1295,6 +1313,8 @@ impl Interactive {
             editor: ControlEditor::default(),
             host,
             input,
+            locale_index: cabinet.session().language_index(),
+            locale_store: options.locale_store.map(Rc::clone),
             measurement: options
                 .measure
                 .then(measurement::LiveMeasurement::default),
@@ -1326,6 +1346,15 @@ impl Interactive {
         &mut self,
         session: LocalSession,
     ) -> Result<(), RenderError> {
+        let locale = session.language_index();
+        if locale != self.locale_index {
+            save_locale(
+                self.locale_store.as_deref(),
+                locale,
+                self.publication,
+            )?;
+            self.locale_index = locale;
+        }
         let requested = session.display();
         if requested != self.requested {
             save_display(
@@ -1676,6 +1705,19 @@ const fn presentation_wait(
     }
 }
 
+fn save_locale(
+    store: Option<&LocaleStore>,
+    index: usize,
+    publication: PublicationPolicy,
+) -> Result<(), RenderError> {
+    if let Some(preferences) = store {
+        let locale = title_messages::locale_tag(index)?;
+        let receipt = preferences.store(&locale).map_err(failure)?;
+        publication.confirm(receipt).map_err(failure)?;
+    }
+    Ok(())
+}
+
 fn save_display(
     store: Option<&DisplayStore>,
     settings: DisplaySettings,
@@ -1740,102 +1782,6 @@ fn key_label(key: KeyboardKey) -> &'static str {
     }
 }
 
-const fn adaptive_hint(world_available: bool) -> &'static str {
-    if world_available {
-        "ADAPTIVE EXTENDS STREET WHEN IT FITS"
-    } else {
-        "NO WORLD STRIP - ADAPTIVE ASPECT FIT"
-    }
-}
-
-const fn settings_hint(
-    hidden: bool,
-    persistent: bool,
-    editor: bool,
-) -> &'static str {
-    if hidden {
-        "SMOKE DOES NOT SAVE SETTINGS"
-    } else if !persistent {
-        "SETTINGS ARE SESSION ONLY"
-    } else if editor {
-        "CONTROL EDITS APPLY NEXT LAUNCH"
-    } else {
-        "DISPLAY AND VOLUME SAVED"
-    }
-}
-
-const fn main_menu_hints(hosted: bool) -> &'static [&'static str] {
-    if hosted {
-        &[
-            "LOCAL LEFT/RIGHT CHOOSE CHARACTER",
-            "LOCAL START OPENS HOSTED GAME",
-            "REMOTE START JOINS DURING PLAY",
-            "UP/DOWN SELECT - PRIMARY CONFIRM",
-        ]
-    } else {
-        &[
-            "LEFT/RIGHT CHOOSE YOUR CHARACTER",
-            "PRESS YOUR START CONTROL TO JOIN",
-            "GAMEPAD / TOUCH: USE JOIN CONTROL",
-            "UP/DOWN SELECT - PRIMARY CONFIRM",
-        ]
-    }
-}
-
-fn desktop_hint(
-    key: Option<KeyboardKey>,
-    mouse: Option<PointerButton>,
-) -> String {
-    let keyboard = key.map(|code| {
-        let label = key_label(code);
-        // Two 13-character keys with mouse labels fit the pause plate.
-        if label.len() > 13 {
-            "PROFILE"
-        } else {
-            label
-        }
-    });
-    match (keyboard, mouse) {
-        (Some(label), Some(button)) => {
-            format!("{label}/MOUSE {}", mouse_label(button))
-        },
-        (None, Some(button)) => format!("MOUSE {}", mouse_label(button)),
-        (Some(label), None) => String::from(label),
-        (None, None) => String::from("NONE"),
-    }
-}
-
-fn pause_hints(profiles: &Profiles, reserved: [bool; 4]) -> [String; 4] {
-    let index = reserved.iter().position(|remote| !remote).unwrap_or(0);
-    let [pause, ..] = profiles.keys.first().copied().unwrap_or([None; 8]);
-    let [_, _, primary, secondary, left, right, up, down] =
-        profiles.keys.get(index).copied().unwrap_or([None; 8]);
-    let [mouse_pause, _, attack, jump, m_left, m_right, m_up, m_down] =
-        profiles.mouse.get(index).copied().unwrap_or([None; 8]);
-    [
-        format!(
-            "P{} LEFT: {} RIGHT: {}",
-            index.saturating_add(1),
-            desktop_hint(left, m_left),
-            desktop_hint(right, m_right)
-        ),
-        format!(
-            "UP: {} DOWN: {}",
-            desktop_hint(up, m_up),
-            desktop_hint(down, m_down)
-        ),
-        format!(
-            "ATTACK: {} JUMP: {}",
-            desktop_hint(primary, attack),
-            desktop_hint(secondary, jump)
-        ),
-        format!(
-            "{} OR START RESUMES - JOIN BELOW",
-            desktop_hint(pause, mouse_pause)
-        ),
-    ]
-}
-
 const fn touch_editor_command(control: Control) -> EditorNavigation {
     match control {
         Control::Pause => EditorNavigation::Cancel,
@@ -1847,76 +1793,6 @@ const fn touch_editor_command(control: Control) -> EditorNavigation {
         Control::Up => EditorNavigation::Up,
         Control::Down => EditorNavigation::Down,
     }
-}
-
-fn load_editor(
-    scene: &mut SceneSession<'_, '_>,
-    enabled: bool,
-    touch_enabled: bool,
-) -> Result<Option<ControlEditorArt>, RenderError> {
-    enabled
-        .then(|| {
-            ControlEditorArt::load(
-                scene,
-                PlateLayout {
-                    background: [24, 22, 30, 255],
-                    height: MENU_HEIGHT,
-                    max_bytes: size(ControlEditorArt::bytes(
-                        MENU_WIDTH,
-                        MENU_HEIGHT,
-                    ))?,
-                    width: MENU_WIDTH,
-                },
-                touch_enabled.then_some([
-                    "TOUCH: ARROWS, B SOURCE, A EDIT",
-                    "TOUCH: START CLEAR, PAUSE BACK",
-                ]),
-            )
-        })
-        .transpose()
-}
-
-fn load_menu(
-    scene: &mut SceneSession<'_, '_>,
-    world_available: bool,
-    options: PreviewOptions<'_>,
-    reserved: [bool; 4],
-) -> Result<MenuArt, RenderError> {
-    let hints = pause_hints(&options.controls.profiles, reserved);
-    let pause = hints.each_ref().map(String::as_str);
-    let reset = options.can_reset_controls(reserved);
-    MenuArt::load(
-        scene,
-        PlateLayout {
-            background: [24, 22, 30, 255],
-            height: MENU_HEIGHT,
-            max_bytes: size(MenuArt::bytes(
-                MENU_WIDTH,
-                MENU_HEIGHT,
-                reset,
-                options.source_settings,
-            ))?,
-            width: MENU_WIDTH,
-        },
-        MenuContent {
-            control_reset: reset,
-            main_hints: main_menu_hints(reserved.contains(&true)),
-            pause_hints: &pause,
-            settings_hints: &[
-                "PRIMARY CHANGES VALUE - PAUSE RETURNS",
-                adaptive_hint(world_available),
-                settings_hint(
-                    options.hidden,
-                    options.preferences.is_some(),
-                    options.can_reset_controls(reserved),
-                ),
-            ],
-            sources: options.source_settings,
-            title: "THE SIMPSONS ARCADE",
-            window_switching: options.window_switching
-                == WindowSwitching::Supported,
-        },
-    )
 }
 
 fn ground_position(
@@ -2130,6 +2006,8 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
         controls,
         display,
         host,
+        locale_index,
+        locale_store,
         measure,
         preferences,
         smoke,
@@ -2139,6 +2017,7 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
     } = launch::Launch::parse(args)?;
     let resolved = Rc::new(controls.resolve()?);
     let display_store = preferences.map(Rc::new);
+    let shared_locale_store = locale_store.map(Rc::new);
     let shared_volume_store = volume_store.map(Rc::new);
     let listener = host.as_deref().map(lan::open_host).transpose()?;
     let result = Sources::local(&assets).and_then(|source| {
@@ -2153,6 +2032,8 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
                 controls: &resolved,
                 display,
                 hidden: smoke,
+                locale_index,
+                locale_store: shared_locale_store.as_ref(),
                 measure,
                 preferences: display_store.as_ref(),
                 publication: PublicationPolicy::Durable,
@@ -2472,7 +2353,8 @@ fn smoke_settings(
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
     let session = LocalSession::with_display(DisplaySettings::default(), false)
-        .with_source_settings(options.source_settings);
+        .with_source_settings(options.source_settings)
+        .with_languages(title_messages::LOCALES.len(), options.locale_index);
     let mut simulation = live_with_session(false, session)?;
     let mut controls = Controls::with_smoke_profiles(
         options.touch_enabled,
@@ -2505,7 +2387,56 @@ fn smoke_settings(
         }
     }
     smoke_window_toggle(scene, art, &mut controls, &mut simulation)?;
+    smoke_language_menu(scene, art, &mut controls, &mut simulation)?;
     scene.apply_display_settings(options.display)
+}
+
+fn smoke_language_menu(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    for control in [Control::Down, Control::Primary] {
+        smoke_press(controls, simulation, control)?;
+    }
+    let initial = simulation.state().session();
+    if initial.phase() != Phase::Settings || !initial.has_languages() {
+        return Err(failure("language menu unavailable"));
+    }
+    for _step in initial.items() {
+        if simulation.state().session().selected() == Some(MenuItem::Language) {
+            break;
+        }
+        smoke_press(controls, simulation, Control::Down)?;
+    }
+    if simulation.state().session().selected() != Some(MenuItem::Language) {
+        return Err(failure("language row unreachable"));
+    }
+    let _drawn = art.present(scene, simulation.state())?;
+    let before = scene.readback()?;
+    smoke_press(controls, simulation, Control::Primary)?;
+    let changed = simulation.state().session();
+    if changed.language_index() == initial.language_index()
+        || changed.display() != initial.display()
+        || changed.volume() != initial.volume()
+        || changed.source_settings() != initial.source_settings()
+        || changed.phase() != initial.phase()
+    {
+        return Err(failure(
+            "language selection altered unrelated preferences",
+        ));
+    }
+    let _updated = art.present(scene, simulation.state())?;
+    if scene.readback()? == before {
+        return Err(failure("selected language did not change menu pixels"));
+    }
+    smoke_press(controls, simulation, Control::Primary)?;
+    let restored = simulation.state().session();
+    if restored.language_index() != initial.language_index() {
+        return Err(failure("language selection did not wrap"));
+    }
+    Ok(())
 }
 
 fn smoke_window_toggle(
@@ -3371,17 +3302,6 @@ fn window(
     })
 }
 
-fn editor_limits(enabled: bool) -> (usize, usize) {
-    if enabled {
-        (
-            ControlEditorArt::bytes(MENU_WIDTH, MENU_HEIGHT),
-            ControlEditorArt::sprites(MENU_WIDTH).saturating_add(2),
-        )
-    } else {
-        (0, 0)
-    }
-}
-
 fn scene_limits(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
@@ -3401,18 +3321,11 @@ fn scene_limits(
     let count = source.poses.count().saturating_add(enemy_atlases);
     let extension = usize::from(source.world.is_some());
     let shadows = usize::from(source.shadow.is_some());
-    let editor = options.can_reset_controls(reserved);
-    let (editor_bytes, editor_sprites) = editor_limits(editor);
+    let language = title_messages::art_limits(options, reserved);
     Ok(SceneLimits {
         atlas_bytes: size(
             2_317_632usize
-                .saturating_add(MenuArt::bytes(
-                    MENU_WIDTH,
-                    MENU_HEIGHT,
-                    editor,
-                    options.source_settings,
-                ))
-                .saturating_add(editor_bytes)
+                .saturating_add(language.atlas_bytes)
                 .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
                     touch::extra_bytes(&options.controls.profiles)
@@ -3430,15 +3343,15 @@ fn scene_limits(
             count
                 .saturating_add(extension)
                 .saturating_add(shadows)
-                .saturating_add(usize::from(editor).saturating_mul(2))
+                .saturating_add(language.atlases)
                 .saturating_add(
-                    8usize.saturating_add(usize::from(touch_enabled)),
+                    6usize.saturating_add(usize::from(touch_enabled)),
                 ),
         )?,
         sprites: size(
             enemy_sprites
                 .saturating_add(source.poses.scenic_sprite_count())
-                .saturating_add(editor_sprites)
+                .saturating_add(language.sprites)
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
                 .saturating_add(
@@ -3911,107 +3824,6 @@ mod tests {
             return Err(failure("rejected release left movement held"));
         }
         Ok(())
-    }
-
-    #[test]
-    fn settings_hint_follows_persistence_availability() {
-        use super::settings_hint;
-
-        assert_eq!(
-            settings_hint(true, true, false),
-            "SMOKE DOES NOT SAVE SETTINGS"
-        );
-        assert_eq!(
-            settings_hint(false, false, false),
-            "SETTINGS ARE SESSION ONLY"
-        );
-        assert_eq!(
-            settings_hint(false, true, false),
-            "DISPLAY AND VOLUME SAVED"
-        );
-        assert_eq!(
-            settings_hint(false, true, true),
-            "CONTROL EDITS APPLY NEXT LAUNCH"
-        );
-    }
-
-    #[test]
-    fn menu_hints_follow_actual_launch_capabilities() {
-        use super::{adaptive_hint, main_menu_hints};
-
-        assert!(adaptive_hint(true).contains("EXTENDS STREET"));
-        assert!(adaptive_hint(false).contains("ASPECT FIT"));
-        assert!(
-            main_menu_hints(true).contains(&"LOCAL START OPENS HOSTED GAME")
-        );
-        assert!(
-            main_menu_hints(true).contains(&"REMOTE START JOINS DURING PLAY")
-        );
-        assert!(
-            main_menu_hints(false)
-                .contains(&"PRESS YOUR START CONTROL TO JOIN")
-        );
-        assert!(
-            !main_menu_hints(false)
-                .iter()
-                .any(|hint| hint.contains("REMOTE"))
-        );
-    }
-
-    #[test]
-    fn pause_hints_include_mouse_only_and_combined_desktop_bindings() {
-        use super::{PointerButton, pause_hints};
-
-        let mut profiles = DEFAULT_PROFILES;
-        let [_, keys, ..] = &mut profiles.keys;
-        let [_, mouse, ..] = &mut profiles.mouse;
-        let [_, _, _, jump, left, ..] = keys;
-        *jump = None;
-        *left = None;
-        *mouse = [
-            Some(PointerButton::X1),
-            None,
-            None,
-            Some(PointerButton::Middle),
-            Some(PointerButton::Right),
-            Some(PointerButton::X2),
-            None,
-            None,
-        ];
-        let [first, ..] = &mut profiles.mouse;
-        *first = [None; 8];
-        let [horizontal, vertical, combat, resume] =
-            pause_hints(&profiles, [true, false, false, false]);
-        assert_eq!(horizontal, "P2 LEFT: MOUSE RIGHT RIGHT: Right/MOUSE X2");
-        assert_eq!(vertical, "UP: Up DOWN: Down");
-        assert_eq!(combat, "ATTACK: F JUMP: MOUSE MIDDLE");
-        assert!(resume.contains("MOUSE X1"));
-        assert!(resume.contains("START RESUMES"));
-    }
-
-    #[test]
-    fn pause_hints_fit_extended_keyboard_and_mouse_labels() {
-        use games_platform::ir::ui::TextLine;
-
-        use super::{MENU_WIDTH, PointerButton, desktop_hint};
-
-        let binding = desktop_hint(
-            Some(KeyboardKey::from_code(100)),
-            Some(PointerButton::Middle),
-        );
-        assert_eq!(binding, "IntlBackslash/MOUSE MIDDLE");
-        let text = format!("P4 LEFT: {binding} RIGHT: {binding}");
-        assert!(
-            TextLine {
-                color: [255; 4],
-                scale: 2,
-                text: &text,
-                top: 0,
-            }
-            .fit_width(MENU_WIDTH)
-            .scale
-                > 0
-        );
     }
 
     #[test]

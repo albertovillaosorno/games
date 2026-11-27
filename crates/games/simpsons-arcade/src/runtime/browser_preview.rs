@@ -45,7 +45,8 @@ use games_platform::ir::storage::bundle::directory::{
     SelectedDirectory, SidecarSnapshot, select,
 };
 use games_platform::ir::storage::preferences::{
-    ControlStore, DisplayStore, PreferenceError, PublicationPolicy, VolumeStore,
+    ControlStore, DisplayStore, LocaleStore, PreferenceError,
+    PublicationPolicy, VolumeStore,
 };
 use games_platform::ir::storage::save::SaveError;
 
@@ -77,6 +78,7 @@ type Start = fn(
 struct Stores {
     controls: ControlStore,
     display: DisplayStore,
+    locale: LocaleStore,
     volume: VolumeStore,
 }
 
@@ -90,6 +92,9 @@ impl Stores {
             return Err(failure("browser requires windowed preferences"));
         }
         let volume = self.volume.load().map_err(failure)?.unwrap_or_default();
+        let (locale_store, locale_index) =
+            super::title_messages::restore_locale(Some(self.locale))
+                .map_err(failure)?;
         let publication = PublicationPolicy::BestEffort;
         let controls = ResolvedControls::from_store(self.controls, publication)
             .map_err(failure)?;
@@ -97,6 +102,8 @@ impl Stores {
             controls: Rc::new(controls),
             display,
             display_store: Some(Rc::new(self.display)),
+            locale_index,
+            locale_store: locale_store.map(Rc::new),
             publication,
             volume,
             volume_store: Some(Rc::new(self.volume)),
@@ -110,6 +117,7 @@ impl Stores {
         Ok(Self {
             controls: ControlStore::open(namespace, maximum)?,
             display: DisplayStore::open(namespace)?,
+            locale: LocaleStore::open(namespace)?,
             volume: VolumeStore::open(namespace)?,
         })
     }
@@ -339,7 +347,7 @@ const fn unavailable(error: PreferenceError) -> bool {
 #[cfg(test)]
 mod tests {
     use games::audio::MasterVolume;
-    use games::presentation::PresentationMode;
+    use games::presentation::{LocaleTag, PresentationMode};
     use games_assets::{ContentHash, ManifestLimits};
 
     use super::*;
@@ -376,6 +384,8 @@ mod tests {
         };
         let initial = open()?.load(defaults)?;
         if initial.display != defaults
+            || initial.locale_index != 0
+            || initial.locale_store.is_none()
             || initial.volume != MasterVolume::Full
             || initial.controls.profiles != DEFAULT_PROFILES
             || !initial.controls.can_reset()
@@ -389,12 +399,16 @@ mod tests {
         };
         let handles = open()?;
         let _display = handles.display.store(chosen).map_err(failure)?;
+        let spanish = LocaleTag::parse("es-MX").map_err(failure)?;
+        let _locale = handles.locale.store(&spanish).map_err(failure)?;
         let _volume =
             handles.volume.store(MasterVolume::Half).map_err(failure)?;
         let profile = "version=1\nkey 1 right=Q\n";
         let _controls = handles.controls.store(profile).map_err(failure)?;
         let loaded = handles.load(defaults)?;
         if loaded.display != chosen
+            || loaded.locale_index != 1
+            || loaded.locale_store.is_none()
             || loaded.volume != MasterVolume::Half
             || loaded.controls.profiles
                 != configured_profiles(profile).map_err(failure)?

@@ -43,7 +43,7 @@ use games_platform::ir::graphics::{NativeWindow, frame_loop};
 use games_platform::ir::input::InputStartup;
 use games_platform::ir::storage::bundle::{BundleSource, MemoryBundleStore};
 use games_platform::ir::storage::preferences::{
-    DisplayStore, PublicationPolicy, VolumeStore,
+    DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
 
 pub use super::audio::AudioSelection;
@@ -79,6 +79,8 @@ pub(super) struct Preferences {
     pub(super) controls: Rc<launch::ResolvedControls>,
     pub(super) display: DisplaySettings,
     pub(super) display_store: Option<Rc<DisplayStore>>,
+    pub(super) locale_index: usize,
+    pub(super) locale_store: Option<Rc<LocaleStore>>,
     pub(super) publication: PublicationPolicy,
     pub(super) volume: MasterVolume,
     pub(super) volume_store: Option<Rc<VolumeStore>>,
@@ -90,6 +92,8 @@ impl Preferences {
             controls: Rc::new(launch::ResolvedControls::transient()),
             display,
             display_store: None,
+            locale_index: 0,
+            locale_store: None,
             publication: PublicationPolicy::Durable,
             volume: MasterVolume::Full,
             volume_store: None,
@@ -113,6 +117,8 @@ fn preview_options<'preferences>(
         controls: &preferences.controls,
         display: preferences.display,
         hidden: false,
+        locale_index: preferences.locale_index,
+        locale_store: preferences.locale_store.as_ref(),
         measure: false,
         preferences: preferences.display_store.as_ref(),
         publication: preferences.publication,
