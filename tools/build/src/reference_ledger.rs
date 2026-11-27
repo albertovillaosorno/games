@@ -354,9 +354,17 @@ fn graph(
     functions: &BTreeMap<String, Function>,
     report: &mut Report,
 ) -> Result<(), String> {
+    let mut locations = BTreeSet::new();
     let mut inbound = BTreeSet::new();
     let mut outbound = BTreeSet::new();
     for (id, function) in functions {
+        let (context, _) =
+            id.rsplit_once(':').ok_or("invalid function identity")?;
+        let entry =
+            address(&function.entry_address).ok_or("invalid entry address")?;
+        if !locations.insert((context, entry)) {
+            return Err(format!("duplicate numeric function identity: {id}"));
+        }
         for caller in &function.callers {
             if !functions.contains_key(caller)
                 || !inbound.insert((caller.as_str(), id.as_str()))
@@ -652,6 +660,30 @@ mod tests {
         }
         if audit("{}", limit).is_ok() {
             return Err(String::from("accepted unrecognized record"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_numeric_identity_aliases_but_preserves_banks()
+    -> Result<(), String> {
+        let limit = NonZeroUsize::new(2).ok_or("fixture limit")?;
+        for (padded, short) in [("0001", "1"), ("0000", "0")] {
+            let first = record(padded, &[], &[]);
+            let alias = record(short, &[], &[]);
+            if audit(&lines(&[first.clone(), alias.clone()]), limit).is_ok() {
+                return Err(String::from("accepted numeric identity alias"));
+            }
+            let mut banked = alias;
+            set_field(&mut banked, "bank", Value::from("bank-01"))?;
+            set_field(
+                &mut banked,
+                "id",
+                Value::from(format!("audio:z80:program:bank-01:{short}")),
+            )?;
+            if audit(&lines(&[first, banked]), limit)?.functions != 2 {
+                return Err(String::from("lost distinct bank identity"));
+            }
         }
         Ok(())
     }
