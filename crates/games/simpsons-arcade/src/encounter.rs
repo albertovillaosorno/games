@@ -62,7 +62,7 @@ const RESTRAINT_DAMAGE_INTERVAL: u8 = 48;
 // Anchors are approximate; the observed arrivals start outside the view.
 const RESTRAINT_THRESHOLD: i16 = 154;
 const OPENING_COMBAT_LIMIT: i16 = 362;
-const STAGE_TWO_LATE_COMBAT_GATE: i16 = 1264;
+const STAGE_TWO_COUNT_GATES: [(i16, usize); 2] = [(1184, 2), (1264, 1)];
 const REINFORCEMENTS: &[(i16, Point)] = &[
     (50, Point { x: 334, y: 176 }),
     (82, Point { x: -18, y: 208 }),
@@ -231,11 +231,16 @@ impl Encounter {
                     })
                 })
                 .map_or(travel, |(gate, _)| travel.min(gate));
-        if self.stage_two && limit > STAGE_TWO_LATE_COMBAT_GATE {
-            // The observed gate releases with one counted actor left.
-            // Only regular enemies are modeled here; keep later arrivals
-            // outside the cohort so release cannot be revoked.
-            let count = Self::stage_two_enemy_count(STAGE_TWO_LATE_COMBAT_GATE);
+        if !self.stage_two {
+            return limit;
+        }
+        for (gate, maximum_survivors) in STAGE_TWO_COUNT_GATES {
+            if limit <= gate {
+                break;
+            }
+            // Only regular enemies are modeled here. Exclude later
+            // arrivals so a released gate cannot be revoked.
+            let count = Self::stage_two_enemy_count(gate);
             let survivors = self
                 .enemies
                 .iter()
@@ -243,8 +248,8 @@ impl Encounter {
                 .flatten()
                 .filter(|enemy| enemy.health > 0)
                 .count();
-            if survivors > 1 {
-                return STAGE_TWO_LATE_COMBAT_GATE;
+            if survivors > maximum_survivors {
+                return gate;
             }
         }
         limit
@@ -809,6 +814,22 @@ mod tests {
         ]));
         encounter.restart();
         assert_eq!(encounter.enemies().count(), 1);
+    }
+
+    #[test]
+    fn earlier_second_stage_count_gate_releases_with_two_survivors() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, true);
+        encounter.enter_stage_two(1416);
+        encounter.admit(1184);
+        defeat_prefix(&mut encounter, 9);
+        assert_eq!(encounter.limit_travel(1183), 1183);
+        assert_eq!(encounter.limit_travel(1416), 1184);
+        defeat_prefix(&mut encounter, 10);
+        assert_eq!(encounter.limit_travel(1416), 1264);
+        encounter.admit(1258);
+        assert_eq!(encounter.limit_travel(1416), 1264);
+        defeat_prefix(&mut encounter, 12);
+        assert_eq!(encounter.limit_travel(1416), 1416);
     }
 
     #[test]

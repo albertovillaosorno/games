@@ -5316,3 +5316,12 @@ either optional record in all five native display modes. Departure-only
 and inflated-only catalogues each passed the adaptive native route.
 All seven independent regression runs reached 1,416 columns; the
 departure-only run retained its separate layer readback checkpoint.
+
+A subsequent pair of full earlier-gate captures reproduces both original
+regular-object traces and confirms the distinct 1,184-column cap. It
+holds for 97 control and 56 delayed ticks while the primary count exceeds
+two. Both release at two counted actors and advance immediately. The
+same native cohort approximation now handles this threshold before the
+1,264-column cap, with a regression distinguishing their release counts.
+Other source control states, including the 1,024-column record, retain
+mixed observations and are not mapped to this approximation.
