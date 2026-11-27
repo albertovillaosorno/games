@@ -242,13 +242,16 @@ impl BonusArt {
             BonusPhase::Pumping => 2,
             BonusPhase::Results => 3,
             BonusPhase::Complete => 4,
-            BonusPhase::StageCard => 5,
+            BonusPhase::StageCard | BonusPhase::StageSetup => 5,
         };
         let header = self
             .headers
             .get(language)
             .ok_or(RenderError::InvalidSprite)?;
-        if bonus.phase() == BonusPhase::StageCard {
+        if matches!(
+            bonus.phase(),
+            BonusPhase::StageCard | BonusPhase::StageSetup
+        ) {
             draws.push(header.draw(phase, 16, 100)?);
             return Ok(());
         }

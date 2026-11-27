@@ -4718,3 +4718,32 @@ continue to use the existing mechanics. Regressions exercise each
 station with right, opposed horizontal and opposed vertical input
 at three adjacent sample offsets and verify canceled translation.
 These observations do not establish pixel-exact animation equivalence.
+
+### Second-stage setup visibility
+
+Eighteen consecutive original displayed frames spanning the end of
+Stage 2's card confirm an eleven-tick scene setup. Independent
+neutral, reversed-direction and primary-edge controls agree on the
+phase boundaries. The last nine setup frames and the entrance's
+initial frame are identically opaque black; the stage becomes
+visible on entrance tick one and the vehicle on tick two.
+
+Native retains the card's verified logical input gate, adds the
+separate eleven-tick unskippable setup, and clears the game raster
+for the ten observed black frames. The arrival, landing and vehicle
+tracks keep their existing elapsed ticks. Pause suspends setup,
+reset clears it, and fresh action edges cannot accelerate it.
+The existing localized card is held for the first two setup frames
+rather than approximating an unverified original fade. The modern
+menu and touch panel remain available. Stage music still starts at
+admission; the audible original cue onset is not established.
+
+The optimized 4,000,304-byte Linux executable passed original-backed
+offscreen OpenGL, synthetic touch and dummy-audio campaign smoke in
+all five display modes. Readback checks cover each setup frame,
+including exactly ten entirely black game rasters, the first visible
+stage frame, the vehicle and landing, and routed combat through all
+270 available columns. All 600 movement and 20 combat submissions
+per mode met the 16.667 ms budget; whole-smoke peak RSS ranged from
+183,214,080 to 183,365,632 bytes. Exact card art, fade, audible cue
+alignment and physical presentation acceptance remain open.

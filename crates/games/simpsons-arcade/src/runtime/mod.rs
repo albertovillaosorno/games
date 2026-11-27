@@ -687,7 +687,10 @@ impl Scene {
             .ok_or(RenderError::InvalidSprite)?;
         let hud = locale.hud;
         let panel_draw = locale.panel.or(self.panel);
-        self.queue_stage(cabinet, view, hud)?;
+        let blank = cabinet.stage_scene_hidden();
+        if !blank {
+            self.queue_stage(cabinet, view, hud)?;
+        }
         self.queue_menu(cabinet, center, editor)?;
         if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused)
             && cabinet.bonus().is_none()
@@ -714,7 +717,12 @@ impl Scene {
             panel.destination.x = center;
             self.draws.push(panel);
         }
-        scene.present([24, 22, 30], &self.draws)
+        let clear = if blank {
+            [0; 3]
+        } else {
+            [24, 22, 30]
+        };
+        scene.present(clear, &self.draws)
     }
 
     fn presentation_view(

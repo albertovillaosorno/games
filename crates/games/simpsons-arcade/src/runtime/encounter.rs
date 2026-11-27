@@ -776,8 +776,10 @@ fn smoke_stage_two(
     let before = scene.readback()?;
     verify_stage_card(scene, art, simulation, &before)?;
     let card_pixels = scene.readback()?;
+    verify_stage_setup(scene, art, simulation)?;
     let entry = simulation.state();
     if !entry.stage_two()
+        || entry.stage_entrance().map(crate::StageEntrance::tick) != Some(1)
         || entry.camera_origin() != 0
         || entry.bonus().is_some()
         || entry.wrestler().is_some()
@@ -787,7 +789,7 @@ fn smoke_stage_two(
     let impacts = entry.impact_cues();
     let _entry = art.present(scene, entry)?;
     let entry_pixels = scene.readback()?;
-    if card_pixels == entry_pixels {
+    if card_pixels == entry_pixels || game_scene_black(scene)? {
         return Err(failure("second-stage entry did not change readback"));
     }
     verify_stage_entrance(scene, art, simulation, &entry_pixels)?;
@@ -816,6 +818,53 @@ fn smoke_stage_two(
     Err(failure("second-stage combat or travel was not reached"))
 }
 
+fn verify_stage_setup(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    for elapsed in 0..12u16 {
+        let cabinet = simulation.state();
+        let blank = elapsed >= 2;
+        if cabinet.stage_scene_hidden() != blank {
+            return Err(failure("second-stage setup visibility shifted"));
+        }
+        if elapsed == 11
+            && cabinet.stage_entrance().map(crate::StageEntrance::tick)
+                != Some(0)
+        {
+            return Err(failure("setup changed the entrance clock"));
+        }
+        let _drawn = art.present(scene, cabinet)?;
+        if game_scene_black(scene)? != blank {
+            return Err(failure("second-stage setup readback mismatch"));
+        }
+        advance(simulation, 1)?;
+    }
+    write_status(format_args!("Second stage: ten blank game frames verified"))
+        .map_err(failure)
+}
+
+fn game_scene_black(
+    scene: &mut SceneSession<'_, '_>,
+) -> Result<bool, RenderError> {
+    let width = scene.layout().width().get();
+    let pixels = scene.readback()?;
+    for y in 0..super::world::BASE_HEIGHT {
+        let row = rgba_row(&pixels, width, (0, y), width)
+            .ok_or(RenderError::InvalidLength)?;
+        if row
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| *pixel != [0, 0, 0, 255])
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn verify_stage_entrance(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -823,7 +872,7 @@ fn verify_stage_entrance(
     before: &[u8],
 ) -> Result<(), RenderError> {
     let entry = *simulation.state();
-    advance(simulation, 180)?;
+    advance(simulation, 179)?;
     let descent = simulation.state();
     if descent
         .stage_entrance()

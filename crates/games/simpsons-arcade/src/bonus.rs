@@ -51,6 +51,9 @@ const RESULT_EXIT_STAGGER: u16 = 15;
 const RESULT_EXIT_TICKS: u16 = 160;
 const STAGE_CARD_MIN_TICKS: u16 = 65;
 const STAGE_CARD_MAX_TICKS: u16 = 192;
+// Separate measured setup phase; the entrance starts with its own tick 0.
+const STAGE_SETUP_TICKS: u16 = 11;
+const STAGE_SETUP_BLANK: u16 = 2;
 const REST_TICKS: u8 = 16;
 const INVERSE_BASE: u16 = 0xb000;
 const MIN_WIDTH: u16 = 0x4000;
@@ -76,6 +79,8 @@ pub enum BonusPhase {
     Results,
     /// Await the next stage through a bounded, skippable title card.
     StageCard,
+    /// Finish the noninteractive scene setup after the title card.
+    StageSetup,
     /// Hold the cleared street before the bonus.
     Victory,
 }
@@ -317,7 +322,12 @@ pub struct Bonus {
 
 impl Bonus {
     pub(super) fn advance(&mut self, presses: [bool; 4]) {
-        if matches!(self.phase, BonusPhase::Complete | BonusPhase::StageCard) {
+        if matches!(
+            self.phase,
+            BonusPhase::Complete
+                | BonusPhase::StageCard
+                | BonusPhase::StageSetup
+        ) {
             return;
         }
         self.tick = self.tick.saturating_add(1);
@@ -341,6 +351,7 @@ impl Bonus {
             | BonusPhase::Instructions
             | BonusPhase::Ready
             | BonusPhase::StageCard
+            | BonusPhase::StageSetup
             | BonusPhase::Victory => self.phase,
         };
         if next != self.phase {
@@ -359,7 +370,7 @@ impl Bonus {
         }
     }
 
-    /// Advance only when the optional next stage is configured.
+    /// Advance the card and setup only when the next stage is configured.
     pub(super) fn advance_stage_card(&mut self, presses: [bool; 4]) -> bool {
         if self.phase == BonusPhase::Complete {
             self.phase = BonusPhase::StageCard;
@@ -367,9 +378,17 @@ impl Bonus {
             return false;
         }
         self.tick = self.tick.saturating_add(1);
-        self.tick >= STAGE_CARD_MAX_TICKS
+        if self.phase == BonusPhase::StageSetup {
+            return self.tick >= STAGE_SETUP_TICKS;
+        }
+        if self.tick >= STAGE_CARD_MAX_TICKS
             || (self.tick >= STAGE_CARD_MIN_TICKS
                 && self.any_admitted_edge(presses))
+        {
+            self.phase = BonusPhase::StageSetup;
+            self.tick = 0;
+        }
+        false
     }
 
     fn any_admitted_edge(self, presses: [bool; 4]) -> bool {
@@ -467,6 +486,11 @@ impl Bonus {
     pub fn rank(self, player: Player) -> Option<u8> {
         let result = self.result?;
         Some(result.rank(result.score(player)?))
+    }
+
+    pub(super) const fn stage_setup_blank(self) -> bool {
+        matches!(self.phase, BonusPhase::StageSetup)
+            && self.tick >= STAGE_SETUP_BLANK
     }
 
     /// Fixed playing ticks in the current phase.
