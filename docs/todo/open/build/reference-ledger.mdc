@@ -967,3 +967,13 @@ second-stage actor-count gate with the native regular-cohort cap at
 intentional runtime replacements and unchanged function, flow, dependency
 and disposition counts. Original actor eligibility, scheduling, absolute
 departure poses and pixel parity remain unresolved.
+
+The same partial actor-count mapping now covers the earlier second-stage
+1,184-column gate. Matched original control and delayed traces held
+for 97 and 56 active ticks, respectively, with no count-threshold
+violations. Both released with two counted actors and advanced
+immediately. The portable regular-cohort model distinguishes this
+threshold from the later one-survivor gate, with regression coverage
+and all five extended native display modes passing. The checker retains
+43 partial mappings and unchanged dispositions; the ambiguous earlier
+control states and exact original eligibility remain unresolved.
