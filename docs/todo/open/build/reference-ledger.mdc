@@ -150,3 +150,42 @@ sound transport function have explicit unresolved semantic reviews.
 The inventory check still reports 788 identities and 2,893 reciprocal
 pairs; disposition totals are 674 discovered, 112 unresolved and two
 non-runtime. No additional runtime equivalence is claimed.
+
+A further main-CPU state-dispatch checkpoint expands the private
+inventory from 102 to 155 identities, comprising 114 fixed functions
+and 41 functions in three bank overlays. All 9,434 decoded instruction
+bytes have an owner. Eleven constant-selector bank paths and 29 newly
+reviewed selector observations support conditional graph edges; the
+main graph contains 109 possible bank/table edges, 31 unresolved flow
+records and 24 interior-entry observations. The numeric state selectors
+are not identified as campaign stages. The merged checker reports 841
+functions, 27,773 owned instruction bytes and 2,978 reciprocal graph
+pairs; dispositions are 727 discovered, 112 unresolved and two
+non-runtime. All audio records and earlier main semantic reviews are
+preserved. Original byte evidence and analysis projects remain private.
+
+Fourteen additional main functions have semantic dispositions. The
+four-station sampled-input routine is a deliberate modern replacement:
+shared logical-device transitions, station-local held controls and
+session gating replace the hardware sampling record. Existing input,
+walk and pause regression tests support the replacement; exact original
+sampling-inhibit timing is not asserted. Thirteen other functions have
+verified arithmetic, queue, record-search or input-accounting behavior
+but unresolved gameplay semantics and Rust mappings. The combined
+ledger dispositions are 713 discovered, 125 unresolved, one intentional
+replacement and two non-runtime. No function is claimed implemented
+with exact original behavior.
+
+The inventory checker now requires detailed flow records to reconcile
+with each function's distinct callee set. It checks numeric site and
+target addresses, entry/interior labels, nonempty provenance and
+duplicate observations; distinct selector or assignment evidence may
+share a source and target. Explicit unresolved observations are counted
+and checked independently. This is a consistency gate, not disassembly,
+function-body ownership or runtime reachability verification.
+
+Fresh workspace validation and the detailed check on the private ledger
+passed. The 2,978 reciprocal pairs reconcile with 3,264 detailed flow
+records, including 75 interior-entry observations and 31 explicit
+unresolved records. Interior labels are checked against numeric entry
+addresses, not asserted to be accurate function boundaries.

@@ -4028,3 +4028,38 @@ Additional callback and table-effect reviews bring the audio total
 to 112 reviewed functions, and the main CPU to two reviewed functions.
 The latter include the sound-command transport, whose gameplay command
 meaning and Rust replacement remain unresolved.
+
+### Main-CPU state dispatch discovery
+
+The next static discovery checkpoint reconciles interrupt-state writes,
+conditional nested dispatch tables, queued command selectors and new
+bank transitions. The main inventory contains 155 functions with 9,434
+owned decoded instruction bytes across the fixed region and three bank
+overlays. The private graph retains 109 possible bank/table edges,
+31 unresolved flow records and 24 interior-entry observations. No
+unclassified selector, runtime bank context or function-boundary ambiguity
+is counted as resolved. The merged ledger contains 841 identities; the
+686 audio records and existing semantic dispositions are unchanged.
+The static numeric states are not yet mapped to campaign stages, and
+no new gameplay or platform acceptance is claimed.
+
+Fourteen further main functions have semantic dispositions. The original
+four-station sampling routine is explicitly replaced by shared routed
+logical inputs and per-station held/edge state under modern session
+policy. Thirteen queue, arithmetic and record/accounting routines remain
+unresolved after semantic review. The title's free-play requirement does
+not justify claiming unverified historical credit or score semantics.
+
+### Original-backed browser campaign diagnostic
+
+The explicit scenery diagnostic now reuses routed native encounter
+readbacks for the admitted second-stage art selection. An isolated
+Firefox run selected the original-backed 1,076-file trusted folder,
+verified 57 readbacks and 62 blits, and reached wrestler clearance,
+balloon pumping, paused bonus state, bonus completion and routed
+second-stage combat. The run also verified the stationary actor, scenic
+pair, 15 backdrop phases and 270 second-stage columns, with no remaining
+canvas or stored preferences. The first directory chooser attempt timed
+out; a second explicit directory and upload selection succeeded. This
+is finite diagnostic evidence, not physical/browser audible playback,
+complete campaign parity or interactive controller/touch acceptance.

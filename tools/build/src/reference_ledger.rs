@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Read-only function ledger identity and graph consistency checks.
+//   - Read-only function ledger identity and flow consistency checks.
 // - Must-Not:
 //   - Infer semantics, claim parity or alter private research records.
 // - Allows:
 //   - Inputs: A local JSON Lines ledger and explicit byte and row bounds.
-//   - Outputs: Aggregate function, status and graph counts.
+//   - Outputs: Aggregate function, status, graph and flow counts.
 //   - Side effects: Bounded file admission and aggregate output only.
 // - Split-When:
 //   - Another ledger format requires independent schema admission.
@@ -75,6 +75,11 @@ impl Arguments {
             report.functions, report.bytes, report.pairs, report.auxiliary,
         ))
         .map_err(|error| error.to_string())?;
+        write_line(&format!(
+            "Flow records: {}; interior entries: {}; unresolved: {}",
+            report.flows, report.interior, report.unresolved,
+        ))
+        .map_err(|error| error.to_string())?;
         for (status, count) in report.statuses {
             write_line(&format!("{status}: {count}"))
                 .map_err(|error| error.to_string())?;
@@ -95,6 +100,7 @@ struct Function {
     cpu: String,
     edition: String,
     entry_address: String,
+    flow_edges: Vec<FlowEdge>,
     id: String,
     module: String,
     original_name: String,
@@ -103,19 +109,120 @@ struct Function {
     semantic_name: Option<String>,
     status: String,
     test_evidence: Option<Value>,
+    #[serde(default)]
+    unresolved_flows: Vec<UnresolvedFlow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FlowEdge {
+    evidence: BTreeMap<String, Value>,
+    interior_entry: bool,
+    kind: String,
+    site: String,
+    target: String,
+    target_address: String,
+}
+
+impl FlowEdge {
+    fn validate(&self, target: &Function) -> Result<(), &'static str> {
+        if address(&self.site).is_none()
+            || address(&self.target_address).is_none()
+        {
+            return Err("invalid flow address");
+        }
+        if self.kind.trim().is_empty()
+            || !nonempty(self.evidence.get("kind").and_then(Value::as_str))
+        {
+            return Err("missing flow provenance");
+        }
+        if self.interior_entry
+            == (address(&self.target_address) == address(&target.entry_address))
+        {
+            return Err("inconsistent interior entry");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct UnresolvedFlow {
+    kind: String,
+    site: String,
+    target: Option<String>,
+}
+
+impl UnresolvedFlow {
+    fn validate(&self) -> Result<(), &'static str> {
+        if address(&self.site).is_none()
+            || self
+                .target
+                .as_deref()
+                .is_some_and(|value| address(value).is_none())
+            || self.kind.trim().is_empty()
+        {
+            return Err("invalid unresolved flow");
+        }
+        Ok(())
+    }
 }
 
 impl Function {
+    fn audit_flows(
+        &self,
+        functions: &BTreeMap<String, Self>,
+        report: &mut Report,
+    ) -> Result<(), String> {
+        let failure =
+            |message: &str| format!("function {}: {message}", self.id);
+        let mut targets = BTreeSet::new();
+        let mut records = BTreeSet::new();
+        for flow in &self.flow_edges {
+            let target = functions
+                .get(&flow.target)
+                .ok_or_else(|| failure("dangling detailed flow target"))?;
+            flow.validate(target).map_err(failure)?;
+            let evidence = serde_json::to_string(&flow.evidence)
+                .map_err(|_error| failure("invalid flow provenance"))?;
+            if !records.insert((
+                address(&flow.site),
+                &flow.kind,
+                &flow.target,
+                address(&flow.target_address),
+                evidence,
+            )) {
+                return Err(failure("duplicate detailed flow record"));
+            }
+            let _inserted = targets.insert(flow.target.as_str());
+            report.interior = report
+                .interior
+                .saturating_add(usize::from(flow.interior_entry));
+        }
+        if targets != self.callees.iter().map(String::as_str).collect() {
+            return Err(failure("detailed flow targets differ from callees"));
+        }
+        report.flows = report.flows.saturating_add(self.flow_edges.len());
+
+        let mut unresolved = BTreeSet::new();
+        for flow in &self.unresolved_flows {
+            flow.validate().map_err(failure)?;
+            if !unresolved.insert((
+                address(&flow.site),
+                &flow.kind,
+                flow.target.as_deref().and_then(address),
+            )) {
+                return Err(failure("duplicate unresolved flow record"));
+            }
+        }
+        report.unresolved = report.unresolved.saturating_add(unresolved.len());
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), &'static str> {
         let address = self
             .entry_address
             .strip_prefix("0x")
             .ok_or("missing hexadecimal address prefix")?;
-        if address.is_empty()
-            || !address.bytes().all(|byte| {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-            })
-        {
+        if !hexadecimal(address) {
             return Err("invalid entry address");
         }
         let components = [
@@ -172,9 +279,12 @@ impl Function {
 struct Report {
     auxiliary: usize,
     bytes: u64,
+    flows: usize,
     functions: usize,
+    interior: usize,
     pairs: usize,
     statuses: BTreeMap<String, usize>,
+    unresolved: usize,
 }
 
 fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
@@ -221,7 +331,7 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
         return Err(String::from("ledger contains no functions"));
     }
     report.functions = functions.len();
-    report.pairs = graph(&functions)?;
+    graph(&functions, &mut report)?;
     Ok(report)
 }
 
@@ -240,7 +350,10 @@ fn evidence(value: &Value) -> bool {
     }
 }
 
-fn graph(functions: &BTreeMap<String, Function>) -> Result<usize, String> {
+fn graph(
+    functions: &BTreeMap<String, Function>,
+    report: &mut Report,
+) -> Result<(), String> {
     let mut inbound = BTreeSet::new();
     let mut outbound = BTreeSet::new();
     for (id, function) in functions {
@@ -262,7 +375,23 @@ fn graph(functions: &BTreeMap<String, Function>) -> Result<usize, String> {
     if inbound != outbound {
         return Err(String::from("nonreciprocal function graph"));
     }
-    Ok(outbound.len())
+    report.pairs = outbound.len();
+    for function in functions.values() {
+        function.audit_flows(functions, report)?;
+    }
+    Ok(())
+}
+
+fn address(value: &str) -> Option<&str> {
+    let digits = value.strip_prefix("0x")?;
+    hexadecimal(digits).then_some(digits.trim_start_matches('0'))
+}
+
+fn hexadecimal(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn identifier(value: &str) -> bool {
@@ -282,6 +411,17 @@ mod tests {
 
     use super::*;
 
+    fn flow(site: &str, target: &str, entry: &str) -> Value {
+        serde_json::json!({
+            "evidence": {"kind": "fixture"},
+            "interior_entry": false,
+            "kind": "direct_call",
+            "site": site,
+            "target": target,
+            "target_address": entry,
+        })
+    }
+
     fn record(address: &str, inbound: &[&str], outbound: &[&str]) -> Value {
         serde_json::json!({
             "address_space": "program",
@@ -292,6 +432,10 @@ mod tests {
             "confidence": "fixture",
             "cpu": "Z80",
             "edition": "fixture",
+            "flow_edges": outbound.iter().map(|target| {
+                let entry = target.rsplit(':').next().unwrap_or_default();
+                flow(&format!("0x{address}"), target, &format!("0x{entry}"))
+            }).collect::<Vec<_>>(),
             "entry_address": format!("0x{address}"),
             "id": format!("audio:z80:program:fixed:{address}"),
             "module": "audio",
@@ -328,11 +472,127 @@ mod tests {
         if report.functions != 2
             || report.bytes != 6
             || report.pairs != 1
+            || report.flows != 1
+            || report.interior != 0
+            || report.unresolved != 0
             || report.auxiliary != 1
             || report.statuses.get("discovered") != Some(&2)
             || audit(&input, NonZeroUsize::MIN).is_ok()
         {
             return Err(String::from("ledger counts or row budget differ"));
+        }
+        Ok(())
+    }
+
+    fn set_field(
+        value: &mut Value,
+        field: &str,
+        replacement: Value,
+    ) -> Result<(), String> {
+        let object = value.as_object_mut().ok_or("fixture object")?;
+        let _previous = object.insert(field.to_owned(), replacement);
+        Ok(())
+    }
+
+    fn edges(value: &mut Value) -> Result<&mut Vec<Value>, String> {
+        value
+            .get_mut("flow_edges")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| String::from("fixture edges"))
+    }
+
+    #[test]
+    fn reconciles_aliased_targets_and_unresolved_observations()
+    -> Result<(), String> {
+        let limit = NonZeroUsize::new(2).ok_or("fixture limit")?;
+        let [mut first, second] = pair();
+        let target = "audio:z80:program:fixed:0002";
+        let mut alias = flow("0x1", target, "0x3");
+        set_field(&mut alias, "interior_entry", Value::Bool(true))?;
+        set_field(&mut alias, "kind", Value::from("possible_table_call"))?;
+        let provenance = serde_json::json!({"kind": "table", "selector": 1u8});
+        set_field(&mut alias, "evidence", provenance)?;
+        let mut second_alias = alias.clone();
+        let other = serde_json::json!({"kind": "table", "selector": 2u8});
+        set_field(&mut second_alias, "evidence", other)?;
+        edges(&mut first)?.extend([alias, second_alias]);
+        let unresolved = serde_json::json!([
+            {"kind": "alternate_context", "site": "0x0001"},
+            {
+                "kind": "unmapped_target",
+                "site": "0x0001",
+                "target": "0x0004"
+            }
+        ]);
+        set_field(&mut first, "unresolved_flows", unresolved)?;
+        let report = audit(&lines(&[first, second]), limit)?;
+        if report.pairs != 1
+            || report.flows != 3
+            || report.interior != 2
+            || report.unresolved != 2
+        {
+            return Err(String::from("detailed flow counts differ"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_missing_conflicting_and_duplicate_flow_records()
+    -> Result<(), String> {
+        let limit = NonZeroUsize::new(2).ok_or("fixture limit")?;
+        let [first, second] = pair();
+        let mut missing = first.clone();
+        let _removed = missing
+            .as_object_mut()
+            .ok_or("fixture")?
+            .remove("flow_edges");
+        let mut empty = first.clone();
+        set_field(&mut empty, "flow_edges", serde_json::json!([]))?;
+        let mut duplicate = first.clone();
+        let original = edges(&mut duplicate)?.first().ok_or("edge")?.clone();
+        edges(&mut duplicate)?.push(original);
+        for invalid in [missing, empty, duplicate] {
+            if audit(&lines(&[invalid, second.clone()]), limit).is_ok() {
+                return Err(String::from("accepted missing or duplicate flow"));
+            }
+        }
+        for (field, value) in [
+            ("site", Value::from("0001")),
+            ("target", Value::from("audio:z80:program:fixed:0009")),
+            ("target_address", Value::from("0x0003")),
+            ("interior_entry", Value::Bool(true)),
+            ("evidence", serde_json::json!({})),
+            ("kind", Value::from(" ")),
+        ] {
+            let mut invalid = first.clone();
+            let edge = edges(&mut invalid)?.first_mut().ok_or("edge")?;
+            set_field(edge, field, value)?;
+            if audit(&lines(&[invalid, second.clone()]), limit).is_ok() {
+                return Err(String::from("accepted conflicting flow field"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_and_duplicate_unresolved_records() -> Result<(), String>
+    {
+        let mut fixture = record("0001", &[], &[]);
+        for invalid in [
+            serde_json::json!([{"site": "bad", "kind": "computed"}]),
+            serde_json::json!([{"site": "0x0001", "kind": ""}]),
+            serde_json::json!([{
+                "site": "0x0001", "kind": "computed", "target": "bad"
+            }]),
+            serde_json::json!([
+                {"site": "0x0001", "kind": "computed"},
+                {"site": "0x0001", "kind": "computed"}
+            ]),
+        ] {
+            set_field(&mut fixture, "unresolved_flows", invalid)?;
+            if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {
+                return Err(String::from("accepted invalid unresolved flow"));
+            }
         }
         Ok(())
     }
