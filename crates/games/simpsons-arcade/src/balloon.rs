@@ -51,6 +51,18 @@ const CONTACT_STRIKE: u8 = 16;
 const CONTACT_END: u8 = 48;
 const TARGET_HOLD: u8 = 64;
 const DEFEAT_END: u8 = 140;
+// Both controls rose from 32 to 128 in 32 ticks, then stopped for
+// one tick. The 32-tick hold ends at tick 99; acknowledgement differs.
+const TERMINAL_RISE_END: u8 = 32;
+const TERMINAL_SETTLE_START: u8 = 34;
+const TERMINAL_SCALE_END: u8 = 66;
+const TERMINAL_FALL_START: u8 = DEFEAT_END.saturating_sub(27);
+const ACTIVE_ELEVATION: i16 = 32;
+const TERMINAL_APEX: i16 = 128;
+// Boardwalk actor coordinates are displaced 43 pixels from the screen.
+const RECOIL_LEFT: i16 = 21;
+const RECOIL_RIGHT: i16 = 340;
+const SETTLE_CENTER: i16 = 165;
 
 /// Current fixed-step balloon boss phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,7 +132,9 @@ impl BalloonBoss {
             BalloonAction::Approach => self.approach(layout, slots),
             BalloonAction::Contact { tick } => self.contact(tick, slots),
             BalloonAction::Response { phase } => self.respond(phase),
-            BalloonAction::Terminal { tick } => self.terminal(tick, slots),
+            BalloonAction::Terminal { tick } => {
+                self.terminal(tick, layout, slots)
+            },
             BalloonAction::Cleared => BalloonAction::Cleared,
         };
         false
@@ -212,8 +226,7 @@ impl BalloonBoss {
             self.quantity = self.quantity.saturating_sub(HIT_QUANTITY);
             struck = true;
             if self.quantity == 0 {
-                self.defeat_credit = Some(player);
-                self.action = BalloonAction::Terminal { tick: 0 };
+                self.start_terminal(player, slot.station.position.x);
                 return true;
             }
         }
@@ -279,11 +292,26 @@ impl BalloonBoss {
         }
     }
 
-    fn terminal(&mut self, tick: u8, slots: &mut [Slot; 4]) -> BalloonAction {
+    const fn start_terminal(&mut self, player: Player, striker_x: i16) {
+        self.defeat_credit = Some(player);
+        // The last admitted strike supplies the recoil side.
+        self.facing = if self.position.x > striker_x {
+            Facing::Right
+        } else {
+            Facing::Left
+        };
+        self.action = BalloonAction::Terminal { tick: 0 };
+    }
+
+    fn terminal(
+        &mut self,
+        tick: u8,
+        layout: StreetLayout,
+        slots: &mut [Slot; 4],
+    ) -> BalloonAction {
         let next = tick.saturating_add(1);
-        // The two controls showed the terminal scale decrease beginning
-        // after the initial rising motion; the final readiness varies.
-        if (34..=66).contains(&next) {
+        self.terminal_horizontal(next, layout);
+        if (TERMINAL_SETTLE_START..=TERMINAL_SCALE_END).contains(&next) {
             self.scale = (
                 self.scale.0.saturating_sub(1),
                 self.scale.1.saturating_sub(1),
@@ -300,6 +328,54 @@ impl BalloonBoss {
         BalloonAction::Cleared
     }
 
+    /// Reference elevation during the terminal response.
+    ///
+    /// The portable readiness gate retains the provisional defeat duration.
+    #[must_use]
+    pub fn terminal_elevation(self) -> i16 {
+        match self.action {
+            BalloonAction::Terminal { tick } if tick <= TERMINAL_RISE_END => {
+                ACTIVE_ELEVATION
+                    .saturating_add(i16::from(tick).saturating_mul(3))
+            },
+            BalloonAction::Terminal { tick } if tick > TERMINAL_FALL_START => {
+                terminal_fall(tick.saturating_sub(TERMINAL_FALL_START))
+            },
+            BalloonAction::Terminal { .. } => TERMINAL_APEX,
+            BalloonAction::Cleared => 0,
+            BalloonAction::Approach
+            | BalloonAction::Contact { .. }
+            | BalloonAction::Intro { .. }
+            | BalloonAction::Response { .. } => ACTIVE_ELEVATION,
+        }
+    }
+
+    const fn terminal_horizontal(&mut self, tick: u8, layout: StreetLayout) {
+        let camera = layout.min.x.saturating_sub(StreetLayout::DOWNTOWN.min.x);
+        let speed = if tick <= TERMINAL_RISE_END {
+            if self.position.x < camera.saturating_add(RECOIL_LEFT) {
+                self.facing = Facing::Right;
+            } else if self.position.x > camera.saturating_add(RECOIL_RIGHT) {
+                self.facing = Facing::Left;
+            }
+            6
+        } else if tick >= TERMINAL_SETTLE_START {
+            self.facing =
+                if self.position.x <= camera.saturating_add(SETTLE_CENTER) {
+                    Facing::Right
+                } else {
+                    Facing::Left
+                };
+            4
+        } else {
+            return;
+        };
+        self.position.x = match self.facing {
+            Facing::Left => self.position.x.saturating_sub(speed),
+            Facing::Right => self.position.x.saturating_add(speed),
+        };
+    }
+
     /// Whether the boss contributes a sprite to the arena.
     #[must_use]
     pub const fn visible(self) -> bool {
@@ -312,6 +388,23 @@ impl BalloonBoss {
             | BalloonAction::Terminal { .. } => true,
         }
     }
+}
+
+fn terminal_fall(tick: u8) -> i16 {
+    // The paired controls differ by at most one pixel of fractional phase.
+    // Integrate the observed fractional gravity and limit the velocity byte.
+    let mut elevation = i32::from(TERMINAL_APEX)
+        .saturating_mul(256)
+        .saturating_add(127);
+    let mut velocity = 0i32;
+    for _ in 0..tick.min(27) {
+        velocity = velocity.saturating_sub(96);
+        if velocity < -2048i32 {
+            velocity = velocity.saturating_add(256);
+        }
+        elevation = elevation.saturating_add(velocity);
+    }
+    i16::try_from(elevation.max(0).div_euclid(256)).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -409,6 +502,72 @@ mod tests {
         assert_eq!(slots.map(|slot| slot.station.score), [0, 0, 0, 1]);
         assert!(!boss.advance(StreetLayout::DOWNTOWN, slots));
         assert_eq!(slots.map(|slot| slot.station.score), [0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn terminal_recoil_preserves_both_reference_paths() {
+        assert_recoil(226, Facing::Left, [
+            220, 184, 178, 34, 34, 166, 162, 162, 162,
+        ]);
+        assert_recoil(300, Facing::Right, [
+            306, 342, 336, 192, 192, 164, 168, 168, 168,
+        ]);
+    }
+
+    fn assert_recoil(start: i16, facing: Facing, samples: [i16; 9]) {
+        let mut slots = active_slots();
+        let mut boss = BalloonBoss::new(0);
+        boss.position.x = start;
+        boss.facing = facing;
+        boss.quantity = 0;
+        boss.scale = (64, 64);
+        boss.action = BalloonAction::Terminal { tick: 0 };
+        let mut tick = 0u8;
+        for (sample, expected) in
+            [1, 7, 8, 32, 33, 66, 67, 99, 113].into_iter().zip(samples)
+        {
+            for _ in tick..sample {
+                assert!(!boss.advance(StreetLayout::DOWNTOWN, &mut slots));
+            }
+            assert_eq!(boss.position.x, expected, "{sample}");
+            tick = sample;
+        }
+    }
+
+    #[test]
+    fn terminal_fall_stays_within_paired_fractional_phase() {
+        let first = [
+            128i16, 127, 127, 126, 124, 122, 120, 117, 114, 111, 107, 103, 99,
+            94, 88, 83, 77, 70, 64, 57, 49, 41, 34, 26, 18, 11, 3, 0,
+        ];
+        let second = [
+            128i16, 128, 127, 126, 124, 122, 120, 117, 114, 111, 107, 103, 99,
+            94, 89, 83, 77, 71, 64, 57, 49, 41, 34, 26, 18, 11, 3, 0,
+        ];
+        for (tick, (low, high)) in (0..=27u8).zip(first.into_iter().zip(second))
+        {
+            let actual = terminal_fall(tick);
+            assert!((low..=high).contains(&actual), "{tick}");
+        }
+    }
+
+    #[test]
+    fn response_scale_retains_the_observed_four_phase_cycle() {
+        let mut slots = active_slots();
+        let mut boss = BalloonBoss::new(0);
+        boss.action = BalloonAction::Response { phase: 0 };
+        boss.scale = (64, 64);
+        for tick in 1..=36u8 {
+            assert!(!boss.advance(StreetLayout::DOWNTOWN, &mut slots));
+            match tick {
+                1 => assert_eq!(boss.scale, (68, 64)),
+                8 | 9 => assert_eq!(boss.scale, (96, 64)),
+                17 | 18 | 35 | 36 => assert_eq!(boss.scale, (64, 64)),
+                26 | 27 => assert_eq!(boss.scale, (32, 96)),
+                _ => {},
+            }
+        }
+        assert_eq!(boss.action, BalloonAction::Approach);
     }
 
     #[test]

@@ -84,8 +84,9 @@ impl BalloonArt {
             basis.1,
             boss.scale.1,
         ))?;
+        let elevation = boss.terminal_elevation().saturating_add(8);
         let destination =
-            ground_position(scaled, view.project(boss.position), 40)?;
+            ground_position(scaled, view.project(boss.position), elevation)?;
         Ok(Some(art.draw(destination, boss.facing == Facing::Left)))
     }
 
