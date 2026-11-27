@@ -91,6 +91,7 @@ impl Arguments {
 #[derive(Debug, Deserialize)]
 struct Function {
     address_space: String,
+    analysis_state: Option<String>,
     bank: String,
     behavior: Option<String>,
     body_bytes: NonZeroU64,
@@ -98,15 +99,20 @@ struct Function {
     callers: Vec<String>,
     confidence: String,
     cpu: String,
+    data_dependencies: Option<Vec<String>>,
     edition: String,
     entry_address: String,
     flow_edges: Vec<FlowEdge>,
     id: String,
+    inputs: Option<Vec<String>>,
     module: String,
     original_name: String,
+    outputs: Option<Vec<String>>,
     rust_owner: Option<String>,
     rust_symbol: Option<String>,
+    semantic_evidence: Option<String>,
     semantic_name: Option<String>,
+    state_mutations: Option<Vec<String>>,
     status: String,
     test_evidence: Option<Value>,
     #[serde(default)]
@@ -249,6 +255,7 @@ impl Function {
         {
             return Err("missing function provenance");
         }
+        self.validate_semantic_review()?;
         self.validate_disposition()
     }
 
@@ -270,6 +277,27 @@ impl Function {
             || !self.test_evidence.as_ref().is_some_and(evidence)
         {
             return Err("resolved function lacks behavior or evidence");
+        }
+        Ok(())
+    }
+
+    fn validate_semantic_review(&self) -> Result<(), &'static str> {
+        if self.analysis_state.as_deref() != Some("semantic-reviewed") {
+            return Ok(());
+        }
+        if self.status == "discovered"
+            || !nonempty(self.semantic_name.as_deref())
+            || !nonempty(self.behavior.as_deref())
+            || !nonempty(self.semantic_evidence.as_deref())
+            || !review_list(self.inputs.as_deref())
+            || !review_list(self.outputs.as_deref())
+            || !review_list(self.state_mutations.as_deref())
+            || self
+                .data_dependencies
+                .as_deref()
+                .is_some_and(|entries| !review_list(Some(entries)))
+        {
+            return Err("incomplete semantic review");
         }
         Ok(())
     }
@@ -407,6 +435,10 @@ fn identifier(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
         })
+}
+
+fn review_list(value: Option<&[String]>) -> bool {
+    value.is_some_and(|items| items.iter().all(|item| !item.trim().is_empty()))
 }
 
 fn nonempty(value: Option<&str>) -> bool {
@@ -602,6 +634,47 @@ mod tests {
                 return Err(String::from("accepted invalid unresolved flow"));
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn checks_explicit_semantic_review_fields() -> Result<(), String> {
+        let mut reviewed = record("0001", &[], &[]);
+        for (field, value) in [
+            ("analysis_state", Value::from("semantic-reviewed")),
+            ("status", Value::from("unresolved")),
+            ("semantic_name", Value::from("fixture")),
+            ("behavior", Value::from("fixture")),
+            ("semantic_evidence", Value::from("fixture")),
+            ("inputs", serde_json::json!([])),
+            ("outputs", serde_json::json!(["result"])),
+            ("state_mutations", serde_json::json!([])),
+            ("data_dependencies", Value::Null),
+        ] {
+            set_field(&mut reviewed, field, value)?;
+        }
+        let report = audit(&reviewed.to_string(), NonZeroUsize::MIN)?;
+        if report.statuses.get("unresolved") != Some(&1) {
+            return Err(String::from("missing unresolved review"));
+        }
+        for (field, value) in [
+            ("semantic_name", Value::Null),
+            ("behavior", Value::from(" ")),
+            ("semantic_evidence", Value::Null),
+            ("inputs", Value::Null),
+            ("outputs", serde_json::json!([""])),
+            ("state_mutations", serde_json::json!([1u8])),
+            ("data_dependencies", serde_json::json!([" "])),
+            ("status", Value::from("discovered")),
+        ] {
+            let mut invalid = reviewed.clone();
+            set_field(&mut invalid, field, value)?;
+            if audit(&invalid.to_string(), NonZeroUsize::MIN).is_ok() {
+                return Err(format!("accepted invalid reviewed {field}"));
+            }
+        }
+        set_field(&mut reviewed, "data_dependencies", serde_json::json!([]))?;
+        let _report = audit(&reviewed.to_string(), NonZeroUsize::MIN)?;
         Ok(())
     }
 
