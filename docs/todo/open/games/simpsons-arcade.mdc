@@ -3240,3 +3240,14 @@ All 600 movement and 20 combat submissions per mode met the sampled
 exact combat and camera interactions, and original-backed browser
 and physical acceptance remain open. No private art is tracked and
 the default catalogue remains unchanged.
+
+The rebuilt 3,715,904-byte Linux executable also passed all five
+original-backed native display-mode smokes with 257 pose records
+(218 regular and 39 scenic; 21,146 catalogue bytes). Both cooperative
+families, their combined jump and Primary actions, dedicated restraint
+recovery, escape, eleven reinforcement meters and the impact and
+four ground-hurt cues remained operational. The projected scenic
+readback passed in every mode. No sampled submission missed the
+16.667 ms budget; lifetime peak RSS ranged from 148,258,816 to
+148,393,984 bytes. The complete 220-regular plus 41-scenic capacity
+is independently exercised by the catalogue regression.
