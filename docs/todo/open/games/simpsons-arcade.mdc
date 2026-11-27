@@ -3564,4 +3564,14 @@ submission missed its 16.667 ms budget. The executable was 3,873,840
 bytes; lifetime peak RSS across those five runs ranged from 154,537,984
 to 154,923,008 bytes. The private 275-record catalogue remained unchanged.
 All related changes passed fresh workspace and commit-hook validation.
-This is not fresh Firefox execution or physical device acceptance.
+Physical device acceptance remains open.
+
+Fresh Firefox execution also passed the corrected procedural title and
+localisation smoke (49 callbacks, 54 blits and clean canvas removal).
+The original-backed adaptive scenery diagnostic independently passed
+in three isolated profiles with absent, malformed and oversized locale
+storage. Each used the trusted folder chooser with 970 files, performed
+36 readbacks and 36 blits, verified both scenic tracks and all 15
+settled-camera backdrop phases, and removed the canvas. The two invalid
+stored values were preserved exactly with no other preference writes.
+No physical device or broader browser acceptance is inferred.
