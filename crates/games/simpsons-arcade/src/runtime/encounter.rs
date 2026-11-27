@@ -51,8 +51,8 @@ use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
 use super::{
-    Art, Controls, Scene, backdrop, cabinet_with_scroll, dimension, failure,
-    fixed, ground_position, linked, live, live_with_scroll, size,
+    Art, Controls, Scene, backdrop, cabinet_with_scroll, cemetery, dimension,
+    failure, fixed, ground_position, linked, live, live_with_scroll, size,
 };
 use crate::{
     BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase, CONTINUE_TICKS,
@@ -936,12 +936,47 @@ fn smoke_balloon(
         let cabinet = simulation.state();
         observe_balloon(scene, art, cabinet, &mut samples)?;
         if observe_balloon_score(cabinet, &mut terminal_score)? {
-            return finish_balloon_samples(samples);
+            finish_balloon_samples(samples)?;
+            return smoke_cemetery(scene, art, simulation);
         }
         let intent = cabinet.diagnostic_intent();
         advance_diagnostic(controls, simulation, held, intent)?;
     }
     Err(failure("balloon boss was not cleared through play"))
+}
+
+fn smoke_cemetery(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    if art.poses.cemetery.is_none() {
+        return Ok(());
+    }
+    if simulation.state().cemetery_entrance().is_none() {
+        advance(simulation, 1)?;
+    }
+    cemetery::verify(scene, art, simulation.state())?;
+    advance(simulation, 5)?;
+    cemetery::verify(scene, art, simulation.state())?;
+    advance(simulation, 187)?;
+    cemetery::verify(scene, art, simulation.state())?;
+    for ticks in [13u16, 5, 7, 7, 133, 6, 66] {
+        advance(simulation, ticks)?;
+        cemetery::verify(scene, art, simulation.state())?;
+    }
+    if simulation
+        .state()
+        .cemetery_entrance()
+        .map(crate::CemeteryEntrance::phase)
+        != Some(crate::CemeteryPhase::Landed)
+    {
+        return Err(failure("cemetery landing not reached"));
+    }
+    write_status(format_args!(
+        "Cemetery entrance: routed card, four backdrops and landing"
+    ))
+    .map_err(failure)
 }
 
 fn finish_balloon_samples(samples: u8) -> Result<(), RenderError> {

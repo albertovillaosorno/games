@@ -1509,7 +1509,10 @@ impl Cabinet {
     /// Whether the stage transition hides the game world.
     #[must_use]
     pub fn stage_scene_hidden(&self) -> bool {
-        self.bonus.is_some_and(Bonus::stage_setup_blank)
+        self.cemetery.is_some_and(|entrance| {
+            entrance.phase() == CemeteryPhase::Setup
+                && entrance.background_phase().is_none()
+        }) || self.bonus.is_some_and(Bonus::stage_setup_blank)
             || self
                 .stage_entrance
                 .is_some_and(|entrance| entrance.tick() == 0)

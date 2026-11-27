@@ -39,6 +39,7 @@ mod balloon;
 mod bonus;
 /// Local canonical directory browser launch.
 pub mod browser_preview;
+mod cemetery;
 mod controller;
 mod encounter;
 mod lan;
@@ -735,7 +736,10 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
     ) -> Result<world::View, RenderError> {
-        let active_world = if cabinet.stage_two() {
+        let cemetery = cabinet.cemetery_entrance().is_some();
+        let active_world = if cemetery {
+            None
+        } else if cabinet.stage_two() {
             Some(
                 self.poses
                     .stage_two
@@ -745,7 +749,7 @@ impl Scene {
         } else {
             self.world_art
         };
-        let width = if self.poses.backdrop.draw(cabinet).is_some() {
+        let width = if cemetery || self.poses.backdrop.draw(cabinet).is_some() {
             let base = FrameLayout::new(
                 dimension(world::BASE_WIDTH)?,
                 scene.layout().height(),
@@ -843,6 +847,40 @@ impl Scene {
             && let Some(draw) = self.poses.wrestler.fighter(boss, view)?
         {
             self.world.push((boss.position.y, draw));
+        }
+        Ok(())
+    }
+
+    fn queue_cemetery(
+        &mut self,
+        cabinet: &Cabinet,
+        entrance: crate::CemeteryEntrance,
+        (view, hud): (world::View, station_hud::StationHud),
+    ) -> Result<(), RenderError> {
+        let art = self
+            .poses
+            .cemetery
+            .as_deref()
+            .ok_or(RenderError::InvalidSprite)?;
+        art.queue(entrance, &mut self.draws);
+        if entrance.background_phase().is_none()
+            || !cabinet.session().world_visible()
+        {
+            return Ok(());
+        }
+        let stations = cabinet.stations();
+        for (seat, player) in Player::ALL.into_iter().zip(cabinet.choices()) {
+            let station = *stations
+                .get(player.index())
+                .ok_or(RenderError::InvalidSprite)?;
+            if !station.can_fight() {
+                continue;
+            }
+            self.queue_station(
+                (player, seat),
+                (station, true, None),
+                (view, hud),
+            )?;
         }
         Ok(())
     }
@@ -1003,6 +1041,9 @@ impl Scene {
         view: world::View,
         hud: station_hud::StationHud,
     ) -> Result<(), RenderError> {
+        if let Some(entrance) = cabinet.cemetery_entrance() {
+            return self.queue_cemetery(cabinet, entrance, (view, hud));
+        }
         if let Some(bonus) = cabinet.bonus().filter(|bonus| {
             bonus.phase() != crate::BonusPhase::Victory
                 && cabinet.session().world_visible()

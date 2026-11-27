@@ -48,7 +48,7 @@ use games_platform::ir::storage::file::snapshot;
 use super::world::{self, StageArt, WorldArt};
 use super::{
     Art, KEYS, Maneuver, Player, Station, arrival, backdrop, balloon, bonus,
-    failure, linked, open_bundle, scenery, wrestler,
+    cemetery, failure, linked, open_bundle, scenery, wrestler,
 };
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
@@ -122,6 +122,7 @@ pub(super) struct Catalogue {
     bonus: Option<ContentHash>,
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
+    cemetery: Option<Box<cemetery::Selection>>,
     entries: BTreeMap<Key, ContentHash>,
     landing_markers: Option<ContentHash>,
     linked: Option<[ContentHash; linked::POSE_COUNT]>,
@@ -167,6 +168,10 @@ impl Catalogue {
             .saturating_add(
                 usize::from(self.balloon.is_some())
                     .saturating_mul(balloon::ATLAS_BYTES),
+            )
+            .saturating_add(
+                usize::from(self.cemetery.is_some())
+                    .saturating_mul(cemetery::ATLAS_BYTES),
             )
             .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
@@ -276,6 +281,7 @@ impl Catalogue {
             && (self.stage_two.is_none() || self.bonus.is_some())
             && (self.balloon.is_none()
                 || (self.linked.is_some() && self.backdrop.has_boardwalk()))
+            && (self.cemetery.is_none() || self.balloon.is_some())
             && (self.linked.is_none() || self.stage_two.is_some())
     }
 
@@ -294,6 +300,10 @@ impl Catalogue {
                 usize::from(self.balloon.is_some())
                     .saturating_mul(balloon::POSE_COUNT),
             )
+            .saturating_add(
+                usize::from(self.cemetery.is_some())
+                    .saturating_mul(cemetery::ROLE_COUNT),
+            )
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
             .saturating_add(usize::from(self.bonus_departure.is_some()))
@@ -310,6 +320,11 @@ impl Catalogue {
             .chain(self.scenery.digests())
             .chain(self.backdrop.digests())
             .chain(self.balloon.into_iter().flatten())
+            .chain(
+                self.cemetery
+                    .iter()
+                    .flat_map(|selection| selection.digests()),
+            )
             .chain(self.wrestler.digests())
             .chain(self.bonus)
             .chain(self.bonus_departure)
@@ -338,6 +353,7 @@ impl Catalogue {
                 self.balloon =
                     Some(balloon::parse(line, self.balloon.is_some())?);
             },
+            Some("cemetery-entrance") => self.insert_cemetery(line)?,
             Some("linked-actors") => {
                 self.linked = Some(linked::parse(line, self.linked.is_some())?);
             },
@@ -392,6 +408,14 @@ impl Catalogue {
         Ok(())
     }
 
+    fn insert_cemetery(&mut self, line: &str) -> Result<(), RenderError> {
+        if self.cemetery.is_some() {
+            return Err(failure("duplicate cemetery entrance"));
+        }
+        self.cemetery = Some(Box::new(cemetery::Selection::parse(line)?));
+        Ok(())
+    }
+
     pub(super) fn linked_sprite_count(&self) -> usize {
         usize::from(self.linked.is_some()).saturating_mul(linked::EXTRA_SPRITES)
     }
@@ -429,6 +453,14 @@ impl Catalogue {
                         scene,
                         (digest, self.bonus_departure, self.bonus_inflated),
                     )
+                })
+                .transpose()?,
+            cemetery: self
+                .cemetery
+                .as_deref()
+                .map(|selection| {
+                    cemetery::CemeteryArt::load(store, scene, selection)
+                        .map(Box::new)
                 })
                 .transpose()?,
             entries,
@@ -502,6 +534,10 @@ impl Catalogue {
             .saturating_add(self.linked_sprite_count())
             .saturating_add(self.balloon_sprite_count())
             .saturating_add(
+                usize::from(self.cemetery.is_some())
+                    .saturating_mul(cemetery::EXTRA_SPRITES),
+            )
+            .saturating_add(
                 usize::from(self.arrival.is_some())
                     .saturating_mul(arrival::EXTRA_SPRITES),
             )
@@ -522,6 +558,7 @@ pub(super) struct PoseArt {
     pub(super) backdrop: backdrop::BackdropArt,
     pub(super) balloon: Option<Box<balloon::BalloonArt>>,
     pub(super) bonus: Option<bonus::BonusArt>,
+    pub(super) cemetery: Option<Box<cemetery::CemeteryArt>>,
     entries: PoseEntries,
     pub(super) linked: Option<linked::LinkedArt>,
     pub(super) scenery: scenery::PlacedArt,
@@ -571,6 +608,13 @@ impl PoseArt {
                 .with_stage_two(travel)
                 .map(|state| state.with_linked_actors(self.linked.is_some()))
                 .map(|state| state.with_balloon_boss(self.balloon.is_some()))
+                .map(|state| {
+                    state.with_cemetery_entrance(
+                        self.cemetery
+                            .as_deref()
+                            .map(cemetery::CemeteryArt::first),
+                    )
+                })
                 .map_err(failure)
         } else {
             Ok(*cabinet)
@@ -686,6 +730,7 @@ impl PoseArt {
             backdrop: backdrop::BackdropArt::default(),
             balloon: None,
             bonus: None,
+            cemetery: None,
             entries: self
                 .entries
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
@@ -1866,6 +1911,7 @@ mod tests {
         assert!(
             Catalogue::parse(&format!("{complete}{record}{record}")).is_err()
         );
+        assert_cemetery_catalogue(&format!("{complete}{record}"), &complete);
     }
 
     fn assert_boardwalk_catalogue(
@@ -1908,6 +1954,66 @@ mod tests {
         assert!(
             Catalogue::parse(&format!("{full}stage-two-backdrop 31 {HASH}\n"))
                 .is_err()
+        );
+    }
+
+    fn assert_cemetery_budget(base: &Catalogue, selected: &Catalogue) {
+        assert_eq!(
+            selected.count(),
+            base.count().saturating_add(cemetery::ROLE_COUNT)
+        );
+        assert_eq!(
+            selected.atlas_count(),
+            base.atlas_count().saturating_add(cemetery::ROLE_COUNT)
+        );
+        assert_eq!(
+            selected.atlas_bytes(),
+            base.atlas_bytes().saturating_add(cemetery::ATLAS_BYTES)
+        );
+        assert_eq!(
+            selected.scenic_sprite_count(),
+            base.scenic_sprite_count()
+                .saturating_add(cemetery::EXTRA_SPRITES)
+        );
+        assert_eq!(selected.digests().count(), selected.count());
+    }
+
+    fn assert_cemetery_catalogue(with_boss: &str, without_boss: &str) {
+        let hashes: Vec<_> = "0123456789abcdef"
+            .chars()
+            .map(|digit| digit.to_string().repeat(64))
+            .collect();
+        let record = format!("cemetery-entrance homer {}\n", hashes.join(" "));
+        let base = Catalogue::parse(with_boss);
+        let selected = Catalogue::parse(&format!("{with_boss}{record}"));
+        assert!(base.is_ok() && selected.is_ok());
+        if let (Ok(baseline), Ok(value)) = (base, selected) {
+            assert_cemetery_budget(&baseline, &value);
+        }
+        assert!(Catalogue::parse(&format!("{without_boss}{record}")).is_err());
+        assert!(
+            Catalogue::parse(&format!("{with_boss}{record}{record}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!(
+                "{with_boss}{}",
+                record.replace("homer", "unknown")
+            ))
+            .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!(
+                "{with_boss}{}",
+                record.replace(&"f".repeat(64), "")
+            ))
+            .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!(
+                "{with_boss}{}",
+                record.replace(&"1".repeat(64), &"0".repeat(64))
+            ))
+            .is_err()
         );
     }
 
