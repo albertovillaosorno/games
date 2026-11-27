@@ -4307,3 +4307,20 @@ Fresh opt-in offscreen native renderer validation passed, including the
 zero-to-one digit readback and four-digit placement fixture. The first
 run encountered a timing-sensitive unrelated LAN test failure; the
 unchanged fresh retry passed. No physical display acceptance is claimed.
+
+### Routed score presentation regression
+
+The original-backed combat smoke now distinguishes the final enemy
+disappearance from the simultaneous score increment. It verifies zero
+before disappearance and one point for the successful station afterward,
+observes both rendered states, then compares complete readbacks with
+the score glyphs omitted. This preserves the earlier disappearance and
+blink checks without falsely requiring an unchanged HUD.
+
+The optimized Linux offscreen OpenGL and dummy-audio smoke passed the
+published opening configuration and the complete optional campaign
+configuration in aspect-fit and adaptive modes. Both campaign runs
+reached the wrestler, completed the balloon bonus and traversed the
+admitted second stage; the 600 movement and 20 combat submissions
+had no frame-budget misses. These are routed diagnostic observations,
+not physical device or full campaign parity claims.

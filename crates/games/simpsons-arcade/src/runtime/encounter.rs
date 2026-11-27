@@ -383,12 +383,54 @@ fn smoke_defeat(
     if hidden != scene.readback()? {
         return Err(failure("defeated enemy did not blink off"));
     }
-    advance(simulation, u16::from(ENEMY_DEFEAT_TICKS.saturating_sub(54)))?;
-    let _gone = art.present(scene, simulation.state())?;
-    if hidden != scene.readback()? {
-        return Err(failure("defeated enemy did not disappear"));
+    verify_defeat_score(scene, art, simulation, &hidden)
+}
+
+fn verify_defeat_score(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    hidden: &[u8],
+) -> Result<(), RenderError> {
+    if simulation.state().stations().map(|station| station.score) != [0; 4] {
+        return Err(failure("score awarded before disappearance"));
     }
+    let without_score =
+        readback_without_scores(scene, art, simulation.state())?;
+    if hidden == without_score {
+        return Err(failure("initial score was not rendered"));
+    }
+    advance(simulation, u16::from(ENEMY_DEFEAT_TICKS.saturating_sub(54)))?;
+    if simulation.state().stations().map(|station| station.score)
+        != [1, 0, 0, 0]
+    {
+        return Err(failure("defeat did not award the successful station"));
+    }
+    let _gone = art.present(scene, simulation.state())?;
+    let gone = scene.readback()?;
+    if hidden == gone || gone == without_score {
+        return Err(failure("updated score was not rendered"));
+    }
+    if without_score != readback_without_scores(scene, art, simulation.state())?
+    {
+        return Err(failure(
+            "defeated enemy changed the scene beyond its score",
+        ));
+    }
+    let _restored = art.present(scene, simulation.state())?;
     Ok(())
+}
+
+fn readback_without_scores(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<Vec<u8>, RenderError> {
+    let digits = art.score_digits.take().ok_or(RenderError::InvalidSprite)?;
+    let presented = art.present(scene, cabinet);
+    art.score_digits = Some(digits);
+    let _presented = presented?;
+    scene.readback()
 }
 
 fn smoke_join_meter(
