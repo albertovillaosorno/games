@@ -55,12 +55,13 @@ use super::{
     ground_position, live, live_with_scroll, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Control, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
-    Enemy, EnemyAction, FAR_STREET_ADMISSION, Facing,
+    CONTINUE_TICKS, Cabinet, Control, DiagnosticIntent, ENEMY_CAPACITY,
+    ENEMY_DEFEAT_TICKS, Enemy, EnemyAction, FAR_STREET_ADMISSION, Facing,
     GROUND_ATTACK_RECOVERY_TICKS, LATER_COMBAT_GATE, MID_STREET_ADMISSION,
     MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT, Maneuver,
     OPPOSING_ENEMY_COUNT, PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase,
     Player, Point, REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
+    Wrestler, WrestlerAction,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -351,7 +352,8 @@ pub(super) fn smoke(
     smoke_counterstrike(scene, art, touch_enabled)?;
     smoke_expiry(scene, art, touch_enabled)?;
     smoke_reinforcements(scene, art, touch_enabled)?;
-    smoke_restraint(scene, art, touch_enabled)
+    smoke_restraint(scene, art, touch_enabled)?;
+    smoke_wrestler(scene, art, touch_enabled)
 }
 
 fn smoke_defeat(
@@ -486,6 +488,30 @@ fn smoke_reinforcements(
         .map_err(failure)
 }
 
+fn advance_diagnostic(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    held: &mut Option<Control>,
+    (direction, requested): DiagnosticIntent,
+) -> Result<(), RenderError> {
+    if *held != direction {
+        if let Some(previous) = *held {
+            let scan = controls.key(Player::Marge, previous)?;
+            key(controls, simulation, scan, false)?;
+        }
+        if let Some(next) = direction {
+            let scan = controls.key(Player::Marge, next)?;
+            key(controls, simulation, scan, true)?;
+        }
+        *held = direction;
+    }
+    if let Some(action) = requested {
+        let scan = controls.key(Player::Marge, action)?;
+        pulse(controls, simulation, scan)?;
+    }
+    advance(simulation, 1)
+}
+
 fn smoke_later_reinforcements(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -502,23 +528,8 @@ fn smoke_later_reinforcements(
         if simulation.state().camera_origin() >= gate {
             break;
         }
-        let (direction, requested) = simulation.state().diagnostic_intent();
-        if held != direction {
-            if let Some(previous) = held {
-                let scan = controls.key(Player::Marge, previous)?;
-                key(&mut controls, &mut simulation, scan, false)?;
-            }
-            if let Some(next) = direction {
-                let scan = controls.key(Player::Marge, next)?;
-                key(&mut controls, &mut simulation, scan, true)?;
-            }
-            held = direction;
-        }
-        if let Some(action) = requested {
-            let scan = controls.key(Player::Marge, action)?;
-            pulse(&mut controls, &mut simulation, scan)?;
-        }
-        advance(&mut simulation, 1)?;
+        let intent = simulation.state().diagnostic_intent();
+        advance_diagnostic(&mut controls, &mut simulation, &mut held, intent)?;
     }
     if let Some(previous) = held {
         let scan = controls.key(Player::Marge, previous)?;
@@ -544,6 +555,111 @@ fn smoke_later_reinforcements(
         &mut simulation,
         (expected.saturating_sub(1), &mut seen),
     )
+}
+
+fn smoke_wrestler(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+) -> Result<(), RenderError> {
+    if !art.poses.wrestler.enabled() {
+        return Ok(());
+    }
+    let limit = u16::try_from(crate::LATE_BACKDROP_ORIGIN).map_err(failure)?;
+    let initial = cabinet_with_scroll(true, LocalSession::default(), limit)?
+        .with_late_wrestler(true);
+    let mut simulation = fixed(initial)?;
+    let mut controls = Controls::new(touch_enabled)?;
+    pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
+    advance(&mut simulation, 1)?;
+    let mut held = None;
+    let mut samples = 0u8;
+    for _ in 0..8000u16 {
+        let cabinet = simulation.state();
+        if observe_wrestler(scene, art, cabinet, &mut samples)? {
+            return write_status(format_args!(
+                "Wrestler: reached and cleared through routed input"
+            ))
+            .map_err(failure);
+        }
+        let intent = wrestler_intent(cabinet);
+        advance_diagnostic(&mut controls, &mut simulation, &mut held, intent)?;
+    }
+    Err(failure("wrestler was not cleared through play"))
+}
+
+fn observe_wrestler(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    samples: &mut u8,
+) -> Result<bool, RenderError> {
+    let Some(boss) = cabinet.wrestler() else {
+        return Ok(false);
+    };
+    let sample = wrestler_sample(boss);
+    if sample & *samples != sample {
+        verify_wrestler_art(scene, art, cabinet, boss.visible())?;
+        *samples |= sample;
+    }
+    if boss.action != WrestlerAction::Cleared {
+        return Ok(false);
+    }
+    if *samples != 63 || boss.health != 0 {
+        return Err(failure("wrestler milestones were incomplete"));
+    }
+    Ok(true)
+}
+
+fn wrestler_sample(boss: Wrestler) -> u8 {
+    if !boss.visible() && boss.action != WrestlerAction::Cleared {
+        return 0;
+    }
+    match boss.action {
+        WrestlerAction::Intro { .. } => 1,
+        WrestlerAction::Approach => 2,
+        WrestlerAction::Attack { .. } => 4,
+        WrestlerAction::Stagger { .. } => 8,
+        WrestlerAction::Defeat { .. } => 16,
+        WrestlerAction::Cleared => 32,
+    }
+}
+
+fn wrestler_intent(cabinet: &Cabinet) -> DiagnosticIntent {
+    let Some(boss) = cabinet.wrestler() else {
+        return cabinet.diagnostic_intent();
+    };
+    let [marge, ..] = cabinet.stations();
+    if matches!(marge.participation, Participation::Continuing { .. }) {
+        return (None, Some(Control::Start));
+    }
+    if !marge.can_fight() || matches!(boss.action, WrestlerAction::Intro { .. })
+    {
+        return (None, None);
+    }
+    let direction = crate::diagnostic_direction(marge, boss.position);
+    let attack = (direction.is_none() && marge.maneuver == Maneuver::Idle)
+        .then_some(Control::Primary);
+    (direction, attack)
+}
+
+fn verify_wrestler_art(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    visible: bool,
+) -> Result<(), RenderError> {
+    let _presented = art.present(scene, cabinet)?;
+    let pixels = scene.readback()?;
+    let saved = take(&mut art.poses.wrestler);
+    let omitted = art.present(scene, cabinet);
+    art.poses.wrestler = saved;
+    let _omitted = omitted?;
+    if (pixels != scene.readback()?) != visible {
+        return Err(failure("wrestler art visibility differs from state"));
+    }
+    let _restored = art.present(scene, cabinet)?;
+    Ok(())
 }
 
 fn smoke_reinforcement_gate(

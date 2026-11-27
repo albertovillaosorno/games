@@ -3657,3 +3657,42 @@ control on the corresponding refill tick rather than waiting for
 the full meter. The meter cadence is unchanged. Exact reentry
 animation, invulnerability, combat-edge timing and respawn position
 remain provisional. Original captures and PCM remain private.
+
+### Wrestler native traversal and victory sequence observations
+
+The opt-in wrestler diagnostic routes the same keyboard edges as the
+ordinary street smoke. From a fresh cabinet it traverses all prior
+encounters, reaches the late arena and clears the wrestler without
+mutating cabinet state directly. It samples six encounter phases:
+visible entrance, approach, attack, stagger, visible defeat and
+cleared. Each visible sample changes the rendered frame relative to
+omitting the optional wrestler art; the cleared frame does not.
+This verifies composite visibility, not exact original sprite
+placement or isolated visibility of every selected pose.
+
+The 3,898,624-byte optimized Linux executable passed original-backed
+offscreen touch smoke in aspect-fit, integer, fill, stretch and
+adaptive display modes. The complete local catalogue contains 286
+records (23,471 bytes). All five runs also verified the fifteen late
+backdrop phases and the existing stock-loss audio controls. Lifetime
+peak RSS ranged from 154,746,880 to 159,612,928 bytes. All 600 movement
+and 20 combat-strike submissions per run met the 16.667 ms budget;
+these are not a dedicated wrestler performance benchmark. Physical
+devices and the original fight's exact rules remain unverified.
+
+An additional isolated original-edition replay sampled 132 victory,
+bonus and Stage 2 frames at 20-frame intervals from device frame
+13,780 through 16,400. All six overlapping checkpoints match the
+earlier full-scene captures byte-for-byte. Each of the 132
+preceding-device/current-screen comparisons reproduces all 71,680
+pixels exactly. Excluding the original HUD and device objects yields
+21 distinct 320 by 196 RGBA8 rasters, including held backgrounds
+sampled from frames 14,100 through 14,660, 14,900 through 15,480 and
+15,940 through 16,360. These ranges describe sampled frames, not
+continuous per-tick equivalence or recovered transition rules.
+
+All 21 background payload and canonical manifest digests were
+independently read back from the local asset store. They remain
+unselected private transition evidence. No victory/bonus sequence,
+new stage admission or title-card timing has been implemented in
+the reconstruction.
