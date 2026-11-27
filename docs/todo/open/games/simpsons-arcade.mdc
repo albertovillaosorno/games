@@ -5779,4 +5779,13 @@ rotations pass the rebuilt optimized aspect-fit smoke: Marge eight,
 Bart one, Lisa four and Homer six. The earlier fixed-count diagnostic
 rejected the other three rotations. GPU readback checks are retained;
 physical display, input, audio and playable third-stage acceptance
-remain open, as does the ranked landing browser runtime check.
+remain open.
+
+The rebuilt optimized Firefox/WebGL diagnostic passes all four extended
+44-role rank rotations using a trusted local selection of 1,575 files.
+Each visits all thirteen ordered route checkpoints, including the exact
+rank-dependent grounded phase checks. Marge, Homer, Bart and Lisa runs
+perform 150, 144, 129 and 138 readbacks and 218, 210, 190 and 202 blits,
+respectively. All four dispose of the canvas and leave origin-local
+preferences empty. This is isolated software-rendered browser evidence,
+not physical-device or playable third-stage acceptance.
