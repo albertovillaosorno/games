@@ -946,3 +946,13 @@ and stationary heights of the other two. Five existing semantic records
 retain these observations without promoting their dispositions or mapping
 unverified art. Exact presentation and nonparticipant departure behavior
 remain unresolved. Function and graph counts are unchanged.
+
+Matched late second-stage descriptor allocations reproduce two
+independent object traces byte-for-byte despite different movement
+timing and source record reuse. The reviewed thresholded descriptor
+consumer gains a partial Rust mapping for the five observed regular
+arrivals only. The generic source allocator remains unmapped; other
+actor types, original descriptor conditions, exact anchors and
+clearance behavior remain unresolved. The checker reports 38 partial
+mappings, three intentional replacements and unchanged function,
+semantic review, dependency, graph and disposition counts.

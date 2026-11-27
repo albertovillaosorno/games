@@ -5129,6 +5129,18 @@ Xvfb and dummy-audio diagnostics establish neither physical acceptance
 nor original combat parity. Later distinct actors and stage completion
 remain open.
 
+Read-only allocator observations reproduce both retained original
+compact object traces in full, with 8,501 control and 14,501 delayed
+rows. The five observed regular admissions correlate with the same
+reviewed thresholded descriptor consumer under both inputs, despite
+different allocation slots and frames. Other records admitted in the
+same region remain unclassified, so this is a partial mapping only.
+The optimized Firefox diagnostic also passes on the current revision:
+a trusted 1,302-file selection, eight ordered checkpoints, 75 WebGL
+readbacks and 98 blits, with no remaining canvas or stored
+preferences. This run includes the cumulative admission-count
+assertion and the full 1,416-column traversal.
+
 ### Bonus competition admission
 
 Three matched original runs begin the first bonus with three active
