@@ -420,3 +420,15 @@ Dispositions are 1,031 unresolved, three intentional replacements
 and 16 non-runtime. The ownership audit reports zero unowned decoded
 bytes. Remaining executable regions, physical observations and
 native gameplay mappings are not accepted.
+
+Nine board-specific EEPROM transport helpers now have non-runtime
+dispositions. Their admitted callers, control templates and pinned board
+map establish serial bit emission, sampling and readiness handling.
+The same port temporarily selects a video bank and disables FIRQ; the
+parent read/write routines select a fixed exit mode. The entry-level
+configuration reads, writes, checksums and settings meaning remain
+unresolved; modern native persistence still needs independent mapping.
+The graph is unchanged at 1,050 functions and 3,323 reciprocal pairs.
+The checker reports 1,022 unresolved, three intentional replacements
+and 25 non-runtime dispositions. Revisit the exclusions if additional
+relevant callers or effects are established.

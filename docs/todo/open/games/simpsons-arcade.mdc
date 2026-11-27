@@ -4253,3 +4253,13 @@ identities and 17,678 owned bytes; the combined checker reports
 1,050 identities, 1,031 unresolved dispositions and 82 unresolved
 flow observations. The existing native prototype remains unchanged;
 map and combat equivalence still require mapping and verification.
+
+Nine more board-specific EEPROM helpers are now non-runtime: their
+bounded control templates and pinned device map establish physical
+serial signalling, bit sampling and conditional readiness polling.
+The transport also changes original video-bank and interrupt state.
+Original configuration values, entry-level persistence and checksum
+semantics remain unresolved. Modern native settings are not asserted
+as equivalent to that original format. The unchanged 1,050-identity
+inventory now has 1,022 unresolved, three intentional replacements and
+25 non-runtime dispositions. No new playable milestone is claimed.
