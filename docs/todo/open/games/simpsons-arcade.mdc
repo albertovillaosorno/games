@@ -3077,3 +3077,38 @@ reset, both clearance gates, offscreen spawning at every supported
 view width and input-driven clearing of the full twelve-enemy
 prototype. Full stage progression, exact combat parity, physical
 device acceptance and audible playback remain open.
+
+The protected Fill path also passed the extended street with the
+default single touch panel, all four panels, and a two-panel subset
+with independently remapped attack and directional bindings. On the
+1280-by-912 offscreen drawable, the protected panels occupied
+960-by-240, 536-by-536 and 760-by-380 pixels respectively. Each run
+verified 1350 camera columns, 48 synthetic controller directions,
+eleven reinforcement meters, 600 movement and 20 combat submissions.
+No reported host-work frame-budget misses occurred. These are
+synthetic input and offscreen rendering checks, not physical
+touchscreen, controller or display acceptance.
+
+### Observed defeat impact audio
+
+Four solo original-edition replays used the independently verified
+successful ground strikes. The corresponding idle controls omitted
+the attack input. Each successful strike admitted the same centered
+differential PCM sample at the visible enemy defeat or one reference
+frame later; that sample did not start in the corresponding idle
+window. The existing canonical sample-0056 contains 4258 decoded
+mono samples at 7990 Hz, consistent with the observed pitch. The
+fixed-step cabinet counts resolved defeats rather than attack attempts
+or persistent defeat animation. The runtime observes each new cue,
+mixes it through the existing effects source and preserves attack-only
+bundle compatibility. Existing attack replacement scope is unchanged.
+
+Fresh validation 1795744453792397889-2222743 passed with the native
+dummy-audio smoke enabled. The optimized 3,682,296-byte Linux title
+also passed the original-backed extended-street Fill/touch smoke
+and verified one impact cue with no repeat on a second presentation
+of the same simulation state. Synthetic tests cover sample metadata,
+centered gain, unchanged replacement scope and exact defeat count.
+The capture, original samples and derived payloads remain private.
+Channel contention, other sound events and physical audibility are
+not established by these checks.
