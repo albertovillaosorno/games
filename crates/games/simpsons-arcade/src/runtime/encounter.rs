@@ -993,6 +993,7 @@ fn smoke_cemetery_landing(
 ) -> Result<(), RenderError> {
     let mut previous = [None; 4];
     let mut samples = 0u8;
+    let mut station_samples = [0usize; 4];
     for _ in 0u16..66 {
         advance(simulation, 1)?;
         let cabinet = simulation.state();
@@ -1001,12 +1002,35 @@ fn smoke_cemetery_landing(
             .ok_or(RenderError::InvalidSprite)?;
         let poses = Player::ALL.map(|player| entrance.landing_pose(player));
         if poses != previous {
+            for ((count, before), after) in
+                station_samples.iter_mut().zip(previous).zip(poses)
+            {
+                *count = count.saturating_add(usize::from(
+                    after != before && after.is_some(),
+                ));
+            }
             cemetery::verify(scene, art, cabinet)?;
             previous = poses;
             samples = samples.saturating_add(1);
         }
     }
-    if samples < 8 {
+    let entrance = simulation
+        .state()
+        .cemetery_entrance()
+        .ok_or(RenderError::InvalidSprite)?;
+    let expected = Player::ALL.map(|player| {
+        if entrance.position(player).is_none() {
+            return 0;
+        }
+        match entrance.rank(player) {
+            0 => 8,
+            1 => 6,
+            2 if player == Player::Homer => 3,
+            2 => 4,
+            _ => 1,
+        }
+    });
+    if station_samples != expected || samples == 0 {
         return Err(failure("cemetery grounded pose progression incomplete"));
     }
     write_status(format_args!(
