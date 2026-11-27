@@ -5574,3 +5574,62 @@ selector path has a bounded static entry review; nested dispatch,
 projectile behavior, variable extents, terminal timing, scoring and
 transition acceptance remain open. All original evidence and local
 artwork remain private. No native boss implementation is claimed.
+
+### Aligned third-stage background and title departure controls
+
+The early-Primary and neutral title replays each preserve all 1,601
+retained transition rows. The early replay provides 108 title/departure
+and 318 consecutive cemetery samples; the neutral replay adds 179
+samples across two windows. Each of the 605 full scenes reconstructs
+all 71,680 pixels exactly before background extraction. Twelve initial
+alignment rejects pass only with the preceding tile RAM and scroll
+samples; neither the strict comparison nor admission bounds change.
+The original rejects remain available for review.
+
+The 111-tick title departure shift yields 99 distinct paired background
+samples with identical digests. The initial cemetery background holds
+for five ticks. The four phases then cycle in descending and ascending
+order, with seven-tick intermediate holds and fourteen-tick endpoint
+holds. All 318 consecutive early cemetery samples agree with the
+56-tick repetition, including station descent and initial gameplay.
+The four verified 320-by-196 background phases are published only to
+the local canonical store; each manifest and 250,880-byte payload hash
+passes independent readback. No launch configuration is changed.
+
+This establishes reusable entrance background timing and local art,
+not a native third-stage handoff. The title display and its input gates,
+station-rank recurrence cadence, scrolling terrain, enemy behavior,
+audio, and physical acceptance still require implementation or review.
+
+### Third-stage title gate and ranked fall controls
+
+Seven additional isolated replays each retain 1,601 transition rows.
+Three early Primary edges, including the last tested tick before the
+64-count gate, and an 80-tick hold across it preserve every neutral
+row. Fresh Primary edges at the next two ticks advance title departure;
+a Secondary edge at the previously tested skip tick advances it by the
+same 111 ticks as Primary. The earliest tested accepted edge advances
+the neutral departure by 126 ticks. This supports a fresh-edge gate,
+not a continuously held button.
+
+Across eleven schedules, ten setup ticks follow title departure, then
+97 ticks precede station initialization and 130 more precede playable
+input. All four rank permutations occur. An independent piecewise
+fixed-point trajectory matches all 5,720 station-height samples, with
+sixteen-tick rank offsets, a shared descent and hold, and accelerating
+final fall. The final rank reaches ground two ticks before the playable
+transition. Two extended read-only replays reproduce their complete
+retained transition, rank-read and recurrence traces. Each verifies
+34,468 wrapping recurrence updates from startup through the fall,
+with identical ordered values but different update-frame schedules.
+Subset admission and the complete invocation policy remain unresolved.
+
+Six strict scene publications isolate eighteen body crops. Excluding
+one top-clipped crop leaves six distinct complete payloads across
+seventeen samples, with exact repeated hashes and preceding-height
+crop registration. The observed airborne body cadence alternates two
+Marge families every six ticks and two Lisa families with eight- and
+twelve-tick holds; Homer and Bart each retain one family. All six
+manifests and 24 payload occurrences pass independent readback. Dust,
+landing pose variants and full native rendering remain open. All
+reference captures and original artwork remain private.
