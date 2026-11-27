@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Fixed-step third-stage card, cemetery entrance and body timing.
+//   - Fixed-step third-stage entrance, body timing and bounded room motion.
 // - Must-Not:
 //   - Decode original media, choose a random seed or render sprites.
 // - Allows:
-//   - Inputs: Admitted stations, selected fall order and fresh action edges.
-//   - Outputs: Scene phase, rank, fixed-point height and body pose.
+//   - Inputs: Admitted stations, fall order and logical station inputs.
+//   - Outputs: Scene phase, body pose, positions and shared depth offset.
 //   - Side effects: Deterministic in-memory progression only.
 // - Split-When:
 //   - Cemetery gameplay needs a distinct encounter policy.
@@ -33,11 +33,23 @@
 
 use games::animation::cycle_tick;
 
-use super::{Player, Point, stage_card_departed};
+use super::{Player, Point, Slot, StreetLayout, stage_card_departed};
 
 const FIRST_BACKGROUND: u64 = 13;
 const FIRST_STATION: u64 = 107;
 const PLAYABLE_TICK: u64 = 237;
+const FIRST_WALK_TICK: u64 = 242;
+const LAST_WALK_TICK: u64 = 357;
+const ROOM_LAYOUT: StreetLayout = StreetLayout {
+    max: Point { x: 320, y: 176 },
+    min: Point { x: 112, y: 122 },
+    spawn: [
+        Point { x: 116, y: 176 },
+        Point { x: 144, y: 176 },
+        Point { x: 172, y: 176 },
+        Point { x: 200, y: 176 },
+    ],
+};
 const DESCENT_TICKS: u64 = 130;
 const FALL_RANK_DELAY: i32 = 16;
 const UNITS_PER_PIXEL: u32 = 256;
@@ -89,6 +101,70 @@ pub struct CemeteryBody {
     pub position: Point,
 }
 
+/// Bounded first-room locomotion and shared vertical projection.
+///
+/// World depth increases away from the viewer. The projected depth adds
+/// the shared camera offset, so neutral stations retain their world
+/// positions during a pan. This does not model subsequent room combat,
+/// terrain sampling or the original camera descriptor scheduler.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CemeteryRoom {
+    depth_offset: i16,
+}
+
+impl CemeteryRoom {
+    fn advance(&mut self, slots: &mut [Slot; 4]) {
+        // Only the four-station, pre-encounter interval is established.
+        if !slots.iter().all(|slot| slot.station.can_fight()) {
+            return;
+        }
+        let projected = slots.map(|slot| self.project(slot.station.position));
+        let motion = slots.map(|slot| {
+            let (dx, dy) = slot.direction();
+            (dx, dy.saturating_neg())
+        });
+        let toward = projected.iter().all(|point| point.y < 320);
+        let away = projected.iter().all(|point| point.y > 168);
+        let request = projected.into_iter().zip(motion).fold(
+            0i16,
+            |total, (point, (_, dy))| {
+                if (dy < 0 && point.y < 168 && toward)
+                    || (dy > 0 && point.y > 192 && away)
+                {
+                    total.saturating_sub(dy)
+                } else {
+                    total
+                }
+            },
+        );
+        // A party of four can request a pan, not four times its speed.
+        self.depth_offset = self
+            .depth_offset
+            .saturating_add(request.clamp(-2, 2))
+            .clamp(0, 31);
+        for (slot, direction) in slots.iter_mut().zip(motion) {
+            slot.move_with_direction(ROOM_LAYOUT, direction);
+        }
+    }
+
+    /// Current shared depth offset, in logical units.
+    #[must_use]
+    pub const fn depth_offset(self) -> i16 {
+        self.depth_offset
+    }
+
+    /// Project a room world position into camera-relative record space.
+    ///
+    /// This is not the final sprite registration or display transform.
+    #[must_use]
+    pub const fn project(self, point: Point) -> Point {
+        Point {
+            y: point.y.saturating_add(self.depth_offset),
+            ..point
+        }
+    }
+}
+
 /// Deterministic cemetery arrival clock with explicitly selected fall order.
 ///
 /// Selecting the first rank is deliberately separate from the unverified
@@ -99,6 +175,7 @@ pub struct CemeteryEntrance {
     admitted: [bool; 4],
     card: bool,
     first: Player,
+    room: Option<CemeteryRoom>,
     tick: u64,
 }
 
@@ -117,6 +194,20 @@ impl CemeteryEntrance {
         {
             self.card = false;
             self.tick = 0;
+        }
+    }
+
+    pub(super) fn advance_room(&mut self, slots: &mut [Slot; 4]) {
+        let walking = self.room_walkable();
+        let Some(room) = &mut self.room else {
+            return;
+        };
+        if walking {
+            room.advance(slots);
+        } else if !self.card && self.tick == LAST_WALK_TICK.saturating_add(1) {
+            for slot in slots {
+                slot.station.walking = None;
+            }
         }
     }
 
@@ -185,6 +276,12 @@ impl CemeteryEntrance {
         })
     }
 
+    pub(super) fn enable_room(&mut self) {
+        if self.admitted.into_iter().all(|admitted| admitted) {
+            self.room = Some(CemeteryRoom::default());
+        }
+    }
+
     /// Current elevation in 1/256 logical pixels.
     ///
     /// An absent or not-yet-initialized station has no elevation.
@@ -241,6 +338,7 @@ impl CemeteryEntrance {
             admitted,
             card: true,
             first,
+            room: None,
             tick: 0,
         }
     }
@@ -268,13 +366,7 @@ impl CemeteryEntrance {
         {
             return None;
         }
-        let x = match player {
-            Player::Marge => 116,
-            Player::Homer => 144,
-            Player::Bart => 172,
-            Player::Lisa => 200,
-        };
-        Some(Point { x, y: 176 })
+        ROOM_LAYOUT.spawn.get(player.index()).copied()
     }
 
     /// Rank among the four observed trajectories, independent of admission.
@@ -297,6 +389,27 @@ impl CemeteryEntrance {
         ))
     }
 
+    /// Opted-in first-room projection after the ranked landing.
+    ///
+    /// The final offset remains inspectable after the verified motion
+    /// interval ends. The ordinary rendered entrance has no room state.
+    #[must_use]
+    pub const fn room(self) -> Option<CemeteryRoom> {
+        if matches!(self.phase(), CemeteryPhase::Landed) {
+            self.room
+        } else {
+            None
+        }
+    }
+
+    /// Whether the bounded room accepts motion on the current tick.
+    #[must_use]
+    pub fn room_walkable(self) -> bool {
+        !self.card
+            && self.room.is_some()
+            && (FIRST_WALK_TICK..=LAST_WALK_TICK).contains(&self.tick)
+    }
+
     /// Elapsed card ticks, or ticks since title departure.
     #[must_use]
     pub const fn tick(self) -> u64 {
@@ -315,6 +428,7 @@ const fn base_rank(player: Player) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Control;
     use super::*;
 
     fn arrival(first: Player) -> CemeteryEntrance {
@@ -325,6 +439,207 @@ mod tests {
         assert_eq!(state.phase(), CemeteryPhase::Setup);
         assert_eq!(state.tick(), 0);
         state
+    }
+
+    fn room_slots() -> [Slot; 4] {
+        let mut slots = ROOM_LAYOUT.spawn.map(Slot::new);
+        for slot in &mut slots {
+            slot.start(0, false);
+        }
+        slots
+    }
+
+    fn hold(slots: &mut [Slot; 4], controls: [Option<Control>; 4]) {
+        for (slot, control) in slots.iter_mut().zip(controls) {
+            slot.held = control.map_or(0, Control::mask);
+        }
+    }
+
+    fn room_positions(room: CemeteryRoom, slots: &[Slot; 4]) -> [Point; 4] {
+        slots.map(|slot| room.project(slot.station.position))
+    }
+
+    // Independent piecewise description of the recorded projected samples.
+    fn downward_sample(tick: i16) -> (i16, i16) {
+        let offset = tick.saturating_sub(5).max(0).saturating_mul(2).min(31);
+        let depth = match tick {
+            0..=5 => 176i16.saturating_sub(tick.saturating_mul(2)),
+            6..=20 => 166,
+            21..=26 => {
+                165i16.saturating_sub(tick.saturating_sub(21).saturating_mul(2))
+            },
+            _ => 153,
+        };
+        (offset, depth)
+    }
+
+    #[test]
+    fn room_opposed_cardinal_trace_matches_observed_positions() {
+        let mut room = CemeteryRoom::default();
+        let mut slots = room_slots();
+        hold(&mut slots, [
+            Some(Control::Up),
+            Some(Control::Down),
+            Some(Control::Left),
+            Some(Control::Right),
+        ]);
+        for tick in 1i16..=116 {
+            room.advance(&mut slots);
+            let (offset, depth) = downward_sample(tick);
+            let idle = 176i16.saturating_add(offset);
+            let expected = [
+                Point { x: 116, y: idle },
+                Point { x: 144, y: depth },
+                Point {
+                    x: 172i16.saturating_sub(tick.saturating_mul(2)).max(112),
+                    y: idle,
+                },
+                Point {
+                    x: 200i16.saturating_add(tick.saturating_mul(2)).min(320),
+                    y: idle,
+                },
+            ];
+            assert_eq!(room.depth_offset(), offset, "tick {tick}");
+            assert_eq!(room_positions(room, &slots), expected, "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn room_diagonal_reversal_retains_both_cardinal_components() {
+        let mut room = CemeteryRoom::default();
+        let mut slots = room_slots();
+        let [marge, _, bart, _] = &mut slots;
+        marge.held = Control::Down.mask() | Control::Right.mask();
+        bart.held = Control::Down.mask() | Control::Left.mask();
+        for tick in 1i16..=40 {
+            room.advance(&mut slots);
+            let (offset, depth) = downward_sample(tick);
+            let idle = 176i16.saturating_add(offset);
+            assert_eq!(room.depth_offset(), offset);
+            assert_eq!(room_positions(room, &slots), [
+                Point {
+                    x: 116i16.saturating_add(tick.saturating_mul(2)),
+                    y: depth,
+                },
+                Point { x: 144, y: idle },
+                Point {
+                    x: 172i16.saturating_sub(tick.saturating_mul(2)).max(112),
+                    y: depth,
+                },
+                Point { x: 200, y: idle },
+            ]);
+        }
+        assert_diagonal_return(room, slots);
+    }
+
+    fn upward_sample(tick: i16) -> (i16, i16) {
+        let offset = 31i16
+            .saturating_sub(tick.saturating_sub(20).max(0).saturating_mul(2))
+            .max(15);
+        let depth = if tick <= 20 {
+            153i16.saturating_add(tick.saturating_mul(2))
+        } else if tick < 28 {
+            193
+        } else {
+            191
+        };
+        (offset, depth)
+    }
+
+    fn assert_diagonal_return(mut room: CemeteryRoom, mut slots: [Slot; 4]) {
+        hold(&mut slots, [None; 4]);
+        for _ in 0u8..8 {
+            room.advance(&mut slots);
+        }
+        let [marge, _, bart, _] = &mut slots;
+        marge.held = Control::Up.mask() | Control::Left.mask();
+        bart.held = Control::Up.mask() | Control::Right.mask();
+        for tick in 1i16..=40 {
+            room.advance(&mut slots);
+            let (offset, depth) = upward_sample(tick);
+            assert_eq!(room.depth_offset(), offset);
+            assert_eq!(room_positions(room, &slots), [
+                Point {
+                    x: 196i16.saturating_sub(tick.saturating_mul(2)),
+                    y: depth,
+                },
+                Point {
+                    x: 144,
+                    y: 176i16.saturating_add(offset)
+                },
+                Point {
+                    x: 112i16.saturating_add(tick.saturating_mul(2)),
+                    y: depth,
+                },
+                Point {
+                    x: 200,
+                    y: 176i16.saturating_add(offset)
+                },
+            ]);
+        }
+    }
+
+    fn assert_reversal(all: bool) {
+        let mut room = CemeteryRoom::default();
+        let mut slots = room_slots();
+        let controls = |control| {
+            if all {
+                [Some(control); 4]
+            } else {
+                [Some(control), None, None, None]
+            }
+        };
+        hold(&mut slots, controls(Control::Down));
+        for tick in 1i16..=27 {
+            room.advance(&mut slots);
+            let (offset, depth) = downward_sample(tick);
+            assert_eq!(room.depth_offset(), offset);
+            assert_depths(room, &slots, all, depth);
+        }
+        hold(&mut slots, [None; 4]);
+        for _ in 0u8..21 {
+            room.advance(&mut slots);
+            assert_eq!(room.depth_offset(), 31);
+            assert_depths(room, &slots, all, 153);
+        }
+        hold(&mut slots, controls(Control::Up));
+        for tick in 1i16..=38 {
+            room.advance(&mut slots);
+            let (offset, depth) = upward_sample(tick);
+            assert_eq!(room.depth_offset(), offset, "tick {tick}");
+            assert_depths(room, &slots, all, depth);
+        }
+    }
+
+    fn assert_depths(
+        room: CemeteryRoom,
+        slots: &[Slot; 4],
+        all: bool,
+        depth: i16,
+    ) {
+        let idle = 176i16.saturating_add(room.depth_offset());
+        let expected = if all {
+            [depth; 4]
+        } else {
+            [depth, idle, idle, idle]
+        };
+        assert_eq!(room_positions(room, slots).map(|point| point.y), expected);
+        if !all {
+            let [_, homer, bart, lisa] = slots;
+            for slot in [homer, bart, lisa] {
+                assert_eq!(slot.station.position.y, 176);
+            }
+        }
+    }
+
+    #[test]
+    fn room_reversal_keeps_idle_stations_fixed_in_world_space() {
+        assert_reversal(false);
+    }
+
+    #[test]
+    fn room_party_camera_does_not_multiply_scroll_speed() {
+        assert_reversal(true);
     }
 
     #[test]

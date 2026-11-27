@@ -55,7 +55,7 @@ use std::time::Duration;
 pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
 pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
 pub use cemetery::{
-    CemeteryBody, CemeteryEntrance, CemeteryPhase, CemeteryPose,
+    CemeteryBody, CemeteryEntrance, CemeteryPhase, CemeteryPose, CemeteryRoom,
 };
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
@@ -626,10 +626,17 @@ impl Slot {
     }
 
     fn move_tick(&mut self, layout: StreetLayout) {
+        self.move_with_direction(layout, self.direction());
+    }
+
+    fn move_with_direction(
+        &mut self,
+        layout: StreetLayout,
+        (dx, dy): (i16, i16),
+    ) {
         if !self.station.can_fight() {
             return;
         }
-        let (dx, dy) = self.direction();
         let up_held = self.held(Control::Up);
         let walking_held = up_held
             || self.held(Control::Down)
@@ -797,6 +804,25 @@ struct LinkedEncounter {
     parents: [LinkedParent; LINKED_PARENT_CAPACITY],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CemeterySelection {
+    Entrance(Player),
+    Room(Player),
+}
+
+impl CemeterySelection {
+    fn entrance(self, admitted: [bool; 4]) -> CemeteryEntrance {
+        let first = match self {
+            Self::Entrance(player) | Self::Room(player) => player,
+        };
+        let mut entrance = CemeteryEntrance::new(admitted, first);
+        if matches!(self, Self::Room(_)) {
+            entrance.enable_room();
+        }
+        entrance
+    }
+}
+
 /// Deterministic arcade title state, independent of the host platform.
 ///
 /// The prototype omits the original intro, full stage progression, complete
@@ -810,7 +836,7 @@ pub struct Cabinet {
     bonus_enabled: bool,
     camera: i16,
     cemetery: Option<CemeteryEntrance>,
-    cemetery_first: Option<Player>,
+    cemetery_selection: Option<CemeterySelection>,
     choices: [Player; 4],
     cooperation: Cooperation,
     encounter: Option<Encounter>,
@@ -866,15 +892,14 @@ impl Cabinet {
 
     fn admit_cemetery(&mut self) {
         if self.cemetery.is_none()
-            && let Some(first) = self.cemetery_first
+            && let Some(selection) = self.cemetery_selection
             && self
                 .balloon_boss
                 .is_some_and(|boss| boss.action == BalloonAction::Cleared)
         {
-            self.cemetery = Some(CemeteryEntrance::new(
-                self.stations().map(Station::can_fight),
-                first,
-            ));
+            self.cemetery = Some(
+                selection.entrance(self.stations().map(Station::can_fight)),
+            );
             self.cooperation.reset();
         }
     }
@@ -989,6 +1014,7 @@ impl Cabinet {
         {
             self.move_cemetery_stations(entrance);
         }
+        entrance.advance_room(&mut self.slots);
         self.cemetery = Some(entrance);
         true
     }
@@ -1147,6 +1173,19 @@ impl Cabinet {
     #[must_use]
     pub const fn choices(&self) -> [Player; 4] {
         self.choices
+    }
+
+    const fn configure_cemetery(
+        mut self,
+        selection: Option<CemeterySelection>,
+    ) -> Self {
+        self.cemetery_selection = if self.balloon_boss_enabled {
+            selection
+        } else {
+            None
+        };
+        self.cemetery = None;
+        self
     }
 
     fn cycle_character(
@@ -1395,7 +1434,7 @@ impl Cabinet {
             bonus_enabled: false,
             camera: 0,
             cemetery: None,
-            cemetery_first: None,
+            cemetery_selection: None,
             choices: Player::ALL,
             cooperation: Cooperation::default(),
             encounter: None,
@@ -1482,7 +1521,7 @@ impl Cabinet {
             self.balloon_boss_enabled = false;
             self.balloon_boss = None;
             self.cemetery = None;
-            self.cemetery_first = None;
+            self.cemetery_selection = None;
         }
         if !matches!(limit, Some(value) if value >= LINKED_MIN_TRAVEL)
             && let Some(encounter) = &mut self.encounter
@@ -1578,7 +1617,7 @@ impl Cabinet {
         if !self.balloon_boss_enabled {
             self.balloon_boss = None;
             self.cemetery = None;
-            self.cemetery_first = None;
+            self.cemetery_selection = None;
         }
         self
     }
@@ -1608,17 +1647,23 @@ impl Cabinet {
     /// The host chooses a verified rank rotation explicitly. The preview
     /// ends at the landing boundary; no third-stage combat is admitted.
     #[must_use]
-    pub const fn with_cemetery_entrance(
-        mut self,
-        first: Option<Player>,
-    ) -> Self {
-        self.cemetery_first = if self.balloon_boss_enabled {
-            first
-        } else {
-            None
-        };
-        self.cemetery = None;
-        self
+    pub const fn with_cemetery_entrance(self, first: Option<Player>) -> Self {
+        self.configure_cemetery(match first {
+            Some(player) => Some(CemeterySelection::Entrance(player)),
+            None => None,
+        })
+    }
+
+    /// Select the bounded four-station first-room locomotion diagnostic.
+    ///
+    /// The ordinary rendered entrance remains unchanged. Only a full
+    /// four-station admission enables the room, and its movement ends
+    /// before the first unmodeled encounter. Station positions in this
+    /// room are world coordinates with depth increasing away from the
+    /// viewer; use the room projection to inspect the camera offset.
+    #[must_use]
+    pub const fn with_cemetery_room(self, first: Player) -> Self {
+        self.configure_cemetery(Some(CemeterySelection::Room(first)))
     }
 
     /// Enable optional pair locomotion in cabinet pair order.
@@ -1944,7 +1989,7 @@ fn cabinet() -> Cabinet {
         bonus_enabled: false,
         camera: 0,
         cemetery: None,
-        cemetery_first: None,
+        cemetery_selection: None,
         choices: Player::ALL,
         cooperation: Cooperation::default(),
         encounter: None,
@@ -4030,15 +4075,119 @@ mod tests {
             return;
         };
         let disabled = boardwalk.with_cemetery_entrance(Some(Player::Homer));
-        assert_eq!(disabled.cemetery_first, None);
+        assert_eq!(disabled.cemetery_selection, None);
         let selected = boardwalk
             .with_linked_actors(true)
             .with_balloon_boss(true)
             .with_cemetery_entrance(Some(Player::Homer));
-        assert_eq!(selected.cemetery_first, Some(Player::Homer));
-        assert_eq!(selected.with_balloon_boss(false).cemetery_first, None);
-        assert_eq!(selected.with_linked_actors(false).cemetery_first, None);
+        assert_eq!(
+            selected.cemetery_selection,
+            Some(CemeterySelection::Entrance(Player::Homer))
+        );
+        assert_eq!(selected.with_balloon_boss(false).cemetery_selection, None);
+        assert_eq!(selected.with_linked_actors(false).cemetery_selection, None);
         assert_cemetery_after_boss(selected);
+    }
+
+    fn room_cabinet(admitted: [bool; 4]) -> Cabinet {
+        let configured = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1871));
+        assert!(configured.is_ok());
+        let mut state = configured
+            .unwrap_or_else(|_error| cabinet())
+            .with_linked_actors(true)
+            .with_balloon_boss(true)
+            .with_cemetery_room(Player::Marge);
+        for (player, active) in Player::ALL.into_iter().zip(admitted) {
+            if active {
+                state.input_step(0, &pulse(player, Control::Start));
+            }
+        }
+        state.enter_stage_two(1871);
+        state.stage_entrance = None;
+        state.balloon_boss = Some(BalloonBoss {
+            action: BalloonAction::Cleared,
+            quantity: 0,
+            ..BalloonBoss::new(1871)
+        });
+        state.input_step(0, &[]);
+        assert!(state.cemetery_entrance().is_some());
+        state
+    }
+
+    #[test]
+    fn cemetery_room_requires_full_admission() {
+        let mut state = room_cabinet([true, false, true, true]);
+        advance_empty(&mut state, 0..429);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::phase),
+            Some(CemeteryPhase::Landed),
+        );
+        assert_eq!(
+            state.cemetery_entrance().and_then(CemeteryEntrance::room),
+            None
+        );
+        assert!(
+            !state
+                .cemetery_entrance()
+                .is_some_and(CemeteryEntrance::room_walkable)
+        );
+    }
+
+    #[test]
+    fn cemetery_room_accepts_motion_only_in_the_verified_window() {
+        let mut state = room_cabinet([true; 4]);
+        state.input_step(0, &[change(Player::Marge, Control::Down, true)]);
+        advance_empty(&mut state, 1..433);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::tick),
+            Some(241)
+        );
+        assert!(
+            !state
+                .cemetery_entrance()
+                .is_some_and(CemeteryEntrance::room_walkable)
+        );
+        let [marge, ..] = state.stations();
+        assert_eq!(marge.position, Point { x: 116, y: 176 });
+        assert_cemetery_room_pause_and_boundary(state);
+    }
+
+    fn assert_cemetery_room_pause_and_boundary(mut state: Cabinet) {
+        state.input_step(0, &pulse(Player::Marge, Control::Pause));
+        let paused = state.cemetery_entrance();
+        advance_empty(&mut state, 0..20);
+        assert_eq!(state.cemetery_entrance(), paused);
+        state.input_step(0, &pulse(Player::Marge, Control::Pause));
+        let [marge, ..] = state.stations();
+        assert_eq!(marge.position, Point { x: 116, y: 174 });
+        assert!(
+            state
+                .cemetery_entrance()
+                .is_some_and(CemeteryEntrance::room_walkable)
+        );
+        advance_empty(&mut state, 0..115);
+        let stationary = state.stations().map(|station| station.position);
+        let offset = state.cemetery_entrance().and_then(CemeteryEntrance::room);
+        assert_eq!(offset.map(CemeteryRoom::depth_offset), Some(31));
+        state.input_step(0, &[change(Player::Marge, Control::Up, true)]);
+        assert!(
+            !state
+                .cemetery_entrance()
+                .is_some_and(CemeteryEntrance::room_walkable)
+        );
+        assert_eq!(
+            state.stations().map(|station| station.position),
+            stationary
+        );
+        assert_eq!(
+            state.cemetery_entrance().and_then(CemeteryEntrance::room),
+            offset
+        );
+        state.reset_world();
+        assert_eq!(state.cemetery_entrance(), None);
     }
 
     fn assert_cemetery_after_boss(mut state: Cabinet) {
@@ -4102,7 +4251,10 @@ mod tests {
         assert_stage_two_stations(before, &state.stations());
         state.reset_world();
         assert_eq!(state.cemetery_entrance(), None);
-        assert_eq!(state.cemetery_first, Some(Player::Homer));
+        assert_eq!(
+            state.cemetery_selection,
+            Some(CemeterySelection::Entrance(Player::Homer))
+        );
     }
 
     fn assert_linked_reconfiguration(result: &Result<Cabinet, LayoutError>) {

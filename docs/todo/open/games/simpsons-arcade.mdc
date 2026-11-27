@@ -5823,3 +5823,36 @@ rectangles. The rebuilt Marge-first Firefox/WebGL route passes all
 thirteen checkpoints with 150 readbacks and 218 blits. This strengthens
 the entrance diagnostic without establishing exact full composition
 or extending the playable stage.
+
+### Bounded four-station cemetery locomotion
+
+Three independent original replays (one-station reversal, all-station
+reversal and two-station diagonal reversal) preserve all 1,259 aligned
+arrival samples. Each adds 141 detailed projection samples and 301
+station samples. The shared vertical offset increases from zero to 31
+in steps no larger than two, even when all four stations request a
+pan. The final step is one. Neutral stations retain their world depth
+while their projected record depths change by the offset. Reversing
+from the lower bound reduces the offset from 31 to 15; it does not
+reset to zero. Two diagonal controls retain both two-unit components.
+The sampled world-coordinate rectangle is 112 through 320 horizontally
+and 122 through 176 in depth, with the latter increasing away from
+the viewer.
+
+The portable cabinet admits an explicit four-station room diagnostic
+after the selected ranked arrival. It reuses the existing station
+locomotion and held controls, projects the room's shared depth offset,
+and accepts motion only on the observed 116 pre-encounter ticks.
+Neutral, opposed and reversed movements have independent piecewise
+trace regressions, including diagonal movement and the shared offset.
+The entrance-only presentation remains the default. Subset admission,
+general terrain, camera descriptor progression, final sprite
+registration, moving backdrop, attacks and subsequent encounters
+are not implemented by this diagnostic.
+
+The strengthened cemetery visibility check also passes the remaining
+three original-backed browser rank rotations, with 144, 129 and 138
+readbacks and 210, 190 and 202 blits for Homer, Bart and Lisa first.
+All four routes visit the thirteen ordered checkpoints and dispose
+of the canvas and origin-local preferences. This is not physical
+device acceptance or moving-room presentation acceptance.
