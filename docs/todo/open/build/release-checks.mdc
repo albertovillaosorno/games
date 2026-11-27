@@ -573,3 +573,35 @@ catalogue and succeeds after removing the alias. Package receipt tests
 also exercise this unchanged-content hard-link rejection. These checks
 do not establish concurrent same-user isolation or authorise retirement
 of the source store.
+
+At be9826d, repeat native and browser package publications under
+umask 077 matched byte-for-byte within each target. The native
+package contained 109 files and 4,154,345 bytes, with receipt
+SHA-256
+`c73b47760d941d16c1922e41ec34240e2011ec0737ddb34590467b57c03e0256`.
+Its 3,628,672-byte executable digest was
+`3604ea39a206eb594ce9c7f513607a46b6eb7695b61b38a25d2774b647efcab6`.
+The browser package remained identical to d238e72 (88 files,
+1,546,800 bytes and the same receipt). Independent lengths and
+SHA-256 matched all 108 native and 87 browser receipt entries;
+the project licence and notices matched the workspace. File modes
+remained 0700 for the native executable and 0600 for other files,
+and Node accepted the browser module. Both target copies rejected
+wrong-target verification, repeat publication and an extra hard link
+to LICENSE outside the package tree. Restoring the single link
+returned the original receipt and exact package bytes.
+
+The second native package rejected settings paths at its root,
+within its licence directory and through a directory alias. In an
+isolated Xvfb/X11 process and filesystem namespace with no network,
+read-only package and asset mounts, software OpenGL and dummy audio,
+the full adaptive touch smoke then passed with separate settings.
+It verified 106 added scene columns, 444 camera columns, 48 synthetic
+controller directions, two cooperative pose families and six
+reinforcement meters. All 620 movement and combat submissions met
+the 16.667 ms host-work budget (maximum 14.540 ms). Settings remained
+empty and post-run package verification matched the receipt. The
+earlier 4,154,377-byte package was a working-tree observation while
+native launch changes were in flight; it is not an exact committed
+source reproduction. This new pair is same-host reproducibility,
+not independent-host or physical-device acceptance.
