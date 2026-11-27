@@ -315,3 +315,21 @@ Their initial state and root reachability are unverified; they remain
 candidate data, separate from the classified byte total. The remaining
 8,428 bytes comprise these candidates, 8,096 uniform-run bytes and 134
 other mixed bytes. Uniformity alone does not establish inert padding.
+
+The next two main-CPU checkpoints verify seven descriptor destination
+pointers against their parent record stride and admitted reset path.
+Conditional selector transitions admit 18 new functions in two
+overlays, with 652 additional owned instruction bytes and no
+unowned decoded instructions. All new functions have explicit
+unresolved semantic reviews. Previous bodies, graph observations and
+semantic dispositions are preserved, including the payment replacements.
+
+The main inventory now contains 257 functions (146 fixed and 111 in
+three overlays), with 12,854 decoded bytes, 225 possible bank/table
+observations and 62 unresolved observations. The combined checker
+reports 946 identities, 31,252 owned bytes, 3,155 reciprocal pairs,
+3,464 detailed flow observations and 69 interior entries.
+Dispositions are 941 unresolved, three intentional replacements and
+two non-runtime. Descriptor and timer state paths are conditional;
+no runtime reachability, campaign semantics or Rust equivalence is
+claimed.

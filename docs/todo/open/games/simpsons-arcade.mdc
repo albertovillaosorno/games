@@ -4184,3 +4184,16 @@ boundaries. Their root reachability is unknown, so the classified total
 remains unchanged. Physical audio acceptance also remains open: a
 fresh host sink inspection exposed only the dummy output, despite
 enumerated audio hardware. No physical listening result is claimed.
+
+### Conditional record and timer state paths
+
+Independent descriptor-pointer verification and successive selector
+review admit 18 additional main-CPU functions and 652 decoded
+instruction bytes, without losing prior identities or observations.
+All new functions have unresolved semantic dispositions. The main
+inventory contains 257 identities and 12,854 owned decoded bytes.
+The combined private checker reports 946 identities, 941 unresolved,
+three intentional replacements and two non-runtime dispositions.
+Sixty-two flow observations remain unresolved. Conditional state
+transitions do not establish campaign-stage identities or runtime
+equivalence; no additional playable milestone is claimed.
