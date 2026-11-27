@@ -25,8 +25,8 @@ decompiler output private.
   bank mapping, executable regions and analysis limitations. Use other
   appropriate static tools when the required processor is unavailable;
   never interpret one instruction set as another.
-- Keep a durable private per-title function inventory under
-  `.reference/ledger/<title>/`. Give each discovered function a stable
+- Keep one durable private per-title JSON Lines function inventory in
+  `.reference/games/<title>/ledger.jsonl`. Give each function a stable
   identity comprising module, CPU, address space or bank, and entry
   address; preserve the original FUN identifier or symbol.
 - Record semantic name, inputs, outputs, state mutations, callers,
@@ -65,6 +65,16 @@ On 2026-11-27 the official Ghidra 12.2 release was acquired through
 main processor as Konami 053248 with a banked code window and the
 audio processor as Z80. The Ghidra archive contains standard 6809
 and Z80 languages; custom Konami compatibility is not yet established.
-No complete function inventory, Rust mapping or cleanup guard has
+No complete function inventory or Rust mapping has
 passed acceptance. The existing MAME capture and migration ledger
 is retained; no historical research has been deleted.
+
+The shared retention capability now exposes a bounded read-only plan and
+explicit reviewed-hash apply on Linux. It admits only owner-sealed flat
+archive packages in the fixed disposable investigation namespace, checks
+an exact retained record in the per-title `ledger.jsonl`, and requires
+both age and quota. Fixture tests cover stale plans, ledger changes and
+appends, links, bounds, protected unsealed runs and absent roots. The
+operation reports logical bytes and retained record identities; no actual
+historical run has been classified or removed. Function inventory and
+semantic mapping acceptance remain open.

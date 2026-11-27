@@ -64,6 +64,9 @@ impl crate::ir::storage::fixtures::FixtureFactory for () {
 /// Native integration tests of the portable preference contracts.
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 mod preferences;
+/// Explicit bounded retention of positively classified research archives.
+#[cfg(target_os = "linux")]
+mod retention;
 
 /// Integrity-checked local save slots.
 #[cfg(any(target_os = "linux", target_os = "android"))]

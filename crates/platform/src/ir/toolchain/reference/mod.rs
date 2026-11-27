@@ -31,6 +31,9 @@
 
 //! Portable reference download requests and receipts.
 
+/// Bounded research archive retention.
+pub mod retention;
+
 use std::ffi::OsString;
 
 use super::{ToolchainError, ToolchainFactory};

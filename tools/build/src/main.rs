@@ -48,6 +48,8 @@ pub mod reference_objects;
 pub mod reference_palette;
 /// Bounded read-only video mixer comparison against local observations.
 pub mod reference_priority;
+/// Explicit bounded private research archive retention.
+pub mod reference_retention;
 /// Bounded local tile RAM admission diagnostic.
 pub mod reference_tilemap;
 #[cfg(feature = "native-preview")]
@@ -81,6 +83,8 @@ use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
+    "games-build retention plan AGE_SECONDS QUOTA_BYTES ENTRIES BYTES\n",
+    "games-build retention apply AGE_SECONDS QUOTA_BYTES ENTRIES BYTES HASH\n",
     "usage: games-build build TITLE [linux-x86-64|webassembly]\n",
     "games-build package TITLE [OUTPUT [TARGET]]\n",
     "games-build package-check TITLE OUTPUT [TARGET]\n",
@@ -243,6 +247,7 @@ enum Command {
     #[cfg(feature = "native-preview")]
     RenderCheck(Machine, render_check::Arguments),
     ReplaceMedia(publication::MediaReplacement),
+    Retention(reference_retention::Arguments),
     SampleCheck(Machine, OsString, NonZeroU64, Arguments),
     #[cfg(feature = "native-preview")]
     SceneSequence(Machine, reference_background::sequence::Sequence),
@@ -262,6 +267,12 @@ impl Command {
         let format = args.next().ok_or_else(|| String::from(USAGE))?;
         let action = args.next().ok_or_else(|| String::from(USAGE))?;
         match (format.to_str(), action.to_str()) {
+            (Some("retention"), Some(operation)) => {
+                Ok(Self::Retention(reference_retention::Arguments::parse(
+                    operation,
+                    &args.collect::<Vec<_>>(),
+                )?))
+            },
             (Some("import"), Some(source_format)) => {
                 Self::parse_import(source_format, args)
             },
@@ -281,21 +292,7 @@ impl Command {
                     output,
                 ))
             },
-            (Some("package"), Some(title)) => {
-                let Some(output) = args.next() else {
-                    return Ok(Self::PackageTitle(title_build::Title::parse(
-                        title,
-                        &[],
-                    )?));
-                };
-                Ok(Self::PackageExplicit(
-                    title_build::Distribution::parse(
-                        title,
-                        &args.collect::<Vec<_>>(),
-                    )?,
-                    output,
-                ))
-            },
+            (Some("package"), Some(title)) => Self::parse_package(title, args),
             (Some("bundle"), Some(operation)) => {
                 Self::parse_bundle(operation, args.collect())
             },
@@ -571,6 +568,22 @@ impl Command {
         Self::parse_assets(action, profile, args)
     }
 
+    fn parse_package<Args>(title: &str, mut args: Args) -> Result<Self, String>
+    where
+        Args: Iterator<Item = OsString>,
+    {
+        let Some(output) = args.next() else {
+            return Ok(Self::PackageTitle(title_build::Title::parse(
+                title,
+                &[],
+            )?));
+        };
+        Ok(Self::PackageExplicit(
+            title_build::Distribution::parse(title, &args.collect::<Vec<_>>())?,
+            output,
+        ))
+    }
+
     fn parse_reference(
         action: &str,
         machine: Machine,
@@ -649,6 +662,7 @@ impl Command {
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
+            Self::Retention(arguments) => arguments.run(),
             Self::PackageCheck(title, output) => {
                 title_package::check(title, &output)
             },
@@ -730,6 +744,7 @@ impl Command {
             | Self::PackageExplicit(..)
             | Self::PaletteCheck(..)
             | Self::PriorityCheck(..)
+            | Self::Retention(..)
             | Self::SampleCheck(..)
             | Self::StripPublish(..)
             | Self::TilemapCheck(..)

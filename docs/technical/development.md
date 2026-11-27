@@ -76,10 +76,71 @@ reference sources under `.reference/tools/`. These directories are local.
 See the [asset pipeline](asset-pipeline.md) for import and publication.
 
 Local reference data survives cleanup: `.reference/games/` contains
-original media, `.reference/tools/` contains downloaded tools and sources,
-and `.reference/ledger/` contains durable local reference ledgers.
+original media and the single per-title `ledger.jsonl` function inventory.
+`.reference/tools/` contains downloaded reference sources; older durable
+reference records also remain protected.
 `.cache/` and `.temp/` are regenerable scratch space, never the only
 copy of durable records. Do not remove reference storage during cleanup.
+
+## Bounded private research retention
+
+Research retention never traverses original media, tool installations,
+analysis projects, canonical assets or historical unclassified captures.
+Only direct run directories under
+`.reference/investigations/archived-disposable/` are eligible. A completed
+run must contain exactly two regular, single-link files: an opaque
+`captures.tar.zst` package and `.games-disposable-v1`. Do not package
+original media or unique evidence. The owner must review and classify the
+run, record retained evidence and reproduction inputs in the canonical
+private ledger, and stop all writers before sealing it. Unsealed runs are
+protected; unexpected entries in a sealed run reject the preview.
+
+The UTF-8 seal contains these five lines (replace the placeholders):
+
+```text
+games-disposable-v1
+status=completed-archived-regenerable
+evidence=title/ledger.jsonl
+sha256=RETAINED_RECORD_SHA256
+reproduce=REPRODUCTION_INPUTS_AND_COMMAND
+```
+
+The digest identifies an exact nonempty line in
+`.reference/games/<title>/ledger.jsonl`, excluding its final LF. The guard
+checks that the record still exists with that identity; it does not infer
+completion, inspect the opaque archive or certify reproducibility. The
+seal is an explicit owner attestation. Later ledger appends do not change
+an unchanged retained record. No historical capture is automatically moved
+or classified.
+
+Preview using minimum age in seconds, logical byte quota, observed entry
+bound and aggregate logical scan-byte bound, respectively:
+
+```sh
+cargo run --locked -p games-build -- retention plan \
+  604800 10737418240 10000 107374182400
+```
+
+The preview reports selected names, logical bytes, retained record hashes,
+protected unsealed runs and a plan hash. Age includes the newest metadata
+change in the sealed run. The oldest eligible runs are selected only
+while above quota; fresh archives can leave the quota unmet. No physical
+disk-block savings are promised. Apply only after reviewing the preview:
+
+```sh
+cargo run --locked -p games-build -- retention apply \
+  604800 10737418240 10000 107374182400 REVIEWED_PLAN_HASH
+```
+
+The Linux adapter pins owner-controlled directory descriptors, rejects
+links, validates retained record hashes, serializes cooperating invocations
+and re-observes the plan before removing only its named files and empty run
+directories. Do not manually mutate sealed runs while applying. An
+interruption may leave a partially removed run; inspect and reclassify it
+before retrying. Unsupported hosts return an explicit failure. An absent
+archive root yields an empty read-only preview.
+
+## Native title preview
 
 Build the available GNU/Linux x86-64 title preview with:
 

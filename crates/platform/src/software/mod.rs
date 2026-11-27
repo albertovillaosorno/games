@@ -194,6 +194,11 @@ use crate::ir::storage::bundle::{
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::environment::{Environment, EnvironmentBackend};
 #[cfg(not(target_os = "linux"))]
+use crate::ir::toolchain::reference::retention::{
+    Operation as RetentionOperation, Plan as RetentionPlan,
+    Policy as RetentionPolicy, RetentionBackend,
+};
+#[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::validation::ValidationBackend;
 #[cfg(not(target_os = "linux"))]
 use crate::ir::toolchain::validation::state::{StateFactory, StatePort};
@@ -485,6 +490,16 @@ impl FixturePort for () {
 
     fn yield_execution() -> io::Result<()> {
         Err(ErrorKind::Unsupported.into())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl RetentionBackend for () {
+    fn retain(
+        _policy: RetentionPolicy,
+        _operation: RetentionOperation,
+    ) -> Result<RetentionPlan, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
     }
 }
 
