@@ -169,7 +169,7 @@ pub(crate) trait PlaybackBackend: Debug {
     /// Clear pending frames without changing pause state.
     fn clear(&self) -> Result<(), PlaybackError>;
     /// Observe the application-facing format and current device state.
-    fn observe_playback(&self) -> PlaybackObservation;
+    fn observe_playback(&self) -> Result<PlaybackObservation, PlaybackError>;
     /// Backend and requested device diagnostics.
     fn output(&self) -> (&str, Option<&str>);
     /// Poll a previously pending control request without blocking.
@@ -180,7 +180,7 @@ pub(crate) trait PlaybackBackend: Debug {
         samples: AdmittedSamples<'_>,
     ) -> Result<(), PlaybackError>;
     /// Observe current software-queue occupancy.
-    fn queued_bytes(&self) -> u32;
+    fn queued_bytes(&self) -> Result<u32, PlaybackError>;
     /// Request a pause or resume, possibly completing asynchronously.
     fn request_control(
         &self,
@@ -235,7 +235,7 @@ impl NativeAudio {
         result: Result<PlaybackControl, PlaybackError>,
     ) -> Result<PlaybackControl, PlaybackError> {
         let previous = self.state.get();
-        let observed = self.backend.observe_playback();
+        let observed = self.backend.observe_playback()?;
         let expected = if matches!(&result, Ok(PlaybackControl::Complete))
             || (matches!(&result, Ok(PlaybackControl::Pending))
                 && observed.state == request.destination)
@@ -245,7 +245,7 @@ impl NativeAudio {
             previous
         };
         self.layout.admit_observation(observed, expected)?;
-        let bytes = self.backend.queued_bytes();
+        let bytes = self.backend.queued_bytes()?;
         self.layout.admit_queue_receipt(
             request.maximum_frames,
             bytes,
@@ -268,9 +268,9 @@ impl NativeAudio {
         backend: PlaybackPort,
     ) -> Result<Self, PlaybackError> {
         request.admit_opened(
-            backend.observe_playback(),
+            backend.observe_playback()?,
             backend.output().1,
-            backend.queued_bytes(),
+            backend.queued_bytes()?,
         )?;
         Ok(Self {
             backend,
@@ -289,7 +289,7 @@ impl NativeAudio {
         self.backend.clear()?;
         self.observe_state()?;
         self.layout
-            .admit_queue_receipt(0, self.backend.queued_bytes(), false)
+            .admit_queue_receipt(0, self.backend.queued_bytes()?, false)
     }
 
     fn observe_state(&self) -> Result<(), PlaybackError> {
@@ -297,7 +297,7 @@ impl NativeAudio {
             return Err(PlaybackError::TransitionPending);
         }
         self.layout.admit_observation(
-            self.backend.observe_playback(),
+            self.backend.observe_playback()?,
             self.state.get(),
         )
     }
@@ -377,7 +377,7 @@ impl NativeAudio {
         self.observe_state()?;
         let _maximum = self
             .layout
-            .admit(range.len(), self.backend.queued_bytes())?;
+            .admit(range.len(), self.backend.queued_bytes()?)?;
         self.scratch.clear();
         self.scratch
             .try_reserve_exact(range.len())
@@ -396,12 +396,12 @@ impl NativeAudio {
         let state = self.state.get();
         let admitted = self
             .layout
-            .admit_samples(samples, self.backend.queued_bytes())?;
+            .admit_samples(samples, self.backend.queued_bytes()?)?;
         self.backend.queue_samples(admitted)?;
         self.observe_state()?;
         self.layout.admit_submission(
             admitted,
-            self.backend.queued_bytes(),
+            self.backend.queued_bytes()?,
             state,
         )
     }
@@ -411,7 +411,7 @@ impl NativeAudio {
     /// Rejects malformed or out-of-budget backend observations.
     pub fn queued_frames(&self) -> Result<u32, PlaybackError> {
         self.observe_state()?;
-        self.layout.queued_frames(self.backend.queued_bytes())
+        self.layout.queued_frames(self.backend.queued_bytes()?)
     }
 
     /// Poll any outstanding control, then admit the desired consumption state.
@@ -464,7 +464,7 @@ impl NativeAudio {
             destination: next,
             maximum_frames: self
                 .layout
-                .queued_frames(self.backend.queued_bytes())?,
+                .queued_frames(self.backend.queued_bytes()?)?,
             may_consume: previous == PlaybackState::Running
                 || next == PlaybackState::Running,
         };
@@ -494,7 +494,9 @@ mod tests {
         control_pending: Cell<bool>,
         control_result: RefCell<Option<ControlResult>>,
         observation: Cell<Option<u32>>,
+        observation_fails: Cell<bool>,
         obtained: Cell<PlaybackObservation>,
+        queue_reads_before_failure: Cell<Option<u32>>,
         requested_name: Option<&'static str>,
         samples: RefCell<Vec<i16>>,
         state: Cell<PlaybackState>,
@@ -510,11 +512,18 @@ mod tests {
             Ok(())
         }
 
-        fn observe_playback(&self) -> PlaybackObservation {
-            PlaybackObservation {
+        fn observe_playback(
+            &self,
+        ) -> Result<PlaybackObservation, PlaybackError> {
+            if self.observation_fails.get() {
+                return Err(PlaybackError::Backend(String::from(
+                    "format query failed",
+                )));
+            }
+            Ok(PlaybackObservation {
                 state: self.state.get(),
                 ..self.obtained.get()
-            }
+            })
         }
 
         fn output(&self) -> (&str, Option<&str>) {
@@ -547,12 +556,20 @@ mod tests {
             Ok(())
         }
 
-        fn queued_bytes(&self) -> u32 {
-            self.observation.get().unwrap_or_else(|| {
+        fn queued_bytes(&self) -> Result<u32, PlaybackError> {
+            let remaining = self.queue_reads_before_failure.get();
+            if remaining == Some(0) {
+                return Err(PlaybackError::Backend(String::from(
+                    "queue query failed",
+                )));
+            }
+            self.queue_reads_before_failure
+                .set(remaining.map(|count| count.saturating_sub(1)));
+            Ok(self.observation.get().unwrap_or_else(|| {
                 u32::try_from(self.samples.borrow().len())
                     .unwrap_or(u32::MAX)
                     .saturating_mul(2)
-            })
+            }))
         }
 
         fn request_control(
@@ -591,6 +608,7 @@ mod tests {
             control_pending: Cell::new(false),
             control_result: RefCell::new(None),
             observation: Cell::new(None),
+            observation_fails: Cell::new(false),
             obtained: Cell::new(PlaybackObservation {
                 buffer_bytes: 8,
                 buffer_frames: 2,
@@ -599,6 +617,7 @@ mod tests {
                 signed_native_16: true,
                 state: PlaybackState::Paused,
             }),
+            queue_reads_before_failure: Cell::new(None),
             requested_name,
             samples: RefCell::new(Vec::new()),
             state: Cell::new(PlaybackState::Paused),
@@ -1019,6 +1038,71 @@ mod tests {
             return Err(PlaybackError::InvalidQueue);
         }
         Ok(())
+    }
+
+    #[test]
+    fn format_query_failure_rejects_open_and_dispatch()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        backend.observation_fails.set(true);
+        let failure =
+            PlaybackError::Backend(String::from("format query failed"));
+        let request = PlaybackRequest::new(configuration(), None)?;
+        let opened =
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend)));
+        verify(&opened.err(), &Some(failure.clone()))?;
+        verify(&handle.queue_samples(&[1, -1]), &Err(failure.clone()))?;
+        verify(&handle.resume(), &Err(failure))?;
+        verify(&backend.state.get(), &PlaybackState::Paused)?;
+        verify(backend.samples.borrow().as_slice(), &[])?;
+        backend.observation_fails.set(false);
+        verify(&handle.queued_frames()?, &0)
+    }
+
+    #[test]
+    fn queue_query_failure_never_fabricates_a_submission_receipt()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        let failure =
+            PlaybackError::Backend(String::from("queue query failed"));
+        backend.queue_reads_before_failure.set(Some(0));
+        let request = PlaybackRequest::new(configuration(), None)?;
+        let opened =
+            NativeAudio::admit_opened(request, Box::new(Rc::clone(&backend)));
+        verify(&opened.err(), &Some(failure.clone()))?;
+        verify(&handle.queue_samples(&[1, -1]), &Err(failure.clone()))?;
+        verify(&handle.resume(), &Err(failure.clone()))?;
+        verify(backend.samples.borrow().as_slice(), &[])?;
+        verify(&backend.state.get(), &PlaybackState::Paused)?;
+        // A failure after submission cannot retract samples already copied.
+        backend.queue_reads_before_failure.set(Some(1));
+        verify(&handle.queue_samples(&[2, -2]), &Err(failure))?;
+        backend.queue_reads_before_failure.set(None);
+        verify(backend.samples.borrow().as_slice(), &[2, -2])?;
+        verify(&handle.queued_frames()?, &1)
+    }
+
+    #[test]
+    fn failed_pending_query_does_not_admit_queue_operations()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        handle.queue_samples(&[1, -1])?;
+        backend.control_pending.set(true);
+        verify(&handle.resume()?, &PlaybackControl::Pending)?;
+        backend.queue_reads_before_failure.set(Some(0));
+        let failure =
+            PlaybackError::Backend(String::from("queue query failed"));
+        verify(&handle.poll_control(), &Err(failure))?;
+        verify(&handle.clear(), &Err(PlaybackError::TransitionPending))?;
+        backend.queue_reads_before_failure.set(None);
+        backend.state.set(PlaybackState::Running);
+        drop(
+            backend
+                .control_result
+                .replace(Some(Ok(PlaybackControl::Complete))),
+        );
+        verify(&handle.poll_control()?, &PlaybackControl::Complete)?;
+        verify(&handle.queued_frames()?, &1)
     }
 
     #[test]

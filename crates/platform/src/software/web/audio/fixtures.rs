@@ -134,13 +134,16 @@ async fn settle(
 fn submit_silence(audio: &BrowserAudio) -> Result<(), PlaybackError> {
     audio
         .layout
-        .admit_observation(audio.observe_playback(), PlaybackState::Running)?;
-    let admitted =
-        audio.layout.admit_samples(&SILENCE, audio.queued_bytes())?;
-    audio.queue_samples(admitted)?;
-    audio
+        .admit_observation(audio.observe_playback()?, PlaybackState::Running)?;
+    let admitted = audio
         .layout
-        .admit_submission(admitted, audio.queued_bytes(), audio.state())
+        .admit_samples(&SILENCE, audio.queued_bytes()?)?;
+    audio.queue_samples(admitted)?;
+    audio.layout.admit_submission(
+        admitted,
+        audio.queued_bytes()?,
+        audio.state(),
+    )
 }
 
 fn scheduled_tail(audio: &BrowserAudio) -> Result<(f64, f64), PlaybackError> {
@@ -177,7 +180,7 @@ async fn verify_refill(audio: BrowserAudio) -> Result<(), PlaybackError> {
                     && next_end.to_bits() == (end + duration).to_bits(),
                 "near-tail refill introduced a discontinuity",
             )?;
-            drain(|| Ok(audio.queued_bytes())).await?;
+            drain(|| audio.queued_bytes()).await?;
             return Ok(());
         }
         delay().await?;
@@ -247,9 +250,9 @@ pub(in crate::software) fn verify_fixture() -> Result<(), PlaybackError> {
     )?;
     let refill = create_audio(request)?;
     request.admit_opened(
-        refill.observe_playback(),
+        refill.observe_playback()?,
         refill.output().1,
-        refill.queued_bytes(),
+        refill.queued_bytes()?,
     )?;
     require(
         refill.request_control(PlaybackState::Running)?

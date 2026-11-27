@@ -62,9 +62,9 @@ impl PlaybackBackend for AudioBackend {
         Ok(())
     }
 
-    fn observe_playback(&self) -> PlaybackObservation {
+    fn observe_playback(&self) -> Result<PlaybackObservation, PlaybackError> {
         let obtained = self.device.spec();
-        PlaybackObservation {
+        Ok(PlaybackObservation {
             buffer_bytes: obtained.size,
             buffer_frames: obtained.samples,
             channels: obtained.channels,
@@ -75,7 +75,7 @@ impl PlaybackBackend for AudioBackend {
                 AudioStatus::Playing => PlaybackState::Running,
                 AudioStatus::Stopped => PlaybackState::Stopped,
             },
-        }
+        })
     }
 
     fn output(&self) -> (&str, Option<&str>) {
@@ -95,8 +95,8 @@ impl PlaybackBackend for AudioBackend {
             .map_err(PlaybackError::Backend)
     }
 
-    fn queued_bytes(&self) -> u32 {
-        self.device.size()
+    fn queued_bytes(&self) -> Result<u32, PlaybackError> {
+        Ok(self.device.size())
     }
 
     fn request_control(

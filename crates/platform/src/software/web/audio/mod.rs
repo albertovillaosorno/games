@@ -169,9 +169,9 @@ impl PlaybackBackend for BrowserAudio {
         failure.map_or(Ok(()), Err)
     }
 
-    fn observe_playback(&self) -> PlaybackObservation {
+    fn observe_playback(&self) -> Result<PlaybackObservation, PlaybackError> {
         let spec = self.layout.spec();
-        PlaybackObservation {
+        Ok(PlaybackObservation {
             buffer_bytes: u32::from(spec.buffer_frames.get())
                 .saturating_mul(u32::from(spec.channels.get()))
                 .saturating_mul(2),
@@ -186,7 +186,7 @@ impl PlaybackBackend for BrowserAudio {
             },
             signed_native_16: true,
             state: self.state(),
-        }
+        })
     }
 
     fn output(&self) -> (&str, Option<&str>) {
@@ -234,12 +234,14 @@ impl PlaybackBackend for BrowserAudio {
         Ok(())
     }
 
-    fn queued_bytes(&self) -> u32 {
+    fn queued_bytes(&self) -> Result<u32, PlaybackError> {
         let mut queue = self.queue.borrow_mut();
         queue.retain(|chunk| !chunk.ended());
-        queue
-            .iter()
-            .fold(0u32, |total, chunk| total.saturating_add(chunk.bytes))
+        queue.iter().try_fold(0u32, |total, chunk| {
+            total
+                .checked_add(chunk.bytes)
+                .ok_or(PlaybackError::InvalidQueue)
+        })
     }
 
     fn request_control(
