@@ -5517,3 +5517,28 @@ retirement, original damage and all-player behavior, exact count gates,
 variable vertical camera, the second-stage boss and next-stage handoff
 remain open. The optional model and its local assets do not establish
 complete second-stage or release acceptance.
+
+### Optional second-stage endpoint backdrop
+
+A repeat of the aligned boardwalk control retains identical regular,
+new-actor, camera and palette-change traces. Nine strict complete-frame
+reconstructions establish seven distinct 320-by-196 background-only
+phases and two later samples of the final phase. The six visible
+changes occur five ticks apart after the camera settles.
+
+The optional `stage-two-backdrop TICK SHA256` catalogue track requires
+all seven keys (0, 5, 10, 15, 20, 25 and 30) and the verified 1,871-column
+second-stage route. It uses the shared backdrop loader and fixed playing
+clock, holds the final phase, freezes while paused and resets with the
+campaign. The 320-column viewport is retained during the transition;
+the original one-column overshoot is outside the current verified
+portable travel extent. The first-stage boss is not re-admitted.
+An omitted track keeps the existing static route presentation.
+
+Five isolated optimized Linux touch smokes (adaptive, aspect-fit,
+integer, fill and stretch) verify the seven selected backdrop payloads
+by GPU readback and confirm backdrop-first layering at the endpoint.
+All retain the routed 1,871-column encounter and first-stage 15-phase
+backdrop checks. The new track has not been checked on a browser or
+physical Android device. No second-stage boss or successful campaign
+handoff is implemented by this presentation.

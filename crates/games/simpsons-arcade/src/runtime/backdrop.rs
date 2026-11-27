@@ -17,13 +17,13 @@
 //   - Outputs: One opaque original-width backdrop sprite.
 //   - Side effects: Load bounded canonical atlases during scene startup.
 // - Split-When:
-//   - More stages need independent backdrop sequencing.
+//   - Backdrop tracks need materially different rendering contracts.
 // - Merge-When:
 //   - A shared background animation contract subsumes this composition.
 // - Summary:
 //   - Present a measured late encounter background sequence.
 // - Description:
-//   - Use observed phase keys; hold the last known phase after tick 320.
+//   - Use each stage’s measured phase keys and hold its last known phase.
 // - Usage:
 //   - Select all backdrop records alongside the verified long street.
 // - Defaults:
@@ -50,16 +50,37 @@ pub(super) const ATLAS_BYTES: usize = 320 * 196 * 4;
 pub(super) const KEYS: [u16; 15] = [
     0, 4, 9, 14, 19, 24, 257, 258, 259, 261, 262, 263, 264, 265, 267,
 ];
+pub(super) const BOARDWALK_KEYS: [u16; 7] = [0, 5, 10, 15, 20, 25, 30];
 const PERIOD: [u16; 8] = [264, 265, 264, 267, 264, 267, 264, 265];
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Track {
+    Boardwalk,
+    Street,
+}
+
+impl Track {
+    const fn keys(self) -> &'static [u16] {
+        match self {
+            Self::Street => &KEYS,
+            Self::Boardwalk => &BOARDWALK_KEYS,
+        }
+    }
+}
+
+type Key = (Track, u16);
 
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
-    entries: BTreeMap<u16, ContentHash>,
+    entries: BTreeMap<Key, ContentHash>,
 }
 
 impl Catalogue {
     pub(super) fn complete(&self) -> bool {
-        self.entries.is_empty() || self.entries.len() == KEYS.len()
+        [Track::Street, Track::Boardwalk].into_iter().all(|track| {
+            let count = self.track_count(track);
+            count == 0 || count == track.keys().len()
+        })
     }
 
     pub(super) fn count(&self) -> usize {
@@ -70,16 +91,27 @@ impl Catalogue {
         self.entries.values().copied()
     }
 
+    pub(super) fn has_boardwalk(&self) -> bool {
+        self.track_count(Track::Boardwalk) != 0
+    }
+
     pub(super) fn insert(&mut self, line: &str) -> Result<(), RenderError> {
         let mut fields = line.split_whitespace();
-        let (Some("backdrop"), Some(key_text), Some(digest_text), None) =
+        let (Some(kind), Some(key_text), Some(digest_text), None) =
             (fields.next(), fields.next(), fields.next(), fields.next())
         else {
             return Err(failure("invalid backdrop record"));
         };
+        let track = match kind {
+            "backdrop" => Track::Street,
+            "stage-two-backdrop" => Track::Boardwalk,
+            _ => return Err(failure("invalid backdrop track")),
+        };
         let key = key_text.parse::<u16>().map_err(failure)?;
         let digest = digest_text.parse::<ContentHash>().map_err(failure)?;
-        if !KEYS.contains(&key) || self.entries.insert(key, digest).is_some() {
+        if !track.keys().contains(&key)
+            || self.entries.insert((track, key), digest).is_some()
+        {
             return Err(failure("unexpected or duplicate backdrop phase"));
         }
         Ok(())
@@ -111,28 +143,61 @@ impl Catalogue {
             {
                 return Err(failure("invalid backdrop extent or opacity"));
             }
-            let _prior = entries
-                .insert(key, Art::upload(scene, (width, height), &pixels)?);
+            let phase = PhaseArt {
+                art: Art::upload(scene, (width, height), &pixels)?,
+                digest: record.digest,
+            };
+            let _prior = entries.insert(key, phase);
         }
         Ok(BackdropArt { entries })
     }
+
+    pub(super) fn street_count(&self) -> usize {
+        self.track_count(Track::Street)
+    }
+
+    fn track_count(&self, track: Track) -> usize {
+        self.entries
+            .keys()
+            .filter(|(kind, _)| *kind == track)
+            .count()
+    }
+}
+
+#[derive(Debug)]
+struct PhaseArt {
+    art: Art,
+    digest: ContentHash,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct BackdropArt {
-    entries: BTreeMap<u16, Art>,
+    entries: BTreeMap<Key, PhaseArt>,
 }
 
 impl BackdropArt {
     pub(super) fn draw(&self, cabinet: &Cabinet) -> Option<SpriteDraw> {
+        let art = self.selected(cabinet)?.art;
+        let mut destination = art.rect;
+        destination.y = TOP;
+        Some(art.draw(destination, false))
+    }
+
+    pub(super) fn has_boardwalk(&self) -> bool {
+        self.entries.contains_key(&(Track::Boardwalk, 0))
+    }
+
+    fn selected(&self, cabinet: &Cabinet) -> Option<&PhaseArt> {
         if !cabinet.session().world_visible() {
             return None;
         }
         let tick = cabinet.late_backdrop_tick()?;
-        let art = self.entries.get(&phase_key(tick))?;
-        let mut destination = art.rect;
-        destination.y = TOP;
-        Some(art.draw(destination, false))
+        let key = if cabinet.stage_two() {
+            (Track::Boardwalk, boardwalk_key(tick))
+        } else {
+            (Track::Street, phase_key(tick))
+        };
+        self.entries.get(&key)
     }
 }
 
@@ -154,13 +219,80 @@ fn phase_key(tick: u16) -> u16 {
     }
 }
 
+fn boardwalk_key(tick: u16) -> u16 {
+    BOARDWALK_KEYS
+        .into_iter()
+        .rev()
+        .find(|&key| key <= tick)
+        .unwrap_or_default()
+}
+
+/// Observe each selected boardwalk phase on the live routed cabinet.
+pub(super) fn observe_boardwalk(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    observed: &mut u8,
+) -> Result<(), RenderError> {
+    if !art.poses.backdrop.has_boardwalk() || !cabinet.stage_two() {
+        return Ok(());
+    }
+    let Some(tick) = cabinet.late_backdrop_tick() else {
+        return Ok(());
+    };
+    let index = BOARDWALK_KEYS
+        .iter()
+        .position(|&key| key == boardwalk_key(tick))
+        .ok_or(RenderError::InvalidSprite)?;
+    let flag = 1u8
+        .checked_shl(u32::try_from(index).map_err(failure)?)
+        .ok_or(RenderError::InvalidSprite)?;
+    if *observed & flag != 0 {
+        return Ok(());
+    }
+    let digest = art
+        .poses
+        .backdrop
+        .selected(cabinet)
+        .ok_or(RenderError::InvalidSprite)?
+        .digest;
+    let draw = art
+        .poses
+        .backdrop
+        .draw(cabinet)
+        .ok_or(RenderError::InvalidSprite)?;
+    let _presented = art.present(scene, cabinet)?;
+    if cabinet.camera_origin() != crate::BOARDWALK_BACKDROP_ORIGIN
+        || scene.layout().width().get() != world::BASE_WIDTH
+        || art.draws.first() != Some(&draw)
+    {
+        return Err(failure("boardwalk backdrop viewport or layering differs"));
+    }
+    let pitch = scene.layout().pitch();
+    let offset = pitch.saturating_mul(usize::try_from(TOP).map_err(failure)?);
+    let _isolated = scene.present([24, 22, 30], &[draw])?;
+    let pixels = scene.readback()?;
+    let region = pixels
+        .get(offset..offset.saturating_add(ATLAS_BYTES))
+        .ok_or(RenderError::InvalidLength)?;
+    if ContentHash::calculate(region) != digest {
+        return Err(failure("isolated boardwalk backdrop pixels differ"));
+    }
+    *observed |= flag;
+    Ok(())
+}
+
+pub(super) const fn boardwalk_complete(observed: u8) -> bool {
+    observed == 0x7f
+}
+
 pub(super) fn smoke(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     source: &Sources<'_>,
 ) -> Result<(), RenderError> {
     let catalogue = &source.poses.backdrop;
-    if catalogue.count() == 0 {
+    if catalogue.street_count() == 0 {
         return Ok(());
     }
     let limit = u16::try_from(crate::LATE_BACKDROP_ORIGIN).map_err(failure)?;
@@ -178,7 +310,7 @@ pub(super) fn smoke(
         if KEYS.contains(&tick) || tick == crate::LATE_BACKDROP_HOLD_TICK {
             let digest = catalogue
                 .entries
-                .get(&phase_key(tick))
+                .get(&(Track::Street, phase_key(tick)))
                 .ok_or(RenderError::InvalidSprite)?;
             let bundle = open_bundle(source.store, *digest)?;
             let pixels =
@@ -235,6 +367,17 @@ fn verify_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boardwalk_phase_selection_holds_each_boundary_for_five_ticks() {
+        for key in BOARDWALK_KEYS {
+            assert!(
+                (key..key.saturating_add(5))
+                    .all(|tick| boardwalk_key(tick) == key)
+            );
+        }
+        assert_eq!(boardwalk_key(u16::MAX), 30);
+    }
 
     #[test]
     fn phase_selection_retains_nonmonotonic_observed_keys() {

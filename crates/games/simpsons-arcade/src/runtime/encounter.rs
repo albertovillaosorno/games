@@ -51,8 +51,8 @@ use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 
 use super::{
-    Art, Controls, Scene, cabinet_with_scroll, dimension, failure, fixed,
-    ground_position, linked, live, live_with_scroll, size,
+    Art, Controls, Scene, backdrop, cabinet_with_scroll, dimension, failure,
+    fixed, ground_position, linked, live, live_with_scroll, size,
 };
 use crate::{
     BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase, CONTINUE_TICKS,
@@ -82,6 +82,13 @@ pub(super) struct CombatArt {
     player_filled: Art,
     player_missing: Art,
     strike: Art,
+}
+
+struct StageRoute<'route> {
+    entry_pixels: &'route [u8],
+    impacts: u64,
+    limit: i16,
+    simulation: &'route mut LiveSimulation<Cabinet>,
 }
 
 impl CombatArt {
@@ -836,11 +843,37 @@ fn smoke_stage_two(
     }
     verify_stage_entrance(scene, art, simulation, &entry_pixels)?;
     let limit = i16::try_from(stage.world.scroll_limit()?).map_err(failure)?;
+    route_stage_two(scene, art, controls, StageRoute {
+        entry_pixels: &entry_pixels,
+        impacts,
+        limit,
+        simulation,
+    })
+}
+
+fn route_stage_two(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    StageRoute {
+        entry_pixels,
+        impacts,
+        limit,
+        simulation,
+    }: StageRoute<'_>,
+) -> Result<(), RenderError> {
     let mut held = None;
     let mut linked_samples = 0u8;
+    let mut backdrop_samples = 0u8;
     for _ in 0..8000u16 {
         let cabinet = simulation.state();
         linked::observe(scene, art, cabinet, &mut linked_samples)?;
+        backdrop::observe_boardwalk(
+            scene,
+            art,
+            cabinet,
+            &mut backdrop_samples,
+        )?;
         if cabinet.stage_two()
             && cabinet.camera_origin() == limit
             && cabinet.impact_cues() > impacts
@@ -854,7 +887,13 @@ fn smoke_stage_two(
                 ));
             }
             linked::verify_route(scene, art, cabinet, linked_samples)?;
-            let _drawn = art.present(scene, cabinet)?;
+            finish_boardwalk_backdrop(
+                scene,
+                art,
+                simulation,
+                backdrop_samples,
+            )?;
+            let _drawn = art.present(scene, simulation.state())?;
             if entry_pixels == scene.readback()? {
                 return Err(failure(
                     "second-stage travel did not change readback",
@@ -869,6 +908,33 @@ fn smoke_stage_two(
         advance_diagnostic(controls, simulation, &mut held, intent)?;
     }
     Err(failure("second-stage combat or travel was not reached"))
+}
+
+fn finish_boardwalk_backdrop(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    mut observed: u8,
+) -> Result<(), RenderError> {
+    if !art.poses.backdrop.has_boardwalk() {
+        return Ok(());
+    }
+    for _ in 0..=crate::BOARDWALK_BACKDROP_HOLD_TICK {
+        advance(simulation, 1)?;
+        backdrop::observe_boardwalk(
+            scene,
+            art,
+            simulation.state(),
+            &mut observed,
+        )?;
+        if backdrop::boardwalk_complete(observed) {
+            return write_status(format_args!(
+                "Boardwalk backdrop: seven exact endpoint phases"
+            ))
+            .map_err(failure);
+        }
+    }
+    Err(failure("boardwalk backdrop phase observations incomplete"))
 }
 
 fn verify_stage_setup(

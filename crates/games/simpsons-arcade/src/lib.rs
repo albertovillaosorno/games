@@ -96,6 +96,8 @@ const MID_STREET_ADMISSION: i16 = 562;
 const LATE_BACKDROP_ORIGIN: i16 = 1360;
 const LATE_BACKDROP_SETTLED_ORIGIN: i16 = 1359;
 const LATE_BACKDROP_HOLD_TICK: u16 = 320;
+const BOARDWALK_BACKDROP_ORIGIN: i16 = 1871;
+const BOARDWALK_BACKDROP_HOLD_TICK: u16 = 30;
 const MID_STREET_SCRIPT_ORIGIN: i16 = 674;
 const MID_STREET_SCRIPT_TICKS: u16 = 336;
 const MID_STREET_COMBAT_GATE: i16 = 770;
@@ -871,8 +873,12 @@ impl Cabinet {
 
     fn advance_camera(&mut self) {
         if let Some(tick) = self.late_backdrop_tick {
-            self.late_backdrop_tick =
-                Some(tick.saturating_add(1).min(LATE_BACKDROP_HOLD_TICK));
+            let hold = if self.stage_two() {
+                BOARDWALK_BACKDROP_HOLD_TICK
+            } else {
+                LATE_BACKDROP_HOLD_TICK
+            };
+            self.late_backdrop_tick = Some(tick.saturating_add(1).min(hold));
             return;
         }
         // The verified long street first reaches its full extent. On the
@@ -886,6 +892,13 @@ impl Cabinet {
             return;
         }
         let travel = self.active_scroll_limit();
+        if self.stage_two()
+            && travel == BOARDWALK_BACKDROP_ORIGIN
+            && self.camera == travel
+        {
+            self.late_backdrop_tick = Some(0);
+            return;
+        }
         let limit = self
             .encounter
             .as_ref()
@@ -1200,7 +1213,10 @@ impl Cabinet {
             }
             self.cooperation.invalidate(&self.slots);
             self.advance_camera();
-            if self.wrestler_enabled && self.late_backdrop_tick == Some(0) {
+            if !self.stage_two()
+                && self.wrestler_enabled
+                && self.late_backdrop_tick == Some(0)
+            {
                 self.wrestler = Some(Wrestler::new(self.camera));
             }
             self.advance_scripted_scene();
@@ -1218,7 +1234,7 @@ impl Cabinet {
         self.impact_cues
     }
 
-    /// Fixed playing ticks since the late backdrop camera admission.
+    /// Fixed playing ticks since the current stage backdrop admission.
     #[must_use]
     pub const fn late_backdrop_tick(&self) -> Option<u16> {
         self.late_backdrop_tick
@@ -4151,6 +4167,45 @@ mod tests {
         assert_eq!(homer.stocks, PLAYER_STOCKS);
         state.reset_world();
         assert_eq!(state.bonus(), None);
+    }
+
+    #[test]
+    fn boardwalk_backdrop_uses_playing_ticks_without_reopening_wrestler() {
+        let initial = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1871));
+        assert!(initial.is_ok());
+        let Ok(mut state) = initial else {
+            return;
+        };
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.enter_stage_two(BOARDWALK_BACKDROP_ORIGIN);
+        state.stage_entrance = None;
+        state.camera = BOARDWALK_BACKDROP_ORIGIN;
+        state.input_step(1, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 2..20);
+        assert_eq!(state.late_backdrop_tick(), None);
+        state.input_step(20, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.late_backdrop_tick(), Some(0));
+        assert_boardwalk_clock(state);
+    }
+
+    fn assert_boardwalk_clock(mut state: Cabinet) {
+        advance_empty(&mut state, 21..26);
+        assert_eq!(state.late_backdrop_tick(), Some(5));
+        state.input_step(26, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 27..60);
+        assert_eq!(state.late_backdrop_tick(), Some(5));
+        state.input_step(60, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.late_backdrop_tick(), Some(6));
+        advance_empty(&mut state, 61..100);
+        assert_eq!(state.late_backdrop_tick(), Some(30));
+        assert_eq!(state.camera_origin(), BOARDWALK_BACKDROP_ORIGIN);
+        assert!(state.stage_two());
+        assert_eq!(state.wrestler(), None);
+        state.reset_world();
+        assert_eq!(state.late_backdrop_tick(), None);
     }
 
     fn assert_late_backdrop_admission(mut state: Cabinet) {

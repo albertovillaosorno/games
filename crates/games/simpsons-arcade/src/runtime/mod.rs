@@ -793,7 +793,11 @@ impl Scene {
         if cabinet.stage_two() {
             let stage =
                 self.poses.stage_two.ok_or(RenderError::InvalidSprite)?;
-            stage.world.queue(stage.background, view, &mut self.draws)?;
+            if let Some(draw) = self.poses.backdrop.draw(cabinet) {
+                self.draws.push(draw);
+            } else {
+                stage.world.queue(stage.background, view, &mut self.draws)?;
+            }
             if cabinet.session().world_visible() {
                 self.queue_arrival(cabinet, view)?;
                 self.poses.scenery.queue(cabinet, view, &mut self.draws)?;

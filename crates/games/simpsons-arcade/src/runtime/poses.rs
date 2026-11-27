@@ -133,14 +133,14 @@ impl Catalogue {
         &self,
         world: Option<WorldArt>,
     ) -> Result<(), RenderError> {
-        if self.backdrop_count() != 0
+        if self.backdrop.street_count() != 0
             && world.map_or(Ok(0), WorldArt::scroll_limit)?
                 != u16::try_from(crate::LATE_BACKDROP_ORIGIN)
                     .map_err(failure)?
         {
             return Err(failure("backdrop requires the verified long street"));
         }
-        if self.has_wrestler() && self.backdrop_count() == 0 {
+        if self.has_wrestler() && self.backdrop.street_count() == 0 {
             return Err(failure("wrestler requires the late backdrop"));
         }
         if self.scenery.has_street()
@@ -258,6 +258,7 @@ impl Catalogue {
                 || self.stage_two.is_some())
             && (self.landing_markers.is_none() || self.arrival.is_some())
             && self.backdrop.complete()
+            && (!self.backdrop.has_boardwalk() || self.stage_two.is_some())
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
             && (self.bonus_departure.is_none() || self.bonus.is_some())
@@ -352,7 +353,9 @@ impl Catalogue {
                 )?);
             },
             Some("wrestler") => self.wrestler.insert(line)?,
-            Some("backdrop") => self.backdrop.insert(line)?,
+            Some("backdrop" | "stage-two-backdrop") => {
+                self.backdrop.insert(line)?;
+            },
             Some("scenic-entrance" | "scenic-pair" | "scenic-stationary") => {
                 self.scenery.insert(line)?;
             },
@@ -509,6 +512,14 @@ impl PoseArt {
     ) -> Result<Cabinet, RenderError> {
         if let Some(stage) = self.stage_two {
             let travel = stage.world.scroll_limit()?;
+            if self.backdrop.has_boardwalk()
+                && i16::try_from(travel).map_err(failure)?
+                    != crate::BOARDWALK_BACKDROP_ORIGIN
+            {
+                return Err(failure(
+                    "boardwalk backdrop requires the endpoint",
+                ));
+            }
             if self.linked.is_some() && travel < 1264 {
                 return Err(failure(
                     "linked actors require late second-stage travel",
@@ -1713,12 +1724,56 @@ mod tests {
             assert_stage_two_budget(selected, &value, &other);
             assert_arrival_catalogue(&text, fighter, bonus_record, &value);
             assert_entrance_catalogue(&text, fighter, bonus_record, &value);
+            assert_boardwalk_catalogue(&text, fighter, bonus_record, &value);
         }
         assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
         assert!(
             parse_stage_two(&format!("stage-two {HASH} {HASH}"), None).is_err()
         );
         assert!(parse_stage_two(&format!("stage-two {HASH}"), None).is_err());
+    }
+
+    fn assert_boardwalk_catalogue(
+        stage_text: &str,
+        fighter: &str,
+        bonus_record: &str,
+        stage: &Catalogue,
+    ) {
+        let mut track = String::new();
+        for tick in backdrop::BOARDWALK_KEYS {
+            assert!(
+                writeln!(track, "stage-two-backdrop {tick} {HASH}").is_ok()
+            );
+        }
+        let full = format!("{stage_text}{track}");
+        assert!(Catalogue::parse(&full).is_ok_and(|value| {
+            value.count() == stage.count().saturating_add(7)
+                && value.atlas_count() == stage.atlas_count().saturating_add(7)
+                && value.atlas_bytes()
+                    == stage.atlas_bytes().saturating_add(
+                        7usize.saturating_mul(backdrop::ATLAS_BYTES),
+                    )
+                && value.digests().count() == value.count()
+        }));
+        assert!(
+            Catalogue::parse(&format!("{fighter}{bonus_record}{track}"))
+                .is_err()
+        );
+        for key in backdrop::BOARDWALK_KEYS {
+            let partial = track
+                .replace(&format!("stage-two-backdrop {key} {HASH}\n"), "");
+            assert!(
+                Catalogue::parse(&format!("{stage_text}{partial}")).is_err()
+            );
+        }
+        assert!(
+            Catalogue::parse(&format!("{full}stage-two-backdrop 0 {HASH}\n"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{full}stage-two-backdrop 31 {HASH}\n"))
+                .is_err()
+        );
     }
 
     fn assert_arrival_catalogue(
