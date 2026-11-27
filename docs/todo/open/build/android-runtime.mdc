@@ -36,3 +36,40 @@ but the SDK, NDK and cross-linker were absent. The completed mobile-web
 record retains portable compilation evidence. The browser package does
 not imply Android support. Continue title implementation on supported
 targets while this target is unavailable; do not mark it complete.
+
+On 2026-11-27 the prerequisite blocker was resolved with the official
+Google Android command-line tools (23.0; the Linux archive matched the
+published size and SHA-1). The user-shared SDK root is
+`$HOME/.local/share/android-sdk`. Android Platform 35, Build-Tools
+35.0.0, Platform-Tools 37.0.3, NDK r28c (28.2.13676358), Emulator
+37.3.10 and the API 35 Google APIs x86-64 system image are installed.
+The NDK identifies Clang 19.0.1 and its API 24 AArch64 target. A Rust
+standalone PIE links with `aarch64-linux-android24-clang`; ELF inspection
+confirms AArch64 and the Android `/system/bin/linker64` interpreter.
+
+A disposable JNI probe links a Rust ARM64 shared library, compiles its
+minimal Java activity against API 35, packages only `arm64-v8a`, aligns
+its native payload and passes APK signature schemes v2 and v3. This
+checks the official toolchain, not the game or its capability adapters.
+No original assets or production signing credentials were used.
+
+KVM acceleration passes. Two initial headless starts of a private API 35
+AVD crashed before Android boot completion, including a retry with audio
+disabled and SwiftShader selected. QEMU exited 139 (SIGSEGV, confirmed by
+the system coredump inventory). ADB reported no connected device.
+
+A separate private API 35 Google APIs x86-64 AVD with two CPU cores,
+2 GiB RAM, software graphics, Vulkan disabled and no audio survived a
+105-second cold start; ADB was offline when that bounded attempt ended.
+The next start reached boot completion and reported API 35 and
+`x86_64,arm64-v8a` ABIs with the `libndk_translation.so` native bridge.
+The independently built ARM64-only JNI APK installed and cold-launched;
+its UIAutomator hierarchy contained the integer 42 returned by Rust.
+The emulator shut down cleanly. The working headless configuration used
+`-gpu software -feature -Vulkan -cores 2 -memory 2048 -no-audio`,
+no cameras and no snapshot. This proves execution through translation,
+not native ARM64 hardware equivalence.
+
+The shared Android capability adapters and game APK remain open. No game
+startup, graphics, touch, persistence, audio or physical ARM64 acceptance
+is claimed. A usable emulated test target is now demonstrated.
