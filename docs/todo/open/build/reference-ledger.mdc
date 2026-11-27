@@ -403,3 +403,20 @@ reports 1,037 identities, 35,426 owned bytes, 3,300 reciprocal pairs,
 Dispositions are 1,018 unresolved, three intentional replacements
 and 16 non-runtime. All decoded instruction bytes have owners;
 neither executable-region completeness nor runtime parity is claimed.
+
+Five additional selector paths admit 13 main identities and 650
+owned bytes. Slot motion and auxiliary updates now have conditional
+callback evidence; combined and single-axis map sampling share one
+wrapped lookup. A 27-byte continuation moves to its newly identified
+owner with an explicit interior transfer and no lost instructions.
+Operand-byte review distinguishes immediate and direct-page inputs.
+
+The main inventory contains 361 identities and 17,678 owned bytes
+(189 fixed and 172 across six overlays), with 332 possible bank/table
+observations and 82 unresolved observations. The combined checker
+reports 1,050 identities, 36,076 owned bytes, 3,323 reciprocal pairs,
+3,666 detailed flow observations and 84 interior entries.
+Dispositions are 1,031 unresolved, three intentional replacements
+and 16 non-runtime. The ownership audit reports zero unowned decoded
+bytes. Remaining executable regions, physical observations and
+native gameplay mappings are not accepted.

@@ -4244,3 +4244,12 @@ are conditional on their runtime context. The main inventory has
 1,037 identities, 1,018 unresolved dispositions and 81 unresolved
 flow observations. These are semantic findings, not a new playable
 milestone or verified combat equivalence.
+
+Thirteen more main identities cover conditional slot-motion
+callbacks, auxiliary coordinates and single-axis map sampling.
+The shared continuation retains every previous instruction with an
+explicit interior transfer. The main inventory contains 361
+identities and 17,678 owned bytes; the combined checker reports
+1,050 identities, 1,031 unresolved dispositions and 82 unresolved
+flow observations. The existing native prototype remains unchanged;
+map and combat equivalence still require mapping and verification.
