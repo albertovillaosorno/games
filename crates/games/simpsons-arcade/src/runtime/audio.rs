@@ -332,7 +332,8 @@ impl Playback {
         self.smoke_drain(&mut simulation)?;
         self.smoke_reset(&mut simulation)?;
         self.smoke_maneuver(false)?;
-        self.smoke_maneuver(true)
+        self.smoke_maneuver(true)?;
+        self.smoke_source_changes()
     }
 
     fn smoke_drain(
@@ -387,8 +388,8 @@ impl Playback {
     ) -> Result<(), RenderError> {
         let mut controls = Controls::new(false)?;
         smoke_press(&mut controls, simulation, Control::Pause)?;
+        self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
-        self.smoke_settings(simulation, &mut controls)?;
         if self.queued_frames()? != 0
             || self.mixer.active() != 4usize.saturating_add(self.music_voices())
         {
@@ -502,6 +503,39 @@ impl Playback {
             return Err(failure("source setting restoration reset audio"));
         }
         Ok(())
+    }
+
+    fn smoke_source_changes(&mut self) -> Result<(), RenderError> {
+        let mut simulation = live_with_session(
+            false,
+            LocalSession::default().with_source_settings(self.sources),
+        )?;
+        let mut controls = Controls::new(false)?;
+        self.update(simulation.state())?;
+        smoke_join(&mut simulation, &mut controls)?;
+        self.update(simulation.state())?;
+        let clip = self
+            .clips
+            .first()
+            .ok_or(RenderError::InvalidSprite)?
+            .clone();
+        play(&mut self.mixer, clip, StereoGain::UNITY)?;
+        self.device.clear().map_err(failure)?;
+        self.fill()?;
+        self.verify_submission(1)?;
+        smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        self.update(simulation.state())?;
+        self.smoke_settings(&mut simulation, &mut controls)?;
+        if simulation.state().phase() != Phase::Paused
+            || self.queued_frames()? != 0
+        {
+            return Err(failure(
+                "source settings did not return to the paused session",
+            ));
+        }
+        smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        self.update(simulation.state())?;
+        self.verify_submission(1)
     }
 
     fn sync_levels(&mut self, session: LocalSession) {
