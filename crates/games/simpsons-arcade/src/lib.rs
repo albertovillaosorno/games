@@ -93,8 +93,8 @@ const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;
 const FINAL_KNOCKOUT_TICKS: u16 = 168;
 const REFILL_TICKS: u16 = 64;
-// The first visible column follows the original continue edge by four ticks.
-const CONTINUE_METER_DELAY: u8 = 4;
+// The first visible column follows an in-game Start edge by four ticks.
+const JOIN_METER_DELAY: u8 = 4;
 // Original ground-attack follow-up edges first take effect at offset 20.
 const GROUND_ATTACK_RECOVERY_TICKS: u8 = 20;
 
@@ -635,24 +635,23 @@ impl Slot {
         self.station.walking = None;
     }
 
-    const fn start(&mut self, camera: i16) {
-        let continuing = match self.station.participation {
-            Participation::Absent => false,
-            Participation::Continuing { .. } => true,
-            Participation::Playing | Participation::Recovering { .. } => {
-                return;
-            },
-        };
+    const fn start(&mut self, camera: i16, fill_meter: bool) {
+        if matches!(
+            self.station.participation,
+            Participation::Playing | Participation::Recovering { .. }
+        ) {
+            return;
+        }
         self.station.health = PLAYER_HEALTH;
-        // Free continue restores control immediately. Only the HUD refills.
-        self.station.display_health = if continuing {
+        // In-game Start admits control immediately. Only the HUD refills.
+        self.station.display_health = if fill_meter {
             0
         } else {
             PLAYER_HEALTH
         };
         self.station.stocks = PLAYER_STOCKS;
-        self.meter_wait = if continuing {
-            CONTINUE_METER_DELAY
+        self.meter_wait = if fill_meter {
+            JOIN_METER_DELAY
         } else {
             0
         };
@@ -859,7 +858,9 @@ impl Cabinet {
             | Control::Up => return,
         };
         match self.session.input(command) {
-            SessionEffect::Join => slot.start(self.camera),
+            SessionEffect::Join => {
+                slot.start(self.camera, playing && self.encounter.is_some());
+            },
             SessionEffect::Reset => self.reset_world(),
             SessionEffect::None | SessionEffect::Exit => {},
         }

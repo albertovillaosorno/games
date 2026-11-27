@@ -335,6 +335,7 @@ pub(super) fn smoke(
 ) -> Result<(), RenderError> {
     smoke_enemy_walk(scene, art, touch_enabled)?;
     smoke_four_player_encounter(scene, art)?;
+    smoke_join_meter(scene, art)?;
     let mut simulation = live(true)?;
     let mut controls = Controls::new(touch_enabled)?;
     approach(&mut controls, &mut simulation)?;
@@ -384,6 +385,34 @@ fn smoke_defeat(
     let _gone = art.present(scene, simulation.state())?;
     if hidden != scene.readback()? {
         return Err(failure("defeated enemy did not disappear"));
+    }
+    Ok(())
+}
+
+fn smoke_join_meter(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+) -> Result<(), RenderError> {
+    let mut simulation = live(true)?;
+    let mut controls = Controls::new(false)?;
+    pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
+    advance(&mut simulation, 1)?;
+    let scancode = controls.key(Player::Homer, Control::Start)?;
+    pulse(&mut controls, &mut simulation, scancode)?;
+    advance(&mut simulation, 1)?;
+    for expected in 0..=1 {
+        let [_, homer, ..] = simulation.state().stations();
+        if !homer.can_fight() || homer.display_health != expected {
+            return Err(failure("native late join meter cadence failed"));
+        }
+        let _drawn = art.present(scene, simulation.state())?;
+        verify_station_health(
+            &scene.readback().map_err(failure)?,
+            Player::Homer,
+            homer,
+            scene.layout().width().get(),
+        )?;
+        advance(&mut simulation, 4)?;
     }
     Ok(())
 }

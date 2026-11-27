@@ -1253,6 +1253,63 @@ mod tests {
     }
 
     #[test]
+    fn midgame_join_fills_each_station_without_delaying_control() {
+        for player in [Player::Homer, Player::Bart, Player::Lisa] {
+            let result = playing(Point { x: 288, y: 208 });
+            assert!(result.is_ok());
+            let Ok(mut cabinet) = result else {
+                return;
+            };
+            cabinet.input_step(3, &pulse_for(player, Control::Start));
+            let stations = cabinet.stations();
+            assert!(stations.get(player.index()).is_some());
+            let Some(joined) = stations.get(player.index()) else {
+                return;
+            };
+            assert!(joined.can_fight());
+            assert_eq!(joined.display_health, 0);
+            cabinet.input_step(4, &[LogicalAction {
+                action: Action {
+                    control: Control::Left,
+                    player,
+                },
+                down: true,
+            }]);
+            let moved = cabinet.stations();
+            assert!(moved.get(player.index()).is_some_and(|station| {
+                station.position.x < joined.position.x
+                    && station.display_health == 0
+            }));
+            verify_join_meter(&mut cabinet, player);
+        }
+    }
+
+    fn verify_join_meter(cabinet: &mut Cabinet, player: Player) {
+        for offset in 2..=66u8 {
+            let tick = u64::from(offset).saturating_add(3);
+            if offset == 8 {
+                cabinet.input_step(tick, &pulse_for(player, Control::Start));
+            } else {
+                cabinet.input_step(tick, &[]);
+            }
+            let expected = if offset < 4 {
+                0
+            } else {
+                offset
+                    .saturating_sub(4)
+                    .checked_div(2)
+                    .unwrap_or_default()
+                    .saturating_add(1)
+            };
+            let stations = cabinet.stations();
+            assert!(stations.get(player.index()).is_some_and(|station| {
+                station.health == PLAYER_HEALTH
+                    && station.display_health == expected
+            }));
+        }
+    }
+
+    #[test]
     fn enemy_approaches_only_after_entry() {
         let spawn = Point { x: 250, y: 190 };
         let result = Cabinet::with_encounter(StreetLayout::DOWNTOWN, spawn);
