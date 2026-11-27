@@ -689,3 +689,23 @@ Dispositions are 1,475 unresolved, three intentional replacements
 and 25 non-runtime. Every prior decoded instruction, detailed
 observation and audio record is preserved; all decoded bytes have
 owners. Full original execution coverage remains unverified.
+
+An extended stage replay preserves both prior score and phase traces,
+and confirms the selected region row. Six unique additional indexed
+selections exercise three title-card substates and three scroll
+or transform handlers. Their direct continuations add 12 reviewed
+main identities and 325 owned bytes, including two fixed transfer
+stubs. The card timer now has a partial Rust mapping to the native
+logical input gate, timeout, pause and adjacent boundary tests.
+Display setup, original scheduling, exact cue timing and scroll
+handler equivalence remain unresolved.
+
+The main inventory is 826 identities and 35,772 owned bytes, with
+1,012 possible observations. The combined checker reports 1,515
+identities, 54,170 owned bytes, 4,146 reciprocal pairs, 4,618 flow
+observations, 208 interior entries and 168 unresolved flows.
+Dispositions are 1,487 unresolved, three intentional replacements
+and 25 non-runtime. All prior decoded instructions, detailed
+observations and audio records remain intact; every decoded byte
+has an owner. These observed selectors do not establish complete
+execution coverage.
