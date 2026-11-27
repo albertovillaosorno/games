@@ -207,3 +207,28 @@ unresolved flow observations. Dispositions are 648 discovered,
 215 unresolved, one intentional replacement and two non-runtime.
 The conditional selector paths do not establish runtime reachability,
 complete native implementation or original parity.
+
+Bank-local initialization and subsequent state mutations now support
+additional conditional dispatches in the three admitted overlays. Two
+stack-local callback counters and a bounded command-byte branch give
+explicit selector ranges. The command interpreter's six provisional
+continuation identities are consolidated into its existing function:
+they use the interpreter's stack frame and return to its own loop.
+The previous recursive call observation is retained. The main inventory
+now contains 239 identities (146 fixed, 93 bank-overlay) and 12,202
+owned decoded bytes, with 194 possible observations, 61 unresolved
+observations and 18 interior entries. No previous identities are lost.
+
+The checker additionally rejects numerically identical entry addresses
+within the same identity context even when their hexadecimal padding
+differs. Synthetic fixtures distinguish zero and nonzero address
+aliases from equal offsets in separate banks.
+
+A concurrent audio pass supplies 440 further semantic reviews without
+claiming Rust mappings. At this checkpoint the audio inventory has
+621 unresolved, one non-runtime and 64 discovered functions. The
+combined checker reports 925 identities, 30,541 owned instruction
+bytes, 3,114 reciprocal graph pairs and 3,419 detailed observations,
+including 69 interior and 61 unresolved flow observations. Dispositions
+are 267 discovered, 655 unresolved, one intentional replacement and
+two non-runtime. Function coverage and runtime equivalence remain open.

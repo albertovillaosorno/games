@@ -4098,3 +4098,18 @@ close; no canvas or persisted preference remained. A private isolated
 PipeWire null sink received the browser output. This verifies host
 queue consumption and control, not speaker audibility, exact soundtrack
 loop parity or complete original audio reconstruction.
+
+### Bank-local dispatch and audio review
+
+Conditional selector initialization, subsequent increments, bounded
+stack-local callback counters and command-byte dispatch extend the
+main-CPU inventory to 239 identities and 12,202 owned decoded bytes.
+Six provisional command-handler entries share the interpreter's stack
+frame and are reconciled as internal continuations, not separate
+functions. Alternate bank and selector contexts remain unresolved.
+
+A concurrent audio pass records 440 additional semantic reviews. The
+combined private ledger contains 925 identities and 3,419 detailed flow
+observations, with 267 discovered, 655 unresolved, one intentional
+replacement and two non-runtime functions. These are static evidence
+and dispositions, not original gameplay or audio equivalence.
