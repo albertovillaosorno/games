@@ -31,7 +31,7 @@
 
 //! Linux adapter for explicitly sealed, flat research archive packages.
 
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::io;
 use std::os::fd::OwnedFd;
 use std::path::Path;
@@ -479,6 +479,29 @@ fn inventory(roots: &Roots, policy: Policy) -> Outcome<Observed> {
     Ok((runs, protected))
 }
 
+fn under_archive_lock<T>(
+    archive: &OwnedFd,
+    operation: Operation,
+    action: impl FnOnce() -> Outcome<T>,
+) -> Outcome<T> {
+    let lock = File::from(archive.try_clone().map_err(io_failure)?);
+    match operation {
+        Operation::Plan => lock.try_lock_shared(),
+        Operation::Apply(_) => lock.try_lock(),
+    }
+    .map_err(|error| match error {
+        TryLockError::WouldBlock => {
+            failure("archive retention is already in progress")
+        },
+        TryLockError::Error(source) => io_failure(source),
+    })?;
+    let result = action();
+    // A forked process can briefly retain the same open file description.
+    // Explicitly unlock even on error instead of relying on its last close.
+    let released = lock.unlock().map_err(io_failure);
+    result.and_then(|value| released.map(|()| value))
+}
+
 fn execute(
     workspace: &Path,
     policy: Policy,
@@ -494,36 +517,32 @@ fn execute(
         verify_plan(operation, &plan)?;
         return Ok(plan);
     };
-    let lock = File::from(roots.archive.try_clone().map_err(io_failure)?);
-    match operation {
-        Operation::Plan => lock.try_lock_shared(),
-        Operation::Apply(_) => lock.try_lock(),
-    }
-    .map_err(|_error| failure("archive retention is already in progress"))?;
-    let root_stamp = stamp(&trusted(&roots.archive)?);
-    let (runs, protected) = inventory(&roots, policy)?;
-    if stamp(&trusted(&roots.archive)?) != root_stamp {
-        return Err(failure("archive inventory changed"));
-    }
-    let candidates = runs.iter().map(|run| run.candidate.clone()).collect();
-    let plan = select(policy, now, Inventory {
-        candidates,
-        protected,
-        root: root_stamp,
-    })?;
-    roots.verify(workspace)?;
-    verify_plan(operation, &plan)?;
-    if matches!(operation, Operation::Apply(_)) {
-        for removal in &plan.removals {
-            roots.verify(workspace)?;
-            let run = runs
-                .iter()
-                .find(|entry| entry.candidate.removal.name == removal.name)
-                .ok_or_else(|| failure("missing reviewed run"))?;
-            run.remove(&roots, policy)?;
+    under_archive_lock(&roots.archive, operation, || {
+        let root_stamp = stamp(&trusted(&roots.archive)?);
+        let (runs, protected) = inventory(&roots, policy)?;
+        if stamp(&trusted(&roots.archive)?) != root_stamp {
+            return Err(failure("archive inventory changed"));
         }
-    }
-    Ok(plan)
+        let candidates = runs.iter().map(|run| run.candidate.clone()).collect();
+        let plan = select(policy, now, Inventory {
+            candidates,
+            protected,
+            root: root_stamp,
+        })?;
+        roots.verify(workspace)?;
+        verify_plan(operation, &plan)?;
+        if matches!(operation, Operation::Apply(_)) {
+            for removal in &plan.removals {
+                roots.verify(workspace)?;
+                let run = runs
+                    .iter()
+                    .find(|entry| entry.candidate.removal.name == removal.name)
+                    .ok_or_else(|| failure("missing reviewed run"))?;
+                run.remove(&roots, policy)?;
+            }
+        }
+        Ok(plan)
+    })
 }
 
 fn verify_plan(operation: Operation, plan: &Plan) -> Outcome<()> {
@@ -602,6 +621,58 @@ mod tests {
     fn preview(root: &TestRoot, limits: Policy) -> io::Result<Plan> {
         execute(root.path(), limits, Operation::Plan, aged_now()?)
             .map_err(|error| io::Error::other(error.to_string()))
+    }
+
+    #[test]
+    fn lock_releases_while_an_inherited_description_remains_open()
+    -> io::Result<()> {
+        let root = fixture()?;
+        let archive = root.path().join(ROOT);
+        let primary = open(&archive, DIRECTORY_FLAGS, Mode::empty())?;
+        let inherited = primary.try_clone()?;
+        let independent =
+            File::from(open(&archive, DIRECTORY_FLAGS, Mode::empty())?);
+        let result = under_archive_lock(&primary, Operation::Plan, || {
+            if matches!(independent.try_lock(), Err(TryLockError::WouldBlock)) {
+                Ok(())
+            } else {
+                Err(failure("shared lock did not exclude apply"))
+            }
+        });
+        result.map_err(|error| io::Error::other(error.to_string()))?;
+        require(
+            independent.try_lock().is_ok(),
+            "successful preview retained an inherited lock",
+        )?;
+        independent.unlock()?;
+
+        let failed: Outcome<()> = under_archive_lock(
+            &primary,
+            Operation::Apply(ContentHash::calculate(b"fixture")),
+            || {
+                if matches!(
+                    independent.try_lock_shared(),
+                    Err(TryLockError::WouldBlock)
+                ) {
+                    Err(failure("fixture operation failed"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        require(
+            matches!(failed, Err(ToolchainError::Failed { diagnostic, .. })
+                if diagnostic == "fixture operation failed"),
+            "exclusive lock or operation error was lost",
+        )?;
+        drop(primary);
+        require(
+            independent.try_lock_shared().is_ok(),
+            "failed apply retained an inherited lock",
+        )?;
+        independent.unlock()?;
+        drop(inherited);
+        Ok(())
     }
 
     #[test]
