@@ -163,3 +163,31 @@ not be duplicated or regressed. Shared adapter migration, workspace
 feature and dependency checks, application storage and asset paths,
 actual title packaging, audio and physical ARM64 acceptance remain
 open. No workspace dependency or owner configuration was changed.
+
+A disposable Linux compatibility probe builds SDL3 0.22.1 with its
+upstream SDL 3.4.20 source statically linked, without installing a
+system development package. X11, offscreen and a private headless
+Wayland compositor with a virtual monitor select OpenGL and verify
+exact RGBA nearest-neighbor texture readback. The default headless
+Wayland session has no displays. An injected fractional mouse event
+retains its coordinates; SDL3 event timestamps are nanoseconds rather
+than the existing SDL2 millisecond timestamps.
+
+Dummy audio verifies default and enumerated device selection, exact
+48 kHz stereo signed-16 source and destination, a 1024-frame obtained
+period, byte-counted queue admission, clearing, resuming, draining
+and pausing. This is not audible playback or validation of differing
+physical device formats. The shared audio IR now admits fallible
+backend observations and retains terminal control results until
+their state and queue receipts can be verified; regression tests
+exercise synchronous, asynchronous and rejected controls. Linux and
+browser adapters retain their existing dependencies.
+
+The SDL3 wrapper's rumble and sensor capability queries require
+unsafe calls. A separate strict compile probe rejects both; existing
+Linux capability discovery must not be degraded to migrate. Another
+SDL2 entry candidate, interoptopus 0.16.6, emits an unsafe trait
+implementation and export attribute in the strict ARM64 probe and is
+not admitted. Neither probe modifies workspace dependencies. Native
+adapter migration remains blocked on a compatible safe integration,
+and Android title packaging and physical-device acceptance remain open.
