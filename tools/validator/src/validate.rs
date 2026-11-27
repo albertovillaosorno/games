@@ -204,6 +204,10 @@ fn validate_browser_smokes(
         ),
         ("simpsons-arcade-browser-frame-smoke", "browser-frame-smoke"),
         ("simpsons-arcade-browser-title-smoke", "browser-title-smoke"),
+        (
+            "simpsons-arcade-browser-scenery-smoke",
+            "browser-title-smoke",
+        ),
         ("simpsons-arcade-browser-preview", "browser-preview"),
         ("simpsons-arcade-browser-audio-smoke", "browser-audio-smoke"),
     ] {

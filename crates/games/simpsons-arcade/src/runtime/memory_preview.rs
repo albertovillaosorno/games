@@ -38,7 +38,9 @@ use games::audio::MasterVolume;
 use games::presentation::DisplaySettings;
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
+use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::graphics::{NativeWindow, frame_loop};
+use games_platform::ir::input::InputStartup;
 use games_platform::ir::storage::bundle::{BundleSource, MemoryBundleStore};
 use games_platform::ir::storage::preferences::{
     DisplayStore, PublicationPolicy, VolumeStore,
@@ -47,8 +49,8 @@ use games_platform::ir::storage::preferences::{
 pub use super::audio::AudioSelection;
 use super::{
     Interactive, OptionalSources, PreviewOptions, Scene, Sources,
-    WindowSwitching, audio, dimension, launch, poses, preview_layout,
-    scene_limits, size, world,
+    WindowSwitching, audio, dimension, failure, launch, poses, preview_layout,
+    scene_limits, scenery, size, world,
 };
 
 /// Explicit selection for the local event-driven preview.
@@ -93,6 +95,12 @@ impl Preferences {
             volume_store: None,
         }
     }
+}
+
+struct Resident {
+    art: Scene,
+    scene: SceneSession<'static, 'static>,
+    startup: InputStartup,
 }
 
 fn preview_options<'preferences>(
@@ -153,43 +161,13 @@ pub(super) fn start_with_preferences<Complete>(
 where
     Complete: FnOnce(Result<(), RenderError>) + 'static,
 {
-    let source = Sources::load(
-        BundleSource::Memory(store),
-        selection.actors,
-        OptionalSources {
-            audio: selection.audio,
-            enemy: selection.enemy,
-            poses: selection
-                .poses
-                .map(poses::Catalogue::parse)
-                .transpose()?
-                .unwrap_or_default(),
-            shadow: selection.shadow,
-            world: selection.world,
-        },
-    )?;
+    let source = sources(store, selection)?;
     let options = preview_options(selection, preferences, &source)?;
-    let reserved = [false; 4];
-    let layout =
-        preview_layout(options.touch_enabled, &preferences.controls.profiles)?;
-    let limits = scene_limits(&source, options, reserved)?;
-    let mut window = NativeWindow::open(
-        "The Simpsons Arcade - movement prototype",
-        dimension(960)?,
-        dimension(if options.touch_enabled {
-            912
-        } else {
-            672
-        })?,
-        false,
-    )?;
-    window.apply_display_settings(options.display)?;
-    let startup = window.input(size(reserved.len())?)?;
-    let mut scene = window.into_scene(layout, limits)?;
-    scene.protect_bottom(NonZeroU32::new(
-        layout.height().get().saturating_sub(world::BASE_HEIGHT),
-    ))?;
-    let mut art = Scene::load(&mut scene, &source, options, reserved)?;
+    let Resident {
+        mut art,
+        mut scene,
+        startup,
+    } = open_scene(&source, options)?;
     let mut preview = Interactive::for_scene(startup, options, &art, None)?;
     let mut playback = audio::open_optional(
         source.audio.as_ref(),
@@ -206,4 +184,67 @@ where
         },
         complete,
     )
+}
+
+fn sources<'source>(
+    store: &'source MemoryBundleStore,
+    selection: &Selection<'_>,
+) -> Result<Sources<'source>, RenderError> {
+    Sources::load(
+        BundleSource::Memory(store),
+        selection.actors,
+        OptionalSources {
+            audio: selection.audio,
+            enemy: selection.enemy,
+            poses: selection
+                .poses
+                .map(poses::Catalogue::parse)
+                .transpose()?
+                .unwrap_or_default(),
+            shadow: selection.shadow,
+            world: selection.world,
+        },
+    )
+}
+
+fn open_scene(
+    source: &Sources<'_>,
+    options: PreviewOptions<'_>,
+) -> Result<Resident, RenderError> {
+    let reserved = [false; 4];
+    let layout =
+        preview_layout(options.touch_enabled, &options.controls.profiles)?;
+    let limits = scene_limits(source, options, reserved)?;
+    let mut window = NativeWindow::open(
+        "The Simpsons Arcade - movement prototype",
+        dimension(960)?,
+        dimension(if options.touch_enabled {
+            912
+        } else {
+            672
+        })?,
+        false,
+    )?;
+    window.apply_display_settings(options.display)?;
+    let startup = window.input(size(reserved.len())?)?;
+    let mut scene = window.into_scene(layout, limits)?;
+    scene.protect_bottom(NonZeroU32::new(
+        layout.height().get().saturating_sub(world::BASE_HEIGHT),
+    ))?;
+    let art = Scene::load(&mut scene, source, options, reserved)?;
+    Ok(Resident { art, scene, startup })
+}
+
+pub(super) fn verify_scenery(
+    store: &MemoryBundleStore,
+    selection: &Selection<'_>,
+    preferences: &Preferences,
+) -> Result<(), RenderError> {
+    let source = sources(store, selection)?;
+    if !source.poses.has_scenery() {
+        return Err(failure("scenery smoke requires scenic poses"));
+    }
+    let options = preview_options(selection, preferences, &source)?;
+    let Resident { mut art, mut scene, .. } = open_scene(&source, options)?;
+    scenery::smoke(&mut scene, &mut art)
 }

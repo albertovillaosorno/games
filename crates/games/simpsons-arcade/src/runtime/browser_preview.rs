@@ -54,6 +54,7 @@ use super::launch::{
 };
 use super::memory_preview::{
     AudioSelection, Preferences, Selection, start_with_preferences,
+    verify_scenery,
 };
 use super::{
     art_bundle_limits, audio, failure, parse_hash, parse_hashes, poses,
@@ -65,6 +66,12 @@ const POSES: &str = "launch-poses.txt";
 const PREFERENCES: &str = "simpsons-arcade";
 
 type Completion = fn(Result<(), RenderError>);
+type Start = fn(
+    &SelectedDirectory,
+    bool,
+    &Preferences,
+    Completion,
+) -> Result<(), RenderError>;
 
 #[derive(Debug)]
 struct Stores {
@@ -119,6 +126,25 @@ pub fn start(
     touch_enabled: bool,
     complete: Completion,
 ) -> Result<(), RenderError> {
+    select_with(touch_enabled, start_selected, complete)
+}
+
+/// Check the selected scenic track through the resident browser renderer.
+/// Unlike live play, this explicit diagnostic runs one finite readback.
+/// # Errors
+/// Rejects absent scenery, invalid assets or failed pixel verification.
+pub fn scenery_smoke(
+    touch_enabled: bool,
+    complete: Completion,
+) -> Result<(), RenderError> {
+    select_with(touch_enabled, smoke_selected, complete)
+}
+
+fn select_with(
+    touch_enabled: bool,
+    start: Start,
+    complete: Completion,
+) -> Result<(), RenderError> {
     select(
         limits(),
         &[CATALOGUE, POSES],
@@ -135,12 +161,7 @@ pub fn start(
                     DirectorySelectionError::Selection(error) => error,
                 })
                 .and_then(|(directory, admitted)| {
-                    start_selected(
-                        &directory,
-                        touch_enabled,
-                        &admitted,
-                        complete,
-                    )
+                    start(&directory, touch_enabled, &admitted, complete)
                 });
             if let Err(error) = opened {
                 complete(Err(error));
@@ -279,6 +300,18 @@ fn start_selected(
 ) -> Result<(), RenderError> {
     let options = selection_from(directory.sidecars(), touch_enabled)?;
     start_with_preferences(directory.bundles(), &options, admitted, complete)
+}
+
+fn smoke_selected(
+    directory: &SelectedDirectory,
+    touch_enabled: bool,
+    admitted: &Preferences,
+    complete: Completion,
+) -> Result<(), RenderError> {
+    let options = selection_from(directory.sidecars(), touch_enabled)?;
+    verify_scenery(directory.bundles(), &options, admitted)?;
+    complete(Ok(()));
+    Ok(())
 }
 
 fn preferences(defaults: DisplaySettings) -> Result<Preferences, RenderError> {
@@ -489,6 +522,21 @@ mod tests {
             == count
     }
 
+    fn pose_fixture(pose: ContentHash, scenic: ContentHash) -> String {
+        ["marge", "homer", "bart", "lisa"]
+            .into_iter()
+            .flat_map(|name| {
+                ["attack", "jump"]
+                    .map(|kind| format!("{name} {kind} 0 {pose}\n"))
+            })
+            .chain(
+                (8u16..=328).step_by(8).map(|tick| {
+                    format!("scenic-pair {tick} 248 52 {scenic}\n")
+                }),
+            )
+            .collect()
+    }
+
     #[test]
     fn manifest_selection_includes_every_art_and_audio_role()
     -> Result<(), RenderError> {
@@ -497,16 +545,11 @@ mod tests {
         let shadow = ContentHash::calculate(b"shadow");
         let world = ContentHash::calculate(b"world");
         let pose = ContentHash::calculate(b"pose");
+        let scenic = ContentHash::calculate(b"scenic");
         let base = ContentHash::calculate(b"base");
         let replacement = ContentHash::calculate(b"replacement");
         let music = ContentHash::calculate(b"music");
-        let poses: String = ["marge", "homer", "bart", "lisa"]
-            .into_iter()
-            .flat_map(|name| {
-                ["attack", "jump"]
-                    .map(|kind| format!("{name} {kind} 0 {pose}\n"))
-            })
-            .collect();
+        let poses = pose_fixture(pose, scenic);
         let selection = Selection {
             actors: [actor; 4],
             audio: Some(AudioSelection {
@@ -530,6 +573,7 @@ mod tests {
             (shadow, 1, art_bundle_limits()?),
             (world, 1, world::bundle_limits()?),
             (pose, 8, art_bundle_limits()?),
+            (scenic, 41, art_bundle_limits()?),
             (base, 1, audio::base_limits()?),
             (music, 1, audio::music_limits()?),
             (replacement, 1, audio::replacement_limits()?),

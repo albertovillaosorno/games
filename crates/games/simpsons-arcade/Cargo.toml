@@ -100,3 +100,8 @@ required-features = ["browser-title-smoke"]
 name = "simpsons-arcade-browser-preview"
 path = "src/bin/browser-preview.rs"
 required-features = ["browser-preview"]
+
+[[bin]]
+name = "simpsons-arcade-browser-scenery-smoke"
+path = "src/bin/browser-scenery-smoke.rs"
+required-features = ["browser-title-smoke"]
