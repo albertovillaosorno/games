@@ -88,3 +88,38 @@ audio, physical input and storage-location integration, and the game
 APK. Core execution and app-private persistence are established only
 through translated emulation, not a playable title or native ARM64
 hardware acceptance.
+
+The pinned SDL2 0.39.0 Rust dependency's upstream native source builds
+with NDK r28c for AArch64 at API 24. A disposable APK contains only the
+ARM64 libraries and upstream SDL Activity and diagnostic entry points.
+It passes alignment and APK v2/v3 signature verification. On the
+translated API 35 emulator, the native diagnostic selects OpenGL ES 2,
+observes rotation and the new 1920 by 1080 extent, receives native
+finger down/up and synthesized mouse events, and observes window focus
+loss and recovery across Home and relaunch. The first run also observed
+surface destruction and native pause/resume. No title assets were
+included.
+
+SDL's filesystem diagnostic returns the app-private files directory
+from its preference-path API; the executable base-path query is
+unsupported. SDL selects OpenSL ES and enumerates one output and one
+capture device, but default-device format discovery is unsupported.
+The headless emulator ran with audio disabled; no audible playback or
+real controller behavior has been verified.
+
+The shared input contract now distinguishes application suspension from
+window focus loss. SDL background notifications release all held
+physical sources without detaching controllers, cancel active control
+editor drafts, invalidate touch geometry and stop feedback. Termination
+maps to quit. Application foreground alone does not grant window focus.
+Unit and all-feature validation pass on the development host; this is
+not verification of the Android title adapter or suspended simulation
+timing.
+
+The pinned Rust-SDL2 wrapper does not supply an Android application
+entry point. Its Java Activity invokes the native SDL main symbol.
+An owned unsafe exported entry or a shim bypassing the workspace
+unsafe-code prohibition is not an acceptable solution. A supported
+safe entry wrapper or other lawful platform integration is required.
+The upstream diagnostics establish dependency feasibility only; the
+Android target remains explicitly unavailable for interactive titles.
