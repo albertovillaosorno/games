@@ -1666,3 +1666,25 @@ recorded, as required by the unavailable-target acceptance criterion.
 No Android application, package or physical device support is claimed.
 The remaining Android implementation is tracked in android-runtime.mdc.
 The native title task retains physical input, screen and audible checks.
+
+Hidden-document lifecycle events now cancel application input without
+requiring a window blur. A bounded DOM queue retains the newest actual
+suspension with its acquisition order and timestamp when overflow
+coalesces input; ordinary overflow still withdraws window input only.
+The expanded diagnostic verifies controller neutralization before the
+suspension, queue overflow before, at and after that event, controller
+identity retention, and subsequent input recovery.
+
+The 241,961-byte bound diagnostic module from b80c90b passed natural,
+forced-visible and forced-hidden observations in isolated Firefox and
+Epiphany/WebKitGTK. Both engines reported 302, 302 and 308 event
+dispatches respectively, ten synthetic suspensions per run, 48 listener
+additions and removals, and no retained canvas or active listener.
+The module SHA-256 is
+`47780ff23bb1305bf5f2d90b7f6aefc686e08da25b09135f69900b175a54ae26`.
+WebKitGTK required a short private runtime socket path and dropping
+namespace setup capabilities before launching its intact sandbox.
+Earlier harness startup failures are not counted. Forced visibility
+and synthetic events are not physical background-tab or device tests.
+Fresh `cargo validate` passed at 1795817907303287248-1992923 and
+1795818043444803094-2009097.
