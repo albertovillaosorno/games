@@ -51,6 +51,7 @@ pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
     EnemyAction, RestraintMotion,
 };
+use games::animation::cycle_tick;
 use games::input::LogicalAction;
 use games::presentation::StripViewport;
 use games::replay::InputStep;
@@ -76,6 +77,9 @@ const ENEMY_CAPACITY: usize = 12;
 const OPENING_ENEMY_COUNT: usize = 7;
 const LATER_COMBAT_GATE: i16 = 458;
 const OPPOSING_ENEMY_COUNT: usize = 9;
+const STATIONARY_SCENE_ORIGIN: i16 = 482;
+const STATIONARY_SCENE_CYCLE: u16 = 100;
+const STATIONARY_SCENE_END: u16 = 65;
 const MID_STREET_ADMISSION: i16 = 562;
 const MID_STREET_SCRIPT_ORIGIN: i16 = 674;
 const MID_STREET_SCRIPT_TICKS: u16 = 336;
@@ -703,6 +707,7 @@ pub struct Cabinet {
     scroll_limit: i16,
     session: LocalSession,
     slots: [Slot; 4],
+    stationary_tick: Option<u16>,
 }
 
 impl Cabinet {
@@ -760,12 +765,26 @@ impl Cabinet {
     }
 
     fn advance_scripted_scene(&mut self) {
-        if self.camera < MID_STREET_SCRIPT_ORIGIN {
-            return;
+        if self.camera >= MID_STREET_SCRIPT_ORIGIN {
+            self.scripted_tick = Some(self.scripted_tick.map_or(0, |tick| {
+                tick.saturating_add(1).min(MID_STREET_SCRIPT_TICKS)
+            }));
         }
-        self.scripted_tick = Some(self.scripted_tick.map_or(0, |tick| {
-            tick.saturating_add(1).min(MID_STREET_SCRIPT_TICKS)
-        }));
+        self.stationary_tick = if self.camera < STATIONARY_SCENE_ORIGIN
+            || self
+                .scripted_tick
+                .is_some_and(|tick| tick >= STATIONARY_SCENE_END)
+        {
+            None
+        } else {
+            cycle_tick(
+                u64::from(
+                    self.stationary_tick
+                        .map_or(0, |tick| tick.saturating_add(1)),
+                ),
+                STATIONARY_SCENE_CYCLE,
+            )
+        };
     }
 
     fn apply(
@@ -975,6 +994,7 @@ impl Cabinet {
             scroll_limit: 0,
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
+            stationary_tick: None,
         })
     }
 
@@ -1005,6 +1025,7 @@ impl Cabinet {
         self.cooperation.reset();
         self.camera = 0;
         self.scripted_tick = None;
+        self.stationary_tick = None;
         if let Some(encounter) = &mut self.encounter {
             encounter.restart();
         }
@@ -1030,6 +1051,12 @@ impl Cabinet {
     #[must_use]
     pub const fn session(&self) -> LocalSession {
         self.session
+    }
+
+    /// Current fixed-step phase of the stationary scenic actor.
+    #[must_use]
+    pub const fn stationary_scene_tick(&self) -> Option<u16> {
+        self.stationary_tick
     }
 
     /// Inspect all four stations in character order.
@@ -1282,6 +1309,7 @@ fn cabinet() -> Cabinet {
         scroll_limit: 0,
         session: LocalSession::default(),
         slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
+        stationary_tick: None,
     })
 }
 
@@ -2889,6 +2917,7 @@ mod tests {
         }
         assert_eq!(state.camera_origin(), MID_STREET_SCRIPT_ORIGIN);
         assert_eq!(state.scripted_scene_tick(), Some(0));
+        assert_stationary_departure(state);
         assert_scripted_pause_and_completion(state);
     }
 
@@ -2909,6 +2938,44 @@ mod tests {
         state.reset_world();
         assert_eq!(state.scripted_scene_tick(), None);
         assert_eq!(state.camera_origin(), 0);
+    }
+
+    fn assert_stationary_departure(mut state: Cabinet) {
+        assert!(state.stationary_scene_tick().is_some());
+        advance_empty(&mut state, 1000..1064);
+        assert_eq!(state.scripted_scene_tick(), Some(64));
+        assert!(state.stationary_scene_tick().is_some());
+        state.input_step(1064, &[]);
+        assert_eq!(state.scripted_scene_tick(), Some(65));
+        assert_eq!(state.stationary_scene_tick(), None);
+        state.reset_world();
+        assert_eq!(state.stationary_scene_tick(), None);
+    }
+
+    #[test]
+    fn stationary_scene_loops_at_the_admission_camera_limit() {
+        let Ok(mut state) = cabinet().with_scroll_limit(482) else {
+            return;
+        };
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.input_step(1, &[change(Player::Marge, Control::Right, true)]);
+        for tick in 2..1000 {
+            state.input_step(tick, &[]);
+            if state.camera_origin() == STATIONARY_SCENE_ORIGIN {
+                break;
+            }
+            assert_eq!(state.stationary_scene_tick(), None);
+        }
+        assert_eq!(state.stationary_scene_tick(), Some(0));
+        state.input_step(1000, &[change(Player::Marge, Control::Right, false)]);
+        advance_empty(&mut state, 1001..1100);
+        assert_eq!(state.stationary_scene_tick(), Some(0));
+        state.input_step(1100, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 1101..1110);
+        assert_eq!(state.stationary_scene_tick(), Some(0));
+        state.input_step(1110, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.stationary_scene_tick(), Some(1));
+        assert_eq!(state.camera_origin(), STATIONARY_SCENE_ORIGIN);
     }
 
     #[test]

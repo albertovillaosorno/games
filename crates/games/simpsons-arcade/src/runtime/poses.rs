@@ -190,7 +190,10 @@ impl Catalogue {
         let mut entries = BTreeMap::new();
         let mut scenery = scenery::Catalogue::default();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            if line.split_whitespace().next() == Some("scenic-pair") {
+            if matches!(
+                line.split_whitespace().next(),
+                Some("scenic-pair" | "scenic-stationary")
+            ) {
                 scenery.insert(line)?;
                 continue;
             }
@@ -229,6 +232,10 @@ impl Catalogue {
             return Err(failure("missing tick-zero pose"));
         }
         Ok(Self { entries, scenery })
+    }
+
+    pub(super) fn scenic_sprite_count(&self) -> usize {
+        self.scenery.track_count()
     }
 }
 
@@ -566,6 +573,14 @@ mod tests {
             assert!(writeln!(text, "scenic-pair {tick} 248 52 {HASH}").is_ok());
         }
         text
+    }
+
+    fn stationary_fixture() -> String {
+        format!(
+            "scenic-stationary 0 804 81 {HASH}\n\
+             scenic-stationary 1 804 82 {HASH}\n\
+             scenic-stationary 2 804 81 {HASH}\n"
+        )
     }
 
     fn complete() -> String {
@@ -1015,6 +1030,13 @@ mod tests {
                 .ok(),
             Some(MAX_POSES.saturating_add(41))
         );
+        let stationary = stationary_fixture();
+        assert_eq!(
+            Catalogue::parse(&format!("{text}{scenic}{stationary}"))
+                .map(|value| (value.count(), value.scenic_sprite_count()))
+                .ok(),
+            Some((MAX_POSES.saturating_add(44), 2))
+        );
         assert_eq!(
             Catalogue::parse(&text).map(|value| value.count()).ok(),
             Some(MAX_POSES)
@@ -1039,6 +1061,27 @@ mod tests {
         assert!(
             Catalogue::parse(&format!(
                 "{}scenic-pair 8 248 52 {HASH}",
+                complete()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn stationary_catalogue_is_optional_but_complete() {
+        let text = format!("{}{}", complete(), stationary_fixture());
+        let result = Catalogue::parse(&text);
+        assert_eq!(
+            result
+                .as_ref()
+                .map(|value| (value.count(), value.scenic_sprite_count()))
+                .ok(),
+            Some((11, 1))
+        );
+        assert!(result.is_ok_and(|value| value.admit_world(None).is_err()));
+        assert!(
+            Catalogue::parse(&format!(
+                "{}scenic-stationary 0 804 81 {HASH}",
                 complete()
             ))
             .is_err()

@@ -642,7 +642,7 @@ impl Scene {
                 } else {
                     21usize
                 })
-                .saturating_add(usize::from(source.poses.has_scenery()))
+                .saturating_add(source.poses.scenic_sprite_count())
                 .saturating_add(
                     usize::from(source.shadow.is_some()).saturating_mul(4),
                 ),
@@ -769,11 +769,8 @@ impl Scene {
             self.draws
                 .push(self.background.draw(self.background.rect, false));
         }
-        if cabinet.session().world_visible()
-            && let Some(tick) = cabinet.scripted_scene_tick()
-            && let Some(draw) = self.poses.scenery.draw(tick, view)?
-        {
-            self.draws.push(draw);
+        if cabinet.session().world_visible() {
+            self.poses.scenery.queue(cabinet, view, &mut self.draws)?;
         }
         Ok(())
     }
@@ -3417,7 +3414,7 @@ fn scene_limits(
         )?,
         sprites: size(
             enemy_sprites
-                .saturating_add(usize::from(source.poses.has_scenery()))
+                .saturating_add(source.poses.scenic_sprite_count())
                 .saturating_add(editor_sprites)
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))

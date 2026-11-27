@@ -9,32 +9,32 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Optional bounded mid-street scripted actor art admission and placement.
+//   - Optional bounded mid-street scenic art admission and placement.
 // - Must-Not:
 //   - Resolve combat, change camera gates or interpret original object data.
 // - Allows:
 //   - Inputs: Pinned isolated art, fixed-step scene tick and world viewport.
-//   - Outputs: At most one positioned, clipped sprite draw.
+//   - Outputs: At most two positioned, clipped sprite draw.
 //   - Side effects: Load admitted canonical atlases during scene startup.
 // - Split-When:
 //   - Additional independent scripted scenes require distinct tracks.
 // - Merge-When:
 //   - Shared placement-aware pose tracks subsume this local composition.
 // - Summary:
-//   - Present the independently observed noncombat suited-actor sequence.
+//   - Present independently observed noncombat scenic sequences.
 // - Description:
 //   - Hold sparse observed frames at their measured original raster origins.
 // - Usage:
-//   - Add optional scenic-pair records to the existing pose catalogue.
+//   - Add optional scenic-pair or scenic-stationary records to the catalogue.
 // - Defaults:
-//   - No scenery without the complete bounded track.
+//   - No scenery without a complete bounded track.
 
 //! Optional, sparse world-anchored mid-street scene presentation.
 
 use std::collections::BTreeMap;
 use std::mem::take;
 
-use games::animation::{Keyframes, keyframe};
+use games::animation::{Keyframes, keyframe, optional_track_complete};
 use games::input::LogicalAction;
 use games::replay::InputStep as _;
 use games_assets::ContentHash;
@@ -47,15 +47,120 @@ use games_platform::ir::storage::bundle::BundleSource;
 use super::world::{View, camera_at_limit};
 use super::{Art, Scene, dimension, failure, open_bundle};
 use crate::{
-    Action, BASE_WIDTH, Control, MID_STREET_SCRIPT_ORIGIN,
-    MID_STREET_SCRIPT_TICKS, Player, Point, SIDE,
+    Action, BASE_WIDTH, Cabinet, Control, MID_STREET_SCRIPT_ORIGIN,
+    MID_STREET_SCRIPT_TICKS, Player, Point, SIDE, STATIONARY_SCENE_CYCLE,
 };
 
 const FIRST_TICK: u16 = 8;
 const STEP: u16 = 8;
 const LAST_TICK: u16 = MID_STREET_SCRIPT_TICKS - STEP;
 const MAX_GAP: u16 = STEP * 2;
-const KEY: &str = "actor/scenic-pair";
+const STATIONARY_X: i16 = 804;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Kind {
+    Pair,
+    Stationary,
+}
+
+impl Kind {
+    const ALL: [Self; 2] = [Self::Stationary, Self::Pair];
+
+    const fn asset_key(self) -> &'static str {
+        match self {
+            Self::Pair => "actor/scenic-pair",
+            Self::Stationary => "actor/scenic-stationary",
+        }
+    }
+
+    const fn frame(self, tick: u16) -> Option<u16> {
+        match self {
+            Self::Pair if tick < MID_STREET_SCRIPT_TICKS => Some(tick),
+            Self::Stationary if tick < STATIONARY_SCENE_CYCLE => {
+                Some(stationary_frame(tick))
+            },
+            Self::Pair | Self::Stationary => None,
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "scenic-pair" => Some(Self::Pair),
+            "scenic-stationary" => Some(Self::Stationary),
+            _ => None,
+        }
+    }
+
+    fn tick(self, cabinet: &Cabinet) -> Option<u16> {
+        match self {
+            Self::Pair => cabinet.scripted_scene_tick(),
+            Self::Stationary => cabinet.stationary_scene_tick(),
+        }
+    }
+
+    fn valid_sample(self, tick: u16, origin: Point) -> bool {
+        match self {
+            Self::Pair => {
+                (FIRST_TICK..=LAST_TICK).contains(&tick)
+                    && tick.is_multiple_of(STEP)
+                    && (0..320).contains(&origin.x)
+                    && (28..224).contains(&origin.y)
+            },
+            Self::Stationary => {
+                tick <= 2
+                    && origin.x == STATIONARY_X
+                    && origin.y == stationary_top(tick)
+            },
+        }
+    }
+
+    fn validate_art(
+        self,
+        frame: u16,
+        art: Art,
+        origin: Point,
+    ) -> Result<(), RenderError> {
+        let width = art.rect.width.get();
+        let height = art.rect.height.get();
+        let valid = match self {
+            Self::Pair => {
+                width <= 128
+                    && height <= 128
+                    && u32::try_from(origin.x)
+                        .map_err(failure)?
+                        .saturating_add(width)
+                        <= BASE_WIDTH
+                    && u32::try_from(origin.y)
+                        .map_err(failure)?
+                        .saturating_add(height)
+                        <= 224
+            },
+            Self::Stationary => {
+                width == 26
+                    && height
+                        == if frame == 1 {
+                            63
+                        } else {
+                            64
+                        }
+            },
+        };
+        if !valid {
+            return Err(failure("scenic pose exceeds observed extent"));
+        }
+        Ok(())
+    }
+
+    const fn world_origin(self, origin: Point) -> Point {
+        match self {
+            Self::Pair => Point {
+                x: MID_STREET_SCRIPT_ORIGIN.saturating_add(origin.x),
+                y: origin.y,
+            },
+            Self::Stationary => origin,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct Sample {
@@ -63,7 +168,7 @@ struct Sample {
     origin: Point,
 }
 
-type Track<T> = Keyframes<(), (), u16, T>;
+type Track<T> = Keyframes<Kind, (), u16, T>;
 
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
@@ -72,20 +177,10 @@ pub(super) struct Catalogue {
 
 impl Catalogue {
     pub(super) fn complete(&self) -> bool {
-        if self.entries.is_empty() {
-            return true;
-        }
-        let mut previous = FIRST_TICK;
-        if !self.entries.contains_key(&((), (), FIRST_TICK)) {
-            return false;
-        }
-        for &((), (), tick) in self.entries.keys() {
-            if tick.saturating_sub(previous) > MAX_GAP {
-                return false;
-            }
-            previous = tick;
-        }
-        previous == LAST_TICK
+        self.pair_complete()
+            && optional_track_complete(&self.entries, Kind::Stationary, (), &[
+                0, 1, 2,
+            ])
     }
 
     pub(super) fn count(&self) -> usize {
@@ -97,27 +192,24 @@ impl Catalogue {
     }
 
     pub(super) fn insert(&mut self, line: &str) -> Result<(), RenderError> {
-        let ["scenic-pair", raw_tick, raw_left, raw_top, digest] =
+        let [name, raw_tick, raw_left, raw_top, digest] =
             <[&str; 5]>::try_from(line.split_whitespace().collect::<Vec<_>>())
-                .map_err(|_error| failure("invalid scenic pose record"))?
-        else {
-            return Err(failure("unknown scenic pose"));
-        };
+                .map_err(|_error| failure("invalid scenic pose record"))?;
+        let kind = Kind::from_name(name)
+            .ok_or_else(|| failure("unknown scenic pose"))?;
         let tick = raw_tick.parse::<u16>().map_err(failure)?;
-        let left = raw_left.parse::<i16>().map_err(failure)?;
-        let top = raw_top.parse::<i16>().map_err(failure)?;
-        if !(FIRST_TICK..=LAST_TICK).contains(&tick)
-            || !tick.is_multiple_of(STEP)
-            || !(0..320).contains(&left)
-            || !(28..224).contains(&top)
-        {
+        let origin = Point {
+            x: raw_left.parse::<i16>().map_err(failure)?,
+            y: raw_top.parse::<i16>().map_err(failure)?,
+        };
+        if !kind.valid_sample(tick, origin) {
             return Err(failure("scenic pose outside observed interval"));
         }
         let sample = Sample {
             digest: digest.parse().map_err(failure)?,
-            origin: Point { x: left, y: top },
+            origin,
         };
-        if self.entries.insert(((), (), tick), sample).is_some() {
+        if self.entries.insert((kind, (), tick), sample).is_some() {
             return Err(failure("duplicate scenic pose"));
         }
         Ok(())
@@ -131,23 +223,38 @@ impl Catalogue {
         let mut entries = BTreeMap::new();
         for (&key, sample) in &self.entries {
             let bundle = open_bundle(store, sample.digest)?;
-            let art = Art::load(scene, &bundle, KEY)?;
-            if art.rect.width.get() > 128
-                || art.rect.height.get() > 128
-                || u32::try_from(sample.origin.x)
-                    .map_err(failure)?
-                    .saturating_add(art.rect.width.get())
-                    > BASE_WIDTH
-                || u32::try_from(sample.origin.y)
-                    .map_err(failure)?
-                    .saturating_add(art.rect.height.get())
-                    > 224
-            {
-                return Err(failure("scenic pose exceeds original raster"));
-            }
+            let art = Art::load(scene, &bundle, key.0.asset_key())?;
+            key.0.validate_art(key.2, art, sample.origin)?;
             let _prior = entries.insert(key, (art, sample.origin));
         }
         Ok(PlacedArt { entries })
+    }
+
+    fn pair_complete(&self) -> bool {
+        if !has_track(&self.entries, Kind::Pair) {
+            return true;
+        }
+        let mut previous = FIRST_TICK;
+        if !self.entries.contains_key(&(Kind::Pair, (), FIRST_TICK)) {
+            return false;
+        }
+        for &(kind, (), tick) in self.entries.keys() {
+            if kind != Kind::Pair {
+                continue;
+            }
+            if tick.saturating_sub(previous) > MAX_GAP {
+                return false;
+            }
+            previous = tick;
+        }
+        previous == LAST_TICK
+    }
+
+    pub(super) fn track_count(&self) -> usize {
+        Kind::ALL
+            .into_iter()
+            .filter(|&kind| has_track(&self.entries, kind))
+            .count()
     }
 }
 
@@ -157,23 +264,36 @@ pub(super) struct PlacedArt {
 }
 
 impl PlacedArt {
-    pub(super) fn draw(
+    fn draw(
         &self,
+        kind: Kind,
         tick: u16,
         view: View,
     ) -> Result<Option<SpriteDraw>, RenderError> {
-        if tick >= MID_STREET_SCRIPT_TICKS {
+        let Some(frame) = kind.frame(tick) else {
             return Ok(None);
-        }
-        let Some(&(art, origin)) = keyframe(&self.entries, ((), (), tick))
+        };
+        let Some(&(art, origin)) = keyframe(&self.entries, (kind, (), frame))
         else {
             return Ok(None);
         };
-        let world = Point {
-            x: MID_STREET_SCRIPT_ORIGIN.saturating_add(origin.x),
-            y: origin.y,
-        };
-        clipped_draw(art, view.project(world), view.width)
+        clipped_draw(art, view.project(kind.world_origin(origin)), view.width)
+    }
+
+    pub(super) fn queue(
+        &self,
+        cabinet: &Cabinet,
+        view: View,
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        for kind in Kind::ALL {
+            if let Some(tick) = kind.tick(cabinet)
+                && let Some(draw) = self.draw(kind, tick, view)?
+            {
+                draws.push(draw);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -210,15 +330,50 @@ fn clipped_draw(
     Ok(Some(Art { rect: source, ..art }.draw(destination, false)))
 }
 
+fn has_track<T>(entries: &Track<T>, kind: Kind) -> bool {
+    entries.keys().any(|&(owner, (), _)| owner == kind)
+}
+
+const fn stationary_frame(tick: u16) -> u16 {
+    match tick {
+        0..=12 | 26..=38 | 65..=77 => 0,
+        13..=25 | 39..=51 => 1,
+        _ => 2,
+    }
+}
+
+const fn stationary_top(frame: u16) -> i16 {
+    if frame == 1 {
+        82
+    } else {
+        81
+    }
+}
+
 pub(super) fn smoke(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
 ) -> Result<(), RenderError> {
-    if art.poses.scenery.entries.is_empty() {
-        return Ok(());
+    for kind in Kind::ALL {
+        if has_track(&art.poses.scenery.entries, kind) {
+            smoke_track(scene, art, kind)?;
+        }
     }
-    let origin = u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?;
-    let mut cabinet = camera_at_limit(origin)?;
+    Ok(())
+}
+
+fn smoke_track(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    kind: Kind,
+) -> Result<(), RenderError> {
+    let limit = match kind {
+        Kind::Pair => {
+            u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?
+        },
+        Kind::Stationary => 566,
+    };
+    let mut cabinet = camera_at_limit(limit)?;
     cabinet.input_step(1000, &[LogicalAction {
         action: Action {
             control: Control::Right,
@@ -229,12 +384,12 @@ pub(super) fn smoke(
     for tick in 1001..=1095 {
         cabinet.input_step(tick, &[]);
     }
-    let tick = cabinet
-        .scripted_scene_tick()
+    let tick = kind
+        .tick(&cabinet)
         .ok_or_else(|| failure("scripted scene did not start"))?;
     let view = art.presentation_view(scene, &cabinet)?;
     let draw =
-        art.poses.scenery.draw(tick, view)?.ok_or_else(|| {
+        art.poses.scenery.draw(kind, tick, view)?.ok_or_else(|| {
             failure("scripted scene did not provide visible art")
         })?;
     let _drawn = art.present(scene, &cabinet)?;
@@ -245,7 +400,11 @@ pub(super) fn smoke(
         .and_then(|_baseline_drawn| scene.readback());
     art.poses.scenery = saved;
     verify_pixels(&actual, &baseline?, view.width, draw.destination)?;
-    write_status(format_args!("Scripted scenic pair: visible at tick {tick}"))
+    let name = match kind {
+        Kind::Pair => "Scripted scenic pair",
+        Kind::Stationary => "Stationary scenic actor",
+    };
+    write_status(format_args!("{name}: visible at tick {tick}"))
         .map_err(failure)?;
     Ok(())
 }
@@ -314,7 +473,7 @@ mod tests {
                 .insert(&format!("scenic-pair 8 248 52 {HASH}"))
                 .is_err()
         );
-        assert!(track.entries.remove(&((), (), 24)).is_some());
+        assert!(track.entries.remove(&(Kind::Pair, (), 24)).is_some());
         assert!(!track.complete());
     }
 
@@ -335,5 +494,59 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn stationary_track_requires_all_three_measured_poses() {
+        let mut track = Catalogue::default();
+        assert_eq!(track.track_count(), 0);
+        for (frame, top) in [(0u16, 81i16), (1, 82)] {
+            assert!(
+                track
+                    .insert(&format!(
+                        "scenic-stationary {frame} 804 {top} {HASH}"
+                    ))
+                    .is_ok()
+            );
+        }
+        assert!(!track.complete());
+        assert!(
+            track
+                .insert(&format!("scenic-stationary 2 804 81 {HASH}"))
+                .is_ok()
+        );
+        assert!(track.complete());
+        assert_eq!(track.track_count(), 1);
+        assert_eq!(track.count(), 3);
+    }
+
+    #[test]
+    fn stationary_track_rejects_unobserved_poses_and_origins() {
+        for invalid in ["3 804 81", "0 805 81", "1 804 81", "2 804 82"] {
+            assert!(
+                Catalogue::default()
+                    .insert(&format!("scenic-stationary {invalid} {HASH}"))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn stationary_phase_selects_each_observed_interval() {
+        let intervals = [
+            (0..13, 0),
+            (13..26, 1),
+            (26..39, 0),
+            (39..52, 1),
+            (52..65, 2),
+            (65..78, 0),
+            (78..100, 2),
+        ];
+        for (ticks, frame) in intervals {
+            for tick in ticks {
+                assert_eq!(Kind::Stationary.frame(tick), Some(frame));
+            }
+        }
+        assert_eq!(Kind::Stationary.frame(100), None);
     }
 }
