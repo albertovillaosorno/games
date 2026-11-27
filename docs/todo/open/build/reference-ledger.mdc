@@ -538,3 +538,23 @@ possible observations. The combined checker reports 1,291 identities,
 1,263 unresolved, three intentional replacements and 25 non-runtime.
 No decoded instruction is unowned. Of 252 captured nested selections,
 108 are now admitted; 144 remain in four unreviewed overlays.
+
+The bank-31 handoff is now reconciled against the repaired ownership
+audit. Its 31 captured nested selections and direct continuations add
+30 reviewed main identities and 1,152 owned bytes. The new reviews
+distinguish descriptor field updates, conditional child allocation,
+station placement and auxiliary coordinate and timer updates. Shared
+retirement and auxiliary-field continuations move to their newly
+identified owners, with explicit partition notes in the prior records.
+All earlier instruction lines and detailed observation provenance are
+retained; the audio records and existing Rust mappings are unchanged.
+
+The main inventory is 632 identities and 27,607 owned bytes, with 744
+possible observations. The combined checker reports 1,321 identities,
+46,005 owned bytes, 3,806 reciprocal pairs, 4,242 flow observations,
+189 interior entries and 138 unresolved flows. Dispositions are 1,293
+unresolved, three intentional replacements and 25 non-runtime.
+No decoded instruction is unowned. Of the 252 captured nested
+selections, 139 are now admitted; 113 in three overlays remain review
+inputs. Function boundaries, complete dispatch coverage and gameplay
+semantics remain provisional.
