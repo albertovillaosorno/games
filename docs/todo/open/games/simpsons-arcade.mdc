@@ -42,10 +42,13 @@ preserve original four-player cooperative gameplay and pixel art.
 - Remove avoidable black side borders in supported wide scenes by using
   real additional scene content and precise uniform viewport geometry.
   Verify the owner's maximized desktop aspect ratio, resize and fullscreen.
+  Physically verify native aspect-fit, integer, fill/crop, stretch and
+  adaptive display modes, high-DPI mapping and device remapping.
   Keep safe aspect-fit fallback only where genuine extension is unavailable.
 - Verify actual audible playback on the host, not only dummy audio and
   submission counters. Diagnose device selection, gain and queue delivery;
   expose persistent master, effects and music settings where supported.
+  Record the selected physical audio device and effective volume.
   Reconstruct the original music and other missing cues separately.
 
 - Use only a selected lawful original edition and locally imported assets.

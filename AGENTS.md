@@ -29,6 +29,15 @@
   defer speculative enhancements until a current title requires them.
   Coordinate distinct acceptance blockers rather than parallel work
   on the same already-demonstrated capability.
+- Separate shared delivery acceptance from physical or title-specific
+  acceptance. Keep every unmet requirement in an actionable open record;
+  never treat unavailable devices or targets as verified. Where a target
+  is explicitly unavailable, continue independent supported-target work.
+  A blocked external prerequisite must not trigger repeated equivalent
+  diagnostics or unrelated refinements. Record the blocker once and
+  proceed to the earliest unblocked implementation task. Recheck it when
+  the prerequisite changes. Keep the validator and dependency checks
+  mandatory; completion still requires actual evidence.
 - Keep the root README concise: purpose, goals, platform status, entry
   points and catalogue. Put implementation details, commands, limits and
   technical design under docs/technical; keep title evidence in tasks.

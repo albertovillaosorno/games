@@ -1,6 +1,7 @@
 # Games TODO
 
-This is the canonical public roadmap. Work in phase order.
+This is the canonical public roadmap. Follow phase and dependency order.
+Explicitly unavailable independent targets do not block supported work.
 
 Open records live in `docs/todo/open/`; completed records move to
 `docs/todo/completed/` only after their acceptance criteria pass. Keep
@@ -22,27 +23,22 @@ Completed. See `docs/todo/completed/assets/`.
 
 ## P3 - Build system
 
-### TODO - Native Linux packaging
+Native Linux, browser and distribution delivery completed. See
+`docs/todo/completed/build/`. Android runtime remains independently open.
 
-Produce portable Linux x86-64 executables with local asset discovery.
+### TODO - Android ARM64 runtime and packaging
 
-[TODO - Native Linux packaging](docs/todo/open/build/native.mdc)
+Implement and verify the unavailable Android target when prerequisites
+exist. Do not block supported-target title implementation.
 
-### TODO - Android and browser packaging
-
-Support Android ARM64 and browser targets where compatible.
-
-[TODO - Android and browser packaging](docs/todo/open/build/mobile-web.mdc)
-
-### TODO - Build and distribution checks
-
-Verify build outputs, portability and distribution boundaries.
-
-[TODO - Build and distribution checks](docs/todo/open/build/release-checks.mdc)
+<!-- MarkdownLint-disable-next-line MD013 MD044 -->
+[TODO - Android ARM64 runtime and packaging](docs/todo/open/build/android-runtime.mdc)
 
 ## P4 - Title implementation
 
-Implement the following titles sequentially after the foundation gates.
+Implement the following titles in catalogue order after the shared
+delivery gates. An unavailable independent target does not block
+implementation for supported targets.
 Each record owns title-specific acceptance. Shared rules remain in
 AGENTS.md and the foundation contracts.
 

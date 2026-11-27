@@ -1,6 +1,6 @@
 ---
 id: "native"
-status: "open"
+status: "completed"
 lane: "3"
 priority: "p3"
 area: "build"
@@ -30,10 +30,12 @@ Produce portable Linux x86-64 executables with local asset discovery.
   profiles, persistent settings and reset. Test single-player-first
   WASD/Space/left-click defaults, explicit extra-seat admission and
   one shared Escape keyboard pause control.
-- Verify audible physical output and report selected audio device and
-  volume controls. Dummy audio smoke does not satisfy audible acceptance.
-- Verify adaptive wide scene and gameplay HUD on the owner's maximized
-  desktop; keep control hints in pause/settings rather than gameplay.
+- Verify audio routing and volume controls in the packaged runtime.
+  Actual audible output, selected physical device and effective volume
+  remain mandatory title acceptance; dummy audio is not audible evidence.
+- Verify adaptive wide scene and gameplay HUD through the packaged
+  runtime; keep control hints in pause/settings rather than gameplay.
+  Owner maximized desktop acceptance remains mandatory in the title.
 
 - Read configured asset and executable roots from the private local .env.
 - Use exactly one persistent per-title asset namespace across targets.
@@ -1096,3 +1098,18 @@ changes. Real relative scratch publication and independent receipt
 readback verified the native package (109 files, 4,154,345 bytes)
 and browser package (88 files, 1,546,800 bytes) without including
 assets. Fresh validation passed both regressions.
+
+Acceptance review, 2026-11-26: the native Linux delivery contract is
+demonstrated for the supported local runtime and an independent mounted
+userspace. Published executable and notice inventories, configured
+destinations, verified shared-store migration, repeated publication,
+read-only asset mounts, all five presentation modes, persistent settings,
+remapping and virtual input regressions cover software delivery.
+Actual audible playback, physical device conformance and the owner's
+maximized desktop are not established by those diagnostics. The
+original mandatory physical audio and owner desktop checks are retained
+in the open Simpsons Arcade title acceptance, alongside high-DPI,
+display-mode and device remapping checks. Future titles must demonstrate
+their own applicable device and display acceptance. This scope decision
+allows supported-target implementation to proceed without claiming
+hardware acceptance or arbitrary Linux ABI compatibility.

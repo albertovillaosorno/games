@@ -1,6 +1,6 @@
 ---
 id: "mobile-web"
-status: "open"
+status: "completed"
 lane: "3"
 priority: "p3"
 area: "build"
@@ -24,7 +24,8 @@ Support Android ARM64 and browser targets where compatible.
 
 ## Evidence
 
-Pending. Record actual checks and remaining limitations before completion.
+Initial cross-target observations follow; the acceptance review below
+records the supported delivery scope.
 
 Install the official Rust standard-library targets for the selected stable
 toolchain. Cross-target library checks are mandatory in the shared
@@ -1653,3 +1654,15 @@ An injected source connection failure reported InvalidState after pending
 admission, installed and removed one listener, attempted disconnection,
 scheduled no source and closed both contexts. The reported error is the
 observed public diagnostic result, not the injected host error text.
+
+Acceptance review, 2026-11-26: the supported browser packaging path is
+demonstrated by published and independently verified WebAssembly packages,
+explicit canonical asset selection, resident WebGL scenes, scoped input,
+persistent settings and bounded audio. The actual title runtime has been
+exercised with local original-derived assets in Firefox. WebKitGTK
+directory selection and audio admission limitations remain explicit.
+Android ARM64 portable compilation and the absence of an SDK/NDK are
+recorded, as required by the unavailable-target acceptance criterion.
+No Android application, package or physical device support is claimed.
+The remaining Android implementation is tracked in android-runtime.mdc.
+The native title task retains physical input, screen and audible checks.

@@ -1,0 +1,38 @@
+---
+id: "android-runtime"
+status: "open"
+lane: "3"
+priority: "p3"
+area: "build"
+task: "TODO - Android ARM64 runtime and packaging"
+depends_on:
+  - "mobile-web"
+validation:
+  - "cargo validate"
+---
+# TODO - Android ARM64 runtime and packaging
+
+## Objective
+
+Deliver the intended Android ARM64 target through the shared capability
+IR without blocking implementation on already supported targets.
+
+## Acceptance
+
+- Install or discover a supported official Android SDK and NDK.
+- Implement missing Android graphics, audio, lifecycle, input and storage
+  adapters through the shared IR; preserve explicit capability absence.
+- Build, link, package and verify an ARM64 application using the official
+  toolchain; preserve the shared asset namespace and licence boundaries.
+- Exercise startup, touch, storage, rendering and audio on an available
+  Android device or emulator; record physical-device checks separately.
+- Record unsupported capabilities and do not claim Android compatibility
+  from portable compilation alone.
+
+## Evidence
+
+Blocked: on 2026-11-26 the Android Rust target and ADB were available,
+but the SDK, NDK and cross-linker were absent. The completed mobile-web
+record retains portable compilation evidence. The browser package does
+not imply Android support. Continue title implementation on supported
+targets while this target is unavailable; do not mark it complete.

@@ -1,6 +1,6 @@
 ---
 id: "release-checks"
-status: "open"
+status: "completed"
 lane: "3"
 priority: "p3"
 area: "build"
@@ -634,3 +634,15 @@ The 45,220,060-byte difference measures repeated logical references,
 not actual allocated storage saved. No assets were changed or
 exported. This is host-local readback, not provenance verification
 or authority to retire any source media.
+
+Acceptance review, 2026-11-26: native and browser packages have passed
+publication, independent receipt readback, licence inventory, startup,
+asset discovery, destination separation and bounded rejection checks.
+The configured store audit demonstrates one physical payload per
+canonical digest across its manifests. Shared assets remain outside
+target packages, and repeat publication cannot alter them. Android
+runtime and package verification remain in the open android-runtime
+record; the supported Firefox path does not certify every browser.
+The Simpsons title retains actual physical display, input and audible
+playback acceptance. Other native host and browser compatibility
+must be established before making additional distribution claims.
