@@ -198,6 +198,25 @@ impl ArrivalArt {
         Ok(())
     }
 
+    pub(super) fn queue_release_shadows(
+        entrance: StageEntrance,
+        (view, shadow): (View, &ShadowArt),
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        if !shadow.supports_release() {
+            return Ok(());
+        }
+        for player in Player::ALL {
+            if let Some(point) = entrance.released_shadow(player) {
+                shadow.queue_unique(
+                    view.project(shadow_position(point)),
+                    draws,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn queue_released(
         &self,
         entrance: StageEntrance,
@@ -325,6 +344,13 @@ const fn shadow_position(point: Point) -> Point {
     }
 }
 
+pub(super) const fn moving_shadow_position(point: Point) -> Point {
+    Point {
+        y: point.y.saturating_sub(8),
+        ..point
+    }
+}
+
 pub(super) fn verify(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -434,6 +460,84 @@ pub(super) fn verify_ordinary_bodies(
     write_status(format_args!(
         "Second stage ordinary bodies: {visible} at tick {:?}",
         cabinet.stage_arrival().map(StageEntrance::tick)
+    ))
+    .map_err(failure)
+}
+
+fn expected_release_shadows(
+    shadow: &ShadowArt,
+    motion: Option<StageEntrance>,
+    view: View,
+) -> Vec<SpriteDraw> {
+    Player::ALL
+        .into_iter()
+        .filter_map(|player| {
+            let point = motion?.released_shadow(player)?;
+            Some(shadow.draw(view.project(shadow_position(point))))
+        })
+        .collect()
+}
+
+fn expected_bounce_shadows(
+    shadow: &ShadowArt,
+    cabinet: &Cabinet,
+    view: View,
+    expected: &mut Vec<SpriteDraw>,
+) {
+    let Some(entrance) = cabinet.stage_entrance() else {
+        return;
+    };
+    for (player, station) in Player::ALL.into_iter().zip(cabinet.stations()) {
+        if station.can_fight()
+            && entrance.ordinary_body_visible(player)
+            && entrance.elevation(player).is_some_and(|height| height > 0)
+        {
+            expected.push(
+                shadow.draw(
+                    view.project(moving_shadow_position(station.position)),
+                ),
+            );
+        }
+    }
+}
+
+pub(super) fn verify_release_shadows(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    stationary_visible: bool,
+) -> Result<(), RenderError> {
+    if art.poses.arrival.is_none() {
+        return Ok(());
+    }
+    let Some(shadow) =
+        art.shadow.as_ref().filter(|mask| mask.supports_release())
+    else {
+        return Ok(());
+    };
+    let view = art.presentation_view(scene, cabinet)?;
+    let motion = cabinet.stage_arrival();
+    if motion.is_some_and(StageEntrance::scripted_art) {
+        return Ok(());
+    }
+    let mut expected = expected_release_shadows(shadow, motion, view);
+    let stationary_count = expected.len();
+    if (stationary_count != 0) != stationary_visible {
+        return Err(failure("stationary release shadow lifetime differs"));
+    }
+    expected_bounce_shadows(shadow, cabinet, view, &mut expected);
+    if !shadow.matches_union(&art.draws, &expected) {
+        return Err(failure("landing shadows do not form a single mask union"));
+    }
+    if stationary_count != 0 {
+        let stationary = expected
+            .get(..stationary_count)
+            .ok_or(RenderError::InvalidSprite)?;
+        verify_draws(scene, art, cabinet, (view, stationary))?;
+    }
+    write_status(format_args!(
+        "Second stage release shadows: {stationary_count} at tick {:?}",
+        motion.map(StageEntrance::tick)
     ))
     .map_err(failure)
 }

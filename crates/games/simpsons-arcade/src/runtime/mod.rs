@@ -919,7 +919,7 @@ impl Scene {
                 .poses
                 .pair(pair, joined.motion)
                 .ok_or(RenderError::InvalidSprite)?;
-            if let Some(shadow) = &self.shadow
+            if self.shadow.is_some()
                 && pair == Pair::MargeHomer
                 && matches!(
                     joined.motion,
@@ -927,7 +927,11 @@ impl Scene {
                         | crate::PairMotion::AfterJump { .. }
                 )
             {
-                self.draws.push(shadow.draw(view.project(joined.position)));
+                self.queue_shadow(
+                    view.project(joined.position),
+                    cabinet.stage_arrival(),
+                    false,
+                )?;
             }
             self.world.push((
                 joined.position.y,
@@ -942,6 +946,27 @@ impl Scene {
             ));
         }
         Ok(())
+    }
+
+    fn queue_shadow(
+        &mut self,
+        position: Point,
+        entrance: Option<StageEntrance>,
+        airborne: bool,
+    ) -> Result<(), RenderError> {
+        let Some(shadow) = &self.shadow else {
+            return Ok(());
+        };
+        if !self.release_shadows_active(entrance) {
+            self.draws.push(shadow.draw(position));
+            return Ok(());
+        }
+        let ground = if airborne {
+            arrival::moving_shadow_position(position)
+        } else {
+            position
+        };
+        shadow.queue_unique(ground, &mut self.draws)
     }
 
     fn queue_stage(
@@ -1062,12 +1087,12 @@ impl Scene {
         };
         let position = view.project(station.position);
         let airborne = gameplay_entrance.is_some() && elevation > 0;
-        if let Some(shadow) = &self.shadow
+        if self.shadow.is_some()
             && (airborne
                 || (gameplay_entrance.is_none()
                     && shadow::visible(player, station.maneuver)))
         {
-            self.draws.push(shadow.draw(position));
+            self.queue_shadow(position, entrance, airborne)?;
         }
         let pose = if airborne {
             self.poses.entrance(player)
@@ -1094,6 +1119,16 @@ impl Scene {
         if !cabinet.session().world_visible() {
             return Ok(());
         }
+        if let (Some(entrance), Some(shadow)) =
+            (cabinet.stage_arrival(), &self.shadow)
+            && self.release_shadows_active(Some(entrance))
+        {
+            arrival::ArrivalArt::queue_release_shadows(
+                entrance,
+                (view, shadow),
+                &mut self.draws,
+            )?;
+        }
         let stations = cabinet.stations();
         for (seat, character) in Player::ALL.into_iter().zip(cabinet.choices())
         {
@@ -1110,6 +1145,15 @@ impl Scene {
             )?;
         }
         self.queue_pairs(cabinet, view)
+    }
+
+    fn release_shadows_active(&self, entrance: Option<StageEntrance>) -> bool {
+        self.poses.arrival.is_some()
+            && entrance.is_some_and(StageEntrance::release_shadows_active)
+            && self
+                .shadow
+                .as_ref()
+                .is_some_and(shadow::ShadowArt::supports_release)
     }
 }
 
@@ -3570,6 +3614,10 @@ fn scene_limits(
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
                 .saturating_add(
+                    usize::from(source.poses.has_arrival())
+                        .saturating_mul(shadow::RELEASE_EXTRA_SPRITES),
+                )
+                .saturating_add(
                     18usize.saturating_add(usize::from(touch_enabled)),
                 ),
         )?,
@@ -3589,6 +3637,10 @@ fn draw_capacity(source: &Sources<'_>) -> usize {
             usize::from(source.poses.has_wrestler()).saturating_mul(2),
         )
         .saturating_add(usize::from(source.shadow.is_some()).saturating_mul(4))
+        .saturating_add(
+            usize::from(source.poses.has_arrival())
+                .saturating_mul(shadow::RELEASE_EXTRA_SPRITES),
+        )
 }
 
 fn world_capacity(combat: bool) -> usize {

@@ -897,31 +897,33 @@ fn verify_stage_entrance(
     advance_vehicle_check(scene, art, simulation, (41, true))?;
     advance_vehicle_check(scene, art, simulation, (1, false))?;
     advance(simulation, 7)?;
-    verify_arrival_sample(scene, art, simulation, (true, false, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, false, false, false))?;
     advance(simulation, 2)?;
-    verify_arrival_sample(scene, art, simulation, (true, false, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, false, false, false))?;
     advance(simulation, 1)?;
-    verify_arrival_sample(scene, art, simulation, (true, true, false))?;
-    advance_body_check(scene, art, simulation, (2, true))?;
-    advance_body_check(scene, art, simulation, (2, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, true, false, true))?;
+    advance_body_check(scene, art, simulation, (2, true, true))?;
+    advance_body_check(scene, art, simulation, (2, false, true))?;
     advance(simulation, 44)?;
-    verify_arrival_sample(scene, art, simulation, (true, true, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, true, false, true))?;
     advance(simulation, 15)?;
     if simulation.state().stage_entrance().is_some() {
         return Err(failure("second-stage landing did not finish"));
     }
-    verify_arrival_sample(scene, art, simulation, (true, true, false))?;
-    advance_body_check(scene, art, simulation, (1, true))?;
-    advance_body_check(scene, art, simulation, (14, true))?;
-    advance_body_check(scene, art, simulation, (1, true))?;
-    advance_body_check(scene, art, simulation, (1, false))?;
-    advance_body_check(scene, art, simulation, (2, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, true, false, true))?;
+    advance_body_check(scene, art, simulation, (1, true, true))?;
+    advance_body_check(scene, art, simulation, (14, true, true))?;
+    advance_body_check(scene, art, simulation, (1, true, true))?;
+    advance_body_check(scene, art, simulation, (1, false, true))?;
+    advance_body_check(scene, art, simulation, (2, false, true))?;
     advance(simulation, 1)?;
-    verify_arrival_sample(scene, art, simulation, (false, true, true))?;
-    advance(simulation, 67)?;
-    verify_arrival_sample(scene, art, simulation, (false, true, false))?;
+    verify_arrival_sample(scene, art, simulation, (false, true, true, true))?;
+    advance_body_check(scene, art, simulation, (8, true, true))?;
+    advance_body_check(scene, art, simulation, (1, false, false))?;
+    advance(simulation, 58)?;
+    verify_arrival_sample(scene, art, simulation, (false, true, false, false))?;
     advance(simulation, 1)?;
-    verify_arrival_sample(scene, art, simulation, (false, false, true))?;
+    verify_arrival_sample(scene, art, simulation, (false, false, true, false))?;
     if simulation.state().stage_arrival().is_some() {
         return Err(failure("released arrival art did not retire"));
     }
@@ -933,7 +935,7 @@ fn advance_body_check(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     simulation: &mut LiveSimulation<Cabinet>,
-    (ticks, visible): (u16, bool),
+    (ticks, visible, stationary): (u16, bool, bool),
 ) -> Result<(), RenderError> {
     advance(simulation, ticks)?;
     let _drawn = art.present(scene, simulation.state())?;
@@ -942,6 +944,12 @@ fn advance_body_check(
         art,
         simulation.state(),
         visible,
+    )?;
+    super::arrival::verify_release_shadows(
+        scene,
+        art,
+        simulation.state(),
+        stationary,
     )
 }
 
@@ -949,13 +957,14 @@ fn verify_arrival_sample(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     simulation: &LiveSimulation<Cabinet>,
-    (visible, markers, bodies): (bool, bool, bool),
+    (visible, markers, bodies, stationary): (bool, bool, bool, bool),
 ) -> Result<(), RenderError> {
     let cabinet = simulation.state();
     let _drawn = art.present(scene, cabinet)?;
     super::arrival::verify(scene, art, cabinet, visible)?;
     super::arrival::verify_markers(scene, art, cabinet, markers)?;
-    super::arrival::verify_ordinary_bodies(scene, art, cabinet, bodies)
+    super::arrival::verify_ordinary_bodies(scene, art, cabinet, bodies)?;
+    super::arrival::verify_release_shadows(scene, art, cabinet, stationary)
 }
 
 fn advance_vehicle_check(

@@ -4988,3 +4988,34 @@ bounded readback at the sampled release and post-landing ticks,
 including the held tick 311, disappearance at 382 and restoration at
 383. The subsequent routed combat and 270-column travel also pass.
 Whole-scene and physical-device acceptance remain open.
+
+### Released stationary shadow presentation
+
+The neutral reference isolates four stationary shadows at displayed
+tick 232, and four stationary plus four moving shadows at tick 234.
+All twelve independent crops match the previously admitted 24-by-8
+ground mask byte for byte. Their stationary centres are eight pixels
+right and seven above the release ground anchors; the moving bounce
+centres are eight pixels above current station ground positions.
+Overlapping coverage darkens the original background only once.
+
+The optional arrival presentation reuses that atlas. Stationary
+shadows retain their initial admission and release origins through
+neutral tick 323, independently of body visibility and the fully
+clipped tethers. The verified mask's overlapping opaque coverage is
+subtracted before submitting bounded, one-row clipped sprite runs;
+disjoint masks retain their normal draw. This adds no atlas bytes or
+per-frame allocation and reserves at most 384 additional sprite
+commands only when arrival art is selected. Alternative mask extents
+retain the previous rendering policy.
+
+Portable tests cover station ownership, lifetime, translated and
+clipped mask coverage and the maximum row-run bound. The fixed-step
+gameplay landing gate is unchanged.
+
+Fresh workspace validation and optimized original-backed native touch
+smoke passed in all five display modes. The smoke checks stationary
+shadow readback through tick 323, retirement at 324 and the bounded
+single-coverage union of stationary and moving masks. Subsequent routed
+combat and 270-column travel also pass. Exact directional retirement,
+original selective admission and whole-scene parity remain open.

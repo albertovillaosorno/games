@@ -200,6 +200,21 @@ impl StageEntrance {
     }
 
     #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn release_shadows_active(self) -> bool {
+        !self.scripted_art() && self.tick < 324
+    }
+
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) fn released_shadow(self, player: Player) -> Option<Point> {
+        if !self.release_shadows_active()
+            || !self.admitted.get(player.index()).copied()?
+        {
+            return None;
+        }
+        self.at(SCRIPT_END).scripted_position(player)
+    }
+
+    #[cfg(any(test, feature = "native-preview"))]
     pub(super) fn released_tether(
         self,
         player: Player,
@@ -465,6 +480,25 @@ mod tests {
             assert!(selective.at(tick).ordinary_body_visible(Player::Marge));
             assert!(selective.at(tick).ordinary_body_visible(Player::Bart));
         }
+    }
+
+    #[test]
+    fn released_shadow_lifetime_is_independent_of_clipped_tethers() {
+        let selective = StageEntrance::new([true, false, true, false]);
+        for player in Player::ALL {
+            assert_eq!(selective.at(231).released_shadow(player), None);
+            assert_eq!(selective.at(324).released_shadow(player), None);
+        }
+        let marge = Some(Point { x: 68, y: 192 });
+        let bart = Some(Point { x: 132, y: 192 });
+        for tick in 232..324 {
+            let arrival = selective.at(tick);
+            assert_eq!(arrival.released_shadow(Player::Marge), marge);
+            assert_eq!(arrival.released_shadow(Player::Homer), None);
+            assert_eq!(arrival.released_shadow(Player::Bart), bart);
+            assert_eq!(arrival.released_shadow(Player::Lisa), None);
+        }
+        assert!(selective.at(323).released_tether(Player::Marge).is_none());
     }
 
     #[test]
