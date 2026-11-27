@@ -4361,3 +4361,11 @@ second-station join and a separate branch that expires and starts a
 new campaign. This distinguishes the continuing station's existing
 score from a newly admitted station's zero score. Exact multiplayer
 expiry, boss awards and complete score parity remain open.
+
+All 42 captured group callback selections now have verified immutable
+pointer and bank-table evidence, including signed table indexing.
+Two isolated discovery passes reviewed 110 additional main CPU
+identities and their direct continuations. The newly reviewed paths
+include conditional record retirement, terrain sampling, linked
+record state changes and nested state dispatchers. The latter remain
+unbounded; native actor behavior and campaign parity are not claimed.

@@ -466,3 +466,21 @@ indirection in the first two region descriptor selections, and record
 42 callback word selections in four fixed group dispatchers with their
 active ROM banks. These are bounded observations, not exhaustive type
 coverage; no additional roots are admitted on this evidence alone.
+
+The 42 observed callback words reconcile with the immutable pointer
+and bank tables, signed indexed addressing and the four record spans.
+Two isolated discovery passes admit the observed roots and their
+bounded direct continuations: 110 additional reviewed main identities
+and 3,039 owned bytes, across six newly admitted overlays and fixed
+ROM. All preceding instruction bytes, function bodies and detailed
+flow observations are preserved. No decoded instruction is unowned.
+The remaining nested state selectors are not inferred from contiguous
+ROM data or treated as exhaustively covered by the replay.
+
+The main inventory now has 480 identities, 21,868 owned bytes,
+485 possible bank/table observations and 126 unresolved flows.
+The combined checker reports 1,169 identities, 40,266 owned bytes,
+3,503 reciprocal pairs, 3,890 detailed flow observations and 122
+interior entries. Dispositions are 1,141 unresolved, three intentional
+replacements and 25 non-runtime. All prior semantic fields and audio
+entries are retained; gameplay mappings remain incomplete.
