@@ -30,6 +30,9 @@
 
 //! Shared canonical bundle and media-overlay admission.
 
+/// Admission of edition-media locale bindings.
+pub mod localisation;
+
 use std::collections::BTreeMap;
 use std::io::{Error as IoError, ErrorKind};
 

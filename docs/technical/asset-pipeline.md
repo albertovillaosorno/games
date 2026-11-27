@@ -14,6 +14,36 @@ cargo run --locked -p games-build -- import mame graphics simpsons \
   world-4p-set-1 PATH SOURCE ENTRY TOTAL COUNT
 ```
 
+## Optional edition-localised media
+
+When the selected source edition contains language-dependent assets, its
+shared importer profile can stage an optional canonical `Data` catalogue
+with the other resources. Use a caller-selected logical key in the same
+manifest, such as `localisation/media`; no extra bundle format or store
+is needed. The metadata is UTF-8, begins with `media-locales-v1` and a
+newline, and contains zero or more newline-terminated rows. Each row has
+three tab-separated fields: base asset key, normalized locale tag, and
+variant asset key. Rows are strictly sorted by base key and locale. Both
+keys must resolve to existing records of the same encoding family in the
+pinned manifest; they cannot identify the catalogue itself.
+
+The title opens the catalogue through
+`platform::ir::storage::bundle::localisation::LocalisedMediaCatalogue`
+with explicit metadata byte and binding-count budgets. It supplies its
+admitted selected and fallback locales. Resource resolution visits the
+exact selection, its parents, the configured fallback and its parents,
+then the original base record. Variants are direct references, never
+recursive aliases. The original remains accessible through its normal
+base key. Missing or damaged payloads fail verification rather than
+silently changing language. Identical bytes reuse the same SHA-256
+object even when several logical keys or locales select it.
+
+Authored message catalogues remain separate from original-edition assets.
+Do not require an optional media catalogue for an edition without
+language-dependent resources, or assume a source contains translations.
+Actual source extraction and title-specific asset interpretation remain
+separate acceptance evidence.
+
 ## Persistent storage layout
 
 The local ignored `.env` selects an absolute `GAMES_ASSET_ROOT`,

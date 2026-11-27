@@ -32,6 +32,7 @@
 
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter::successors;
 use std::num::NonZeroUsize;
 
 use super::message::{
@@ -98,6 +99,14 @@ impl LocaleTag {
         &self.0
     }
 
+    /// Visit this exact locale followed by progressively shorter parents.
+    /// The caller chooses any further fallback.
+    pub fn candidates(&self) -> impl Iterator<Item = &str> {
+        successors(Some(self.as_str()), |tag| {
+            tag.rsplit_once('-').map(|(parent, _subtag)| parent)
+        })
+    }
+
     /// Admit and normalize a locale identifier of at most 255 ASCII bytes.
     ///
     /// # Errors
@@ -140,6 +149,18 @@ impl LocaleTag {
             tag.push_str(&normalized);
         }
         Ok(Self(tag))
+    }
+
+    /// Select the first value from this locale or the configured fallback.
+    /// Both tags are visited from exact to progressively shorter parents.
+    #[must_use]
+    pub fn resolve_with<T, F>(&self, fallback: &Self, lookup: F) -> Option<T>
+    where
+        F: FnMut(&str) -> Option<T>,
+    {
+        self.candidates()
+            .chain(fallback.candidates())
+            .find_map(lookup)
     }
 }
 
@@ -288,15 +309,6 @@ impl TranslationCatalog {
         )
     }
 
-    fn lookup(&self, mut locale: &str, key: &str) -> Option<&str> {
-        loop {
-            if let Some(text) = self.get(locale, key) {
-                return Some(text);
-            }
-            locale = locale.rsplit_once('-')?.0;
-        }
-    }
-
     /// Create an empty catalogue with explicit logical storage limits.
     #[must_use]
     pub const fn new(fallback: LocaleTag, limits: CatalogLimits) -> Self {
@@ -312,10 +324,8 @@ impl TranslationCatalog {
     /// Resolve a locale string, using fallback for invalid identifiers.
     #[must_use]
     pub fn resolve(&self, locale: &str, key: &str) -> Option<&str> {
-        LocaleTag::parse(locale).map_or_else(
-            |_| self.lookup(self.fallback.as_str(), key),
-            |tag| self.resolve_tag(&tag, key),
-        )
+        let admitted = LocaleTag::parse(locale);
+        self.resolve_tag(admitted.as_ref().unwrap_or(&self.fallback), key)
     }
 
     /// Resolve an admitted locale without reparsing it on each lookup.
@@ -324,8 +334,7 @@ impl TranslationCatalog {
     /// fallback tag and its parents. Return None if the key is absent.
     #[must_use]
     pub fn resolve_tag(&self, locale: &LocaleTag, key: &str) -> Option<&str> {
-        self.lookup(locale.as_str(), key)
-            .or_else(|| self.lookup(self.fallback.as_str(), key))
+        locale.resolve_with(&self.fallback, |tag| self.get(tag, key))
     }
 }
 

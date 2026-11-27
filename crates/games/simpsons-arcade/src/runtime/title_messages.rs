@@ -445,18 +445,12 @@ pub(super) fn locale_index(requested: Option<&LocaleTag>) -> usize {
     let Some(locale) = requested else {
         return 0;
     };
-    let mut candidate = locale.as_str();
-    loop {
-        if let Some(index) =
+    locale
+        .candidates()
+        .find_map(|candidate| {
             LOCALES.iter().position(|(tag, _label)| *tag == candidate)
-        {
-            return index;
-        }
-        let Some((parent, _subtag)) = candidate.rsplit_once('-') else {
-            return 0;
-        };
-        candidate = parent;
-    }
+        })
+        .unwrap_or(0)
 }
 
 pub(super) fn locale_tag(index: usize) -> Result<LocaleTag, RenderError> {

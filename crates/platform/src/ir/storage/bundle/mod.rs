@@ -32,6 +32,8 @@
 
 /// Explicit selected canonical directory admission.
 pub mod directory;
+/// Typed edition-media locale variants in the pinned bundle.
+pub mod localisation;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
