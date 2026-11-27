@@ -57,8 +57,8 @@ use super::{
 use crate::{
     CONTINUE_TICKS, Cabinet, Control, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
     Enemy, EnemyAction, Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver,
-    PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase, Player, Point, Station,
-    TICK_INTERVAL,
+    PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase, Player, Point,
+    REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -635,15 +635,28 @@ fn verify_reinforcements(
     simulation: &mut LiveSimulation<Cabinet>,
     (expected, seen): (usize, &mut [bool; ENEMY_CAPACITY - 1]),
 ) -> Result<(), RenderError> {
-    for _ in 0..80u8 {
+    // The widest supported view determines offscreen arrival coordinates.
+    // In a narrow view, a lone stationary player can lose a stock before
+    // the last enemy arrives. Allow a complete recovery and meter drain
+    // in addition to the original bounded approach time.
+    let ticks = 320u16
+        .saturating_add(STOCK_REENTRY_TICKS)
+        .saturating_add(REFILL_TICKS)
+        .saturating_add(u16::from(PLAYER_HEALTH).saturating_mul(2));
+    for _ in 0..ticks.div_ceil(4) {
         observe_reinforcements(scene, art, simulation.state(), seen)?;
         if seen.iter().filter(|checked| **checked).count() == expected {
             return Ok(());
         }
         advance(simulation, 4)?;
     }
+    let cabinet = simulation.state();
+    let enemies = cabinet.enemies().collect::<Vec<_>>();
     Err(failure(format!(
-        "expected {expected} visible reinforcement meters: {seen:?}"
+        "expected {expected} visible reinforcement meters: {seen:?}; \
+         camera {}; stations {:?}; enemies {enemies:?}",
+        cabinet.camera_origin(),
+        cabinet.stations(),
     )))
 }
 

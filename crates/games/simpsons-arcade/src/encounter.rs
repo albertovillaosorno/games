@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn reinforcements_enter_beyond_every_supported_view() {
-        for travel in [50i16, 82, 154, 362, 444] {
+        for travel in [50i16, 82, 154, 362, 444, 1350] {
             for (gate, anchor) in REINFORCEMENTS
                 .into_iter()
                 .filter(|(gate, _)| *gate <= travel)
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn opening_street_clear_releases_remaining_verified_travel() {
-        for (limit, expected) in [(80, 2), (154, 4), (444, 7)] {
+        for (limit, expected) in [(80, 2), (154, 4), (444, 7), (1350, 7)] {
             let result = Cabinet::with_opening_street()
                 .and_then(|cabinet| cabinet.with_scroll_limit(limit));
             assert!(result.is_ok());
