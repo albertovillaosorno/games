@@ -3009,3 +3009,32 @@ Fresh validation 1795742119526400256-1903518 passed 1,997 aggregate test
 executions and all six portable core targets. These results establish
 verified art and provisional opening combat, not complete street or
 campaign progression, physical display/input/audio or browser parity.
+
+Later independent original-edition replays reproduced a simultaneous
+opposing-edge regular enemy pair at 458 columns of camera travel.
+Three further regular enemies first enter from the left at 562, 770
+and 834 columns. Admission is monotonic and viewport independent.
+The prototype uses the existing regular enemy rules and provisional
+clearance gates at 458 and 770; the other two arrivals do not add
+hard stops. Exact enemy anchors, combat rules and clearance conditions
+remain unverified. A stationary object at 482, two distinct groups at
+674 and a larger late-street group are not represented as regular
+enemies. No original media is committed.
+
+Optimized original-backed offscreen OpenGL smoke passed all four
+display modes with touch and dummy audio, including 1,350 camera
+columns, eleven full reinforcement meters, 600 movement and 20
+combat submissions and two cooperative pose families. Adaptive
+rendering verified 106 additional logical columns. No reported
+host-work frame-budget misses occurred. The earlier eight-meter
+run also reached its stage checks but failed in the concurrent
+audio diagnostic; the corrected diagnostic passed the complete
+eleven-meter runs.
+
+Fresh workspace validation 1795743165010875652-2039583 passed 2,017
+aggregate test executions, all six portable core targets and the
+WebAssembly core smoke. Inline regressions verify boundary admission,
+reset, both clearance gates, offscreen spawning at every supported
+view width and input-driven clearing of the full twelve-enemy
+prototype. Full stage progression, exact combat parity, physical
+device acceptance and audible playback remain open.
