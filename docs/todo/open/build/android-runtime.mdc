@@ -138,3 +138,28 @@ strict compilation because its native method macro emits a deprecated
 atomic API; its dependency resolution also introduces syn 3 alongside
 syn 2. No candidate was added to the workspace, no diagnostic APK was
 published, and no Android title runtime acceptance is implied.
+
+A separate disposable probe uses the documented SDL3 Activity `main`
+override and the JNI 0.22.4 `jni_mangle` attribute with a typed
+`EnvUnowned` and panic-catching `with_env` boundary. The Rust 2024
+ARM64 library links with unsafe code forbidden and warnings denied,
+without the deprecated native-method macro or an owned native shim.
+Its isolated dependency resolution uses thiserror 2.0.18 and retains
+one syn major version; this is not workspace dependency admission.
+The ARM64-only APK verifies alignment and v2/v3 signatures.
+
+On the API 35 x86-64 emulator with ARM64 translation, a cold launch
+enters the Rust SDL3 event loop. Center-pixel readback changes from
+RGBA (40, 80, 180, 255) to (12, 180, 40, 255) after a touch, then
+retains the latter color after Home and foreground restoration. The
+Activity observes focus loss and recovery and logs the normal Rust
+return value 42. The isolated emulator shuts down. No title media,
+production credentials or installed application state were used.
+
+This establishes a candidate safe entry route with SDL3, not the
+existing SDL2 integration. The development host lacks a system SDL3
+package; the existing Linux graphics, input and audio adapters must
+not be duplicated or regressed. Shared adapter migration, workspace
+feature and dependency checks, application storage and asset paths,
+actual title packaging, audio and physical ARM64 acceptance remain
+open. No workspace dependency or owner configuration was changed.
