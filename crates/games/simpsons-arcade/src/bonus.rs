@@ -31,7 +31,7 @@
 
 //! Experimental balloon pumping bonus.
 
-use super::Player;
+use super::{Player, stage_card_departed};
 
 // Baseline instruction entry is 953 reference frames after the terminal
 // response, of which 128 are the separate wrestler defeat phase.
@@ -52,8 +52,6 @@ const RESULT_EXIT_TICKS: u16 = 160;
 const DEPARTURE_HOLD_TICKS: u16 = 32;
 const DEPARTURE_SPEED: u32 = 160;
 const DEPARTURE_ACCELERATION: u32 = 8;
-const STAGE_CARD_MIN_TICKS: u16 = 65;
-const STAGE_CARD_MAX_TICKS: u16 = 192;
 // Separate measured setup phase; the entrance starts with its own tick 0.
 const STAGE_SETUP_TICKS: u16 = 11;
 const STAGE_SETUP_BLANK: u16 = 2;
@@ -438,9 +436,7 @@ impl Bonus {
         if self.phase == BonusPhase::StageSetup {
             return self.tick >= STAGE_SETUP_TICKS;
         }
-        if self.tick >= STAGE_CARD_MAX_TICKS
-            || (self.tick >= STAGE_CARD_MIN_TICKS && active_edge)
-        {
+        if stage_card_departed(self.tick, active_edge) {
             self.phase = BonusPhase::StageSetup;
             self.tick = 0;
         }

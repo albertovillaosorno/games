@@ -33,6 +33,7 @@
 
 mod balloon;
 mod bonus;
+mod cemetery;
 mod cooperative;
 mod encounter;
 mod entrance;
@@ -53,6 +54,9 @@ use std::time::Duration;
 
 pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
 pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
+pub use cemetery::{
+    CemeteryBody, CemeteryEntrance, CemeteryPhase, CemeteryPose,
+};
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
@@ -805,6 +809,8 @@ pub struct Cabinet {
     bonus: Option<Bonus>,
     bonus_enabled: bool,
     camera: i16,
+    cemetery: Option<CemeteryEntrance>,
+    cemetery_first: Option<Player>,
     choices: [Player; 4],
     cooperation: Cooperation,
     encounter: Option<Encounter>,
@@ -855,6 +861,21 @@ impl Cabinet {
             self.bonus = Some(Bonus::new(
                 self.slots.map(|slot| slot.station.can_fight()),
             ));
+        }
+    }
+
+    fn admit_cemetery(&mut self) {
+        if self.cemetery.is_none()
+            && let Some(first) = self.cemetery_first
+            && self
+                .balloon_boss
+                .is_some_and(|boss| boss.action == BalloonAction::Cleared)
+        {
+            self.cemetery = Some(CemeteryEntrance::new(
+                self.stations().map(Station::can_fight),
+                first,
+            ));
+            self.cooperation.reset();
         }
     }
 
@@ -951,6 +972,27 @@ impl Cabinet {
             self.camera.max(target.min(self.camera.saturating_add(2)));
     }
 
+    fn advance_cemetery(&mut self, presses: [bool; 4]) -> bool {
+        let Some(mut entrance) = self.cemetery else {
+            return false;
+        };
+        let active_edge = self
+            .stations()
+            .map(Station::can_fight)
+            .into_iter()
+            .zip(presses)
+            .any(|(active, pressed)| active && pressed);
+        let previous_phase = entrance.phase();
+        entrance.advance(active_edge);
+        if previous_phase == CemeteryPhase::Setup
+            && entrance.phase() == CemeteryPhase::Descent
+        {
+            self.move_cemetery_stations(entrance);
+        }
+        self.cemetery = Some(entrance);
+        true
+    }
+
     fn advance_continue(&mut self) {
         if self.phase() != Phase::Playing || self.encounter.is_none() {
             return;
@@ -1023,6 +1065,7 @@ impl Cabinet {
         let control = change.action.control;
         let interlude = playing
             && ((self.bonus.is_some() && control != Control::Start)
+                || self.cemetery.is_some()
                 || self.stage_entrance().is_some());
         let (Some(slot), Some(queued)) =
             (self.slots.get_mut(index), pending.get_mut(index))
@@ -1091,6 +1134,13 @@ impl Cabinet {
     #[must_use]
     pub const fn camera_origin(&self) -> i16 {
         self.camera
+    }
+
+    /// Optional cemetery entrance following the cleared boardwalk boss.
+    /// The previous encounter remains retained; subsequent combat is absent.
+    #[must_use]
+    pub const fn cemetery_entrance(&self) -> Option<CemeteryEntrance> {
+        self.cemetery
     }
 
     /// Selected character for each input seat, in physical seat order.
@@ -1190,6 +1240,7 @@ impl Cabinet {
 
     fn enter_stage_two(&mut self, travel: i16) {
         self.balloon_boss = None;
+        self.cemetery = None;
         if let Some(encounter) = &mut self.encounter {
             encounter.enter_stage_two(travel);
         }
@@ -1211,7 +1262,9 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
-        if self.advance_bonus(pending.map(|queued| queued.button_edges != 0))
+        let presses = pending.map(|queued| queued.button_edges != 0);
+        if self.advance_cemetery(presses)
+            || self.advance_bonus(presses)
             || self.advance_stage_entrance()
         {
             return;
@@ -1263,6 +1316,7 @@ impl Cabinet {
             }
             self.record_attack_cues();
             self.admit_bonus();
+            self.admit_cemetery();
         }
     }
 
@@ -1294,6 +1348,15 @@ impl Cabinet {
             .filter(|encounter| encounter.stage_two)
             .filter_map(|encounter| encounter.linked.as_ref())
             .flat_map(LinkedEncounter::parents)
+    }
+
+    fn move_cemetery_stations(&mut self, entrance: CemeteryEntrance) {
+        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
+            if let Some(point) = entrance.position(player) {
+                slot.restore_position(0);
+                slot.station.position = point;
+            }
+        }
     }
 
     fn move_entrance_stations(&mut self, entrance: StageEntrance) {
@@ -1331,6 +1394,8 @@ impl Cabinet {
             bonus: None,
             bonus_enabled: false,
             camera: 0,
+            cemetery: None,
+            cemetery_first: None,
             choices: Player::ALL,
             cooperation: Cooperation::default(),
             encounter: None,
@@ -1374,6 +1439,7 @@ impl Cabinet {
 
     fn reset_world(&mut self) {
         self.balloon_boss = None;
+        self.cemetery = None;
         self.bonus = None;
         self.cooperation.reset();
         self.camera = 0;
@@ -1415,6 +1481,8 @@ impl Cabinet {
         if !matches!(limit, Some(BOARDWALK_BACKDROP_ORIGIN)) {
             self.balloon_boss_enabled = false;
             self.balloon_boss = None;
+            self.cemetery = None;
+            self.cemetery_first = None;
         }
         if !matches!(limit, Some(value) if value >= LINKED_MIN_TRAVEL)
             && let Some(encounter) = &mut self.encounter
@@ -1506,6 +1574,8 @@ impl Cabinet {
                 .is_some_and(|encounter| encounter.linked.is_some());
         if !self.balloon_boss_enabled {
             self.balloon_boss = None;
+            self.cemetery = None;
+            self.cemetery_first = None;
         }
         self
     }
@@ -1527,6 +1597,24 @@ impl Cabinet {
             self.bonus = None;
             self.set_stage_two_limit(None);
         }
+        self
+    }
+
+    /// Opt into the third-stage arrival after the enabled boardwalk boss.
+    ///
+    /// The host chooses a verified rank rotation explicitly. The preview
+    /// ends at the landing boundary; no third-stage combat is admitted.
+    #[must_use]
+    pub const fn with_cemetery_entrance(
+        mut self,
+        first: Option<Player>,
+    ) -> Self {
+        self.cemetery_first = if self.balloon_boss_enabled {
+            first
+        } else {
+            None
+        };
+        self.cemetery = None;
         self
     }
 
@@ -1743,6 +1831,11 @@ const fn in_range(
         && from.y.abs_diff(to.y) <= extent.1
 }
 
+// Shared fixed-tick title card timeout and fresh-action gate.
+const fn stage_card_departed(tick: u16, active_edge: bool) -> bool {
+    tick >= 192 || (tick >= 65 && active_edge)
+}
+
 const fn step_toward(value: i16, target: i16) -> i16 {
     if value < target {
         value.saturating_add(1)
@@ -1847,6 +1940,8 @@ fn cabinet() -> Cabinet {
         bonus: None,
         bonus_enabled: false,
         camera: 0,
+        cemetery: None,
+        cemetery_first: None,
         choices: Player::ALL,
         cooperation: Cooperation::default(),
         encounter: None,
@@ -3919,6 +4014,92 @@ mod tests {
             state.enter_stage_two(1871);
             assert_eq!(state.linked_parents().count(), LINKED_PARENT_CAPACITY);
         }
+    }
+
+    #[test]
+    fn cemetery_admission_requires_enabled_boss_and_explicit_rotation() {
+        let configured = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1871));
+        assert!(configured.is_ok());
+        let Ok(boardwalk) = configured else {
+            return;
+        };
+        let disabled = boardwalk.with_cemetery_entrance(Some(Player::Homer));
+        assert_eq!(disabled.cemetery_first, None);
+        let selected = boardwalk
+            .with_linked_actors(true)
+            .with_balloon_boss(true)
+            .with_cemetery_entrance(Some(Player::Homer));
+        assert_eq!(selected.cemetery_first, Some(Player::Homer));
+        assert_eq!(selected.with_balloon_boss(false).cemetery_first, None);
+        assert_eq!(selected.with_linked_actors(false).cemetery_first, None);
+        assert_cemetery_after_boss(selected);
+    }
+
+    fn assert_cemetery_after_boss(mut state: Cabinet) {
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.input_step(1, &pulse(Player::Homer, Control::Start));
+        state.enter_stage_two(1871);
+        state.stage_entrance = None;
+        state.balloon_boss = Some(BalloonBoss {
+            action: BalloonAction::Cleared,
+            quantity: 0,
+            ..BalloonBoss::new(1871)
+        });
+        state.input_step(2, &[]);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::tick),
+            Some(0)
+        );
+        assert_eq!(
+            state
+                .cemetery_entrance()
+                .map(|entrance| entrance.rank(Player::Homer)),
+            Some(0)
+        );
+        let before = state.stations();
+        state.input_step(3, &[change(Player::Marge, Control::Primary, true)]);
+        advance_empty(&mut state, 4..68);
+        state.input_step(68, &pulse(Player::Bart, Control::Secondary));
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::phase),
+            Some(CemeteryPhase::Card)
+        );
+        state.input_step(69, &pulse(Player::Marge, Control::Pause));
+        let paused = state.cemetery_entrance();
+        advance_empty(&mut state, 70..80);
+        assert_eq!(state.cemetery_entrance(), paused);
+        state.input_step(80, &pulse(Player::Marge, Control::Pause));
+        state.input_step(81, &pulse(Player::Homer, Control::Secondary));
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::phase),
+            Some(CemeteryPhase::Setup)
+        );
+        assert_cemetery_descent(state, &before);
+    }
+
+    fn assert_cemetery_descent(mut state: Cabinet, before: &[Station; 4]) {
+        let previous_encounter = state.encounter;
+        let impacts = state.impact_cues();
+        state.input_step(82, &[change(Player::Marge, Control::Right, true)]);
+        state.input_step(83, &pulse(Player::Bart, Control::Start));
+        advance_empty(&mut state, 84..319);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::phase),
+            Some(CemeteryPhase::Landed)
+        );
+        assert_eq!(state.encounter, previous_encounter);
+        assert_eq!(state.impact_cues(), impacts);
+        let [marge, homer, bart, _] = state.stations();
+        assert_eq!(marge.position, Point { x: 116, y: 176 });
+        assert_eq!(homer.position, Point { x: 144, y: 176 });
+        assert_eq!(bart.participation, Participation::Absent);
+        assert_stage_two_stations(before, &state.stations());
+        state.reset_world();
+        assert_eq!(state.cemetery_entrance(), None);
+        assert_eq!(state.cemetery_first, Some(Player::Homer));
     }
 
     fn assert_linked_reconfiguration(result: &Result<Cabinet, LayoutError>) {

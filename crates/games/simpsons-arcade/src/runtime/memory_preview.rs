@@ -190,7 +190,8 @@ where
         mut scene,
         startup,
     } = open_scene(&source, options)?;
-    let mut preview = Interactive::for_scene(startup, options, &art, None)?;
+    let mut preview =
+        Box::new(Interactive::for_scene(startup, options, &art, None)?);
     let mut playback = audio::open_optional(
         source.audio.as_ref(),
         None,
