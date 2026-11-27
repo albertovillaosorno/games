@@ -32,12 +32,17 @@
 
 //! Portable presentation of shared session menu state.
 
+mod messages;
 use std::num::NonZeroUsize;
 
 use games::audio::{AudioSource, MasterVolume, SourceSettings};
-use games::presentation::{PresentationMode, WindowMode};
+use games::presentation::{
+    MessageParameter, MessageValue, PresentationMode, WindowMode,
+};
 use games::session::{ControlReset, LocalSession, MenuItem, SessionPhase};
+pub use messages::{MENU_MESSAGE_KEYS, MenuText, register_menu_messages};
 
+use self::messages::english_catalog;
 use crate::ir::frame::RenderError;
 use crate::ir::scene::{AtlasUpload, SpriteDraw};
 use crate::ir::ui::{PlateLayout, TextAtlas, TextLine};
@@ -165,39 +170,54 @@ impl Row {
         }
     }
 
-    fn label(self) -> String {
+    fn label(
+        self,
+        text: MenuText<'_>,
+        limit: NonZeroUsize,
+    ) -> Result<String, RenderError> {
         match self {
-            Self::Choice(item) => match item {
-                MenuItem::Audio => "AUDIO",
-                MenuItem::Back => "BACK",
-                MenuItem::Display => "DISPLAY",
-                MenuItem::EffectsVolume => "EFFECTS",
-                MenuItem::EditControls => "EDIT CONTROLS NEXT LAUNCH",
-                MenuItem::Exit => "EXIT",
-                MenuItem::MainMenu => "MAIN MENU",
-                MenuItem::MusicVolume => "MUSIC",
-                MenuItem::Play => "PLAY",
-                MenuItem::ResetControls => "RESET CONTROLS",
-                MenuItem::Resume => "RESUME",
-                MenuItem::Settings => "SETTINGS",
-                MenuItem::Volume => "VOLUME",
-                MenuItem::Window => "WINDOW",
-            }
-            .to_owned(),
+            Self::Choice(item) => {
+                text.literal(choice_key(item)).map(str::to_owned)
+            },
             Self::ControlReset(false) => {
-                "RESET CONTROLS NEXT LAUNCH".to_owned()
+                text.literal("menu.control.reset").map(str::to_owned)
             },
-            Self::ControlReset(true) => "DEFAULTS NEXT LAUNCH".to_owned(),
-            Self::Presentation(mode) => format!("DISPLAY: {}", mode.as_str()),
-            Self::SourceVolume(source, level) => {
-                let name = match source {
-                    AudioSource::Effects => "EFFECTS",
-                    AudioSource::Music => "MUSIC",
-                };
-                format!("{name}: {}%", level.percent())
+            Self::ControlReset(true) => {
+                text.literal("menu.control.defaults").map(str::to_owned)
             },
-            Self::Volume(level) => format!("MASTER: {}%", level.percent()),
-            Self::Window(mode) => format!("WINDOW: {}", mode.as_str()),
+            Self::Presentation(mode) => text.format(
+                "menu.display.value",
+                MessageParameter {
+                    name: "mode",
+                    value: MessageValue::Text(
+                        text.literal(presentation_key(mode))?,
+                    ),
+                },
+                limit,
+            ),
+            Self::SourceVolume(source, level) => volume_label(
+                text,
+                match source {
+                    AudioSource::Effects => "menu.effects.value",
+                    AudioSource::Music => "menu.music.value",
+                },
+                level,
+                limit,
+            ),
+            Self::Volume(level) => {
+                volume_label(text, "menu.master.value", level, limit)
+            },
+            Self::Window(mode) => text.format(
+                "menu.window.value",
+                MessageParameter {
+                    name: "mode",
+                    value: MessageValue::Text(text.literal(match mode {
+                        WindowMode::Fullscreen => "menu.window.fullscreen",
+                        WindowMode::Windowed => "menu.window.windowed",
+                    })?),
+                },
+                limit,
+            ),
         }
     }
 
@@ -260,6 +280,26 @@ impl MenuArt {
     where
         Upload: AtlasUpload,
     {
+        let (locale, catalog) = english_catalog()?;
+        Self::load_localised(scene, spec, content, MenuText {
+            catalog: &catalog,
+            locale: &locale,
+        })
+    }
+
+    /// Upload translated menu art using a caller-selected locale.
+    ///
+    /// # Errors
+    /// Rejects missing or invalid messages, clipped text or excess bytes.
+    pub fn load_localised<Upload>(
+        scene: &mut Upload,
+        spec: PlateLayout,
+        content: MenuContent<'_>,
+        text: MenuText<'_>,
+    ) -> Result<Self, RenderError>
+    where
+        Upload: AtlasUpload,
+    {
         let panel_bytes = usize::from(spec.width)
             .saturating_mul(usize::from(spec.height))
             .saturating_mul(PHASES.len())
@@ -270,14 +310,19 @@ impl MenuArt {
             .checked_sub(panel_bytes)
             .and_then(NonZeroUsize::new)
             .ok_or(RenderError::TooLarge)?;
-        let panels = PHASES.map(|phase| panel(spec.width, content, phase));
-        let labels = available_rows(content.control_reset, content.sources)
-            .flat_map(|row| {
-                let label = row.label();
-                let highlighted = format!("> {label}");
-                [label, highlighted]
-            })
-            .collect::<Vec<_>>();
+        let panels = PHASES
+            .into_iter()
+            .map(|phase| panel(spec.width, content, phase, text))
+            .collect::<Result<Vec<_>, _>>()?;
+        let limit =
+            NonZeroUsize::new(usize::from(spec.width).saturating_mul(4))
+                .ok_or(RenderError::InvalidDimensions)?;
+        let mut labels = Vec::new();
+        for row in available_rows(content.control_reset, content.sources) {
+            let label = row.label(text, limit)?;
+            let highlighted = format!("> {label}");
+            labels.extend([label, highlighted]);
+        }
         let rows = labels
             .iter()
             .enumerate()
@@ -360,22 +405,27 @@ fn available_rows(
         .filter(move |row| row.available(control_reset, sources))
 }
 
-fn panel(
+fn panel<'text>(
     width: u16,
-    content: MenuContent<'_>,
+    content: MenuContent<'text>,
     phase: SessionPhase,
-) -> Vec<TextLine<'_>> {
+    text: MenuText<'text>,
+) -> Result<Vec<TextLine<'text>>, RenderError> {
+    let audio_hints = [
+        text.literal("menu.audio.hint")?,
+        text.literal("menu.audio.all")?,
+    ];
     let (subtitle, hints) = match phase {
-        SessionPhase::Audio => (
-            "AUDIO",
-            &[
-                "PRIMARY CHANGES LEVEL - PAUSE RETURNS",
-                "MASTER APPLIES TO ALL SOURCES",
-            ][..],
-        ),
-        SessionPhase::MainMenu => ("FREE PLAY", content.main_hints),
-        SessionPhase::Paused => ("PAUSED", content.pause_hints),
-        SessionPhase::Settings => ("SETTINGS", content.settings_hints),
+        SessionPhase::Audio => (text.literal("menu.audio")?, &audio_hints[..]),
+        SessionPhase::MainMenu => {
+            (text.literal("menu.free-play")?, content.main_hints)
+        },
+        SessionPhase::Paused => {
+            (text.literal("menu.paused")?, content.pause_hints)
+        },
+        SessionPhase::Settings => {
+            (text.literal("menu.settings")?, content.settings_hints)
+        },
         SessionPhase::Controls
         | SessionPhase::Playing
         | SessionPhase::Exited => ("", &[][..]),
@@ -406,6 +456,16 @@ fn panel(
             .len(),
     )
     .unwrap_or(u16::MAX);
+    append_hints(&mut lines, width, hints, count);
+    Ok(lines)
+}
+
+fn append_hints<'text>(
+    lines: &mut Vec<TextLine<'text>>,
+    width: u16,
+    hints: &[&'text str],
+    count: u16,
+) {
     let mut top = ROW_TOP
         .saturating_add(count.saturating_mul(ROW_HEIGHT))
         .saturating_add(12);
@@ -421,7 +481,51 @@ fn panel(
         );
         top = top.saturating_add(12);
     }
-    lines
+}
+
+const fn choice_key(item: MenuItem) -> &'static str {
+    match item {
+        MenuItem::Audio => "menu.audio",
+        MenuItem::Back => "menu.back",
+        MenuItem::Display => "menu.display",
+        MenuItem::EffectsVolume => "menu.effects",
+        MenuItem::EditControls => "menu.control.edit",
+        MenuItem::Exit => "menu.exit",
+        MenuItem::MainMenu => "menu.main",
+        MenuItem::MusicVolume => "menu.music",
+        MenuItem::Play => "menu.play",
+        MenuItem::ResetControls => "menu.reset",
+        MenuItem::Resume => "menu.resume",
+        MenuItem::Settings => "menu.settings",
+        MenuItem::Volume => "menu.volume",
+        MenuItem::Window => "menu.window",
+    }
+}
+
+const fn presentation_key(mode: PresentationMode) -> &'static str {
+    match mode {
+        PresentationMode::Adaptive => "menu.display.adaptive",
+        PresentationMode::AspectFit => "menu.display.aspect-fit",
+        PresentationMode::Fill => "menu.display.fill",
+        PresentationMode::Integer => "menu.display.integer",
+        PresentationMode::Stretch => "menu.display.stretch",
+    }
+}
+
+fn volume_label(
+    text: MenuText<'_>,
+    key: &str,
+    level: MasterVolume,
+    limit: NonZeroUsize,
+) -> Result<String, RenderError> {
+    text.format(
+        key,
+        MessageParameter {
+            name: "percent",
+            value: MessageValue::Text(level.percent()),
+        },
+        limit,
+    )
 }
 
 fn row_plate(width: u16, label: &str, selected: bool) -> Vec<TextLine<'_>> {
@@ -442,7 +546,9 @@ fn row_plate(width: u16, label: &str, selected: bool) -> Vec<TextLine<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use games::presentation::DisplaySettings;
+    use games::presentation::{
+        CatalogLimits, DisplaySettings, LocaleTag, TranslationCatalog,
+    };
     use games::session::{MenuInput, SessionEffect};
 
     use super::*;
@@ -506,7 +612,75 @@ mod tests {
     }
 
     #[test]
+    fn built_in_menu_catalogues_are_complete_and_localised() {
+        let parsed_en = LocaleTag::parse("en");
+        let parsed_es = LocaleTag::parse("es-MX");
+        assert!(parsed_en.is_ok() && parsed_es.is_ok());
+        let (Ok(en), Ok(es)) = (parsed_en, parsed_es) else {
+            return;
+        };
+        let mut catalog = TranslationCatalog::new(en.clone(), CatalogLimits {
+            locales: NonZeroUsize::new(2).unwrap_or(NonZeroUsize::MIN),
+            messages: NonZeroUsize::new(128).unwrap_or(NonZeroUsize::MIN),
+            utf8_bytes: NonZeroUsize::new(8192).unwrap_or(NonZeroUsize::MIN),
+        });
+        assert_eq!(register_menu_messages(&mut catalog, &en), Ok(true));
+        assert_eq!(register_menu_messages(&mut catalog, &es), Ok(true));
+        assert_eq!(catalog.first_missing(&en, MENU_MESSAGE_KEYS), None);
+        assert_eq!(catalog.first_missing(&es, MENU_MESSAGE_KEYS), None);
+        let text = MenuText {
+            catalog: &catalog,
+            locale: &es,
+        };
+        let limit = NonZeroUsize::new(256).unwrap_or(NonZeroUsize::MIN);
+        assert_eq!(
+            Row::Presentation(PresentationMode::AspectFit).label(text, limit),
+            Ok("PANTALLA: proporci\u{f3}n".to_owned())
+        );
+        assert_eq!(
+            Row::SourceVolume(AudioSource::Music, MasterVolume::Half)
+                .label(text, limit),
+            Ok("M\u{da}SICA: 50%".to_owned())
+        );
+        let mut capture = Capture::default();
+        assert!(
+            MenuArt::load_localised(
+                &mut capture,
+                PlateLayout {
+                    background: [0, 0, 0, 255],
+                    height: 192,
+                    max_bytes: NonZeroUsize::new(2_000_000)
+                        .unwrap_or(NonZeroUsize::MIN),
+                    width: 280,
+                },
+                MenuContent {
+                    control_reset: true,
+                    main_hints: &["JUGAR"],
+                    pause_hints: &["CONTINUAR"],
+                    settings_hints: &["VOLVER"],
+                    sources: SourceSettings::default(),
+                    title: "PRUEBA",
+                    window_switching: true,
+                },
+                text,
+            )
+            .is_ok()
+        );
+        assert_eq!(capture.layouts.len(), 2);
+    }
+
+    #[test]
     fn setting_rows_reflect_the_requested_value() {
+        let loaded = english_catalog();
+        assert!(loaded.is_ok());
+        let Ok((locale, catalog)) = loaded else {
+            return;
+        };
+        let text = MenuText {
+            catalog: &catalog,
+            locale: &locale,
+        };
+        let limit = NonZeroUsize::new(256).unwrap_or(NonZeroUsize::MIN);
         let display = DisplaySettings {
             presentation: PresentationMode::Integer,
             window: WindowMode::Fullscreen,
@@ -520,8 +694,8 @@ mod tests {
                     false
                 ),
             )
-            .label(),
-            "DISPLAY: integer"
+            .label(text, limit),
+            Ok("DISPLAY: integer".to_owned())
         );
         assert_eq!(
             Row::for_item(
@@ -532,8 +706,8 @@ mod tests {
                     false
                 ),
             )
-            .label(),
-            "WINDOW: fullscreen"
+            .label(text, limit),
+            Ok("WINDOW: fullscreen".to_owned())
         );
         assert_eq!(
             Row::for_item(
@@ -544,8 +718,8 @@ mod tests {
                     false
                 ),
             )
-            .label(),
-            "MASTER: 50%"
+            .label(text, limit),
+            Ok("MASTER: 50%".to_owned())
         );
     }
 
