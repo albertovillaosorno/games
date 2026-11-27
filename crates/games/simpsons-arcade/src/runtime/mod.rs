@@ -34,6 +34,7 @@
 mod audio;
 mod axis_smoke;
 mod backdrop;
+mod bonus;
 /// Local canonical directory browser launch.
 pub mod browser_preview;
 mod controller;
@@ -681,7 +682,6 @@ impl Scene {
         let center =
             i32::try_from(world::centered_offset(width)).map_err(failure)?;
         self.draws.clear();
-        self.queue_background(cabinet, view)?;
         self.world.clear();
         let locale = self
             .locales
@@ -689,13 +689,11 @@ impl Scene {
             .ok_or(RenderError::InvalidSprite)?;
         let hud = locale.hud;
         let panel_draw = locale.panel.or(self.panel);
-        self.queue_visible_stations(cabinet, view, hud)?;
-        self.queue_enemy_sprites(cabinet, view)?;
-        self.world.sort_by_key(|(depth, _)| *depth);
-        self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
-        self.queue_enemy_meters(cabinet, view)?;
+        self.queue_stage(cabinet, view, hud)?;
         self.queue_menu(cabinet, center, editor)?;
-        if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused) {
+        if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused)
+            && cabinet.bonus().is_none()
+        {
             let shift = if cabinet.phase() == Phase::Paused {
                 12i32
             } else {
@@ -896,6 +894,37 @@ impl Scene {
                     joined.facing == Facing::Right,
                 ),
             ));
+        }
+        Ok(())
+    }
+
+    fn queue_stage(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+        hud: station_hud::StationHud,
+    ) -> Result<(), RenderError> {
+        if let Some(bonus) = cabinet.bonus().filter(|bonus| {
+            bonus.phase() != crate::BonusPhase::Victory
+                && cabinet.session().world_visible()
+        }) {
+            let art = self
+                .poses
+                .bonus
+                .as_ref()
+                .ok_or(RenderError::InvalidSprite)?;
+            art.queue(
+                bonus,
+                cabinet.session().language_index(),
+                &mut self.draws,
+            )?;
+        } else {
+            self.queue_background(cabinet, view)?;
+            self.queue_visible_stations(cabinet, view, hud)?;
+            self.queue_enemy_sprites(cabinet, view)?;
+            self.world.sort_by_key(|(depth, _)| *depth);
+            self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
+            self.queue_enemy_meters(cabinet, view)?;
         }
         Ok(())
     }
@@ -3389,7 +3418,7 @@ fn scene_limits(
     } else {
         0
     };
-    let count = source.poses.count().saturating_add(enemy_atlases);
+    let count = source.poses.atlas_count().saturating_add(enemy_atlases);
     let extension = usize::from(source.world.is_some());
     let shadows = usize::from(source.shadow.is_some());
     let language = title_messages::art_limits(options, reserved);

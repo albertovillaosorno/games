@@ -55,13 +55,13 @@ use super::{
     ground_position, live, live_with_scroll, size,
 };
 use crate::{
-    CONTINUE_TICKS, Cabinet, Control, DiagnosticIntent, ENEMY_CAPACITY,
-    ENEMY_DEFEAT_TICKS, Enemy, EnemyAction, FAR_STREET_ADMISSION, Facing,
-    GROUND_ATTACK_RECOVERY_TICKS, LATER_COMBAT_GATE, MID_STREET_ADMISSION,
-    MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT, Maneuver,
-    OPPOSING_ENEMY_COUNT, PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase,
-    Player, Point, REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
-    Wrestler, WrestlerAction,
+    BONUS_MAX_INFLATION, Bonus, BonusPhase, CONTINUE_TICKS, Cabinet, Control,
+    DiagnosticIntent, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS, Enemy, EnemyAction,
+    FAR_STREET_ADMISSION, Facing, GROUND_ATTACK_RECOVERY_TICKS,
+    LATER_COMBAT_GATE, MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE,
+    MID_STREET_ENEMY_COUNT, Maneuver, OPPOSING_ENEMY_COUNT, PLAYER_HEALTH,
+    PLAYER_STOCKS, Participation, Phase, Player, Point, REFILL_TICKS,
+    STOCK_REENTRY_TICKS, Station, TICK_INTERVAL, Wrestler, WrestlerAction,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -567,7 +567,8 @@ fn smoke_wrestler(
     }
     let limit = u16::try_from(crate::LATE_BACKDROP_ORIGIN).map_err(failure)?;
     let initial = cabinet_with_scroll(true, LocalSession::default(), limit)?
-        .with_late_wrestler(true);
+        .with_late_wrestler(true)
+        .with_bonus(art.poses.bonus.is_some());
     let mut simulation = fixed(initial)?;
     let mut controls = Controls::new(touch_enabled)?;
     pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
@@ -577,15 +578,112 @@ fn smoke_wrestler(
     for _ in 0..8000u16 {
         let cabinet = simulation.state();
         if observe_wrestler(scene, art, cabinet, &mut samples)? {
-            return write_status(format_args!(
+            write_status(format_args!(
                 "Wrestler: reached and cleared through routed input"
             ))
-            .map_err(failure);
+            .map_err(failure)?;
+            return smoke_bonus(scene, art, &mut controls, &mut simulation);
         }
         let intent = wrestler_intent(cabinet);
         advance_diagnostic(&mut controls, &mut simulation, &mut held, intent)?;
     }
     Err(failure("wrestler was not cleared through play"))
+}
+
+fn smoke_bonus(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    if art.poses.bonus.is_none() {
+        return Ok(());
+    }
+    await_bonus(simulation, BonusPhase::Instructions)?;
+    let _instructions = art.present(scene, simulation.state())?;
+    let initial = scene.readback()?;
+    await_bonus(simulation, BonusPhase::Ready)?;
+    let _ready = art.present(scene, simulation.state())?;
+    if initial == scene.readback()? {
+        return Err(failure("bonus instructions and ready appear identical"));
+    }
+    await_bonus(simulation, BonusPhase::Pumping)?;
+    let _pumping = art.present(scene, simulation.state())?;
+    let before = scene.readback()?;
+    pump_bonus(controls, simulation, 12)?;
+    let _inflated = art.present(scene, simulation.state())?;
+    if before == scene.readback()? {
+        return Err(failure("routed bonus inputs did not change readback"));
+    }
+    verify_bonus_pause(controls, simulation)?;
+    pump_bonus(controls, simulation, 64)?;
+    if !simulation.state().bonus().is_some_and(|bonus| {
+        bonus.phase() == BonusPhase::Results
+            && bonus.rank(Player::Marge) == Some(1)
+            && bonus.inflation(Player::Marge) == Some(BONUS_MAX_INFLATION)
+    }) {
+        return Err(failure("bonus pumping did not produce a winning result"));
+    }
+    let _result = art.present(scene, simulation.state())?;
+    let result = scene.readback()?;
+    await_bonus(simulation, BonusPhase::Complete)?;
+    let _complete = art.present(scene, simulation.state())?;
+    if result == scene.readback()? {
+        return Err(failure("bonus completion did not change readback"));
+    }
+    write_status(format_args!(
+        "Bonus: routed pumping, pause, winning result and completion verified"
+    ))
+    .map_err(failure)
+}
+
+fn await_bonus(
+    simulation: &mut LiveSimulation<Cabinet>,
+    target: BonusPhase,
+) -> Result<(), RenderError> {
+    for _ in 0..1800u16 {
+        if simulation.state().bonus().map(Bonus::phase) == Some(target) {
+            return Ok(());
+        }
+        advance(simulation, 1)?;
+    }
+    Err(failure("bonus phase not reached"))
+}
+
+fn pump_bonus(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    ticks: u16,
+) -> Result<(), RenderError> {
+    let scan = controls.key(Player::Marge, Control::Primary)?;
+    for _ in 0..ticks {
+        if simulation.state().bonus().map(Bonus::phase)
+            != Some(BonusPhase::Pumping)
+        {
+            break;
+        }
+        pulse(controls, simulation, scan)?;
+        advance(simulation, 1)?;
+    }
+    Ok(())
+}
+
+fn verify_bonus_pause(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let scan = controls.key(Player::Marge, Control::Pause)?;
+    pulse(controls, simulation, scan)?;
+    advance(simulation, 1)?;
+    let paused = simulation.state().bonus();
+    advance(simulation, 30)?;
+    if simulation.state().phase() != Phase::Paused
+        || simulation.state().bonus() != paused
+    {
+        return Err(failure("bonus advanced during pause"));
+    }
+    pulse(controls, simulation, scan)?;
+    advance(simulation, 1)
 }
 
 fn observe_wrestler(

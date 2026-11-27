@@ -31,6 +31,7 @@
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
+mod bonus;
 mod cooperative;
 mod encounter;
 #[cfg(feature = "native-preview")]
@@ -47,6 +48,7 @@ mod wrestler;
 use std::mem;
 use std::time::Duration;
 
+pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusPhase};
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
@@ -339,6 +341,16 @@ struct PendingManeuver {
 }
 
 impl PendingManeuver {
+    fn capture_bonus(&mut self, active: bool, control: Control) -> bool {
+        if !active || control == Control::Pause {
+            return false;
+        }
+        if matches!(control, Control::Primary | Control::Secondary) {
+            self.button_edges |= control.mask();
+        }
+        true
+    }
+
     // Resolve after all input edges for this tick have arrived.
     // A directional chord is the ordinary jump, including its release state.
     const fn resolve(self, directional: bool) -> Option<Maneuver> {
@@ -717,6 +729,8 @@ struct Encounter {
 /// provisional. It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
+    bonus: Option<Bonus>,
+    bonus_enabled: bool,
     camera: i16,
     choices: [Player; 4],
     cooperation: Cooperation,
@@ -734,6 +748,18 @@ pub struct Cabinet {
 }
 
 impl Cabinet {
+    fn admit_bonus(&mut self) {
+        if self.bonus_enabled
+            && self
+                .wrestler
+                .is_some_and(|boss| boss.action == WrestlerAction::Cleared)
+        {
+            self.bonus = Some(Bonus::new(
+                self.slots.map(|slot| slot.station.can_fight()),
+            ));
+        }
+    }
+
     fn advance_camera(&mut self) {
         if let Some(tick) = self.late_backdrop_tick {
             self.late_backdrop_tick =
@@ -840,10 +866,12 @@ impl Cabinet {
             return;
         };
         let control = change.action.control;
-        if !slot.edge(control, change.down, queued) {
+        let playing = self.session.phase() == Phase::Playing;
+        if !slot.edge(control, change.down, queued)
+            || queued.capture_bonus(playing && self.bonus.is_some(), control)
+        {
             return;
         }
-        let playing = self.session.phase() == Phase::Playing;
         if matches!(control, Control::Left | Control::Right)
             && slot.station.participation == Participation::Absent
             && matches!(self.session.phase(), Phase::MainMenu | Phase::Playing)
@@ -883,6 +911,12 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             *pending = [PendingManeuver::default(); 4];
         }
+    }
+
+    /// Optional first-stage victory and balloon bonus.
+    #[must_use]
+    pub const fn bonus(&self) -> Option<Bonus> {
+        self.bonus
     }
 
     /// Rightward travel of the original-width gameplay camera.
@@ -970,6 +1004,13 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
+        if let Some(bonus) = &mut self.bonus {
+            bonus.advance(pending.map(|queued| {
+                u8::try_from(queued.button_edges.count_ones())
+                    .unwrap_or_default()
+            }));
+            return;
+        }
         let [marge, ..] = pending;
         let restraint_edge = marge.button_edges.is_power_of_two();
         let pair_command = self.cooperation.filter_actions(&mut pending);
@@ -1006,6 +1047,7 @@ impl Cabinet {
                 encounter.admit(self.camera);
             }
             self.record_attack_cues();
+            self.admit_bonus();
         }
     }
 
@@ -1037,6 +1079,8 @@ impl Cabinet {
             return Err(LayoutError::SpawnOutside);
         }
         Ok(Self {
+            bonus: None,
+            bonus_enabled: false,
             camera: 0,
             choices: Player::ALL,
             cooperation: Cooperation::default(),
@@ -1078,6 +1122,7 @@ impl Cabinet {
     }
 
     fn reset_world(&mut self) {
+        self.bonus = None;
         self.cooperation.reset();
         self.camera = 0;
         self.late_backdrop_tick = None;
@@ -1158,6 +1203,16 @@ impl Cabinet {
         self.with_pair_jump(Pair::BartLisa, enabled)
     }
 
+    /// Opt into the provisional balloon bonus after the wrestler fight.
+    #[must_use]
+    pub const fn with_bonus(mut self, enabled: bool) -> Self {
+        self.bonus_enabled = enabled && self.wrestler_enabled;
+        if !self.bonus_enabled {
+            self.bonus = None;
+        }
+        self
+    }
+
     /// Enable optional pair locomotion in cabinet pair order.
     ///
     /// Solo actions and damage separate the pair until neutral admission.
@@ -1196,6 +1251,8 @@ impl Cabinet {
             enabled && self.scroll_limit == LATE_BACKDROP_ORIGIN && progressive;
         if !self.wrestler_enabled {
             self.wrestler = None;
+            self.bonus = None;
+            self.bonus_enabled = false;
         }
         self
     }
@@ -1420,6 +1477,8 @@ fn cabinet() -> Cabinet {
     // A valid constant layout cannot fail; keep fixture construction
     // independent from any mutable global or host input.
     result.unwrap_or_else(|_error| Cabinet {
+        bonus: None,
+        bonus_enabled: false,
         camera: 0,
         choices: Player::ALL,
         cooperation: Cooperation::default(),
@@ -3066,6 +3125,80 @@ mod tests {
         state.reset_world();
         assert_eq!(state.wrestler(), None);
         assert_eq!(state.camera_origin(), 0);
+    }
+
+    #[test]
+    fn bonus_is_opt_in_and_freezes_street_during_pumping() {
+        let result = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360));
+        assert!(result.is_ok());
+        let Ok(initial) = result else {
+            return;
+        };
+        let mut state = initial.with_late_wrestler(true);
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.wrestler = Some(Wrestler {
+            action: WrestlerAction::Cleared,
+            health: 0,
+            ..Wrestler::new(0)
+        });
+        state.admit_bonus();
+        assert_eq!(state.bonus(), None);
+        state = state.with_bonus(true);
+        state.admit_bonus();
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Victory));
+        let stations = state.stations();
+        for tick in 1..2000 {
+            if state.bonus().map(Bonus::phase) == Some(BonusPhase::Pumping) {
+                break;
+            }
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Pumping));
+        assert_eq!(state.stations(), stations);
+        assert_bonus_inputs(state);
+    }
+
+    fn assert_bonus_inputs(mut state: Cabinet) {
+        let stations = state.stations();
+        state.input_step(2000, &pulse(Player::Marge, Control::Pause));
+        let paused = state.bonus();
+        advance_empty(&mut state, 2001..2020);
+        assert_eq!(state.bonus(), paused);
+        state.input_step(2020, &pulse(Player::Marge, Control::Pause));
+        state.input_step(2021, &[change(
+            Player::Marge,
+            Control::Primary,
+            true,
+        )]);
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Marge)),
+            Some(2)
+        );
+        state.input_step(2022, &[change(
+            Player::Marge,
+            Control::Primary,
+            true,
+        )]);
+        state.input_step(2023, &pulse(Player::Homer, Control::Start));
+        state.input_step(2024, &pulse(Player::Homer, Control::Secondary));
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Marge)),
+            Some(2)
+        );
+        assert_eq!(
+            state
+                .bonus()
+                .and_then(|bonus| bonus.inflation(Player::Homer)),
+            None
+        );
+        assert_eq!(state.stations(), stations);
+        state.reset_world();
+        assert_eq!(state.bonus(), None);
     }
 
     fn assert_late_backdrop_admission(mut state: Cabinet) {

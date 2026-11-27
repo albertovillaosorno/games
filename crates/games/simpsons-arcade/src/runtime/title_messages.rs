@@ -67,6 +67,15 @@ pub(super) const LOCALES: [(&str, &str); 2] =
     [("en", "English"), ("es-MX", "Espa\u{f1}ol")];
 
 messages! {
+    "title.bonus.instructions" => "TAP ATTACK OR JUMP TO PUMP",
+        "PULSA ATAQUE O SALTO PARA INFLAR";
+    "title.bonus.ready" => "READY", "LISTOS";
+    "title.bonus.pumping" => "GO - TAP TO PUMP",
+        "YA - PULSA PARA INFLAR";
+    "title.bonus.results" => "RESULTS - RANK",
+        "RESULTADOS - PUESTO";
+    "title.bonus.complete" => "BONUS COMPLETE",
+        "BONO COMPLETADO";
     "title.action.pause" => "PAUSE", "PAUSA";
     "title.action.start" => "START", "INICIO";
     "title.action.primary" => "PRIMARY", "PRINCIPAL";

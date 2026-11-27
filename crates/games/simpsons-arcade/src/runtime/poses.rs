@@ -47,8 +47,8 @@ use games_platform::ir::storage::file::snapshot;
 
 use super::world::WorldArt;
 use super::{
-    Art, KEYS, Maneuver, Player, Station, backdrop, failure, open_bundle,
-    scenery, wrestler,
+    Art, KEYS, Maneuver, Player, Station, backdrop, bonus, failure,
+    open_bundle, scenery, wrestler,
 };
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
@@ -116,6 +116,7 @@ enum Subject {
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
     pub(super) backdrop: backdrop::Catalogue,
+    bonus: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
     scenery: scenery::Catalogue,
     wrestler: wrestler::Catalogue,
@@ -154,6 +155,17 @@ impl Catalogue {
             .saturating_add(
                 self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
             )
+            .saturating_add(
+                usize::from(self.bonus.is_some())
+                    .saturating_mul(bonus::ATLAS_BYTES),
+            )
+    }
+
+    pub(super) fn atlas_count(&self) -> usize {
+        self.count().saturating_add(
+            usize::from(self.bonus.is_some())
+                .saturating_mul(bonus::ATLAS_COUNT.saturating_sub(1)),
+        )
     }
 
     pub(super) fn backdrop_count(&self) -> usize {
@@ -188,6 +200,7 @@ impl Catalogue {
             && self.scenery.complete()
             && self.backdrop.complete()
             && self.wrestler.complete()
+            && (self.bonus.is_none() || self.has_wrestler())
     }
 
     pub(super) fn count(&self) -> usize {
@@ -196,6 +209,7 @@ impl Catalogue {
             .saturating_add(self.scenery.count())
             .saturating_add(self.backdrop_count())
             .saturating_add(self.wrestler.count())
+            .saturating_add(usize::from(self.bonus.is_some()))
     }
 
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
@@ -205,6 +219,7 @@ impl Catalogue {
             .chain(self.scenery.digests())
             .chain(self.backdrop.digests())
             .chain(self.wrestler.digests())
+            .chain(self.bonus)
     }
 
     pub(super) fn has_scenery(&self) -> bool {
@@ -243,6 +258,10 @@ impl Catalogue {
         }
         Ok(PoseArt {
             backdrop: self.backdrop.load(store, scene)?,
+            bonus: self
+                .bonus
+                .map(|digest| bonus::BonusArt::load(store, scene, digest))
+                .transpose()?,
             entries,
             scenery: self.scenery.load(store, scene)?,
             wrestler: self.wrestler.load(store, scene)?,
@@ -264,7 +283,12 @@ impl Catalogue {
         let mut scenery = scenery::Catalogue::default();
         let mut backdrop = backdrop::Catalogue::default();
         let mut wrestler = wrestler::Catalogue::default();
+        let mut bonus = None;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            if line.split_whitespace().next() == Some("bonus") {
+                bonus = Some(parse_bonus(line, bonus)?);
+                continue;
+            }
             if line.split_whitespace().next() == Some("wrestler") {
                 wrestler.insert(line)?;
                 continue;
@@ -289,6 +313,7 @@ impl Catalogue {
         }
         let catalogue = Self {
             backdrop,
+            bonus,
             entries,
             scenery,
             wrestler,
@@ -307,6 +332,7 @@ impl Catalogue {
 #[derive(Debug, Default)]
 pub(super) struct PoseArt {
     pub(super) backdrop: backdrop::BackdropArt,
+    pub(super) bonus: Option<bonus::BonusArt>,
     entries: BTreeMap<Key, Art>,
     pub(super) scenery: scenery::PlacedArt,
     pub(super) wrestler: wrestler::WrestlerArt,
@@ -318,7 +344,8 @@ impl PoseArt {
             cabinet
                 .with_cooperative_pairs(self.paired_families())
                 .with_marge_restraint(self.restraint_enabled())
-                .with_late_wrestler(self.wrestler.enabled()),
+                .with_late_wrestler(self.wrestler.enabled())
+                .with_bonus(self.bonus.is_some()),
             |state, pair| state.with_pair_jump(pair, self.pair_jump(pair)),
         )
     }
@@ -424,6 +451,7 @@ impl PoseArt {
     pub(super) fn take_enemy(&mut self) -> Self {
         Self {
             backdrop: backdrop::BackdropArt::default(),
+            bonus: None,
             entries: self
                 .entries
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
@@ -553,6 +581,22 @@ fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
                     .into_iter()
                     .all(|kind| entries.contains_key(&(subject, kind, 0))))
     })
+}
+
+fn parse_bonus(
+    line: &str,
+    selected: Option<ContentHash>,
+) -> Result<ContentHash, RenderError> {
+    let mut fields = line.split_whitespace();
+    let (Some("bonus"), Some(digest), None) =
+        (fields.next(), fields.next(), fields.next())
+    else {
+        return Err(failure("invalid bonus record"));
+    };
+    if selected.is_some() {
+        return Err(failure("duplicate bonus record"));
+    }
+    digest.parse().map_err(failure)
 }
 
 fn parse_line(line: &str) -> Result<Entry, RenderError> {
@@ -1325,6 +1369,57 @@ mod tests {
         assert!(
             Catalogue::parse(&format!("{full}marge restraint 0 {HASH}"))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn bonus_requires_complete_wrestler_and_has_independent_atlas_budget() {
+        let base = complete();
+        let record = format!("bonus {HASH}\n");
+        assert!(Catalogue::parse(&format!("{base}{record}")).is_err());
+        let mut fighter = base;
+        for name in [
+            "defeat",
+            "flex",
+            "intro",
+            "left",
+            "red-flex",
+            "red-left",
+            "red-right",
+            "rig",
+            "right",
+            "seated",
+            "stand",
+        ] {
+            use std::fmt::Write as _;
+            assert!(writeln!(fighter, "wrestler {name} {HASH}").is_ok());
+        }
+        let previous = Catalogue::parse(&fighter);
+        let expanded = Catalogue::parse(&format!("{fighter}{record}"));
+        assert!(previous.is_ok());
+        assert!(expanded.is_ok());
+        let (Ok(plain), Ok(selected)) = (previous, expanded) else {
+            return;
+        };
+        assert_bonus_budget(&plain, &selected);
+        assert!(
+            Catalogue::parse(&format!("{fighter}{record}{record}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{fighter}bonus {HASH} extra")).is_err()
+        );
+    }
+
+    fn assert_bonus_budget(plain: &Catalogue, selected: &Catalogue) {
+        assert_eq!(selected.count(), plain.count().saturating_add(1));
+        assert_eq!(selected.digests().count(), selected.count());
+        assert_eq!(
+            selected.atlas_count(),
+            plain.atlas_count().saturating_add(bonus::ATLAS_COUNT),
+        );
+        assert_eq!(
+            selected.atlas_bytes(),
+            plain.atlas_bytes().saturating_add(bonus::ATLAS_BYTES),
         );
     }
 
