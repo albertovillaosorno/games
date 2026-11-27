@@ -4133,3 +4133,21 @@ bytes, 122,555 are classified; 8,517 remain unclassified. The sequence
 outcomes are unchanged. Unselected table entries are structurally
 classified, not proven reachable. Original data, detailed semantic
 reviews and reproduction evidence remain private.
+
+### Bounded audio timing recurrence
+
+A repeated structural boundary after a mandatory scheduler wait limits
+the modeled residual accumulator to fewer states than the active
+byte-sized tempo. The check verifies the intervening command, read
+and note counts and detects exact repeated residuals. All 576 roots
+now resolve in this model (348 recurring and 228 terminating), including
+the 62 previously bounded-out roots. Comparison against all 514 prior
+solved roots preserves terminal records and recurrence periods in
+modeled steps, notes and service ticks with no discrepancies.
+This does not establish a full sound-chip simulation, mixed waveform
+looping, original music reconstruction or Rust behavior equivalence.
+
+A parallel main-CPU semantic pass reviews 101 further identities,
+including all remaining currently identified banked functions.
+The combined ledger retains 925 identities, with 102 discovered,
+820 unresolved, one intentional replacement and two non-runtime.

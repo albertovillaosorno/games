@@ -252,3 +252,19 @@ and 8,289 metadata bytes (122,555 total). All 576 sequence outcomes
 remain unchanged. The remaining 8,517 bytes are unclassified, including
 uniform runs and possible undecoded native routines. The additional
 table entries are not asserted to be dynamically selected.
+
+An exact recurrence check at a repeated structural boundary after a
+mandatory modeled scheduler wait bounds the residual accumulator by
+the active byte-sized tempo. The checker preserves the structural
+state, verifies equal intervening command, read and note counts, and
+tests each residual for repetition. It resolves all 576 timing roots:
+348 recurring and 228 terminating. All 228 earlier terminal records
+match exactly; all 286 earlier recurrence periods match in modeled
+steps, notes and service ticks. The remaining 62 roots now recur.
+The model does not include complete sound-chip state, prove a mixed
+waveform loop or establish native implementation equivalence.
+
+A parallel main-CPU review adds 101 semantic dispositions covering the
+remaining banked identities. The private checker now reports 102
+discovered, 820 unresolved, one intentional replacement and two
+non-runtime functions across the unchanged 925 identities and graph.
