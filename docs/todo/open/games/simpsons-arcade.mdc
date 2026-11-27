@@ -3716,3 +3716,16 @@ an exact internal input-to-object delay or an automatic attack
 buffer. The reconstruction retains its existing fresh-edge rule.
 Exact early attack admission, secondary input and reentry
 presentation remain open. Original captures remain private.
+
+Additional matched Secondary and simultaneous Primary/Secondary
+controls for all four stations confirm the same observed edge
+boundary. Pulses at offset 55 leave all sampled object, HUD and
+voice data identical to neutral, as does holding Secondary from
+55 for twelve frames. At offset 56, Secondary alone and the
+simultaneous pulse first change the object state at offset 59.
+The simultaneous pulse differs from Secondary alone in the
+object and voice traces for every station, despite identical HUD
+traces between those two controls. These observations establish
+neither the exact combined-action rule nor an internal polling
+model. No early reentry or combined-action implementation is
+inferred from them.
