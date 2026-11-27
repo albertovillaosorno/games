@@ -837,7 +837,12 @@ impl Cabinet {
                     | BonusPhase::StageSetup
             )
         {
-            if bonus.advance_stage_card(presses) {
+            let active_edge = self
+                .slots
+                .iter()
+                .zip(presses)
+                .any(|(slot, pressed)| slot.station.can_fight() && pressed);
+            if bonus.advance_stage_card(active_edge) {
                 self.enter_stage_two(limit);
             }
             return true;
@@ -3769,12 +3774,20 @@ mod tests {
             state.bonus().and_then(|bonus| bonus.rank(Player::Lisa)),
             None
         );
-        for tick in 2002..2300 {
-            if state.stage_two() {
-                break;
-            }
-            state.input_step(tick, &[]);
-        }
+        state.input_step(2002, &[]);
+        advance_empty(&mut state, 2003..2066);
+        state.input_step(2066, &pulse(Player::Lisa, Control::Primary));
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::StageCard)
+        );
+        state.input_step(2067, &pulse(Player::Bart, Control::Primary));
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::StageCard)
+        );
+        state.input_step(2068, &pulse(Player::Lisa, Control::Secondary));
+        state = assert_stage_setup(state, 2068);
         assert!(state.stage_two());
         assert_eq!(state.bonus(), None);
         let [_, _, _, lisa] = state.stations();

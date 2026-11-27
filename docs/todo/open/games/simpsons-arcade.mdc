@@ -5146,3 +5146,20 @@ the exact ordered checkpoints and the canonical folder name. It passes
 without changing the title's Rust implementation or relaxing admission.
 The isolated virtual display and null audio sink do not establish
 physical rendering, input, speaker audibility or campaign parity.
+
+### Live station eligibility on the second-stage title card
+
+Two isolated original runs repeat the same three-station bonus and
+fourth-station pumping-phase join. The phase and score traces match
+through the input prefix. With all subsequent action edges withheld,
+the title-card setup starts at reference frame 18,022 and completes at
+18,219. A single fresh fourth-station action at frame 18,100 instead
+completes it at 18,104, while the fourth competition flag remains clear.
+The static input gate scans live station-mask bits, not bonus flags.
+
+The native title card therefore accepts fresh edges from currently
+active campaign stations independently of the fixed competition roster.
+The regression checks the pre-gate edge, an absent-station edge after
+the gate, and a fresh late-join edge that advances setup and preserves
+the station. The existing 65-tick gate and 192-tick timeout are unchanged.
+This does not reproduce exact original scheduler timing or title-card art.

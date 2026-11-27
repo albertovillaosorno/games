@@ -370,8 +370,8 @@ impl Bonus {
         }
     }
 
-    /// Advance the card and setup only when the next stage is configured.
-    pub(super) fn advance_stage_card(&mut self, presses: [bool; 4]) -> bool {
+    /// Advance using a fresh action edge from a live campaign station.
+    pub(super) fn advance_stage_card(&mut self, active_edge: bool) -> bool {
         if self.phase == BonusPhase::Complete {
             self.phase = BonusPhase::StageCard;
             self.tick = 0;
@@ -382,8 +382,7 @@ impl Bonus {
             return self.tick >= STAGE_SETUP_TICKS;
         }
         if self.tick >= STAGE_CARD_MAX_TICKS
-            || (self.tick >= STAGE_CARD_MIN_TICKS
-                && self.any_admitted_edge(presses))
+            || (self.tick >= STAGE_CARD_MIN_TICKS && active_edge)
         {
             self.phase = BonusPhase::StageSetup;
             self.tick = 0;
