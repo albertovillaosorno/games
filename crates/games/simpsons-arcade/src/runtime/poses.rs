@@ -48,7 +48,7 @@ use games_platform::ir::storage::file::snapshot;
 use super::world::WorldArt;
 use super::{
     Art, KEYS, Maneuver, Player, Station, backdrop, failure, open_bundle,
-    scenery,
+    scenery, wrestler,
 };
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
@@ -118,6 +118,7 @@ pub(super) struct Catalogue {
     pub(super) backdrop: backdrop::Catalogue,
     entries: BTreeMap<Key, ContentHash>,
     scenery: scenery::Catalogue,
+    wrestler: wrestler::Catalogue,
 }
 
 impl Catalogue {
@@ -132,6 +133,9 @@ impl Catalogue {
         {
             return Err(failure("backdrop requires the verified long street"));
         }
+        if self.has_wrestler() && self.backdrop_count() == 0 {
+            return Err(failure("wrestler requires the late backdrop"));
+        }
         if self.has_scenery()
             && world.map_or(Ok(0), WorldArt::scroll_limit)?
                 < u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?
@@ -145,6 +149,7 @@ impl Catalogue {
         self.entries
             .len()
             .saturating_add(self.scenery.count())
+            .saturating_add(self.wrestler.count())
             .saturating_mul(65_536)
             .saturating_add(
                 self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
@@ -155,11 +160,42 @@ impl Catalogue {
         self.backdrop.count()
     }
 
+    fn complete(&self) -> bool {
+        let entries = &self.entries;
+        let complete = Player::ALL.into_iter().all(|player| {
+            [Kind::Attack, Kind::Jump]
+                .into_iter()
+                .all(|kind| entries.contains_key(&station_key(player, kind, 0)))
+        });
+        let optional = [
+            Kind::AirAttack,
+            Kind::AttackMoving,
+            Kind::Hurt,
+            Kind::Lift,
+            Kind::Special,
+            Kind::Walk,
+            Kind::WalkUp,
+        ]
+        .into_iter()
+        .all(|kind| optional_complete(entries, kind));
+        complete
+            && optional
+            && enemy_complete(entries)
+            && interaction_complete(entries, Kind::Restraint, &RESTRAINT_KEYS)
+            && interaction_complete(entries, Kind::Repelled, &REPELLED_KEYS)
+            && repelled_requires_restraint(entries)
+            && pair_complete(entries)
+            && self.scenery.complete()
+            && self.backdrop.complete()
+            && self.wrestler.complete()
+    }
+
     pub(super) fn count(&self) -> usize {
         self.entries
             .len()
             .saturating_add(self.scenery.count())
             .saturating_add(self.backdrop_count())
+            .saturating_add(self.wrestler.count())
     }
 
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
@@ -168,10 +204,15 @@ impl Catalogue {
             .copied()
             .chain(self.scenery.digests())
             .chain(self.backdrop.digests())
+            .chain(self.wrestler.digests())
     }
 
     pub(super) fn has_scenery(&self) -> bool {
         self.scenery.count() != 0
+    }
+
+    pub(super) fn has_wrestler(&self) -> bool {
+        self.wrestler.count() != 0
     }
 
     pub(super) fn load(
@@ -204,6 +245,7 @@ impl Catalogue {
             backdrop: self.backdrop.load(store, scene)?,
             entries,
             scenery: self.scenery.load(store, scene)?,
+            wrestler: self.wrestler.load(store, scene)?,
         })
     }
 
@@ -221,7 +263,12 @@ impl Catalogue {
         let mut entries = BTreeMap::new();
         let mut scenery = scenery::Catalogue::default();
         let mut backdrop = backdrop::Catalogue::default();
+        let mut wrestler = wrestler::Catalogue::default();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            if line.split_whitespace().next() == Some("wrestler") {
+                wrestler.insert(line)?;
+                continue;
+            }
             if line.split_whitespace().next() == Some("backdrop") {
                 backdrop.insert(line)?;
                 continue;
@@ -240,39 +287,16 @@ impl Catalogue {
                 return Err(failure("excess or duplicate poses"));
             }
         }
-        let complete = Player::ALL.into_iter().all(|player| {
-            [Kind::Attack, Kind::Jump]
-                .into_iter()
-                .all(|kind| entries.contains_key(&station_key(player, kind, 0)))
-        });
-        let complete_optional = [
-            Kind::AirAttack,
-            Kind::AttackMoving,
-            Kind::Hurt,
-            Kind::Lift,
-            Kind::Special,
-            Kind::Walk,
-            Kind::WalkUp,
-        ]
-        .into_iter()
-        .all(|kind| optional_complete(&entries, kind));
-        if !complete
-            || !complete_optional
-            || !enemy_complete(&entries)
-            || !interaction_complete(&entries, Kind::Restraint, &RESTRAINT_KEYS)
-            || !interaction_complete(&entries, Kind::Repelled, &REPELLED_KEYS)
-            || !repelled_requires_restraint(&entries)
-            || !pair_complete(&entries)
-            || !scenery.complete()
-            || !backdrop.complete()
-        {
-            return Err(failure("missing tick-zero pose"));
-        }
-        Ok(Self {
+        let catalogue = Self {
             backdrop,
             entries,
             scenery,
-        })
+            wrestler,
+        };
+        if !catalogue.complete() {
+            return Err(failure("missing tick-zero pose"));
+        }
+        Ok(catalogue)
     }
 
     pub(super) fn scenic_sprite_count(&self) -> usize {
@@ -285,6 +309,7 @@ pub(super) struct PoseArt {
     pub(super) backdrop: backdrop::BackdropArt,
     entries: BTreeMap<Key, Art>,
     pub(super) scenery: scenery::PlacedArt,
+    pub(super) wrestler: wrestler::WrestlerArt,
 }
 
 impl PoseArt {
@@ -292,7 +317,8 @@ impl PoseArt {
         Pair::ALL.into_iter().fold(
             cabinet
                 .with_cooperative_pairs(self.paired_families())
-                .with_marge_restraint(self.restraint_enabled()),
+                .with_marge_restraint(self.restraint_enabled())
+                .with_late_wrestler(self.wrestler.enabled()),
             |state, pair| state.with_pair_jump(pair, self.pair_jump(pair)),
         )
     }
@@ -403,6 +429,7 @@ impl PoseArt {
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
                 .collect(),
             scenery: scenery::PlacedArt::default(),
+            wrestler: wrestler::WrestlerArt::default(),
         }
     }
 }

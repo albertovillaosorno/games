@@ -43,6 +43,7 @@ pub mod remote;
 #[cfg(feature = "native-preview")]
 /// Title runtime composition using shared platform capabilities.
 pub mod runtime;
+mod wrestler;
 use std::mem;
 use std::time::Duration;
 
@@ -58,6 +59,7 @@ use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
 use games::session::{LocalSession, MenuInput, SessionEffect};
 pub use maneuver::{AirAttackMotion, JumpMotion, Maneuver};
+pub use wrestler::{Wrestler, WrestlerAction};
 
 /// Fixed reference screen period: 384 by 264 clocks at 6 MHz.
 pub const TICK_INTERVAL: Duration = Duration::from_micros(16_896);
@@ -74,6 +76,8 @@ const STRIP_VIEWPORT: StripViewport = StripViewport {
 };
 
 const ENEMY_CAPACITY: usize = 12;
+const PLAYER_STRIKE: u8 = 10;
+const WRESTLER_ATTACK_STRIKE: u8 = 24;
 const OPENING_ENEMY_COUNT: usize = 7;
 const LATER_COMBAT_GATE: i16 = 458;
 const OPPOSING_ENEMY_COUNT: usize = 9;
@@ -724,6 +728,8 @@ pub struct Cabinet {
     session: LocalSession,
     slots: [Slot; 4],
     stationary_tick: Option<u16>,
+    wrestler: Option<Wrestler>,
+    wrestler_enabled: bool,
 }
 
 impl Cabinet {
@@ -984,8 +990,16 @@ impl Cabinet {
                 );
                 self.impact_cues = self.impact_cues.saturating_add(defeated);
             }
+            if let Some(boss) = &mut self.wrestler {
+                let defeated = boss.advance(layout, &mut self.slots);
+                self.impact_cues =
+                    self.impact_cues.saturating_add(u64::from(defeated));
+            }
             self.cooperation.invalidate(&self.slots);
             self.advance_camera();
+            if self.wrestler_enabled && self.late_backdrop_tick == Some(0) {
+                self.wrestler = Some(Wrestler::new(self.camera));
+            }
             self.advance_scripted_scene();
             if let Some(encounter) = &mut self.encounter {
                 encounter.admit(self.camera);
@@ -1034,6 +1048,8 @@ impl Cabinet {
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
             stationary_tick: None,
+            wrestler: None,
+            wrestler_enabled: false,
         })
     }
 
@@ -1066,6 +1082,7 @@ impl Cabinet {
         self.late_backdrop_tick = None;
         self.scripted_tick = None;
         self.stationary_tick = None;
+        self.wrestler = None;
         if let Some(encounter) = &mut self.encounter {
             encounter.restart();
         }
@@ -1166,6 +1183,22 @@ impl Cabinet {
         Ok(cabinet)
     }
 
+    /// Enable the provisional wrestler fight at the complete street end.
+    /// Requires an opening-street encounter and the verified travel limit.
+    #[must_use]
+    pub const fn with_late_wrestler(mut self, enabled: bool) -> Self {
+        let progressive = match self.encounter {
+            Some(encounter) => encounter.progressive,
+            None => false,
+        };
+        self.wrestler_enabled =
+            enabled && self.scroll_limit == LATE_BACKDROP_ORIGIN && progressive;
+        if !self.wrestler_enabled {
+            self.wrestler = None;
+        }
+        self
+    }
+
     /// Opt into the provisional Marge restraint for the opening street.
     ///
     /// The single-player, right-facing contact rule is experimental.
@@ -1233,6 +1266,12 @@ impl Cabinet {
         self.scroll_limit = requested;
         Ok(self)
     }
+
+    /// Current optional wrestler encounter, including its cleared state.
+    #[must_use]
+    pub const fn wrestler(&self) -> Option<Wrestler> {
+        self.wrestler
+    }
 }
 
 impl InputStep for Cabinet {
@@ -1282,6 +1321,55 @@ fn diagnostic_direction(station: Station, enemy: Enemy) -> Option<Control> {
 fn distance(first: Point, second: Point) -> u32 {
     u32::from(first.x.abs_diff(second.x))
         .saturating_add(u32::from(first.y.abs_diff(second.y)))
+}
+const fn in_range(
+    from: Point,
+    facing: Facing,
+    to: Point,
+    extent: (u16, u16),
+) -> bool {
+    let ahead = match facing {
+        Facing::Left => to.x <= from.x,
+        Facing::Right => to.x >= from.x,
+    };
+    ahead
+        && from.x.abs_diff(to.x) <= extent.0
+        && from.y.abs_diff(to.y) <= extent.1
+}
+
+const fn step_toward(value: i16, target: i16) -> i16 {
+    if value < target {
+        value.saturating_add(1)
+    } else if value > target {
+        value.saturating_sub(1)
+    } else {
+        value
+    }
+}
+
+fn player_strike(
+    station: &mut Station,
+    target: Point,
+    extent: (u16, u16),
+) -> bool {
+    station.can_fight()
+        && in_range(station.position, station.facing, target, extent)
+        && (matches!(station.maneuver, Maneuver::Attack {
+            tick: PLAYER_STRIKE,
+            ..
+        }) || station.maneuver.consume_air_strike())
+}
+
+const fn hurt_slot(slot: &mut Slot, amount: u8) {
+    slot.damage(amount);
+    slot.station.hurt_cues =
+        slot.station
+            .hurt_cues
+            .saturating_add(if slot.station.health > 0 {
+                1
+            } else {
+                0
+            });
 }
 
 fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {
@@ -1351,6 +1439,8 @@ fn cabinet() -> Cabinet {
         session: LocalSession::default(),
         slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
         stationary_tick: None,
+        wrestler: None,
+        wrestler_enabled: false,
     })
 }
 
@@ -2949,6 +3039,40 @@ mod tests {
             assert_eq!(state.late_backdrop_tick(), None);
         }
         assert_late_backdrop_admission(state);
+    }
+
+    #[test]
+    fn wrestler_admission_is_opt_in_and_pauses_with_the_arena() {
+        let result = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360));
+        assert!(result.is_ok());
+        let Ok(initial) = result else {
+            return;
+        };
+        let mut state = initial.with_late_wrestler(true);
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.camera = LATE_BACKDROP_ORIGIN;
+        let [first, ..] = &mut state.slots;
+        first.station.position.x = LATE_BACKDROP_ORIGIN.saturating_add(208);
+        state.input_step(1, &[]);
+        assert_eq!(
+            state.wrestler().map(|boss| boss.action),
+            Some(WrestlerAction::Intro { tick: 0 })
+        );
+        state.input_step(2, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 3..20);
+        assert_eq!(
+            state.wrestler().map(|boss| boss.action),
+            Some(WrestlerAction::Intro { tick: 0 })
+        );
+        state.input_step(20, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(
+            state.wrestler().map(|boss| boss.action),
+            Some(WrestlerAction::Intro { tick: 1 })
+        );
+        state.reset_world();
+        assert_eq!(state.wrestler(), None);
+        assert_eq!(state.camera_origin(), 0);
     }
 
     fn assert_late_backdrop_admission(mut state: Cabinet) {

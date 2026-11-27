@@ -35,12 +35,12 @@ use super::{
     BASE_WIDTH, ENEMY_CAPACITY, Encounter, FAR_STREET_ADMISSION, Facing,
     LATER_COMBAT_GATE, MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE,
     MID_STREET_ENEMY_COUNT, Maneuver, OPENING_ENEMY_COUNT,
-    OPPOSING_ENEMY_COUNT, Point, Slot, StreetLayout, distance, strip_width,
-    view_origin, viewport_width,
+    OPPOSING_ENEMY_COUNT, Point, Slot, StreetLayout, distance, hurt_slot,
+    in_range, player_strike, step_toward, strip_width, view_origin,
+    viewport_width,
 };
 
 const ENEMY_HEALTH: u8 = 1;
-const PLAYER_STRIKE: u8 = 10;
 const ENEMY_STRIKE: u8 = 14;
 const ENEMY_DAMAGE: u8 = 3;
 /// Number of fixed-step ticks in the initial enemy punch.
@@ -462,11 +462,7 @@ impl Enemy {
                         (22, 10),
                     )
             }) {
-                slot.damage(ENEMY_DAMAGE);
-                slot.station.hurt_cues = slot
-                    .station
-                    .hurt_cues
-                    .saturating_add(u64::from(slot.station.health > 0));
+                hurt_slot(slot, ENEMY_DAMAGE);
             }
         }
         self.action = if next >= ENEMY_ATTACK_TICKS {
@@ -503,18 +499,7 @@ impl Enemy {
     fn receive_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
         for slot in slots {
             let station = &mut slot.station;
-            if station.can_fight()
-                && in_range(
-                    station.position,
-                    station.facing,
-                    self.position,
-                    (32, 12),
-                )
-                && (matches!(station.maneuver, Maneuver::Attack {
-                    tick: PLAYER_STRIKE,
-                    ..
-                }) || station.maneuver.consume_air_strike())
-            {
+            if player_strike(station, self.position, (32, 12)) {
                 self.health = 0;
                 // The original observed rightward knockback faces left.
                 self.facing = match station.facing {
@@ -591,31 +576,6 @@ fn arrival_x(travel: i16, camera: i16, offset: i16) -> i16 {
     }
 }
 
-const fn in_range(
-    from: Point,
-    facing: Facing,
-    to: Point,
-    extent: (u16, u16),
-) -> bool {
-    let ahead = match facing {
-        Facing::Left => to.x <= from.x,
-        Facing::Right => to.x >= from.x,
-    };
-    ahead
-        && from.x.abs_diff(to.x) <= extent.0
-        && from.y.abs_diff(to.y) <= extent.1
-}
-
-const fn step_toward(value: i16, target: i16) -> i16 {
-    if value < target {
-        value.saturating_add(1)
-    } else if value > target {
-        value.saturating_sub(1)
-    } else {
-        value
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::slice;
@@ -626,7 +586,7 @@ mod tests {
     use super::*;
     use crate::{
         Action, CONTINUE_TICKS, Cabinet, Control, LayoutError, PLAYER_HEALTH,
-        PLAYER_STOCKS, Participation, Phase, Player,
+        PLAYER_STOCKS, PLAYER_STRIKE, Participation, Phase, Player, Station,
     };
 
     fn pulse(control: Control) -> [LogicalAction<Action>; 2] {
@@ -1079,7 +1039,7 @@ mod tests {
 
     fn assert_restraint_escape(
         cabinet: &mut Cabinet,
-        initial: crate::Station,
+        initial: Station,
         release: LogicalAction<Action>,
     ) {
         for (tick, control) in (15..26)
@@ -1832,7 +1792,7 @@ mod tests {
 
     fn verify_continue_meter_pause(
         cabinet: &mut Cabinet,
-        before_refill: crate::Station,
+        before_refill: Station,
     ) {
         cabinet.input_step(4, &pulse(Control::Pause));
         for tick in 5..15 {
@@ -2011,14 +1971,14 @@ mod tests {
         assert_eq!(first.display_health, PLAYER_HEALTH - 1);
         cabinet.input_step(18, &[]);
         let [between, ..] = cabinet.stations();
-        assert_eq!(between, crate::Station {
+        assert_eq!(between, Station {
             maneuver: Maneuver::Hurt { tick: 2 },
             ..first
         });
         check_meter_pause(&mut cabinet, between);
     }
 
-    fn check_meter_pause(cabinet: &mut Cabinet, between: crate::Station) {
+    fn check_meter_pause(cabinet: &mut Cabinet, between: Station) {
         cabinet.input_step(19, &pulse(Control::Pause));
         for tick in 20..100 {
             cabinet.input_step(tick, &[]);
@@ -2032,8 +1992,8 @@ mod tests {
 
     fn advance_until(
         cabinet: &mut Cabinet,
-        predicate: impl Fn(crate::Station) -> bool,
-    ) -> crate::Station {
+        predicate: impl Fn(Station) -> bool,
+    ) -> Station {
         for tick in 0..1600 {
             let [station, ..] = cabinet.stations();
             if predicate(station) {
@@ -2076,7 +2036,7 @@ mod tests {
         });
         assert_eq!(refill.stocks, 1);
         assert!(!refill.can_fight());
-        let recovered = advance_until(cabinet, crate::Station::can_fight);
+        let recovered = advance_until(cabinet, Station::can_fight);
         assert_eq!(recovered.display_health, PLAYER_HEALTH);
         assert_eq!(recovered.stocks, 1);
         let final_empty = advance_until(cabinet, |station| {

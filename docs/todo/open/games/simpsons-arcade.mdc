@@ -3587,3 +3587,44 @@ camera observation is not a universal rule for every control. The
 sampling does not establish the exact release tick or distinguish all
 actor interactions. A verified victory control and successful next-stage
 admission remain necessary before implementing those transitions.
+
+### Successful late encounter reference and experimental fight
+
+Two independently started MAME 0.289 runs of the World four-player
+set 1 reproduced the full 13,774,080-byte sampled HUD trace exactly.
+The input sequence admits all four stations in the late encounter,
+uses repeated attacks, jumps and original cabinet stock/continue
+inputs, then attempts rightward travel after the fight. The wrestler
+has distinct entrance, standing, raised-arm, extended-arm, seated,
+red and final falling poses. At device frame 13,736 it is falling; it
+is absent in the image at 13,784. Victory is not inferred from a
+temporary red knockdown or an empty player meter.
+
+The original reaches the balloon victory sequence, the television
+bonus prompt and the pump bonus game. Its scroll register first
+reaches 406 at frame 14,670. The Stage 2 Krustyland title card is
+visible at 15,900, and further input produces controllable combat and
+rightward travel at 16,400 through 19,000. In an otherwise matched
+control, withholding both attack-button pulses from 11,700 through
+14,499 delays the first scroll value of 406 to 17,142 (2,472 device
+frames). This establishes attack-dependent progression in this
+control, not a recovered health threshold or universal camera rule.
+The physical inputs to the original are research only; its payment
+or virtual coin rules do not enter the reconstruction.
+
+Eleven isolated wrestler and rig samples are admitted through the
+existing canonical art tool only after exact 71,680-pixel scene
+verification. Samples with inconsistent device/frame alignment are
+rejected, not approximated. The final defeat crop is taken from
+frame 13,736, not the earlier transient knockdown.
+
+The optional reconstruction admits the wrestler only with the
+complete verified street, opening combat and all eleven named
+wrestler poses. It shares the ordinary player's ground and aerial
+strike admission and hurt rules. Its health, hit extents, windup,
+stagger, blink, color threshold and sparse art placement remain
+provisional independent tuning. The simulation holds the current
+arena through defeat, then exposes the cleared state; the victory
+sequence, bonus game, camera release and subsequent playable stage
+still require implementation. Physical acceptance and original
+combat parity remain open.

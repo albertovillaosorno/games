@@ -50,6 +50,7 @@ mod station_hud;
 mod title_messages;
 mod touch;
 mod world;
+mod wrestler;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
@@ -626,6 +627,9 @@ impl Scene {
             .map(|bundle| world::WorldArt::load(scene, &original, bundle))
             .transpose()?;
         source.poses.admit_world(world_art)?;
+        if source.poses.has_wrestler() && source.enemy.is_none() {
+            return Err(failure("wrestler requires the opening combat art"));
+        }
         drop(original);
         let actors = load_actors(scene, source)?;
         Ok(Self {
@@ -636,17 +640,7 @@ impl Scene {
                 .as_ref()
                 .map(|bundles| encounter::CombatArt::load(scene, bundles))
                 .transpose()?,
-            draws: Vec::with_capacity(
-                (if source.enemy.is_some() {
-                    21usize.saturating_add(encounter::EXTRA_SPRITES)
-                } else {
-                    21usize
-                })
-                .saturating_add(source.poses.scenic_sprite_count())
-                .saturating_add(
-                    usize::from(source.shadow.is_some()).saturating_mul(4),
-                ),
-            ),
+            draws: Vec::with_capacity(draw_capacity(source)),
             locales: title_messages::load_art(
                 scene,
                 world_art.is_some(),
@@ -660,7 +654,10 @@ impl Scene {
                 .as_ref()
                 .map(|bundle| shadow::ShadowArt::load(scene, bundle))
                 .transpose()?,
-            world: Vec::with_capacity(world_capacity(source.enemy.is_some())),
+            world: Vec::with_capacity(
+                world_capacity(source.enemy.is_some())
+                    .saturating_add(usize::from(source.poses.has_wrestler())),
+            ),
             world_art,
         })
     }
@@ -767,6 +764,12 @@ impl Scene {
         }
         if cabinet.session().world_visible() {
             self.poses.scenery.queue(cabinet, view, &mut self.draws)?;
+            if let Some(draw) = cabinet
+                .wrestler()
+                .and_then(|boss| self.poses.wrestler.rig(boss))
+            {
+                self.draws.push(draw);
+            }
         }
         Ok(())
     }
@@ -813,6 +816,12 @@ impl Scene {
                     )?,
                 ));
             }
+        }
+        if cabinet.session().world_visible()
+            && let Some(boss) = cabinet.wrestler()
+            && let Some(draw) = self.poses.wrestler.fighter(boss, view)?
+        {
+            self.world.push((boss.position.y, draw));
         }
         Ok(())
     }
@@ -3408,6 +3417,9 @@ fn scene_limits(
         sprites: size(
             enemy_sprites
                 .saturating_add(source.poses.scenic_sprite_count())
+                .saturating_add(
+                    usize::from(source.poses.has_wrestler()).saturating_mul(2),
+                )
                 .saturating_add(language.sprites)
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
@@ -3416,6 +3428,19 @@ fn scene_limits(
                 ),
         )?,
     })
+}
+
+fn draw_capacity(source: &Sources<'_>) -> usize {
+    let base = if source.enemy.is_some() {
+        21usize.saturating_add(encounter::EXTRA_SPRITES)
+    } else {
+        21usize
+    };
+    base.saturating_add(source.poses.scenic_sprite_count())
+        .saturating_add(
+            usize::from(source.poses.has_wrestler()).saturating_mul(2),
+        )
+        .saturating_add(usize::from(source.shadow.is_some()).saturating_mul(4))
 }
 
 fn world_capacity(combat: bool) -> usize {
