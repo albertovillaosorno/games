@@ -72,9 +72,14 @@ const STRIP_VIEWPORT: StripViewport = StripViewport {
     side_inset: SIDE,
 };
 
-const ENEMY_CAPACITY: usize = 9;
+const ENEMY_CAPACITY: usize = 12;
 const OPENING_ENEMY_COUNT: usize = 7;
 const LATER_COMBAT_GATE: i16 = 458;
+const OPPOSING_ENEMY_COUNT: usize = 9;
+const MID_STREET_ADMISSION: i16 = 562;
+const MID_STREET_COMBAT_GATE: i16 = 770;
+const MID_STREET_ENEMY_COUNT: usize = 11;
+const FAR_STREET_ADMISSION: i16 = 834;
 const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;

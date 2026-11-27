@@ -56,10 +56,11 @@ use super::{
 };
 use crate::{
     CONTINUE_TICKS, Cabinet, Control, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
-    Enemy, EnemyAction, Facing, GROUND_ATTACK_RECOVERY_TICKS,
-    LATER_COMBAT_GATE, Maneuver, OPENING_ENEMY_COUNT, PLAYER_HEALTH,
-    PLAYER_STOCKS, Participation, Phase, Player, Point, REFILL_TICKS,
-    STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
+    Enemy, EnemyAction, FAR_STREET_ADMISSION, Facing,
+    GROUND_ATTACK_RECOVERY_TICKS, LATER_COMBAT_GATE, MID_STREET_ADMISSION,
+    MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT, Maneuver,
+    OPPOSING_ENEMY_COUNT, PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase,
+    Player, Point, REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -435,9 +436,22 @@ fn smoke_reinforcements(
             (limit, gate, verified),
         )?;
     }
-    if i16::try_from(limit).map_err(failure)? >= LATER_COMBAT_GATE {
-        smoke_later_reinforcements(scene, art, touch_enabled, limit)?;
-        verified = ENEMY_CAPACITY - 1;
+    for (gate, expected) in [
+        (LATER_COMBAT_GATE, OPPOSING_ENEMY_COUNT),
+        (MID_STREET_ADMISSION, 10),
+        (MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT),
+        (FAR_STREET_ADMISSION, ENEMY_CAPACITY),
+    ] {
+        if i16::try_from(limit).map_err(failure)? < gate {
+            break;
+        }
+        smoke_later_reinforcements(
+            scene,
+            art,
+            touch_enabled,
+            (limit, gate, verified, expected),
+        )?;
+        verified = expected.saturating_sub(1);
     }
     write_status(format_args!("Reinforcements: {verified} meters verified"))
         .map_err(failure)
@@ -447,7 +461,7 @@ fn smoke_later_reinforcements(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     touch_enabled: bool,
-    limit: u16,
+    (limit, gate, verified, expected): (u16, i16, usize, usize),
 ) -> Result<(), RenderError> {
     let mut simulation =
         live_with_scroll(true, LocalSession::default(), limit)?;
@@ -456,7 +470,7 @@ fn smoke_later_reinforcements(
     advance(&mut simulation, 1)?;
     let mut held = None;
     for _ in 0..3000u16 {
-        if simulation.state().camera_origin() >= LATER_COMBAT_GATE {
+        if simulation.state().camera_origin() >= gate {
             break;
         }
         let (direction, requested) = simulation.state().diagnostic_intent();
@@ -482,24 +496,24 @@ fn smoke_later_reinforcements(
         key(&mut controls, &mut simulation, scan, false)?;
     }
     let cabinet = simulation.state();
-    if cabinet.camera_origin() != LATER_COMBAT_GATE
-        || cabinet.enemies().count() != ENEMY_CAPACITY
+    if cabinet.camera_origin() != gate
+        || cabinet.enemies().count() != expected
         || cabinet
             .enemies()
-            .take(OPENING_ENEMY_COUNT)
+            .take(verified.saturating_add(1))
             .any(|enemy| enemy.health > 0)
     {
         return Err(failure("later encounter was not reached through combat"));
     }
     let mut seen = [false; ENEMY_CAPACITY - 1];
-    for checked in seen.iter_mut().take(OPENING_ENEMY_COUNT - 1) {
+    for checked in seen.iter_mut().take(verified) {
         *checked = true;
     }
     verify_reinforcements(
         scene,
         art,
         &mut simulation,
-        (ENEMY_CAPACITY - 1, &mut seen),
+        (expected.saturating_sub(1), &mut seen),
     )
 }
 
