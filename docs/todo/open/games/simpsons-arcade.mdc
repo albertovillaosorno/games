@@ -4671,3 +4671,35 @@ second-stage combat after 270 columns of travel. All 600 movement
 and 20 combat submissions per mode met the 16.667 ms budget;
 whole-smoke peak RSS ranged from 181,354,496 to 181,534,720 bytes.
 The entrance's vehicle artwork remains a separate pending change.
+
+### Second-stage entrance vehicle
+
+The original-backed neutral replay provides an independently isolated
+vehicle layer with visible raster bounds at elapsed ticks 2 through 221.
+The exact scene decoder verified the source frames before extracting
+28 local canonical RGBA8 crops, retaining both endpoints and eight-tick
+samples except for one duplicate. The largest crop is 166 by 185 pixels;
+the optional track permits no interval longer than 16 ticks.
+
+The catalogue accepts `scenic-entrance TICK X Y SHA256` records only
+with the second-stage selection. The track shares the held-keyframe
+selection and clipped world projection used by the street scenery.
+Its 29 possible records reserve at most 122,840 bytes per atlas; the
+shared catalogue limit is now 28 KiB. The 28 locally selected vehicle
+payloads total 1,906,452 RGBA8 bytes. Missing endpoints, larger gaps,
+invalid samples and a track without stage-two art are rejected.
+
+Fresh full workspace validation passed. The optimized 3,992,328-byte
+Linux executable passed original-backed offscreen OpenGL, synthetic
+touch and dummy-audio smoke in all five display modes. At the sampled
+descent tick, comparison with the vehicle layer disabled verified
+visible changes confined to its projected rectangle. The existing
+entrance, landing, routed combat and 270-column second-stage travel
+also passed. All 600 movement and 20 combat submissions per mode met
+the 16.667 ms budget; whole-smoke peak RSS ranged from 183,083,008
+to 183,357,440 bytes.
+
+This is a sparse vehicle layer, not full raster or frame-by-frame
+animation equivalence. Independent station arrival art, exact
+card-to-entrance setup visibility, original cue alignment and physical
+input/display acceptance remain open.

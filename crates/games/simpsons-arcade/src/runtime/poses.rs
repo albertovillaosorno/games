@@ -58,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(24_575);
+    NonZeroU64::MIN.saturating_add(28_671);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -138,7 +138,7 @@ impl Catalogue {
         if self.has_wrestler() && self.backdrop_count() == 0 {
             return Err(failure("wrestler requires the late backdrop"));
         }
-        if self.has_scenery()
+        if self.scenery.has_street()
             && world.map_or(Ok(0), WorldArt::scroll_limit)?
                 < u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?
         {
@@ -150,9 +150,9 @@ impl Catalogue {
     pub(super) fn atlas_bytes(&self) -> usize {
         self.entries
             .len()
-            .saturating_add(self.scenery.count())
             .saturating_add(self.wrestler.count())
             .saturating_mul(65_536)
+            .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
                 self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
             )
@@ -203,6 +203,7 @@ impl Catalogue {
             && repelled_requires_restraint(entries)
             && pair_complete(entries)
             && self.scenery.complete()
+            && (!self.scenery.has_entrance() || self.stage_two.is_some())
             && self.backdrop.complete()
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
@@ -318,7 +319,7 @@ impl Catalogue {
             }
             if matches!(
                 line.split_whitespace().next(),
-                Some("scenic-pair" | "scenic-stationary")
+                Some("scenic-entrance" | "scenic-pair" | "scenic-stationary")
             ) {
                 scenery.insert(line)?;
                 continue;
@@ -1314,7 +1315,7 @@ mod tests {
     #[test]
     fn memory_pose_text_has_the_same_byte_budget_as_local_text() {
         let valid = complete();
-        let padded = format!("{valid}\n{}", " ".repeat(24_576));
+        let padded = format!("{valid}\n{}", " ".repeat(28_672));
         assert!(Catalogue::parse(&valid).is_ok());
         assert!(Catalogue::parse(&padded).is_err());
     }
@@ -1491,12 +1492,44 @@ mod tests {
         assert!(parsed.is_ok());
         if let Ok(value) = parsed {
             assert_stage_two_budget(selected, &value, &other);
+            assert_entrance_catalogue(&text, fighter, bonus_record, &value);
         }
         assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
         assert!(
             parse_stage_two(&format!("stage-two {HASH} {HASH}"), None).is_err()
         );
         assert!(parse_stage_two(&format!("stage-two {HASH}"), None).is_err());
+    }
+
+    fn assert_entrance_catalogue(
+        stage_text: &str,
+        fighter: &str,
+        bonus_record: &str,
+        stage: &Catalogue,
+    ) {
+        use std::fmt::Write as _;
+        let mut track = format!("scenic-entrance 2 67 0 {HASH}\n");
+        for tick in (8u16..=216).step_by(8) {
+            assert!(
+                writeln!(track, "scenic-entrance {tick} 80 0 {HASH}").is_ok()
+            );
+        }
+        assert!(Catalogue::parse(&format!("{stage_text}{track}")).is_err());
+        assert!(writeln!(track, "scenic-entrance 221 183 0 {HASH}").is_ok());
+        assert!(
+            Catalogue::parse(&format!("{fighter}{bonus_record}{track}"))
+                .is_err()
+        );
+        let parsed = Catalogue::parse(&format!("{stage_text}{track}"));
+        assert!(parsed.is_ok());
+        let Ok(selected) = parsed else {
+            return;
+        };
+        assert_eq!(selected.count(), stage.count().saturating_add(29));
+        assert_eq!(
+            selected.atlas_bytes(),
+            stage.atlas_bytes().saturating_add(29 * 166 * 185 * 4)
+        );
     }
 
     fn assert_stage_two_budget(

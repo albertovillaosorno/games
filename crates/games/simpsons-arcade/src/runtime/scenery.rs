@@ -9,12 +9,12 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Optional bounded mid-street scenic art admission and placement.
+//   - Optional bounded stage scenic art admission and placement.
 // - Must-Not:
 //   - Resolve combat, change camera gates or interpret original object data.
 // - Allows:
 //   - Inputs: Pinned isolated art, fixed-step scene tick and world viewport.
-//   - Outputs: At most two positioned, clipped sprite draw.
+//   - Outputs: Bounded positioned, clipped sprite draws.
 //   - Side effects: Load admitted canonical atlases during scene startup.
 // - Split-When:
 //   - Additional independent scripted scenes require distinct tracks.
@@ -25,11 +25,11 @@
 // - Description:
 //   - Hold sparse observed frames at their measured original raster origins.
 // - Usage:
-//   - Add optional scenic-pair or scenic-stationary records to the catalogue.
+//   - Add optional scenic records to the catalogue.
 // - Defaults:
 //   - No scenery without a complete bounded track.
 
-//! Optional, sparse world-anchored mid-street scene presentation.
+//! Optional, sparse world-anchored stage scene presentation.
 
 use std::collections::BTreeMap;
 use std::mem::take;
@@ -49,42 +49,60 @@ use super::{Art, Scene, dimension, failure, open_bundle};
 use crate::{
     Action, BASE_WIDTH, Cabinet, Control, MID_STREET_SCRIPT_ORIGIN,
     MID_STREET_SCRIPT_TICKS, Player, Point, SIDE, STATIONARY_SCENE_CYCLE,
+    StageEntrance,
 };
 
 const FIRST_TICK: u16 = 8;
 const STEP: u16 = 8;
 const LAST_TICK: u16 = MID_STREET_SCRIPT_TICKS - STEP;
 const MAX_GAP: u16 = STEP * 2;
+const ENTRANCE_FIRST: u16 = 2;
+const ENTRANCE_LAST: u16 = 221;
 const STATIONARY_X: i16 = 804;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
+    Entrance,
     Pair,
     Stationary,
 }
 
 impl Kind {
-    const ALL: [Self; 2] = [Self::Stationary, Self::Pair];
+    const ALL: [Self; 3] = [Self::Stationary, Self::Pair, Self::Entrance];
 
     const fn asset_key(self) -> &'static str {
         match self {
+            Self::Entrance => "actor/scenic-entrance",
             Self::Pair => "actor/scenic-pair",
             Self::Stationary => "actor/scenic-stationary",
         }
     }
 
+    const fn atlas_bytes(self) -> usize {
+        match self {
+            Self::Entrance => 166 * 185 * 4,
+            Self::Pair | Self::Stationary => 65_536,
+        }
+    }
+
     const fn frame(self, tick: u16) -> Option<u16> {
         match self {
+            Self::Entrance
+                if tick >= ENTRANCE_FIRST && tick <= ENTRANCE_LAST =>
+            {
+                Some(tick)
+            },
             Self::Pair if tick < MID_STREET_SCRIPT_TICKS => Some(tick),
             Self::Stationary if tick < STATIONARY_SCENE_CYCLE => {
                 Some(stationary_frame(tick))
             },
-            Self::Pair | Self::Stationary => None,
+            Self::Entrance | Self::Pair | Self::Stationary => None,
         }
     }
 
     fn from_name(name: &str) -> Option<Self> {
         match name {
+            "scenic-entrance" => Some(Self::Entrance),
             "scenic-pair" => Some(Self::Pair),
             "scenic-stationary" => Some(Self::Stationary),
             _ => None,
@@ -93,6 +111,7 @@ impl Kind {
 
     fn tick(self, cabinet: &Cabinet) -> Option<u16> {
         match self {
+            Self::Entrance => cabinet.stage_entrance().map(StageEntrance::tick),
             Self::Pair => cabinet.scripted_scene_tick(),
             Self::Stationary => cabinet.stationary_scene_tick(),
         }
@@ -100,6 +119,13 @@ impl Kind {
 
     fn valid_sample(self, tick: u16, origin: Point) -> bool {
         match self {
+            Self::Entrance => {
+                (tick == ENTRANCE_FIRST
+                    || tick == ENTRANCE_LAST
+                    || ((8..=216).contains(&tick) && tick.is_multiple_of(STEP)))
+                    && (56..=183).contains(&origin.x)
+                    && origin.y == 0
+            },
             Self::Pair => {
                 (FIRST_TICK..=LAST_TICK).contains(&tick)
                     && tick.is_multiple_of(STEP)
@@ -123,6 +149,14 @@ impl Kind {
         let width = art.rect.width.get();
         let height = art.rect.height.get();
         let valid = match self {
+            Self::Entrance => {
+                width <= 166
+                    && height <= 185
+                    && u32::try_from(origin.x)
+                        .map_err(failure)?
+                        .saturating_add(width)
+                        <= BASE_WIDTH
+            },
             Self::Pair => {
                 width <= 128
                     && height <= 128
@@ -157,7 +191,7 @@ impl Kind {
                 x: MID_STREET_SCRIPT_ORIGIN.saturating_add(origin.x),
                 y: origin.y,
             },
-            Self::Stationary => origin,
+            Self::Entrance | Self::Stationary => origin,
         }
     }
 }
@@ -176,8 +210,36 @@ pub(super) struct Catalogue {
 }
 
 impl Catalogue {
+    pub(super) fn atlas_bytes(&self) -> usize {
+        self.entries
+            .keys()
+            .map(|(kind, (), _)| kind.atlas_bytes())
+            .fold(0usize, usize::saturating_add)
+    }
+
+    fn bounded_track(&self, owner: Kind, first: u16, last: u16) -> bool {
+        if !has_track(&self.entries, owner) {
+            return true;
+        }
+        let mut previous = first;
+        if !self.entries.contains_key(&(owner, (), first)) {
+            return false;
+        }
+        for &(kind, (), tick) in self.entries.keys() {
+            if kind != owner {
+                continue;
+            }
+            if tick.saturating_sub(previous) > MAX_GAP {
+                return false;
+            }
+            previous = tick;
+        }
+        previous == last
+    }
+
     pub(super) fn complete(&self) -> bool {
-        self.pair_complete()
+        self.bounded_track(Kind::Pair, FIRST_TICK, LAST_TICK)
+            && self.bounded_track(Kind::Entrance, ENTRANCE_FIRST, ENTRANCE_LAST)
             && optional_track_complete(&self.entries, Kind::Stationary, (), &[
                 0, 1, 2,
             ])
@@ -189,6 +251,15 @@ impl Catalogue {
 
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
         self.entries.values().map(|sample| sample.digest)
+    }
+
+    pub(super) fn has_entrance(&self) -> bool {
+        has_track(&self.entries, Kind::Entrance)
+    }
+
+    pub(super) fn has_street(&self) -> bool {
+        has_track(&self.entries, Kind::Pair)
+            || has_track(&self.entries, Kind::Stationary)
     }
 
     pub(super) fn insert(&mut self, line: &str) -> Result<(), RenderError> {
@@ -228,26 +299,6 @@ impl Catalogue {
             let _prior = entries.insert(key, (art, sample.origin));
         }
         Ok(PlacedArt { entries })
-    }
-
-    fn pair_complete(&self) -> bool {
-        if !has_track(&self.entries, Kind::Pair) {
-            return true;
-        }
-        let mut previous = FIRST_TICK;
-        if !self.entries.contains_key(&(Kind::Pair, (), FIRST_TICK)) {
-            return false;
-        }
-        for &(kind, (), tick) in self.entries.keys() {
-            if kind != Kind::Pair {
-                continue;
-            }
-            if tick.saturating_sub(previous) > MAX_GAP {
-                return false;
-            }
-            previous = tick;
-        }
-        previous == LAST_TICK
     }
 
     pub(super) fn track_count(&self) -> usize {
@@ -354,7 +405,7 @@ pub(super) fn smoke(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
 ) -> Result<(), RenderError> {
-    for kind in Kind::ALL {
+    for kind in [Kind::Stationary, Kind::Pair] {
         if has_track(&art.poses.scenery.entries, kind) {
             smoke_track(scene, art, kind)?;
         }
@@ -372,6 +423,9 @@ fn smoke_track(
             u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?
         },
         Kind::Stationary => 566,
+        Kind::Entrance => {
+            return Err(failure("entrance requires the second stage"));
+        },
     };
     let mut cabinet = camera_at_limit(limit)?;
     cabinet.input_step(1000, &[LogicalAction {
@@ -387,26 +441,52 @@ fn smoke_track(
     let tick = kind
         .tick(&cabinet)
         .ok_or_else(|| failure("scripted scene did not start"))?;
-    let view = art.presentation_view(scene, &cabinet)?;
-    let draw =
-        art.poses.scenery.draw(kind, tick, view)?.ok_or_else(|| {
-            failure("scripted scene did not provide visible art")
-        })?;
     let _drawn = art.present(scene, &cabinet)?;
-    let actual = scene.readback()?;
-    let saved = take(&mut art.poses.scenery);
-    let baseline = art
-        .present(scene, &cabinet)
-        .and_then(|_baseline_drawn| scene.readback());
-    art.poses.scenery = saved;
-    verify_pixels(&actual, &baseline?, view.width, draw.destination)?;
+    verify_visible(scene, art, &cabinet, (kind, tick))?;
     let name = match kind {
         Kind::Pair => "Scripted scenic pair",
         Kind::Stationary => "Stationary scenic actor",
+        Kind::Entrance => "Second stage vehicle",
     };
     write_status(format_args!("{name}: visible at tick {tick}"))
         .map_err(failure)?;
     Ok(())
+}
+
+pub(super) fn verify_entrance(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    if !has_track(&art.poses.scenery.entries, Kind::Entrance) {
+        return Ok(());
+    }
+    let tick = Kind::Entrance
+        .tick(cabinet)
+        .ok_or_else(|| failure("missing entrance"))?;
+    verify_visible(scene, art, cabinet, (Kind::Entrance, tick))?;
+    write_status(format_args!(
+        "Second stage vehicle: clipped reference art verified"
+    ))
+    .map_err(failure)
+}
+
+fn verify_visible(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    (kind, tick): (Kind, u16),
+) -> Result<(), RenderError> {
+    let view = art.presentation_view(scene, cabinet)?;
+    let draw =
+        art.poses.scenery.draw(kind, tick, view)?.ok_or_else(|| {
+            failure("scripted scene did not provide visible art")
+        })?;
+    let actual = scene.readback()?;
+    let saved = take(&mut art.poses.scenery);
+    let baseline = art.present(scene, cabinet).and_then(|_| scene.readback());
+    art.poses.scenery = saved;
+    verify_pixels(&actual, &baseline?, view.width, draw.destination)
 }
 
 fn verify_pixels(
@@ -449,10 +529,57 @@ fn verify_pixels(
 
 #[cfg(test)]
 mod tests {
+    use std::iter::once;
+
     use super::*;
 
     const HASH: &str =
         "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn complete_entrance_track() -> Catalogue {
+        let mut track = Catalogue::default();
+        for tick in once(ENTRANCE_FIRST)
+            .chain((8..=216).step_by(8))
+            .chain(once(ENTRANCE_LAST))
+            .filter(|&tick| tick != 112)
+        {
+            assert!(
+                track
+                    .insert(&format!("scenic-entrance {tick} 80 0 {HASH}"))
+                    .is_ok()
+            );
+        }
+        track
+    }
+
+    #[test]
+    fn entrance_track_requires_endpoints_and_bounded_gaps() {
+        assert!(Catalogue::default().complete());
+        let mut track = complete_entrance_track();
+        assert!(track.complete());
+        assert!(track.has_entrance());
+        assert!(!track.has_street());
+        assert_eq!(track.atlas_bytes(), 28 * 166 * 185 * 4);
+        assert!(track.entries.remove(&(Kind::Entrance, (), 120)).is_some());
+        assert!(!track.complete());
+    }
+
+    #[test]
+    fn entrance_track_rejects_invalid_samples_and_stops_at_exit() {
+        for invalid in [
+            "1 80 0", "222 80 0", "9 80 0", "8 55 0", "8 184 0", "8 80 1",
+        ] {
+            assert!(
+                Catalogue::default()
+                    .insert(&format!("scenic-entrance {invalid} {HASH}"))
+                    .is_err()
+            );
+        }
+        assert_eq!(Kind::Entrance.frame(1), None);
+        assert_eq!(Kind::Entrance.frame(2), Some(2));
+        assert_eq!(Kind::Entrance.frame(221), Some(221));
+        assert_eq!(Kind::Entrance.frame(222), None);
+    }
 
     #[test]
     fn optional_track_requires_bounded_complete_samples() {

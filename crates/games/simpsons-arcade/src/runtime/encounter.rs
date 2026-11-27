@@ -838,6 +838,7 @@ fn verify_stage_entrance(
     if before == scene.readback()? {
         return Err(failure("second-stage descent did not change readback"));
     }
+    super::scenery::verify_entrance(scene, art, descent)?;
     advance(simulation, 115)?;
     if simulation.state().stage_entrance().is_some() {
         return Err(failure("second-stage landing did not finish"));
