@@ -4426,3 +4426,21 @@ The global campaign reset is a separate original path. These findings
 support the existing native free-play lifecycle tests without adopting
 the original coin, dispatch or configuration mechanisms. Additional
 callback semantics and complete original function coverage remain open.
+
+### Wrestler soundtrack timing after terminal response
+
+Two isolated original replays reproduce their retained score traces
+byte-for-byte. Read-only sound command observations place the defeat
+cue at the terminal response in both. In the baseline, victory,
+transition and instructions follow at offsets 275, 499 and 953 frames;
+in the withheld-attack replay they follow five frames earlier relative
+to its later terminal response. Both share the 128-frame clearance.
+
+The previous audio offsets assumed a 67-tick defeat and 60 Hz conversion.
+The fixed simulation already uses the reference screen period of
+16,896 microseconds. Relative to the new 128-tick clearance, the native
+baseline victory, transition and instruction offsets are 147, 371 and
+825 ticks. A terminal-to-instructions regression checks the actual
+cue selection throughout the defeat and bonus handoff. These timings
+choose the matched baseline deterministically; the observed five-frame
+variation and exact original sound sequencing remain unresolved.

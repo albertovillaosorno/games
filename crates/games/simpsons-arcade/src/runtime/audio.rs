@@ -87,10 +87,11 @@ const HANDOFF_TRACKS: [(&str, usize); 4] = [
     ("audio/bonus-transition", 480_000),
     ("audio/bonus-instructions", 240_000),
 ];
-// Original command separations converted from the board refresh to 60 Hz,
-// relative to the already completed 67-tick reconstructed defeat animation.
-const VICTORY_CUE_TICK: u16 = 212;
-const TRANSITION_CUE_TICK: u16 = 439;
+// Baseline command offsets from the terminal response are 275 and 499
+// reference frames. Native fixed ticks use the reference screen period;
+// the bonus clock begins after the 128-tick wrestler defeat phase.
+const VICTORY_CUE_TICK: u16 = 147;
+const TRANSITION_CUE_TICK: u16 = 371;
 const SOURCE_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
 // Observed PCM pitch 0xe9b with the 3,579,545 Hz chip clock:
 // round(3,579,545 / (4096 - 0xe9b)). The catalogue stays nominal.
@@ -1710,6 +1711,33 @@ mod tests {
     use super::*;
 
     type FixtureClip<'key> = (&'key str, u64, i16);
+
+    #[test]
+    fn soundtrack_follows_terminal_response_timing() -> Result<(), RenderError>
+    {
+        let mut cabinet = smoke_campaign(LocalSession::default(), false)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        cabinet.wrestler = Some(Wrestler {
+            action: WrestlerAction::Defeat { tick: 0 },
+            health: 0,
+            ..Wrestler::new(0)
+        });
+        for elapsed in 0..=953u64 {
+            let expected = match elapsed {
+                0..=274 => MusicCue::Defeat,
+                275..=498 => MusicCue::Victory,
+                499..=952 => MusicCue::Transition,
+                _ => MusicCue::Instructions,
+            };
+            if MusicCue::select(&cabinet) != expected
+                || cabinet.bonus().is_some() != (elapsed >= 128)
+            {
+                return Err(failure("soundtrack shifted from terminal timing"));
+            }
+            cabinet.input_step(elapsed, &[]);
+        }
+        Ok(())
+    }
 
     #[test]
     fn soundtrack_fixture_follows_bonus_handoff() -> Result<(), RenderError> {

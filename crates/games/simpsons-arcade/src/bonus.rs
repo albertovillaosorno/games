@@ -33,7 +33,9 @@
 
 use super::Player;
 
-const VICTORY_TICKS: u16 = 900;
+// Baseline instruction entry is 953 reference frames after the terminal
+// response, of which 128 are the separate wrestler defeat phase.
+const VICTORY_TICKS: u16 = 825;
 const INSTRUCTION_MIN_TICKS: u16 = 120;
 const INSTRUCTION_MAX_TICKS: u16 = 400;
 const READY_TICKS: u16 = 160;
