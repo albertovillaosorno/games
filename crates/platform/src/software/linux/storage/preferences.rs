@@ -9,7 +9,8 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Native integration tests for shared display, audio and input preferences.
+//   - Native integration tests for shared display, audio, input and locale
+//     settings.
 // - Must-Not:
 //   - Select a title's settings directory or change its display.
 // - Allows:
@@ -32,10 +33,10 @@
 use std::num::NonZeroU64;
 
 use games::audio::{AudioSource, MasterVolume};
-use games::presentation::DisplaySettings;
+use games::presentation::{DisplaySettings, LocaleTag};
 
 use crate::ir::storage::preferences::{
-    ControlStore, DisplayStore, PreferenceError, VolumeStore,
+    ControlStore, DisplayStore, LocaleStore, PreferenceError, VolumeStore,
 };
 use crate::ir::storage::save::{SaveError, SaveStore};
 
@@ -44,6 +45,7 @@ const DISPLAY_SLOT: u32 = 0;
 const CONTROL_SLOT: u32 = 1;
 const VOLUME_SLOT: u32 = 2;
 const EFFECTS_SLOT: u32 = 3;
+const LOCALE_SLOT: u32 = 5;
 
 #[cfg(test)]
 mod tests {
@@ -53,6 +55,35 @@ mod tests {
 
     use super::super::fixtures::TestRoot;
     use super::*;
+    #[test]
+    fn locale_preferences_are_canonical_and_independent()
+    -> Result<(), PreferenceError> {
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let location = root.path.as_os_str();
+        let locale = LocaleStore::open(location)?;
+        let display = DisplayStore::open(location)?;
+        let volume = VolumeStore::open(location)?;
+        require(locale.load()?.is_none())?;
+        let settings = DisplaySettings::default();
+        require(display.store(settings)?.durability.is_ok())?;
+        require(volume.store(MasterVolume::Half)?.durability.is_ok())?;
+        let selected = LocaleTag::parse("ES-mx")
+            .map_err(|_error| PreferenceError::InvalidPayload)?;
+        require(locale.store(&selected)?.durability.is_ok())?;
+        let reopened = LocaleStore::open(location)?;
+        require(reopened.load()? == Some(selected.clone()))?;
+        require(display.load()? == Some(settings))?;
+        require(volume.load()? == Some(MasterVolume::Half))?;
+        let raw = SaveStore::open(location, MAX_BYTES)?;
+        require(raw.load(LOCALE_SLOT)? == b"locale-v1\nes-MX")?;
+        let wrong = b"master-volume-v1\n50";
+        let _receipt = raw.store(LOCALE_SLOT, wrong)?;
+        require(reopened.load() == Err(PreferenceError::InvalidPayload))?;
+        require(reopened.store(&selected).is_err())?;
+        require(raw.load(LOCALE_SLOT)? == wrong)?;
+        require(volume.load()? == Some(MasterVolume::Half))
+    }
+
     fn require(condition: bool) -> Result<(), PreferenceError> {
         condition
             .then_some(())

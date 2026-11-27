@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable persistence of shared display, audio and input preferences.
+//   - Portable persistence of shared display, audio, input and locale settings.
 // - Must-Not:
 //   - Select a title's settings location or change its display.
 // - Allows:
@@ -36,14 +36,14 @@ use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
 use games::audio::{AudioSource, MasterVolume, SourceSettings};
-use games::presentation::DisplaySettings;
+use games::presentation::{DisplaySettings, LocaleTag};
 
 use super::file::FileReadError;
 use super::save::{SaveError, SaveReceipt, SaveStore};
 use crate::ir::security::preferences::{
-    InvalidPreference, control_payload_limit, decode_control,
-    decode_source_volume, decode_volume, encode_control, encode_source_volume,
-    encode_volume,
+    InvalidPreference, control_payload_limit, decode_control, decode_locale,
+    decode_source_volume, decode_volume, encode_control, encode_locale,
+    encode_source_volume, encode_volume, locale_payload_limit,
 };
 
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(63);
@@ -52,6 +52,7 @@ const CONTROL_SLOT: u32 = 1;
 const VOLUME_SLOT: u32 = 2;
 const EFFECTS_SLOT: u32 = 3;
 const MUSIC_SLOT: u32 = 4;
+const LOCALE_SLOT: u32 = 5;
 
 /// Display preference admission or publication error.
 pub type DisplayStoreError = PreferenceError;
@@ -123,6 +124,46 @@ impl DisplayStore {
         Ok(self
             .store
             .store(DISPLAY_SLOT, settings.encode().as_bytes())?)
+    }
+}
+
+/// Selected locale in a dedicated caller-selected settings location.
+///
+/// The caller is responsible for the title's supported languages and fallback.
+#[derive(Debug)]
+pub struct LocaleStore {
+    store: SaveStore,
+}
+
+impl LocaleStore {
+    /// Read the selected locale or None if it has not been saved.
+    /// # Errors
+    /// Rejects unsafe storage or malformed preferences.
+    pub fn load(&self) -> Result<Option<LocaleTag>, PreferenceError> {
+        load_optional(&self.store, LOCALE_SLOT)?
+            .map(|bytes| decode_locale(&bytes).map_err(PreferenceError::from))
+            .transpose()
+    }
+
+    /// Open a dedicated settings location.
+    /// # Errors
+    /// Rejects unsafe or unavailable storage.
+    pub fn open(location: &OsStr) -> Result<Self, PreferenceError> {
+        Ok(Self {
+            store: SaveStore::open(location, locale_payload_limit()?)?,
+        })
+    }
+
+    /// Atomically replace the selected locale.
+    /// # Errors
+    /// Rejects unsafe storage, incompatible existing data or save failure.
+    pub fn store(
+        &self,
+        locale: &LocaleTag,
+    ) -> Result<SaveReceipt, PreferenceError> {
+        let _existing = self.load()?;
+        let payload = encode_locale(locale);
+        Ok(self.store.store(LOCALE_SLOT, payload.as_bytes())?)
     }
 }
 

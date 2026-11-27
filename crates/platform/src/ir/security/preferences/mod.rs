@@ -9,7 +9,8 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Portable audio and input preference payload formats and admission.
+//   - Portable audio, input and locale preference payload formats and
+//     admission.
 // - Must-Not:
 //   - Access storage, resolve device bindings or change title state.
 // - Allows:
@@ -34,11 +35,13 @@
 use std::num::NonZeroU64;
 
 use games::audio::{AudioSource, MasterVolume};
+use games::presentation::LocaleTag;
 
 const VOLUME_PREFIX: &str = "master-volume-v1\n";
 const EFFECTS_PREFIX: &str = "effects-volume-v1\n";
 const MUSIC_PREFIX: &str = "music-volume-v1\n";
 const CONTROL_PREFIX: &str = "input-profile-v1\n";
+const LOCALE_PREFIX: &str = "locale-v1\n";
 
 /// Rejection of an incompatible, malformed or oversized preference payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +148,35 @@ pub fn encode_control(
     Ok(payload)
 }
 
+/// Compute the maximum encoded locale preference size.
+/// # Errors
+/// Rejects an unrepresentable payload bound.
+pub fn locale_payload_limit() -> Result<NonZeroU64, InvalidPreference> {
+    let size = LOCALE_PREFIX
+        .len()
+        .checked_add(LocaleTag::MAX_BYTES)
+        .ok_or(InvalidPreference)?;
+    u64::try_from(size)
+        .ok()
+        .and_then(NonZeroU64::new)
+        .ok_or(InvalidPreference)
+}
+
+/// Decode a locale without applying any title-specific language policy.
+/// # Errors
+/// Rejects incompatible versions, invalid UTF-8 or invalid locale tags.
+pub fn decode_locale(bytes: &[u8]) -> Result<LocaleTag, InvalidPreference> {
+    let text = str::from_utf8(bytes).map_err(|_error| InvalidPreference)?;
+    let tag = text.strip_prefix(LOCALE_PREFIX).ok_or(InvalidPreference)?;
+    LocaleTag::parse(tag).map_err(|_error| InvalidPreference)
+}
+
+/// Encode a validated canonical locale identifier.
+#[must_use]
+pub fn encode_locale(locale: &LocaleTag) -> String {
+    format!("{LOCALE_PREFIX}{}", locale.as_str())
+}
+
 fn admit_control(
     profile: &str,
     maximum: NonZeroU64,
@@ -161,6 +193,47 @@ fn admit_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locale_codec_normalizes_tags_and_rejects_other_payloads()
+    -> Result<(), InvalidPreference> {
+        let locale =
+            LocaleTag::parse("ES-mx").map_err(|_error| InvalidPreference)?;
+        if encode_locale(&locale) != "locale-v1\nes-MX"
+            || decode_locale(b"locale-v1\nES-mx")? != locale
+        {
+            return Err(InvalidPreference);
+        }
+        for bytes in [
+            b"locale-v2\nes-MX".as_slice(),
+            b"locale-v1\nes_MX",
+            b"locale-v1\n",
+            b"locale-v1\n../en",
+            b"locale-v1\nen\n",
+            b"locale-v1\n\xff",
+            b"master-volume-v1\n100",
+        ] {
+            if decode_locale(bytes) != Err(InvalidPreference) {
+                return Err(InvalidPreference);
+            }
+        }
+        let oversized = format!(
+            "locale-v1\n{}",
+            "a".repeat(LocaleTag::MAX_BYTES.saturating_add(1))
+        );
+        if decode_locale(oversized.as_bytes()) != Err(InvalidPreference) {
+            return Err(InvalidPreference);
+        }
+        if locale_payload_limit()?.get()
+            != u64::try_from(
+                LOCALE_PREFIX.len().saturating_add(LocaleTag::MAX_BYTES),
+            )
+            .map_err(|_error| InvalidPreference)?
+        {
+            return Err(InvalidPreference);
+        }
+        Ok(())
+    }
 
     fn limit(value: u64) -> NonZeroU64 {
         NonZeroU64::new(value).unwrap_or(NonZeroU64::MIN)

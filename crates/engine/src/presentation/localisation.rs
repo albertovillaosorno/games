@@ -89,6 +89,9 @@ pub struct TranslationCatalog {
 }
 
 impl LocaleTag {
+    /// Maximum admitted ASCII locale identifier length in bytes.
+    pub const MAX_BYTES: usize = 255;
+
     /// Obtain the normalized, hyphen-separated identifier.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -101,7 +104,7 @@ impl LocaleTag {
     ///
     /// Returns an error for malformed or unsupported subtags.
     pub fn parse(value: &str) -> Result<Self, CatalogError> {
-        if value.len() > 255 || !value.is_ascii() {
+        if value.len() > Self::MAX_BYTES || !value.is_ascii() {
             return Err(CatalogError::InvalidLocale);
         }
         let mut parts = value.split('-').peekable();
