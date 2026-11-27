@@ -35,6 +35,14 @@ exist. Do not block supported-target title implementation.
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Android ARM64 runtime and packaging](docs/todo/open/build/android-runtime.mdc)
 
+### TODO - Static reference ledger and research retention
+
+Use static function inventories and a safe investigation retention guard
+without blocking independent title implementation.
+
+<!-- MarkdownLint-disable-next-line MD013 MD044 -->
+[TODO - Static reference ledger and research retention](docs/todo/open/build/reference-ledger.mdc)
+
 ## P4 - Title implementation
 
 Implement the following titles in catalogue order after the shared

@@ -1,0 +1,70 @@
+---
+id: "reference-ledger"
+status: "open"
+lane: "3"
+priority: "p3"
+area: "build"
+task: "TODO - Static reference ledger and research retention"
+depends_on:
+  - "reference-tests"
+validation:
+  - "cargo validate"
+---
+# TODO - Static reference ledger and research retention
+
+## Objective
+
+Use a function-first static analysis workflow and bounded investigation
+retention for all selected titles; keep original software and its
+decompiler output private.
+
+## Acceptance
+
+- Prefer a verified Ghidra processor and loader for each selected lawful
+  binary. Record the exact edition, tool revision, CPU, address spaces,
+  bank mapping, executable regions and analysis limitations. Use other
+  appropriate static tools when the required processor is unavailable;
+  never interpret one instruction set as another.
+- Keep a durable private per-title function inventory under
+  `.reference/ledger/<title>/`. Give each discovered function a stable
+  identity comprising module, CPU, address space or bank, and entry
+  address; preserve the original FUN identifier or symbol.
+- Record semantic name, inputs, outputs, state mutations, callers,
+  callees, data dependencies, confidence, Rust owner and symbol,
+  test evidence and status. Reconcile function discovery, indirect
+  calls and unexplained executable regions; separate data from code.
+- Resolve every discovered function as implemented, shared mechanism,
+  intentional documented replacement, non-runtime or unresolved.
+  Do not treat an unclassified address or guessed behavior as complete.
+  Use verified semantic specifications for independent Rust
+  implementation; do not publish original pseudocode or proprietary
+  code. Preserve existing importer, IR, safety and licensing boundaries.
+- Use targeted emulator observations for ambiguities, assets and
+  regression tests. Do not repeat broad visual experiments in place
+  of static analysis. Measure progress by resolved functions and
+  playable campaign milestones, not capture counts or commits.
+- Provide a bounded research retention guard through contributor
+  tooling. Keep disposable captures in a dedicated scratch namespace.
+  Record the retained evidence, reproduction inputs and completion
+  status before making a run eligible for removal.
+- Default to read-only inventory and cleanup preview; require explicit
+  application of a bounded plan. Apply age and size retention only to
+  positively identified completed, archived and regenerable runs.
+  Reject unsafe paths, links, active or unclassified investigations.
+  Protect originals, tool installations, private analysis projects,
+  durable ledgers and canonical assets. Test with tiny scratch fixtures.
+- Keep unclassified historical captures until individually reviewed.
+  Document reclaimed bytes and retained evidence; never delete an
+  investigation merely because it is old.
+
+## Evidence
+
+On 2026-11-27 the official Ghidra 12.2 release was acquired through
+`cargo download ghidra-release`. Its archive is private and contains
+569,712,708 bytes. The pinned MAME source identifies the Simpsons
+main processor as Konami 053248 with a banked code window and the
+audio processor as Z80. The Ghidra archive contains standard 6809
+and Z80 languages; custom Konami compatibility is not yet established.
+No complete function inventory, Rust mapping or cleanup guard has
+passed acceptance. The existing MAME capture and migration ledger
+is retained; no historical research has been deleted.

@@ -52,6 +52,10 @@ preserve original four-player cooperative gameplay and pixel art.
   Record the selected physical audio device and effective volume.
   Reconstruct the original music and other missing cues separately.
 
+- Complete the private function ledger for the selected original.
+  Map verified static function semantics to Rust owners and tests;
+  resolve intentional modern replacements and non-runtime functions.
+  Verify the complete campaign with targeted reference comparisons.
 - Use only a selected lawful original edition and locally imported assets.
 - Reuse shared engine mechanisms and extend them where necessary.
 - Verify observable gameplay or application behaviour, saves and input.
@@ -3930,3 +3934,18 @@ bytes. Omitting the optional selection preserved legacy stage travel;
 malformed identity and substitution of the street cue were rejected.
 These diagnostics do not establish physical or browser audio playback,
 exact music looping or complete second-stage gameplay parity.
+
+### Function-first analysis correction
+
+On 2026-11-27 the owner clarified that the primary reconstruction
+method is a complete static function ledger, not broad observational
+inference. Existing playable slices and regression evidence remain
+useful but are not evidence of complete function coverage. The main
+Konami 053248 processor uses 64 banked 8 KiB regions and a fixed
+32 KiB window. The audio processor is Z80. Ghidra 12.2 was acquired;
+custom main-processor language admission and function inventory are
+pending. The new private ledger must distinguish CPU, bank and entry
+address and record verified semantic mappings, unresolved functions
+and deliberate free-play or modern-platform replacements. Preserve
+the existing asset importer and shared Rust capability architecture.
+Do not claim a complete campaign from provisional encounters.
