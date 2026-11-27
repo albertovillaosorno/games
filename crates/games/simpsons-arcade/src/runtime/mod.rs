@@ -54,7 +54,7 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::rc::Rc;
 use std::time::Duration;
 
-use games::audio::MasterVolume;
+use games::audio::{AudioSource, MasterVolume, SourceSettings};
 use games::input::physical::{
     ControllerAxis, ControllerButton, KeyboardKey, PointerButton,
 };
@@ -1014,6 +1014,7 @@ struct PreviewOptions<'profiles> {
     measure: bool,
     preferences: Option<&'profiles Rc<DisplayStore>>,
     publication: PublicationPolicy,
+    source_settings: SourceSettings,
     touch_enabled: bool,
     volume: MasterVolume,
     volume_store: Option<&'profiles Rc<VolumeStore>>,
@@ -1030,6 +1031,7 @@ impl PreviewOptions<'_> {
 
     fn session(self, reserved: [bool; 4]) -> LocalSession {
         LocalSession::with_preferences(self.display, self.volume, false)
+            .with_source_settings(self.source_settings)
             .with_control_reset(self.can_reset_controls(reserved))
             .with_fixed_window(self.window_switching == WindowSwitching::Fixed)
     }
@@ -1083,6 +1085,7 @@ struct Interactive {
     requested: DisplaySettings,
     reset_persisted: bool,
     simulation: LiveSimulation<HostedCabinet>,
+    source_settings: SourceSettings,
     stopped: bool,
     volume: MasterVolume,
     volume_store: Option<Rc<VolumeStore>>,
@@ -1270,6 +1273,7 @@ impl Interactive {
             requested: cabinet.session().display(),
             reset_persisted: false,
             simulation,
+            source_settings: cabinet.session().source_settings(),
             stopped: false,
             volume: cabinet.session().volume(),
             volume_store: options.volume_store.map(Rc::clone),
@@ -1306,6 +1310,16 @@ impl Interactive {
                 self.publication,
             )?;
             self.volume = volume;
+        }
+        let sources = session.source_settings();
+        if self.source_settings != sources {
+            save_sources(
+                self.volume_store.as_deref(),
+                self.source_settings,
+                sources,
+                self.publication,
+            )?;
+            self.source_settings = sources;
         }
         if session.control_reset() != ControlReset::Requested {
             self.reset_persisted = false;
@@ -1653,6 +1667,28 @@ fn save_volume(
     Ok(())
 }
 
+fn save_sources(
+    store: Option<&VolumeStore>,
+    previous: SourceSettings,
+    requested: SourceSettings,
+    publication: PublicationPolicy,
+) -> Result<(), RenderError> {
+    let Some(preferences) = store else {
+        return Ok(());
+    };
+    for source in [AudioSource::Effects, AudioSource::Music] {
+        let Some(level) = requested.get(source) else {
+            continue;
+        };
+        if previous.get(source) != Some(level) {
+            let receipt =
+                preferences.store_source(source, level).map_err(failure)?;
+            publication.confirm(receipt).map_err(failure)?;
+        }
+    }
+    Ok(())
+}
+
 const fn mouse_label(button: PointerButton) -> &'static str {
     match button {
         PointerButton::Left => "LEFT",
@@ -1815,16 +1851,22 @@ fn load_menu(
 ) -> Result<MenuArt, RenderError> {
     let hints = pause_hints(&options.controls.profiles, reserved);
     let pause = hints.each_ref().map(String::as_str);
+    let reset = options.can_reset_controls(reserved);
     MenuArt::load(
         scene,
         PlateLayout {
             background: [24, 22, 30, 255],
             height: MENU_HEIGHT,
-            max_bytes: size(1_400_000)?,
+            max_bytes: size(MenuArt::bytes(
+                MENU_WIDTH,
+                MENU_HEIGHT,
+                reset,
+                options.source_settings,
+            ))?,
             width: MENU_WIDTH,
         },
         MenuContent {
-            control_reset: options.can_reset_controls(reserved),
+            control_reset: reset,
             main_hints: main_menu_hints(reserved.contains(&true)),
             pause_hints: &pause,
             settings_hints: &[
@@ -1836,6 +1878,7 @@ fn load_menu(
                     options.can_reset_controls(reserved),
                 ),
             ],
+            sources: options.source_settings,
             title: "THE SIMPSONS ARCADE",
             window_switching: options.window_switching
                 == WindowSwitching::Supported,
@@ -2066,6 +2109,10 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
     let shared_volume_store = volume_store.map(Rc::new);
     let listener = host.as_deref().map(lan::open_host).transpose()?;
     let result = Sources::local(&assets).and_then(|source| {
+        let source_settings = audio::source_settings(
+            source.audio.as_ref(),
+            shared_volume_store.as_deref(),
+        )?;
         window(
             &source,
             PreviewOptions {
@@ -2076,6 +2123,7 @@ fn run_preview(args: Vec<OsString>) -> Result<(), String> {
                 measure,
                 preferences: display_store.as_ref(),
                 publication: PublicationPolicy::Durable,
+                source_settings,
                 touch_enabled,
                 volume,
                 volume_store: shared_volume_store.as_ref(),
@@ -2390,7 +2438,8 @@ fn smoke_settings(
     art: &mut Scene,
     options: PreviewOptions<'_>,
 ) -> Result<(), RenderError> {
-    let session = LocalSession::with_display(DisplaySettings::default(), false);
+    let session = LocalSession::with_display(DisplaySettings::default(), false)
+        .with_source_settings(options.source_settings);
     let mut simulation = live_with_session(false, session)?;
     let mut controls = Controls::with_smoke_profiles(
         options.touch_enabled,
@@ -2443,6 +2492,19 @@ fn smoke_window_toggle(
         let _drawn = art.present(scene, simulation.state())?;
     }
     smoke_press(controls, simulation, Control::Down)?;
+    smoke_audio_menu(scene, art, controls, simulation)
+}
+
+fn smoke_audio_menu(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    smoke_press(controls, simulation, Control::Primary)?;
+    if simulation.state().phase() != Phase::Audio {
+        return Err(failure("audio submenu did not open"));
+    }
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene.readback()?;
     smoke_press(controls, simulation, Control::Primary)?;
@@ -2453,9 +2515,47 @@ fn smoke_window_toggle(
     if scene.readback()? == before {
         return Err(failure("master volume row did not update"));
     }
+    smoke_source_levels(scene, art, controls, simulation)?;
+    smoke_press(controls, simulation, Control::Start)?;
+    if simulation.state().phase() != Phase::Settings {
+        return Err(failure("audio did not return to settings"));
+    }
     smoke_press(controls, simulation, Control::Start)?;
     if simulation.state().phase() != Phase::MainMenu {
         return Err(failure("settings did not return to main menu"));
+    }
+    Ok(())
+}
+
+fn smoke_source_levels(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    for source in [AudioSource::Effects, AudioSource::Music] {
+        let mut expected = simulation.state().session().source_settings();
+        let Some(level) = expected.get(source) else {
+            continue;
+        };
+        match source {
+            AudioSource::Effects => expected.effects = Some(level.next()),
+            AudioSource::Music => expected.music = Some(level.next()),
+        }
+        smoke_press(controls, simulation, Control::Down)?;
+        let _drawn = art.present(scene, simulation.state())?;
+        let before = scene.readback()?;
+        smoke_press(controls, simulation, Control::Primary)?;
+        let session = simulation.state().session();
+        if session.source_settings() != expected
+            || session.volume() != MasterVolume::ThreeQuarters
+        {
+            return Err(failure("source volume menu selection failed"));
+        }
+        let _updated = art.present(scene, simulation.state())?;
+        if scene.readback()? == before {
+            return Err(failure("source volume row did not update"));
+        }
     }
     Ok(())
 }
@@ -3198,8 +3298,11 @@ fn window(
     let limits = scene_limits(source, options, reserved)?;
     let startup = window
         .input(size(reserved.into_iter().filter(|remote| !remote).count())?)?;
-    let mut playback =
-        audio::open_optional(source.audio.as_ref(), options.audio_device)?;
+    let mut playback = audio::open_optional(
+        source.audio.as_ref(),
+        options.audio_device,
+        options.source_settings,
+    )?;
     let renderer =
         (options.hidden || options.measure).then(|| window.renderer_name());
     window.with_scene(layout, limits, |scene| {
@@ -3232,10 +3335,7 @@ fn window(
 fn editor_limits(enabled: bool) -> (usize, usize) {
     if enabled {
         (
-            107_520usize.saturating_add(ControlEditorArt::bytes(
-                MENU_WIDTH,
-                MENU_HEIGHT,
-            )),
+            ControlEditorArt::bytes(MENU_WIDTH, MENU_HEIGHT),
             ControlEditorArt::sprites(MENU_WIDTH).saturating_add(2),
         )
     } else {
@@ -3266,7 +3366,13 @@ fn scene_limits(
     let (editor_bytes, editor_sprites) = editor_limits(editor);
     Ok(SceneLimits {
         atlas_bytes: size(
-            3_607_872usize
+            2_317_632usize
+                .saturating_add(MenuArt::bytes(
+                    MENU_WIDTH,
+                    MENU_HEIGHT,
+                    editor,
+                    options.source_settings,
+                ))
                 .saturating_add(editor_bytes)
                 .saturating_add(station_hud::extra_bytes(reserved))
                 .saturating_add(if touch_enabled {
@@ -3285,22 +3391,18 @@ fn scene_limits(
                 .saturating_add(extension)
                 .saturating_add(shadows)
                 .saturating_add(usize::from(editor).saturating_mul(2))
-                .saturating_add(if touch_enabled {
-                    9
-                } else {
-                    8
-                }),
+                .saturating_add(
+                    8usize.saturating_add(usize::from(touch_enabled)),
+                ),
         )?,
         sprites: size(
             enemy_sprites
                 .saturating_add(editor_sprites)
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))
-                .saturating_add(if touch_enabled {
-                    19
-                } else {
-                    18
-                }),
+                .saturating_add(
+                    18usize.saturating_add(usize::from(touch_enabled)),
+                ),
         )?,
     })
 }

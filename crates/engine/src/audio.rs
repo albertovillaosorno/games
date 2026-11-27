@@ -236,6 +236,86 @@ pub enum AudioError {
     VoicesFull,
 }
 
+/// An independently controlled source in the shared mixer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AudioSource {
+    /// Short or environmental sound effects.
+    Effects,
+    /// Music, including loops.
+    Music,
+}
+
+/// Independent source levels before the final master attenuation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SourceVolumes {
+    /// Effects source attenuation.
+    pub effects: MasterVolume,
+    /// Music source attenuation.
+    pub music: MasterVolume,
+}
+
+impl SourceVolumes {
+    const fn level(self, source: AudioSource) -> MasterVolume {
+        match source {
+            AudioSource::Effects => self.effects,
+            AudioSource::Music => self.music,
+        }
+    }
+}
+
+/// A voice gain and its independently controlled source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceGain {
+    /// Source level applied on top of the stereo gain.
+    pub source: AudioSource,
+    /// Original, unattenuated stereo gain.
+    pub stereo: StereoGain,
+}
+
+impl SourceGain {
+    const fn effects(stereo: StereoGain) -> Self {
+        Self {
+            source: AudioSource::Effects,
+            stereo,
+        }
+    }
+}
+
+/// Source settings exposed only for admitted playback capabilities.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SourceSettings {
+    /// Current effects level, absent when no effects are available.
+    pub effects: Option<MasterVolume>,
+    /// Current music level, absent when no music is available.
+    pub music: Option<MasterVolume>,
+}
+
+impl SourceSettings {
+    /// Return the current level if the source is available.
+    #[must_use]
+    pub const fn get(self, source: AudioSource) -> Option<MasterVolume> {
+        match source {
+            AudioSource::Effects => self.effects,
+            AudioSource::Music => self.music,
+        }
+    }
+
+    /// Current mixer levels; absent sources retain neutral attenuation.
+    #[must_use]
+    pub const fn levels(self) -> SourceVolumes {
+        SourceVolumes {
+            effects: match self.effects {
+                Some(level) => level,
+                None => MasterVolume::Full,
+            },
+            music: match self.music {
+                Some(level) => level,
+                None => MasterVolume::Full,
+            },
+        }
+    }
+}
+
 /// Convert explicit elapsed simulation time to complete audio frames.
 ///
 /// Fractional frames carry forward exactly, so an identical elapsed
@@ -302,8 +382,9 @@ impl LoopRegion {
 #[derive(Clone, Copy, Debug)]
 struct Voice<S> {
     clip: PcmClip<S>,
+    effective_gain: StereoGain,
     frame: usize,
-    gain: StereoGain,
+    gain: SourceGain,
     looping: Option<LoopRegion>,
     phase: u64,
 }
@@ -372,7 +453,10 @@ where
                 .checked_div(i64::from(u16::MAX))
                 .unwrap_or(0)
         };
-        [scale(left, self.gain.left), scale(right, self.gain.right)]
+        [
+            scale(left, self.effective_gain.left),
+            scale(right, self.effective_gain.right),
+        ]
     }
 }
 
@@ -385,6 +469,7 @@ type VoiceSlot<S> = Option<Voice<S>>;
 #[derive(Debug)]
 pub struct PcmMixer<S> {
     rate: NonZeroU32,
+    sources: SourceVolumes,
     voices: Vec<VoiceSlot<S>>,
     volume: MasterVolume,
 }
@@ -408,7 +493,7 @@ where
     fn admit(
         &mut self,
         clip: PcmClip<S>,
-        gain: StereoGain,
+        gain: SourceGain,
         looping: Option<LoopRegion>,
     ) -> Result<usize, AudioError> {
         let (index, slot) = self
@@ -419,6 +504,9 @@ where
             .ok_or(AudioError::VoicesFull)?;
         *slot = Some(Voice {
             clip,
+            effective_gain: gain
+                .stereo
+                .attenuated(self.sources.level(gain.source)),
             frame: 0,
             gain,
             looping,
@@ -447,6 +535,7 @@ where
         voices.resize_with(count, || None);
         Ok(Self {
             rate,
+            sources: SourceVolumes::default(),
             voices,
             volume: MasterVolume::default(),
         })
@@ -463,7 +552,7 @@ where
         clip: PcmClip<S>,
         gain: StereoGain,
     ) -> Result<usize, AudioError> {
-        self.admit(clip, gain, None)
+        self.admit(clip, SourceGain::effects(gain), None)
     }
 
     /// Play from frame zero, then repeat the specified source region.
@@ -477,6 +566,18 @@ where
         &mut self,
         clip: PcmClip<S>,
         gain: StereoGain,
+        region: Range<usize>,
+    ) -> Result<usize, AudioError> {
+        self.play_loop_on(clip, SourceGain::effects(gain), region)
+    }
+
+    /// Play a loop through an independently controlled source.
+    /// # Errors
+    /// Rejects empty or out-of-range regions and a full mixer.
+    pub fn play_loop_on(
+        &mut self,
+        clip: PcmClip<S>,
+        gain: SourceGain,
         region: Range<usize>,
     ) -> Result<usize, AudioError> {
         if region.is_empty() || region.end > clip.frames() {
@@ -506,6 +607,20 @@ where
         let rate = NonZeroU64::from(self.rate).get();
         for frame in output {
             *frame = mix_frame(&mut self.voices, rate, self.volume);
+        }
+    }
+
+    /// Change source attenuation for active and future voices.
+    pub fn set_source_volumes(&mut self, sources: SourceVolumes) {
+        if self.sources == sources {
+            return;
+        }
+        self.sources = sources;
+        for voice in self.voices.iter_mut().flatten() {
+            voice.effective_gain = voice
+                .gain
+                .stereo
+                .attenuated(sources.level(voice.gain.source));
         }
     }
 
@@ -621,6 +736,59 @@ mod tests {
             .play(effect, StereoGain::UNITY.attenuated(MasterVolume::Muted))?;
         mixer.render(&mut frames);
         (frames == [[3999, -3999], [1999, -1999]] && mixer.active() == 1)
+            .then_some(())
+            .ok_or(AudioError::InvalidVolume)
+    }
+
+    #[test]
+    fn source_levels_change_active_voices_without_restarting_them()
+    -> Result<(), AudioError> {
+        let music = Clip::new(
+            &[1000, -1000, 2000, -2000, 3000, -3000],
+            Channels::Stereo,
+            rate(1),
+        )?;
+        let effect =
+            Clip::new(&[4000, 8000, 12000, 16000], Channels::Mono, rate(1))?;
+        let mut mixer = Mixer::new(rate(1), NonZeroU16::MIN.saturating_add(1))?;
+        let _music = mixer.play_loop_on(
+            music,
+            SourceGain {
+                source: AudioSource::Music,
+                stereo: StereoGain::UNITY,
+            },
+            0..3,
+        )?;
+        let _effect = mixer.play(effect, StereoGain::UNITY)?;
+        let mut frame = [[0; 2]];
+        mixer.render(&mut frame);
+        if frame != [[5000, 3000]] {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.set_source_volumes(SourceVolumes {
+            effects: MasterVolume::Half,
+            music: MasterVolume::Muted,
+        });
+        mixer.render(&mut frame);
+        if frame != [[3999; 2]] || mixer.active() != 2 {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.set_source_volumes(SourceVolumes {
+            effects: MasterVolume::Muted,
+            music: MasterVolume::Full,
+        });
+        mixer.render(&mut frame);
+        if frame != [[3000, -3000]] {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.render(&mut frame);
+        if frame != [[1000, -1000]] || mixer.active() != 1 {
+            return Err(AudioError::InvalidVolume);
+        }
+        let _muted = mixer.play(effect, StereoGain::UNITY)?;
+        mixer.set_volume(MasterVolume::Half);
+        mixer.render(&mut frame);
+        (frame == [[1000, -1000]] && mixer.active() == 2)
             .then_some(())
             .ok_or(AudioError::InvalidVolume)
     }

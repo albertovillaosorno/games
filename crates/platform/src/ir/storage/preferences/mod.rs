@@ -35,20 +35,23 @@ use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
-use games::audio::MasterVolume;
+use games::audio::{AudioSource, MasterVolume, SourceSettings};
 use games::presentation::DisplaySettings;
 
 use super::file::FileReadError;
 use super::save::{SaveError, SaveReceipt, SaveStore};
 use crate::ir::security::preferences::{
-    InvalidPreference, control_payload_limit, decode_control, decode_volume,
-    encode_control, encode_volume,
+    InvalidPreference, control_payload_limit, decode_control,
+    decode_source_volume, decode_volume, encode_control, encode_source_volume,
+    encode_volume,
 };
 
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(63);
 const DISPLAY_SLOT: u32 = 0;
 const CONTROL_SLOT: u32 = 1;
 const VOLUME_SLOT: u32 = 2;
+const EFFECTS_SLOT: u32 = 3;
+const MUSIC_SLOT: u32 = 4;
 
 /// Display preference admission or publication error.
 pub type DisplayStoreError = PreferenceError;
@@ -123,7 +126,7 @@ impl DisplayStore {
     }
 }
 
-/// Master audio volume in the same dedicated preferences location.
+/// Independent audio volume preferences in the dedicated settings location.
 #[derive(Debug)]
 pub struct VolumeStore {
     store: SaveStore,
@@ -139,12 +142,50 @@ impl VolumeStore {
             .transpose()
     }
 
+    /// Read a source override without replacing its catalogue default.
+    /// # Errors
+    /// Rejects unsafe storage and incompatible source preferences.
+    pub fn load_source(
+        &self,
+        source: AudioSource,
+    ) -> Result<Option<MasterVolume>, PreferenceError> {
+        load_optional(&self.store, source_slot(source))?
+            .map(|bytes| {
+                decode_source_volume(&bytes, source)
+                    .map_err(PreferenceError::from)
+            })
+            .transpose()
+    }
+
     /// Open a dedicated location as described by [`SaveStore::open`].
     /// # Errors
     /// Rejects unavailable or unsafe storage locations.
     pub fn open(location: &OsStr) -> Result<Self, PreferenceError> {
         Ok(Self {
             store: SaveStore::open(location, MAX_BYTES)?,
+        })
+    }
+
+    /// Overlay saved preferences on the currently admitted source defaults.
+    /// # Errors
+    /// Rejects invalid saved levels for an admitted source.
+    pub fn resolve_sources(
+        &self,
+        defaults: SourceSettings,
+    ) -> Result<SourceSettings, PreferenceError> {
+        let resolve = |source, default| {
+            self.load_source(source)
+                .map(|stored| stored.unwrap_or(default))
+        };
+        Ok(SourceSettings {
+            effects: defaults
+                .effects
+                .map(|level| resolve(AudioSource::Effects, level))
+                .transpose()?,
+            music: defaults
+                .music
+                .map(|level| resolve(AudioSource::Music, level))
+                .transpose()?,
         })
     }
 
@@ -158,6 +199,19 @@ impl VolumeStore {
         let _existing = self.load()?;
         let payload = encode_volume(volume);
         Ok(self.store.store(VOLUME_SLOT, payload.as_bytes())?)
+    }
+
+    /// Atomically replace only the selected source override.
+    /// # Errors
+    /// Rejects unsafe storage, incompatible existing data or save failure.
+    pub fn store_source(
+        &self,
+        source: AudioSource,
+        volume: MasterVolume,
+    ) -> Result<SaveReceipt, PreferenceError> {
+        let _existing = self.load_source(source)?;
+        let payload = encode_source_volume(source, volume);
+        Ok(self.store.store(source_slot(source), payload.as_bytes())?)
     }
 }
 
@@ -235,6 +289,13 @@ impl PublicationPolicy {
             (Self::BestEffort, Err(ErrorKind::Unsupported)) => Ok(()),
             (_, durability) => durability,
         }
+    }
+}
+
+const fn source_slot(source: AudioSource) -> u32 {
+    match source {
+        AudioSource::Effects => EFFECTS_SLOT,
+        AudioSource::Music => MUSIC_SLOT,
     }
 }
 

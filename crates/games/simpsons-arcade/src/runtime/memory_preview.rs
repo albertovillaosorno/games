@@ -95,6 +95,30 @@ impl Preferences {
     }
 }
 
+fn preview_options<'preferences>(
+    selection: &Selection<'_>,
+    preferences: &'preferences Preferences,
+    source: &Sources<'_>,
+) -> Result<PreviewOptions<'preferences>, RenderError> {
+    Ok(PreviewOptions {
+        audio_device: None,
+        controls: &preferences.controls,
+        display: preferences.display,
+        hidden: false,
+        measure: false,
+        preferences: preferences.display_store.as_ref(),
+        publication: preferences.publication,
+        source_settings: audio::source_settings(
+            source.audio.as_ref(),
+            preferences.volume_store.as_deref(),
+        )?,
+        touch_enabled: selection.touch_enabled,
+        volume: preferences.volume,
+        volume_store: preferences.volume_store.as_ref(),
+        window_switching: WindowSwitching::Fixed,
+    })
+}
+
 /// Open the live title and yield to the host between bounded frame steps.
 ///
 /// The memory snapshot is needed only during initialization. The same title
@@ -144,19 +168,7 @@ where
             world: selection.world,
         },
     )?;
-    let options = PreviewOptions {
-        audio_device: None,
-        controls: &preferences.controls,
-        display: preferences.display,
-        hidden: false,
-        measure: false,
-        preferences: preferences.display_store.as_ref(),
-        publication: preferences.publication,
-        touch_enabled: selection.touch_enabled,
-        volume: preferences.volume,
-        volume_store: preferences.volume_store.as_ref(),
-        window_switching: WindowSwitching::Fixed,
-    };
+    let options = preview_options(selection, preferences, &source)?;
     let reserved = [false; 4];
     let layout =
         preview_layout(options.touch_enabled, &preferences.controls.profiles)?;
@@ -179,7 +191,11 @@ where
     ))?;
     let mut art = Scene::load(&mut scene, &source, options, reserved)?;
     let mut preview = Interactive::for_scene(startup, options, &art, None)?;
-    let mut playback = audio::open_optional(source.audio.as_ref(), None)?;
+    let mut playback = audio::open_optional(
+        source.audio.as_ref(),
+        None,
+        options.source_settings,
+    )?;
     if let Some(output) = &mut playback {
         output.enable_output();
     }

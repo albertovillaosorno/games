@@ -31,7 +31,7 @@
 
 //! Local free-play navigation independent of the host and title rules.
 
-use crate::audio::MasterVolume;
+use crate::audio::{MasterVolume, SourceSettings};
 use crate::presentation::{DisplaySettings, PresentationMode};
 
 const MAIN_ITEMS: [MenuItem; 3] =
@@ -45,14 +45,14 @@ const PAUSE_ITEMS: [MenuItem; 4] = [
 const SETTINGS_ITEMS: [MenuItem; 4] = [
     MenuItem::Display,
     MenuItem::Window,
-    MenuItem::Volume,
+    MenuItem::Audio,
     MenuItem::Back,
 ];
 const FIXED_WINDOW_SETTINGS: [MenuItem; 3] =
-    [MenuItem::Display, MenuItem::Volume, MenuItem::Back];
+    [MenuItem::Display, MenuItem::Audio, MenuItem::Back];
 const FIXED_WINDOW_SETTINGS_WITH_CONTROL_RESET: [MenuItem; 5] = [
     MenuItem::Display,
-    MenuItem::Volume,
+    MenuItem::Audio,
     MenuItem::ResetControls,
     MenuItem::EditControls,
     MenuItem::Back,
@@ -60,9 +60,21 @@ const FIXED_WINDOW_SETTINGS_WITH_CONTROL_RESET: [MenuItem; 5] = [
 const SETTINGS_WITH_CONTROL_RESET: [MenuItem; 6] = [
     MenuItem::Display,
     MenuItem::Window,
-    MenuItem::Volume,
+    MenuItem::Audio,
     MenuItem::ResetControls,
     MenuItem::EditControls,
+    MenuItem::Back,
+];
+
+const AUDIO_ITEMS: [MenuItem; 2] = [MenuItem::Volume, MenuItem::Back];
+const AUDIO_EFFECTS: [MenuItem; 3] =
+    [MenuItem::Volume, MenuItem::EffectsVolume, MenuItem::Back];
+const AUDIO_MUSIC: [MenuItem; 3] =
+    [MenuItem::Volume, MenuItem::MusicVolume, MenuItem::Back];
+const AUDIO_ALL: [MenuItem; 4] = [
+    MenuItem::Volume,
+    MenuItem::EffectsVolume,
+    MenuItem::MusicVolume,
     MenuItem::Back,
 ];
 
@@ -81,6 +93,8 @@ pub enum ControlReset {
 /// Current screen of a local gameplay session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SessionPhase {
+    /// Independent master and available source volume settings.
+    Audio,
     /// The host is editing a next-launch control profile.
     Controls,
     /// The user has requested that the host close.
@@ -99,16 +113,22 @@ pub enum SessionPhase {
 /// Available shared menu choices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MenuItem {
+    /// Open the shared audio settings menu.
+    Audio,
     /// Return to the menu from which settings were opened.
     Back,
     /// Cycle the logical presentation mode.
     Display,
     /// Open the host control profile editor.
     EditControls,
+    /// Cycle the effects source level.
+    EffectsVolume,
     /// Close the host.
     Exit,
     /// Abandon the current world and return to the main menu.
     MainMenu,
+    /// Cycle the music source level.
+    MusicVolume,
     /// Start a new session.
     Play,
     /// Request default controls for the next launch.
@@ -158,14 +178,23 @@ impl SessionPhase {
         self.items_with_window(control_reset, true)
     }
 
-    /// Visible menu choices for the host window capabilities.
+    /// Visible choices for the host window and audio capabilities.
     #[must_use]
-    pub const fn items_with_window(
+    pub const fn items_with_sources(
         self,
         control_reset: bool,
         window_switching: bool,
+        sources: SourceSettings,
     ) -> &'static [MenuItem] {
         match self {
+            Self::Audio => {
+                match (sources.effects.is_some(), sources.music.is_some()) {
+                    (false, false) => &AUDIO_ITEMS,
+                    (true, false) => &AUDIO_EFFECTS,
+                    (false, true) => &AUDIO_MUSIC,
+                    (true, true) => &AUDIO_ALL,
+                }
+            },
             Self::MainMenu => &MAIN_ITEMS,
             Self::Paused => &PAUSE_ITEMS,
             Self::Settings if !window_switching && control_reset => {
@@ -176,6 +205,23 @@ impl SessionPhase {
             Self::Settings => &SETTINGS_ITEMS,
             Self::Controls | Self::Playing | Self::Exited => &[],
         }
+    }
+
+    /// Visible menu choices for the host window capabilities.
+    #[must_use]
+    pub const fn items_with_window(
+        self,
+        control_reset: bool,
+        window_switching: bool,
+    ) -> &'static [MenuItem] {
+        self.items_with_sources(
+            control_reset,
+            window_switching,
+            SourceSettings {
+                effects: None,
+                music: None,
+            },
+        )
     }
 }
 
@@ -189,10 +235,20 @@ pub struct LocalSession {
     restrict_fill: bool,
     selection: usize,
     settings_origin: SessionPhase,
+    sources: SourceSettings,
     volume: MasterVolume,
 }
 
 impl LocalSession {
+    const fn close_audio(&mut self) {
+        self.transition(SessionPhase::Settings);
+        self.selection = if self.fixed_window {
+            1
+        } else {
+            2
+        };
+    }
+
     const fn close_controls(&mut self) {
         self.transition(SessionPhase::Settings);
         self.selection = if self.fixed_window {
@@ -210,7 +266,18 @@ impl LocalSession {
 
     fn confirm(&mut self) -> SessionEffect {
         match self.selected() {
+            Some(MenuItem::Audio) => self.transition(SessionPhase::Audio),
+            Some(MenuItem::Back) if self.phase == SessionPhase::Audio => {
+                self.close_audio();
+            },
             Some(MenuItem::Back) => self.close_settings(),
+            Some(MenuItem::EffectsVolume) => {
+                self.sources.effects =
+                    self.sources.effects.map(MasterVolume::next);
+            },
+            Some(MenuItem::MusicVolume) => {
+                self.sources.music = self.sources.music.map(MasterVolume::next);
+            },
             Some(MenuItem::Display) => self.cycle_display(),
             Some(MenuItem::EditControls) => {
                 self.transition(SessionPhase::Controls);
@@ -294,9 +361,10 @@ impl LocalSession {
     /// Visible choices for the current screen, empty while playing.
     #[must_use]
     pub const fn items(self) -> &'static [MenuItem] {
-        self.phase.items_with_window(
+        self.phase.items_with_sources(
             !matches!(self.control_reset, ControlReset::Disabled),
             self.window_switching(),
+            self.sources,
         )
     }
 
@@ -334,6 +402,12 @@ impl LocalSession {
         self.items().get(self.selection).copied()
     }
 
+    /// Source levels for admitted audio capabilities.
+    #[must_use]
+    pub const fn source_settings(self) -> SourceSettings {
+        self.sources
+    }
+
     const fn start(&mut self) -> SessionEffect {
         match self.phase {
             SessionPhase::MainMenu | SessionPhase::Playing => {
@@ -342,6 +416,10 @@ impl LocalSession {
             },
             SessionPhase::Paused => {
                 self.transition(SessionPhase::Playing);
+                SessionEffect::None
+            },
+            SessionPhase::Audio => {
+                self.close_audio();
                 SessionEffect::None
             },
             SessionPhase::Controls => {
@@ -360,6 +438,7 @@ impl LocalSession {
         match self.phase {
             SessionPhase::Playing => self.transition(SessionPhase::Paused),
             SessionPhase::Paused => self.transition(SessionPhase::Playing),
+            SessionPhase::Audio => self.close_audio(),
             SessionPhase::Controls => self.close_controls(),
             SessionPhase::Settings => self.close_settings(),
             SessionPhase::MainMenu | SessionPhase::Exited => {},
@@ -436,8 +515,22 @@ impl LocalSession {
             restrict_fill,
             selection: 0,
             settings_origin: SessionPhase::MainMenu,
+            sources: SourceSettings {
+                effects: None,
+                music: None,
+            },
             volume,
         }
+    }
+
+    /// Offer only the source settings supported by the selected playback.
+    #[must_use]
+    pub const fn with_source_settings(
+        mut self,
+        sources: SourceSettings,
+    ) -> Self {
+        self.sources = sources;
+        self
     }
 
     /// Whether the current screen suspends or displays an existing world.
@@ -446,7 +539,9 @@ impl LocalSession {
         matches!(self.phase, SessionPhase::Playing | SessionPhase::Paused)
             || (matches!(
                 self.phase,
-                SessionPhase::Settings | SessionPhase::Controls
+                SessionPhase::Settings
+                    | SessionPhase::Controls
+                    | SessionPhase::Audio
             ) && matches!(self.settings_origin, SessionPhase::Paused))
     }
 }
@@ -472,10 +567,76 @@ mod tests {
         menu_input(&mut session, MenuInput::Confirm);
         assert_eq!(session.items(), &FIXED_WINDOW_SETTINGS);
         menu_input(&mut session, MenuInput::Next);
+        assert_eq!(session.selected(), Some(MenuItem::Audio));
+        menu_input(&mut session, MenuInput::Confirm);
         assert_eq!(session.selected(), Some(MenuItem::Volume));
         menu_input(&mut session, MenuInput::Confirm);
         assert_eq!(session.display().window, WindowMode::Windowed);
         assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
+    }
+
+    #[test]
+    fn audio_choices_reflect_available_sources() {
+        for (effects, music, expected) in [
+            (None, None, AUDIO_ITEMS.as_slice()),
+            (Some(MasterVolume::Full), None, AUDIO_EFFECTS.as_slice()),
+            (None, Some(MasterVolume::Muted), AUDIO_MUSIC.as_slice()),
+            (
+                Some(MasterVolume::Half),
+                Some(MasterVolume::Full),
+                AUDIO_ALL.as_slice(),
+            ),
+        ] {
+            let sources = SourceSettings { effects, music };
+            assert_eq!(
+                SessionPhase::Audio.items_with_sources(false, true, sources),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn audio_changes_preserve_the_paused_world() {
+        let mut session =
+            LocalSession::default().with_source_settings(SourceSettings {
+                effects: Some(MasterVolume::Half),
+                music: Some(MasterVolume::Quarter),
+            });
+        assert_eq!(session.input(MenuInput::Start), SessionEffect::Join);
+        for input in [
+            MenuInput::Pause,
+            MenuInput::Next,
+            MenuInput::Confirm,
+            MenuInput::Next,
+            MenuInput::Next,
+            MenuInput::Confirm,
+        ] {
+            menu_input(&mut session, input);
+        }
+        assert_eq!(session.phase(), SessionPhase::Audio);
+        assert!(session.world_visible());
+        change_sources(&mut session);
+        menu_input(&mut session, MenuInput::Pause);
+        assert_eq!(session.selected(), Some(MenuItem::Audio));
+        menu_input(&mut session, MenuInput::Pause);
+        assert_eq!(session.phase(), SessionPhase::Paused);
+        assert!(session.world_visible());
+    }
+
+    fn change_sources(session: &mut LocalSession) {
+        menu_input(session, MenuInput::Next);
+        menu_input(session, MenuInput::Confirm);
+        assert_eq!(session.source_settings(), SourceSettings {
+            effects: Some(MasterVolume::Quarter),
+            music: Some(MasterVolume::Quarter)
+        });
+        menu_input(session, MenuInput::Next);
+        menu_input(session, MenuInput::Confirm);
+        assert_eq!(session.source_settings(), SourceSettings {
+            effects: Some(MasterVolume::Quarter),
+            music: Some(MasterVolume::Muted)
+        });
+        assert_eq!(session.volume(), MasterVolume::Full);
     }
 
     #[test]
@@ -598,15 +759,24 @@ mod tests {
         menu_input(&mut session, MenuInput::Next);
         menu_input(&mut session, MenuInput::Confirm);
         assert_eq!(session.display().window, WindowMode::Fullscreen);
-        menu_input(&mut session, MenuInput::Next);
-        assert_eq!(session.selected(), Some(MenuItem::Volume));
-        menu_input(&mut session, MenuInput::Confirm);
-        assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
-        menu_input(&mut session, MenuInput::Next);
-        menu_input(&mut session, MenuInput::Confirm);
+        change_master_and_close(&mut session);
         assert_eq!(session.phase(), SessionPhase::MainMenu);
         assert_eq!(session.selected(), Some(MenuItem::Settings));
         assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
+    }
+
+    fn change_master_and_close(session: &mut LocalSession) {
+        menu_input(session, MenuInput::Next);
+        assert_eq!(session.selected(), Some(MenuItem::Audio));
+        menu_input(session, MenuInput::Confirm);
+        assert_eq!(session.selected(), Some(MenuItem::Volume));
+        menu_input(session, MenuInput::Confirm);
+        assert_eq!(session.volume(), MasterVolume::ThreeQuarters);
+        menu_input(session, MenuInput::Next);
+        menu_input(session, MenuInput::Confirm);
+        assert_eq!(session.selected(), Some(MenuItem::Audio));
+        menu_input(session, MenuInput::Next);
+        menu_input(session, MenuInput::Confirm);
     }
 
     #[test]

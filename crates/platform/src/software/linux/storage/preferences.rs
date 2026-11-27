@@ -31,7 +31,7 @@
 
 use std::num::NonZeroU64;
 
-use games::audio::MasterVolume;
+use games::audio::{AudioSource, MasterVolume};
 use games::presentation::DisplaySettings;
 
 use crate::ir::storage::preferences::{
@@ -43,6 +43,7 @@ const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(63);
 const DISPLAY_SLOT: u32 = 0;
 const CONTROL_SLOT: u32 = 1;
 const VOLUME_SLOT: u32 = 2;
+const EFFECTS_SLOT: u32 = 3;
 
 #[cfg(test)]
 mod tests {
@@ -91,6 +92,69 @@ mod tests {
             require(raw.load(VOLUME_SLOT)? == payload)?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn source_overrides_are_independent_of_master_and_each_other()
+    -> Result<(), PreferenceError> {
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let volume = VolumeStore::open(root.path.as_os_str())?;
+        let effects = AudioSource::Effects;
+        let music = AudioSource::Music;
+        require(volume.load_source(effects)?.is_none())?;
+        require(volume.load_source(music)?.is_none())?;
+        require(volume.store(MasterVolume::Half)?.durability.is_ok())?;
+        require(
+            volume
+                .store_source(effects, MasterVolume::Quarter)?
+                .durability
+                .is_ok(),
+        )?;
+        require(volume.load_source(music)?.is_none())?;
+        require(
+            volume
+                .store_source(music, MasterVolume::Muted)?
+                .durability
+                .is_ok(),
+        )?;
+        let reopened = VolumeStore::open(root.path.as_os_str())?;
+        require(reopened.load()? == Some(MasterVolume::Half))?;
+        require(reopened.load_source(effects)? == Some(MasterVolume::Quarter))?;
+        require(reopened.load_source(music)? == Some(MasterVolume::Muted))?;
+        let raw = SaveStore::open(root.path.as_os_str(), MAX_BYTES)?;
+        let wrong = b"music-volume-v1\n50";
+        let _receipt = raw.store(EFFECTS_SLOT, wrong)?;
+        require(
+            reopened.load_source(effects)
+                == Err(PreferenceError::InvalidPayload),
+        )?;
+        require(reopened.store_source(effects, MasterVolume::Full).is_err())?;
+        require(raw.load(EFFECTS_SLOT)? == wrong)?;
+        require(reopened.load_source(music)? == Some(MasterVolume::Muted))
+    }
+
+    #[test]
+    fn source_resolution_preserves_defaults_and_capability_absence()
+    -> Result<(), PreferenceError> {
+        use games::audio::SourceSettings;
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let store = VolumeStore::open(root.path.as_os_str())?;
+        let defaults = SourceSettings {
+            effects: Some(MasterVolume::Half),
+            music: Some(MasterVolume::Quarter),
+        };
+        require(store.resolve_sources(defaults)? == defaults)?;
+        let _receipt =
+            store.store_source(AudioSource::Music, MasterVolume::Muted)?;
+        let effects_only = SourceSettings { music: None, ..defaults };
+        require(store.resolve_sources(effects_only)? == effects_only)?;
+        require(
+            store.resolve_sources(defaults)?
+                == SourceSettings {
+                    music: Some(MasterVolume::Muted),
+                    ..defaults
+                },
+        )
     }
 
     #[test]

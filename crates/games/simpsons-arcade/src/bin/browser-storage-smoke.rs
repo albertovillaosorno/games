@@ -35,7 +35,7 @@ use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::num::NonZeroU64;
 
-use games::audio::MasterVolume;
+use games::audio::{AudioSource, MasterVolume, SourceSettings};
 use games::presentation::{DisplaySettings, PresentationMode, WindowMode};
 use games::safety::SafetyError;
 use games_platform::ir::measurement::{elapsed_between, now};
@@ -68,6 +68,7 @@ const SECOND: Settings = Settings {
     volume: MasterVolume::Half,
 };
 const SLOT: u32 = 0;
+const SOURCE_PREFERENCES: &str = "browser-source-preference-smoke";
 
 struct PreferenceStores {
     control: ControlStore,
@@ -156,6 +157,7 @@ fn main() -> Result<(), &'static str> {
     smoke_output()?;
     smoke_slots()?;
     smoke_preferences()?;
+    smoke_source_preferences()?;
     smoke_incompatible_preferences()
 }
 
@@ -212,6 +214,47 @@ fn smoke_preferences() -> Result<(), &'static str> {
         || stores.load()? != Some(next)
     {
         return Err("invalid control text altered preferences");
+    }
+    Ok(())
+}
+
+fn smoke_source_preferences() -> Result<(), &'static str> {
+    let location = OsStr::new(SOURCE_PREFERENCES);
+    let store = VolumeStore::open(location).map_err(preference_error)?;
+    let effects = AudioSource::Effects;
+    let music = AudioSource::Music;
+    let previous = store.load_source(music).map_err(preference_error)?;
+    let next_effects = store
+        .load_source(effects)
+        .map_err(preference_error)?
+        .unwrap_or_default()
+        .next();
+    check_receipt(store.store_source(effects, next_effects))?;
+    if store.load_source(music).map_err(preference_error)? != previous {
+        return Err("effects changed the music preference");
+    }
+    let next_music = previous.unwrap_or_default().next();
+    check_receipt(store.store_source(music, next_music))?;
+    let reopened = VolumeStore::open(location).map_err(preference_error)?;
+    let expected = SourceSettings {
+        effects: Some(next_effects),
+        music: Some(next_music),
+    };
+    let defaults = SourceSettings {
+        effects: Some(MasterVolume::Full),
+        music: Some(MasterVolume::Full),
+    };
+    if reopened.load().map_err(preference_error)?.is_some()
+        || reopened
+            .resolve_sources(defaults)
+            .map_err(preference_error)?
+            != expected
+        || reopened
+            .resolve_sources(SourceSettings { music: None, ..defaults })
+            .map_err(preference_error)?
+            != (SourceSettings { music: None, ..expected })
+    {
+        return Err("independent source preferences did not survive reopen");
     }
     Ok(())
 }

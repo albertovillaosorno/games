@@ -36,21 +36,24 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use games::audio::{
-    AudioError, Channels, MasterVolume, OwnedClip, OwnedMixer, StereoGain,
+    AudioError, AudioSource, Channels, MasterVolume, OwnedClip, OwnedMixer,
+    SourceGain, SourceSettings, StereoGain,
 };
 use games::input::{InputEvent, LogicalAction};
 use games::replay::LiveSimulation;
+use games::session::LocalSession;
 use games_assets::pcm::PcmSamples;
 use games_assets::{ContentHash, ManifestLimits};
 use games_platform::ir::audio::{NativeAudio, PlaybackControl, PlaybackSpec};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::process::write_status;
 use games_platform::ir::storage::bundle::{BundleSource, MediaOverlay};
+use games_platform::ir::storage::preferences::VolumeStore;
 
 use super::launch::AudioSelection as LocalAudioSelection;
 use super::{
-    Controls, failure, live, open_selected_bundle, parse_hash, size,
-    smoke_press,
+    Controls, failure, live_with_session, open_selected_bundle, parse_hash,
+    size, smoke_press,
 };
 use crate::{Action, Cabinet, Control, Phase, Player, TICK_INTERVAL};
 
@@ -192,6 +195,13 @@ impl Samples {
             music_volume: selection.music_volume,
         })
     }
+
+    fn source_settings(&self) -> SourceSettings {
+        SourceSettings {
+            effects: Some(self.effects_volume),
+            music: self.music.as_ref().map(|_clip| self.music_volume),
+        }
+    }
 }
 
 pub(super) struct Playback {
@@ -199,14 +209,12 @@ pub(super) struct Playback {
     cues: [u64; 4],
     device: NativeAudio,
     discard_queued: bool,
-    effects_volume: MasterVolume,
-    gains: [StereoGain; 4],
     live_output: bool,
     mixer: OwnedMixer,
     music: Option<OwnedClip>,
     music_started: bool,
-    music_volume: MasterVolume,
     scratch: [[i16; 2]; CHUNK],
+    sources: SourceSettings,
     volume: MasterVolume,
 }
 
@@ -237,7 +245,21 @@ impl Playback {
     pub(super) fn open(
         samples: &Samples,
         name: Option<&str>,
+        sources: SourceSettings,
     ) -> Result<Self, RenderError> {
+        if sources.effects.is_none()
+            || sources.music.is_some() != samples.music.is_some()
+        {
+            return Err(failure("audio source capability mismatch"));
+        }
+        let mut mixer = OwnedMixer::new(
+            RATE,
+            NonZeroU16::MIN.saturating_add(
+                15u16.saturating_add(u16::from(samples.music.is_some())),
+            ),
+        )
+        .map_err(failure)?;
+        mixer.set_source_volumes(sources.levels());
         let spec = PlaybackSpec {
             buffer_frames: NonZeroU16::MIN.saturating_add(255),
             channels: NonZeroU8::MIN.saturating_add(1),
@@ -256,20 +278,12 @@ impl Playback {
             cues: [0; 4],
             device,
             discard_queued: false,
-            effects_volume: samples.effects_volume,
-            gains: GAINS.map(|gain| gain.attenuated(samples.effects_volume)),
             live_output: false,
-            mixer: OwnedMixer::new(
-                RATE,
-                NonZeroU16::MIN.saturating_add(
-                    15u16.saturating_add(u16::from(samples.music.is_some())),
-                ),
-            )
-            .map_err(failure)?,
+            mixer,
             music: samples.music.clone(),
             music_started: false,
-            music_volume: samples.music_volume,
             scratch: [[0; 2]; CHUNK],
+            sources,
             volume: MasterVolume::default(),
         })
     }
@@ -297,7 +311,7 @@ impl Playback {
     }
 
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
-        let mut simulation = smoke_entry()?;
+        let mut simulation = smoke_entry(self.sources)?;
         self.update(simulation.state())?;
         self.verify_quiet()?;
         let _first = simulation
@@ -337,7 +351,10 @@ impl Playback {
     }
 
     fn smoke_maneuver(&mut self, airborne: bool) -> Result<(), RenderError> {
-        let mut simulation = live(false)?;
+        let mut simulation = live_with_session(
+            false,
+            LocalSession::default().with_source_settings(self.sources),
+        )?;
         let mut controls = Controls::new(false)?;
         self.update(simulation.state())?;
         smoke_join(&mut simulation, &mut controls)?;
@@ -370,8 +387,8 @@ impl Playback {
     ) -> Result<(), RenderError> {
         let mut controls = Controls::new(false)?;
         smoke_press(&mut controls, simulation, Control::Pause)?;
-        self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
+        self.smoke_settings(simulation, &mut controls)?;
         if self.queued_frames()? != 0
             || self.mixer.active() != 4usize.saturating_add(self.music_voices())
         {
@@ -391,11 +408,7 @@ impl Playback {
             .first()
             .ok_or(RenderError::InvalidSprite)?
             .clone();
-        play(
-            &mut self.mixer,
-            clip,
-            StereoGain::UNITY.attenuated(self.effects_volume),
-        )?;
+        play(&mut self.mixer, clip, StereoGain::UNITY)?;
         self.device.clear().map_err(failure)?;
         self.fill()?;
         self.verify_submission(1)?;
@@ -433,17 +446,82 @@ impl Playback {
         Ok(())
     }
 
+    fn smoke_settings(
+        &mut self,
+        simulation: &mut LiveSimulation<Cabinet>,
+        controls: &mut Controls,
+    ) -> Result<(), RenderError> {
+        for control in [
+            Control::Down,
+            Control::Primary,
+            Control::Down,
+            Control::Down,
+            Control::Primary,
+        ] {
+            smoke_press(controls, simulation, control)?;
+        }
+        if simulation.state().phase() != Phase::Audio {
+            return Err(failure("paused audio settings did not open"));
+        }
+        for source in [AudioSource::Effects, AudioSource::Music] {
+            if self.sources.get(source).is_some() {
+                self.smoke_source_change(simulation, controls, source)?;
+            }
+        }
+        for _ in 0u8..2 {
+            smoke_press(controls, simulation, Control::Pause)?;
+        }
+        Ok(())
+    }
+
+    fn smoke_source_change(
+        &mut self,
+        simulation: &mut LiveSimulation<Cabinet>,
+        controls: &mut Controls,
+        source: AudioSource,
+    ) -> Result<(), RenderError> {
+        let original = self.sources;
+        let active = self.mixer.active();
+        smoke_press(controls, simulation, Control::Down)?;
+        smoke_press(controls, simulation, Control::Primary)?;
+        self.update(simulation.state())?;
+        if self.sources.get(source)
+            != original.get(source).map(MasterVolume::next)
+            || self.queued_frames()? != 0
+            || self.mixer.active() != active
+        {
+            return Err(failure(
+                "source setting retained stale queued audio or reset voices",
+            ));
+        }
+        for _ in 0u8..4 {
+            smoke_press(controls, simulation, Control::Primary)?;
+        }
+        self.update(simulation.state())?;
+        if self.sources != original || self.mixer.active() != active {
+            return Err(failure("source setting restoration reset audio"));
+        }
+        Ok(())
+    }
+
+    fn sync_levels(&mut self, session: LocalSession) {
+        let volume = session.volume();
+        let sources = session.source_settings();
+        if self.volume != volume || self.sources != sources {
+            // Pending frames were already mixed at the previous levels.
+            self.discard_queued = true;
+            self.mixer.set_volume(volume);
+            self.mixer.set_source_volumes(sources.levels());
+            self.volume = volume;
+            self.sources = sources;
+        }
+    }
+
     pub(super) fn update(
         &mut self,
         cabinet: &Cabinet,
     ) -> Result<(), RenderError> {
-        let volume = cabinet.session().volume();
-        if self.volume != volume {
-            // Pending frames were already mixed at the previous volume.
-            self.discard_queued = true;
-            self.mixer.set_volume(volume);
-            self.volume = volume;
-        }
+        self.sync_levels(cabinet.session());
         let current = cabinet.stations().map(|station| station.attack_cues);
         let phase = cabinet.phase();
         let playing = phase == Phase::Playing;
@@ -462,9 +540,12 @@ impl Playback {
         {
             let _voice = self
                 .mixer
-                .play_loop(
+                .play_loop_on(
                     clip.clone(),
-                    StereoGain::UNITY.attenuated(self.music_volume),
+                    SourceGain {
+                        source: AudioSource::Music,
+                        stereo: StereoGain::UNITY,
+                    },
                     MUSIC_LOOP_START..MUSIC_FRAMES,
                 )
                 .map_err(failure)?;
@@ -475,7 +556,7 @@ impl Playback {
             .iter_mut()
             .zip(current)
             .zip(&self.clips)
-            .zip(self.gains)
+            .zip(GAINS)
         {
             let new_cues = count.saturating_sub(*previous);
             *previous = count;
@@ -515,9 +596,10 @@ impl Playback {
     }
 
     fn verify_submission(&self, active: usize) -> Result<(), RenderError> {
-        let audible = (active != 0
-            && self.effects_volume != MasterVolume::Muted)
-            || (self.music_started && self.music_volume != MasterVolume::Muted);
+        let levels = self.sources.levels();
+        let audible = self.volume != MasterVolume::Muted
+            && ((active != 0 && levels.effects != MasterVolume::Muted)
+                || (self.music_started && levels.music != MasterVolume::Muted));
         if self.mixer.active() != active.saturating_add(self.music_voices())
             || self.queued_frames()? != QUEUE_FRAMES
             || self.scratch.iter().all(|frame| *frame == [0, 0]) == audible
@@ -544,12 +626,24 @@ pub(super) fn list_devices() -> Result<(), RenderError> {
     Ok(())
 }
 
+pub(super) fn source_settings(
+    samples: Option<&Samples>,
+    store: Option<&VolumeStore>,
+) -> Result<SourceSettings, RenderError> {
+    let defaults =
+        samples.map_or_else(SourceSettings::default, Samples::source_settings);
+    store.map_or(Ok(defaults), |preferences| {
+        preferences.resolve_sources(defaults).map_err(failure)
+    })
+}
+
 pub(super) fn open_optional(
     samples: Option<&Samples>,
     name: Option<&str>,
+    sources: SourceSettings,
 ) -> Result<Option<Playback>, RenderError> {
     if let Some(available) = samples {
-        return Playback::open(available, name).map(Some);
+        return Playback::open(available, name, sources).map(Some);
     }
     write_status(format_args!("Audio: disabled (no audio bundle)"))
         .map_err(failure)?;
@@ -635,8 +729,13 @@ fn play(
     }
 }
 
-fn smoke_entry() -> Result<LiveSimulation<Cabinet>, RenderError> {
-    let mut simulation = live(false)?;
+fn smoke_entry(
+    sources: SourceSettings,
+) -> Result<LiveSimulation<Cabinet>, RenderError> {
+    let mut simulation = live_with_session(
+        false,
+        LocalSession::default().with_source_settings(sources),
+    )?;
     let mut controls = Controls::new(false)?;
     smoke_join(&mut simulation, &mut controls)?;
     smoke_hold(&mut controls, &mut simulation, Control::Primary)?;

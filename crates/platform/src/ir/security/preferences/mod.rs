@@ -33,9 +33,11 @@
 
 use std::num::NonZeroU64;
 
-use games::audio::MasterVolume;
+use games::audio::{AudioSource, MasterVolume};
 
 const VOLUME_PREFIX: &str = "master-volume-v1\n";
+const EFFECTS_PREFIX: &str = "effects-volume-v1\n";
+const MUSIC_PREFIX: &str = "music-volume-v1\n";
 const CONTROL_PREFIX: &str = "input-profile-v1\n";
 
 /// Rejection of an incompatible, malformed or oversized preference payload.
@@ -47,15 +49,48 @@ pub struct InvalidPreference;
 /// # Errors
 /// Rejects incompatible versions, malformed UTF-8 and invalid volume values.
 pub fn decode_volume(bytes: &[u8]) -> Result<MasterVolume, InvalidPreference> {
-    let text = str::from_utf8(bytes).map_err(|_error| InvalidPreference)?;
-    let value = text.strip_prefix(VOLUME_PREFIX).ok_or(InvalidPreference)?;
-    MasterVolume::parse(value).map_err(|_error| InvalidPreference)
+    decode_level(bytes, VOLUME_PREFIX)
 }
 
 /// Encode a versioned master-volume preference.
 #[must_use]
 pub fn encode_volume(volume: MasterVolume) -> String {
     format!("{VOLUME_PREFIX}{}", volume.percent())
+}
+
+/// Decode a versioned preference for exactly the requested source.
+/// # Errors
+/// Rejects incompatible versions, source identities and invalid values.
+pub fn decode_source_volume(
+    bytes: &[u8],
+    source: AudioSource,
+) -> Result<MasterVolume, InvalidPreference> {
+    decode_level(bytes, source_prefix(source))
+}
+
+/// Encode a versioned source-volume preference.
+#[must_use]
+pub fn encode_source_volume(
+    source: AudioSource,
+    volume: MasterVolume,
+) -> String {
+    format!("{}{}", source_prefix(source), volume.percent())
+}
+
+fn decode_level(
+    bytes: &[u8],
+    prefix: &str,
+) -> Result<MasterVolume, InvalidPreference> {
+    let text = str::from_utf8(bytes).map_err(|_error| InvalidPreference)?;
+    let value = text.strip_prefix(prefix).ok_or(InvalidPreference)?;
+    MasterVolume::parse(value).map_err(|_error| InvalidPreference)
+}
+
+const fn source_prefix(source: AudioSource) -> &'static str {
+    match source {
+        AudioSource::Effects => EFFECTS_PREFIX,
+        AudioSource::Music => MUSIC_PREFIX,
+    }
 }
 
 /// Compute the whole encoded byte bound for an input profile.
@@ -158,6 +193,38 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn source_volume_codec_rejects_cross_source_and_master_payloads() {
+        for level in MasterVolume::ALL {
+            let effect = encode_source_volume(AudioSource::Effects, level);
+            let music = encode_source_volume(AudioSource::Music, level);
+            for (source, valid, invalid) in [
+                (AudioSource::Effects, &effect, &music),
+                (AudioSource::Music, &music, &effect),
+            ] {
+                assert_eq!(
+                    decode_source_volume(valid.as_bytes(), source),
+                    Ok(level)
+                );
+                assert_eq!(
+                    decode_source_volume(invalid.as_bytes(), source),
+                    Err(InvalidPreference)
+                );
+                assert_eq!(
+                    decode_source_volume(
+                        encode_volume(level).as_bytes(),
+                        source
+                    ),
+                    Err(InvalidPreference)
+                );
+                assert_eq!(
+                    decode_volume(valid.as_bytes()),
+                    Err(InvalidPreference)
+                );
+            }
+        }
     }
 
     #[test]
