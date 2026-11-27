@@ -74,6 +74,11 @@ const PLAYER_MISSING: [u8; 4] = [33, 82, 189, 255];
 // Reserve the complete bounded encounter and active-player case.
 pub(super) const EXTRA_SPRITES: usize = 16 + ENEMY_CAPACITY * 3;
 
+type BalloonRoute<'route> = (
+    &'route mut LiveSimulation<Cabinet>,
+    &'route mut Option<Control>,
+);
+
 #[derive(Debug)]
 pub(super) struct CombatArt {
     approach: Art,
@@ -899,15 +904,122 @@ fn route_stage_two(
                     "second-stage travel did not change readback",
                 ));
             }
-            return write_status(format_args!(
+            write_status(format_args!(
                 "Second stage: routed combat and {limit} columns verified"
             ))
-            .map_err(failure);
+            .map_err(failure)?;
+            return smoke_balloon(
+                scene,
+                art,
+                controls,
+                (simulation, &mut held),
+            );
         }
         let intent = cabinet.diagnostic_intent();
         advance_diagnostic(controls, simulation, &mut held, intent)?;
     }
     Err(failure("second-stage combat or travel was not reached"))
+}
+
+fn smoke_balloon(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    (simulation, held): BalloonRoute<'_>,
+) -> Result<(), RenderError> {
+    if art.poses.balloon.is_none() {
+        return Ok(());
+    }
+    let mut samples = 0u8;
+    let mut terminal_score = None;
+    for _ in 0..8000u16 {
+        let cabinet = simulation.state();
+        observe_balloon(scene, art, cabinet, &mut samples)?;
+        if observe_balloon_score(cabinet, &mut terminal_score)? {
+            return finish_balloon_samples(samples);
+        }
+        let intent = cabinet.diagnostic_intent();
+        advance_diagnostic(controls, simulation, held, intent)?;
+    }
+    Err(failure("balloon boss was not cleared through play"))
+}
+
+fn finish_balloon_samples(samples: u8) -> Result<(), RenderError> {
+    if samples & 0b11_1011 != 0b11_1011 {
+        return Err(failure("balloon boss milestones incomplete"));
+    }
+    write_status(format_args!(
+        "Balloon boss: routed defeat, delayed score and poses"
+    ))
+    .map_err(failure)
+}
+
+fn observe_balloon(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    samples: &mut u8,
+) -> Result<(), RenderError> {
+    let Some(boss) = cabinet.balloon_boss() else {
+        return Ok(());
+    };
+    let sample = match boss.action {
+        crate::BalloonAction::Intro { .. } if boss.visible() => 1,
+        crate::BalloonAction::Intro { .. } => 0,
+        crate::BalloonAction::Approach => 2,
+        crate::BalloonAction::Contact { .. } => 4,
+        crate::BalloonAction::Response { .. } => 8,
+        crate::BalloonAction::Terminal { .. } => 16,
+        crate::BalloonAction::Cleared => 32,
+    };
+    if sample & *samples == sample {
+        return Ok(());
+    }
+    let _presented = art.present(scene, cabinet)?;
+    let pixels = scene.readback()?;
+    let saved = art.poses.balloon.take();
+    let omitted = art.present(scene, cabinet);
+    art.poses.balloon = saved;
+    let _omitted = omitted?;
+    if (pixels != scene.readback()?) != boss.visible() {
+        return Err(failure("balloon boss art visibility differs from state"));
+    }
+    let _restored = art.present(scene, cabinet)?;
+    *samples |= sample;
+    Ok(())
+}
+
+fn observe_balloon_score(
+    cabinet: &Cabinet,
+    terminal_score: &mut Option<u16>,
+) -> Result<bool, RenderError> {
+    let Some(boss) = cabinet.balloon_boss() else {
+        return Ok(false);
+    };
+    let [marge, ..] = cabinet.stations();
+    match boss.action {
+        crate::BalloonAction::Terminal { tick: 0 } => {
+            *terminal_score = Some(marge.score);
+        },
+        crate::BalloonAction::Terminal { .. } => {
+            if Some(marge.score) != *terminal_score {
+                return Err(failure("balloon boss score awarded early"));
+            }
+        },
+        crate::BalloonAction::Cleared => {
+            if Some(marge.score)
+                != terminal_score.map(|score| score.saturating_add(1))
+            {
+                return Err(failure("balloon boss delayed score differs"));
+            }
+            return Ok(true);
+        },
+        crate::BalloonAction::Intro { .. }
+        | crate::BalloonAction::Approach
+        | crate::BalloonAction::Contact { .. }
+        | crate::BalloonAction::Response { .. } => {},
+    }
+    Ok(false)
 }
 
 fn finish_boardwalk_backdrop(

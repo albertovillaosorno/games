@@ -35,6 +35,7 @@ mod arrival;
 mod audio;
 mod axis_smoke;
 mod backdrop;
+mod balloon;
 mod bonus;
 /// Local canonical directory browser launch.
 pub mod browser_preview;
@@ -658,7 +659,8 @@ impl Scene {
             world: Vec::with_capacity(
                 world_capacity(source.enemy.is_some())
                     .saturating_add(usize::from(source.poses.has_wrestler()))
-                    .saturating_add(source.poses.linked_sprite_count()),
+                    .saturating_add(source.poses.linked_sprite_count())
+                    .saturating_add(source.poses.balloon_sprite_count()),
             ),
             world_art,
         })
@@ -824,6 +826,27 @@ impl Scene {
         Ok(())
     }
 
+    fn queue_boss_sprites(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+    ) -> Result<(), RenderError> {
+        if cabinet.session().world_visible()
+            && let Some(boss) = cabinet.balloon_boss()
+            && let Some(balloon) = &self.poses.balloon
+            && let Some(draw) = balloon.draw(boss, view)?
+        {
+            self.world.push((boss.position.y, draw));
+        }
+        if cabinet.session().world_visible()
+            && let Some(boss) = cabinet.wrestler()
+            && let Some(draw) = self.poses.wrestler.fighter(boss, view)?
+        {
+            self.world.push((boss.position.y, draw));
+        }
+        Ok(())
+    }
+
     fn queue_enemy_meters(
         &mut self,
         cabinet: &Cabinet,
@@ -872,13 +895,7 @@ impl Scene {
         {
             linked.queue(cabinet, view, &mut self.world)?;
         }
-        if cabinet.session().world_visible()
-            && let Some(boss) = cabinet.wrestler()
-            && let Some(draw) = self.poses.wrestler.fighter(boss, view)?
-        {
-            self.world.push((boss.position.y, draw));
-        }
-        Ok(())
+        self.queue_boss_sprites(cabinet, view)
     }
 
     fn queue_menu(

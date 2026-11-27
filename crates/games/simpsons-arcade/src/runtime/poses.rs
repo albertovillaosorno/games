@@ -47,8 +47,8 @@ use games_platform::ir::storage::file::snapshot;
 
 use super::world::{self, StageArt, WorldArt};
 use super::{
-    Art, KEYS, Maneuver, Player, Station, arrival, backdrop, bonus, failure,
-    linked, open_bundle, scenery, wrestler,
+    Art, KEYS, Maneuver, Player, Station, arrival, backdrop, balloon, bonus,
+    failure, linked, open_bundle, scenery, wrestler,
 };
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
@@ -105,6 +105,7 @@ impl Kind {
 
 type Entry = (Key, ContentHash);
 type Key = (Subject, Kind, u8);
+type PoseEntries = BTreeMap<Key, Art>;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Subject {
@@ -117,6 +118,7 @@ enum Subject {
 pub(super) struct Catalogue {
     arrival: Option<ContentHash>,
     pub(super) backdrop: backdrop::Catalogue,
+    balloon: Option<[ContentHash; balloon::POSE_COUNT]>,
     bonus: Option<ContentHash>,
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
@@ -161,6 +163,10 @@ impl Catalogue {
                 usize::from(self.linked.is_some())
                     .saturating_mul(linked::POSE_COUNT)
                     .saturating_mul(65_536),
+            )
+            .saturating_add(
+                usize::from(self.balloon.is_some())
+                    .saturating_mul(balloon::ATLAS_BYTES),
             )
             .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
@@ -223,6 +229,10 @@ impl Catalogue {
         self.backdrop.count()
     }
 
+    pub(super) fn balloon_sprite_count(&self) -> usize {
+        usize::from(self.balloon.is_some())
+    }
+
     pub(super) fn bonus_departure_sprite_count(&self) -> usize {
         usize::from(self.bonus_departure.is_some())
             .saturating_mul(bonus::DEPARTURE_EXTRA_SPRITES)
@@ -264,6 +274,8 @@ impl Catalogue {
             && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.bonus_inflated.is_none() || self.bonus.is_some())
             && (self.stage_two.is_none() || self.bonus.is_some())
+            && (self.balloon.is_none()
+                || (self.linked.is_some() && self.backdrop.has_boardwalk()))
             && (self.linked.is_none() || self.stage_two.is_some())
     }
 
@@ -278,6 +290,10 @@ impl Catalogue {
             .saturating_add(usize::from(self.arrival.is_some()))
             .saturating_add(usize::from(self.landing_markers.is_some()))
             .saturating_add(self.backdrop_count())
+            .saturating_add(
+                usize::from(self.balloon.is_some())
+                    .saturating_mul(balloon::POSE_COUNT),
+            )
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
             .saturating_add(usize::from(self.bonus_departure.is_some()))
@@ -293,6 +309,7 @@ impl Catalogue {
             .copied()
             .chain(self.scenery.digests())
             .chain(self.backdrop.digests())
+            .chain(self.balloon.into_iter().flatten())
             .chain(self.wrestler.digests())
             .chain(self.bonus)
             .chain(self.bonus_departure)
@@ -317,6 +334,10 @@ impl Catalogue {
 
     fn insert(&mut self, line: &str) -> Result<(), RenderError> {
         match line.split_whitespace().next() {
+            Some("balloon-boss") => {
+                self.balloon =
+                    Some(balloon::parse(line, self.balloon.is_some())?);
+            },
             Some("linked-actors") => {
                 self.linked = Some(linked::parse(line, self.linked.is_some())?);
             },
@@ -380,27 +401,7 @@ impl Catalogue {
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<PoseArt, RenderError> {
-        let mut entries = BTreeMap::new();
-        for (&key, digest) in &self.entries {
-            let bundle = open_bundle(store, *digest)?;
-            let name = match (key.0, key.1) {
-                (Subject::Station(player), _) => KEYS
-                    .get(player.index())
-                    .ok_or(RenderError::InvalidSprite)?,
-                (Subject::Enemy, Kind::Walk) => &"enemy/approach",
-                (Subject::Enemy, Kind::Defeat) => &"enemy/defeat",
-                (Subject::Enemy, Kind::Repelled) => &"enemy/repelled",
-                (Subject::Enemy, Kind::Restraint) => &"actor/interaction",
-                (Subject::Enemy, _) => &"enemy/strike",
-                (Subject::Pair(Pair::MargeHomer), _) => &"actor/duo",
-                (Subject::Pair(Pair::BartLisa), _) => &"actor/bart-lisa",
-            };
-            let art = Art::load(scene, &bundle, name)?;
-            if art.rect.width.get() > 128 || art.rect.height.get() > 128 {
-                return Err(failure("unexpected pose extent"));
-            }
-            let _prior = entries.insert(key, art);
-        }
+        let entries = self.load_entries(store, scene)?;
         Ok(PoseArt {
             arrival: self
                 .arrival
@@ -413,6 +414,13 @@ impl Catalogue {
                 })
                 .transpose()?,
             backdrop: self.backdrop.load(store, scene)?,
+            balloon: self
+                .balloon
+                .map(|hashes| {
+                    balloon::BalloonArt::load(store, scene, hashes)
+                        .map(Box::new)
+                })
+                .transpose()?,
             bonus: self
                 .bonus
                 .map(|digest| {
@@ -436,6 +444,35 @@ impl Catalogue {
                 .transpose()?,
             wrestler: self.wrestler.load(store, scene)?,
         })
+    }
+
+    fn load_entries(
+        &self,
+        store: BundleSource<'_>,
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<PoseEntries, RenderError> {
+        let mut entries = BTreeMap::new();
+        for (&key, digest) in &self.entries {
+            let bundle = open_bundle(store, *digest)?;
+            let name = match (key.0, key.1) {
+                (Subject::Station(player), _) => KEYS
+                    .get(player.index())
+                    .ok_or(RenderError::InvalidSprite)?,
+                (Subject::Enemy, Kind::Walk) => &"enemy/approach",
+                (Subject::Enemy, Kind::Defeat) => &"enemy/defeat",
+                (Subject::Enemy, Kind::Repelled) => &"enemy/repelled",
+                (Subject::Enemy, Kind::Restraint) => &"actor/interaction",
+                (Subject::Enemy, _) => &"enemy/strike",
+                (Subject::Pair(Pair::MargeHomer), _) => &"actor/duo",
+                (Subject::Pair(Pair::BartLisa), _) => &"actor/bart-lisa",
+            };
+            let art = Art::load(scene, &bundle, name)?;
+            if art.rect.width.get() > 128 || art.rect.height.get() > 128 {
+                return Err(failure("unexpected pose extent"));
+            }
+            let _prior = entries.insert(key, art);
+        }
+        Ok(entries)
     }
 
     pub(super) fn open(path: &OsStr) -> Result<Self, RenderError> {
@@ -463,6 +500,7 @@ impl Catalogue {
         self.scenery
             .track_count()
             .saturating_add(self.linked_sprite_count())
+            .saturating_add(self.balloon_sprite_count())
             .saturating_add(
                 usize::from(self.arrival.is_some())
                     .saturating_mul(arrival::EXTRA_SPRITES),
@@ -482,8 +520,9 @@ impl Catalogue {
 pub(super) struct PoseArt {
     pub(super) arrival: Option<arrival::ArrivalArt>,
     pub(super) backdrop: backdrop::BackdropArt,
+    pub(super) balloon: Option<Box<balloon::BalloonArt>>,
     pub(super) bonus: Option<bonus::BonusArt>,
-    entries: BTreeMap<Key, Art>,
+    entries: PoseEntries,
     pub(super) linked: Option<linked::LinkedArt>,
     pub(super) scenery: scenery::PlacedArt,
     pub(super) stage_two: Option<StageArt>,
@@ -531,6 +570,7 @@ impl PoseArt {
             (*cabinet)
                 .with_stage_two(travel)
                 .map(|state| state.with_linked_actors(self.linked.is_some()))
+                .map(|state| state.with_balloon_boss(self.balloon.is_some()))
                 .map_err(failure)
         } else {
             Ok(*cabinet)
@@ -644,6 +684,7 @@ impl PoseArt {
         Self {
             arrival: None,
             backdrop: backdrop::BackdropArt::default(),
+            balloon: None,
             bonus: None,
             entries: self
                 .entries
@@ -1729,6 +1770,7 @@ mod tests {
             assert_entrance_catalogue(&text, fighter, bonus_record, &value);
             assert_boardwalk_catalogue(&text, fighter, bonus_record, &value);
             assert_linked_catalogue(&text, fighter, bonus_record, &value);
+            assert_balloon_catalogue(&text);
         }
         assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
         assert!(
@@ -1773,6 +1815,56 @@ mod tests {
         }
         assert!(
             Catalogue::parse(&format!("{} extra", full.trim_end())).is_err()
+        );
+    }
+
+    fn assert_balloon_budget(base: &Catalogue, value: &Catalogue) {
+        assert_eq!(
+            value.count(),
+            base.count().saturating_add(balloon::POSE_COUNT)
+        );
+        assert_eq!(
+            value.atlas_count(),
+            base.atlas_count().saturating_add(balloon::POSE_COUNT)
+        );
+        assert_eq!(
+            value.atlas_bytes(),
+            base.atlas_bytes().saturating_add(balloon::ATLAS_BYTES)
+        );
+        assert_eq!(value.digests().count(), value.count());
+        assert_eq!(value.balloon_sprite_count(), 1);
+    }
+
+    fn assert_balloon_catalogue(stage_text: &str) {
+        let linked_hashes: Vec<_> = ['1', '2', '3', '4', '5', '6', '7']
+            .into_iter()
+            .map(|digit| digit.to_string().repeat(64))
+            .collect();
+        let linked = format!("linked-actors {}\n", linked_hashes.join(" "));
+        let mut boardwalk = String::new();
+        for tick in backdrop::BOARDWALK_KEYS {
+            assert!(
+                writeln!(boardwalk, "stage-two-backdrop {tick} {HASH}").is_ok()
+            );
+        }
+        let complete = format!("{stage_text}{linked}{boardwalk}");
+        let hashes: Vec<_> = ['8', '9', 'a', 'b']
+            .into_iter()
+            .map(|digit| digit.to_string().repeat(64))
+            .collect();
+        let record = format!("balloon-boss {}\n", hashes.join(" "));
+        let baseline = Catalogue::parse(&complete);
+        let selected = Catalogue::parse(&format!("{complete}{record}"));
+        assert!(baseline.is_ok() && selected.is_ok());
+        if let (Ok(base), Ok(value)) = (baseline, selected) {
+            assert_balloon_budget(&base, &value);
+        }
+        assert!(Catalogue::parse(&format!("{stage_text}{record}")).is_err());
+        assert!(
+            Catalogue::parse(&format!("{stage_text}{linked}{record}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{complete}{record}{record}")).is_err()
         );
     }
 
