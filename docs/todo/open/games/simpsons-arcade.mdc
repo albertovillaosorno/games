@@ -5647,9 +5647,21 @@ The optional `balloon-boss` catalogue record requires four distinct
 canonical pose hashes and the complete boardwalk and linked catalogue.
 The four isolated RGBA8 pose roles reserve 374,352 atlas bytes and one
 sprite. Presentation uses the shared depth queue with sparse scale
-approximation. The native route diagnostic checks pose readback and
-terminal scoring, but its boss-specific GPU run and physical acceptance
-are still pending. No third-stage runtime handoff is claimed.
+approximation.
+
+Two additional terminal replays reproduce their four retained trace
+streams byte for byte. Both show six-pixel signed horizontal recoil,
+a 32-tick elevation rise from 32 to 128, a one-tick stop, scale
+contraction to 31 in 33 steps, four-pixel horizontal centering and a
+27-tick fractional descent. The portable model reproduces these
+landmarks and tests both directions and the one-pixel descent envelope.
+The acknowledgement differs between controls; the fixed 140-tick
+award, depth drift and sprite anchor remain provisional.
+
+The optimized Linux boss-only diagnostic passes all five display modes
+with routed defeat, delayed scoring and pose readback. These runs and
+the combined-route browser result below do not establish physical
+device, exact audio, collision or full original presentation parity.
 
 ### Optional ranked cemetery entrance preview
 
