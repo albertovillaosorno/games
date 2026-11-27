@@ -690,7 +690,13 @@ pub struct Cabinet {
 
 impl Cabinet {
     fn advance_camera(&mut self) {
-        if self.camera == self.scroll_limit {
+        let limit = self
+            .encounter
+            .as_ref()
+            .map_or(self.scroll_limit, |encounter| {
+                encounter.limit_travel(self.scroll_limit)
+            });
+        if self.camera >= limit {
             return;
         }
         let mut active =
@@ -713,7 +719,7 @@ impl Cabinet {
         let target = right
             .saturating_sub(anchor)
             .min(left.saturating_sub(self.layout.min.x))
-            .min(self.scroll_limit);
+            .min(limit);
         self.camera =
             self.camera.max(target.min(self.camera.saturating_add(2)));
     }
@@ -1064,7 +1070,8 @@ impl Cabinet {
     /// Enable bounded rightward opening-street travel.
     ///
     /// The host supplies the extent of verified additional world art.
-    /// Progressive combat remains within its verified opening section.
+    /// Progressive combat gates the remaining art until the opening
+    /// encounter is cleared.
     /// Rendering dimensions are not simulation inputs.
     /// # Errors
     /// Rejects travel outside the representable world coordinates.
@@ -1074,18 +1081,15 @@ impl Cabinet {
     ) -> Result<Self, LayoutError> {
         let requested = i16::try_from(travel)
             .map_err(|_error| LayoutError::ScrollOverflow)?;
-        let limit = self
-            .encounter
-            .as_ref()
-            .map_or(requested, |encounter| encounter.limit_travel(requested));
-        if self.layout.max.x.checked_add(limit).is_none() || limit < self.camera
+        if self.layout.max.x.checked_add(requested).is_none()
+            || requested < self.camera
         {
             return Err(LayoutError::ScrollOverflow);
         }
         if let Some(encounter) = &mut self.encounter {
             encounter.art_travel = requested;
         }
-        self.scroll_limit = limit;
+        self.scroll_limit = requested;
         Ok(self)
     }
 }

@@ -156,7 +156,12 @@ impl Encounter {
     }
 
     pub(super) fn limit_travel(&self, travel: i16) -> i16 {
-        if self.progressive {
+        if self.progressive
+            && !self
+                .enemies
+                .iter()
+                .all(|entry| entry.is_some_and(|enemy| enemy.health == 0))
+        {
             travel.min(OPENING_COMBAT_LIMIT)
         } else {
             travel
@@ -766,6 +771,111 @@ mod tests {
         cabinet.input_step(62, &[press]);
         assert_opening_arrivals(&mut cabinet);
         assert_combat_travel_bound(&mut cabinet);
+    }
+
+    #[test]
+    fn opening_street_clear_releases_remaining_verified_travel() {
+        for (limit, expected) in [(80, 2), (154, 4), (444, 7)] {
+            let result = Cabinet::with_opening_street()
+                .and_then(|cabinet| cabinet.with_scroll_limit(limit));
+            assert!(result.is_ok());
+            let Ok(mut cabinet) = result else {
+                return;
+            };
+            cabinet.input_step(0, &pulse(Control::Start));
+            clear_street(&mut cabinet, limit);
+            assert_eq!(cabinet.enemies().count(), expected);
+            assert!(cabinet.enemies().all(|enemy| enemy.health == 0));
+            assert_eq!(
+                cabinet.camera_origin(),
+                i16::try_from(limit).unwrap_or_default()
+            );
+        }
+    }
+
+    fn clear_street(cabinet: &mut Cabinet, limit: u16) {
+        let mut held = None;
+        let end = i16::try_from(limit).unwrap_or_default();
+        for tick in 1..3000 {
+            let [marge, ..] = cabinet.stations();
+            let target = cabinet
+                .enemies()
+                .filter(|enemy| enemy.health > 0)
+                .min_by_key(|enemy| distance(marge.position, enemy.position));
+            if cabinet.camera_origin() > OPENING_COMBAT_LIMIT {
+                assert!(target.is_none());
+            }
+            if target.is_none() && cabinet.camera_origin() == end {
+                return;
+            }
+            let direction = target.map_or(Some(Control::Right), |enemy| {
+                pursuit_direction(marge, enemy)
+            });
+            let mut actions = direction_changes(&mut held, direction);
+            if matches!(marge.participation, Participation::Continuing { .. }) {
+                actions.extend(pulse(Control::Start));
+            } else if target.is_some()
+                && direction.is_none()
+                && marge.maneuver == Maneuver::Idle
+            {
+                actions.extend(pulse(Control::Primary));
+            }
+            cabinet.input_step(tick, &actions);
+            assert_eq!(cabinet.phase(), Phase::Playing);
+        }
+    }
+
+    fn direction_changes(
+        held: &mut Option<Control>,
+        direction: Option<Control>,
+    ) -> Vec<LogicalAction<Action>> {
+        if *held == direction {
+            return Vec::new();
+        }
+        let mut actions = Vec::new();
+        if let Some(previous) = *held {
+            let [_, release] = pulse(previous);
+            actions.push(release);
+        }
+        if let Some(next) = direction {
+            let [press, _] = pulse(next);
+            actions.push(press);
+        }
+        *held = direction;
+        actions
+    }
+
+    fn pursuit_direction(
+        station: crate::Station,
+        enemy: Enemy,
+    ) -> Option<Control> {
+        let from = station.position;
+        let to = enemy.position;
+        if from.x != to.x
+            && (from.x.abs_diff(to.x) > 24
+                || !in_range(from, station.facing, to, (u16::MAX, u16::MAX)))
+        {
+            Some(if from.x < to.x {
+                Control::Right
+            } else {
+                Control::Left
+            })
+        } else if from.y.abs_diff(to.y) > 6 {
+            Some(if from.y < to.y {
+                Control::Down
+            } else {
+                Control::Up
+            })
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn opening_street_rejects_art_outside_world_coordinates() {
+        let result = Cabinet::with_opening_street()
+            .and_then(|cabinet| cabinet.with_scroll_limit(32_767));
+        assert_eq!(result, Err(LayoutError::ScrollOverflow));
     }
 
     fn assert_opening_arrivals(cabinet: &mut Cabinet) {
