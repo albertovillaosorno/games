@@ -706,16 +706,19 @@ impl Scene {
         if cabinet.phase() == Phase::Controls {
             let (selection, profiles) =
                 editor.ok_or(RenderError::InvalidSprite)?;
-            self.editor.ok_or(RenderError::InvalidSprite)?.queue(
-                ControlEditorView {
-                    actions: ACTION_NAMES,
-                    editor: selection,
-                    key_name,
-                    profiles,
-                },
-                (20i32.saturating_add(center), 16i32),
-                &mut self.draws,
-            )?;
+            self.editor
+                .as_ref()
+                .ok_or(RenderError::InvalidSprite)?
+                .queue(
+                    ControlEditorView {
+                        actions: ACTION_NAMES,
+                        editor: selection,
+                        key_name,
+                        profiles,
+                    },
+                    (20i32.saturating_add(center), 16i32),
+                    &mut self.draws,
+                )?;
         }
         if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused) {
             let shift = if cabinet.phase() == Phase::Paused {
