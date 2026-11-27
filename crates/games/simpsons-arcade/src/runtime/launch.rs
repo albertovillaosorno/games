@@ -68,6 +68,7 @@ const USAGE: &str = concat!(
     "[--enemy APPROACH_SHA STRIKE_SHA] ",
     "[--audio SHA [--audio-mod SHA] [--music SHA] ",
     "[--bonus-music PUMP_SHA RESULT_SHA] ",
+    "[--handoff-music DEFEAT_SHA VICTORY_SHA TRANSITION_SHA INSTRUCTIONS_SHA] ",
     "[--effects-volume PERCENT] [--music-volume PERCENT]] ",
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -86,6 +87,9 @@ type AudioVolumes = (Option<MasterVolume>, Option<MasterVolume>);
 type BonusMusicHashes = Option<[OsString; 2]>;
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
 type EnemyHashes = Option<[OsString; 2]>;
+type HandoffMusicHashes = Option<[OsString; 4]>;
+type MusicHashes = (Option<OsString>, BonusMusicHashes, HandoffMusicHashes);
+type OptionalHashes<const COUNT: usize> = Option<[OsString; COUNT]>;
 type VolumePreferences = (Option<VolumeStore>, MasterVolume);
 pub(super) type Fields<'text> = BTreeMap<&'text str, &'text str>;
 
@@ -101,6 +105,7 @@ pub(super) struct AudioSelection {
     pub(super) base: OsString,
     pub(super) bonus_music: BonusMusicHashes,
     pub(super) effects_volume: MasterVolume,
+    pub(super) handoff_music: HandoffMusicHashes,
     pub(super) music: Option<OsString>,
     pub(super) music_volume: MasterVolume,
     pub(super) replacement: Option<OsString>,
@@ -115,6 +120,16 @@ impl AudioSelection {
         let bonus_music = flag(args, "--bonus-music")
             .then(|| Ok::<_, String>([next(args)?, next(args)?]))
             .transpose()?;
+        let handoff_music = flag(args, "--handoff-music")
+            .then(|| {
+                Ok::<_, String>([
+                    next(args)?,
+                    next(args)?,
+                    next(args)?,
+                    next(args)?,
+                ])
+            })
+            .transpose()?;
         let effects = flag(args, "--effects-volume")
             .then(|| next(args))
             .transpose()?;
@@ -128,7 +143,7 @@ impl AudioSelection {
         Self::new(
             base,
             replacement,
-            (music, bonus_music),
+            (music, bonus_music, handoff_music),
             (
                 effects.map(parse).transpose()?,
                 soundtrack.map(parse).transpose()?,
@@ -145,7 +160,8 @@ impl AudioSelection {
             values.remove("audio_mod").map(hash).transpose()?,
             (
                 values.remove("music").map(hash).transpose()?,
-                bonus_music_hashes(values.remove("bonus_music"))?,
+                music_hashes(values.remove("bonus_music"))?,
+                music_hashes(values.remove("handoff_music"))?,
             ),
             (
                 values.remove("effects_volume").map(volume).transpose()?,
@@ -157,10 +173,13 @@ impl AudioSelection {
     fn new(
         base: Option<OsString>,
         replacement: Option<OsString>,
-        (music, bonus_music): (Option<OsString>, BonusMusicHashes),
+        (music, bonus_music, handoff_music): MusicHashes,
         volumes: AudioVolumes,
     ) -> Result<Option<Self>, String> {
         let (effects_volume, music_volume) = volumes;
+        if handoff_music.is_some() && bonus_music.is_none() {
+            return Err(String::from("handoff music requires bonus music"));
+        }
         if bonus_music.is_some() && music.is_none() {
             return Err(String::from("bonus music requires street music"));
         }
@@ -172,6 +191,7 @@ impl AudioSelection {
                 base: digest,
                 bonus_music,
                 effects_volume: effects_volume.unwrap_or_default(),
+                handoff_music,
                 music: track,
                 music_volume: music_volume.unwrap_or_default(),
                 replacement: changes,
@@ -955,21 +975,25 @@ fn flag(args: &mut Arguments, expected: &str) -> bool {
     }
 }
 
-fn bonus_music_hashes(text: Option<&str>) -> Result<BonusMusicHashes, String> {
-    text.map(|value| {
-        let (pump, result) = value
-            .split_once(',')
-            .ok_or("expected pumping and results music hashes")?;
-        Ok([hash(pump)?, hash(result)?])
-    })
-    .transpose()
-}
-
 fn hash(text: &str) -> Result<OsString, String> {
     let _digest: ContentHash = text
         .parse()
         .map_err(|error| format!("launch hash: {error:?}"))?;
     Ok(text.into())
+}
+
+fn music_hashes<const COUNT: usize>(
+    text: Option<&str>,
+) -> Result<OptionalHashes<COUNT>, String> {
+    text.map(|value| {
+        value
+            .split(',')
+            .map(hash)
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_error| String::from("unexpected music role count"))
+    })
+    .transpose()
 }
 
 fn measurement_flag(args: &mut Arguments, smoke: bool) -> Result<bool, String> {
@@ -1250,6 +1274,7 @@ mod tests {
                 base: DIGEST.into(),
                 bonus_music: None,
                 effects_volume: MasterVolume::Full,
+                handoff_music: None,
                 music: None,
                 music_volume: MasterVolume::Full,
                 replacement: None,
@@ -1477,6 +1502,7 @@ mod tests {
                 base: "audio".into(),
                 bonus_music: None,
                 effects_volume: MasterVolume::Full,
+                handoff_music: None,
                 music: None,
                 music_volume: MasterVolume::Full,
                 replacement: None,
@@ -1606,6 +1632,11 @@ mod tests {
             "--bonus-music",
             "pump",
             "results",
+            "--handoff-music",
+            "defeat",
+            "victory",
+            "transition",
+            "instructions",
             "--effects-volume",
             "25",
             "--music-volume",
@@ -1622,6 +1653,10 @@ mod tests {
                 base: "base".into(),
                 bonus_music: Some(["pump".into(), "results".into()]),
                 effects_volume: MasterVolume::Quarter,
+                handoff_music: Some(
+                    ["defeat", "victory", "transition", "instructions"]
+                        .map(OsString::from),
+                ),
                 music: Some("track".into()),
                 music_volume: MasterVolume::Half,
                 replacement: Some("mod".into()),

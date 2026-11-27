@@ -203,6 +203,7 @@ fn selection(digest: ContentHash, audio: ContentHash) -> Selection<'static> {
             base: audio,
             bonus_music: None,
             effects_volume: MasterVolume::Full,
+            handoff_music: None,
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,

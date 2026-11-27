@@ -222,6 +222,11 @@ catalogue to admit the two independently verified local stereo cues.
 Explicit native launch accepts `--bonus-music PUMP_SHA RESULT_SHA` after
 `--music SHA`. Both cues use the existing music volume; neither is
 distributed with the executable.
+With the bonus music pair admitted, `handoff_music` additionally accepts
+four comma-separated SHA values in defeat, victory, transition and
+instructions order. Native launch accepts `--handoff-music` followed by
+the same four values after `--bonus-music`. These finite cues also use
+the existing music volume.
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`
 to distinguish the filename from a misplaced option.

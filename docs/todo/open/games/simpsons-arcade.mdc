@@ -3834,3 +3834,34 @@ a dedicated audio performance benchmark, browser playback observation,
 physical listening test or exact timing/parity claim. Victory,
 instructions, complete bonus effects and subsequent stage music remain
 open.
+
+### Optional victory handoff music
+
+Additional isolated service controls reproduce the defeat, victory,
+transition and instruction commands. Paired defeat and victory captures
+match; three replay controls each for transition and instructions match
+byte-for-byte, with silence before cue onset. The four bounded local
+stereo 48 kHz selections contain 384,000, 288,000, 480,000 and 240,000
+PCM frames respectively. These are finite excerpts, not recovered
+original playback programs. No original data or digests are tracked.
+
+The optional `handoff_music` selection (defeat, victory, transition,
+instructions in that order)
+requires the bonus music pair. The defeat cue begins on defeat;
+subsequent cues start at Victory ticks 212 and 439 and on Instructions
+entry. These fixed-tick offsets approximate the observed command
+separations without changing gameplay timing. Ready remains silent.
+Native and browser admission check the role and exact PCM bounds.
+
+The optimized 3,944,328-byte native executable passed the original-backed
+aspect-fit offscreen/dummy-audio smoke with all six cues, including
+pumping pause/resume, exhaustion and completion. The 600 movement and
+20 combat-strike submissions met the 16.667 ms budget; whole-smoke peak
+RSS was 164,507,648 bytes. Separately, Firefox admitted the earlier
+bonus music pair from a trusted directory selection (1,058 files),
+completed 36 scenery readbacks and blits, and removed its canvas without
+preference writes. Native admission rejected swapped bonus music roles.
+These checks establish admission and runtime routing, not physical audio,
+browser audio playback, exact original timing or complete bonus parity.
+Stage 2 music and gameplay, complete bonus effects, scoring and physical
+acceptance remain open.

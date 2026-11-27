@@ -374,6 +374,12 @@ fn manifest_requests(
                 hashes.map(|digest| ManifestRequest { digest, limits }),
             );
         }
+        if let Some(hashes) = audio.handoff_music {
+            let limits = audio::handoff_music_limits()?;
+            requests.extend(
+                hashes.map(|digest| ManifestRequest { digest, limits }),
+            );
+        }
         if let Some(digest) = audio.replacement {
             requests.push(ManifestRequest {
                 digest,
@@ -714,6 +720,33 @@ mod tests {
             .collect()
     }
 
+    fn handoff_fixture() -> [ContentHash; 4] {
+        [
+            b"defeat".as_slice(),
+            b"victory",
+            b"transition",
+            b"instructions",
+        ]
+        .map(ContentHash::calculate)
+    }
+
+    fn verify_handoff_requests(
+        requests: &[ManifestRequest],
+        handoff: [ContentHash; 4],
+    ) -> Result<(), RenderError> {
+        for digest in handoff {
+            if !has_manifest_requests(
+                requests,
+                digest,
+                1,
+                audio::handoff_music_limits()?,
+            ) {
+                return Err(failure("missing handoff manifest"));
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn manifest_selection_includes_every_art_and_audio_role()
     -> Result<(), RenderError> {
@@ -729,6 +762,7 @@ mod tests {
         let music = ContentHash::calculate(b"music");
         let pump = ContentHash::calculate(b"pump");
         let results = ContentHash::calculate(b"results");
+        let handoff = handoff_fixture();
         let poses = pose_fixture(pose, scenic, background);
         let selection = Selection {
             actors: [actor; 4],
@@ -736,6 +770,7 @@ mod tests {
                 base,
                 bonus_music: Some([pump, results]),
                 effects_volume: MasterVolume::Full,
+                handoff_music: Some(handoff),
                 music: Some(music),
                 music_volume: MasterVolume::Full,
                 replacement: Some(replacement),
@@ -768,9 +803,16 @@ mod tests {
                 ));
             }
         }
+        verify_handoff_requests(&requests, handoff)?;
+        verify_invalid_pose(&selection)
+    }
+
+    fn verify_invalid_pose(
+        selection: &Selection<'_>,
+    ) -> Result<(), RenderError> {
         if manifest_requests(&Selection {
             poses: Some("invalid"),
-            ..selection
+            ..*selection
         })
         .is_ok()
         {
