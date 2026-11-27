@@ -137,10 +137,25 @@ pub struct LocaleStore {
 
 impl LocaleStore {
     /// Read the selected locale or None if it has not been saved.
+    /// Invalid or oversized locale envelopes are incompatible payloads.
+    /// A caller may use a session-only default without replacing them.
     /// # Errors
     /// Rejects unsafe storage or malformed preferences.
     pub fn load(&self) -> Result<Option<LocaleTag>, PreferenceError> {
-        load_optional(&self.store, LOCALE_SLOT)?
+        load_optional(&self.store, LOCALE_SLOT)
+            .map_err(|error| {
+                if matches!(
+                    error,
+                    PreferenceError::Storage(
+                        SaveError::Envelope(_)
+                            | SaveError::Read(FileReadError::TooLarge)
+                    )
+                ) {
+                    PreferenceError::InvalidPayload
+                } else {
+                    error
+                }
+            })?
             .map(|bytes| decode_locale(&bytes).map_err(PreferenceError::from))
             .transpose()
     }

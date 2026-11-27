@@ -50,6 +50,7 @@ const LOCALE_SLOT: u32 = 5;
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::fs::symlink;
 
     use games::presentation::{PresentationMode, WindowMode};
 
@@ -82,6 +83,53 @@ mod tests {
         require(reopened.store(&selected).is_err())?;
         require(raw.load(LOCALE_SLOT)? == wrong)?;
         require(volume.load()? == Some(MasterVolume::Half))
+    }
+
+    #[test]
+    fn locale_envelope_rejection_preserves_incompatible_bytes()
+    -> Result<(), PreferenceError> {
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let location = root.path.as_os_str();
+        let locale = LocaleStore::open(location)?;
+        let selected = LocaleTag::parse("es-MX")
+            .map_err(|_error| PreferenceError::InvalidPayload)?;
+        let path = root.path.join("slot-5.gms");
+        let corrupted = b"invalid envelope";
+        fs::write(&path, corrupted).map_err(SaveError::from)?;
+        require(locale.load() == Err(PreferenceError::InvalidPayload))?;
+        require(
+            locale.store(&selected) == Err(PreferenceError::InvalidPayload),
+        )?;
+        require(fs::read(&path).map_err(SaveError::from)? == corrupted)?;
+        let wide =
+            SaveStore::open(location, NonZeroU64::MIN.saturating_add(1023))?;
+        let oversized = [b'x'; 512];
+        let _receipt = wide.store(LOCALE_SLOT, &oversized)?;
+        require(locale.load() == Err(PreferenceError::InvalidPayload))?;
+        require(
+            locale.store(&selected) == Err(PreferenceError::InvalidPayload),
+        )?;
+        require(wide.load(LOCALE_SLOT)? == oversized)
+    }
+
+    #[test]
+    fn locale_does_not_treat_unsafe_storage_as_an_invalid_payload()
+    -> Result<(), PreferenceError> {
+        let root = TestRoot::new().map_err(SaveError::from)?;
+        let locale = LocaleStore::open(root.path.as_os_str())?;
+        let selected = LocaleTag::parse("es-MX")
+            .map_err(|_error| PreferenceError::InvalidPayload)?;
+        let target = root.path.join("untouched");
+        fs::write(&target, b"unrelated").map_err(SaveError::from)?;
+        let path = root.path.join("slot-5.gms");
+        symlink(&target, &path).map_err(SaveError::from)?;
+        require(matches!(locale.load(), Err(PreferenceError::Storage(_))))?;
+        require(matches!(
+            locale.store(&selected),
+            Err(PreferenceError::Storage(_))
+        ))?;
+        require(fs::read_link(path).map_err(SaveError::from)? == target)?;
+        require(fs::read(target).map_err(SaveError::from)? == b"unrelated")
     }
 
     fn require(condition: bool) -> Result<(), PreferenceError> {
