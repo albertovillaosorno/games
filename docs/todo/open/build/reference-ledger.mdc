@@ -1199,3 +1199,15 @@ observations. Six conditional direct-page call edges were reproduced.
 The private canonical ledger is unchanged by this diagnostic; the
 candidate report does not certify function-body ownership, computed
 dispatch completeness or Rust mappings.
+
+The optional dependency work queue groups pending identities after the
+same reciprocal graph check, retains cyclic dependencies together and
+ranks graph-ready groups first. The private canonical check reports
+1,600 groups for 1,644 pending functions, of which 287 groups have no
+known pending external callee. The report includes partial mappings and
+unknown flow counts; it does not grant semantic acceptance. A synthetic
+cycle and leaf fixture verifies ordering, grouping and deterministic
+output across reordered ledger records. No canonical rows were changed.
+The retention preview under the documented seven-day and 10 GiB policy
+selected zero sealed bytes; no historical unclassified captures were
+removed or newly classified without owner evidence.

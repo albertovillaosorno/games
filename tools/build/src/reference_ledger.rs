@@ -31,6 +31,8 @@
 
 //! Bounded private reference ledger consistency checks.
 
+use std::cmp::Reverse;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -48,16 +50,31 @@ use crate::{USAGE, parse_limit, text};
 #[derive(Debug)]
 pub(crate) struct Arguments {
     byte_limit: NonZeroU64,
+    group_limit: Option<NonZeroUsize>,
     path: OsString,
     row_limit: NonZeroUsize,
 }
 
 impl Arguments {
     pub(crate) fn parse(args: Vec<OsString>) -> Result<Self, String> {
-        let [path, bytes, rows] = <[OsString; 3]>::try_from(args)
-            .map_err(|_args| String::from(USAGE))?;
+        let mut arguments = args.into_iter();
+        let path = arguments.next().ok_or(USAGE)?;
+        let bytes = arguments.next().ok_or(USAGE)?;
+        let rows = arguments.next().ok_or(USAGE)?;
+        let group_limit = arguments
+            .next()
+            .map(|value| {
+                text(&value)?.parse::<NonZeroUsize>().map_err(|_error| {
+                    String::from("invalid ledger group limit")
+                })
+            })
+            .transpose()?;
+        if arguments.next().is_some() {
+            return Err(String::from(USAGE));
+        }
         Ok(Self {
             byte_limit: parse_limit(&bytes)?,
+            group_limit,
             path,
             row_limit: text(&rows)?
                 .parse()
@@ -70,7 +87,7 @@ impl Arguments {
             .map_err(|error| format!("ledger snapshot: {error:?}"))?;
         let input = from_utf8(&bytes)
             .map_err(|_error| String::from("ledger is not UTF-8"))?;
-        let report = audit(input, self.row_limit)?;
+        let report = audit(input, self.row_limit, self.group_limit)?;
         write_line(&format!(
             "Functions: {}; bytes: {}; pairs: {}; auxiliary: {}",
             report.functions, report.bytes, report.pairs, report.auxiliary,
@@ -98,6 +115,9 @@ impl Arguments {
         for (status, count) in report.statuses {
             write_line(&format!("{status}: {count}"))
                 .map_err(|error| error.to_string())?;
+        }
+        if let Some(groups) = report.groups {
+            groups.write()?;
         }
         Ok(())
     }
@@ -353,6 +373,7 @@ struct Report {
     bytes: u64,
     flows: usize,
     functions: usize,
+    groups: Option<GroupReport>,
     interior: usize,
     pairs: usize,
     partial_mappings: usize,
@@ -393,7 +414,55 @@ impl Report {
     }
 }
 
-fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
+#[derive(Debug, Eq, PartialEq)]
+struct Group {
+    callers: BTreeSet<usize>,
+    dependencies: BTreeSet<usize>,
+    members: Vec<String>,
+    partial: usize,
+    unknown_flows: usize,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct GroupReport {
+    ready: usize,
+    selected: Vec<Group>,
+    total: usize,
+}
+
+impl GroupReport {
+    fn write(self) -> Result<(), String> {
+        write_line(&format!(
+            "Pending dependency groups: {}; graph-ready: {}; shown: {}",
+            self.total,
+            self.ready,
+            self.selected.len(),
+        ))
+        .map_err(|error| error.to_string())?;
+        for group in self.selected {
+            write_line(&format!(
+                concat!(
+                    "Group: members={}; dependencies={}; callers={}; ",
+                    "partial={}; unknown-flows={}; ids={}"
+                ),
+                group.members.len(),
+                group.dependencies.len(),
+                group.callers.len(),
+                group.partial,
+                group.unknown_flows,
+                group.members.join(","),
+            ))
+            .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+fn audit(
+    input: &str,
+    limit: NonZeroUsize,
+    group_limit: Option<NonZeroUsize>,
+) -> Result<Report, String> {
     let mut functions = BTreeMap::new();
     let mut archived_runs = BTreeSet::new();
     let mut selected_edition = None;
@@ -444,7 +513,124 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
     }
     report.functions = functions.len();
     graph(&functions, &mut report)?;
+    if let Some(maximum) = group_limit {
+        report.groups = Some(dependency_groups(&functions, maximum));
+    }
     Ok(report)
+}
+
+fn pending(function: &Function) -> bool {
+    matches!(function.status.as_str(), "discovered" | "unresolved")
+}
+
+// Iterative postorder avoids stack overflow on deep private call graphs.
+fn finish_order(functions: &BTreeMap<String, Function>) -> Vec<&str> {
+    let mut visited = BTreeSet::new();
+    let mut order = Vec::new();
+    for function in functions.values().filter(|function| pending(function)) {
+        let mut stack = vec![(function.id.as_str(), false)];
+        while let Some((id, expanded)) = stack.pop() {
+            if expanded {
+                order.push(id);
+                continue;
+            }
+            if let Some(node) = functions.get(id).filter(|node| pending(node))
+                && visited.insert(id)
+            {
+                stack.push((id, true));
+                stack.extend(
+                    node.callees.iter().map(|callee| (callee.as_str(), false)),
+                );
+            }
+        }
+    }
+    order
+}
+
+fn components(functions: &BTreeMap<String, Function>) -> BTreeMap<&str, usize> {
+    let mut owners = BTreeMap::new();
+    let mut next = 0usize;
+    for seed in finish_order(functions).into_iter().rev() {
+        if owners.contains_key(seed) {
+            continue;
+        }
+        let mut stack = vec![seed];
+        while let Some(id) = stack.pop() {
+            if let Some(node) = functions.get(id).filter(|node| pending(node))
+                && let Entry::Vacant(entry) = owners.entry(id)
+            {
+                let _owner = entry.insert(next);
+                stack.extend(node.callers.iter().map(String::as_str));
+            }
+        }
+        next = next.saturating_add(1);
+    }
+    owners
+}
+
+fn dependency_groups(
+    functions: &BTreeMap<String, Function>,
+    maximum: NonZeroUsize,
+) -> GroupReport {
+    let owners = components(functions);
+    let mut groups = BTreeMap::new();
+    for (id, owner) in &owners {
+        let Some(function) = functions.get(*id) else {
+            continue;
+        };
+        let group = groups.entry(*owner).or_insert_with(|| Group {
+            callers: BTreeSet::new(),
+            dependencies: BTreeSet::new(),
+            members: Vec::new(),
+            partial: 0,
+            unknown_flows: 0,
+        });
+        group.members.push((*id).to_owned());
+        group.partial = group
+            .partial
+            .saturating_add(usize::from(function.rust_owner.is_some()));
+        group.unknown_flows = group
+            .unknown_flows
+            .saturating_add(function.unresolved_flows.len());
+        group.dependencies.extend(
+            function
+                .callees
+                .iter()
+                .filter_map(|callee| owners.get(callee.as_str()))
+                .copied()
+                .filter(|target| target != owner),
+        );
+        group.callers.extend(
+            function
+                .callers
+                .iter()
+                .filter_map(|caller| owners.get(caller.as_str()))
+                .copied()
+                .filter(|source| source != owner),
+        );
+    }
+    let mut selected: Vec<_> = groups.into_values().collect();
+    let total = selected.len();
+    let ready = selected
+        .iter()
+        .filter(|group| group.dependencies.is_empty())
+        .count();
+    selected.sort_by(|left, right| {
+        (
+            left.dependencies.len(),
+            Reverse(left.partial),
+            Reverse(left.callers.len()),
+            &left.members,
+        )
+            .cmp(&(
+                right.dependencies.len(),
+                Reverse(right.partial),
+                Reverse(right.callers.len()),
+                &right.members,
+            ))
+    });
+    selected.truncate(maximum.get());
+    GroupReport { ready, selected, total }
 }
 
 fn register_archived(
@@ -554,6 +740,10 @@ mod tests {
 
     use super::*;
 
+    fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
+        super::audit(input, limit, None)
+    }
+
     fn flow(site: &str, target: &str, entry: &str) -> Value {
         serde_json::json!({
             "evidence": {"kind": "fixture"},
@@ -625,6 +815,42 @@ mod tests {
             || audit(&input, NonZeroUsize::MIN).is_ok()
         {
             return Err(String::from("ledger counts or row budget differ"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn groups_cycles_and_prioritises_external_dependencies()
+    -> Result<(), String> {
+        let first_id = "audio:z80:program:fixed:0001";
+        let second_id = "audio:z80:program:fixed:0002";
+        let leaf_id = "audio:z80:program:fixed:0003";
+        let records = [
+            record("0001", &[second_id], &[second_id, leaf_id]),
+            record("0002", &[first_id], &[first_id, leaf_id]),
+            record("0003", &[first_id, second_id], &[]),
+        ];
+        let limit = NonZeroUsize::new(3).ok_or("fixture limit")?;
+        let report = super::audit(&lines(&records), limit, Some(limit))?;
+        let groups = report.groups.ok_or("missing groups")?;
+        let [leaf, cycle] = groups.selected.as_slice() else {
+            return Err(String::from("unexpected component count"));
+        };
+        if groups.total != 2
+            || groups.ready != 1
+            || leaf.members != [leaf_id]
+            || !leaf.dependencies.is_empty()
+            || leaf.callers.len() != 1
+            || cycle.members != [first_id, second_id]
+            || cycle.dependencies.len() != 1
+        {
+            return Err(String::from("incorrect dependency grouping"));
+        }
+        let [first, second, third] = records;
+        let reordered =
+            super::audit(&lines(&[third, second, first]), limit, Some(limit))?;
+        if reordered.groups.as_ref() != Some(&groups) {
+            return Err(String::from("group report is not deterministic"));
         }
         Ok(())
     }

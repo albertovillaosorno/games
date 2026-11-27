@@ -82,6 +82,26 @@ reference records also remain protected.
 `.cache/` and `.temp/` are regenerable scratch space, never the only
 copy of durable records. Do not remove reference storage during cleanup.
 
+## Reference dependency work queue
+
+The ledger checker accepts an optional positive group-output limit:
+
+```sh
+cargo run --locked -p games-build -- ledger check PATH BYTES ROWS 10
+```
+
+After reciprocal graph validation, it groups discovered and unresolved
+functions into strongly connected components. It reports pending
+external dependency groups, dependent groups, partial Rust mappings
+and unknown flow observations. Groups with fewer pending dependencies
+come first, then partial mappings and dependent groups in descending
+order, then stable function identities. The original byte and row
+limits still apply; the extra limit bounds the number of emitted groups.
+Graph-ready means only that no known pending external callee remains.
+Unknown flows and semantic gaps may still block implementation. The
+report is read-only and neither creates a second inventory nor changes
+any disposition.
+
 ## Bounded private research retention
 
 Research retention never traverses original media, tool installations,
