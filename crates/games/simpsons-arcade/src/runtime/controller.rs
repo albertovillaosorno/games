@@ -46,6 +46,7 @@ use games_platform::ir::scene::{EventBatch, SceneLimits, SpriteDraw};
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
 
 use super::launch::ControllerLaunch;
+use super::title_messages::{self, TitleText, parameter};
 use super::{
     CONTROLS, Controls, EVENT_BUDGET, LocalActions, Profiles, dimension,
     failure, key_label, lan, project_contact, size, touch,
@@ -58,13 +59,19 @@ const WIDTH: u16 = 320;
 const HEIGHT: u16 = touch::PANEL_TOP;
 const MAX_BYTES: usize = 389_120;
 
-fn connection_failure(kind: ErrorKind) -> RenderError {
+type InputRoute<'route> = (
+    &'route mut Controls,
+    &'route mut ClientLan,
+    &'route mut Vec<RemoteControl>,
+);
+
+fn connection_failure(kind: ErrorKind, text: TitleText<'_>) -> RenderError {
     let context = if kind == ErrorKind::TimedOut {
-        "LAN connection timed out"
+        "title.controller.error.timeout"
     } else if kind == ErrorKind::InvalidData {
-        "Invalid LAN frame; use matching host and controller builds"
+        "title.controller.error.frame"
     } else if kind == ErrorKind::WouldBlock {
-        "Remote input queue full"
+        "title.controller.error.queue"
     } else if matches!(
         kind,
         ErrorKind::BrokenPipe
@@ -73,11 +80,17 @@ fn connection_failure(kind: ErrorKind) -> RenderError {
             | ErrorKind::NotConnected
             | ErrorKind::UnexpectedEof
     ) {
-        "LAN connection lost"
+        "title.controller.error.lost"
     } else {
-        "LAN controller transport failed"
+        "title.controller.error.transport"
     };
-    RenderError::Backend(format!("{context} ({kind:?}); re-launch to rejoin"))
+    let message = text.label(context).and_then(|label| {
+        text.render("title.controller.error.relaunch", &[
+            parameter("context", label),
+            parameter("kind", &format!("{kind:?}")),
+        ])
+    });
+    message.map_or_else(|error| error, RenderError::Backend)
 }
 
 fn enqueue(
@@ -95,80 +108,103 @@ fn remote_controls(
     })
 }
 
-const fn remote_label(control: Control) -> Option<&'static str> {
+const fn remote_key(control: Control) -> Option<&'static str> {
     match control {
         Control::Pause => None,
-        Control::Start => Some("JOIN"),
-        Control::Primary => Some("ATTACK"),
-        Control::Secondary => Some("JUMP"),
-        Control::Left => Some("LEFT"),
-        Control::Right => Some("RIGHT"),
-        Control::Up => Some("UP"),
-        Control::Down => Some("DOWN"),
+        Control::Start => Some("station.join"),
+        Control::Primary => Some("title.controller.attack"),
+        Control::Secondary => Some("title.controller.jump"),
+        Control::Left => Some("title.action.left"),
+        Control::Right => Some("title.action.right"),
+        Control::Up => Some("title.action.up"),
+        Control::Down => Some("title.action.down"),
     }
 }
 
-fn binding_hints(profiles: &Profiles) -> Vec<String> {
+fn binding_hints(
+    profiles: &Profiles,
+    text: TitleText<'_>,
+) -> Result<Vec<String>, RenderError> {
     let [keys, ..] = profiles.keys;
     let [buttons, ..] = profiles.buttons;
     let [mouse_bindings, ..] = profiles.mouse;
-    CONTROLS
+    let mut hints = Vec::new();
+    for (control, ((key, button), mouse)) in CONTROLS
         .into_iter()
         .zip(keys.into_iter().zip(buttons).zip(mouse_bindings))
-        .filter_map(|(control, ((key, button), mouse))| {
-            let label = remote_label(control)?;
-            let key_name = key.map_or("NONE", key_label);
-            let mouse_name = mouse.map_or_else(String::new, |binding| {
-                format!(" / MOUSE {}", super::mouse_label(binding))
-            });
-            Some(format!(
-                "{label}: {key_name}{mouse_name} / {}",
-                button.profile_name()
-            ))
-        })
-        .collect()
-}
-
-fn axis_label(slot: Option<usize>) -> Option<&'static str> {
-    slot.and_then(|index| CONTROLS.get(index).copied())
-        .and_then(remote_label)
-}
-
-fn axis_hints(profiles: &Profiles) -> Vec<String> {
-    let [axes, ..] = profiles.axes;
-    let mut hints: Vec<_> = ControllerAxis::ALL
-        .into_iter()
-        .zip(axes)
-        .filter_map(|(axis, profile)| {
-            let negative = axis_label(profile.negative);
-            let positive = axis_label(profile.positive);
-            if negative.is_none() && positive.is_none() {
-                return None;
-            }
-            Some(format!(
-                "{}: -{} +{}",
-                axis.profile_name(),
-                negative.unwrap_or("NONE"),
-                positive.unwrap_or("NONE"),
-            ))
-        })
-        .collect();
-    if hints.is_empty() {
-        hints.push(String::from("NO REMOTE AXIS BINDINGS"));
+    {
+        let Some(action) = remote_key(control) else {
+            continue;
+        };
+        let key_name = match key {
+            Some(code) => key_label(code),
+            None => text.label("title.binding.none")?,
+        };
+        let mouse_name = if let Some(binding) = mouse {
+            let name = text.render("title.binding.mouse", &[parameter(
+                "button",
+                text.label(title_messages::mouse_key(binding))?,
+            )])?;
+            format!(" / {name}")
+        } else {
+            String::new()
+        };
+        hints.push(text.render("title.controller.binding", &[
+            parameter("action", text.label(action)?),
+            parameter("key", key_name),
+            parameter("mouse", &mouse_name),
+            parameter("button", button.profile_name()),
+        ])?);
     }
-    hints
+    Ok(hints)
+}
+
+fn axis_key(slot: Option<usize>) -> Option<&'static str> {
+    slot.and_then(|index| CONTROLS.get(index).copied())
+        .and_then(remote_key)
+}
+
+fn axis_hints(
+    profiles: &Profiles,
+    text: TitleText<'_>,
+) -> Result<Vec<String>, RenderError> {
+    let [axes, ..] = profiles.axes;
+    let mut hints = Vec::new();
+    for (axis, profile) in ControllerAxis::ALL.into_iter().zip(axes) {
+        let negative = axis_key(profile.negative);
+        let positive = axis_key(profile.positive);
+        if negative.is_none() && positive.is_none() {
+            continue;
+        }
+        hints.push(text.render("title.controller.axis", &[
+            parameter("axis", axis.profile_name()),
+            parameter(
+                "negative",
+                text.label(negative.unwrap_or("title.binding.none"))?,
+            ),
+            parameter(
+                "positive",
+                text.label(positive.unwrap_or("title.binding.none"))?,
+            ),
+        ])?);
+    }
+    if hints.is_empty() {
+        hints.push(text.label("title.controller.no-axis")?.into());
+    }
+    Ok(hints)
 }
 
 fn panel(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
     touch_enabled: bool,
+    text: TitleText<'_>,
 ) -> Result<SpriteDraw, RenderError> {
-    let bindings = binding_hints(profiles);
-    let axes = axis_hints(profiles);
+    let bindings = binding_hints(profiles, text)?;
+    let axes = axis_hints(profiles, text)?;
     let lines = [
-        ("REMOTE CONTROLLER", 8, 3),
-        ("WATCH THE HOST SCREEN", 25, 2),
+        (text.label("title.controller.heading")?, 8, 3),
+        (text.label("title.controller.watch")?, 25, 2),
     ]
     .into_iter()
     .chain(
@@ -183,17 +219,17 @@ fn panel(
             .zip(&axes)
             .map(|(top, hint)| (hint.as_str(), top, 2)),
     )
-    .chain([("CLOSE WINDOW TO LEAVE", 201, 2)])
+    .chain([(text.label("title.controller.leave")?, 201, 2)])
     .chain(touch_enabled.then_some((
-        "TOUCH BELOW - DRAG OFF TO RELEASE",
+        text.label("title.controller.touch")?,
         213,
         2,
     )))
-    .map(|(text, top, scale)| {
+    .map(|(label, top, scale)| {
         TextLine {
             color: [245, 240, 220, 255],
             scale,
-            text,
+            text: label,
             top,
         }
         .fit_width(WIDTH)
@@ -227,10 +263,16 @@ fn controller_draws(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
     touch_enabled: bool,
+    text: TitleText<'_>,
 ) -> Result<Vec<SpriteDraw>, RenderError> {
-    let mut draws = vec![panel(scene, profiles, touch_enabled)?];
+    let mut draws = vec![panel(scene, profiles, touch_enabled, text)?];
     if touch_enabled {
-        draws.push(touch::load(scene, profiles, touch::PanelRole::Controller)?);
+        draws.push(touch::load(
+            scene,
+            profiles,
+            touch::PanelRole::Controller,
+            None,
+        )?);
     }
     Ok(draws)
 }
@@ -300,10 +342,12 @@ fn enqueue_attachments(
     events: Vec<InputEvent>,
     controls: &mut Controls,
     controller: &mut ClientLan,
+    text: TitleText<'_>,
 ) -> Result<(), RenderError> {
     for attached in events {
-        enqueue(controller, controls.actions(attached)?)
-            .map_err(|_rejected| connection_failure(ErrorKind::WouldBlock))?;
+        enqueue(controller, controls.actions(attached)?).map_err(
+            |_rejected| connection_failure(ErrorKind::WouldBlock, text),
+        )?;
     }
     Ok(())
 }
@@ -312,35 +356,67 @@ fn discover_controllers(
     input: &mut NativeInput,
     controls: &mut Controls,
     controller: &mut ClientLan,
+    text: TitleText<'_>,
 ) -> Result<(), RenderError> {
-    enqueue_attachments(input.discover_after_drain()?, controls, controller)
+    enqueue_attachments(
+        input.discover_after_drain()?,
+        controls,
+        controller,
+        text,
+    )
+}
+
+fn dispatch_input(
+    scene: &mut SceneSession<'_, '_>,
+    input: &mut NativeInput,
+    route: InputRoute<'_>,
+    text: TitleText<'_>,
+) -> Result<EventBatch, RenderError> {
+    let (controls, controller, deferred) = route;
+    let batch =
+        scene.dispatch_events(size(EVENT_BUDGET)?, 8, |view, native| {
+            route_event(
+                project_event(view, input.translate(native))?,
+                controls,
+                controller,
+                deferred,
+            )
+        })?;
+    if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
+        discover_controllers(input, controls, controller, text)?;
+    }
+    Ok(batch)
 }
 
 fn interactive(
     scene: &mut SceneSession<'_, '_>,
     startup: InputStartup,
     connection: lan::ControllerConnection,
+    text: TitleText<'_>,
 ) -> Result<(), RenderError> {
-    let lan::ControllerConnection {
-        controls: resolved,
-        stream,
-        touch_enabled,
-    } = connection;
-    let mut controller = ClientLan::new(stream).map_err(failure)?;
+    let resolved = connection.controls;
+    let touch_enabled = connection.touch_enabled;
+    let mut controller = ClientLan::new(connection.stream).map_err(failure)?;
     let mut input = startup.input;
     let mut controls = controller_controls(&resolved.profiles, touch_enabled)?;
     if touch_enabled {
         input.enable_touch();
     }
-    enqueue_attachments(startup.attached, &mut controls, &mut controller)?;
-    let draws = controller_draws(scene, &resolved.profiles, touch_enabled)?;
+    enqueue_attachments(
+        startup.attached,
+        &mut controls,
+        &mut controller,
+        text,
+    )?;
+    let draws =
+        controller_draws(scene, &resolved.profiles, touch_enabled, text)?;
     let _initial_drawn = scene.present([24, 22, 30], &draws)?;
     resolved.persist().map_err(failure)?;
     let mut deferred = Vec::new();
     loop {
         controller
             .poll()
-            .map_err(|error| connection_failure(error.kind()))?;
+            .map_err(|error| connection_failure(error.kind(), text))?;
         if let Err(rejected) =
             controller.enqueue_batch(mem::take(&mut deferred))
         {
@@ -361,20 +437,14 @@ fn interactive(
         {
             continue;
         }
-        let batch =
-            scene.dispatch_events(size(EVENT_BUDGET)?, 8, |view, native| {
-                route_event(
-                    project_event(view, input.translate(native))?,
-                    &mut controls,
-                    &mut controller,
-                    &mut deferred,
-                )
-            })?;
+        let batch = dispatch_input(
+            scene,
+            &mut input,
+            (&mut controls, &mut controller, &mut deferred),
+            text,
+        )?;
         if batch == EventBatch::Stopped && deferred.is_empty() {
             return Ok(());
-        }
-        if matches!(batch, EventBatch::Empty | EventBatch::Drained) {
-            discover_controllers(&mut input, &mut controls, &mut controller)?;
         }
         if batch != EventBatch::Empty || !scene.presentation_is_current()? {
             let _drawn = scene.present([24, 22, 30], &draws)?;
@@ -386,10 +456,16 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
     let connection = lan::open_client(ControllerLaunch::parse(args)?)?;
     let touch_enabled = connection.touch_enabled;
     let result = (|| {
+        let catalog = title_messages::catalogue()?;
+        let locale = title_messages::locale_tag(connection.locale_index)?;
+        let text = TitleText {
+            catalog: &catalog,
+            locale: &locale,
+        };
         let layout =
             controller_layout(&connection.controls.profiles, touch_enabled)?;
         let mut window = NativeWindow::open(
-            "The Simpsons Arcade - remote controller",
+            text.label("title.controller.caption")?,
             dimension(layout.width().get().saturating_mul(2))?,
             dimension(layout.height().get().saturating_mul(2))?,
             false,
@@ -397,7 +473,7 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
         let startup = window.input(size(1)?)?;
         let limits = controller_limits(layout, touch_enabled)?;
         window.with_scene(layout, limits, |scene| {
-            interactive(scene, startup, connection)
+            interactive(scene, startup, connection, text)
         })
     })();
     result.map_err(|error: RenderError| format!("{error:?}"))
@@ -412,6 +488,18 @@ mod tests {
     use super::super::{DEFAULT_PROFILES, configured_profiles};
     use super::*;
     use crate::Player;
+
+    fn with_text<T>(
+        index: usize,
+        run: impl FnOnce(TitleText<'_>) -> Result<T, RenderError>,
+    ) -> Result<T, RenderError> {
+        let catalog = title_messages::catalogue()?;
+        let locale = title_messages::locale_tag(index)?;
+        run(TitleText {
+            catalog: &catalog,
+            locale: &locale,
+        })
+    }
 
     fn remapped_profiles() -> Result<Profiles, RenderError> {
         configured_profiles(concat!(
@@ -445,7 +533,9 @@ mod tests {
             (ErrorKind::ConnectionReset, "LAN connection lost"),
             (ErrorKind::Other, "LAN controller transport failed"),
         ] {
-            let RenderError::Backend(message) = connection_failure(kind) else {
+            let RenderError::Backend(message) =
+                with_text(0, |text| Ok(connection_failure(kind, text)))?
+            else {
                 return Err(failure("expected a native backend diagnostic"));
             };
             if !message.contains(expected)
@@ -458,9 +548,35 @@ mod tests {
     }
 
     #[test]
+    fn spanish_hints_and_recovery_preserve_physical_binding_names()
+    -> Result<(), RenderError> {
+        let profiles = remapped_profiles()?;
+        with_text(1, |text| {
+            let bindings = binding_hints(&profiles, text)?;
+            let axes = axis_hints(&profiles, text)?;
+            let RenderError::Backend(message) =
+                connection_failure(ErrorKind::TimedOut, text)
+            else {
+                return Err(failure("missing controller diagnostic"));
+            };
+            if !bindings
+                .iter()
+                .any(|line| line == "ATAQUE: V / RAT\u{d3}N IZQUIERDO / x")
+                || !bindings.iter().any(|line| line == "DERECHA: H / dpright")
+                || !axes.iter().any(|line| line == "leftx: -IZQUIERDA +DERECHA")
+                || !message.contains("Tiempo de conexi\u{f3}n LAN agotado")
+                || !message.ends_with("reinicia para volver")
+            {
+                return Err(failure("incorrect Spanish controller text"));
+            }
+            Ok(())
+        })
+    }
+
+    #[test]
     fn remapped_bindings_match_hints() -> Result<(), RenderError> {
         let profiles = remapped_profiles()?;
-        let hints = binding_hints(&profiles);
+        let hints = with_text(0, |text| binding_hints(&profiles, text))?;
         if !hints
             .iter()
             .any(|line| line == "ATTACK: V / MOUSE LEFT / x")
@@ -524,7 +640,8 @@ mod tests {
             "axis-threshold 1 rightx=20000/5000\n",
         ))
         .map_err(failure)?;
-        if axis_hints(&profiles) != ["lefty: -UP +DOWN", "rightx: -LEFT +RIGHT"]
+        if with_text(0, |text| axis_hints(&profiles, text))?
+            != ["lefty: -UP +DOWN", "rightx: -LEFT +RIGHT"]
         {
             return Err(failure("controller hint ignored custom axes"));
         }
@@ -575,13 +692,13 @@ mod tests {
 
     #[test]
     fn axis_hints_cover_remote_assignments() -> Result<(), RenderError> {
-        if axis_hints(&DEFAULT_PROFILES)
+        if with_text(0, |text| axis_hints(&DEFAULT_PROFILES, text))?
             != ["leftx: -LEFT +RIGHT", "lefty: -UP +DOWN"]
         {
             return Err(failure("default axis hints changed"));
         }
         let profiles = all_axis_profiles()?;
-        let hints = axis_hints(&profiles);
+        let hints = with_text(0, |text| axis_hints(&profiles, text))?;
         if hints
             != [
                 "leftx: -ATTACK +NONE",
@@ -617,7 +734,9 @@ mod tests {
             "axis 1 righttrigger=none/pause\n",
         ))
         .map_err(failure)?;
-        if axis_hints(&disabled) != ["NO REMOTE AXIS BINDINGS"] {
+        if with_text(0, |text| axis_hints(&disabled, text))?
+            != ["NO REMOTE AXIS BINDINGS"]
+        {
             return Err(failure("inactive axis hint advertises a control"));
         }
         Ok(())
@@ -710,7 +829,9 @@ mod tests {
             true,
         )?;
         window.with_scene(layout, controller_limits(layout, true)?, |scene| {
-            let draws = controller_draws(scene, &profiles, true)?;
+            let draws = with_text(0, |text| {
+                controller_draws(scene, &profiles, true, text)
+            })?;
             if !scene.present([24, 22, 30], &draws)? {
                 return Err(failure("touch controller not drawn"));
             }
@@ -763,7 +884,9 @@ mod tests {
                 sprites: size(1)?,
             },
             |scene| {
-                let sprite = panel(scene, &all_axis_profiles()?, false)?;
+                let sprite = with_text(0, |text| {
+                    panel(scene, &all_axis_profiles()?, false, text)
+                })?;
                 if !scene.present([24, 22, 30], &[sprite])? {
                     return Err(failure("controller panel not drawn"));
                 }

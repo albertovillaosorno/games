@@ -35,11 +35,13 @@ use games::input::InputMapping;
 use games::input::touch::{
     TouchLayout, TouchPoint, TouchZone, normalized_boundary,
 };
+use games::presentation::{MessageParameter, MessageValue};
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::ui;
 
+use super::title_messages::TitleText;
 use super::{Action, CONTROLS, Control, Player, Profiles, dimension, size};
 
 pub(super) const MAX_SCENE_HEIGHT: u16 = PANEL_TOP + PANEL_HEIGHT * 4;
@@ -186,11 +188,23 @@ pub(super) fn reserved(profiles: &Profiles, reserved: [bool; 4]) -> bool {
         .any(|(selected, remote)| selected && remote)
 }
 
-pub(super) fn extra_bytes(profiles: &Profiles) -> usize {
-    seats(profiles).count().saturating_sub(1).saturating_mul(
-        usize::from(WIDTH)
-            .saturating_mul(usize::from(PANEL_HEIGHT))
-            .saturating_mul(4),
+pub(super) fn resources(profiles: &Profiles, enabled: bool) -> (usize, usize) {
+    if !enabled {
+        return (0, 0);
+    }
+    let count = seats(profiles).count();
+    let atlases = if count > 1 {
+        super::title_messages::LOCALES.len()
+    } else {
+        1
+    };
+    let panel_bytes = usize::from(WIDTH)
+        .saturating_mul(usize::from(PANEL_HEIGHT))
+        .saturating_mul(4);
+    (
+        panel_bytes
+            .saturating_mul(count.saturating_mul(atlases).saturating_sub(1)),
+        atlases,
     )
 }
 
@@ -302,10 +316,23 @@ pub(super) fn install(
     Ok(())
 }
 
+pub(super) fn shared_panel(
+    scene: &mut SceneSession<'_, '_>,
+    profiles: &Profiles,
+    enabled: bool,
+) -> Result<Option<SpriteDraw>, RenderError> {
+    if enabled && seats(profiles).count() == 1 {
+        load(scene, profiles, PanelRole::Cabinet, None).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub(super) fn load(
     scene: &mut SceneSession<'_, '_>,
     profiles: &Profiles,
     role: PanelRole,
+    text: Option<TitleText<'_>>,
 ) -> Result<SpriteDraw, RenderError> {
     let count = seats(profiles).count();
     let panel_height = height(profiles)?.saturating_sub(PANEL_TOP);
@@ -318,14 +345,11 @@ pub(super) fn load(
     for player in seats(profiles) {
         let buttons = panel(profiles, player)?;
         let label = if count > 1 {
-            ["SEAT 1", "SEAT 2", "SEAT 3", "SEAT 4"]
-                .get(player.index())
-                .copied()
-                .ok_or(RenderError::InvalidSprite)?
+            seat_label(text.ok_or(RenderError::InvalidSprite)?, player)?
         } else {
-            ""
+            String::new()
         };
-        raster_panel(&mut pixels, &buttons, label, role);
+        raster_panel(&mut pixels, &buttons, &label, role);
     }
     let atlas = scene.load_atlas(layout, &pixels)?;
     let source = SpriteRect {
@@ -346,6 +370,19 @@ pub(super) fn load(
     })
 }
 
+fn seat_label(
+    text: TitleText<'_>,
+    player: Player,
+) -> Result<String, RenderError> {
+    text.render("title.touch.seat", &[MessageParameter {
+        name: "seat",
+        value: MessageValue::Unsigned(
+            u64::try_from(player.index().saturating_add(1))
+                .map_err(|_error| RenderError::TooLarge)?,
+        ),
+    }])
+}
+
 fn raster_panel(
     pixels: &mut Vec<u8>,
     buttons: &[PanelButton; 8],
@@ -357,7 +394,8 @@ fn raster_panel(
         scale: 2,
         text: label,
         top: 35,
-    };
+    }
+    .fit_width(60);
     for y in 0..PANEL_HEIGHT {
         for x in 0..WIDTH {
             let color = buttons
@@ -820,6 +858,64 @@ mod tests {
             (41, ContactPhase::Up, edge(Player::Bart, false)),
         ] {
             if route(finger, phase).as_slice() != expected.as_slice() {
+                return Err(RenderError::InvalidSprite);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn localised_labels_preserve_button_pixels() -> Result<(), RenderError> {
+        use super::super::title_messages::{self, TitleText};
+        let catalog = title_messages::catalogue()?;
+        let english = title_messages::locale_tag(0)?;
+        let spanish = title_messages::locale_tag(1)?;
+        let labels = [
+            super::seat_label(
+                TitleText {
+                    catalog: &catalog,
+                    locale: &english,
+                },
+                Player::Bart,
+            )?,
+            super::seat_label(
+                TitleText {
+                    catalog: &catalog,
+                    locale: &spanish,
+                },
+                Player::Bart,
+            )?,
+        ];
+        if labels != ["SEAT 3", "PUESTO 3"] {
+            return Err(RenderError::InvalidSprite);
+        }
+        let [first, second] = labels.map(|label| {
+            let mut pixels = Vec::new();
+            super::raster_panel(
+                &mut pixels,
+                &BUTTONS,
+                &label,
+                PanelRole::Cabinet,
+            );
+            pixels
+        });
+        if first == second || first.len() != second.len() {
+            return Err(RenderError::InvalidLength);
+        }
+        for (index, (left, right)) in first
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(second.as_chunks::<4>().0)
+            .enumerate()
+        {
+            if left != right
+                && !(120..180).contains(
+                    &(index
+                        .checked_rem(320)
+                        .ok_or(RenderError::InvalidDimensions)?),
+                )
+            {
                 return Err(RenderError::InvalidSprite);
             }
         }

@@ -42,6 +42,7 @@ use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::menu::{
     MENU_MESSAGE_KEYS, MenuArt, MenuContent, MenuText, register_menu_messages,
 };
+use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::storage::preferences::{LocaleStore, PreferenceError};
 use games_platform::ir::ui::PlateLayout;
 use games_platform::ir::ui::editor::{
@@ -51,7 +52,7 @@ use games_platform::ir::ui::editor::{
 
 use super::{
     MENU_HEIGHT, MENU_WIDTH, PreviewOptions, Profiles, WindowSwitching,
-    failure, key_label, size, station_hud,
+    failure, key_label, size, station_hud, touch,
 };
 
 macro_rules! messages {
@@ -121,6 +122,49 @@ messages! {
         "ATAQUE: {attack} SALTO: {jump}";
     "title.pause.resume" => "{pause} OR START RESUMES - JOIN BELOW",
         "{pause} O INICIO CONTIN\u{da}A - UNIRSE ABAJO";
+    "title.touch.seat" => "SEAT {seat}", "PUESTO {seat}";
+    "title.controller.heading" => "REMOTE CONTROLLER", "CONTROL REMOTO";
+    "title.controller.watch" =>
+        "WATCH THE HOST SCREEN",
+        "MIRA LA PANTALLA DEL ANFITRI\u{d3}N";
+    "title.controller.leave" =>
+        "CLOSE WINDOW TO LEAVE",
+        "CIERRA LA VENTANA PARA SALIR";
+    "title.controller.touch" =>
+        "TOUCH BELOW - DRAG OFF TO RELEASE",
+        "T\u{c1}CTIL ABAJO - DESLIZA PARA SOLTAR";
+    "title.controller.attack" => "ATTACK", "ATAQUE";
+    "title.controller.jump" => "JUMP", "SALTO";
+    "title.controller.no-axis" =>
+        "NO REMOTE AXIS BINDINGS",
+        "SIN EJES REMOTOS ASIGNADOS";
+    "title.controller.binding" =>
+        "{action}: {key}{mouse} / {button}",
+        "{action}: {key}{mouse} / {button}";
+    "title.controller.axis" =>
+        "{axis}: -{negative} +{positive}",
+        "{axis}: -{negative} +{positive}";
+    "title.controller.error.timeout" =>
+        "LAN connection timed out",
+        "Tiempo de conexi\u{f3}n LAN agotado";
+    "title.controller.error.frame" =>
+        "Invalid LAN frame; use matching host and controller builds",
+        "Trama LAN inv\u{e1}lida; usa versiones compatibles";
+    "title.controller.error.queue" =>
+        "Remote input queue full",
+        "Cola de control remoto llena";
+    "title.controller.error.lost" =>
+        "LAN connection lost",
+        "Conexi\u{f3}n LAN perdida";
+    "title.controller.error.transport" =>
+        "LAN controller transport failed",
+        "Fall\u{f3} el transporte LAN del control";
+    "title.controller.error.relaunch" =>
+        "{context} ({kind}); re-launch to rejoin",
+        "{context} ({kind}); reinicia para volver";
+    "title.controller.caption" =>
+        "The Simpsons Arcade - remote controller",
+        "The Simpsons Arcade - control remoto";
     "title.control.touch.first" => "TOUCH: ARROWS, B SOURCE, A EDIT",
         "T\u{c1}CTIL: FLECHAS, B TIPO, A EDITA";
     "title.control.touch.second" => "TOUCH: START CLEAR, PAUSE BACK",
@@ -153,6 +197,7 @@ pub(super) struct LocaleArt {
     pub(super) hud: station_hud::StationHud,
     locale: LocaleTag,
     pub(super) menu: MenuArt,
+    pub(super) panel: Option<SpriteDraw>,
 }
 
 impl LocaleArt {
@@ -184,24 +229,37 @@ impl LocaleArt {
                 locale: &locale,
             },
         )?;
+        let panel = if options.preview.touch_enabled
+            && touch::seats(&options.preview.controls.profiles).count() > 1
+        {
+            Some(touch::load(
+                scene,
+                &options.preview.controls.profiles,
+                touch::PanelRole::Cabinet,
+                Some(text),
+            )?)
+        } else {
+            None
+        };
         Ok(Self {
             catalog,
             editor,
             hud,
             locale,
             menu,
+            panel,
         })
     }
 }
 
 #[derive(Clone, Copy)]
-struct TitleText<'text> {
-    catalog: &'text TranslationCatalog,
-    locale: &'text LocaleTag,
+pub(super) struct TitleText<'text> {
+    pub(super) catalog: &'text TranslationCatalog,
+    pub(super) locale: &'text LocaleTag,
 }
 
 impl<'text> TitleText<'text> {
-    fn label(self, key: &str) -> Result<&'text str, RenderError> {
+    pub(super) fn label(self, key: &str) -> Result<&'text str, RenderError> {
         self.catalog
             .resolve_tag(self.locale, key)
             .ok_or(RenderError::InvalidSprite)
@@ -218,7 +276,7 @@ impl<'text> TitleText<'text> {
         Ok(labels)
     }
 
-    fn render(
+    pub(super) fn render(
         self,
         key: &str,
         parameters: &[MessageParameter<'_>],
@@ -533,7 +591,7 @@ pub(super) const fn mouse_key(button: PointerButton) -> &'static str {
     }
 }
 
-const fn parameter<'text>(
+pub(super) const fn parameter<'text>(
     name: &'text str,
     value: &'text str,
 ) -> MessageParameter<'text> {

@@ -652,11 +652,7 @@ impl Scene {
                 options,
                 reserved,
             )?,
-            panel: if touch_enabled {
-                Some(touch::load(scene, profiles, touch::PanelRole::Cabinet)?)
-            } else {
-                None
-            },
+            panel: touch::shared_panel(scene, profiles, touch_enabled)?,
             poses: source.poses.load(source.store, scene)?,
             shadow: source
                 .shadow
@@ -689,11 +685,12 @@ impl Scene {
         self.draws.clear();
         self.queue_background(cabinet, view)?;
         self.world.clear();
-        let hud = self
+        let locale = self
             .locales
             .get(cabinet.session().language_index())
-            .ok_or(RenderError::InvalidSprite)?
-            .hud;
+            .ok_or(RenderError::InvalidSprite)?;
+        let hud = locale.hud;
+        let panel_draw = locale.panel.or(self.panel);
         self.queue_visible_stations(cabinet, view, hud)?;
         self.queue_enemy_sprites(cabinet, view)?;
         self.world.sort_by_key(|(depth, _)| *depth);
@@ -719,7 +716,7 @@ impl Scene {
                 self.draws.push(choice);
             }
         }
-        if let Some(mut panel) = self.panel {
+        if let Some(mut panel) = panel_draw {
             panel.destination.x = center;
             self.draws.push(panel);
         }
@@ -1774,15 +1771,6 @@ fn save_sources(
     Ok(())
 }
 
-const fn mouse_label(button: PointerButton) -> &'static str {
-    match button {
-        PointerButton::Left => "LEFT",
-        PointerButton::Middle => "MIDDLE",
-        PointerButton::Right => "RIGHT",
-        PointerButton::X1 => "X1",
-        PointerButton::X2 => "X2",
-    }
-}
 fn key_label(key: KeyboardKey) -> &'static str {
     if key == KeyboardKey::ENTER {
         "ENTER"
@@ -3336,15 +3324,13 @@ fn scene_limits(
     let extension = usize::from(source.world.is_some());
     let shadows = usize::from(source.shadow.is_some());
     let language = title_messages::art_limits(options, reserved);
+    let (touch_bytes, touch_atlases) =
+        touch::resources(&options.controls.profiles, touch_enabled);
     Ok(SceneLimits {
         atlas_bytes: size(
             2_096_448usize
                 .saturating_add(language.atlas_bytes)
-                .saturating_add(if touch_enabled {
-                    touch::extra_bytes(&options.controls.profiles)
-                } else {
-                    0
-                })
+                .saturating_add(touch_bytes)
                 .saturating_add(source.poses.atlas_bytes())
                 .saturating_add(enemy_atlases.saturating_mul(65_536))
                 .saturating_add(shadows.saturating_mul(shadow::MAX_BYTES))
@@ -3357,9 +3343,7 @@ fn scene_limits(
                 .saturating_add(extension)
                 .saturating_add(shadows)
                 .saturating_add(language.atlases)
-                .saturating_add(
-                    5usize.saturating_add(usize::from(touch_enabled)),
-                ),
+                .saturating_add(5usize.saturating_add(touch_atlases)),
         )?,
         sprites: size(
             enemy_sprites

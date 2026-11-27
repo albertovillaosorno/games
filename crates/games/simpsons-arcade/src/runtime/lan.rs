@@ -243,6 +243,7 @@ impl ClientSelection {
 
 pub(super) struct ControllerConnection {
     pub(super) controls: ResolvedControls,
+    pub(super) locale_index: usize,
     pub(super) stream: SecureFrameStream,
     pub(super) touch_enabled: bool,
 }
@@ -254,6 +255,7 @@ pub(super) fn open_client(
         &launch.catalogue,
         &catalogue(&launch.catalogue)?,
     )?;
+    let locale_index = launch.locale_index(selection.settings.as_deref())?;
     let controls = launch.select_controls(
         selection.controls.as_deref(),
         selection.settings.as_deref(),
@@ -265,6 +267,7 @@ pub(super) fn open_client(
     }
     Ok(ControllerConnection {
         controls,
+        locale_index,
         stream: selection.connect()?,
         touch_enabled: selection.touch_enabled,
     })

@@ -565,6 +565,15 @@ pub(super) struct ControllerLaunch {
 }
 
 impl ControllerLaunch {
+    pub(super) fn locale_index(
+        &self,
+        settings: Option<&OsStr>,
+    ) -> Result<usize, String> {
+        let directory = self.settings.as_deref().or(settings);
+        admit_settings_location(directory, None)?;
+        load_locale(directory).map(|(_store, index)| index)
+    }
+
     pub(super) fn parse(args: Vec<OsString>) -> Result<Self, String> {
         let mut remaining = args.into_iter().peekable();
         if !flag(&mut remaining, "--lan-controller") {
@@ -1240,6 +1249,18 @@ mod tests {
             .store(&spanish)
             .map_err(|error| format!("{error:?}"))?;
         receipt.durability.map_err(|error| format!("{error:?}"))?;
+        let controller = ControllerLaunch::parse(
+            [
+                OsString::from("--lan-controller"),
+                OsString::from("controller.local"),
+            ]
+            .into(),
+        )?;
+        if controller.locale_index(Some(fixture.0.location()))? != 1
+            || controller.locale_index(None)? != 0
+        {
+            return Err("controller did not restore its selected locale".into());
+        }
         let restored = Launch::parse(args.into())?;
         if restored.locale_index != 1
             || restored.locale_store.is_none()
