@@ -129,10 +129,10 @@ pub fn start(
     select_with(touch_enabled, start_selected, complete)
 }
 
-/// Check the selected scenic track through the resident browser renderer.
+/// Check selected scenic and backdrop tracks through the resident renderer.
 /// Unlike live play, this explicit diagnostic runs one finite readback.
 /// # Errors
-/// Rejects absent scenery, invalid assets or failed pixel verification.
+/// Rejects absent scene tracks, invalid assets or failed pixel verification.
 pub fn scenery_smoke(
     touch_enabled: bool,
     complete: Completion,
@@ -522,7 +522,11 @@ mod tests {
             == count
     }
 
-    fn pose_fixture(pose: ContentHash, scenic: ContentHash) -> String {
+    fn pose_fixture(
+        pose: ContentHash,
+        scenic: ContentHash,
+        background: ContentHash,
+    ) -> String {
         ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
@@ -533,6 +537,11 @@ mod tests {
                 (8u16..=328).step_by(8).map(|tick| {
                     format!("scenic-pair {tick} 248 52 {scenic}\n")
                 }),
+            )
+            .chain(
+                super::super::backdrop::KEYS
+                    .into_iter()
+                    .map(|tick| format!("backdrop {tick} {background}\n")),
             )
             .collect()
     }
@@ -546,10 +555,11 @@ mod tests {
         let world = ContentHash::calculate(b"world");
         let pose = ContentHash::calculate(b"pose");
         let scenic = ContentHash::calculate(b"scenic");
+        let background = ContentHash::calculate(b"backdrop");
         let base = ContentHash::calculate(b"base");
         let replacement = ContentHash::calculate(b"replacement");
         let music = ContentHash::calculate(b"music");
-        let poses = pose_fixture(pose, scenic);
+        let poses = pose_fixture(pose, scenic, background);
         let selection = Selection {
             actors: [actor; 4],
             audio: Some(AudioSelection {
@@ -574,6 +584,7 @@ mod tests {
             (world, 1, world::bundle_limits()?),
             (pose, 8, art_bundle_limits()?),
             (scenic, 41, art_bundle_limits()?),
+            (background, 15, art_bundle_limits()?),
             (base, 1, audio::base_limits()?),
             (music, 1, audio::music_limits()?),
             (replacement, 1, audio::replacement_limits()?),

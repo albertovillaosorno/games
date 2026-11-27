@@ -49,8 +49,8 @@ use games_platform::ir::storage::preferences::{
 pub use super::audio::AudioSelection;
 use super::{
     Interactive, OptionalSources, PreviewOptions, Scene, Sources,
-    WindowSwitching, audio, dimension, failure, launch, poses, preview_layout,
-    scene_limits, scenery, size, world,
+    WindowSwitching, audio, backdrop, dimension, failure, launch, poses,
+    preview_layout, scene_limits, scenery, size, world,
 };
 
 /// Explicit selection for the local event-driven preview.
@@ -241,10 +241,11 @@ pub(super) fn verify_scenery(
     preferences: &Preferences,
 ) -> Result<(), RenderError> {
     let source = sources(store, selection)?;
-    if !source.poses.has_scenery() {
-        return Err(failure("scenery smoke requires scenic poses"));
+    if !source.poses.has_scenery() && source.poses.backdrop_count() == 0 {
+        return Err(failure("scenery smoke requires scenic or backdrop poses"));
     }
     let options = preview_options(selection, preferences, &source)?;
     let Resident { mut art, mut scene, .. } = open_scene(&source, options)?;
-    scenery::smoke(&mut scene, &mut art)
+    scenery::smoke(&mut scene, &mut art)?;
+    backdrop::smoke(&mut scene, &mut art, &source)
 }

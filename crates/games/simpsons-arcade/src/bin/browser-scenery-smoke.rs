@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Interpret source media or duplicate title presentation.
 // - Allows:
-//   - Inputs: A selected local canonical directory with scenic poses.
+//   - Inputs: A selected local canonical directory with scene tracks.
 //   - Outputs: A bounded pixel verification result.
 //   - Side effects: Delegated directory selection and scene presentation.
 // - Split-When:
@@ -23,7 +23,7 @@
 // - Summary:
 //   - Verify the admitted scenery in the ordinary browser renderer.
 // - Description:
-//   - Reuse the browser catalogue and title's native scenery smoke.
+//   - Reuse the browser catalogue and title's native scene-track smoke.
 // - Usage:
 //   - Load with the matching WebAssembly browser binding.
 // - Defaults:
