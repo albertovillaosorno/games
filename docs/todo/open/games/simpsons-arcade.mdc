@@ -7,6 +7,7 @@ area: "games"
 task: "TODO - The Simpsons Arcade Game"
 depends_on:
   - "release-checks"
+  - "localisation"
 validation:
   - "cargo validate"
 ---

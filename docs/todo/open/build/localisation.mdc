@@ -1,0 +1,62 @@
+---
+id: "localisation"
+status: "open"
+lane: "3"
+priority: "p3"
+area: "build"
+task: "TODO - Shared internationalisation and localisation"
+depends_on:
+  - "release-checks"
+validation:
+  - "cargo validate"
+---
+# TODO - Shared internationalisation and localisation
+
+## Objective
+
+Make all games and apps localisable through one shared mechanism without
+coupling gameplay, assets, platform adapters or text to a single language.
+
+## Acceptance
+
+- Extend the existing engine translation catalogue rather than creating
+  parallel title-specific implementations. Use stable message identifiers,
+  canonical BCP 47 locale tags, explicit regional/language fallback and
+  an English default. Keep locale policy independent of host APIs.
+- Supply complete English and Mexican Spanish catalogues for shared UI
+  and the first supported title. Admit additional languages without
+  modifying engine code. Keep shared messages separate from unique title
+  messages; report missing keys and invalid catalogues.
+- Localise user-facing menus, settings, HUD, prompts, controls, errors and
+  applicable subtitles. Do not translate internal identifiers, save keys,
+  protocols, gameplay rules or original asset identities. Preserve the
+  original text and artwork as an explicit option when appropriate.
+- Provide a language selector in shared settings, persist the selection
+  in the existing preference contract, restore it on launch and use
+  deterministic fallback for unavailable or invalid locales. Host locale
+  discovery, if used, belongs to the platform IR, not gameplay.
+- Support Unicode text and licensed glyph coverage, including accents,
+  inverted punctuation and other locale scripts. Measure text by rendered
+  glyphs rather than UTF-8 bytes; verify wrapping and adaptive layout.
+  Evaluate existing shaping, bidirectional and pluralisation mechanisms
+  before introducing new ones; test them for languages that require them.
+- Use bounded catalogue loading and typed message parameters, not
+  executable translation content. Reject malformed inputs and preserve
+  identical gameplay, input routing and save semantics across languages.
+- Demonstrate the first title in English and Spanish on Linux and the
+  supported browser path; test language changes, fallback, persistence,
+  missing glyphs, longer labels and all presentation modes. Record any
+  unavailable platform or additional script coverage explicitly.
+- Require every future title and app to reuse the shared localisation
+  mechanism and verify its own complete supported-language catalogues.
+
+## Evidence
+
+The completed input and presentation contract introduced a portable
+TranslationCatalog with exact-locale, primary-language and configured
+fallback lookup. Its existing synthetic test covers en, es, es-MX,
+es-ES, an unsupported locale and an unknown message key. Review on
+2026-11-26 found that shared menu labels remain hardcoded in English
+and the compact bitmap text renderer measures UTF-8 byte length and
+draws ASCII glyphs. Language selection, persistent locale preferences,
+Unicode layout and integrated title translations are not implemented.

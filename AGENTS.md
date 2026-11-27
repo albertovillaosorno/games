@@ -82,6 +82,14 @@
   tests; retain title-specific rules, art and tuning in the title.
   This applies to sprites, animation, menus, camera, audio, input,
   physics, networking, rendering, storage and all other shared behaviour.
+- All user-facing text belongs to shared or title-specific localisation
+  catalogues with stable keys. Reuse the engine translation mechanism and
+  shared language settings; never hardcode new player-facing English
+  labels in gameplay or presentation. Preserve English and Mexican Spanish
+  as initial supported locales, Unicode text and deterministic fallback.
+  Locale and translation changes must not alter simulation, input codes,
+  saved gameplay or network protocols. Each title verifies its catalogue
+  completeness, text layout and persisted language selection.
 - Request capabilities through the IR, never a concrete OS or SDK. A game
   asks for audio, a window, a renderer or a GPU preference. Device
   discovery, driver selection, admission and explicit fallback belong to
