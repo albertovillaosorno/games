@@ -1005,10 +1005,7 @@ impl Cabinet {
             return;
         }
         if let Some(bonus) = &mut self.bonus {
-            bonus.advance(pending.map(|queued| {
-                u8::try_from(queued.button_edges.count_ones())
-                    .unwrap_or_default()
-            }));
+            bonus.advance(pending.map(|queued| queued.button_edges != 0));
             return;
         }
         let [marge, ..] = pending;
@@ -3157,6 +3154,23 @@ mod tests {
         assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Pumping));
         assert_eq!(state.stations(), stations);
         assert_bonus_inputs(state);
+        assert_bonus_chord(state);
+    }
+
+    fn assert_bonus_chord(mut state: Cabinet) {
+        let mut single = state;
+        single.input_step(3000, &pulse(Player::Marge, Control::Primary));
+        state.input_step(3000, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Marge, Control::Secondary, true),
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Marge, Control::Secondary, false),
+        ]);
+        assert_eq!(state.bonus(), single.bonus());
+        let mut secondary = single;
+        state.input_step(3001, &pulse(Player::Marge, Control::Primary));
+        secondary.input_step(3001, &pulse(Player::Marge, Control::Secondary));
+        assert_eq!(state.bonus(), secondary.bonus());
     }
 
     fn assert_bonus_inputs(mut state: Cabinet) {

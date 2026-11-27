@@ -75,7 +75,7 @@ pub struct Bonus {
 }
 
 impl Bonus {
-    pub(super) fn advance(&mut self, presses: [u8; 4]) {
+    pub(super) fn advance(&mut self, presses: [bool; 4]) {
         if self.phase == BonusPhase::Complete {
             return;
         }
@@ -84,7 +84,7 @@ impl Bonus {
             .participants
             .iter()
             .zip(presses)
-            .any(|(admitted, count)| *admitted && count > 0);
+            .any(|(admitted, pressed)| *admitted && pressed);
         let next = match self.phase {
             BonusPhase::Victory if self.tick >= VICTORY_TICKS => {
                 BonusPhase::Instructions
@@ -141,9 +141,9 @@ impl Bonus {
         self.phase
     }
 
-    fn pump(&mut self, presses: [u8; 4]) -> BonusPhase {
+    fn pump(&mut self, presses: [bool; 4]) -> BonusPhase {
         let decay = self.tick.is_multiple_of(DECAY_TICKS);
-        for ((admitted, size), count) in self
+        for ((admitted, size), pressed) in self
             .participants
             .iter()
             .zip(&mut self.inflation)
@@ -152,7 +152,9 @@ impl Bonus {
             if *admitted {
                 *size = size
                     .saturating_sub(u8::from(decay))
-                    .saturating_add(count.saturating_mul(INFLATION_PER_PRESS))
+                    .saturating_add(
+                        u8::from(pressed).saturating_mul(INFLATION_PER_PRESS),
+                    )
                     .min(BONUS_MAX_INFLATION);
             }
         }
@@ -198,15 +200,15 @@ mod tests {
     fn start_pump(participants: [bool; 4]) -> Bonus {
         let mut bonus = Bonus::new(participants);
         for _ in 0..VICTORY_TICKS {
-            bonus.advance([2; 4]);
+            bonus.advance([true; 4]);
         }
         assert_eq!(bonus.phase(), BonusPhase::Instructions);
         for _ in 0..INSTRUCTION_MIN_TICKS {
-            bonus.advance([2; 4]);
+            bonus.advance([true; 4]);
         }
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         for _ in 0..READY_TICKS {
-            bonus.advance([2; 4]);
+            bonus.advance([true; 4]);
         }
         assert_eq!(bonus.phase(), BonusPhase::Pumping);
         assert_eq!(bonus.inflation(Player::Marge), Some(0));
@@ -217,26 +219,26 @@ mod tests {
     fn idle_timeout_preserves_zero_and_tied_ranks() {
         let mut bonus = start_pump([true, true, false, true]);
         for _ in 0..PUMP_TICKS {
-            bonus.advance([0, 0, 2, 0]);
+            bonus.advance([false, false, true, false]);
         }
         assert_eq!(bonus.phase(), BonusPhase::Results);
         assert_eq!(bonus.inflation(Player::Bart), None);
         assert_eq!(bonus.rank(Player::Marge), Some(1));
         assert_eq!(bonus.rank(Player::Lisa), Some(1));
         for _ in 0..RESULT_TICKS {
-            bonus.advance([2; 4]);
+            bonus.advance([true; 4]);
         }
         assert_eq!(bonus.phase(), BonusPhase::Complete);
         let result = bonus;
-        bonus.advance([2; 4]);
+        bonus.advance([true; 4]);
         assert_eq!(bonus, result);
     }
 
     #[test]
     fn simultaneous_pumping_admits_independent_ties_and_early_finish() {
         let mut bonus = start_pump([true; 4]);
-        for _ in 0..PUMP_TICKS {
-            bonus.advance([2, 0, 2, 1]);
+        for tick in 0..PUMP_TICKS {
+            bonus.advance([true, false, true, tick.is_multiple_of(2)]);
             if bonus.phase() == BonusPhase::Results {
                 break;
             }
@@ -253,13 +255,13 @@ mod tests {
     fn instruction_timeout_cannot_be_skipped_by_absent_station() {
         let mut bonus = Bonus::new([true, false, false, false]);
         for _ in 0..VICTORY_TICKS {
-            bonus.advance([0; 4]);
+            bonus.advance([false; 4]);
         }
         for _ in 1..INSTRUCTION_MAX_TICKS {
-            bonus.advance([0, 2, 0, 0]);
+            bonus.advance([false, true, false, false]);
             assert_eq!(bonus.phase(), BonusPhase::Instructions);
         }
-        bonus.advance([0; 4]);
+        bonus.advance([false; 4]);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
     }
 }

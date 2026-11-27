@@ -3778,3 +3778,19 @@ movement and 20 combat-strike submissions per run met the 16.667 ms
 budget. This is not a dedicated bonus performance measurement or a
 physical-device test. Exact victory art, bonus choreography, scoring,
 audio, further stage admission and physical acceptance remain open.
+
+### Matched bonus button controls
+
+Seven further completed original-edition controls replace Marge's rapid
+Primary sequence with Secondary only (three runs), simultaneous
+Primary/Secondary (two runs), or alternating Primary and Secondary
+(two runs), at the same three-frame cadence. Every control reproduces
+all 242 sampled screen rasters and 242 corresponding sprite DMA
+snapshots of the Primary-only run exactly, from frame 14,759 through
+15,960. This supports either button contributing one pump, without
+additional inflation from the same-frame chord in these controls.
+The reconstruction now collapses multiple fresh button edges at each
+station into one pump per fixed tick; the other timing and scoring
+rules remain provisional. A routed regression compares Primary,
+Secondary and the simultaneous chord at identical cabinet states.
+The private captures remain untracked.
