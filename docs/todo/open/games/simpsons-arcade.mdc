@@ -5127,3 +5127,22 @@ regressions distinguish these boundaries, preserve pause and existing
 stations, and verify that a late join survives the stage-two handoff.
 Exact original demonstration and late-station visuals, input sampling
 and hardware meter timing remain unverified.
+
+### Extended second-stage browser diagnostic
+
+The original-backed extended scenery diagnostic was rebuilt on the
+revision with the distinct bonus and campaign join policy. Isolated
+Firefox selected the canonical 1,302-file folder through a trusted
+directory chooser. The diagnostic verified all eight ordered gameplay
+checkpoints, including the delayed wrestler score, bonus progression,
+ten blank stage-transition frames, entrance and landing, routed combat
+and 1,416 columns of second-stage travel. It performed 75 WebGL
+readbacks and 98 blits and left no canvas or stored preferences.
+
+Earlier attempts selected the parent directory and correctly failed
+unsafe storage admission; the old six-checkpoint harness also rejected
+a successful eight-checkpoint diagnostic. The corrected harness requires
+the exact ordered checkpoints and the canonical folder name. It passes
+without changing the title's Rust implementation or relaxing admission.
+The isolated virtual display and null audio sink do not establish
+physical rendering, input, speaker audibility or campaign parity.
