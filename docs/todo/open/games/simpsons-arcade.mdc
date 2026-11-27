@@ -3005,8 +3005,13 @@ and frame loop. This verifies browser audio submission and local persistence,
 not physical audibility. The asset-free browser package contained 88 files
 (1,557,904 bytes). Fresh validation with the native dummy audio smoke
 passed in 1795743084666126958-2027088; the shared follow-up gate also passed
-in 1795743165010875652-2039583. Physical audible playback, remaining sound
-events and exact sound parity remain open.
+in 1795743165010875652-2039583. Playback initializes from the resolved
+master and source levels and reports them at startup. An original-backed
+native diagnostic using saved master 0, effects 25 and music 0 percent
+passed with dummy output; all three stored payload digests were unchanged.
+Fresh validation 1795743693663657586-2132651 passed 2,017 aggregate test
+executions. Physical audible playback, remaining sound events and exact
+sound parity remain open.
 
 The opening combat camera may proceed beyond the old 362-column gate
 after the six provisional reinforcements are defeated. Next-launch

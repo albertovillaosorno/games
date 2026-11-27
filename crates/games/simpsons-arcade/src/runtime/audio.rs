@@ -40,6 +40,7 @@ use games::audio::{
     SourceGain, SourceSettings, StereoGain,
 };
 use games::input::{InputEvent, LogicalAction};
+use games::presentation::DisplaySettings;
 use games::replay::LiveSimulation;
 use games::session::LocalSession;
 use games_assets::pcm::PcmSamples;
@@ -246,6 +247,7 @@ impl Playback {
         samples: &Samples,
         name: Option<&str>,
         sources: SourceSettings,
+        volume: MasterVolume,
     ) -> Result<Self, RenderError> {
         if sources.effects.is_none()
             || sources.music.is_some() != samples.music.is_some()
@@ -260,6 +262,7 @@ impl Playback {
         )
         .map_err(failure)?;
         mixer.set_source_volumes(sources.levels());
+        mixer.set_volume(volume);
         let spec = PlaybackSpec {
             buffer_frames: NonZeroU16::MIN.saturating_add(255),
             channels: NonZeroU8::MIN.saturating_add(1),
@@ -273,6 +276,13 @@ impl Playback {
             requested.unwrap_or("system default").escape_debug(),
         ))
         .map_err(failure)?;
+        write_status(format_args!(
+            "Audio levels (percent): master={}, effects={}, music={}",
+            volume.percent(),
+            sources.effects.map_or("unavailable", MasterVolume::percent),
+            sources.music.map_or("unavailable", MasterVolume::percent),
+        ))
+        .map_err(failure)?;
         Ok(Self {
             clips: samples.clips()?,
             cues: [0; 4],
@@ -284,7 +294,7 @@ impl Playback {
             music_started: false,
             scratch: [[0; 2]; CHUNK],
             sources,
-            volume: MasterVolume::default(),
+            volume,
         })
     }
 
@@ -311,7 +321,7 @@ impl Playback {
     }
 
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
-        let mut simulation = smoke_entry(self.sources)?;
+        let mut simulation = smoke_entry(self.smoke_session())?;
         self.update(simulation.state())?;
         self.verify_quiet()?;
         let _first = simulation
@@ -352,10 +362,7 @@ impl Playback {
     }
 
     fn smoke_maneuver(&mut self, airborne: bool) -> Result<(), RenderError> {
-        let mut simulation = live_with_session(
-            false,
-            LocalSession::default().with_source_settings(self.sources),
-        )?;
+        let mut simulation = live_with_session(false, self.smoke_session())?;
         let mut controls = Controls::new(false)?;
         self.update(simulation.state())?;
         smoke_join(&mut simulation, &mut controls)?;
@@ -447,6 +454,15 @@ impl Playback {
         Ok(())
     }
 
+    fn smoke_session(&self) -> LocalSession {
+        LocalSession::with_preferences(
+            DisplaySettings::default(),
+            self.volume,
+            false,
+        )
+        .with_source_settings(self.sources)
+    }
+
     fn smoke_settings(
         &mut self,
         simulation: &mut LiveSimulation<Cabinet>,
@@ -506,10 +522,7 @@ impl Playback {
     }
 
     fn smoke_source_changes(&mut self) -> Result<(), RenderError> {
-        let mut simulation = live_with_session(
-            false,
-            LocalSession::default().with_source_settings(self.sources),
-        )?;
+        let mut simulation = live_with_session(false, self.smoke_session())?;
         let mut controls = Controls::new(false)?;
         self.update(simulation.state())?;
         smoke_join(&mut simulation, &mut controls)?;
@@ -675,9 +688,10 @@ pub(super) fn open_optional(
     samples: Option<&Samples>,
     name: Option<&str>,
     sources: SourceSettings,
+    volume: MasterVolume,
 ) -> Result<Option<Playback>, RenderError> {
     if let Some(available) = samples {
-        return Playback::open(available, name, sources).map(Some);
+        return Playback::open(available, name, sources, volume).map(Some);
     }
     write_status(format_args!("Audio: disabled (no audio bundle)"))
         .map_err(failure)?;
@@ -764,12 +778,9 @@ fn play(
 }
 
 fn smoke_entry(
-    sources: SourceSettings,
+    session: LocalSession,
 ) -> Result<LiveSimulation<Cabinet>, RenderError> {
-    let mut simulation = live_with_session(
-        false,
-        LocalSession::default().with_source_settings(sources),
-    )?;
+    let mut simulation = live_with_session(false, session)?;
     let mut controls = Controls::new(false)?;
     smoke_join(&mut simulation, &mut controls)?;
     smoke_hold(&mut controls, &mut simulation, Control::Primary)?;

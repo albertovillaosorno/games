@@ -3302,6 +3302,7 @@ fn window(
         source.audio.as_ref(),
         options.audio_device,
         options.source_settings,
+        options.volume,
     )?;
     let renderer =
         (options.hidden || options.measure).then(|| window.renderer_name());

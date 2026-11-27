@@ -195,6 +195,7 @@ where
         source.audio.as_ref(),
         None,
         options.source_settings,
+        options.volume,
     )?;
     if let Some(output) = &mut playback {
         output.enable_output();

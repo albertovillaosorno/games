@@ -202,7 +202,9 @@ control editing/reset is unavailable. The Audio submenu of Settings cycles
 master and admitted source levels through 100, 75, 50, 25 and 0 percent.
 Saved effects and music levels override their launch defaults independently
 when the matching source is admitted; unavailable sources have no row and
-retain any saved setting. A normal launch with the directory
+retain any saved setting. Audio startup reports the requested output and
+resolved master and admitted source percentages; it does not identify the
+physical output selected by a system default. A normal launch with the directory
 selected enables the next-launch control editor; smoke never writes it.
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`
