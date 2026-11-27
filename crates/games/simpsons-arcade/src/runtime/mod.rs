@@ -2387,7 +2387,8 @@ fn smoke_settings(
         }
     }
     smoke_window_toggle(scene, art, &mut controls, &mut simulation)?;
-    smoke_language_menu(scene, art, &mut controls, &mut simulation)?;
+    let _changed =
+        smoke_language_menu(scene, art, &mut controls, &mut simulation)?;
     scene.apply_display_settings(options.display)
 }
 
@@ -2396,7 +2397,7 @@ fn smoke_language_menu(
     art: &mut Scene,
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
-) -> Result<(), RenderError> {
+) -> Result<LocalSession, RenderError> {
     for control in [Control::Down, Control::Primary] {
         smoke_press(controls, simulation, control)?;
     }
@@ -2436,7 +2437,11 @@ fn smoke_language_menu(
     if restored.language_index() != initial.language_index() {
         return Err(failure("language selection did not wrap"));
     }
-    Ok(())
+    let _restored = art.present(scene, simulation.state())?;
+    if scene.readback()? != before {
+        return Err(failure("language selection did not restore menu pixels"));
+    }
+    Ok(changed)
 }
 
 fn smoke_window_toggle(

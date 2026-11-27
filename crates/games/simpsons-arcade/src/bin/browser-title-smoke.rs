@@ -25,13 +25,14 @@
 // - Description:
 //   - Supply generated RGBA and silent PCM through canonical memory storage.
 // - Usage:
-//   - Run in a visible browser and use the default keyboard controls.
+//   - Run in a browser; the finite locale check uses isolated storage.
 // - Defaults:
-//   - No original assets, audible diagnostic output, persistence or network.
+//   - No original assets, audible diagnostic output or network.
 
 //! Live title diagnostic using procedural canonical art and silent PCM.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64, NonZeroUsize};
 
@@ -46,8 +47,9 @@ use games_platform::ir::process::{write_diagnostic, write_status};
 use games_platform::ir::storage::bundle::{
     MemoryBundleLimits, MemoryBundleStore,
 };
+use games_platform::ir::storage::preferences::PublicationPolicy;
 use games_simpsons_arcade::runtime::memory_preview::{
-    AudioSelection, Selection, start,
+    AudioSelection, DiagnosticScene, Selection, start, verify_localisation,
 };
 
 const MAX_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(399_999);
@@ -56,26 +58,19 @@ type FixtureManifest = (ContentHash, Vec<u8>);
 
 fn main() -> Result<(), RenderError> {
     let (store, digest, audio) = fixture()?;
-    start(
+    let selection = selection(digest, audio);
+    verify_localisation(
         &store,
-        &Selection {
-            actors: [digest; 4],
-            audio: Some(AudioSelection {
-                base: audio,
-                effects_volume: MasterVolume::Full,
-                music: None,
-                music_volume: MasterVolume::Full,
-                replacement: None,
-            }),
-            display: DisplaySettings::default(),
-            enemy: None,
-            poses: None,
-            shadow: None,
-            touch_enabled: false,
-            world: None,
-        },
-        complete,
-    )
+        &selection,
+        (
+            OsStr::new("simpsons-arcade-localisation-smoke"),
+            PublicationPolicy::BestEffort,
+        ),
+        DiagnosticScene::Resident,
+    )?;
+    write_status(format_args!("browser-localisation-smoke: passed"))
+        .map_err(failure)?;
+    start(&store, &selection, complete)
 }
 
 fn complete(result: Result<(), RenderError>) {
@@ -196,4 +191,46 @@ fn silent_audio(
         let _prior = objects.insert(digest, bytes);
     }
     Ok(records)
+}
+
+fn selection(digest: ContentHash, audio: ContentHash) -> Selection<'static> {
+    Selection {
+        actors: [digest; 4],
+        audio: Some(AudioSelection {
+            base: audio,
+            effects_volume: MasterVolume::Full,
+            music: None,
+            music_volume: MasterVolume::Full,
+            replacement: None,
+        }),
+        display: DisplaySettings::default(),
+        enemy: None,
+        poses: None,
+        shadow: None,
+        touch_enabled: false,
+        world: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use games_platform::ir::process::fixtures::{NativeSmoke, smoke_requested};
+    use games_platform::ir::storage::fixtures::TestRoot;
+
+    use super::*;
+
+    #[test]
+    fn opt_in_native_localisation_smoke() -> Result<(), RenderError> {
+        if !smoke_requested(NativeSmoke::Render).map_err(failure)? {
+            return Ok(());
+        }
+        let root = TestRoot::new().map_err(failure)?;
+        let (store, digest, audio) = fixture()?;
+        verify_localisation(
+            &store,
+            &selection(digest, audio),
+            (root.location(), PublicationPolicy::Durable),
+            DiagnosticScene::Borrowed,
+        )
+    }
 }

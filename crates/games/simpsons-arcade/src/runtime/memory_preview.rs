@@ -31,11 +31,13 @@
 
 //! Event-driven title preview from a caller-provided memory snapshot.
 
+use std::ffi::OsStr;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use games::audio::MasterVolume;
-use games::presentation::DisplaySettings;
+use games::presentation::{DisplaySettings, LocaleTag, PresentationMode};
+use games::session::LocalSession;
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
@@ -43,14 +45,15 @@ use games_platform::ir::graphics::{NativeWindow, frame_loop};
 use games_platform::ir::input::InputStartup;
 use games_platform::ir::storage::bundle::{BundleSource, MemoryBundleStore};
 use games_platform::ir::storage::preferences::{
-    DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
+    ControlStore, DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
 
 pub use super::audio::AudioSelection;
 use super::{
-    Interactive, OptionalSources, PreviewOptions, Scene, Sources,
-    WindowSwitching, audio, backdrop, dimension, failure, launch, poses,
-    preview_layout, scene_limits, scenery, size, world,
+    Controls, Interactive, OptionalSources, PreviewOptions, Scene, Sources,
+    WindowSwitching, audio, backdrop, dimension, failure, launch,
+    live_with_session, poses, preview_layout, profile_limit, scene_limits,
+    scenery, size, smoke_language_menu, title_messages, world,
 };
 
 /// Explicit selection for the local event-driven preview.
@@ -99,6 +102,15 @@ impl Preferences {
             volume_store: None,
         }
     }
+}
+
+/// Select the existing scene lifetime contract for a finite diagnostic.
+#[derive(Clone, Copy, Debug)]
+pub enum DiagnosticScene {
+    /// Synchronous borrowed rendering session.
+    Borrowed,
+    /// Owned event-driven rendering session.
+    Resident,
 }
 
 struct Resident {
@@ -234,10 +246,7 @@ fn open_scene(
     window.apply_display_settings(options.display)?;
     let startup = window.input(size(reserved.len())?)?;
     let mut scene = window.into_scene(layout, limits)?;
-    scene.protect_bottom(NonZeroU32::new(
-        layout.height().get().saturating_sub(world::BASE_HEIGHT),
-    ))?;
-    let art = Scene::load(&mut scene, source, options, reserved)?;
+    let art = prepare_art(&mut scene, source, options)?;
     Ok(Resident { art, scene, startup })
 }
 
@@ -254,4 +263,166 @@ pub(super) fn verify_scenery(
     let Resident { mut art, mut scene, .. } = open_scene(&source, options)?;
     scenery::smoke(&mut scene, &mut art)?;
     backdrop::smoke(&mut scene, &mut art, &source)
+}
+
+/// Exercise locale switching, renderer readbacks and isolated persistence.
+///
+/// The supplied location must be reserved for diagnostics. A valid existing
+/// locale at that location is intentionally replaced by the fixture.
+/// # Errors
+/// Rejects unavailable rendering or storage, unexpected fallback, changed
+/// unrelated settings, missing visible changes, or failed restoration.
+pub fn verify_localisation(
+    store: &MemoryBundleStore,
+    selection: &Selection<'_>,
+    (location, publication): (&OsStr, PublicationPolicy),
+    ownership: DiagnosticScene,
+) -> Result<(), RenderError> {
+    let preferences =
+        localisation_preferences(location, selection.display, publication)?;
+    let source = sources(store, selection)?;
+    let options = preview_options(selection, &preferences, &source)?;
+    match ownership {
+        DiagnosticScene::Borrowed => {
+            verify_borrowed(&source, options, location)
+        },
+        DiagnosticScene::Resident => {
+            let Resident {
+                mut art,
+                mut scene,
+                startup,
+            } = open_scene(&source, options)?;
+            verify_localised_scene(
+                &mut scene,
+                &mut art,
+                startup,
+                (options, location),
+            )
+        },
+    }
+}
+
+fn verify_localised_scene(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    startup: InputStartup,
+    (options, location): (PreviewOptions<'_>, &OsStr),
+) -> Result<(), RenderError> {
+    let mut preview = Interactive::for_scene(startup, options, art, None)?;
+    let changed = verify_language_mode(scene, art, options)?;
+    preview.persist_preferences(changed)?;
+    let reopened = LocaleStore::open(location).map_err(failure)?;
+    let (handle, index) =
+        title_messages::restore_locale(Some(reopened)).map_err(failure)?;
+    if handle.is_none() || index != changed.language_index() {
+        return Err(failure("selected locale did not survive reopening"));
+    }
+    for mode in [
+        PresentationMode::Adaptive,
+        PresentationMode::AspectFit,
+        PresentationMode::Fill,
+        PresentationMode::Integer,
+        PresentationMode::Stretch,
+    ] {
+        let _selected = verify_language_mode(scene, art, PreviewOptions {
+            display: DisplaySettings {
+                presentation: mode,
+                ..options.display
+            },
+            locale_index: index,
+            ..options
+        })?;
+    }
+    Ok(())
+}
+
+fn localisation_preferences(
+    location: &OsStr,
+    display: DisplaySettings,
+    publication: PublicationPolicy,
+) -> Result<Preferences, RenderError> {
+    let store = LocaleStore::open(location).map_err(failure)?;
+    let unsupported = LocaleTag::parse("ja").map_err(failure)?;
+    publication
+        .confirm(store.store(&unsupported).map_err(failure)?)
+        .map_err(failure)?;
+    let (handle, index) =
+        title_messages::restore_locale(Some(store)).map_err(failure)?;
+    let admitted = handle.ok_or_else(|| failure("locale store unavailable"))?;
+    if index != 0 || admitted.load().map_err(failure)? != Some(unsupported) {
+        return Err(failure("locale fallback modified stored preference"));
+    }
+    let control_store =
+        ControlStore::open(location, profile_limit().map_err(failure)?)
+            .map_err(failure)?;
+    let controls =
+        launch::ResolvedControls::from_store(control_store, publication)
+            .map_err(failure)?;
+    Ok(Preferences {
+        controls: Rc::new(controls),
+        display,
+        display_store: Some(Rc::new(
+            DisplayStore::open(location).map_err(failure)?,
+        )),
+        locale_index: index,
+        locale_store: Some(Rc::new(admitted)),
+        publication,
+        volume: MasterVolume::Full,
+        volume_store: Some(Rc::new(
+            VolumeStore::open(location).map_err(failure)?,
+        )),
+    })
+}
+
+fn verify_language_mode(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    options: PreviewOptions<'_>,
+) -> Result<LocalSession, RenderError> {
+    let session = options.session([false; 4]);
+    scene.apply_display_settings(session.effective_display())?;
+    let mut simulation = live_with_session(false, session)?;
+    let mut controls = Controls::with_smoke_profiles(
+        options.touch_enabled,
+        &options.controls.profiles,
+    )?;
+    smoke_language_menu(scene, art, &mut controls, &mut simulation)
+}
+
+fn prepare_art(
+    scene: &mut SceneSession<'_, '_>,
+    source: &Sources<'_>,
+    options: PreviewOptions<'_>,
+) -> Result<Scene, RenderError> {
+    scene.protect_bottom(NonZeroU32::new(
+        scene
+            .layout()
+            .height()
+            .get()
+            .saturating_sub(world::BASE_HEIGHT),
+    ))?;
+    Scene::load(scene, source, options, [false; 4])
+}
+
+fn verify_borrowed(
+    source: &Sources<'_>,
+    options: PreviewOptions<'_>,
+    location: &OsStr,
+) -> Result<(), RenderError> {
+    let reserved = [false; 4];
+    let layout =
+        preview_layout(options.touch_enabled, &options.controls.profiles)?;
+    let limits = scene_limits(source, options, reserved)?;
+    let mut window = NativeWindow::open(
+        "The Simpsons Arcade - localisation diagnostic",
+        dimension(960)?,
+        dimension(672)?,
+        true,
+    )?;
+    window.apply_display_settings(options.display)?;
+    let startup = window.input(size(reserved.len())?)?;
+    window.with_scene(layout, limits, |scene| {
+        let mut art = prepare_art(scene, source, options)?;
+        verify_localised_scene(scene, &mut art, startup, (options, location))
+    })
 }
