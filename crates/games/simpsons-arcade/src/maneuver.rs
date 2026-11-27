@@ -232,8 +232,10 @@ pub enum Maneuver {
     Jump(JumpMotion),
     /// Station is held by an active enemy; normal maneuvers are suspended.
     Restrained,
-    /// Station is performing a stationary simultaneous-button attack.
+    /// Station is performing a simultaneous-button attack.
     Special {
+        /// Signed horizontal drift in quarter pixels per tick.
+        drift_quarters: i16,
         /// Whether the provisional encounter strike has been consumed.
         hit: bool,
         /// Zero-based displayed maneuver tick.
@@ -271,10 +273,18 @@ impl Maneuver {
                 None => Self::Idle,
             },
             Self::Restrained => Self::Restrained,
-            Self::Special { hit, tick } => {
+            Self::Special {
+                drift_quarters,
+                hit,
+                tick,
+            } => {
                 let next = tick.saturating_add(1);
                 if next < self.pose_duration(player) {
-                    Self::Special { hit, tick: next }
+                    Self::Special {
+                        drift_quarters,
+                        hit,
+                        tick: next,
+                    }
                 } else {
                     Self::Idle
                 }
@@ -376,6 +386,14 @@ impl Maneuver {
             motion.release();
         }
     }
+
+    pub(super) const fn special(horizontal: i16) -> Self {
+        Self::Special {
+            drift_quarters: horizontal.signum().saturating_mul(3),
+            hit: false,
+            tick: 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -441,10 +459,7 @@ mod tests {
             let jump = JumpMotion::start();
             assert_eq!(cue_ticks(Maneuver::jump(), player), Vec::<u8>::new());
             assert_eq!(cue_ticks(Maneuver::air_attack(jump), player), [4]);
-            assert_eq!(
-                cue_ticks(Maneuver::Special { hit: false, tick: 0 }, player),
-                [4]
-            );
+            assert_eq!(cue_ticks(Maneuver::special(0), player), [4]);
         }
     }
 
@@ -513,7 +528,7 @@ mod tests {
             43, 42, 41, 39, 37, 34, 31, 28, 24, 20, 15, 10, 5,
         ];
         for player in Player::ALL {
-            let mut state = Maneuver::Special { hit: false, tick: 0 };
+            let mut state = Maneuver::special(0);
             for height in expected {
                 assert_eq!(state.elevation(), height);
                 assert!(state.airborne());

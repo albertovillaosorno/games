@@ -202,8 +202,11 @@ mod tests {
                 return Err(String::from("air attack shadow"));
             }
             if !(0..30).all(|tick| {
-                visible(player, Maneuver::Special { tick, hit: false })
-                    == (player != Player::Bart || (1..=4).contains(&tick))
+                visible(player, Maneuver::Special {
+                    drift_quarters: 0,
+                    tick,
+                    hit: false,
+                }) == (player != Player::Bart || (1..=4).contains(&tick))
             }) {
                 return Err(String::from("special shadow"));
             }

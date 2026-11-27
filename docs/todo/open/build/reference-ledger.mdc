@@ -826,3 +826,10 @@ without rejecting legitimately unmapped unresolved functions. The canonical
 inventory passes the stronger check: 31 partial mappings and three
 intentional runtime replacements, with unchanged function and graph
 counts. The remaining 1,534 unresolved functions are not completed.
+
+Eighteen isolated original replays refine the partial station-control
+mapping: fresh opposed directional edges select a jump; preheld
+directions select the special with its observed retained drift.
+Native regressions exercise the four stations, and the existing
+ground-attack fractional movement mapping names the shared remainder
+helper. No function, instruction or graph disposition is promoted.

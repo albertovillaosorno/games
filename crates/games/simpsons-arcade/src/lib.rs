@@ -351,6 +351,7 @@ struct PendingManeuver {
     button_edges: u8,
     candidate: Option<Maneuver>,
     chord: bool,
+    direction_edges: u8,
 }
 
 impl PendingManeuver {
@@ -365,10 +366,17 @@ impl PendingManeuver {
     }
 
     // Resolve after all input edges for this tick have arrived.
-    // A directional chord is the ordinary jump, including its release state.
-    const fn resolve(self, directional: bool) -> Option<Maneuver> {
-        if self.chord && !directional {
-            Some(Maneuver::Special { hit: false, tick: 0 })
+    // A fresh directional edge selects the ordinary jump, even if opposed.
+    const fn resolve(self, held: u8) -> Option<Maneuver> {
+        if self.chord && self.direction_edges & held == 0 {
+            let horizontal = if held & Control::Left.mask() != 0 {
+                -1
+            } else if held & Control::Right.mask() != 0 {
+                1
+            } else {
+                0
+            };
+            Some(Maneuver::special(horizontal))
         } else {
             self.candidate
         }
@@ -378,8 +386,8 @@ impl PendingManeuver {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Slot {
     action_recovery: Recovery,
-    attack_quarters: i16,
     held: u8,
+    horizontal_quarters: i16,
     meter_wait: u8,
     spawn: Point,
     station: Station,
@@ -387,8 +395,8 @@ struct Slot {
 
 impl Slot {
     fn advance_maneuver(&mut self, player: Player, pending: PendingManeuver) {
-        let (dx, dy) = self.direction();
-        let queued = pending.resolve(dx != 0 || dy != 0);
+        let (dx, _) = self.direction();
+        let queued = pending.resolve(self.held);
 
         self.action_recovery = self.action_recovery.advance();
         if self.station.can_fight()
@@ -470,21 +478,6 @@ impl Slot {
         }
     }
 
-    // Retain a quarter-pixel remainder and round the position downward.
-    const fn attack_step(&mut self, horizontal: i16) -> i16 {
-        let next = self.attack_quarters.saturating_add(horizontal.signum());
-        if next < 0 {
-            self.attack_quarters = next.saturating_add(4);
-            -1
-        } else if next >= 4 {
-            self.attack_quarters = next.saturating_sub(4);
-            1
-        } else {
-            self.attack_quarters = next;
-            0
-        }
-    }
-
     fn begin_maneuver(&mut self, maneuver: Maneuver) {
         if self.station.can_fight()
             && self.station.maneuver == Maneuver::Idle
@@ -500,7 +493,7 @@ impl Slot {
     }
 
     const fn damage(&mut self, amount: u8) {
-        self.attack_quarters = 0;
+        self.horizontal_quarters = 0;
         self.action_recovery = Recovery::Ready;
         self.station.health = self.station.health.saturating_sub(amount);
         self.station.maneuver = if self.station.health == 0 {
@@ -547,7 +540,31 @@ impl Slot {
         } else {
             self.held &= !mask;
         }
-        down && !was_held
+        let pressed = down && !was_held;
+        if pressed
+            && matches!(
+                control,
+                Control::Left | Control::Right | Control::Up | Control::Down
+            )
+        {
+            pending.direction_edges |= mask;
+        }
+        pressed
+    }
+
+    // Retain a quarter-pixel remainder and round the position downward.
+    const fn fractional_step(&mut self, quarters: i16) -> i16 {
+        let next = self.horizontal_quarters.saturating_add(quarters);
+        if next < 0 {
+            self.horizontal_quarters = next.saturating_add(4);
+            -1
+        } else if next >= 4 {
+            self.horizontal_quarters = next.saturating_sub(4);
+            1
+        } else {
+            self.horizontal_quarters = next;
+            0
+        }
     }
 
     const fn held(self, control: Control) -> bool {
@@ -564,16 +581,20 @@ impl Slot {
                 };
                 (motion.step().saturating_mul(forward), 0)
             },
-            Maneuver::Attack { tick: 2.., .. } => (self.attack_step(dx), 0),
-            Maneuver::Special { .. }
-            | Maneuver::Attack { .. }
+            Maneuver::Attack { tick: 2.., .. } => {
+                (self.fractional_step(dx.signum()), 0)
+            },
+            Maneuver::Special { drift_quarters, .. } => {
+                (self.fractional_step(drift_quarters), 0)
+            },
+            Maneuver::Attack { .. }
             | Maneuver::Restrained
             | Maneuver::Hurt { .. } => (0, 0),
             // Original drift continues through offset 18, then stops.
             Maneuver::Idle
                 if matches!(self.action_recovery, Recovery::Ground(2..)) =>
             {
-                (self.attack_step(dx), 0)
+                (self.fractional_step(dx.signum()), 0)
             },
             Maneuver::Idle if self.action_recovery != Recovery::Ready => (0, 0),
             Maneuver::Jump(ref mut motion) => (motion.horizontal_step(dx), dy),
@@ -609,7 +630,7 @@ impl Slot {
             || next_x < layout.min.x
             || next_x >= layout.max.x
         {
-            self.attack_quarters = 0;
+            self.horizontal_quarters = 0;
         }
         position.x = next_x.clamp(layout.min.x, layout.max.x);
         position.y = position
@@ -635,8 +656,8 @@ impl Slot {
     const fn new(position: Point) -> Self {
         Self {
             action_recovery: Recovery::Ready,
-            attack_quarters: 0,
             held: 0,
+            horizontal_quarters: 0,
             meter_wait: 0,
             spawn: position,
             station: Station {
@@ -656,7 +677,7 @@ impl Slot {
     }
 
     const fn restore_position(&mut self, camera: i16) {
-        self.attack_quarters = 0;
+        self.horizontal_quarters = 0;
         self.action_recovery = Recovery::Ready;
         self.station.position = Point {
             x: self.spawn.x.saturating_add(camera),
@@ -1863,7 +1884,7 @@ mod tests {
             change(Player::Homer, Control::Primary, true),
         ]);
         let [marge, homer, bart, lisa] = state.stations();
-        assert_eq!(marge.maneuver, Maneuver::Special { hit: false, tick: 0 });
+        assert_eq!(marge.maneuver, Maneuver::special(0));
         assert_eq!(homer.maneuver, marge.maneuver);
         assert_eq!(bart.maneuver, Maneuver::Idle);
         assert_eq!(lisa.maneuver, Maneuver::Idle);
@@ -1949,6 +1970,128 @@ mod tests {
             assert_eq!(chord.stations(), ordinary.stations());
         }
         assert_eq!(station_for(&chord, player).maneuver, Maneuver::Idle);
+    }
+
+    #[test]
+    fn fresh_opposed_directions_select_the_ordinary_jump() {
+        let all = [Control::Left, Control::Right, Control::Up, Control::Down];
+        for player in Player::ALL {
+            for directions in [
+                &[Control::Left, Control::Right][..],
+                &[Control::Up, Control::Down][..],
+                &all[..],
+            ] {
+                compare_opposed_chord(player, directions);
+            }
+        }
+    }
+
+    fn compare_opposed_chord(player: Player, directions: &[Control]) {
+        let mut ordinary = four_playing();
+        let mut chord = ordinary;
+        let position = station_for(&ordinary, player).position;
+        let mut edges = direction_changes(player, directions, true);
+        edges.push(change(player, Control::Secondary, true));
+        ordinary.input_step(3, &edges);
+        edges.push(change(player, Control::Primary, true));
+        chord.input_step(3, &edges);
+        assert_eq!(chord.stations(), ordinary.stations());
+        chord.input_step(4, &[change(player, Control::Primary, false)]);
+        ordinary.input_step(4, &[]);
+        assert_eq!(chord.stations(), ordinary.stations());
+        let mut release = direction_changes(player, directions, false);
+        release.push(change(player, Control::Secondary, false));
+        for tick in 5..63 {
+            let changes = if tick == 13 {
+                release.as_slice()
+            } else {
+                &[]
+            };
+            chord.input_step(tick, changes);
+            ordinary.input_step(tick, changes);
+            assert_eq!(chord.stations(), ordinary.stations());
+            assert_eq!(station_for(&chord, player).position, position);
+        }
+        assert_eq!(station_for(&chord, player).maneuver, Maneuver::Idle);
+    }
+
+    fn direction_changes(
+        player: Player,
+        directions: &[Control],
+        down: bool,
+    ) -> Vec<LogicalAction<Action>> {
+        directions
+            .iter()
+            .map(|control| change(player, *control, down))
+            .collect()
+    }
+
+    #[test]
+    fn preheld_directions_select_special_with_retained_drift() {
+        for player in Player::ALL {
+            for (directions, stride) in [
+                (&[Control::Right][..], 3i16),
+                (&[Control::Left][..], -3),
+                (&[Control::Left, Control::Right][..], -3),
+                (&[Control::Up][..], 0),
+                (&[Control::Up, Control::Down][..], 0),
+            ] {
+                check_special_drift(player, directions, stride);
+            }
+        }
+    }
+
+    fn check_special_drift(
+        player: Player,
+        directions: &[Control],
+        stride: i16,
+    ) {
+        let mut state = four_playing();
+        state.input_step(3, &direction_changes(player, directions, true));
+        state.input_step(4, &[]);
+        let position = station_for(&state, player).position;
+        state.input_step(5, &[
+            change(player, Control::Primary, true),
+            change(player, Control::Secondary, true),
+        ]);
+        let mut release = direction_changes(player, directions, false);
+        release.push(change(player, Control::Primary, false));
+        release.push(change(player, Control::Secondary, false));
+        assert_special_drift(station_for(&state, player), position, stride, 0);
+        for offset in 1..30u8 {
+            let edges = if offset == 10 {
+                release.as_slice()
+            } else {
+                &[]
+            };
+            state.input_step(5 + u64::from(offset), edges);
+            assert_special_drift(
+                station_for(&state, player),
+                position,
+                stride,
+                offset,
+            );
+        }
+        let previous = station_for(&state, player).position;
+        state.input_step(35, &[]);
+        let landed = station_for(&state, player);
+        assert_eq!(landed.maneuver, Maneuver::Idle);
+        assert_eq!(landed.position, previous);
+    }
+
+    fn assert_special_drift(
+        station: Station,
+        position: Point,
+        stride: i16,
+        offset: u8,
+    ) {
+        let elapsed = i16::from(offset).saturating_add(1);
+        let expected = stride.saturating_mul(elapsed).div_euclid(4);
+        assert_eq!(station.position.x, position.x.saturating_add(expected));
+        assert_eq!(station.position.y, position.y);
+        let maneuver = station.maneuver;
+        assert!(matches!(maneuver, Maneuver::Special { tick, .. }
+                if tick == offset));
     }
 
     #[test]

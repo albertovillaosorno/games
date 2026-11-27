@@ -4623,3 +4623,25 @@ cue alignment and control/collision behavior during the landing remain
 open. Regression checks cover the shared arc, alternating steering,
 staggered landing, pause, reset and station preservation; campaign
 readback checks cover the arrival before ordinary combat resumes.
+
+### Fresh direction edges and moving specials
+
+Isolated original input replays show that two fresh action buttons
+with a fresh directional press select the ordinary jump, even when
+horizontal, vertical or all four directional inputs cancel translation.
+Six opposed-direction traces match the ordinary directional jump
+in state, elevation and vertical velocity across 60 sampled ticks.
+When a direction is held before both action edges, the original
+instead selects the special. Horizontal preheld input initializes
+three quarter pixels of signed drift per tick, retained across the
+30-tick special even after release. Left wins when both horizontal
+directions are preheld; preheld vertical-only input does not drift.
+Rightward drift was independently reproduced on all four stations.
+
+Native now distinguishes fresh directional edges from preheld input
+and shares the existing fractional coordinate carry with the special.
+Input events are resolved against the final held state of the tick.
+Regressions compare opposed jumps and signed special trajectories,
+including release and landing, for every station. Fresh full workspace
+validation passed. Other action, terrain and cooperative contexts
+remain outside this comparison.
