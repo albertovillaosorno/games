@@ -29,7 +29,7 @@
 // - Defaults:
 //   - Fixed base extent unless the strip and adaptive mode are selected.
 
-//! Bounded opening-street art and responsive native placement.
+//! Bounded stage art and responsive native placement.
 
 use std::num::NonZeroU64;
 
@@ -38,16 +38,17 @@ use games::presentation::{
     DisplaySettings, PresentationMode, centered_expansion, expanded_anchor,
 };
 use games::replay::InputStep as _;
-use games_assets::{AssetFormat, ManifestLimits};
+use games_assets::{AssetFormat, ContentHash, ManifestLimits};
 use games_platform::ir::frame::{FrameLayout, RenderError};
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
-use games_platform::ir::storage::bundle::CanonicalBundle;
+use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
 
 use super::{
-    Action, Art, Cabinet, Control, Controls, Player, Point, PreviewOptions,
-    Scene, StreetLayout, dimension, failure, live, size, smoke_press,
+    Action, Art, Cabinet, Control, Controls, LoadedArt, Player, Point,
+    PreviewOptions, Scene, StreetLayout, dimension, failure, live, open_bundle,
+    open_selected_bundle, size, smoke_press,
 };
 pub(super) const BASE_WIDTH: u32 = crate::BASE_WIDTH;
 use crate::{MAX_VIEW_WIDTH, SIDE, view_origin, viewport_width};
@@ -59,6 +60,26 @@ const TOP: u32 = 28;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct WorldArt {
     art: Art,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StageArt {
+    pub(super) background: Art,
+    pub(super) world: WorldArt,
+}
+
+impl StageArt {
+    pub(super) fn load(
+        store: BundleSource<'_>,
+        scene: &mut SceneSession<'_, '_>,
+        [base, strip]: [ContentHash; 2],
+    ) -> Result<Self, RenderError> {
+        let bundle = open_bundle(store, base)?;
+        let (background, original) = load_background(scene, &bundle)?;
+        let extension = open_selected_bundle(store, strip, bundle_limits()?)?;
+        let world = WorldArt::load(scene, &original, &extension)?;
+        Ok(Self { background, world })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -236,6 +257,33 @@ impl WorldArt {
 
 pub(super) const fn atlas_budget() -> u32 {
     MAX_STRIP_WIDTH * HEIGHT * 4
+}
+
+pub(super) fn load_background<'bundle>(
+    scene: &mut SceneSession<'_, '_>,
+    bundle: &'bundle CanonicalBundle,
+) -> Result<LoadedArt<'bundle>, RenderError> {
+    let (mut background, original) =
+        Art::load_with_pixels(scene, bundle, "scene/background")?;
+    if (background.rect.width.get(), background.rect.height.get())
+        != (BASE_WIDTH, BASE_HEIGHT)
+    {
+        return Err(failure("unexpected background dimensions"));
+    }
+    // The captured HUD is replaced by live station state.
+    background.rect.y = i32::try_from(TOP).map_err(failure)?;
+    background.rect.height = dimension(HEIGHT)?;
+    Ok((background, original))
+}
+
+pub(super) fn stage_atlas_budget() -> usize {
+    usize::try_from(
+        BASE_WIDTH
+            .saturating_mul(BASE_HEIGHT)
+            .saturating_mul(4)
+            .saturating_add(atlas_budget()),
+    )
+    .unwrap_or_default()
 }
 
 pub(super) fn bundle_limits() -> Result<ManifestLimits, RenderError> {

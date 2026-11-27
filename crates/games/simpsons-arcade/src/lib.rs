@@ -719,10 +719,12 @@ struct Encounter {
     art_travel: i16,
     enemies: [Option<Enemy>; ENEMY_CAPACITY],
     marge_restraint: bool,
+    opening_spawn: Point,
     progressive: bool,
+    stage_two: bool,
 }
 
-/// Deterministic first-street title state, independent of the host platform.
+/// Deterministic arcade title state, independent of the host platform.
 ///
 /// The prototype omits the original intro, full stage progression, collision
 /// and scoring. Optional combat, continuing and maneuver timings are
@@ -742,12 +744,21 @@ pub struct Cabinet {
     scroll_limit: i16,
     session: LocalSession,
     slots: [Slot; 4],
+    stage_two_limit: Option<i16>,
     stationary_tick: Option<u16>,
     wrestler: Option<Wrestler>,
     wrestler_enabled: bool,
 }
 
 impl Cabinet {
+    fn active_scroll_limit(&self) -> i16 {
+        if self.stage_two() {
+            self.stage_two_limit.unwrap_or_default()
+        } else {
+            self.scroll_limit
+        }
+    }
+
     fn admit_bonus(&mut self) {
         if self.bonus_enabled
             && self
@@ -768,19 +779,19 @@ impl Cabinet {
         }
         // The verified long street first reaches its full extent. On the
         // next playing tick the encounter settles one column to the left.
-        if self.scroll_limit == LATE_BACKDROP_ORIGIN
+        if !self.stage_two()
+            && self.scroll_limit == LATE_BACKDROP_ORIGIN
             && self.camera == LATE_BACKDROP_ORIGIN
         {
             self.camera = LATE_BACKDROP_SETTLED_ORIGIN;
             self.late_backdrop_tick = Some(0);
             return;
         }
+        let travel = self.active_scroll_limit();
         let limit = self
             .encounter
             .as_ref()
-            .map_or(self.scroll_limit, |encounter| {
-                encounter.limit_travel(self.scroll_limit)
-            });
+            .map_or(travel, |encounter| encounter.limit_travel(travel));
         if self.camera >= limit {
             return;
         }
@@ -828,6 +839,9 @@ impl Cabinet {
     }
 
     fn advance_scripted_scene(&mut self) {
+        if self.stage_two() {
+            return;
+        }
         if self.camera >= MID_STREET_SCRIPT_ORIGIN {
             self.scripted_tick = Some(self.scripted_tick.map_or(0, |tick| {
                 tick.saturating_add(1).min(MID_STREET_SCRIPT_TICKS)
@@ -1000,12 +1014,34 @@ impl Cabinet {
         }
     }
 
+    fn enter_stage_two(&mut self, travel: i16) {
+        if let Some(encounter) = &mut self.encounter {
+            encounter.enter_stage_two(travel);
+        }
+        self.bonus = None;
+        self.camera = 0;
+        self.cooperation.reset();
+        self.late_backdrop_tick = None;
+        self.scripted_tick = None;
+        self.stationary_tick = None;
+        self.wrestler = None;
+        for slot in &mut self.slots {
+            slot.restore_position(0);
+        }
+    }
+
     fn finish_tick(&mut self, mut pending: [PendingManeuver; 4]) {
         if self.phase() != Phase::Playing {
             return;
         }
         if let Some(bonus) = &mut self.bonus {
-            bonus.advance(pending.map(|queued| queued.button_edges != 0));
+            if bonus.phase() == BonusPhase::Complete
+                && let Some(limit) = self.stage_two_limit
+            {
+                self.enter_stage_two(limit);
+            } else {
+                bonus.advance(pending.map(|queued| queued.button_edges != 0));
+            }
             return;
         }
         let [marge, ..] = pending;
@@ -1019,12 +1055,13 @@ impl Cabinet {
         self.advance_continue();
         if self.phase() == Phase::Playing {
             let layout = self.movement_layout();
+            let travel = self.active_scroll_limit();
             self.cooperation
                 .advance(&mut self.slots, layout, pair_command);
             if let Some(encounter) = &mut self.encounter {
                 let defeated = encounter.advance(
                     layout,
-                    (self.layout, self.scroll_limit),
+                    (self.layout, travel),
                     (&mut self.slots, restraint_edge),
                 );
                 self.impact_cues = self.impact_cues.saturating_add(defeated);
@@ -1089,6 +1126,7 @@ impl Cabinet {
             scroll_limit: 0,
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
+            stage_two_limit: None,
             stationary_tick: None,
             wrestler: None,
             wrestler_enabled: false,
@@ -1128,6 +1166,7 @@ impl Cabinet {
         self.wrestler = None;
         if let Some(encounter) = &mut self.encounter {
             encounter.restart();
+            encounter.art_travel = self.scroll_limit;
         }
         for slot in &mut self.slots {
             let held = slot.held;
@@ -1151,6 +1190,15 @@ impl Cabinet {
     #[must_use]
     pub const fn session(&self) -> LocalSession {
         self.session
+    }
+
+    /// Whether the optional second stage has been admitted.
+    #[must_use]
+    pub const fn stage_two(&self) -> bool {
+        match self.encounter {
+            Some(encounter) => encounter.stage_two,
+            None => false,
+        }
     }
 
     /// Current fixed-step phase of the stationary scenic actor.
@@ -1206,6 +1254,7 @@ impl Cabinet {
         self.bonus_enabled = enabled && self.wrestler_enabled;
         if !self.bonus_enabled {
             self.bonus = None;
+            self.stage_two_limit = None;
         }
         self
     }
@@ -1250,6 +1299,7 @@ impl Cabinet {
             self.wrestler = None;
             self.bonus = None;
             self.bonus_enabled = false;
+            self.stage_two_limit = None;
         }
         self
     }
@@ -1310,7 +1360,8 @@ impl Cabinet {
     ) -> Result<Self, LayoutError> {
         let requested = i16::try_from(travel)
             .map_err(|_error| LayoutError::ScrollOverflow)?;
-        if self.layout.max.x.checked_add(requested).is_none()
+        if self.stage_two()
+            || self.layout.max.x.checked_add(requested).is_none()
             || requested < self.camera
         {
             return Err(LayoutError::ScrollOverflow);
@@ -1319,6 +1370,21 @@ impl Cabinet {
             encounter.art_travel = requested;
         }
         self.scroll_limit = requested;
+        Ok(self)
+    }
+
+    /// Opt into the verified extent of the provisional second stage.
+    /// Requires the optional balloon bonus and a positive art extent.
+    /// # Errors
+    /// Rejects travel outside the representable world coordinates.
+    pub fn with_stage_two(mut self, travel: u16) -> Result<Self, LayoutError> {
+        let limit = i16::try_from(travel)
+            .map_err(|_error| LayoutError::ScrollOverflow)?;
+        if self.stage_two() || self.layout.max.x.checked_add(limit).is_none() {
+            return Err(LayoutError::ScrollOverflow);
+        }
+        self.stage_two_limit =
+            (self.bonus_enabled && limit > 0).then_some(limit);
         Ok(self)
     }
 
@@ -1487,6 +1553,7 @@ fn cabinet() -> Cabinet {
         scroll_limit: 0,
         session: LocalSession::default(),
         slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
+        stage_two_limit: None,
         stationary_tick: None,
         wrestler: None,
         wrestler_enabled: false,
@@ -3155,6 +3222,74 @@ mod tests {
         assert_eq!(state.stations(), stations);
         assert_bonus_inputs(state);
         assert_bonus_chord(state);
+    }
+
+    #[test]
+    fn second_stage_preserves_stations_and_resets_campaign() {
+        let initial = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(270));
+        assert!(initial.is_ok());
+        let Ok(mut state) = initial else {
+            return;
+        };
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.input_step(1, &pulse(Player::Homer, Control::Start));
+        state.camera = LATE_BACKDROP_SETTLED_ORIGIN;
+        let [marge, ..] = &mut state.slots;
+        marge.station.health = PLAYER_HEALTH.saturating_sub(1);
+        marge.station.stocks = 1;
+        state.wrestler = Some(Wrestler {
+            action: WrestlerAction::Cleared,
+            health: 0,
+            ..Wrestler::new(state.camera)
+        });
+        state.admit_bonus();
+        for tick in 2..4000 {
+            if state.bonus().map(Bonus::phase) == Some(BonusPhase::Complete) {
+                break;
+            }
+            state.input_step(tick, &[]);
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Complete));
+        state.input_step(4000, &pulse(Player::Marge, Control::Pause));
+        state.input_step(4001, &[]);
+        assert!(!state.stage_two());
+        assert_stage_two_handoff(state);
+    }
+
+    fn assert_stage_two_handoff(mut state: Cabinet) {
+        let before = state.stations();
+        state.input_step(4002, &pulse(Player::Marge, Control::Pause));
+        assert!(state.stage_two());
+        assert_eq!(state.camera_origin(), 0);
+        assert_eq!(state.bonus(), None);
+        assert_eq!(state.wrestler(), None);
+        assert_eq!(state.enemies().count(), 2);
+        assert_stage_two_stations(&before, &state.stations());
+        assert_stage_two_restart(state);
+    }
+
+    fn assert_stage_two_stations(before: &[Station; 4], after: &[Station; 4]) {
+        for (old, new) in before.iter().zip(after) {
+            assert_eq!(old.health, new.health);
+            assert_eq!(old.stocks, new.stocks);
+            assert_eq!(old.participation, new.participation);
+            assert_eq!(old.display_health, new.display_health);
+        }
+    }
+
+    fn assert_stage_two_restart(mut state: Cabinet) {
+        state.input_step(4003, &pulse(Player::Marge, Control::Primary));
+        assert_ne!(
+            state.stations().first().map(|station| station.maneuver),
+            Some(Maneuver::Idle)
+        );
+        state.reset_world();
+        assert!(!state.stage_two());
+        assert_eq!(state.active_scroll_limit(), 1360);
+        assert_eq!(state.enemies().count(), 1);
     }
 
     fn assert_bonus_chord(mut state: Cabinet) {

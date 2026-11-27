@@ -343,18 +343,26 @@ fn manifest_requests(
         .transpose()?
         .unwrap_or_default();
     let art = art_bundle_limits()?;
+    let strip_limits = world::bundle_limits()?;
     let mut requests: Vec<_> = selection
         .actors
         .into_iter()
         .chain(selection.enemy.into_iter().flatten())
         .chain(selection.shadow)
         .chain(catalogue.digests())
-        .map(|digest| ManifestRequest { digest, limits: art })
+        .map(|digest| ManifestRequest {
+            digest,
+            limits: if Some(digest) == catalogue.stage_two_strip() {
+                strip_limits
+            } else {
+                art
+            },
+        })
         .collect();
     if let Some(digest) = selection.world {
         requests.push(ManifestRequest {
             digest,
-            limits: world::bundle_limits()?,
+            limits: strip_limits,
         });
     }
     if let Some(audio) = selection.audio {

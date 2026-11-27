@@ -569,7 +569,7 @@ fn smoke_wrestler(
     let initial = cabinet_with_scroll(true, LocalSession::default(), limit)?
         .with_late_wrestler(true)
         .with_bonus(art.poses.bonus.is_some());
-    let mut simulation = fixed(initial)?;
+    let mut simulation = fixed(art.poses.configure_stage_two(&initial)?)?;
     let mut controls = Controls::new(touch_enabled)?;
     pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
     advance(&mut simulation, 1)?;
@@ -634,7 +634,52 @@ fn smoke_bonus(
     write_status(format_args!(
         "Bonus: routed pumping, pause, winning result and completion verified"
     ))
-    .map_err(failure)
+    .map_err(failure)?;
+    smoke_stage_two(scene, art, controls, simulation)
+}
+
+fn smoke_stage_two(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let Some(stage) = art.poses.stage_two else {
+        return Ok(());
+    };
+    let before = scene.readback()?;
+    advance(simulation, 1)?;
+    let entry = simulation.state();
+    if !entry.stage_two()
+        || entry.camera_origin() != 0
+        || entry.bonus().is_some()
+        || entry.wrestler().is_some()
+    {
+        return Err(failure("second stage was not admitted"));
+    }
+    let impacts = entry.impact_cues();
+    let _entry = art.present(scene, entry)?;
+    if before == scene.readback()? {
+        return Err(failure("second-stage entry did not change readback"));
+    }
+    let limit = i16::try_from(stage.world.scroll_limit()?).map_err(failure)?;
+    let mut held = None;
+    for _ in 0..5000u16 {
+        let cabinet = simulation.state();
+        if cabinet.stage_two()
+            && cabinet.camera_origin() == limit
+            && cabinet.impact_cues() > impacts
+        {
+            let _drawn = art.present(scene, cabinet)?;
+            return write_status(format_args!(
+                "Second stage: routed combat and {limit} columns verified"
+            ))
+            .map_err(failure);
+        }
+        let intent = cabinet.diagnostic_intent();
+        advance_diagnostic(controls, simulation, &mut held, intent)?;
+    }
+    Err(failure("second-stage combat or travel was not reached"))
 }
 
 fn await_bonus(

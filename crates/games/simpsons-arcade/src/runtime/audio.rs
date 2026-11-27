@@ -315,6 +315,9 @@ enum MusicCue {
 
 impl MusicCue {
     fn select(cabinet: &Cabinet) -> Self {
+        if cabinet.stage_two() {
+            return Self::Quiet;
+        }
         if let Some(bonus) = cabinet.bonus() {
             return match bonus.phase() {
                 BonusPhase::Pumping => Self::Pumping,

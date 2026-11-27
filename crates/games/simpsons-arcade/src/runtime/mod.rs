@@ -612,16 +612,7 @@ impl Scene {
         let touch_enabled = options.touch_enabled;
         let profiles = &options.controls.profiles;
         let [first, _, _, _] = &source.actors;
-        let (mut background, original) =
-            Art::load_with_pixels(scene, first, "scene/background")?;
-        if (background.rect.width.get(), background.rect.height.get())
-            != (world::BASE_WIDTH, world::BASE_HEIGHT)
-        {
-            return Err(failure("unexpected background dimensions"));
-        }
-        // The original HUD reflects the captured player, not live state.
-        background.rect.y = 28i32;
-        background.rect.height = dimension(196)?;
+        let (background, original) = world::load_background(scene, first)?;
         let world_art = source
             .world
             .as_ref()
@@ -724,6 +715,16 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
     ) -> Result<world::View, RenderError> {
+        let active_world = if cabinet.stage_two() {
+            Some(
+                self.poses
+                    .stage_two
+                    .ok_or(RenderError::InvalidSprite)?
+                    .world,
+            )
+        } else {
+            self.world_art
+        };
         let width = if self.poses.backdrop.draw(cabinet).is_some() {
             let base = FrameLayout::new(
                 dimension(world::BASE_WIDTH)?,
@@ -735,16 +736,15 @@ impl Scene {
                 )?,
             )?;
             scene.fit_adaptive_width(base)?.width().get()
-        } else if let Some(art) = self.world_art {
+        } else if let Some(art) = active_world {
             let maximum = art.maximum(scene.layout())?;
             scene.fit_adaptive_width(maximum)?.width().get()
         } else {
             scene.layout().width().get()
         };
-        self.world_art
-            .map_or(Ok(world::View { origin: 0, width }), |art| {
-                art.view(width, cabinet.camera_origin())
-            })
+        active_world.map_or(Ok(world::View { origin: 0, width }), |art| {
+            art.view(width, cabinet.camera_origin())
+        })
     }
 
     fn queue_background(
@@ -752,6 +752,11 @@ impl Scene {
         cabinet: &Cabinet,
         view: world::View,
     ) -> Result<(), RenderError> {
+        if cabinet.stage_two() {
+            let stage =
+                self.poses.stage_two.ok_or(RenderError::InvalidSprite)?;
+            return stage.world.queue(stage.background, view, &mut self.draws);
+        }
         if let Some(draw) = self.poses.backdrop.draw(cabinet) {
             self.draws.push(draw);
         } else if let Some(art) = self.world_art {
@@ -1298,7 +1303,7 @@ impl Interactive {
             art.combat.is_some(),
             options.session(reserved),
             scroll_limit,
-        )?);
+        )?)?;
         let preview = Self::new(startup, options, &cabinet, host)?;
         options.controls.persist().map_err(failure)?;
         Ok(preview)
@@ -3064,7 +3069,7 @@ fn smoke_cooperation(
     }
     let mut cabinet = art.poses.configure_cabinet(
         &Cabinet::new(StreetLayout::DOWNTOWN).map_err(failure)?,
-    );
+    )?;
     for player in Player::ALL {
         cabinet.input_step(0, &[
             LogicalAction {

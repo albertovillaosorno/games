@@ -45,7 +45,7 @@ use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::storage::bundle::BundleSource;
 use games_platform::ir::storage::file::snapshot;
 
-use super::world::WorldArt;
+use super::world::{self, StageArt, WorldArt};
 use super::{
     Art, KEYS, Maneuver, Player, Station, backdrop, bonus, failure,
     open_bundle, scenery, wrestler,
@@ -119,6 +119,7 @@ pub(super) struct Catalogue {
     bonus: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
     scenery: scenery::Catalogue,
+    stage_two: Option<[ContentHash; 2]>,
     wrestler: wrestler::Catalogue,
 }
 
@@ -158,6 +159,10 @@ impl Catalogue {
             .saturating_add(
                 usize::from(self.bonus.is_some())
                     .saturating_mul(bonus::ATLAS_BYTES),
+            )
+            .saturating_add(
+                usize::from(self.stage_two.is_some())
+                    .saturating_mul(world::stage_atlas_budget()),
             )
     }
 
@@ -201,6 +206,7 @@ impl Catalogue {
             && self.backdrop.complete()
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
+            && (self.stage_two.is_none() || self.bonus.is_some())
     }
 
     pub(super) fn count(&self) -> usize {
@@ -210,6 +216,9 @@ impl Catalogue {
             .saturating_add(self.backdrop_count())
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
+            .saturating_add(
+                usize::from(self.stage_two.is_some()).saturating_mul(2),
+            )
     }
 
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
@@ -220,6 +229,7 @@ impl Catalogue {
             .chain(self.backdrop.digests())
             .chain(self.wrestler.digests())
             .chain(self.bonus)
+            .chain(self.stage_two.into_iter().flatten())
     }
 
     pub(super) fn has_scenery(&self) -> bool {
@@ -264,6 +274,10 @@ impl Catalogue {
                 .transpose()?,
             entries,
             scenery: self.scenery.load(store, scene)?,
+            stage_two: self
+                .stage_two
+                .map(|hashes| StageArt::load(store, scene, hashes))
+                .transpose()?,
             wrestler: self.wrestler.load(store, scene)?,
         })
     }
@@ -284,7 +298,12 @@ impl Catalogue {
         let mut backdrop = backdrop::Catalogue::default();
         let mut wrestler = wrestler::Catalogue::default();
         let mut bonus = None;
+        let mut stage_two = None;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            if line.split_whitespace().next() == Some("stage-two") {
+                stage_two = Some(parse_stage_two(line, stage_two)?);
+                continue;
+            }
             if line.split_whitespace().next() == Some("bonus") {
                 bonus = Some(parse_bonus(line, bonus)?);
                 continue;
@@ -316,6 +335,7 @@ impl Catalogue {
             bonus,
             entries,
             scenery,
+            stage_two,
             wrestler,
         };
         if !catalogue.complete() {
@@ -327,6 +347,10 @@ impl Catalogue {
     pub(super) fn scenic_sprite_count(&self) -> usize {
         self.scenery.track_count()
     }
+
+    pub(super) fn stage_two_strip(&self) -> Option<ContentHash> {
+        self.stage_two.map(|[_, strip]| strip)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -335,19 +359,37 @@ pub(super) struct PoseArt {
     pub(super) bonus: Option<bonus::BonusArt>,
     entries: BTreeMap<Key, Art>,
     pub(super) scenery: scenery::PlacedArt,
+    pub(super) stage_two: Option<StageArt>,
     pub(super) wrestler: wrestler::WrestlerArt,
 }
 
 impl PoseArt {
-    pub(super) fn configure_cabinet(&self, cabinet: &Cabinet) -> Cabinet {
-        Pair::ALL.into_iter().fold(
+    pub(super) fn configure_cabinet(
+        &self,
+        cabinet: &Cabinet,
+    ) -> Result<Cabinet, RenderError> {
+        let configured = Pair::ALL.into_iter().fold(
             cabinet
                 .with_cooperative_pairs(self.paired_families())
                 .with_marge_restraint(self.restraint_enabled())
                 .with_late_wrestler(self.wrestler.enabled())
                 .with_bonus(self.bonus.is_some()),
             |state, pair| state.with_pair_jump(pair, self.pair_jump(pair)),
-        )
+        );
+        self.configure_stage_two(&configured)
+    }
+
+    pub(super) fn configure_stage_two(
+        &self,
+        cabinet: &Cabinet,
+    ) -> Result<Cabinet, RenderError> {
+        if let Some(stage) = self.stage_two {
+            (*cabinet)
+                .with_stage_two(stage.world.scroll_limit()?)
+                .map_err(failure)
+        } else {
+            Ok(*cabinet)
+        }
     }
 
     pub(super) fn enemy(&self, action: EnemyAction) -> Option<Art> {
@@ -457,6 +499,7 @@ impl PoseArt {
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
                 .collect(),
             scenery: scenery::PlacedArt::default(),
+            stage_two: None,
             wrestler: wrestler::WrestlerArt::default(),
         }
     }
@@ -581,6 +624,25 @@ fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
                     .into_iter()
                     .all(|kind| entries.contains_key(&(subject, kind, 0))))
     })
+}
+
+fn parse_stage_two(
+    line: &str,
+    selected: Option<[ContentHash; 2]>,
+) -> Result<[ContentHash; 2], RenderError> {
+    let mut fields = line.split_whitespace();
+    let (Some("stage-two"), Some(base), Some(strip), None) =
+        (fields.next(), fields.next(), fields.next(), fields.next())
+    else {
+        return Err(failure("invalid stage-two record"));
+    };
+    if selected.is_some() || base == strip {
+        return Err(failure("duplicate stage-two record or role"));
+    }
+    Ok([
+        base.parse().map_err(failure)?,
+        strip.parse().map_err(failure)?,
+    ])
 }
 
 fn parse_bonus(
@@ -1402,12 +1464,54 @@ mod tests {
             return;
         };
         assert_bonus_budget(&plain, &selected);
+        assert_stage_two_catalogue(&fighter, &record, &selected);
         assert!(
             Catalogue::parse(&format!("{fighter}{record}{record}")).is_err()
         );
         assert!(
             Catalogue::parse(&format!("{fighter}bonus {HASH} extra")).is_err()
         );
+    }
+
+    fn assert_stage_two_catalogue(
+        fighter: &str,
+        bonus_record: &str,
+        selected: &Catalogue,
+    ) {
+        let other = "b".repeat(64);
+        let stage = format!("stage-two {HASH} {other}\n");
+        assert!(Catalogue::parse(&format!("{fighter}{stage}")).is_err());
+        let text = format!("{fighter}{bonus_record}{stage}");
+        let parsed = Catalogue::parse(&text);
+        assert!(parsed.is_ok());
+        if let Ok(value) = parsed {
+            assert_stage_two_budget(selected, &value, &other);
+        }
+        assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
+        assert!(
+            parse_stage_two(&format!("stage-two {HASH} {HASH}"), None).is_err()
+        );
+        assert!(parse_stage_two(&format!("stage-two {HASH}"), None).is_err());
+    }
+
+    fn assert_stage_two_budget(
+        selected: &Catalogue,
+        value: &Catalogue,
+        other: &str,
+    ) {
+        assert_eq!(value.count(), selected.count().saturating_add(2));
+        assert_eq!(value.digests().count(), value.count());
+        assert_eq!(
+            value.atlas_count(),
+            selected.atlas_count().saturating_add(2)
+        );
+        assert_eq!(
+            value.atlas_bytes(),
+            selected
+                .atlas_bytes()
+                .saturating_add(world::stage_atlas_budget())
+        );
+        assert_eq!(value.stage_two_strip(), other.parse().ok());
     }
 
     fn assert_bonus_budget(plain: &Catalogue, selected: &Catalogue) {

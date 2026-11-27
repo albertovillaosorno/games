@@ -3865,3 +3865,41 @@ These checks establish admission and runtime routing, not physical audio,
 browser audio playback, exact original timing or complete bonus parity.
 Stage 2 music and gameplay, complete bonus effects, scoring and physical
 acceptance remain open.
+
+### Optional second-stage playable entry
+
+A four-station moving control and an independent replay cover frames
+16,379 through 19,000. Each of 264 sampled raster, object DMA, tile RAM
+and palette records matches its replay counterpart byte-for-byte.
+All 132 reconstructed moving-control scenes match all 71,680 original
+pixels. A separate direction-release control holds both horizontal
+scroll layers at 422; the moving control advances them together to 180
+after wrapping. The neutral entry and four moving scenes have exact
+overlapping interiors and admit 270 additional world columns. The
+regular enemy object family and palette recur from the earlier street;
+the mascot and other distinct object families remain unimplemented.
+
+An optional `stage-two BASE_SHA STRIP_SHA` pose catalogue record requires
+the first bonus and its preceding boss art. It selects an independent
+base scene and a bounded canonical scrolling strip. Both source identities
+and the exact base prefix are checked before presentation. No original
+data or local digest selections are tracked. Legacy catalogues still
+hold the completed bonus rather than silently admitting another stage.
+
+The next playing tick after bonus completion resets camera, transient
+maneuvers and scenery, preserving participation, stock, health and HUD
+meter state. Regular-enemy behavior and fixed-step input are reused;
+the new wave positions, gate timings and combat rules are provisional.
+The first-stage music is not reused as Stage 2 music. Main-menu reset
+restores the opening encounter. Distinct enemies, scenery animations,
+title card, stage-specific soundtrack and subsequent progression remain
+open.
+
+Fresh workspace validation passed. The optimized 3,954,016-byte Linux
+executable passed original-backed offscreen OpenGL and dummy-audio
+diagnostics in aspect-fit and adaptive modes. Both routed runs cleared
+the boss, won the balloon bonus, entered the second stage, defeated
+enemies and traversed all 270 admitted columns. All measured movement
+and combat-strike submissions met the 16.667 ms budget. This is a
+bounded playable slice, not original gameplay parity, physical audio
+or browser playback acceptance.

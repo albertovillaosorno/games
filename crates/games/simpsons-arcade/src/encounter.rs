@@ -77,15 +77,26 @@ const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (FAR_STREET_ADMISSION, Point { x: -18, y: 152 }),
 ];
 
+// Provisional regular-enemy waves at the observed second-stage holds.
+const STAGE_TWO_REINFORCEMENTS: [(i16, Point); 4] = [
+    (0, Point { x: 334, y: 176 }),
+    (66, Point { x: -18, y: 192 }),
+    (128, Point { x: 334, y: 192 }),
+    (210, Point { x: 334, y: 176 }),
+];
+
 impl Encounter {
     pub(super) fn admit(&mut self, camera: i16) {
         if !self.progressive {
             return;
         }
         let [_, remaining @ ..] = &mut self.enemies;
-        for (entry, (trigger, anchor)) in
-            remaining.iter_mut().zip(REINFORCEMENTS)
-        {
+        let arrivals = if self.stage_two {
+            STAGE_TWO_REINFORCEMENTS.as_slice()
+        } else {
+            REINFORCEMENTS.as_slice()
+        };
+        for (entry, &(trigger, anchor)) in remaining.iter_mut().zip(arrivals) {
             if entry.is_some() || camera < trigger {
                 continue;
             }
@@ -146,6 +157,7 @@ impl Encounter {
                     || slots.iter().any(|slot| slot.station.can_fight()))
             {
                 let restraint = self.marge_restraint
+                    && !self.stage_two
                     && !was_held
                     && index != 0
                     && view.max.x
@@ -160,6 +172,15 @@ impl Encounter {
         self.enemies.iter().flatten().copied()
     }
 
+    pub(super) fn enter_stage_two(&mut self, travel: i16) {
+        self.stage_two = true;
+        self.art_travel = travel;
+        let [initial, remaining @ ..] = &mut self.enemies;
+        *initial = Some(Enemy::new(Point { x: 246, y: 190 }));
+        remaining.fill(None);
+        self.admit(0);
+    }
+
     pub(super) const fn initial(self) -> Option<Enemy> {
         let [initial, ..] = self.enemies;
         initial
@@ -169,20 +190,25 @@ impl Encounter {
         if !self.progressive {
             return travel;
         }
-        [
-            (OPENING_COMBAT_LIMIT, OPENING_ENEMY_COUNT),
-            (LATER_COMBAT_GATE, OPPOSING_ENEMY_COUNT),
-            (MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT),
-        ]
-        .into_iter()
-        .find(|&(_, count)| {
-            !self
-                .enemies
-                .iter()
-                .take(count)
-                .all(|entry| entry.is_some_and(|enemy| enemy.health == 0))
-        })
-        .map_or(travel, |(gate, _)| travel.min(gate))
+        let gates = if self.stage_two {
+            [(66, 2), (128, 3), (210, 4)]
+        } else {
+            [
+                (OPENING_COMBAT_LIMIT, OPENING_ENEMY_COUNT),
+                (LATER_COMBAT_GATE, OPPOSING_ENEMY_COUNT),
+                (MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT),
+            ]
+        };
+        gates
+            .into_iter()
+            .find(|&(_, count)| {
+                !self
+                    .enemies
+                    .iter()
+                    .take(count)
+                    .all(|entry| entry.is_some_and(|enemy| enemy.health == 0))
+            })
+            .map_or(travel, |(gate, _)| travel.min(gate))
     }
 
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
@@ -193,13 +219,16 @@ impl Encounter {
             art_travel: 0,
             enemies,
             marge_restraint: false,
+            opening_spawn: spawn,
             progressive,
+            stage_two: false,
         }
     }
 
     pub(super) fn restart(&mut self) {
+        self.stage_two = false;
         let [initial, remaining @ ..] = &mut self.enemies;
-        *initial = initial.map(Enemy::restart);
+        *initial = Some(Enemy::new(self.opening_spawn));
         remaining.fill(None);
     }
 }
@@ -522,10 +551,6 @@ impl Enemy {
         hit
     }
 
-    pub(super) const fn restart(self) -> Self {
-        Self::new(self.spawn)
-    }
-
     /// Whether the enemy still contributes a visible world sprite.
     #[must_use]
     pub const fn visible(self) -> bool {
@@ -658,6 +683,28 @@ mod tests {
         assert!(encounter.enemies().eq([Enemy::new(spawn)]));
         encounter.admit(50);
         assert_eq!(encounter.enemies().count(), 2);
+    }
+
+    #[test]
+    fn second_stage_waves_gate_only_their_own_travel() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, true);
+        encounter.enter_stage_two(270);
+        assert_eq!(encounter.enemies().count(), 2);
+        assert_eq!(encounter.limit_travel(270), 66);
+        defeat_prefix(&mut encounter, 2);
+        encounter.admit(66);
+        assert_eq!(encounter.enemies().count(), 3);
+        assert_eq!(encounter.limit_travel(270), 128);
+        defeat_prefix(&mut encounter, 3);
+        encounter.admit(128);
+        assert_eq!(encounter.enemies().count(), 4);
+        assert_eq!(encounter.limit_travel(270), 210);
+        defeat_prefix(&mut encounter, 4);
+        encounter.admit(210);
+        assert_eq!(encounter.enemies().count(), 5);
+        assert_eq!(encounter.limit_travel(270), 270);
+        encounter.restart();
+        assert_eq!(encounter.enemies().count(), 1);
     }
 
     fn defeat_prefix(encounter: &mut Encounter, count: usize) {
