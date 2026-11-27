@@ -769,8 +769,7 @@ impl Scene {
         view: world::View,
     ) -> Result<(), RenderError> {
         if let (Some(arrival), Some(entrance)) =
-            (self.poses.arrival.as_ref(), cabinet.stage_entrance())
-            && entrance.scripted_art()
+            (self.poses.arrival.as_ref(), cabinet.stage_arrival())
         {
             arrival.queue(
                 (cabinet, entrance),

@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Shared registered animation supports these independent layers.
 // - Summary:
-//   - Present the observed scripted descent without per-frame atlases.
+//   - Present the scripted descent and released tether withdrawal.
 // - Description:
 //   - Reuse body and tether payloads and the existing ground-shadow mask.
 // - Usage:
@@ -30,6 +30,8 @@
 //   - Fall back to the existing entrance pose without a selected bundle.
 
 //! Registered second-stage arrival body and tether presentation.
+
+use std::num::NonZeroI64;
 
 use games_assets::{AssetFormat, ContentHash};
 use games_platform::ir::frame::RenderError;
@@ -88,6 +90,9 @@ impl ArrivalArt {
         (view, shadow): (View, &ShadowArt),
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<(), RenderError> {
+        if !entrance.scripted_art() {
+            return self.queue_released(entrance, view, draws);
+        }
         // The shadows are below the airborne layers. Every tether precedes
         // every body, independently of the current character selection.
         let mut tethers = [None; 4];
@@ -116,30 +121,63 @@ impl ArrivalArt {
             if let Some((tether_point, tether_elevation)) =
                 entrance.presentation_sample(player, 2)
             {
-                let tether = *self
-                    .tethers
-                    .get(index)
-                    .ok_or(RenderError::InvalidSprite)?;
-                let origin = view.project(
-                    registration.tether(tether_point, tether_elevation),
-                );
                 draws.push(
                     shadow.draw(view.project(shadow_position(tether_point))),
                 );
                 *tethers.get_mut(index).ok_or(RenderError::InvalidSprite)? =
-                    Some(tether.draw(
-                        SpriteRect {
-                            x: i32::from(origin.x),
-                            y: i32::from(origin.y),
-                            ..tether.rect
-                        },
-                        false,
-                    ));
+                    Some(self.tether_draw(
+                        player,
+                        (tether_point, tether_elevation),
+                        view,
+                    )?);
             }
         }
         draws.extend(tethers.into_iter().flatten());
         draws.extend(bodies.into_iter().flatten());
         Ok(())
+    }
+
+    fn queue_released(
+        &self,
+        entrance: StageEntrance,
+        view: View,
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        for player in Player::ALL {
+            let Some(sample) = entrance.released_tether(player) else {
+                continue;
+            };
+            let draw = self.tether_draw(player, sample, view)?;
+            let height = NonZeroI64::from(draw.destination.height);
+            let bottom =
+                i64::from(draw.destination.y).saturating_add(height.get());
+            if bottom > 0 {
+                draws.push(draw);
+            }
+        }
+        Ok(())
+    }
+
+    fn tether_draw(
+        &self,
+        player: Player,
+        (point, elevation): (Point, i16),
+        view: View,
+    ) -> Result<SpriteDraw, RenderError> {
+        let tether = *self
+            .tethers
+            .get(player.index())
+            .ok_or(RenderError::InvalidSprite)?;
+        let origin = view
+            .project(Registration::for_player(player).tether(point, elevation));
+        Ok(tether.draw(
+            SpriteRect {
+                x: i32::from(origin.x),
+                y: i32::from(origin.y),
+                ..tether.rect
+            },
+            false,
+        ))
     }
 }
 
@@ -219,12 +257,13 @@ pub(super) fn verify(
     let Some(arrival) = art.poses.arrival.as_ref() else {
         return Ok(());
     };
-    let entrance =
-        cabinet.stage_entrance().ok_or(RenderError::InvalidSprite)?;
     let view = art.presentation_view(scene, cabinet)?;
     let shadow = art.shadow.as_ref().ok_or(RenderError::InvalidSprite)?;
     let mut expected = Vec::new();
-    arrival.queue((cabinet, entrance), (view, shadow), &mut expected)?;
+    let entrance = cabinet.stage_arrival();
+    if let Some(motion) = entrance {
+        arrival.queue((cabinet, motion), (view, shadow), &mut expected)?;
+    }
     if visible {
         if expected.is_empty()
             || !art
@@ -264,8 +303,8 @@ pub(super) fn verify(
         "absent"
     };
     write_status(format_args!(
-        "Second stage arrival layers: {state} at tick {}",
-        entrance.tick()
+        "Second stage arrival layers: {state} at tick {:?}",
+        entrance.map(StageEntrance::tick)
     ))
     .map_err(failure)
 }

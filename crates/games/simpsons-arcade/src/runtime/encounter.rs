@@ -899,10 +899,18 @@ fn verify_stage_entrance(
     advance(simulation, 2)?;
     verify_arrival_sample(scene, art, simulation, true)?;
     advance(simulation, 1)?;
-    verify_arrival_sample(scene, art, simulation, false)?;
-    advance(simulation, 63)?;
+    verify_arrival_sample(scene, art, simulation, true)?;
+    advance(simulation, 48)?;
+    verify_arrival_sample(scene, art, simulation, true)?;
+    advance(simulation, 15)?;
     if simulation.state().stage_entrance().is_some() {
         return Err(failure("second-stage landing did not finish"));
+    }
+    verify_arrival_sample(scene, art, simulation, true)?;
+    advance(simulation, 20)?;
+    verify_arrival_sample(scene, art, simulation, false)?;
+    if simulation.state().stage_arrival().is_some() {
+        return Err(failure("released arrival art did not retire"));
     }
     write_status(format_args!("Second stage: entrance and landing verified"))
         .map_err(failure)

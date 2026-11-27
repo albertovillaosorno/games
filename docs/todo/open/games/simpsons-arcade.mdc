@@ -4871,3 +4871,34 @@ preceding neutral sample, and both object retirement boundaries
 occur one tick later. The timing shift's cause is unconfirmed.
 Do not hard-code the neutral retirement ticks as unconditional
 gameplay events. Selective admission remains unverified.
+
+### Released tether presentation
+
+The registered body layers still end at displayed tick 231. The four
+existing rope payloads now continue independently at their final
+scripted origins, without allocating new atlas bytes or drawing a
+second set of ground shadows. A discrete acceleration curve matched
+all 86 sampled neutral offsets from ticks 232 through 317, including
+the held step at 311. It uses the observed alternate-step and later
+per-tick cadence; it does not assert the unexplained late object
+retirement timing. Fully clipped tether rectangles are not submitted.
+The initial station admission is latched: a new join after landing
+cannot inherit an earlier rope. Selective original admission remains
+unverified; this is a bounded native policy, not a parity claim.
+
+The single fixed-step arrival clock persists beyond the existing
+landing gate only for presentation. Portable regressions verify the
+unchanged tick-295 gameplay boundary, pause and reset behaviour,
+post-landing attack and join, selective tether ownership and the
+observed withdrawal samples. The clock retires when the tallest
+registered tether rectangle is wholly above the viewport at tick 314,
+not at the original object-group retirement boundary.
+
+Fresh full workspace validation passed. Original-backed native smoke
+with synthetic touch, Xvfb software OpenGL and dummy audio passed all
+five display modes: visible tether readback at ticks 232, 280 and 295,
+no arrival atlas at tick 315, and the subsequent routed combat and
+270-column travel. This supersedes the earlier all-layer absence
+check at tick 232. Station bubbles, ordinary body admission cadence,
+exact selective original timing, whole-scene equivalence and physical
+input/display acceptance remain open.

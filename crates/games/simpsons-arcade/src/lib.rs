@@ -932,20 +932,14 @@ impl Cabinet {
         let Some(mut entrance) = self.stage_entrance else {
             return false;
         };
+        let landing = !entrance.complete();
         entrance.advance();
-        let layout = self.movement_layout();
-        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
-            if !slot.station.can_fight() {
-                continue;
-            }
-            if let Some(point) = entrance.scripted_position(player) {
-                slot.station.position = point;
-            } else if entrance.steering_tick() {
-                slot.move_tick(layout);
-            }
+        if landing {
+            self.move_entrance_stations(entrance);
         }
-        self.stage_entrance = (!entrance.complete()).then_some(entrance);
-        true
+        self.stage_entrance =
+            (!entrance.presentation_complete()).then_some(entrance);
+        landing
     }
 
     fn apply(
@@ -958,19 +952,17 @@ impl Cabinet {
             return;
         };
         let index = character.index();
+        let playing = self.session.phase() == Phase::Playing;
+        let interlude = playing
+            && (self.bonus.is_some() || self.stage_entrance().is_some());
         let (Some(slot), Some(queued)) =
             (self.slots.get_mut(index), pending.get_mut(index))
         else {
             return;
         };
         let control = change.action.control;
-        let playing = self.session.phase() == Phase::Playing;
         if !slot.edge(control, change.down, queued)
-            || queued.capture_interlude(
-                playing
-                    && (self.bonus.is_some() || self.stage_entrance.is_some()),
-                control,
-            )
+            || queued.capture_interlude(interlude, control)
         {
             return;
         }
@@ -1064,7 +1056,7 @@ impl Cabinet {
     // It is not a simulation or production input rule.
     #[cfg(any(test, feature = "native-preview"))]
     fn diagnostic_intent(&self) -> DiagnosticIntent {
-        if self.stage_entrance.is_some() {
+        if self.stage_entrance().is_some() {
             return (None, None);
         }
         let [marge, ..] = self.stations();
@@ -1114,7 +1106,8 @@ impl Cabinet {
         self.cooperation.reset();
         self.late_backdrop_tick = None;
         self.scripted_tick = None;
-        self.stage_entrance = Some(StageEntrance::default());
+        self.stage_entrance =
+            Some(StageEntrance::new(self.stations().map(Station::can_fight)));
         self.stationary_tick = None;
         self.wrestler = None;
         for slot in &mut self.slots {
@@ -1182,6 +1175,20 @@ impl Cabinet {
     #[must_use]
     pub const fn late_backdrop_tick(&self) -> Option<u16> {
         self.late_backdrop_tick
+    }
+
+    fn move_entrance_stations(&mut self, entrance: StageEntrance) {
+        let layout = self.movement_layout();
+        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
+            if !slot.station.can_fight() {
+                continue;
+            }
+            if let Some(point) = entrance.scripted_position(player) {
+                slot.station.position = point;
+            } else if entrance.steering_tick() {
+                slot.move_tick(layout);
+            }
+        }
     }
 
     const fn movement_layout(&self) -> StreetLayout {
@@ -1281,10 +1288,19 @@ impl Cabinet {
         self.session
     }
 
+    // Unlike the gameplay entrance, this survives the landing boundary.
+    #[cfg(any(test, feature = "native-preview"))]
+    const fn stage_arrival(&self) -> Option<StageEntrance> {
+        self.stage_entrance
+    }
+
     /// Active second-stage arrival and landing sequence, if any.
     #[must_use]
     pub const fn stage_entrance(&self) -> Option<StageEntrance> {
-        self.stage_entrance
+        match self.stage_entrance {
+            Some(entrance) if !entrance.complete() => Some(entrance),
+            _ => None,
+        }
     }
 
     /// Whether the stage transition hides the game world.
@@ -3727,21 +3743,52 @@ mod tests {
         assert_eq!(held.stage_entrance().map(StageEntrance::tick), Some(232));
         held.reset_world();
         assert_eq!(held.stage_entrance(), None);
+        assert_eq!(held.stage_arrival(), None);
     }
 
     fn assert_stage_two_restart(mut state: Cabinet) {
         advance_empty(&mut state, 4206..4501);
         assert_eq!(state.stage_entrance(), None);
-        state.input_step(4501, &pulse(Player::Marge, Control::Primary));
+        assert_eq!(state.stage_arrival().map(StageEntrance::tick), Some(295));
+        assert_released_arrival(&mut state);
+        state.input_step(4502, &pulse(Player::Marge, Control::Primary));
         assert_ne!(
             state.stations().first().map(|station| station.maneuver),
             Some(Maneuver::Idle)
         );
+        advance_empty(&mut state, 4503..4520);
+        assert_eq!(state.stage_arrival(), None);
         state.reset_world();
+        assert_eq!(state.stage_arrival(), None);
         assert!(!state.stage_two());
         assert_eq!(state.active_scroll_limit(), 1360);
         assert_eq!(state.stations().map(|station| station.score), [0; 4]);
         assert_eq!(state.enemies().count(), 1);
+    }
+
+    fn assert_released_arrival(state: &mut Cabinet) {
+        let before = state
+            .stage_arrival()
+            .and_then(|entrance| entrance.released_tether(Player::Marge));
+        let mut paused = *state;
+        paused.input_step(4501, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut paused, 4502..4522);
+        assert_eq!(paused.stage_arrival(), state.stage_arrival());
+        state.input_step(4501, &pulse(Player::Bart, Control::Start));
+        let [_, _, bart, _] = state.stations();
+        assert!(bart.can_fight());
+        let arrival = state.stage_arrival();
+        assert_eq!(arrival.map(StageEntrance::tick), Some(296));
+        assert_eq!(
+            arrival.and_then(|entrance| entrance.released_tether(Player::Bart)),
+            None
+        );
+        assert_ne!(
+            arrival.and_then(|entrance| {
+                entrance.released_tether(Player::Marge)
+            }),
+            before
+        );
     }
 
     fn assert_bonus_chord(mut state: Cabinet) {
