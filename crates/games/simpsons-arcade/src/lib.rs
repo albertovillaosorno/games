@@ -293,7 +293,7 @@ pub struct Station {
     pub participation: Participation,
     /// Current foot position.
     pub position: Point,
-    /// Score from completed regular enemy defeats in this campaign.
+    /// Score from completed enemy and wrestler defeats in this campaign.
     pub score: u16,
     /// Remaining health stocks, including the active stock.
     pub stocks: u8,
@@ -302,7 +302,7 @@ pub struct Station {
 }
 
 impl Station {
-    const fn award_regular_defeat(&mut self) {
+    const fn award_defeat_point(&mut self) {
         // The original station counter uses four packed decimal digits.
         self.score = if self.score >= 9_999 {
             0

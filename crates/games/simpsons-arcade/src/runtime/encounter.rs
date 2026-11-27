@@ -617,11 +617,13 @@ pub(super) fn smoke_wrestler(
     advance(&mut simulation, 1)?;
     let mut held = None;
     let mut samples = 0u8;
+    let mut terminal_score = None;
     for _ in 0..8000u16 {
         let cabinet = simulation.state();
+        observe_wrestler_score(cabinet, &mut terminal_score)?;
         if observe_wrestler(scene, art, cabinet, &mut samples)? {
             write_status(format_args!(
-                "Wrestler: reached and cleared through routed input"
+                "Wrestler: routed clearance and delayed score verified"
             ))
             .map_err(failure)?;
             return smoke_bonus(scene, art, &mut controls, &mut simulation);
@@ -641,6 +643,7 @@ fn smoke_bonus(
     if art.poses.bonus.is_none() {
         return Ok(());
     }
+    let scores = simulation.state().stations().map(|station| station.score);
     await_bonus(simulation, BonusPhase::Instructions)?;
     let _instructions = art.present(scene, simulation.state())?;
     let initial = scene.readback()?;
@@ -672,6 +675,9 @@ fn smoke_bonus(
     let _complete = art.present(scene, simulation.state())?;
     if result == scene.readback()? {
         return Err(failure("bonus completion did not change readback"));
+    }
+    if simulation.state().stations().map(|station| station.score) != scores {
+        return Err(failure("bonus changed cumulative defeat score"));
     }
     write_status(format_args!(
         "Bonus: routed pumping, pause, winning result and completion verified"
@@ -777,6 +783,33 @@ fn verify_bonus_pause(
     }
     pulse(controls, simulation, scan)?;
     advance(simulation, 1)
+}
+
+fn observe_wrestler_score(
+    cabinet: &Cabinet,
+    terminal_score: &mut Option<u16>,
+) -> Result<(), RenderError> {
+    let Some(boss) = cabinet.wrestler() else {
+        return Ok(());
+    };
+    let [marge, homer, bart, lisa] = cabinet.stations();
+    if matches!(boss.action, WrestlerAction::Defeat { tick: 0 }) {
+        *terminal_score = Some(marge.score);
+    }
+    let Some(before) = *terminal_score else {
+        return Ok(());
+    };
+    let expected = if boss.action == WrestlerAction::Cleared {
+        before.saturating_add(1)
+    } else {
+        before
+    };
+    if marge.score != expected
+        || [homer, bart, lisa].iter().any(|station| station.score != 0)
+    {
+        return Err(failure("wrestler defeat score or station differs"));
+    }
+    Ok(())
 }
 
 fn observe_wrestler(

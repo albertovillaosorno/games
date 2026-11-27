@@ -4369,3 +4369,25 @@ identities and their direct continuations. The newly reviewed paths
 include conditional record retirement, terrain sampling, linked
 record state changes and nested state dispatchers. The latter remain
 unbounded; native actor behavior and campaign parity are not claimed.
+
+### Wrestler defeat scoring
+
+Four isolated original campaign replays trace a single boss award to
+the terminal response and its retained station. In all four, the
+score changes by one exactly 128 frames later. Two repeat controls
+match the score transitions and confirm the linked actor's station
+in the terminal response. Static review establishes two consecutive
+64-frame phases; the per-frame record trace confirms the active flag
+through the first phase, then alternating visibility until actor and
+rig clearance at the award. This explains why restricting late attack
+inputs alone did not determine credit.
+
+The native wrestler now retains the successful terminal striker, holds
+the defeat pose for 64 fixed ticks, blinks for 64, and awards one point
+through the existing station counter as the encounter clears. The
+bonus does not transfer its separate results into that counter. Tests
+cover all four credited stations, both defeat phases and a cooperative
+terminal hit. The routed native diagnostic also checks the delayed award
+and score preservation during the bonus. Simultaneous-strike ordering,
+the number of boss hits, the exact pose sequence and original campaign
+parity remain provisional.

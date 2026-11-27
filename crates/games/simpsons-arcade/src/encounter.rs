@@ -367,7 +367,7 @@ impl Enemy {
             && let Some(player) = self.defeat_credit.take()
             && let Some(slot) = slots.get_mut(player.index())
         {
-            slot.station.award_regular_defeat();
+            slot.station.award_defeat_point();
         }
     }
 
@@ -1607,9 +1607,9 @@ mod tests {
         let mut slot = Slot::new(Point { x: 132, y: 190 });
         slot.start(0, false);
         slot.station.score = 9_999;
-        slot.station.award_regular_defeat();
+        slot.station.award_defeat_point();
         assert_eq!(slot.station.score, 0);
-        slot.station.award_regular_defeat();
+        slot.station.award_defeat_point();
         slot.station.participation =
             Participation::Continuing { ticks_left: 1 };
         slot.start(0, true);

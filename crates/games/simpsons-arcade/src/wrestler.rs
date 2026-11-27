@@ -32,8 +32,9 @@
 //! Bounded experimental wrestler encounter.
 
 use super::{
-    Facing, Maneuver, Point, Slot, StreetLayout, WRESTLER_ATTACK_STRIKE,
-    distance, hurt_slot, in_range, player_strike, step_toward,
+    Facing, Maneuver, Player, Point, Slot, StreetLayout,
+    WRESTLER_ATTACK_STRIKE, distance, hurt_slot, in_range, player_strike,
+    step_toward,
 };
 
 // The entrance landmarks are approximate reference observations. The remaining
@@ -43,7 +44,10 @@ const INTRO_END: u16 = 251;
 const HEALTH: u8 = 12;
 const ATTACK_END: u8 = 48;
 const STAGGER_END: u8 = 18;
-const DEFEAT_END: u8 = 66;
+// The original terminal response holds for 64 frames, then blinks for
+// another 64 before issuing one point and clearing the encounter.
+const DEFEAT_HOLD: u8 = 64;
+const DEFEAT_END: u8 = 128;
 
 /// Current fixed-step state of the optional wrestler encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +83,8 @@ pub enum WrestlerAction {
 pub struct Wrestler {
     /// Current encounter action.
     pub action: WrestlerAction,
+    /// Retained terminal striker until the defeat point is awarded.
+    pub defeat_credit: Option<Player>,
     /// Direction of the next or current strike.
     pub facing: Facing,
     /// Remaining provisional hit points.
@@ -116,16 +122,27 @@ impl Wrestler {
             WrestlerAction::Intro { .. } | WrestlerAction::Stagger { .. } => {
                 WrestlerAction::Approach
             },
-            WrestlerAction::Defeat { tick } if tick < DEFEAT_END => {
-                WrestlerAction::Defeat {
-                    tick: tick.saturating_add(1),
-                }
-            },
-            WrestlerAction::Defeat { .. } | WrestlerAction::Cleared => {
-                WrestlerAction::Cleared
-            },
+            WrestlerAction::Defeat { tick } => self.advance_defeat(tick, slots),
+            WrestlerAction::Cleared => WrestlerAction::Cleared,
         };
         false
+    }
+
+    fn advance_defeat(
+        &mut self,
+        tick: u8,
+        slots: &mut [Slot; 4],
+    ) -> WrestlerAction {
+        let next = tick.saturating_add(1);
+        if next < DEFEAT_END {
+            return WrestlerAction::Defeat { tick: next };
+        }
+        if let Some(player) = self.defeat_credit.take()
+            && let Some(slot) = slots.get_mut(player.index())
+        {
+            slot.station.award_defeat_point();
+        }
+        WrestlerAction::Cleared
     }
 
     fn approach(
@@ -183,6 +200,7 @@ impl Wrestler {
     pub(super) const fn new(camera: i16) -> Self {
         Self {
             action: WrestlerAction::Intro { tick: 0 },
+            defeat_credit: None,
             facing: Facing::Right,
             health: HEALTH,
             position: Point {
@@ -194,13 +212,14 @@ impl Wrestler {
 
     fn receive_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
         let mut struck = false;
-        for slot in slots {
+        for (player, slot) in Player::ALL.into_iter().zip(slots) {
             if !player_strike(&mut slot.station, self.position, (42, 16)) {
                 continue;
             }
             self.health = self.health.saturating_sub(1);
             struck = true;
             if self.health == 0 {
+                self.defeat_credit = Some(player);
                 self.action = WrestlerAction::Defeat { tick: 0 };
                 return true;
             }
@@ -218,7 +237,7 @@ impl Wrestler {
             WrestlerAction::Intro { tick } => tick >= INTRO_VISIBLE,
             WrestlerAction::Cleared => false,
             WrestlerAction::Defeat { tick } => {
-                tick < 52 || !tick.is_multiple_of(2)
+                tick <= DEFEAT_HOLD || tick.is_multiple_of(2)
             },
             WrestlerAction::Approach
             | WrestlerAction::Attack { .. }
@@ -289,6 +308,49 @@ mod tests {
         );
         assert_eq!(boss.action, WrestlerAction::Cleared);
         assert!(!boss.visible());
+        assert_eq!(slots.map(|slot| slot.station.score), [0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn terminal_striker_receives_one_point_after_two_defeat_phases() {
+        for player in Player::ALL {
+            let mut boss = Wrestler::new(0);
+            boss.action = WrestlerAction::Approach;
+            boss.health = 1;
+            let mut slots = StreetLayout::DOWNTOWN.spawn.map(Slot::new);
+            for slot in &mut slots {
+                slot.station.participation = Participation::Playing;
+                slot.station.health = PLAYER_HEALTH;
+                slot.station.position = Point { x: 145, y: 190 };
+                slot.station.facing = Facing::Right;
+                slot.station.maneuver = Maneuver::Idle;
+            }
+            if let Some(slot) = slots.get_mut(player.index()) {
+                slot.station.maneuver =
+                    Maneuver::Attack { moving: false, tick: 10 };
+            }
+            assert!(boss.advance(StreetLayout::DOWNTOWN, &mut slots));
+            assert_terminal_phases(&mut boss, &mut slots, player);
+        }
+    }
+
+    fn assert_terminal_phases(
+        boss: &mut Wrestler,
+        slots: &mut [Slot; 4],
+        player: Player,
+    ) {
+        for tick in 0..128 {
+            assert_eq!(boss.action, WrestlerAction::Defeat { tick });
+            assert_eq!(boss.visible(), tick <= 64 || tick.is_multiple_of(2));
+            assert_eq!(slots.map(|slot| slot.station.score), [0; 4]);
+            assert!(!boss.advance(StreetLayout::DOWNTOWN, slots));
+        }
+        let expected = Player::ALL.map(|station| u16::from(station == player));
+        assert_eq!(boss.action, WrestlerAction::Cleared);
+        assert!(!boss.visible());
+        assert_eq!(slots.map(|slot| slot.station.score), expected);
+        advance_without_defeat(boss, slots, 8);
+        assert_eq!(slots.map(|slot| slot.station.score), expected);
     }
 
     fn advance_without_defeat(
