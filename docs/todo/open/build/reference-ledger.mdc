@@ -901,3 +901,21 @@ duplicate classified run names without changing function counts.
 Tiny fixtures cover invalid classification, blank retained evidence,
 unrelated run names, changed reproduction notes and ambiguous records.
 No historical capture is classified or removed by this change.
+
+Retention now scans all bounded ledger rows using the same archive
+classification as the checker. Two different records for one sealed run
+cannot authorize deletion, even if one retains the reviewed hash. A
+malformed row or duplicate classification field also prevents removal.
+Tests retain valid unrelated appends and reject conflicting appends
+during both preview and reviewed application, with both archive files
+left untouched.
+
+Retained original static and dynamic observations connect the balloon
+results completion to the conditional station reward. The original
+helper awards half of the full health meter only for a qualifying
+result, with saturation; the neutral replay produces no reward. Two
+partial Rust mappings now identify the validated bonus transition and
+station award. The canonical checker reports 35 partial mappings,
+three intentional runtime replacements and unchanged function, graph,
+semantic review and disposition counts. Original scheduler details,
+exact record predicates and meter presentation remain unresolved.

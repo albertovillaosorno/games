@@ -37,9 +37,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::str::from_utf8;
 
 use games_platform::ir::storage::file::snapshot;
-use games_platform::ir::toolchain::reference::retention::{
-    ARCHIVED_EVIDENCE_KIND, ARCHIVED_EVIDENCE_STATUS, ArchivedEvidence,
-};
+use games_platform::ir::toolchain::reference::retention::ArchivedEvidence;
 use games_platform::ir::toolchain::write_line;
 use serde::Deserialize;
 use serde_json::Value;
@@ -407,6 +405,10 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
         let failure = |message: &str| {
             format!("ledger line {}: {message}", index.saturating_add(1))
         };
+        if register_archived(line, &mut archived_runs).map_err(failure)? {
+            report.auxiliary = report.auxiliary.saturating_add(1);
+            continue;
+        }
         let value: Value = serde_json::from_str(line)
             .map_err(|_error| failure("invalid JSON record"))?;
         let record = value
@@ -416,8 +418,11 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
             .iter()
             .any(|key| record.contains_key(*key))
         {
-            validate_auxiliary(&value, line, &mut archived_runs)
-                .map_err(failure)?;
+            if !value.get("evidence").is_some_and(evidence)
+                || !value.get("reproduce").is_some_and(evidence)
+            {
+                return Err(failure("unrecognized auxiliary record"));
+            }
             report.auxiliary = report.auxiliary.saturating_add(1);
             continue;
         }
@@ -442,27 +447,19 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
     Ok(report)
 }
 
-fn validate_auxiliary(
-    value: &Value,
+fn register_archived(
     line: &str,
     archived_runs: &mut BTreeSet<String>,
-) -> Result<(), &'static str> {
-    let archive = value.get("kind").and_then(Value::as_str)
-        == Some(ARCHIVED_EVIDENCE_KIND)
-        || value.get("status").and_then(Value::as_str)
-            == Some(ARCHIVED_EVIDENCE_STATUS);
-    if archive {
-        let retained = ArchivedEvidence::parse(line.as_bytes())
-            .map_err(|_error| "invalid archived evidence")?;
-        if !archived_runs.insert(retained.run().to_owned()) {
-            return Err("duplicate archived investigation run");
-        }
-    } else if !value.get("evidence").is_some_and(evidence)
-        || !value.get("reproduce").is_some_and(evidence)
-    {
-        return Err("unrecognized auxiliary record");
+) -> Result<bool, &'static str> {
+    let Some(retained) = ArchivedEvidence::classify(line.as_bytes())
+        .map_err(|_error| "invalid ledger archive classification")?
+    else {
+        return Ok(false);
+    };
+    if !archived_runs.insert(retained.run().to_owned()) {
+        return Err("duplicate archived investigation run");
     }
-    Ok(())
+    Ok(true)
 }
 
 fn evidence(value: &Value) -> bool {
@@ -550,6 +547,10 @@ fn nonempty(value: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::slice::from_ref;
+
+    use games_platform::ir::toolchain::reference::retention::{
+        ARCHIVED_EVIDENCE_KIND, ARCHIVED_EVIDENCE_STATUS,
+    };
 
     use super::*;
 
@@ -658,6 +659,17 @@ mod tests {
         if audit(&duplicate, limit).is_ok() {
             return Err(String::from("duplicate archived run accepted"));
         }
+        let mut distinct = archive.clone();
+        set_field(
+            &mut distinct,
+            "evidence",
+            Value::from("different retained evidence"),
+        )?;
+        let conflict =
+            lines(&[first.clone(), second.clone(), archive.clone(), distinct]);
+        if audit(&conflict, limit).is_ok() {
+            return Err(String::from("conflicting archived run accepted"));
+        }
         for (field, value) in [
             ("kind", Value::from("other")),
             ("run", Value::from("../outside")),
@@ -671,6 +683,26 @@ mod tests {
             if audit(&input, limit).is_ok() {
                 return Err(format!("invalid archive field accepted: {field}"));
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn archive_classification_cannot_hide_or_repeat() -> Result<(), String> {
+        let [first, second] = pair();
+        let limit = NonZeroUsize::new(4).ok_or("fixture limit")?;
+        let mut disguised = first.clone();
+        set_field(&mut disguised, "kind", Value::from(ARCHIVED_EVIDENCE_KIND))?;
+        if audit(&lines(&[disguised, second.clone()]), limit).is_ok() {
+            return Err(String::from("archive declaration hid in function"));
+        }
+        let duplicate_kind = format!(
+            "{}\n{{\"kind\":\"archived-investigation\",\"kind\":\"other\",\
+             \"evidence\":\"fixture\",\"reproduce\":\"fixture\"}}",
+            lines(&[first, second])
+        );
+        if audit(&duplicate_kind, limit).is_ok() {
+            return Err(String::from("duplicate archive classification"));
         }
         Ok(())
     }

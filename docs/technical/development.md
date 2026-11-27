@@ -127,7 +127,9 @@ requires a classified archived-investigation record, not an arbitrary
 line with a matching hash. Its run name and reproduction note must
 match the directory and seal, and the retained evidence must be nonempty.
 Later ledger appends do not change an unchanged retained record.
-Duplicate retained records are rejected. The seal and record are owner
+Conflicting records naming the same run, malformed JSON rows and ambiguous
+classification fields are rejected at preview and apply, including records
+with distinct hashes. The seal and record are owner
 attestations: the guard does not inspect the opaque archive or certify
 reproducibility. No historical capture is automatically moved or classified.
 

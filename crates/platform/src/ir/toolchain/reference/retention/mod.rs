@@ -34,9 +34,11 @@
 
 use std::fmt::{Error as FormatError, Write as _};
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::str::from_utf8;
 
 use games_assets::ContentHash;
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::ToolchainError;
 
@@ -60,6 +62,34 @@ pub struct ArchivedEvidence {
 }
 
 impl ArchivedEvidence {
+    /// Identify a classified archive record in a bounded ledger row.
+    ///
+    /// # Errors
+    /// Rejects malformed JSON objects and invalid declared archive records.
+    pub fn classify(line: &[u8]) -> Result<Option<Self>, ToolchainError> {
+        if line
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace())
+            != Some(b'{')
+        {
+            return Err(evidence_error("expected ledger record object"));
+        }
+        let classification: ArchiveClassification =
+            serde_json::from_slice(line).map_err(|_error| {
+                evidence_error("invalid ledger record JSON")
+            })?;
+        if classification.kind.as_ref().and_then(Value::as_str)
+            == Some(ARCHIVED_EVIDENCE_KIND)
+            || classification.status.as_ref().and_then(Value::as_str)
+                == Some(ARCHIVED_EVIDENCE_STATUS)
+        {
+            Self::parse(line).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Whether the record identifies the exact run and seal reproduction.
     #[must_use]
     pub fn matches(&self, run: &str, reproduce: &str) -> bool {
@@ -70,7 +100,7 @@ impl ArchivedEvidence {
     ///
     /// # Errors
     /// Rejects malformed, unclassified, incomplete or unsafe records.
-    pub fn parse(line: &[u8]) -> Result<Self, ToolchainError> {
+    fn parse(line: &[u8]) -> Result<Self, ToolchainError> {
         let record: Self = serde_json::from_slice(line).map_err(|_error| {
             evidence_error("invalid archived evidence JSON")
         })?;
@@ -90,6 +120,12 @@ impl ArchivedEvidence {
     pub fn run(&self) -> &str {
         &self.run
     }
+}
+
+#[derive(Deserialize)]
+struct ArchiveClassification {
+    kind: Option<Value>,
+    status: Option<Value>,
 }
 
 /// Explicit age, quota and inventory admission bounds.
@@ -246,6 +282,44 @@ pub fn select(
         protected,
         removals,
     })
+}
+
+/// Verify the unique declared evidence for a run in an admitted ledger.
+/// The caller must bound and pin the source bytes before invoking this check.
+///
+/// # Errors
+/// Rejects malformed rows, absent evidence and conflicting declarations.
+pub fn verify_ledger_evidence(
+    bytes: &[u8],
+    run: &str,
+    reproduce: &str,
+    digest: ContentHash,
+) -> Result<(), ToolchainError> {
+    let text = from_utf8(bytes)
+        .map_err(|_error| evidence_error("ledger must be UTF-8"))?;
+    let mut found = false;
+    for line in text.split_terminator('\n') {
+        let Some(evidence) = ArchivedEvidence::classify(line.as_bytes())?
+        else {
+            continue;
+        };
+        if evidence.run() != run {
+            continue;
+        }
+        if found
+            || !evidence.matches(run, reproduce)
+            || ContentHash::calculate(line.as_bytes()) != digest
+        {
+            return Err(evidence_error(
+                "retained evidence is ambiguous or changed",
+            ));
+        }
+        found = true;
+    }
+    if !found {
+        return Err(evidence_error("retained evidence identity changed"));
+    }
+    Ok(())
 }
 
 pub(crate) fn safe_component(name: &str) -> bool {

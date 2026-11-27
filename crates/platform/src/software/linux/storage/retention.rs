@@ -50,9 +50,9 @@ use super::file::{
 };
 use super::pinned_directory_entries;
 use crate::ir::toolchain::reference::retention::{
-    ARCHIVED_EVIDENCE_STATUS, ArchivedEvidence, Candidate, Inventory,
-    Operation, Plan, Policy, Removal, RetentionBackend, safe_component, select,
-    valid_reproduction,
+    ARCHIVED_EVIDENCE_STATUS, Candidate, Inventory, Operation, Plan, Policy,
+    Removal, RetentionBackend, safe_component, select, valid_reproduction,
+    verify_ledger_evidence,
 };
 use crate::ir::toolchain::{ToolchainError, workspace_root};
 
@@ -195,18 +195,9 @@ impl Seal {
         let stat = ordinary(&directory, record)?;
         budget.bytes(size(&stat)?)?;
         let bytes = read_bounded(&directory, record, size(&stat)?)?;
-        let mut matches = bytes.split(|byte| *byte == b'\n').filter(|line| {
-            !line.is_empty() && ContentHash::calculate(line) == self.digest
-        });
-        let line = matches
-            .next()
-            .ok_or_else(|| failure("retained evidence identity changed"))?;
-        let evidence = ArchivedEvidence::parse(line)?;
-        if matches.next().is_some()
-            || !evidence.matches(run, &self.reproduce)
-            || stamp(&ordinary(&directory, record)?) != stamp(&stat)
-        {
-            return Err(failure("retained evidence is ambiguous or changed"));
+        verify_ledger_evidence(&bytes, run, &self.reproduce, self.digest)?;
+        if stamp(&ordinary(&directory, record)?) != stamp(&stat) {
+            return Err(failure("retained evidence changed"));
         }
         Ok(())
     }
@@ -786,6 +777,55 @@ mod tests {
             "duplicate retained record accepted",
         )?;
         require(run.join(PAYLOAD).exists(), "ambiguous evidence removed run")
+    }
+
+    #[test]
+    fn conflicting_archive_declarations_prevent_reviewed_apply()
+    -> io::Result<()> {
+        let root = fixture()?;
+        let run = root.path().join(ROOT).join("old-run");
+        let ledger = root.path().join(LEDGER).join("ledger.jsonl");
+        let plan = preview(&root, policy()?)?;
+        let valid = from_utf8(EVIDENCE).map_err(io::Error::other)?;
+        let other = valid.replace("old-run", "different-run");
+        fs::write(&ledger, [EVIDENCE, b"\n", other.as_bytes()].concat())?;
+        require(
+            preview(&root, policy()?)? == plan,
+            "distinct archived run invalidated reviewed evidence",
+        )?;
+        for conflict in [
+            valid.replace("retained", "new retained evidence"),
+            valid.replace("completed-archived-regenerable", "active"),
+            valid.replace(
+                "\"kind\":\"archived-investigation\"",
+                "\"kind\":\"archived-investigation\",\"kind\":\"other\"",
+            ),
+            String::from("{\"unclosed\":"),
+        ] {
+            fs::write(
+                &ledger,
+                [EVIDENCE, b"\n", conflict.as_bytes()].concat(),
+            )?;
+            require(
+                preview(&root, policy()?).is_err(),
+                "ambiguous ledger accepted during preview",
+            )?;
+            require(
+                execute(
+                    root.path(),
+                    policy()?,
+                    Operation::Apply(plan.identity),
+                    aged_now()?,
+                )
+                .is_err(),
+                "ambiguous ledger accepted during reviewed apply",
+            )?;
+            require(
+                run.join(PAYLOAD).exists() && run.join(SEAL).exists(),
+                "conflicting record caused archive mutation",
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
