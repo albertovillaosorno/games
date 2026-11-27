@@ -31,10 +31,19 @@
 //
 //! Deterministic presentation configuration without a rendering backend.
 
-use std::collections::BTreeMap;
+mod localisation;
+mod message;
+
 use std::num::{NonZeroU32, NonZeroU64};
 use std::str;
 use std::time::Duration;
+
+pub use localisation::{
+    CatalogError, CatalogLimits, LocaleTag, TranslationCatalog,
+};
+pub use message::{
+    MessageArguments, MessageFormatError, MessageParameter, MessageValue,
+};
 
 /// An integer pixel rectangle fitted within a display surface.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -616,54 +625,6 @@ impl Viewport {
     }
 }
 
-/// A caller-supplied translation catalogue with configured locale fallback.
-type LocaleMessages = BTreeMap<String, String>;
-
-/// Translation catalogue with a configurable fallback locale.
-#[derive(Clone, Debug)]
-pub struct TranslationCatalog {
-    fallback: String,
-    locales: BTreeMap<String, LocaleMessages>,
-}
-
-impl TranslationCatalog {
-    fn get(&self, locale: &str, key: &str) -> Option<&str> {
-        self.locales.get(locale)?.get(key).map(String::as_str)
-    }
-
-    /// Add or replace a caller-provided message for one locale.
-    pub fn insert(&mut self, locale: &str, key: &str, text: &str) {
-        let _previous = self
-            .locales
-            .entry(String::from(locale))
-            .or_default()
-            .insert(String::from(key), String::from(text));
-    }
-
-    /// Create a catalogue with a configured fallback locale identifier.
-    #[must_use]
-    pub fn new(fallback: &str) -> Self {
-        Self {
-            fallback: String::from(fallback),
-            locales: BTreeMap::new(),
-        }
-    }
-
-    /// Resolve the full locale, primary language, then fallback locale.
-    ///
-    /// Returns `None` if no supplied catalogue contains the key.
-    #[must_use]
-    pub fn resolve(&self, locale: &str, key: &str) -> Option<&str> {
-        self.get(locale, key)
-            .or_else(|| {
-                locale
-                    .split_once('-')
-                    .and_then(|(base, _)| self.get(base, key))
-            })
-            .or_else(|| self.get(&self.fallback, key))
-    }
-}
-
 /// Center an unchanged design in an expanded logical viewport.
 #[must_use]
 pub const fn centered_expansion(design: u32, viewport: u32) -> u32 {
@@ -740,8 +701,8 @@ mod tests {
 
     use super::{
         Dimensions, DisplaySettings, FramePacing, PresentationMode, SpriteRect,
-        StripViewport, TranslationCatalog, Viewport, WindowMode,
-        centered_expansion, expanded_anchor, rgba_row, solid_mask,
+        StripViewport, Viewport, WindowMode, centered_expansion,
+        expanded_anchor, rgba_row, solid_mask,
     };
 
     fn nz(value: u32) -> NonZeroU32 {
@@ -1045,20 +1006,6 @@ mod tests {
                 assert!(rect.y.saturating_add(rect.height) <= height);
             }
         }
-    }
-
-    #[test]
-    fn locale_and_regional_fallback_preserve_declared_messages() {
-        let mut catalogue = TranslationCatalog::new("en");
-        catalogue.insert("en", "start", "Start");
-        catalogue.insert("en", "quit", "Quit");
-        catalogue.insert("es", "start", "Comenzar");
-        catalogue.insert("es-MX", "start", "Jugar");
-        assert_eq!(catalogue.resolve("es-MX", "start"), Some("Jugar"));
-        assert_eq!(catalogue.resolve("es-ES", "start"), Some("Comenzar"));
-        assert_eq!(catalogue.resolve("es-MX", "quit"), Some("Quit"));
-        assert_eq!(catalogue.resolve("fr", "start"), Some("Start"));
-        assert_eq!(catalogue.resolve("fr", "missing"), None);
     }
 
     #[test]
