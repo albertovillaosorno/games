@@ -4222,3 +4222,14 @@ helper is not yet assigned to a gameplay mechanic. The main inventory
 now contains 275 identities and 13,308 bytes; the combined private
 checker reports 964 identities, 945 unresolved dispositions and 65
 unresolved flow observations. Campaign equivalence remains open.
+
+The next 26 main-CPU identities include timed palette handlers,
+region initialization and thresholded record allocation. The board
+map and immutable descriptor review establish palette writes and
+seven conditional stream outcomes, not verified native visuals.
+Additional bank-selected region entries have bounded predecessor
+evidence; general record callback dispatch remains unresolved.
+The main inventory has 301 identities and 14,523 owned bytes.
+The combined ledger has 990 identities, 971 unresolved dispositions
+and 72 unresolved flow observations. The complete campaign remains
+unverified.
