@@ -123,3 +123,18 @@ unsafe-code prohibition is not an acceptable solution. A supported
 safe entry wrapper or other lawful platform integration is required.
 The upstream diagnostics establish dependency feasibility only; the
 Android target remains explicitly unavailable for interactive titles.
+
+Two safe-entry alternatives were investigated in disposable Rust 2024
+ARM64 shared-library probes with `unsafe_code = "forbid"` and warnings
+as errors. `safer-ffi` 0.2.0-rc1 exports `SDL_main` under the NDK linker,
+but its resolved dependencies introduce both syn 1 and syn 2, plus
+multiple extension-trait crate versions. The stable 0.1.13 candidate
+also depends on syn 1. Neither was admitted to the workspace.
+SDL3 0.22.1 builds its upstream Android library with NDK r28c, but
+`sdl3-main` 0.7.0 generates a Rust executable main rather than an exported
+Android `SDL_main` in the shared-library probe. An alternate JNI entry
+using the SDL3 Activity's overridable Java main and `jni` 0.22.4 fails
+strict compilation because its native method macro emits a deprecated
+atomic API; its dependency resolution also introduces syn 3 alongside
+syn 2. No candidate was added to the workspace, no diagnostic APK was
+published, and no Android title runtime acceptance is implied.
