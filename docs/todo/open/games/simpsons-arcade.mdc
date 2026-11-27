@@ -5640,8 +5640,8 @@ The boardwalk route now admits an opt-in fixed-step boss after regular
 and linked actor clearance. A routed-input test clears the boss after
 forty successful hits and observes 25 total defeat cues and one delayed
 boss point. Entrance and scale response landmarks inform the model;
-steering, collision, contact damage, the 140-tick terminal delay and
-score attribution are provisional. Projectile behavior remains open.
+steering, collision, contact damage and the 140-tick terminal delay
+are provisional. Projectile behavior remains open.
 
 The optional `balloon-boss` catalogue record requires four distinct
 canonical pose hashes and the complete boardwalk and linked catalogue.
@@ -5657,6 +5657,15 @@ contraction to 31 in 33 steps, four-pixel horizontal centering and a
 landmarks and tests both directions and the one-pixel descent envelope.
 The acknowledgement differs between controls; the fixed 140-tick
 award, depth drift and sprite anchor remain provisional.
+
+The same paired terminal traces distinguish the last striker from the
+retained pursuit target. Marge receives the control's point while the
+boss targets Bart; Lisa receives the delayed run's point while it
+targets Homer. The score changes 138 and 145 ticks after the final
+quantity reduction, respectively. A portable regression preserves both
+recipient pairs, existing station totals and exactly one delayed award
+despite later strike attempts. This supports single-striker attribution;
+simultaneous collision priority and the acknowledgement timing remain open.
 
 The optimized Linux boss-only diagnostic passes all five display modes
 with routed defeat, delayed scoring and pose readback. These runs and

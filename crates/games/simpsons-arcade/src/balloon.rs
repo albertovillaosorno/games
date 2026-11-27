@@ -45,7 +45,7 @@ const INTRO_HOLD_END: u16 = 131;
 const INTRO_SHRINK_END: u16 = 323;
 const INTRO_EXPAND_END: u16 = 403;
 const INTRO_END: u16 = 485;
-// The shared readiness gate, steering, contact and terminal credit policy
+// The shared readiness gate, steering and contact policy
 // are not recovered. These deterministic timings are provisional.
 const CONTACT_STRIKE: u8 = 16;
 const CONTACT_END: u8 = 48;
@@ -502,6 +502,55 @@ mod tests {
         assert_eq!(slots.map(|slot| slot.station.score), [0, 0, 0, 1]);
         assert!(!boss.advance(StreetLayout::DOWNTOWN, slots));
         assert_eq!(slots.map(|slot| slot.station.score), [0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn final_striker_receives_credit_instead_of_retained_target() {
+        // Both observed terminal schedules retained a different target.
+        for (striker, target, expected) in [
+            (Player::Marge, Player::Bart, [60, 20, 8, 13]),
+            (Player::Lisa, Player::Homer, [59, 20, 8, 14]),
+        ] {
+            assert_distinct_credit(striker, target, expected);
+        }
+    }
+
+    fn assert_distinct_credit(
+        striker: Player,
+        target: Player,
+        expected: [u16; 4],
+    ) {
+        let mut boss = BalloonBoss::new(0);
+        boss.action = BalloonAction::Approach;
+        boss.quantity = HIT_QUANTITY;
+        boss.scale = (64, 64);
+        boss.target = Some(target);
+        boss.target_hold = TARGET_HOLD;
+        let mut slots = active_slots();
+        for (slot, score) in slots.iter_mut().zip([59, 20, 8, 13]) {
+            slot.station.score = score;
+        }
+        set_striker(&mut slots, u8::try_from(striker.index()).unwrap_or(0));
+        assert!(boss.advance(StreetLayout::DOWNTOWN, &mut slots));
+        assert_eq!(boss.defeat_credit, Some(striker));
+        assert_eq!(boss.target, Some(target));
+        set_striker(&mut slots, u8::try_from(target.index()).unwrap_or(0));
+        assert_delayed_credit(&mut boss, &mut slots, expected);
+    }
+
+    fn assert_delayed_credit(
+        boss: &mut BalloonBoss,
+        slots: &mut [Slot; 4],
+        expected: [u16; 4],
+    ) {
+        for _ in 0..DEFEAT_END {
+            assert_eq!(slots.map(|slot| slot.station.score), [59, 20, 8, 13]);
+            assert!(!boss.advance(StreetLayout::DOWNTOWN, slots));
+        }
+        assert_eq!(slots.map(|slot| slot.station.score), expected);
+        assert_eq!(boss.defeat_credit, None);
+        assert!(!boss.advance(StreetLayout::DOWNTOWN, slots));
+        assert_eq!(slots.map(|slot| slot.station.score), expected);
     }
 
     #[test]
