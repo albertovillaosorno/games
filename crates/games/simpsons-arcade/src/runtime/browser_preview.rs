@@ -56,7 +56,7 @@ use super::launch::{
 };
 use super::memory_preview::{
     AudioSelection, Preferences, Selection, start_with_preferences,
-    verify_scenery,
+    verify_scenery, verify_soundtrack,
 };
 use super::title_messages::{self, LaunchFailure, LaunchNotice, launch_label};
 use super::{
@@ -153,11 +153,26 @@ pub fn scenery_smoke(
     touch_enabled: bool,
     complete: SmokeCompletion,
 ) -> Result<(), RenderError> {
+    select_smoke(touch_enabled, smoke_selected, complete)
+}
+
+/// Verify host-consumed second-stage soundtrack playback and pause.
+/// # Errors
+/// Rejects missing assets, playback failures or an exceeded time budget.
+pub fn soundtrack_smoke(complete: SmokeCompletion) -> Result<(), RenderError> {
+    select_smoke(false, soundtrack_selected, complete)
+}
+
+fn select_smoke(
+    touch_enabled: bool,
+    start: Start,
+    complete: SmokeCompletion,
+) -> Result<(), RenderError> {
     let locale = picker_locale(OsStr::new(PREFERENCES));
     select_with(
         touch_enabled,
         locale,
-        smoke_selected,
+        start,
         Rc::new(move |_index, result| {
             complete(result.map_err(|rejected| rejected.error));
         }),
@@ -442,6 +457,26 @@ fn smoke_selected(
     let options = selection_from(directory.sidecars(), touch_enabled)?;
     verify_scenery(directory.bundles(), &options, admitted)?;
     complete(admitted.locale_index, Ok(()));
+    Ok(())
+}
+
+fn soundtrack_selected(
+    directory: &SelectedDirectory,
+    touch_enabled: bool,
+    admitted: &Preferences,
+    complete: &Completion,
+) -> Result<(), LaunchFailure> {
+    let options = selection_from(directory.sidecars(), touch_enabled)?;
+    let callback = Rc::clone(complete);
+    let index = admitted.locale_index;
+    verify_soundtrack(
+        directory.bundles(),
+        &options,
+        admitted,
+        move |result| {
+            callback(index, result.map_err(LaunchFailure::from));
+        },
+    )?;
     Ok(())
 }
 

@@ -632,25 +632,15 @@ impl Playback {
         if self.music.bonus.is_none() {
             return Ok(());
         }
-        let mut cabinet = Cabinet::with_opening_street()
-            .and_then(|state| state.with_scroll_limit(1360))
-            .map_err(failure)?
-            .with_late_wrestler(true)
-            .with_bonus(true);
-        if self.music.stage_two.is_some() {
-            cabinet = cabinet.with_stage_two(270).map_err(failure)?;
-        }
-        cabinet.session = self.smoke_session();
+        let mut cabinet = smoke_campaign(
+            self.smoke_session(),
+            self.music.stage_two.is_some(),
+        )?;
         self.update(&cabinet)?;
         cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
         self.update(&cabinet)?;
         self.verify_quiet()?;
-        cabinet.wrestler = Some(Wrestler {
-            action: WrestlerAction::Cleared,
-            health: 0,
-            ..Wrestler::new(0)
-        });
-        cabinet.admit_bonus();
+        clear_smoke_wrestler(&mut cabinet);
         self.update(&cabinet)?;
         if self.music.cue != MusicCue::Defeat
             || (self.music.handoff.is_none()
@@ -1124,6 +1114,23 @@ impl Playback {
         .map_err(failure)
     }
 
+    pub(super) fn stage_two_smoke(
+        mut self,
+    ) -> Result<StageTwoSmoke, RenderError> {
+        if self.music.stage_two.is_none() {
+            return Err(failure("stage-two soundtrack selection is required"));
+        }
+        let mut cabinet = smoke_campaign(self.smoke_session(), true)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        self.enable_output();
+        Ok(StageTwoSmoke {
+            cabinet,
+            output: self,
+            phase: StageTwoSmokePhase::Street,
+            start: None,
+        })
+    }
+
     fn sync_levels(&mut self, session: LocalSession) {
         let volume = session.volume();
         let sources = session.source_settings();
@@ -1207,6 +1214,159 @@ impl Playback {
             || self.scratch.iter().all(|frame| *frame == [0, 0]) == audible
         {
             return Err(failure("unexpected native audio submission"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StageTwoSmokePhase {
+    Draining,
+    Exhausted { since: Duration },
+    Paused { since: Duration, queued: u32 },
+    Pausing,
+    Resuming,
+    StageTwo,
+    Street,
+}
+
+/// Finite host-consumed soundtrack diagnostic. Unlike the hidden native
+/// smoke, this never clears the queue to accelerate the finite excerpt.
+pub(super) struct StageTwoSmoke {
+    cabinet: Cabinet,
+    output: Playback,
+    phase: StageTwoSmokePhase,
+    start: Option<Duration>,
+}
+
+impl StageTwoSmoke {
+    fn report(message: &str) -> Result<(), RenderError> {
+        write_status(format_args!("Browser soundtrack: {message}"))
+            .map_err(failure)
+    }
+
+    pub(super) fn step(
+        &mut self,
+        timestamp: Duration,
+    ) -> Result<bool, RenderError> {
+        let start = *self.start.get_or_insert(timestamp);
+        if timestamp.saturating_sub(start) > Duration::from_secs(90) {
+            return Err(failure("soundtrack smoke exceeded host time budget"));
+        }
+        self.output.update(&self.cabinet)?;
+        if self.output.device.poll_control().map_err(failure)?
+            == PlaybackControl::Pending
+        {
+            return Ok(true);
+        }
+        let queued = self.output.queued_frames()?;
+        if matches!(self.phase, StageTwoSmokePhase::Street) {
+            self.verify_voice(MusicCue::Street)?;
+            if queued != 0 {
+                Self::report("street queued")?;
+                enter_smoke_stage_two(&mut self.cabinet)?;
+                self.phase = StageTwoSmokePhase::StageTwo;
+            }
+        } else {
+            self.step_stage_two(timestamp, queued)?;
+        }
+        Ok(!matches!(
+            self.phase,
+            StageTwoSmokePhase::Exhausted { since }
+                if timestamp.saturating_sub(since)
+                    >= Duration::from_millis(250)
+        ))
+    }
+
+    fn step_stage_two(
+        &mut self,
+        timestamp: Duration,
+        queued: u32,
+    ) -> Result<(), RenderError> {
+        if !self.cabinet.stage_two()
+            || self.output.music.cue != MusicCue::StageTwo
+        {
+            return Err(failure("second-stage soundtrack was not selected"));
+        }
+        match self.phase {
+            StageTwoSmokePhase::Street => {
+                return Err(failure("street diagnostic state leaked"));
+            },
+            StageTwoSmokePhase::StageTwo => {
+                self.verify_voice(MusicCue::StageTwo)?;
+                if queued != 0 {
+                    Self::report("second-stage queued")?;
+                    self.cabinet
+                        .input_step(0, &bonus_smoke_pulse(Control::Pause));
+                    self.phase = StageTwoSmokePhase::Pausing;
+                }
+            },
+            StageTwoSmokePhase::Pausing => {
+                self.verify_voice(MusicCue::StageTwo)?;
+                if self.cabinet.phase() != Phase::Paused {
+                    return Err(failure("soundtrack did not enter pause"));
+                }
+                self.phase =
+                    StageTwoSmokePhase::Paused { since: timestamp, queued };
+            },
+            StageTwoSmokePhase::Paused { since, queued: held } => {
+                self.verify_pause(
+                    timestamp.saturating_sub(since),
+                    queued,
+                    held,
+                )?;
+            },
+            StageTwoSmokePhase::Resuming => {
+                self.verify_voice(MusicCue::StageTwo)?;
+                if self.cabinet.phase() != Phase::Playing {
+                    return Err(failure("soundtrack did not resume play"));
+                }
+                if queued != 0 {
+                    Self::report("resumed")?;
+                    self.phase = StageTwoSmokePhase::Draining;
+                }
+            },
+            StageTwoSmokePhase::Draining => {
+                if self.output.music_voices() == 0 && queued == 0 {
+                    self.phase =
+                        StageTwoSmokePhase::Exhausted { since: timestamp };
+                }
+            },
+            StageTwoSmokePhase::Exhausted { since } => {
+                if self.output.music_voices() != 0 || queued != 0 {
+                    return Err(failure("finite soundtrack restarted"));
+                }
+                if timestamp.saturating_sub(since) >= Duration::from_millis(250)
+                {
+                    Self::report("finite end")?;
+                }
+            },
+        }
+        Ok(())
+    }
+
+    fn verify_pause(
+        &mut self,
+        elapsed: Duration,
+        queued: u32,
+        held: u32,
+    ) -> Result<(), RenderError> {
+        self.verify_voice(MusicCue::StageTwo)?;
+        if queued != held || self.cabinet.phase() != Phase::Paused {
+            return Err(failure("paused soundtrack queue changed"));
+        }
+        if elapsed >= Duration::from_millis(150) {
+            Self::report("pause held")?;
+            self.cabinet
+                .input_step(0, &bonus_smoke_pulse(Control::Pause));
+            self.phase = StageTwoSmokePhase::Resuming;
+        }
+        Ok(())
+    }
+
+    fn verify_voice(&self, cue: MusicCue) -> Result<(), RenderError> {
+        if self.output.music.cue != cue || self.output.music_voices() != 1 {
+            return Err(failure("expected soundtrack voice is absent"));
         }
         Ok(())
     }
@@ -1442,6 +1602,44 @@ fn play_cues(
     Ok(())
 }
 
+fn smoke_campaign(
+    session: LocalSession,
+    stage_two: bool,
+) -> Result<Cabinet, RenderError> {
+    let mut cabinet = Cabinet::with_opening_street()
+        .and_then(|state| state.with_scroll_limit(1360))
+        .map_err(failure)?
+        .with_late_wrestler(true)
+        .with_bonus(true);
+    if stage_two {
+        cabinet = cabinet.with_stage_two(270).map_err(failure)?;
+    }
+    cabinet.session = session;
+    Ok(cabinet)
+}
+
+fn clear_smoke_wrestler(cabinet: &mut Cabinet) {
+    cabinet.wrestler = Some(Wrestler {
+        action: WrestlerAction::Cleared,
+        health: 0,
+        ..Wrestler::new(0)
+    });
+    cabinet.admit_bonus();
+}
+
+fn enter_smoke_stage_two(cabinet: &mut Cabinet) -> Result<(), RenderError> {
+    clear_smoke_wrestler(cabinet);
+    for tick in 0..6000 {
+        cabinet.input_step(tick, &[]);
+        if cabinet.stage_two() {
+            return Ok(());
+        }
+    }
+    Err(failure(
+        "soundtrack diagnostic did not reach the second stage",
+    ))
+}
+
 fn bonus_smoke_pulse(control: Control) -> [LogicalAction<Action>; 2] {
     [true, false].map(|down| LogicalAction {
         action: Action {
@@ -1512,6 +1710,24 @@ mod tests {
     use super::*;
 
     type FixtureClip<'key> = (&'key str, u64, i16);
+
+    #[test]
+    fn soundtrack_fixture_follows_bonus_handoff() -> Result<(), RenderError> {
+        let mut cabinet = smoke_campaign(LocalSession::default(), true)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        if MusicCue::select(&cabinet) != MusicCue::Street || cabinet.stage_two()
+        {
+            return Err(failure("fixture did not start on the street"));
+        }
+        enter_smoke_stage_two(&mut cabinet)?;
+        if !cabinet.stage_two()
+            || MusicCue::select(&cabinet) != MusicCue::StageTwo
+            || cabinet.phase() != Phase::Playing
+        {
+            return Err(failure("fixture did not enter stage two"));
+        }
+        Ok(())
+    }
 
     #[test]
     fn attack_queue_covers_two_ticks_and_a_submission()

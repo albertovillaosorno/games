@@ -283,6 +283,34 @@ pub(super) fn verify_scenery(
     Ok(())
 }
 
+pub(super) fn verify_soundtrack<Complete>(
+    store: &MemoryBundleStore,
+    selection: &Selection<'_>,
+    preferences: &Preferences,
+    complete: Complete,
+) -> Result<(), RenderError>
+where
+    Complete: FnOnce(Result<(), RenderError>) + 'static,
+{
+    if selection
+        .audio
+        .is_none_or(|audio| audio.stage_two_music.is_none())
+    {
+        return Err(failure("soundtrack smoke requires second-stage audio"));
+    }
+    let source = sources(store, selection)?;
+    let options = preview_options(selection, preferences, &source)?;
+    let mut smoke = audio::open_optional(
+        source.audio.as_ref(),
+        None,
+        options.source_settings,
+        options.volume,
+    )?
+    .ok_or_else(|| failure("soundtrack smoke requires audio"))?
+    .stage_two_smoke()?;
+    frame_loop::start(move |timestamp| smoke.step(timestamp), complete)
+}
+
 /// Exercise locale switching, renderer readbacks and isolated persistence.
 ///
 /// The supplied location must be reserved for diagnostics. A valid existing

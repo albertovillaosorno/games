@@ -4079,6 +4079,22 @@ pairs and 3,302 detailed flow records. Dispositions are 648 discovered,
 The remaining computed dispatch and original campaign semantics are
 not inferred from the numeric selectors.
 
-A separate attempted browser soundtrack diagnostic did not report
-completion in Firefox and is not retained in the tracked runtime.
-Browser audible playback remains unverified.
+### Browser second-stage soundtrack consumption
+
+The explicit soundtrack diagnostic uses the shared browser catalogue,
+the title's existing music selector and playback queue. A bounded
+diagnostic fixture clears the wrestler and advances the bonus handoff;
+this is not evidence of routed campaign completion. The browser host
+must drain the finite second-stage cue, hold its queue during pause,
+resume and reach exhaustion without restarting the music.
+
+An isolated Firefox run selected the canonical 1,076-file directory
+through a trusted keyboard-driven chooser. The initial coordinate-based
+retry selected its parent and correctly failed with unsafe storage.
+The corrected run queued 2,048 street frames, submitted and consumed
+2,880,000 second-stage frames, and observed 11,258 audio-buffer starts
+and ends in total. The host acknowledged resume, suspend, resume and
+close; no canvas or persisted preference remained. A private isolated
+PipeWire null sink received the browser output. This verifies host
+queue consumption and control, not speaker audibility, exact soundtrack
+loop parity or complete original audio reconstruction.
