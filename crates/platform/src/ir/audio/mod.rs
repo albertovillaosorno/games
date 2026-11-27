@@ -95,7 +95,7 @@ pub mod fixtures {
     }
 }
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt::{self, Debug, Formatter};
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32};
 
@@ -173,6 +173,7 @@ pub(crate) trait PlaybackBackend: Debug {
     /// Backend and requested device diagnostics.
     fn output(&self) -> (&str, Option<&str>);
     /// Poll a previously pending control request without blocking.
+    /// A terminal result is consumed once.
     fn poll_control(&self) -> Result<PlaybackControl, PlaybackError>;
     /// Submit admitted complete frames.
     fn queue_samples(
@@ -198,11 +199,12 @@ pub(crate) trait PlaybackFactory {
     ) -> Result<PlaybackPort, PlaybackError>;
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct PendingControl {
     destination: PlaybackState,
     maximum_frames: u32,
     may_consume: bool,
+    result: Result<PlaybackControl, PlaybackError>,
 }
 
 /// An exact-format playback handle, initially paused, with a bounded queue.
@@ -215,7 +217,7 @@ struct PendingControl {
 pub struct NativeAudio {
     backend: PlaybackPort,
     layout: QueueLayout,
-    pending: Cell<Option<PendingControl>>,
+    pending: RefCell<Option<PendingControl>>,
     scratch: Vec<i16>,
     state: Cell<PlaybackState>,
 }
@@ -231,19 +233,20 @@ impl Debug for NativeAudio {
 impl NativeAudio {
     fn admit_control(
         &self,
-        mut request: PendingControl,
-        result: Result<PlaybackControl, PlaybackError>,
+        pending: &mut Option<PendingControl>,
     ) -> Result<PlaybackControl, PlaybackError> {
+        let request = pending.as_mut().ok_or(PlaybackError::InvalidState)?;
         let previous = self.state.get();
         let observed = self.backend.observe_playback()?;
-        let expected = if matches!(&result, Ok(PlaybackControl::Complete))
-            || (matches!(&result, Ok(PlaybackControl::Pending))
-                && observed.state == request.destination)
-        {
-            request.destination
-        } else {
-            previous
-        };
+        let expected =
+            if matches!(&request.result, Ok(PlaybackControl::Complete))
+                || (matches!(&request.result, Ok(PlaybackControl::Pending))
+                    && observed.state == request.destination)
+            {
+                request.destination
+            } else {
+                previous
+            };
         self.layout.admit_observation(observed, expected)?;
         let bytes = self.backend.queued_bytes()?;
         self.layout.admit_queue_receipt(
@@ -252,15 +255,13 @@ impl NativeAudio {
             request.may_consume,
         )?;
         request.maximum_frames = self.layout.queued_frames(bytes)?;
-        match &result {
-            Ok(PlaybackControl::Pending) => self.pending.set(Some(request)),
-            Ok(PlaybackControl::Complete) => {
-                self.state.set(request.destination);
-                self.pending.set(None);
-            },
-            Err(_) => self.pending.set(None),
+        if matches!(&request.result, Ok(PlaybackControl::Pending)) {
+            return Ok(PlaybackControl::Pending);
         }
-        result
+        if matches!(&request.result, Ok(PlaybackControl::Complete)) {
+            self.state.set(request.destination);
+        }
+        pending.take().ok_or(PlaybackError::InvalidState)?.result
     }
 
     fn admit_opened(
@@ -275,7 +276,7 @@ impl NativeAudio {
         Ok(Self {
             backend,
             layout: request.layout(),
-            pending: Cell::new(None),
+            pending: RefCell::new(None),
             scratch: Vec::new(),
             state: Cell::new(PlaybackState::Paused),
         })
@@ -293,7 +294,7 @@ impl NativeAudio {
     }
 
     fn observe_state(&self) -> Result<(), PlaybackError> {
-        if self.pending.get().is_some() {
+        if self.pending.borrow().is_some() {
             return Err(PlaybackError::TransitionPending);
         }
         self.layout.admit_observation(
@@ -348,16 +349,21 @@ impl NativeAudio {
     ///
     /// A pending receipt prevents queue operations and new controls until the
     /// backend settles and the resulting state and occupancy are admitted.
+    /// A failed observation retains a terminal backend result for retry.
     /// With no pending request, this observes the confirmed device state.
     /// # Errors
     /// Rejects backend failure, unexpected device state or queue receipt.
     pub fn poll_control(&self) -> Result<PlaybackControl, PlaybackError> {
-        if let Some(request) = self.pending.get() {
-            self.admit_control(request, self.backend.poll_control())
-        } else {
-            self.observe_state()?;
-            Ok(PlaybackControl::Complete)
+        let mut pending = self.pending.borrow_mut();
+        if let Some(request) = pending.as_mut() {
+            if matches!(&request.result, Ok(PlaybackControl::Pending)) {
+                request.result = self.backend.poll_control();
+            }
+            return self.admit_control(&mut pending);
         }
+        drop(pending);
+        self.observe_state()?;
+        Ok(PlaybackControl::Complete)
     }
 
     /// Decode and enqueue a verified canonical PCM frame range.
@@ -424,9 +430,8 @@ impl NativeAudio {
         &self,
         running: bool,
     ) -> Result<PlaybackControl, PlaybackError> {
-        if self.pending.get().is_some()
-            && self.poll_control()? == PlaybackControl::Pending
-        {
+        let has_pending = self.pending.borrow().is_some();
+        if has_pending && self.poll_control()? == PlaybackControl::Pending {
             return Ok(PlaybackControl::Pending);
         }
         let next = if running {
@@ -467,19 +472,16 @@ impl NativeAudio {
                 .queued_frames(self.backend.queued_bytes()?)?,
             may_consume: previous == PlaybackState::Running
                 || next == PlaybackState::Running,
+            result: self.backend.request_control(next),
         };
-        let result = self.backend.request_control(next);
-        if matches!(&result, Ok(PlaybackControl::Pending)) {
-            // A malformed pending observation must not permit another dispatch.
-            self.pending.set(Some(request));
-        }
-        self.admit_control(request, result)
+        let mut pending = self.pending.borrow_mut();
+        *pending = Some(request);
+        self.admit_control(&mut pending)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     use super::fixtures::{configuration, pcm};
@@ -674,21 +676,27 @@ mod tests {
         let (handle, backend) = fake()?;
         handle.queue_samples(&[1, -1])?;
         backend.control_ignored.set(true);
-        if handle.resume() != Err(PlaybackError::InvalidState)
-            || handle.clear() != Err(PlaybackError::InvalidQueue)
-            || handle.queued_frames()? != 1
-        {
-            return Err(PlaybackError::InvalidState);
-        }
+        verify(&handle.resume(), &Err(PlaybackError::InvalidState))?;
+        verify(&handle.clear(), &Err(PlaybackError::TransitionPending))?;
+        verify(
+            &handle.queued_frames(),
+            &Err(PlaybackError::TransitionPending),
+        )?;
+        verify(&handle.poll_control(), &Err(PlaybackError::InvalidState))?;
         backend.control_ignored.set(false);
-        verify(&handle.resume()?, &PlaybackControl::Complete)?;
+        backend.state.set(PlaybackState::Running);
+        verify(&handle.poll_control()?, &PlaybackControl::Complete)?;
         backend.control_ignored.set(true);
         if handle.pause() != Err(PlaybackError::InvalidState) {
             return Err(PlaybackError::InvalidState);
         }
-        handle.queue_samples(&[2, 3])?;
+        verify(
+            &handle.queue_samples(&[2, 3]),
+            &Err(PlaybackError::TransitionPending),
+        )?;
         backend.control_ignored.set(false);
-        verify(&handle.pause()?, &PlaybackControl::Complete)?;
+        backend.state.set(PlaybackState::Paused);
+        verify(&handle.poll_control()?, &PlaybackControl::Complete)?;
         handle.clear()?;
         if handle.queued_frames()? != 0
             || backend.state.get() != PlaybackState::Paused
@@ -1103,6 +1111,67 @@ mod tests {
         );
         verify(&handle.poll_control()?, &PlaybackControl::Complete)?;
         verify(&handle.queued_frames()?, &1)
+    }
+
+    #[test]
+    fn synchronous_terminal_receipt_survives_failed_observation()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        handle.queue_samples(&[1, -1])?;
+        backend.queue_reads_before_failure.set(Some(1));
+        let failure =
+            PlaybackError::Backend(String::from("queue query failed"));
+        verify(&handle.resume(), &Err(failure))?;
+        verify(&backend.state.get(), &PlaybackState::Running)?;
+        verify(&handle.clear(), &Err(PlaybackError::TransitionPending))?;
+        backend.queue_reads_before_failure.set(None);
+        verify(&handle.poll_control()?, &PlaybackControl::Complete)?;
+        verify(&handle.queued_frames()?, &1)
+    }
+
+    #[test]
+    fn asynchronous_terminal_receipt_survives_failed_observation()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        handle.queue_samples(&[1, -1])?;
+        backend.control_pending.set(true);
+        verify(&handle.resume()?, &PlaybackControl::Pending)?;
+        backend.state.set(PlaybackState::Running);
+        drop(
+            backend
+                .control_result
+                .replace(Some(Ok(PlaybackControl::Complete))),
+        );
+        backend.observation_fails.set(true);
+        let failure =
+            PlaybackError::Backend(String::from("format query failed"));
+        verify(&handle.poll_control(), &Err(failure))?;
+        verify(&handle.clear(), &Err(PlaybackError::TransitionPending))?;
+        backend.observation_fails.set(false);
+        // The fake returns Pending when polled again without another result.
+        verify(&handle.reconcile_running(true)?, &PlaybackControl::Complete)?;
+        verify(&handle.queued_frames()?, &1)
+    }
+
+    #[test]
+    fn rejected_terminal_receipt_survives_failed_observation()
+    -> Result<(), PlaybackError> {
+        let (handle, backend) = fake()?;
+        handle.queue_samples(&[1, -1])?;
+        backend.control_pending.set(true);
+        verify(&handle.resume()?, &PlaybackControl::Pending)?;
+        let denied = PlaybackError::Backend(String::from("denied"));
+        drop(backend.control_result.replace(Some(Err(denied.clone()))));
+        backend.queue_reads_before_failure.set(Some(0));
+        let failure =
+            PlaybackError::Backend(String::from("queue query failed"));
+        verify(&handle.poll_control(), &Err(failure))?;
+        verify(&handle.clear(), &Err(PlaybackError::TransitionPending))?;
+        backend.queue_reads_before_failure.set(None);
+        verify(&handle.poll_control(), &Err(denied))?;
+        verify(&handle.poll_control()?, &PlaybackControl::Complete)?;
+        verify(&handle.queued_frames()?, &1)?;
+        verify(&backend.state.get(), &PlaybackState::Paused)
     }
 
     #[test]
