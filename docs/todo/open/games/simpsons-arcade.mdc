@@ -3339,7 +3339,17 @@ distinct states at the 1,359-column encounter admission and at
 relative ticks 4 and 9. Three later replays also reproduce an
 identical subsequent state, an intermediate state sampled at
 device frame 8550 in two controls, and another state sampled at
-8580 or 8600. The exact later phase boundaries remain unverified.
+8580 or 8600.
+
+Two additional isolated dense replays verify all 228 aligned full
+frames and reproduce all 114 normalized background digests across
+relative ticks -1 through 31 and 251 through 331. They identify
+six early background states beginning at ticks 0, 4, 9, 14, 19 and
+24. The later transition begins at tick 257; its seven initial
+frames lead into an eight-tick recurring three-state sequence
+from tick 264 through 319. The last observed state remains
+unchanged from tick 320 through 331. The unsampled interval and
+the eventual encounter outcome remain open.
 
 The continuing-input and stopped-input controls have identical
 background digests at all twelve common sampled frames from 8250
@@ -3351,5 +3361,5 @@ darkened backdrop would not preserve the original sequence.
 
 The original captures, derived images and digest logs remain
 private. No new runtime stage art, encounter rule or default
-selection was introduced. Exact timing, dynamic background
+selection was introduced. Complete timing, dynamic background
 placement, combat and eventual stage completion remain open.
