@@ -1045,11 +1045,14 @@ impl Scene {
         (actor, view): (Art, world::View),
     ) -> Result<(), RenderError> {
         if self.poses.arrival.is_some()
-            && entrance.is_some_and(StageEntrance::scripted_art)
+            && entrance.is_some_and(|motion| {
+                motion.scripted_art() || !motion.ordinary_body_visible(player)
+            })
         {
             return Ok(());
         }
-        let elevation = if let Some(motion) = entrance {
+        let gameplay_entrance = entrance.filter(|motion| !motion.complete());
+        let elevation = if let Some(motion) = gameplay_entrance {
             let Some(elevation) = motion.elevation(player) else {
                 return Ok(());
             };
@@ -1058,10 +1061,10 @@ impl Scene {
             station.maneuver.elevation()
         };
         let position = view.project(station.position);
-        let airborne = entrance.is_some() && elevation > 0;
+        let airborne = gameplay_entrance.is_some() && elevation > 0;
         if let Some(shadow) = &self.shadow
             && (airborne
-                || (entrance.is_none()
+                || (gameplay_entrance.is_none()
                     && shadow::visible(player, station.maneuver)))
         {
             self.draws.push(shadow.draw(position));
@@ -1102,7 +1105,7 @@ impl Scene {
                     || station.maneuver == Maneuver::Restrained;
             self.queue_station(
                 (character, seat),
-                (station, paired, cabinet.stage_entrance()),
+                (station, paired, cabinet.stage_arrival()),
                 (view, hud),
             )?;
         }

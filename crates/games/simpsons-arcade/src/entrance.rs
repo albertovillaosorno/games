@@ -156,6 +156,29 @@ impl StageEntrance {
         Self { admitted, tick: 0 }
     }
 
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) fn ordinary_body_visible(self, player: Player) -> bool {
+        if !self
+            .admitted
+            .get(player.index())
+            .copied()
+            .unwrap_or_default()
+            || self.scripted_art()
+            || self.presentation_complete()
+        {
+            return true;
+        }
+        // The neutral replay changes cadence at landing and holds tick 311.
+        // Keep this presentation independent of input and collision.
+        if !self.complete() {
+            self.tick & 2 != 0
+        } else if self.tick < 311 {
+            self.tick.is_multiple_of(2)
+        } else {
+            !self.tick.is_multiple_of(2)
+        }
+    }
+
     pub(super) const fn presentation_complete(self) -> bool {
         self.tick >= MARKER_END
     }
@@ -421,6 +444,27 @@ mod tests {
         let selective = StageEntrance::new([false, true, false, true]).at(300);
         assert_eq!(selective.marker_elevation(Player::Marge), None);
         assert_eq!(selective.marker_elevation(Player::Homer), Some(0));
+    }
+
+    #[test]
+    fn ordinary_body_cadence_changes_at_landing_without_hiding_late_joins() {
+        let visible = |tick| sample(tick).ordinary_body_visible(Player::Marge);
+        assert_eq!((232..240).map(visible).collect::<Vec<_>>(), [
+            false, false, true, true, false, false, true, true,
+        ]);
+        assert_eq!((292..300).map(visible).collect::<Vec<_>>(), [
+            false, false, true, false, true, false, true, false,
+        ]);
+        assert_eq!((308..316).map(visible).collect::<Vec<_>>(), [
+            true, false, true, true, false, true, false, true,
+        ]);
+        assert!(!visible(382));
+        assert!(visible(383));
+        let selective = StageEntrance::new([false, true, false, true]);
+        for tick in 295..383 {
+            assert!(selective.at(tick).ordinary_body_visible(Player::Marge));
+            assert!(selective.at(tick).ordinary_body_visible(Player::Bart));
+        }
     }
 
     #[test]

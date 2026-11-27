@@ -4960,3 +4960,31 @@ and all other station state. The regression exercises positive ties,
 a capped winner, a lower-ranked station, an absent station, pause,
 zero scores and later ticks without a second award. Exact original
 meter presentation and complete bonus equivalence remain open.
+
+### Ordinary landing body cadence
+
+The neutral original capture admits ordinary character body groups in
+two-frame on/off intervals after release. From the gameplay landing
+boundary it alternates every tick, with a held visible sample at tick
+311, then restores ordinary visibility at the neutral marker deadline
+of tick 383. The directional replay has an additional held sample and
+retires one tick later; the cause remains unconfirmed.
+
+The optional registered arrival presentation now applies the neutral
+cadence only to initially admitted ordinary station bodies and their
+moving shadows. It neither gates input nor changes collision,
+participation, the tick-295 landing boundary or subsequent maneuver
+selection. Late joins do not inherit this visibility policy. Paired
+poses, exact input-dependent cadence and stationary release-shadow
+composition remain separate acceptance items.
+
+Portable regressions exercise the release, landing, held sample and
+retirement boundaries, including selective station admission.
+
+Fresh workspace validation passed. The optimized original-backed
+native touch smoke passed in all five display modes using isolated
+Xvfb software OpenGL and dummy audio. It verifies body admission and
+bounded readback at the sampled release and post-landing ticks,
+including the held tick 311, disappearance at 382 and restoration at
+383. The subsequent routed combat and 270-column travel also pass.
+Whole-scene and physical-device acceptance remain open.

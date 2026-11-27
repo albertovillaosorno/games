@@ -897,24 +897,31 @@ fn verify_stage_entrance(
     advance_vehicle_check(scene, art, simulation, (41, true))?;
     advance_vehicle_check(scene, art, simulation, (1, false))?;
     advance(simulation, 7)?;
-    verify_arrival_sample(scene, art, simulation, (true, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, false, false))?;
     advance(simulation, 2)?;
-    verify_arrival_sample(scene, art, simulation, (true, false))?;
+    verify_arrival_sample(scene, art, simulation, (true, false, false))?;
     advance(simulation, 1)?;
-    verify_arrival_sample(scene, art, simulation, (true, true))?;
-    advance(simulation, 48)?;
-    verify_arrival_sample(scene, art, simulation, (true, true))?;
+    verify_arrival_sample(scene, art, simulation, (true, true, false))?;
+    advance_body_check(scene, art, simulation, (2, true))?;
+    advance_body_check(scene, art, simulation, (2, false))?;
+    advance(simulation, 44)?;
+    verify_arrival_sample(scene, art, simulation, (true, true, false))?;
     advance(simulation, 15)?;
     if simulation.state().stage_entrance().is_some() {
         return Err(failure("second-stage landing did not finish"));
     }
-    verify_arrival_sample(scene, art, simulation, (true, true))?;
-    advance(simulation, 20)?;
-    verify_arrival_sample(scene, art, simulation, (false, true))?;
-    advance(simulation, 67)?;
-    verify_arrival_sample(scene, art, simulation, (false, true))?;
+    verify_arrival_sample(scene, art, simulation, (true, true, false))?;
+    advance_body_check(scene, art, simulation, (1, true))?;
+    advance_body_check(scene, art, simulation, (14, true))?;
+    advance_body_check(scene, art, simulation, (1, true))?;
+    advance_body_check(scene, art, simulation, (1, false))?;
+    advance_body_check(scene, art, simulation, (2, false))?;
     advance(simulation, 1)?;
-    verify_arrival_sample(scene, art, simulation, (false, false))?;
+    verify_arrival_sample(scene, art, simulation, (false, true, true))?;
+    advance(simulation, 67)?;
+    verify_arrival_sample(scene, art, simulation, (false, true, false))?;
+    advance(simulation, 1)?;
+    verify_arrival_sample(scene, art, simulation, (false, false, true))?;
     if simulation.state().stage_arrival().is_some() {
         return Err(failure("released arrival art did not retire"));
     }
@@ -922,16 +929,33 @@ fn verify_stage_entrance(
         .map_err(failure)
 }
 
+fn advance_body_check(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    (ticks, visible): (u16, bool),
+) -> Result<(), RenderError> {
+    advance(simulation, ticks)?;
+    let _drawn = art.present(scene, simulation.state())?;
+    super::arrival::verify_ordinary_bodies(
+        scene,
+        art,
+        simulation.state(),
+        visible,
+    )
+}
+
 fn verify_arrival_sample(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     simulation: &LiveSimulation<Cabinet>,
-    (visible, markers): (bool, bool),
+    (visible, markers, bodies): (bool, bool, bool),
 ) -> Result<(), RenderError> {
     let cabinet = simulation.state();
     let _drawn = art.present(scene, cabinet)?;
     super::arrival::verify(scene, art, cabinet, visible)?;
-    super::arrival::verify_markers(scene, art, cabinet, markers)
+    super::arrival::verify_markers(scene, art, cabinet, markers)?;
+    super::arrival::verify_ordinary_bodies(scene, art, cabinet, bodies)
 }
 
 fn advance_vehicle_check(

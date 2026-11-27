@@ -394,6 +394,50 @@ fn verify_draws(
     scenery::verify_pixels(&actual, &baseline, view.width, &bounds)
 }
 
+pub(super) fn verify_ordinary_bodies(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    visible: bool,
+) -> Result<(), RenderError> {
+    if art.poses.arrival.is_none() {
+        return Ok(());
+    }
+    let view = art.presentation_view(scene, cabinet)?;
+    for (player, station) in Player::ALL.into_iter().zip(cabinet.stations()) {
+        if !station.can_fight() {
+            continue;
+        }
+        let elevation = cabinet.stage_entrance().map_or_else(
+            || station.maneuver.elevation(),
+            |motion| motion.elevation(player).unwrap_or_default(),
+        );
+        let pose = if elevation > 0 && cabinet.stage_entrance().is_some() {
+            art.poses.entrance(player)
+        } else {
+            art.poses.select(player, station)
+        }
+        .or_else(|| art.actors.get(player.index()).copied())
+        .ok_or(RenderError::InvalidSprite)?;
+        let draw = pose.draw(
+            ground_position(pose, view.project(station.position), elevation)?,
+            station.facing == crate::Facing::Left,
+        );
+        let present = art.world.iter().any(|(_, actual)| *actual == draw);
+        if present != visible {
+            return Err(failure("ordinary arrival body admission mismatch"));
+        }
+        if visible {
+            verify_draws(scene, art, cabinet, (view, &[draw]))?;
+        }
+    }
+    write_status(format_args!(
+        "Second stage ordinary bodies: {visible} at tick {:?}",
+        cabinet.stage_arrival().map(StageEntrance::tick)
+    ))
+    .map_err(failure)
+}
+
 pub(super) fn verify_markers(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
