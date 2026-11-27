@@ -5413,3 +5413,42 @@ modeled regular enemy family. Its observed setup includes separate
 64- and 32-tick countdowns before movement and conditional activation.
 Exact visual assemblies, combat, parent interactions and native
 admission remain open; the regular-cohort gate stays provisional.
+
+### Aligned second-stage doorway extension and cemetery entry control
+
+A directional control after the doorway camera reaches 1,520 columns
+preserves 10,280 preceding regular-object and 480 new-actor trace rows.
+Both scroll layers return to the earlier vertical alignment at frame
+27,802 without losing horizontal travel. The following full scene
+reconstructs all 71,680 pixels exactly. Eight aligned observations then
+produce a 1,808 by 196 strip; all 196 rows retain the complete earlier
+1,778-column interior as exact byte prefixes. The original unaligned
+sample was correctly rejected by the existing strict stitch. Neither
+its overlap nor its eight-scene admission bound is weakened.
+
+The optional second-stage atlas now admits this verified extent, adding
+23,520 bytes to the maximum strip budget. The earlier extent remains
+admitted and the next larger width is rejected. The native simulation
+still models a fixed-height strip rather than the original variable
+vertical camera; the additional doorway actors and boss remain absent.
+
+The optimized Linux executable passes original-backed synthetic-touch
+smoke in adaptive, aspect-fit, fill, integer and stretch modes. Each
+run verifies routed combat through 1,520 columns, the landing and the
+existing audio checks. Whole-smoke peak RSS ranges from 187,277,312 to
+187,965,440 bytes. The isolated Firefox/WebGL diagnostic also passes
+all nine ordered checkpoints with 1,320 selected files, 81 readbacks
+and 106 blits; it leaves no canvas or stored preferences. These are
+not physical rendering, audible output or physical input acceptance.
+
+A separate original control preserves the stage-three lead-in through
+frame 35,414 and presses Primary during the title phase. The transition
+advances 111 frames earlier than the neutral replay, with the first
+station setup likewise 111 frames earlier. Opposed directional holds
+and attack edges during the fall do not displace the four fixed spawn
+positions; movement resumes after the playable phase begins. All 520
+relative height samples match the neutral replay when aligned by fall
+rank, but the character-to-rank assignment differs. The native campaign
+must not assume a fixed character ordering from one capture. Exact rank
+selection, title-phase input boundaries, stock, health and continue
+rules remain open. No third-stage gameplay is claimed.
