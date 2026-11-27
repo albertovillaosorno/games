@@ -41,7 +41,7 @@ use web_sys::{Element, HtmlElement, PointerEvent};
 #[cfg(feature = "test-fixtures")]
 use web_sys::{Event, PointerEventInit};
 
-use super::{EventSource, focus_lost, mouse};
+use super::{EventSource, application_suspended, focus_lost, mouse};
 #[cfg(feature = "test-fixtures")]
 use super::{SCOPE, browser_input, dom_error, next_event, verify};
 use crate::ir::frame::RenderError;
@@ -173,7 +173,7 @@ fn subscribe_lifecycle(
     source.listen(&document, "visibilitychange", move |_| {
         if visibility.hidden() {
             visibility_mouse.clear();
-            Some(focus_lost())
+            Some(application_suspended())
         } else {
             None
         }
@@ -341,7 +341,8 @@ fn verify_lifecycle(
     let cancelled = HostEvent::Input(InputEvent::FocusLost);
     if hidden {
         verify(
-            next_event(source, input)? == Some(cancelled),
+            next_event(source, input)?
+                == Some(HostEvent::Input(InputEvent::ApplicationSuspended)),
             "document visibility loss",
         )?;
         verify_withdrawn_geometry(source, canvas, input, layout)?;

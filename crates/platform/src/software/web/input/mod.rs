@@ -253,7 +253,9 @@ impl EventSource {
                 #[cfg(feature = "interactive")]
                 let order = {
                     let mut controllers = controllers.borrow_mut();
-                    if transition == focus_lost() {
+                    if transition == focus_lost()
+                        || transition == application_suspended()
+                    {
                         controllers.cancel(stamp);
                     }
                     controllers.next_order()
@@ -337,6 +339,10 @@ fn dom_error(_error: JsValue) -> RenderError {
     RenderError::Backend("browser event operation failed".to_owned())
 }
 
+fn application_suspended() -> InputTransition {
+    InputTransition::Event(HostEvent::Input(InputEvent::ApplicationSuspended))
+}
+
 fn focus_lost() -> InputTransition {
     InputTransition::Event(HostEvent::Input(InputEvent::FocusLost))
 }
@@ -418,6 +424,45 @@ fn controller_edge(value: i16) -> InputTransition {
         device: 1,
         value,
     }))
+}
+
+#[cfg(all(feature = "interactive", feature = "test-fixtures"))]
+fn verify_suspension_order() -> Result<(), RenderError> {
+    let target = EventTarget::new().map_err(dom_error)?;
+    let mut source = EventSource::new(&target, SCOPE, NonZeroUsize::MIN)?;
+    source.listen(&target, "fixture-suspend", |_| {
+        Some(application_suspended())
+    })?;
+    let stamp =
+        super::performance::now().map_err(|_| RenderError::InvalidTimestamp)?;
+    verify(
+        source.controller_events.borrow_mut().fixture_hold(stamp)?
+            == [InputEvent::Attached { device: 1 }],
+        "suspension fixture attachment",
+    )?;
+    verify(
+        source.pop().is_some_and(|sample| {
+            sample.transition() == controller_edge(i16::MAX)
+        }),
+        "suspension fixture controller hold",
+    )?;
+    let event = Event::new("fixture-suspend").map_err(dom_error)?;
+    let _sent = target.dispatch_event(&event).map_err(dom_error)?;
+    for expected in [controller_edge(0), application_suspended()] {
+        verify(
+            source
+                .pop()
+                .is_some_and(|sample| sample.transition() == expected),
+            "ordered application suspension",
+        )?;
+    }
+    let _duplicate = target.dispatch_event(&event).map_err(dom_error)?;
+    verify(
+        source.pop().is_some_and(|sample| {
+            sample.transition() == application_suspended()
+        }) && source.pop().is_none(),
+        "duplicate suspension must not duplicate neutral controller edges",
+    )
 }
 
 #[cfg(all(feature = "interactive", feature = "test-fixtures"))]
@@ -657,6 +702,8 @@ pub(in crate::software) fn verify_event_source() -> Result<(), RenderError> {
     )?;
     #[cfg(feature = "interactive")]
     verify_controller_lifecycle(&source, &target)?;
+    #[cfg(feature = "interactive")]
+    verify_suspension_order()?;
     drop(source);
     verify(
         send_key(&target, "keydown", "KeyA", false)?,
