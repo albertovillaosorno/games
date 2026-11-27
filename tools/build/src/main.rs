@@ -152,7 +152,8 @@ const USAGE: &str = concat!(
     "\nnative-preview: mame render-bench MACHINE REV ",
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT FRAMES",
     "\n",
-    "wave compare LEFT RIGHT LIMIT"
+    "wave compare LEFT RIGHT LIMIT\n",
+    "wave publish TITLE REV PARENT WAV KEY START END LIMIT"
 );
 
 #[derive(Debug)]
@@ -242,6 +243,7 @@ enum Command {
     Upgrade(OsString, ContentHash, ManifestLimits),
     Verify(Verification, Arguments),
     WaveCompare(OsString, OsString, NonZeroU64),
+    WavePublish(reference_audio::Publication),
 }
 
 impl Command {
@@ -298,6 +300,9 @@ impl Command {
                         .map_err(|_args| String::from(USAGE))?;
                 Ok(Self::WaveCompare(left, right, parse_limit(&limit)?))
             },
+            (Some("wave"), Some("publish")) => Ok(Self::WavePublish(
+                reference_audio::Publication::parse(args.collect())?,
+            )),
             (Some("neo"), Some(operation)) => Self::parse_neo(operation, args),
             (Some("mame"), Some(operation)) => {
                 Self::parse_mame(operation, args)
@@ -660,6 +665,7 @@ impl Command {
             Self::WaveCompare(left, right, limit) => {
                 reference_audio::check(&left, &right, limit)
             },
+            Self::WavePublish(publication) => publication.run(),
             Self::SampleCheck(machine, raw, limit, args) => {
                 report_samples(machine, &raw, limit, &args)
             },
@@ -710,7 +716,8 @@ impl Command {
             | Self::SampleCheck(..)
             | Self::StripPublish(..)
             | Self::TilemapCheck(..)
-            | Self::WaveCompare(..) => Err(String::from(USAGE)),
+            | Self::WaveCompare(..)
+            | Self::WavePublish(..) => Err(String::from(USAGE)),
         }
     }
 }

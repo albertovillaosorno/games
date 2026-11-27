@@ -32,6 +32,7 @@
 //! Strict signed PCM16 WAV reference capture reader.
 
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64};
+use std::ops::Range;
 
 use games_assets::AssetFormat;
 
@@ -84,6 +85,46 @@ impl<'source> WavePcm<'source> {
     #[must_use]
     pub const fn payload(self) -> &'source [u8] {
         self.payload
+    }
+
+    /// Select complete interleaved frames without copying or resampling.
+    ///
+    /// # Errors
+    /// Rejects empty, reversed or out-of-range frame windows.
+    pub fn slice(self, window: Range<u64>) -> Result<Self, ImportError> {
+        let AssetFormat::PcmS16Le {
+            channels,
+            frames,
+            sample_rate,
+        } = self.format
+        else {
+            return Err(ImportError::InvalidWave);
+        };
+        let selected = window
+            .end
+            .checked_sub(window.start)
+            .and_then(NonZeroU64::new)
+            .filter(|_| window.end <= frames.get())
+            .ok_or(ImportError::InvalidWave)?;
+        let width = NonZeroU64::from(channels).get().saturating_mul(2);
+        let offset = |frame: u64| {
+            frame
+                .checked_mul(width)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or(ImportError::InvalidWave)
+        };
+        let payload = self
+            .payload
+            .get(offset(window.start)?..offset(window.end)?)
+            .ok_or(ImportError::InvalidWave)?;
+        Ok(Self {
+            format: AssetFormat::PcmS16Le {
+                channels,
+                frames: selected,
+                sample_rate,
+            },
+            payload,
+        })
     }
 }
 
@@ -184,6 +225,28 @@ mod tests {
             frames: NonZeroU64::new(2).unwrap_or(NonZeroU64::MIN),
             sample_rate: NonZeroU32::new(48_000).unwrap_or(NonZeroU32::MIN),
         });
+    }
+
+    #[test]
+    fn selects_complete_stereo_frames() -> Result<(), ImportError> {
+        let wave = WavePcm::new(&CAPTURE, NonZeroU64::MAX)?;
+        let selected = wave.slice(1..2)?;
+        let expected = AssetFormat::PcmS16Le {
+            channels: NonZeroU8::MIN.saturating_add(1),
+            frames: NonZeroU64::MIN,
+            sample_rate: NonZeroU32::MIN.saturating_add(47_999),
+        };
+        if selected.payload() != [1, 0, 255, 255]
+            || selected.format() != expected
+        {
+            return Err(ImportError::InvalidWave);
+        }
+        for (start, end) in [(0, 0), (2, 1), (1, 3), (u64::MAX, u64::MAX)] {
+            if wave.slice(start..end).is_ok() {
+                return Err(ImportError::InvalidWave);
+            }
+        }
+        Ok(())
     }
 
     #[test]

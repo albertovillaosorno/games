@@ -9,9 +9,9 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded exact comparison of private PCM16 reference recordings.
+//   - Bounded comparison and canonical selection of PCM16 recordings.
 // - Must-Not:
-//   - Resample, infer audio events, play audio or publish observations.
+//   - Resample, infer audio events, play audio or bypass storage.
 // - Allows:
 //   - Inputs: Two explicit local WAV paths and a per-file byte budget.
 //   - Outputs: Complete frame match count or first differing frame.
@@ -31,13 +31,101 @@
 
 //! Exact local reference audio comparison.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::ops::Range;
 
-use games_assets::AssetFormat;
+use games_assets::{
+    AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
+    SourceIdentity,
+};
 use games_platform::ir::importer::reference::WavePcm;
 use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::storage::staging::CanonicalStaging;
 use games_platform::ir::toolchain;
+
+use crate::{USAGE, parse_limit, publication, text};
+
+/// An explicitly selected complete PCM frame window.
+#[derive(Debug)]
+pub(crate) struct Publication {
+    identity: SourceIdentity,
+    key: String,
+    limit: NonZeroU64,
+    parent: OsString,
+    path: OsString,
+    window: Range<u64>,
+}
+
+impl Publication {
+    pub(crate) fn parse(args: Vec<OsString>) -> Result<Self, String> {
+        let [title, revision, parent, path, key, start, end, limit] =
+            <[OsString; 8]>::try_from(args)
+                .map_err(|_args| String::from(USAGE))?;
+        let identity = SourceIdentity {
+            revision: text(&revision)?.to_owned(),
+            title: text(&title)?.to_owned(),
+        };
+        identity
+            .validate()
+            .map_err(|error| format!("identity: {error:?}"))?;
+        let frame = |value: &OsString| {
+            text(value)?
+                .parse::<u64>()
+                .map_err(|_error| String::from("invalid frame index"))
+        };
+        let window = frame(&start)?..frame(&end)?;
+        if window.is_empty() {
+            return Err(String::from("empty PCM window"));
+        }
+        Ok(Self {
+            identity,
+            key: text(&key)?.to_owned(),
+            limit: parse_limit(&limit)?,
+            parent,
+            path,
+            window,
+        })
+    }
+
+    pub(crate) fn run(self) -> Result<(), String> {
+        publication::require_asset_parent(&self.parent, &self.identity.title)?;
+        let source = snapshot(&self.path, self.limit)
+            .map_err(|error| format!("source WAV: {error:?}"))?;
+        let wave = WavePcm::new(&source, self.limit)
+            .and_then(|pcm| pcm.slice(self.window))
+            .map_err(|error| format!("PCM window: {error:?}"))?;
+        let bytes = wave.payload();
+        let size = u64::try_from(bytes.len())
+            .ok()
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| String::from("invalid PCM window size"))?;
+        let digest = ContentHash::calculate(bytes);
+        let record = AssetRecord {
+            digest,
+            format: wave.format(),
+            key: self.key,
+            size: size.get(),
+        };
+        let limits = ManifestLimits {
+            manifest_bytes: NonZeroUsize::MIN.saturating_add(4095),
+            payload_bytes: size,
+            records: NonZeroUsize::MIN,
+            total_bytes: size,
+        };
+        let manifest = AssetManifest::new(self.identity, vec![record], limits)
+            .map_err(|error| format!("PCM manifest: {error:?}"))?;
+        let mut stage = CanonicalStaging::new(
+            &self.parent,
+            publication::staging_budget(limits)?,
+        )
+        .map_err(|error| format!("stage: {error:?}"))?;
+        stage
+            .write_payload(digest, bytes)
+            .map_err(|error| format!("stage: {error:?}"))?;
+        publication::finish(stage, &manifest, limits)
+    }
+}
 
 /// Compare two bounded complete PCM16 reference recordings.
 /// # Errors
