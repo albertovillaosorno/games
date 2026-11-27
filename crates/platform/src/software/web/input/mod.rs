@@ -189,21 +189,34 @@ impl EventQueue {
         scope: u64,
         order: u64,
     ) {
+        let sample = (order, InputSample::new(stamp, transition, Some(scope)));
         if self.overflow {
+            // Ordinary overflow withdraws window input, but must not
+            // swallow a subsequent application-wide suspension.
+            if transition == application_suspended() {
+                self.samples.clear();
+                self.samples.push_back(sample);
+            }
             return;
         }
         if self.samples.len() == self.capacity.get() {
+            // Keep the latest real suspension and its acquisition order.
+            // It already cancels everything lost by discarding DOM input.
+            let suspension = if transition == application_suspended() {
+                Some(sample)
+            } else {
+                self.samples.iter().rev().copied().find(|(_, queued)| {
+                    queued.transition() == application_suspended()
+                })
+            };
             self.samples.clear();
             self.overflow = true;
-            self.samples.push_back((
+            self.samples.push_back(suspension.unwrap_or((
                 order,
                 InputSample::new(stamp, focus_lost(), Some(scope)),
-            ));
+            )));
         } else {
-            self.samples.push_back((
-                order,
-                InputSample::new(stamp, transition, Some(scope)),
-            ));
+            self.samples.push_back(sample);
         }
     }
 }
@@ -462,6 +475,61 @@ fn verify_suspension_order() -> Result<(), RenderError> {
             sample.transition() == application_suspended()
         }) && source.pop().is_none(),
         "duplicate suspension must not duplicate neutral controller edges",
+    )?;
+    verify_suspension_overflow(&source, &target)
+}
+
+#[cfg(all(feature = "interactive", feature = "test-fixtures"))]
+fn verify_suspension_overflow(
+    source: &EventSource,
+    target: &EventTarget,
+) -> Result<(), RenderError> {
+    // Suspension can fill the queue, trigger overflow, or arrive after it.
+    for keys_before in 0..=2 {
+        let stamp = super::performance::now()
+            .map_err(|_| RenderError::InvalidTimestamp)?;
+        let attached =
+            source.controller_events.borrow_mut().fixture_hold(stamp)?;
+        verify(
+            attached.is_empty(),
+            "suspension retains controller identity",
+        )?;
+        verify(
+            source.pop()
+                == Some(InputSample::new(
+                    Some(stamp),
+                    controller_edge(i16::MAX),
+                    Some(SCOPE),
+                )),
+            "controller reassertion before suspension overflow",
+        )?;
+        for _ in 0..keys_before {
+            let _sent = send_key(target, "keydown", "KeyA", false)?;
+        }
+        let event = Event::new("fixture-suspend").map_err(dom_error)?;
+        let stamp = super::performance::timestamp(event.time_stamp()).ok();
+        let _sent = target.dispatch_event(&event).map_err(dom_error)?;
+        // Force overflow if the suspension was the first observation.
+        let _sent = send_key(target, "keydown", "KeyA", false)?;
+        for expected in [controller_edge(0), application_suspended()] {
+            verify(
+                source.pop()
+                    == Some(InputSample::new(stamp, expected, Some(SCOPE))),
+                "suspension overflow preserves real timestamp and order",
+            )?;
+        }
+        verify(source.pop().is_none(), "suspension overflow drained")?;
+    }
+    let _sent = send_key(target, "keyup", "KeyA", false)?;
+    verify(
+        source.pop().is_some_and(|sample| {
+            sample.transition()
+                == InputTransition::Event(HostEvent::Input(InputEvent::Key {
+                    code: KeyboardKey::LETTER_A.code(),
+                    down: false,
+                }))
+        }) && source.pop().is_none(),
+        "input resumes after suspension overflow",
     )
 }
 
