@@ -4510,3 +4510,12 @@ completion, second-stage travel and finite soundtrack cues. All 600
 movement and 20 combat submissions per mode met the 16.667 ms host
 budget; whole-smoke peak RSS ranged from 181,018,624 to 181,276,672
 bytes. These are synthetic diagnostics, not physical device acceptance.
+
+The post-readout optimized 3,973,064-byte Linux build also passed all
+five full-campaign display modes with original-backed art and PCM.
+The opt-in native rendering and audio workspace gate passed; its digit
+fixture checks initial and final clock readbacks and result glyph
+order. Every campaign run retained the earlier wrestler, winning bonus,
+second-stage travel, cumulative score and soundtrack checks. All 600
+movement and 20 combat submissions per mode met the 16.667 ms budget;
+whole-smoke peak RSS ranged from 181,075,968 to 181,313,536 bytes.
