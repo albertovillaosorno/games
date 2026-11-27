@@ -562,12 +562,20 @@ impl Art {
         pixels: &[u8],
     ) -> Result<Self, RenderError> {
         let layout = FrameLayout::new(width, height, size(1_048_576)?)?;
+        Self::upload_layout(scene, layout, pixels)
+    }
+
+    fn upload_layout(
+        scene: &mut SceneSession<'_, '_>,
+        layout: FrameLayout,
+        pixels: &[u8],
+    ) -> Result<Self, RenderError> {
         let atlas = scene.load_atlas(layout, pixels)?;
         Ok(Self {
             atlas,
             rect: SpriteRect {
-                height,
-                width,
+                height: layout.height(),
+                width: layout.width(),
                 x: 0,
                 y: 0,
             },

@@ -97,10 +97,15 @@ impl WorldArt {
         if record.size > u64::from(atlas_budget()) {
             return Err(RenderError::TooLarge);
         }
+        let layout = FrameLayout::new(
+            width,
+            height,
+            size(usize::try_from(atlas_budget()).map_err(failure)?)?,
+        )?;
         let pixels = extension.view_payload(key).map_err(failure)?;
         validate_prefix(original, &pixels, width.get())?;
         Ok(Self {
-            art: Art::upload(scene, (width, height), &pixels)?,
+            art: Art::upload_layout(scene, layout, &pixels)?,
         })
     }
 
