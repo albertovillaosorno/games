@@ -484,3 +484,42 @@ The combined checker reports 1,169 identities, 40,266 owned bytes,
 interior entries. Dispositions are 1,141 unresolved, three intentional
 replacements and 25 non-runtime. All prior semantic fields and audio
 entries are retained; gameplay mappings remain incomplete.
+
+A matched 330-second original campaign records 227 distinct nested
+word selections at 44 indirect dispatch sites. A focused boss replay
+records another 25 selections across eight subdispatchers. Both
+reproduce the control's 39 score transitions. The pointer reads
+reconcile with immutable table words, signed indices and active banks;
+only 49 selections have been admitted into the reviewed graph so far.
+
+The first boss terminal state retains the linked station's upper
+attribution nibble, then a later timer expiration sets the award flag
+and retires the record and its linked rig. This is original behavior
+evidence, not a claim that the native encounter reproduces it.
+The independently called no-offset vector entry now owns the shared
+continuation of the offset entry; no previously decoded instructions
+or flow observations are lost.
+
+These passes admit 64 main identities and 3,102 additional owned
+bytes. The main inventory is 544 identities and 24,970 owned bytes,
+with 582 possible observations and 137 unresolved flows. The combined
+checker reports 1,233 identities, 43,368 owned bytes, 3,636 reciprocal
+pairs, 4,048 flow observations and 131 interior entries. Dispositions
+are 1,205 unresolved, three intentional replacements and 25
+non-runtime. No decoded instruction is unowned. Other captured nested
+selections and unobserved paths still require review.
+
+The next two passes admit 28 further observed nested selections in
+banks 21 and 30 and their direct continuations. They identify group
+state initialization and retirement, station selection and approach,
+and descriptor stream field updates. Shared fixed helpers and
+interior entries retain their existing ownership. No prior instruction
+or flow observation is removed.
+
+The main inventory is 573 identities, 25,703 owned bytes and 621
+possible observations. The combined checker reports 1,262 identities,
+44,101 owned bytes, 3,685 reciprocal pairs, 4,102 flow observations,
+141 interior entries and 138 unresolved flows. Dispositions are
+1,234 unresolved, three intentional replacements and 25 non-runtime.
+No decoded instruction is unowned. Of the 252 captured nested word
+selections, 77 are now admitted; the other 175 remain review inputs.
