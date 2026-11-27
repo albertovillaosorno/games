@@ -956,3 +956,14 @@ actor types, original descriptor conditions, exact anchors and
 clearance behavior remain unresolved. The checker reports 38 partial
 mappings, three intentional replacements and unchanged function,
 semantic review, dependency, graph and disposition counts.
+
+The validated ranked balloon departure adds four partial mappings for
+relative initialization, the hold interval, acceleration and retirement,
+and refines the earlier ranked scheduling mapping. The fixed-step model
+retains its frozen competition score and separate optional presentation
+layers. One additional partial mapping correlates the matched late
+second-stage actor-count gate with the native regular-cohort cap at
+1,264 columns. The private checker reports 43 partial mappings, three
+intentional runtime replacements and unchanged function, flow, dependency
+and disposition counts. Original actor eligibility, scheduling, absolute
+departure poses and pixel parity remain unresolved.
