@@ -5325,3 +5325,36 @@ same native cohort approximation now handles this threshold before the
 1,264-column cap, with a regression distinguishing their release counts.
 Other source control states, including the 1,024-column record, retain
 mixed observations and are not mapped to this approximation.
+
+### Second-stage doorway scenery extension
+
+A new original four-station replay reproduces the established late-wave
+trace through frame 25,799. Reversing and patrolling the existing street
+clears the last observed regular object group at frame 26,185, but both
+scroll layers hold at the previous 1,416-column limit through frame
+38,000. Regular-object clearance alone therefore does not establish the
+next travel condition. A second directional control reproduces the first
+8,979 regular-object rows before departing toward the doorway. Its two
+horizontal layers advance another 74 columns, to raw position 376; the
+vertical position remains unchanged. The newly reached scene contains
+additional enemy families. Neither replay establishes boss completion,
+exact doorway admission rules or another stage handoff.
+
+Four aligned late observations reconstruct all 71,680 pixels exactly.
+The settled background and a separately captured intermediate scene
+stitch with six retained observations using the existing strict overlap
+and eight-scene bounds. The resulting 1,778 by 196 strip preserves all
+196 rows of the preceding 1,704-column strip byte-for-byte as prefixes.
+The optional catalogue admits this verified extent without changing the
+base scene, earlier art or audio. The per-strip atlas bound increases by
+58,016 bytes and rejects the next larger width; the preceding extent
+remains admitted. No original assets or local selections are tracked.
+
+The optimized 4,057,784-byte Linux executable passes original-backed
+synthetic-touch campaign smoke in adaptive, aspect-fit, fill, integer
+and stretch modes, including 1,490 columns of second-stage travel. All
+3,000 movement and 100 strike submissions meet the 16.667 ms budget.
+Whole-smoke peak RSS ranges from 187,056,128 to 188,416,000 bytes.
+These isolated Xvfb software OpenGL and dummy-audio runs establish
+scenery and provisional traversal only, not exact combat, new enemy
+behavior, physical rendering, audibility or physical input acceptance.
