@@ -4284,3 +4284,26 @@ score through continuing and stage transitions and reset new joins.
 These lifecycle and simultaneous-hit choices remain provisional; boss,
 bonus, other award amounts and original multiplayer attribution are
 not yet mapped. No complete scoring or campaign parity is claimed.
+
+### Campaign score controls
+
+Four fresh long original replays reproduce decimal carry from nine
+to ten and nineteen to twenty, and the same one-point increase for
+Marge near the first boss completion. The cumulative scores remain
+unchanged during the first balloon bonus in all four runs, including
+the previously established idle, sparse-pulse and rapid-pulse
+controls. The displayed balloon result is not transferred to the
+cumulative defeat score in these observations.
+
+Withholding late attacks delays the boss-associated score increase
+and changes the recipient to Homer. Two further controls restrict
+attacks to one station during a bounded late interval, then resume
+all four stations' attacks; both delay the award, but neither proves
+final-strike attribution. The native boss award is not implemented
+on this incomplete evidence. The regular defeat and independent
+bonus models remain separate.
+
+Fresh opt-in offscreen native renderer validation passed, including the
+zero-to-one digit readback and four-digit placement fixture. The first
+run encountered a timing-sensitive unrelated LAN test failure; the
+unchanged fresh retry passed. No physical display acceptance is claimed.

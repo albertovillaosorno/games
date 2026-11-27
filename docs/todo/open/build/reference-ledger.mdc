@@ -432,3 +432,20 @@ The graph is unchanged at 1,050 functions and 3,323 reciprocal pairs.
 The checker reports 1,022 unresolved, three intentional replacements
 and 25 non-runtime dispositions. Revisit the exclusions if additional
 relevant callers or effects are established.
+
+Matched original replays establish that the shared indexed decimal
+addition and its four station selectors update the successful
+station's score by one at regular enemy disappearance. The additional
+first-station replay verifies the same-frame displayed digit change.
+These five ledger entries record a partial native mapping and the
+validated fixed-step tests; they remain unresolved for general table
+bounds, other award amounts, lifecycle and multiplayer attribution.
+The 1,050-function graph and disposition counts are unchanged.
+
+Long campaign controls additionally verify decimal carry across nine
+and nineteen, a station-specific one-point increase near the first
+boss completion, and unchanged cumulative scores throughout the
+balloon bonus despite different balloon results. A late-attack
+withholding control delays the increase and changes its recipient.
+The exact boss attribution, score table bounds and lifecycle remain
+unresolved; the graph and all dispositions are unchanged.
