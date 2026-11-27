@@ -4645,3 +4645,29 @@ Regressions compare opposed jumps and signed special trajectories,
 including release and landing, for every station. Fresh full workspace
 validation passed. Other action, terrain and cooperative contexts
 remain outside this comparison.
+
+### Opposed walking direction and entrance smoke
+
+Three additional original controls establish that opposed directions
+cancel the corresponding coordinate components but retain a walking
+state. All four held directions retain the rear-walk state with zero
+displacement for 25 ticks. With Up, Down and Right held, horizontal
+travel continues while the rear-walk state remains selected. Adding
+the opposing horizontal input during an existing walk preserves its
+walking state and stops translation until release. Static review
+confirms that held directional bits admit the walk, and Up selects
+the rear-walk branch independently of the signed vertical step.
+
+Native separates walking pose intent from coordinate displacement.
+The existing cycle clock continues through canceled movement and
+selects rear art while Up is held. Four-station regressions cover
+opposed axes, direction changes and release; exact original art
+projection and phase equivalence remain outside this check.
+
+The preceding scripted entrance also passed original-backed native
+campaign checks on an optimized 3,986,984-byte worktree build across
+all five display modes. The run included entrance readback and
+second-stage combat after 270 columns of travel. All 600 movement
+and 20 combat submissions per mode met the 16.667 ms budget;
+whole-smoke peak RSS ranged from 181,354,496 to 181,534,720 bytes.
+The entrance's vehicle artwork remains a separate pending change.

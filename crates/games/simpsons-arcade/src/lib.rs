@@ -607,6 +607,11 @@ impl Slot {
             return;
         }
         let (dx, dy) = self.direction();
+        let up_held = self.held(Control::Up);
+        let walking_held = up_held
+            || self.held(Control::Down)
+            || self.held(Control::Left)
+            || self.held(Control::Right);
         let facing_locked = match self.station.maneuver {
             Maneuver::Attack { tick, .. } => tick > 0,
             Maneuver::AirAttack(air) => air.tick() > 0,
@@ -637,14 +642,14 @@ impl Slot {
             .y
             .saturating_add(step_y)
             .clamp(layout.min.y, layout.max.y);
-        self.station.walking = if (dx == 0 && dy == 0)
+        self.station.walking = if !walking_held
             || self.station.maneuver != Maneuver::Idle
             || self.action_recovery != Recovery::Ready
         {
             None
         } else {
             Some(WalkMotion {
-                away: dy < 0,
+                away: up_held,
                 tick: self
                     .station
                     .walking
@@ -3025,6 +3030,48 @@ mod tests {
     }
 
     #[test]
+    fn opposed_walk_preserves_pose_intent_without_translation() {
+        for player in Player::ALL {
+            let mut state = four_playing();
+            let position = station_for(&state, player).position;
+            state.input_step(3, &[
+                change(player, Control::Left, true),
+                change(player, Control::Right, true),
+            ]);
+            let forward = station_for(&state, player);
+            assert_eq!(forward.position, position);
+            assert_eq!(
+                forward.walking,
+                Some(WalkMotion { away: false, tick: 0 })
+            );
+            state.input_step(4, &[
+                change(player, Control::Up, true),
+                change(player, Control::Down, true),
+            ]);
+            let rear = station_for(&state, player);
+            assert_eq!(rear.position, position);
+            assert_eq!(rear.walking, Some(WalkMotion { away: true, tick: 1 }));
+            state.input_step(5, &[change(player, Control::Left, false)]);
+            let lateral = station_for(&state, player);
+            assert_eq!(lateral.position.y, position.y);
+            assert_eq!(lateral.position.x, position.x.saturating_add(2));
+            assert_eq!(
+                lateral.walking,
+                Some(WalkMotion { away: true, tick: 2 })
+            );
+            state.input_step(
+                6,
+                &direction_changes(
+                    player,
+                    &[Control::Right, Control::Up, Control::Down],
+                    false,
+                ),
+            );
+            assert_eq!(station_for(&state, player).walking, None);
+        }
+    }
+
+    #[test]
     // The walk cycle continues while input is held against a boundary.
     fn walking_ticks_follow_held_input_and_restart() {
         let mut state = four_playing();
@@ -3036,16 +3083,17 @@ mod tests {
         assert_eq!(moving.walking_ticks(), Some(1));
         state.input_step(5, &[change(Player::Marge, Control::Left, true)]);
         let [opposed, _, _, _] = state.stations();
-        assert_eq!(opposed.walking_ticks(), None);
+        assert_eq!(opposed.walking_ticks(), Some(2));
+        assert_eq!(opposed.position, moving.position);
         state.input_step(6, &[change(Player::Marge, Control::Right, false)]);
         let [restarted, _, _, _] = state.stations();
-        assert_eq!(restarted.walking_ticks(), Some(0));
+        assert_eq!(restarted.walking_ticks(), Some(3));
         for tick in 7..300 {
             state.input_step(tick, &[]);
         }
         let [blocked, _, _, _] = state.stations();
         assert_eq!(blocked.position.x, StreetLayout::DOWNTOWN.min.x);
-        assert_eq!(blocked.walking_ticks(), Some(293));
+        assert_eq!(blocked.walking_ticks(), Some(296));
         state.input_step(300, &[change(Player::Marge, Control::Left, false)]);
         assert_eq!(station_for(&state, Player::Marge).walking, None);
     }
