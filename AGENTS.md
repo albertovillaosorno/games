@@ -312,8 +312,23 @@
   reference sources. Release archives are not automatically installed or
   executed. Use no Python in project-owned code; third-party reference
   files are excluded.
-- The only designated reusable upstream project is
-  `storytold/craft-libs`. Verify its licences and actual suitability.
+- Prefer suitable reusable components from `storytold/craft-libs` before
+  writing equivalent mechanisms. Inspect its pinned sources and evaluate
+  compatibility, feature boundaries and dependency costs. Reuse through
+  existing IR contracts where appropriate; do not replace working code
+  merely to introduce a dependency. Verify licences and record notices.
+  Study the official Craft Anything source for applicable analysis tools
+  and workflows; it is a reference, not a mandatory runtime dependency.
+- When Ghidra lacks the required CPU or binary loader, first search for
+  compatible maintained upstream extensions. Where feasible, implement
+  a reusable contributor-only processor or loader extension with tests
+  against authoritative instruction and memory-map evidence. Verify
+  decoding, bank identity, control flow and semantic correctness before
+  trusting decompilation. Keep extension code separate from runtime.
+  Do not block playable campaign progress on missing analysis tooling:
+  use verified static alternatives and targeted reference emulation
+  when an extension is unavailable or disproportionate to the task.
+  Record the analysis limitation and revisit unresolved ledger entries.
 - Configure persistent publication roots and the requested target in local
   `.env` using `GAMES_ASSET_ROOT`, `GAMES_OUTPUT_ROOT` and `GAMES_TARGET`.
   Use explicit absolute roots; do not expand shell expressions. Track only
