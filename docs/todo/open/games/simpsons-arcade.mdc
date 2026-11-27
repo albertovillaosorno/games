@@ -4703,3 +4703,18 @@ This is a sparse vehicle layer, not full raster or frame-by-frame
 animation equivalence. Independent station arrival art, exact
 card-to-entrance setup visibility, original cue alignment and physical
 input/display acceptance remain open.
+
+### Opposed ground-attack inputs
+
+Matched isolated original controls on all four stations select moving
+ground-attack art when both horizontal directions are pressed at the
+second input tick, even though translation cancels. Neutral input and
+opposed vertical input retain the neutral attack selection in the
+first-station comparison.
+
+Native now samples held horizontal intent rather than the net axis
+for the attack pose. Fractional movement, facing and attack duration
+continue to use the existing mechanics. Regressions exercise each
+station with right, opposed horizontal and opposed vertical input
+at three adjacent sample offsets and verify canceled translation.
+These observations do not establish pixel-exact animation equivalence.

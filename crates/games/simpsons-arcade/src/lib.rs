@@ -395,7 +395,6 @@ struct Slot {
 
 impl Slot {
     fn advance_maneuver(&mut self, player: Player, pending: PendingManeuver) {
-        let (dx, _) = self.direction();
         let queued = pending.resolve(self.held);
 
         self.action_recovery = self.action_recovery.advance();
@@ -409,7 +408,7 @@ impl Slot {
         }
         let mut previous = self.station.maneuver;
         if let Maneuver::Attack { moving, tick: 0 } = &mut previous {
-            *moving = dx != 0;
+            *moving = self.held(Control::Left) || self.held(Control::Right);
         }
         self.station.maneuver =
             previous.advance(player, self.held(Control::Secondary));
@@ -3102,29 +3101,54 @@ mod tests {
     fn moving_attack_samples_only_the_second_input_tick() {
         for player in Player::ALL {
             for offset in 0..3 {
-                assert_moving_attack_offset(player, offset);
+                assert_moving_attack_offset(
+                    player,
+                    offset,
+                    &[Control::Right],
+                    true,
+                );
+                assert_moving_attack_offset(
+                    player,
+                    offset,
+                    &[Control::Left, Control::Right],
+                    true,
+                );
+                assert_moving_attack_offset(
+                    player,
+                    offset,
+                    &[Control::Up, Control::Down],
+                    false,
+                );
             }
         }
     }
 
-    fn assert_moving_attack_offset(player: Player, offset: u64) {
+    fn assert_moving_attack_offset(
+        player: Player,
+        offset: u64,
+        directions: &[Control],
+        horizontal: bool,
+    ) {
         let mut state = four_playing();
-        let direction = Control::Right;
+        let position = station_for(&state, player).position;
         for tick in 3..8 {
             let mut edges = Vec::new();
             if tick == 3 {
                 edges.extend(pulse(player, Control::Primary));
             }
             if tick == 3u64.saturating_add(offset) {
-                edges.push(change(player, direction, true));
+                edges.extend(direction_changes(player, directions, true));
             }
             if tick == 4u64.saturating_add(offset) {
-                edges.push(change(player, direction, false));
+                edges.extend(direction_changes(player, directions, false));
             }
             state.input_step(tick, &edges);
+            if directions.len() == 2 {
+                assert_eq!(station_for(&state, player).position, position);
+            }
         }
         assert_eq!(station_for(&state, player).maneuver, Maneuver::Attack {
-            moving: offset == 1,
+            moving: horizontal && offset == 1,
             tick: 4
         });
     }
