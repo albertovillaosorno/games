@@ -816,3 +816,13 @@ original; its pose selection with opposed inputs still needs review.
 These station samples add no new admitted selector, function or graph
 edge. Cooperative, other-height and terrain-specific behavior remain
 outside the four-station verification.
+
+The bounded checker now distinguishes partial Rust mappings from resolved
+runtime dispositions. Every asserted mapping requires a nonempty owner,
+symbol and test evidence; partial mappings additionally require explicit
+semantic review. Discovered and non-runtime dispositions cannot carry a
+runtime mapping. Fixtures reject missing or contradictory mapping evidence
+without rejecting legitimately unmapped unresolved functions. The canonical
+inventory passes the stronger check: 31 partial mappings and three
+intentional runtime replacements, with unchanged function and graph
+counts. The remaining 1,534 unresolved functions are not completed.

@@ -80,6 +80,11 @@ impl Arguments {
             report.flows, report.interior, report.unresolved,
         ))
         .map_err(|error| error.to_string())?;
+        write_line(&format!(
+            "Partial Rust mappings: {}; resolved runtime mappings: {}",
+            report.partial_mappings, report.resolved_mappings,
+        ))
+        .map_err(|error| error.to_string())?;
         for (status, count) in report.statuses {
             write_line(&format!("{status}: {count}"))
                 .map_err(|error| error.to_string())?;
@@ -256,20 +261,17 @@ impl Function {
             return Err("missing function provenance");
         }
         self.validate_semantic_review()?;
-        self.validate_disposition()
+        self.validate_disposition()?;
+        self.validate_mapping()
     }
 
     fn validate_disposition(&self) -> Result<(), &'static str> {
         match self.status.as_str() {
             "discovered" | "unresolved" => return Ok(()),
-            "implemented" | "shared-mechanism" | "intentional-replacement" => {
-                if !nonempty(self.rust_owner.as_deref())
-                    || !nonempty(self.rust_symbol.as_deref())
-                {
-                    return Err("resolved runtime function lacks Rust mapping");
-                }
-            },
-            "non-runtime" => {},
+            "implemented"
+            | "shared-mechanism"
+            | "intentional-replacement"
+            | "non-runtime" => {},
             _ => return Err("unrecognized function disposition"),
         }
         if !nonempty(self.semantic_name.as_deref())
@@ -277,6 +279,32 @@ impl Function {
             || !self.test_evidence.as_ref().is_some_and(evidence)
         {
             return Err("resolved function lacks behavior or evidence");
+        }
+        Ok(())
+    }
+
+    fn validate_mapping(&self) -> Result<(), &'static str> {
+        let required = matches!(
+            self.status.as_str(),
+            "implemented" | "shared-mechanism" | "intentional-replacement"
+        );
+        if !required && self.rust_owner.is_none() && self.rust_symbol.is_none()
+        {
+            return Ok(());
+        }
+        if matches!(self.status.as_str(), "discovered" | "non-runtime") {
+            return Err("mapping contradicts function disposition");
+        }
+        if !nonempty(self.rust_owner.as_deref())
+            || !nonempty(self.rust_symbol.as_deref())
+            || !self.test_evidence.as_ref().is_some_and(evidence)
+        {
+            return Err("Rust mapping lacks owner, symbol or test evidence");
+        }
+        if self.status == "unresolved"
+            && self.analysis_state.as_deref() != Some("semantic-reviewed")
+        {
+            return Err("partial Rust mapping lacks semantic review");
         }
         Ok(())
     }
@@ -311,6 +339,8 @@ struct Report {
     functions: usize,
     interior: usize,
     pairs: usize,
+    partial_mappings: usize,
+    resolved_mappings: usize,
     statuses: BTreeMap<String, usize>,
     unresolved: usize,
 }
@@ -349,6 +379,15 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
             .bytes
             .checked_add(function.body_bytes.get())
             .ok_or("owned byte count overflow")?;
+        if function.rust_owner.is_some() {
+            if function.status == "unresolved" {
+                report.partial_mappings =
+                    report.partial_mappings.saturating_add(1);
+            } else {
+                report.resolved_mappings =
+                    report.resolved_mappings.saturating_add(1);
+            }
+        }
         let count = report.statuses.entry(function.status.clone()).or_default();
         *count = count.saturating_add(1);
         if functions.insert(function.id.clone(), function).is_some() {
@@ -679,6 +718,59 @@ mod tests {
     }
 
     #[test]
+    fn checks_partial_mapping_evidence_without_claiming_completion()
+    -> Result<(), String> {
+        let mut fixture = record("0001", &[], &[]);
+        for (field, value) in [
+            ("status", Value::from("unresolved")),
+            ("analysis_state", Value::from("semantic-reviewed")),
+            ("semantic_name", Value::from("fixture")),
+            ("behavior", Value::from("partial behavior")),
+            ("semantic_evidence", Value::from("fixture")),
+            ("inputs", serde_json::json!([])),
+            ("outputs", serde_json::json!([])),
+            ("state_mutations", serde_json::json!([])),
+            ("rust_owner", Value::from("fixture.rs")),
+            ("rust_symbol", Value::from("fixture")),
+            ("test_evidence", serde_json::json!(["partial fixture"])),
+        ] {
+            set_field(&mut fixture, field, value)?;
+        }
+        let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
+        if report.partial_mappings != 1
+            || report.resolved_mappings != 0
+            || report.statuses.get("unresolved") != Some(&1)
+        {
+            return Err(String::from("partial mapping counted as completion"));
+        }
+        for (field, value) in [
+            ("rust_owner", Value::Null),
+            ("rust_symbol", Value::from(" ")),
+            ("test_evidence", Value::Null),
+            ("test_evidence", serde_json::json!([""])),
+            ("analysis_state", Value::Null),
+            ("status", Value::from("discovered")),
+            ("status", Value::from("non-runtime")),
+        ] {
+            let mut invalid = fixture.clone();
+            set_field(&mut invalid, field, value)?;
+            if audit(&invalid.to_string(), NonZeroUsize::MIN).is_ok() {
+                return Err(format!(
+                    "accepted invalid partial mapping {field}"
+                ));
+            }
+        }
+        for field in ["rust_owner", "rust_symbol"] {
+            set_field(&mut fixture, field, Value::Null)?;
+        }
+        let unmapped = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
+        if unmapped.partial_mappings != 0 || unmapped.resolved_mappings != 0 {
+            return Err(String::from("unmapped review counted as mapping"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rejects_unsubstantiated_completion() -> Result<(), String> {
         let mut fixture = record("0001", &[], &[]);
         let row = fixture.as_object_mut().ok_or("fixture object")?;
@@ -697,7 +789,10 @@ mod tests {
         let _symbol =
             mapped.insert("rust_symbol".into(), Value::from("fixture"));
         let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
-        if report.statuses.get("implemented") != Some(&1) {
+        if report.statuses.get("implemented") != Some(&1)
+            || report.partial_mappings != 0
+            || report.resolved_mappings != 1
+        {
             return Err(String::from("missing implemented count"));
         }
         let duplicate = fixture.to_string().replacen(
