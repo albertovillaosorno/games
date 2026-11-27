@@ -871,3 +871,13 @@ and timing fields, channel continuation and FM register operations.
 The private inventory preserves all other record fields; the checker
 passes with 109 unknown dependency lists remaining. No function status,
 flow, or Rust mapping is promoted by the audit.
+
+The read-only checker now reports structured semantic reviews and reviewed
+explicit dependency lists independently of disposition and Rust mapping.
+An explicitly reviewed empty list counts; a list without semantic review
+never counts. Synthetic cases cover both, together with unknown lists.
+A further direct-dependency audit covers 27 sound command, sequence and
+FM effect functions against the retained listings and board memory map.
+The checker reports 1,562 semantic reviews, 1,480 reviewed dependency
+lists and 82 pending lists. Every other function field, graph observation
+and runtime disposition remains unchanged; no parity claim is added.

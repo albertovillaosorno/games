@@ -81,6 +81,15 @@ impl Arguments {
         ))
         .map_err(|error| error.to_string())?;
         write_line(&format!(
+            "Semantic reviews: {}; reviewed dependencies: {}; pending: {}",
+            report.semantic_reviews,
+            report.reviewed_dependencies,
+            report
+                .functions
+                .saturating_sub(report.reviewed_dependencies),
+        ))
+        .map_err(|error| error.to_string())?;
+        write_line(&format!(
             "Partial Rust mappings: {}; resolved runtime mappings: {}",
             report.partial_mappings, report.resolved_mappings,
         ))
@@ -347,8 +356,40 @@ struct Report {
     pairs: usize,
     partial_mappings: usize,
     resolved_mappings: usize,
+    reviewed_dependencies: usize,
+    semantic_reviews: usize,
     statuses: BTreeMap<String, usize>,
     unresolved: usize,
+}
+
+impl Report {
+    fn record_function(
+        &mut self,
+        function: &Function,
+    ) -> Result<(), &'static str> {
+        self.bytes = self
+            .bytes
+            .checked_add(function.body_bytes.get())
+            .ok_or("owned byte count overflow")?;
+        if function.analysis_state.as_deref() == Some("semantic-reviewed") {
+            self.semantic_reviews = self.semantic_reviews.saturating_add(1);
+            if function.data_dependencies.is_some() {
+                self.reviewed_dependencies =
+                    self.reviewed_dependencies.saturating_add(1);
+            }
+        }
+        if function.rust_owner.is_some() {
+            if function.status == "unresolved" {
+                self.partial_mappings = self.partial_mappings.saturating_add(1);
+            } else {
+                self.resolved_mappings =
+                    self.resolved_mappings.saturating_add(1);
+            }
+        }
+        let count = self.statuses.entry(function.status.clone()).or_default();
+        *count = count.saturating_add(1);
+        Ok(())
+    }
 }
 
 fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
@@ -387,21 +428,7 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
         if edition.as_str() != function.edition.as_str() {
             return Err(failure("mixed selected editions"));
         }
-        report.bytes = report
-            .bytes
-            .checked_add(function.body_bytes.get())
-            .ok_or("owned byte count overflow")?;
-        if function.rust_owner.is_some() {
-            if function.status == "unresolved" {
-                report.partial_mappings =
-                    report.partial_mappings.saturating_add(1);
-            } else {
-                report.resolved_mappings =
-                    report.resolved_mappings.saturating_add(1);
-            }
-        }
-        let count = report.statuses.entry(function.status.clone()).or_default();
-        *count = count.saturating_add(1);
+        report.record_function(&function)?;
         if functions.insert(function.id.clone(), function).is_some() {
             return Err(failure("duplicate function identity"));
         }
@@ -567,6 +594,8 @@ mod tests {
             || report.interior != 0
             || report.unresolved != 0
             || report.auxiliary != 1
+            || report.semantic_reviews != 0
+            || report.reviewed_dependencies != 0
             || report.statuses.get("discovered") != Some(&2)
             || audit(&input, NonZeroUsize::MIN).is_ok()
         {
@@ -705,7 +734,10 @@ mod tests {
             set_field(&mut reviewed, field, value)?;
         }
         let report = audit(&reviewed.to_string(), NonZeroUsize::MIN)?;
-        if report.statuses.get("unresolved") != Some(&1) {
+        if report.statuses.get("unresolved") != Some(&1)
+            || report.semantic_reviews != 1
+            || report.reviewed_dependencies != 0
+        {
             return Err(String::from("missing unresolved review"));
         }
         for (field, value) in [
@@ -725,7 +757,22 @@ mod tests {
             }
         }
         set_field(&mut reviewed, "data_dependencies", serde_json::json!([]))?;
-        let _report = audit(&reviewed.to_string(), NonZeroUsize::MIN)?;
+        let empty_review = audit(&reviewed.to_string(), NonZeroUsize::MIN)?;
+        if empty_review.semantic_reviews != 1
+            || empty_review.reviewed_dependencies != 1
+        {
+            return Err(String::from("explicit empty dependency review lost"));
+        }
+        let mut unreviewed = record("0002", &[], &[]);
+        set_field(&mut unreviewed, "data_dependencies", serde_json::json!([]))?;
+        let limit = NonZeroUsize::new(2).ok_or("fixture limit")?;
+        let combined = audit(&lines(&[reviewed, unreviewed]), limit)?;
+        if combined.functions != 2
+            || combined.semantic_reviews != 1
+            || combined.reviewed_dependencies != 1
+        {
+            return Err(String::from("unreviewed dependencies counted"));
+        }
         Ok(())
     }
 
