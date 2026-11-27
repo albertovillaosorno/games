@@ -165,7 +165,16 @@ pub(super) fn smoke(
     }
     let limit = u16::try_from(crate::LATE_BACKDROP_ORIGIN).map_err(failure)?;
     let mut cabinet = world::camera_at_limit(limit)?;
+    if art.poses.backdrop.draw(&cabinet).is_some() {
+        return Err(failure("backdrop obscures pre-admission street"));
+    }
+    cabinet.input_step(1999, &[]);
     for tick in 0..=crate::LATE_BACKDROP_HOLD_TICK {
+        if cabinet.camera_origin() != crate::LATE_BACKDROP_SETTLED_ORIGIN
+            || cabinet.late_backdrop_tick() != Some(tick)
+        {
+            return Err(failure("late camera or fixed-step timing differs"));
+        }
         if KEYS.contains(&tick) || tick == crate::LATE_BACKDROP_HOLD_TICK {
             let digest = catalogue
                 .entries

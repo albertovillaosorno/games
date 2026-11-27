@@ -82,6 +82,7 @@ const STATIONARY_SCENE_CYCLE: u16 = 100;
 const STATIONARY_SCENE_END: u16 = 65;
 const MID_STREET_ADMISSION: i16 = 562;
 const LATE_BACKDROP_ORIGIN: i16 = 1360;
+const LATE_BACKDROP_SETTLED_ORIGIN: i16 = 1359;
 const LATE_BACKDROP_HOLD_TICK: u16 = 320;
 const MID_STREET_SCRIPT_ORIGIN: i16 = 674;
 const MID_STREET_SCRIPT_TICKS: u16 = 336;
@@ -727,6 +728,20 @@ pub struct Cabinet {
 
 impl Cabinet {
     fn advance_camera(&mut self) {
+        if let Some(tick) = self.late_backdrop_tick {
+            self.late_backdrop_tick =
+                Some(tick.saturating_add(1).min(LATE_BACKDROP_HOLD_TICK));
+            return;
+        }
+        // The verified long street first reaches its full extent. On the
+        // next playing tick the encounter settles one column to the left.
+        if self.scroll_limit == LATE_BACKDROP_ORIGIN
+            && self.camera == LATE_BACKDROP_ORIGIN
+        {
+            self.camera = LATE_BACKDROP_SETTLED_ORIGIN;
+            self.late_backdrop_tick = Some(0);
+            return;
+        }
         let limit = self
             .encounter
             .as_ref()
@@ -780,12 +795,6 @@ impl Cabinet {
     }
 
     fn advance_scripted_scene(&mut self) {
-        if self.camera >= LATE_BACKDROP_ORIGIN {
-            self.late_backdrop_tick =
-                Some(self.late_backdrop_tick.map_or(0, |tick| {
-                    tick.saturating_add(1).min(LATE_BACKDROP_HOLD_TICK)
-                }));
-        }
         if self.camera >= MID_STREET_SCRIPT_ORIGIN {
             self.scripted_tick = Some(self.scripted_tick.map_or(0, |tick| {
                 tick.saturating_add(1).min(MID_STREET_SCRIPT_TICKS)
@@ -2939,20 +2948,34 @@ mod tests {
             }
             assert_eq!(state.late_backdrop_tick(), None);
         }
+        assert_late_backdrop_admission(state);
+    }
+
+    fn assert_late_backdrop_admission(mut state: Cabinet) {
         assert_eq!(state.camera_origin(), LATE_BACKDROP_ORIGIN);
+        assert_eq!(state.late_backdrop_tick(), None);
+        state.input_step(1000, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 1001..1020);
+        assert_eq!(state.camera_origin(), LATE_BACKDROP_ORIGIN);
+        assert_eq!(state.late_backdrop_tick(), None);
+        state.input_step(1020, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.camera_origin(), LATE_BACKDROP_SETTLED_ORIGIN);
         assert_eq!(state.late_backdrop_tick(), Some(0));
         assert_late_backdrop_pause_and_hold(state);
     }
 
     fn assert_late_backdrop_pause_and_hold(mut state: Cabinet) {
-        state.input_step(1000, &[change(Player::Marge, Control::Right, false)]);
+        state.input_step(1021, &[]);
+        assert_eq!(state.camera_origin(), LATE_BACKDROP_SETTLED_ORIGIN);
         assert_eq!(state.late_backdrop_tick(), Some(1));
-        state.input_step(1001, &pulse(Player::Marge, Control::Pause));
-        advance_empty(&mut state, 1002..1020);
+        state.input_step(1022, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 1023..1040);
+        assert_eq!(state.camera_origin(), LATE_BACKDROP_SETTLED_ORIGIN);
         assert_eq!(state.late_backdrop_tick(), Some(1));
-        state.input_step(1020, &pulse(Player::Marge, Control::Pause));
+        state.input_step(1040, &pulse(Player::Marge, Control::Pause));
         assert_eq!(state.late_backdrop_tick(), Some(2));
-        advance_empty(&mut state, 1021..1400);
+        advance_empty(&mut state, 1041..1420);
+        assert_eq!(state.camera_origin(), LATE_BACKDROP_SETTLED_ORIGIN);
         assert_eq!(state.late_backdrop_tick(), Some(LATE_BACKDROP_HOLD_TICK));
         state.reset_world();
         assert_eq!(state.late_backdrop_tick(), None);
