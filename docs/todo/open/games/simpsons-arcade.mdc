@@ -4169,3 +4169,18 @@ and 122,644 classified ROM bytes, leaving 8,428 bytes unclassified.
 All 576 timing results are unchanged. Across both processors the
 ledger reports 928 identities, 925 unresolved, one intentional
 replacement and two non-runtime, with 61 unresolved flow observations.
+
+Original coin-event and accounting routines are now explicitly mapped
+to the deliberate free-play replacement rather than duplicated payment
+logic. Existing admission, independent join, fresh Start continuation,
+expiry and held-Start tests support the modern policy. Coin cue identity
+and historical coinage settings are not claimed equivalent. The ledger
+retains 928 identities and the same graph, with 923 unresolved, three
+intentional replacements and two non-runtime dispositions.
+
+Two remaining audio-bank gaps (198 bytes) decode linearly as candidate
+sequence data; five transfers reach known or candidate command
+boundaries. Their root reachability is unknown, so the classified total
+remains unchanged. Physical audio acceptance also remains open: a
+fresh host sink inspection exposed only the dummy output, despite
+enumerated audio hardware. No physical listening result is claimed.

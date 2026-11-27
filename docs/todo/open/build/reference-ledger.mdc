@@ -300,3 +300,18 @@ including 18,398 candidate-inclusive native bytes, 95,927 sequence
 bytes and 8,319 metadata bytes without overlap. The 8,428 remaining
 bytes include uniform runs and two nonuniform bank gaps. All 576
 modeled timing outcomes are exactly unchanged.
+
+The coin-event detector and coin-accounting routine now have explicit
+intentional-replacement dispositions. Verified sample history, carry
+flags, station dispatch and threshold arithmetic establish their
+payment-only roles. Existing free Start, join and continuation tests
+support the modern policy, without emulating coinage, bookkeeping or
+coin sounds. The graph is unchanged: 923 unresolved, three intentional
+replacements and two non-runtime identities.
+
+Two bank gaps totaling 198 bytes admit complete linear sequence
+decoding with five transfers to known or candidate command boundaries.
+Their initial state and root reachability are unverified; they remain
+candidate data, separate from the classified byte total. The remaining
+8,428 bytes comprise these candidates, 8,096 uniform-run bytes and 134
+other mixed bytes. Uniformity alone does not establish inert padding.
