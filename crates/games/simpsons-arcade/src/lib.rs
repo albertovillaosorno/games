@@ -31,6 +31,7 @@
 
 //! Initial cabinet entry and street movement for the pinned four-player set.
 
+mod balloon;
 mod bonus;
 mod cooperative;
 mod encounter;
@@ -50,6 +51,7 @@ mod wrestler;
 use std::mem;
 use std::time::Duration;
 
+pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
 pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
@@ -798,6 +800,8 @@ struct LinkedEncounter {
 /// provisional. It is not a gameplay parity claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cabinet {
+    balloon_boss: Option<BalloonBoss>,
+    balloon_boss_enabled: bool,
     bonus: Option<Bonus>,
     bonus_enabled: bool,
     camera: i16,
@@ -824,6 +828,21 @@ impl Cabinet {
             self.stage_two_limit.unwrap_or_default()
         } else {
             self.scroll_limit
+        }
+    }
+
+    fn admit_balloon_boss(&mut self) {
+        if self.balloon_boss_enabled
+            && self.stage_two()
+            && self.late_backdrop_tick.is_some()
+            && self.balloon_boss.is_none()
+            && self.enemies().all(|enemy| enemy.health == 0)
+            && self.linked_children().all(|child| {
+                child.pose().is_none() && child.enemy().health == 0
+            })
+            && self.linked_parents().all(|parent| parent.pose().is_none())
+        {
+            self.balloon_boss = Some(BalloonBoss::new(self.camera));
         }
     }
 
@@ -1056,6 +1075,12 @@ impl Cabinet {
         }
     }
 
+    /// Current optional second-stage boss, including its cleared state.
+    #[must_use]
+    pub const fn balloon_boss(&self) -> Option<BalloonBoss> {
+        self.balloon_boss
+    }
+
     /// Optional first-stage victory and balloon bonus.
     #[must_use]
     pub const fn bonus(&self) -> Option<Bonus> {
@@ -1109,7 +1134,7 @@ impl Cabinet {
             return (None, None);
         }
         let [marge, ..] = self.stations();
-        let target = self
+        let regular = self
             .enemies()
             .filter(|enemy| enemy.health > 0)
             .chain(
@@ -1117,7 +1142,13 @@ impl Cabinet {
                     .filter(|child| child.can_fight())
                     .map(LinkedChild::enemy),
             )
-            .min_by_key(|enemy| distance(marge.position, enemy.position));
+            .min_by_key(|enemy| distance(marge.position, enemy.position))
+            .map(|enemy| enemy.position);
+        let target = regular.or_else(|| {
+            self.balloon_boss
+                .filter(|boss| boss.quantity > 0)
+                .map(|boss| boss.position)
+        });
         let fallback = self
             .encounter
             .as_ref()
@@ -1125,9 +1156,8 @@ impl Cabinet {
             .and_then(|encounter| encounter.linked.as_ref())
             .is_none_or(|linked| !linked.diagnostic_wait(self.camera))
             .then_some(Control::Right);
-        let direction = target.map_or(fallback, |enemy| {
-            diagnostic_direction(marge, enemy.position)
-        });
+        let direction = target
+            .map_or(fallback, |position| diagnostic_direction(marge, position));
         let action = if matches!(
             marge.participation,
             Participation::Continuing { .. }
@@ -1159,6 +1189,7 @@ impl Cabinet {
     }
 
     fn enter_stage_two(&mut self, travel: i16) {
+        self.balloon_boss = None;
         if let Some(encounter) = &mut self.encounter {
             encounter.enter_stage_two(travel);
         }
@@ -1212,6 +1243,11 @@ impl Cabinet {
                 self.impact_cues =
                     self.impact_cues.saturating_add(u64::from(defeated));
             }
+            if let Some(boss) = &mut self.balloon_boss {
+                let defeated = boss.advance(layout, &mut self.slots);
+                self.impact_cues =
+                    self.impact_cues.saturating_add(u64::from(defeated));
+            }
             self.cooperation.invalidate(&self.slots);
             self.advance_camera();
             if !self.stage_two()
@@ -1220,6 +1256,7 @@ impl Cabinet {
             {
                 self.wrestler = Some(Wrestler::new(self.camera));
             }
+            self.admit_balloon_boss();
             self.advance_scripted_scene();
             if let Some(encounter) = &mut self.encounter {
                 encounter.admit(self.camera);
@@ -1289,6 +1326,8 @@ impl Cabinet {
             return Err(LayoutError::SpawnOutside);
         }
         Ok(Self {
+            balloon_boss: None,
+            balloon_boss_enabled: false,
             bonus: None,
             bonus_enabled: false,
             camera: 0,
@@ -1334,6 +1373,7 @@ impl Cabinet {
     }
 
     fn reset_world(&mut self) {
+        self.balloon_boss = None;
         self.bonus = None;
         self.cooperation.reset();
         self.camera = 0;
@@ -1372,6 +1412,10 @@ impl Cabinet {
 
     const fn set_stage_two_limit(&mut self, limit: Option<i16>) {
         self.stage_two_limit = limit;
+        if !matches!(limit, Some(BOARDWALK_BACKDROP_ORIGIN)) {
+            self.balloon_boss_enabled = false;
+            self.balloon_boss = None;
+        }
         if !matches!(limit, Some(value) if value >= LINKED_MIN_TRAVEL)
             && let Some(encounter) = &mut self.encounter
         {
@@ -1450,6 +1494,22 @@ impl Cabinet {
         true
     }
 
+    /// Opt into the experimental boardwalk boss.
+    /// Requires the complete boardwalk and linked encounter.
+    #[must_use]
+    pub fn with_balloon_boss(mut self, enabled: bool) -> Self {
+        self.balloon_boss_enabled = enabled
+            && self.stage_two_limit == Some(BOARDWALK_BACKDROP_ORIGIN)
+            && self
+                .encounter
+                .as_ref()
+                .is_some_and(|encounter| encounter.linked.is_some());
+        if !self.balloon_boss_enabled {
+            self.balloon_boss = None;
+        }
+        self
+    }
+
     /// Enable the observed Bart/Lisa paired button responses.
     ///
     /// Requires Bart/Lisa locomotion to be enabled. Ground points and
@@ -1526,7 +1586,7 @@ impl Cabinet {
                     .is_some_and(|limit| limit >= LINKED_MIN_TRAVEL))
             .then(LinkedEncounter::new);
         }
-        self
+        self.with_balloon_boss(self.balloon_boss_enabled)
     }
 
     /// Opt into the provisional Marge restraint for the opening street.
@@ -1706,6 +1766,22 @@ fn player_strike(
         }) || station.maneuver.consume_air_strike())
 }
 
+fn strike_grounded_stations(
+    slots: &mut [Slot; 4],
+    (position, facing): (Point, Facing),
+    extent: (u16, u16),
+    damage: u8,
+) {
+    for slot in slots.iter_mut().filter(|slot| {
+        slot.station.can_fight()
+            && !slot.station.maneuver.airborne()
+            && slot.station.maneuver != Maneuver::Restrained
+            && in_range(position, facing, slot.station.position, extent)
+    }) {
+        hurt_slot(slot, damage);
+    }
+}
+
 const fn hurt_slot(slot: &mut Slot, amount: u8) {
     slot.damage(amount);
     slot.station.hurt_cues = slot.station.hurt_cues.saturating_add(1);
@@ -1766,6 +1842,8 @@ fn cabinet() -> Cabinet {
     // A valid constant layout cannot fail; keep fixture construction
     // independent from any mutable global or host input.
     result.unwrap_or_else(|_error| Cabinet {
+        balloon_boss: None,
+        balloon_boss_enabled: false,
         bonus: None,
         bonus_enabled: false,
         camera: 0,

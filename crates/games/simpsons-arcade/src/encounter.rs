@@ -35,8 +35,8 @@ use super::{
     BASE_WIDTH, Encounter, FAR_STREET_ADMISSION, Facing, LATER_COMBAT_GATE,
     MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT,
     Maneuver, OPENING_ENEMY_COUNT, OPPOSING_ENEMY_COUNT, Player, Point, Slot,
-    StreetLayout, distance, hurt_slot, in_range, player_strike, step_toward,
-    strip_width, view_origin, viewport_width,
+    StreetLayout, distance, in_range, player_strike, step_toward,
+    strike_grounded_stations, strip_width, view_origin, viewport_width,
 };
 
 const ENEMY_HEALTH: u8 = 1;
@@ -564,19 +564,12 @@ impl Enemy {
     fn attack(&mut self, tick: u8, slots: &mut [Slot; 4]) {
         let next = tick.saturating_add(1);
         if next == ENEMY_STRIKE {
-            for slot in slots.iter_mut().filter(|slot| {
-                slot.station.can_fight()
-                    && !slot.station.maneuver.airborne()
-                    && slot.station.maneuver != Maneuver::Restrained
-                    && in_range(
-                        self.position,
-                        self.facing,
-                        slot.station.position,
-                        (22, 10),
-                    )
-            }) {
-                hurt_slot(slot, ENEMY_DAMAGE);
-            }
+            strike_grounded_stations(
+                slots,
+                (self.position, self.facing),
+                (22, 10),
+                ENEMY_DAMAGE,
+            );
         }
         self.action = if next >= ENEMY_ATTACK_TICKS {
             EnemyAction::Approach { tick: 0 }
@@ -963,6 +956,53 @@ mod tests {
         );
         assert!(cabinet.enemies().all(|enemy| enemy.health == 0));
         assert_eq!(cabinet.impact_cues(), 24);
+    }
+
+    #[test]
+    fn balloon_boss_is_reachable_and_cleared_with_routed_input() {
+        let initial = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1871))
+            .map(|state| {
+                state.with_linked_actors(true).with_balloon_boss(true)
+            });
+        assert!(initial.is_ok());
+        let Ok(mut cabinet) = initial else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        cabinet.enter_stage_two(1871);
+        assert!(cabinet.balloon_boss().is_none());
+        route_balloon_boss(&mut cabinet);
+        assert_eq!(cabinet.camera_origin(), 1871);
+        assert_eq!(
+            cabinet.balloon_boss().map(|boss| boss.action),
+            Some(crate::BalloonAction::Cleared)
+        );
+        assert_eq!(cabinet.impact_cues(), 25);
+        let [marge, ..] = cabinet.stations();
+        assert_eq!(marge.score, 25);
+        cabinet.reset_world();
+        assert!(cabinet.balloon_boss().is_none());
+        assert!(!cabinet.stage_two());
+    }
+
+    fn route_balloon_boss(cabinet: &mut Cabinet) {
+        let mut held = None;
+        for tick in 1..12000 {
+            let (direction, requested) = cabinet.diagnostic_intent();
+            let mut actions = direction_changes(&mut held, direction);
+            if let Some(action) = requested {
+                actions.extend(pulse(action));
+            }
+            cabinet.input_step(tick, &actions);
+            if cabinet.balloon_boss().is_some_and(|boss| {
+                boss.action == crate::BalloonAction::Cleared
+            }) {
+                break;
+            }
+        }
     }
 
     fn route_stage_two(cabinet: &mut Cabinet, limit: i16) {

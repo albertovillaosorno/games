@@ -32,9 +32,8 @@
 //! Bounded experimental wrestler encounter.
 
 use super::{
-    Facing, Maneuver, Player, Point, Slot, StreetLayout,
-    WRESTLER_ATTACK_STRIKE, distance, hurt_slot, in_range, player_strike,
-    step_toward,
+    Facing, Player, Point, Slot, StreetLayout, WRESTLER_ATTACK_STRIKE,
+    distance, in_range, player_strike, step_toward, strike_grounded_stations,
 };
 
 // The entrance landmarks are approximate reference observations. The remaining
@@ -176,19 +175,12 @@ impl Wrestler {
     fn attack(&self, tick: u8, slots: &mut [Slot; 4]) -> WrestlerAction {
         let next = tick.saturating_add(1);
         if next == WRESTLER_ATTACK_STRIKE {
-            for slot in slots.iter_mut().filter(|slot| {
-                slot.station.can_fight()
-                    && !slot.station.maneuver.airborne()
-                    && slot.station.maneuver != Maneuver::Restrained
-                    && in_range(
-                        self.position,
-                        self.facing,
-                        slot.station.position,
-                        (48, 16),
-                    )
-            }) {
-                hurt_slot(slot, 6);
-            }
+            strike_grounded_stations(
+                slots,
+                (self.position, self.facing),
+                (48, 16),
+                6,
+            );
         }
         if next >= ATTACK_END {
             WrestlerAction::Approach
@@ -249,7 +241,7 @@ impl Wrestler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PLAYER_HEALTH, Participation};
+    use crate::{Maneuver, PLAYER_HEALTH, Participation};
 
     fn active_slots() -> [Slot; 4] {
         let mut slots = StreetLayout::DOWNTOWN.spawn.map(Slot::new);
