@@ -51,6 +51,7 @@ use crate::{USAGE, publication, text};
 
 const RECORD_BYTES: usize = 16;
 const TRANSPARENT: u16 = u16::MAX;
+const DEFAULT_STRIP_SCENES: usize = 8;
 
 #[derive(Debug)]
 struct Group {
@@ -236,7 +237,7 @@ pub struct Strip {
 }
 
 impl Strip {
-    /// Parse output, bundle, HUD rows, black side margins and scene groups.
+    /// Parse output, bundle, crop, optional scene budget and scene groups.
     /// # Errors
     /// Rejects invalid margins or incomplete/excessive observations.
     pub fn parse(args: &[OsString]) -> Result<Self, String> {
@@ -250,9 +251,18 @@ impl Strip {
         let side = text(side_arg)?
             .parse::<usize>()
             .map_err(|_error| String::from("invalid side exclusion"))?;
-        let (groups, remainder) = paths.as_chunks::<7>();
-        if !remainder.is_empty() || !(2..=8).contains(&groups.len()) {
-            return Err(String::from("expected 2 to 8 complete scenes"));
+        let (limit, scene_paths) = match paths {
+            [flag, value, rest @ ..] if flag == "--scene-limit" => {
+                let limit = text(value)?
+                    .parse::<usize>()
+                    .map_err(|_error| String::from("invalid scene limit"))?;
+                (limit, rest)
+            },
+            _ => (DEFAULT_STRIP_SCENES, paths),
+        };
+        let (groups, remainder) = scene_paths.as_chunks::<7>();
+        if !remainder.is_empty() || !(2..=limit).contains(&groups.len()) {
+            return Err(format!("expected 2 to {limit} complete scenes"));
         }
         let scenes = groups
             .iter()
@@ -701,6 +711,46 @@ fn verified_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_scene_count_respects_explicit_budget() {
+        let digest = "0".repeat(64);
+        let header = ["output", "parent", &digest, "28", "16"];
+        let scene = [
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+            "controls",
+        ];
+        let args = |budget: &[&str], count| {
+            header
+                .into_iter()
+                .chain(budget.iter().copied())
+                .chain(scene.into_iter().cycle().take(count * scene.len()))
+                .map(OsString::from)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            Strip::parse(&args(&[], 8)).map(|strip| strip.scenes.len()),
+            Ok(8)
+        );
+        assert!(Strip::parse(&args(&[], 9)).is_err());
+        assert_eq!(
+            Strip::parse(&args(&["--scene-limit", "10"], 10))
+                .map(|strip| strip.scenes.len()),
+            Ok(10)
+        );
+        assert!(Strip::parse(&args(&["--scene-limit", "9"], 10)).is_err());
+        assert!(Strip::parse(&args(&["--scene-limit", "1"], 2)).is_err());
+        assert!(Strip::parse(&args(&["--scene-limit", "10"], 1)).is_err());
+        assert!(Strip::parse(&args(&["--scene-limit", "bad"], 2)).is_err());
+        let mut incomplete = args(&["--scene-limit", "10"], 2);
+        let _last_path = incomplete.pop();
+        assert!(Strip::parse(&incomplete).is_err());
+    }
 
     #[test]
     fn background_publication_requires_complete_scene_and_crop() {

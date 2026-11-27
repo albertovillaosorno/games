@@ -2485,8 +2485,10 @@ cargo run --locked -p games-build -- mame strip-publish simpsons \
   RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS
 ```
 
-The command verifies two to eight complete scenes before stitching exactly
-overlapping world interiors. The title verifies the strip against the
+The command defaults to two to eight complete scenes before stitching
+exactly overlapping world interiors. An explicit `--scene-limit COUNT`
+after the margins admits more observations without changing the strict
+pixel comparison or byte budget. The title verifies the strip against the
 selected base art. The latest verified strip contains 732 art columns
 (288 plus 444
 additional pixels). The original 320-column view retains its 16-pixel
@@ -5452,3 +5454,36 @@ rank, but the character-to-rank assignment differs. The native campaign
 must not assume a fixed character ordering from one capture. Exact rank
 selection, title-phase input boundaries, stock, health and continue
 rules remain open. No third-stage gameplay is claimed.
+
+### Aligned boardwalk travel to the second-stage camera endpoint
+
+A late original movement control matches the first 11,660 regular-object
+and 1,860 new-actor rows of the previous successful campaign. After the
+camera advances, sustained upward input returns both vertical layers to
+240 while horizontal travel continues. Four selected aligned observations
+at raw horizontal positions 36, 112, 182 and 245 reconstruct exactly.
+However, the settled boss-area observation changes overlapping background
+pixels and is correctly rejected by the strict stitch.
+
+A second replay reproduces 12,100 regular and 2,300 new-actor rows of
+that control. The camera briefly reaches raw 246, then settles at 245
+on frame 29,593, with both vertical layers aligned. The first terminal
+observation overlaps the earlier boardwalk exactly; later observations
+at the same camera position do not. Ten exact observations now produce
+2,159 by 196 pixels of art, preserving all 196 rows of the previous
+1,808-column strip as exact byte prefixes. The default eight-scene
+bound remains; the caller explicitly budgets ten. Full-scene comparison,
+strict adjacent overlap, and the existing 2 MiB publication budget remain
+mandatory. The atlas budget increases to 1,692,656 bytes, admits earlier
+extents, and rejects the next larger width.
+
+All five isolated Linux display-mode smokes reach 1,871 columns of
+routed second-stage traversal with the new local selection. All 3,000
+movement and 100 strike submissions meet the 16.667 ms target;
+whole-smoke peak RSS is 187,314,176 to 188,264,448 bytes. The isolated
+Firefox/WebGL diagnostic passes all nine ordered checkpoints with
+1,383 selected files, 81 readbacks and 106 blits, leaving no canvas or
+stored preferences. This reaches the original pre-boss camera endpoint,
+not original second-stage completion. The settled background changes,
+variable vertical camera, distinct actors, boss and next-stage handoff
+still require native implementation and physical acceptance remains open.
