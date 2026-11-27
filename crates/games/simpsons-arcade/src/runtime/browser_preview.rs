@@ -160,7 +160,7 @@ const fn limits() -> DirectoryLimits {
         files: NonZeroUsize::MIN.saturating_add(8191),
         manifest: NonZeroU64::MIN.saturating_add(262_143),
         object: NonZeroU64::MIN.saturating_add(16_777_215),
-        sidecar: NonZeroU64::MIN.saturating_add(18_431),
+        sidecar: poses::MAX_CATALOGUE_BYTES,
     }
 }
 

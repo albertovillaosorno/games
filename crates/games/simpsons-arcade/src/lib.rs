@@ -77,6 +77,8 @@ const OPENING_ENEMY_COUNT: usize = 7;
 const LATER_COMBAT_GATE: i16 = 458;
 const OPPOSING_ENEMY_COUNT: usize = 9;
 const MID_STREET_ADMISSION: i16 = 562;
+const MID_STREET_SCRIPT_ORIGIN: i16 = 674;
+const MID_STREET_SCRIPT_TICKS: u16 = 336;
 const MID_STREET_COMBAT_GATE: i16 = 770;
 const MID_STREET_ENEMY_COUNT: usize = 11;
 const FAR_STREET_ADMISSION: i16 = 834;
@@ -697,6 +699,7 @@ pub struct Cabinet {
     encounter: Option<Encounter>,
     impact_cues: u64,
     layout: StreetLayout,
+    scripted_tick: Option<u16>,
     scroll_limit: i16,
     session: LocalSession,
     slots: [Slot; 4],
@@ -754,6 +757,15 @@ impl Cabinet {
         }
         self.session.return_to_menu();
         self.reset_world();
+    }
+
+    fn advance_scripted_scene(&mut self) {
+        if self.camera < MID_STREET_SCRIPT_ORIGIN {
+            return;
+        }
+        self.scripted_tick = Some(self.scripted_tick.map_or(0, |tick| {
+            tick.saturating_add(1).min(MID_STREET_SCRIPT_TICKS)
+        }));
     }
 
     fn apply(
@@ -923,6 +935,7 @@ impl Cabinet {
             }
             self.cooperation.invalidate(&self.slots);
             self.advance_camera();
+            self.advance_scripted_scene();
             if let Some(encounter) = &mut self.encounter {
                 encounter.admit(self.camera);
             }
@@ -958,6 +971,7 @@ impl Cabinet {
             encounter: None,
             impact_cues: 0,
             layout,
+            scripted_tick: None,
             scroll_limit: 0,
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
@@ -990,6 +1004,7 @@ impl Cabinet {
     fn reset_world(&mut self) {
         self.cooperation.reset();
         self.camera = 0;
+        self.scripted_tick = None;
         if let Some(encounter) = &mut self.encounter {
             encounter.restart();
         }
@@ -1002,6 +1017,13 @@ impl Cabinet {
             slot.station.attack_cues = attack_cues;
             slot.station.hurt_cues = hurt_cues;
         }
+    }
+
+    /// Elapsed fixed ticks in the one-shot mid-street scripted scene.
+    #[must_use]
+    pub fn scripted_scene_tick(&self) -> Option<u16> {
+        self.scripted_tick
+            .filter(|tick| *tick < MID_STREET_SCRIPT_TICKS)
     }
 
     /// Shared menu state used by native and future host presentations.
@@ -1256,6 +1278,7 @@ fn cabinet() -> Cabinet {
         encounter: None,
         impact_cues: 0,
         layout: StreetLayout::DOWNTOWN,
+        scripted_tick: None,
         scroll_limit: 0,
         session: LocalSession::default(),
         slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
@@ -2845,6 +2868,47 @@ mod tests {
         for tick in ticks {
             state.input_step(tick, &[]);
         }
+    }
+
+    #[test]
+    fn scripted_scene_uses_camera_admission_and_fixed_playing_ticks() {
+        let result = cabinet().with_scroll_limit(1360);
+        assert!(result.is_ok());
+        let Ok(mut state) = result else {
+            return;
+        };
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.input_step(1, &[change(Player::Marge, Control::Right, true)]);
+        assert_eq!(state.scripted_scene_tick(), None);
+        for tick in 2..1000 {
+            state.input_step(tick, &[]);
+            if state.camera_origin() >= MID_STREET_SCRIPT_ORIGIN {
+                break;
+            }
+            assert_eq!(state.scripted_scene_tick(), None);
+        }
+        assert_eq!(state.camera_origin(), MID_STREET_SCRIPT_ORIGIN);
+        assert_eq!(state.scripted_scene_tick(), Some(0));
+        assert_scripted_pause_and_completion(state);
+    }
+
+    fn assert_scripted_pause_and_completion(mut state: Cabinet) {
+        state.input_step(1000, &[change(Player::Marge, Control::Right, false)]);
+        assert_eq!(state.scripted_scene_tick(), Some(1));
+        state.input_step(1001, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 1002..1050);
+        assert_eq!(state.scripted_scene_tick(), Some(1));
+        state.input_step(1050, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.scripted_scene_tick(), Some(2));
+        advance_empty(&mut state, 1051..1385);
+        assert_eq!(state.scripted_scene_tick(), None);
+        advance_empty(&mut state, 1385..1400);
+        assert_eq!(state.scripted_scene_tick(), None);
+        assert_eq!(state.impact_cues(), 0);
+        assert_eq!(state.enemies().count(), 0);
+        state.reset_world();
+        assert_eq!(state.scripted_scene_tick(), None);
+        assert_eq!(state.camera_origin(), 0);
     }
 
     #[test]

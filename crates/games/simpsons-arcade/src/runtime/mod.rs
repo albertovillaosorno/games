@@ -43,6 +43,7 @@ mod measurement;
 /// Path-independent event-driven title presentation.
 pub mod memory_preview;
 mod poses;
+mod scenery;
 mod shadow;
 mod station_hud;
 mod touch;
@@ -624,6 +625,7 @@ impl Scene {
             .as_ref()
             .map(|bundle| world::WorldArt::load(scene, &original, bundle))
             .transpose()?;
+        source.poses.admit_world(world_art)?;
         drop(original);
         let actors = load_actors(scene, source)?;
         Ok(Self {
@@ -640,6 +642,7 @@ impl Scene {
                 } else {
                     21usize
                 })
+                .saturating_add(usize::from(source.poses.has_scenery()))
                 .saturating_add(
                     usize::from(source.shadow.is_some()).saturating_mul(4),
                 ),
@@ -686,12 +689,7 @@ impl Scene {
         let center =
             i32::try_from(world::centered_offset(width)).map_err(failure)?;
         self.draws.clear();
-        if let Some(art) = self.world_art {
-            art.queue(self.background, view, &mut self.draws)?;
-        } else {
-            self.draws
-                .push(self.background.draw(self.background.rect, false));
-        }
+        self.queue_background(cabinet, view)?;
         self.world.clear();
         self.queue_visible_stations(cabinet, view)?;
         self.queue_enemy_sprites(cabinet, view)?;
@@ -758,6 +756,26 @@ impl Scene {
             .map_or(Ok(world::View { origin: 0, width }), |art| {
                 art.view(width, cabinet.camera_origin())
             })
+    }
+
+    fn queue_background(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+    ) -> Result<(), RenderError> {
+        if let Some(art) = self.world_art {
+            art.queue(self.background, view, &mut self.draws)?;
+        } else {
+            self.draws
+                .push(self.background.draw(self.background.rect, false));
+        }
+        if cabinet.session().world_visible()
+            && let Some(tick) = cabinet.scripted_scene_tick()
+            && let Some(draw) = self.poses.scenery.draw(tick, view)?
+        {
+            self.draws.push(draw);
+        }
+        Ok(())
     }
 
     fn queue_enemy_meters(
@@ -3242,6 +3260,7 @@ fn smoke_optional(
     playback: Option<&mut audio::Playback>,
 ) -> Result<(), RenderError> {
     smoke_cooperation(scene, art)?;
+    scenery::smoke(scene, art)?;
     if art.combat.is_some() {
         encounter::smoke(scene, art, touch_enabled)?;
     }
@@ -3398,6 +3417,7 @@ fn scene_limits(
         )?,
         sprites: size(
             enemy_sprites
+                .saturating_add(usize::from(source.poses.has_scenery()))
                 .saturating_add(editor_sprites)
                 .saturating_add(extension.saturating_mul(2))
                 .saturating_add(shadows.saturating_mul(4))

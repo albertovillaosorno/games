@@ -2246,8 +2246,9 @@ air-attack, hurt, jump, jump-lift, special, walk or walk-up. TICK is
 the zero-based fixed-step offset, and SHA256 identifies a canonical
 bundle containing that character's actor record. Every station/action
 pair requires tick zero. The most recent pose is held until the next
-record or maneuver end. The catalogue is limited to 220 poses and
-18 KiB. The original four-hash command still works without a catalogue.
+record or maneuver end. Regular poses remain limited to 220 records.
+An optional scenic track adds at most 41 records within a shared 22 KiB
+byte limit. The original four-hash command works without a catalogue.
 Pose crops retain approximate bottom-center pivots.
 An optional jump-lift sequence consists of exactly one tick-zero middle
 pose for each of the four characters. When present, the preview retains
@@ -3187,7 +3188,7 @@ remained at the admission point; both characters left in both
 controls. The observations do not establish a combat role, damage
 rules or an exact camera-release condition. Do not substitute
 ordinary enemy combat for this scripted sequence. Its independent
-runtime presentation and interactions remain open.
+runtime interactions remain open; an optional visual sequence follows.
 
 ### Verified late-street background extension
 
@@ -3210,3 +3211,32 @@ submission missed its 16.667 ms budget. Peak sampled RSS ranged
 from 133,984,256 to 134,836,224 bytes. The encounter's darkening,
 large actors, boss behavior and stage completion remain open;
 the default selection and physical acceptance are unchanged.
+
+### Optional mid-street scripted presentation
+
+A stationary 674-column reference replay isolated 39 independently
+verified composite actor crops with measured raster origins. Samples
+span ticks 8 through 328; two repeated-identity samples were omitted,
+leaving no gap greater than 16 ticks. The optional catalogue accepts
+`scenic-pair TICK X Y SHA256` records with a complete bounded sequence
+and requires a world strip reaching the admission point. The original
+regular-pose record limit is preserved, with a separate maximum of
+41 scenic records and a shared 22 KiB catalogue byte limit.
+
+The deterministic cabinet admits the visual sequence once at camera
+674, pauses its elapsed ticks with gameplay, ends it at tick 336 and
+clears its state on world reset. The presentation projects each held
+sample into the camera and clips it to the viewport before drawing
+the live gameplay actors. No enemy or camera gate was introduced.
+Core and catalogue regressions cover admission, pause, expiration,
+reset, completeness, placement bounds and the regular pose budget.
+
+Optimized native original-backed touch smokes in all five display
+modes verified 1,360 camera columns and a visible scripted pair at
+tick 96, with readback changes confined to the projected destination.
+All 600 movement and 20 combat submissions per mode met the sampled
+16.667 ms budget. Whole-smoke peak RSS ranged from 135,536,640 to
+136,036,352 bytes. Sparse held frames, composite actor ordering,
+exact combat and camera interactions, and original-backed browser
+and physical acceptance remain open. No private art is tracked and
+the default catalogue remains unchanged.

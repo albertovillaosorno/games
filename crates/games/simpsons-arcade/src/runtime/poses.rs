@@ -45,14 +45,19 @@ use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::storage::bundle::BundleSource;
 use games_platform::ir::storage::file::snapshot;
 
-use super::{Art, KEYS, Maneuver, Player, Station, failure, open_bundle};
+use super::world::WorldArt;
+use super::{
+    Art, KEYS, Maneuver, Player, Station, failure, open_bundle, scenery,
+};
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
-    ENEMY_WALK_TICKS, EnemyAction, JumpMotion, Pair, PairMotion, WalkMotion,
+    ENEMY_WALK_TICKS, EnemyAction, JumpMotion, MID_STREET_SCRIPT_ORIGIN, Pair,
+    PairMotion, WalkMotion,
 };
 
 const MAX_POSES: usize = 220;
-const MAX_CATALOGUE_BYTES: NonZeroU64 = NonZeroU64::MIN.saturating_add(18_431);
+pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
+    NonZeroU64::MIN.saturating_add(22_527);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -110,15 +115,33 @@ enum Subject {
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
     entries: BTreeMap<Key, ContentHash>,
+    scenery: scenery::Catalogue,
 }
 
 impl Catalogue {
+    pub(super) fn admit_world(
+        &self,
+        world: Option<WorldArt>,
+    ) -> Result<(), RenderError> {
+        if self.has_scenery()
+            && world.map_or(Ok(0), WorldArt::scroll_limit)?
+                < u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?
+        {
+            return Err(failure("scenic poses require the mid-street world"));
+        }
+        Ok(())
+    }
+
     pub(super) fn count(&self) -> usize {
-        self.entries.len()
+        self.entries.len().saturating_add(self.scenery.count())
     }
 
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
-        self.entries.values().copied()
+        self.entries.values().copied().chain(self.scenery.digests())
+    }
+
+    pub(super) fn has_scenery(&self) -> bool {
+        self.scenery.count() != 0
     }
 
     pub(super) fn load(
@@ -147,7 +170,10 @@ impl Catalogue {
             }
             let _prior = entries.insert(key, art);
         }
-        Ok(PoseArt { entries })
+        Ok(PoseArt {
+            entries,
+            scenery: self.scenery.load(store, scene)?,
+        })
     }
 
     pub(super) fn open(path: &OsStr) -> Result<Self, RenderError> {
@@ -162,7 +188,12 @@ impl Catalogue {
             return Err(failure("pose catalogue exceeds byte limit"));
         }
         let mut entries = BTreeMap::new();
+        let mut scenery = scenery::Catalogue::default();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            if line.split_whitespace().next() == Some("scenic-pair") {
+                scenery.insert(line)?;
+                continue;
+            }
             let (key, digest) = parse_line(line)?;
             if entries.len() >= MAX_POSES
                 || entries.insert(key, digest).is_some()
@@ -193,16 +224,18 @@ impl Catalogue {
             || !interaction_complete(&entries, Kind::Repelled, &REPELLED_KEYS)
             || !repelled_requires_restraint(&entries)
             || !pair_complete(&entries)
+            || !scenery.complete()
         {
             return Err(failure("missing tick-zero pose"));
         }
-        Ok(Self { entries })
+        Ok(Self { entries, scenery })
     }
 }
 
 #[derive(Debug, Default)]
 pub(super) struct PoseArt {
     entries: BTreeMap<Key, Art>,
+    pub(super) scenery: scenery::PlacedArt,
 }
 
 impl PoseArt {
@@ -319,6 +352,7 @@ impl PoseArt {
                 .entries
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
                 .collect(),
+            scenery: scenery::PlacedArt::default(),
         }
     }
 }
@@ -519,10 +553,20 @@ fn walking_offset(player: Player, elapsed: u64) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     const HASH: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn scenic_fixture() -> String {
+        let mut text = String::new();
+        for tick in (8u16..=328).step_by(8) {
+            assert!(writeln!(text, "scenic-pair {tick} 248 52 {HASH}").is_ok());
+        }
+        text
+    }
 
     fn complete() -> String {
         ["marge", "homer", "bart", "lisa"]
@@ -964,6 +1008,13 @@ mod tests {
             )
             .collect();
         let text = format!("{}{extra}", complete());
+        let scenic = scenic_fixture();
+        assert_eq!(
+            Catalogue::parse(&format!("{text}{scenic}"))
+                .map(|value| value.count())
+                .ok(),
+            Some(MAX_POSES.saturating_add(41))
+        );
         assert_eq!(
             Catalogue::parse(&text).map(|value| value.count()).ok(),
             Some(MAX_POSES)
@@ -974,9 +1025,30 @@ mod tests {
     }
 
     #[test]
+    fn scenic_track_preserves_the_regular_pose_budget() {
+        let scenic = scenic_fixture();
+        let text = format!("{}{scenic}", complete());
+        let result = Catalogue::parse(&text);
+        assert!(result.is_ok());
+        let Ok(catalogue) = result else {
+            return;
+        };
+        assert_eq!(catalogue.count(), 49);
+        assert_eq!(catalogue.digests().count(), 49);
+        assert!(catalogue.admit_world(None).is_err());
+        assert!(
+            Catalogue::parse(&format!(
+                "{}scenic-pair 8 248 52 {HASH}",
+                complete()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn memory_pose_text_has_the_same_byte_budget_as_local_text() {
         let valid = complete();
-        let padded = format!("{valid}\n{}", " ".repeat(18_432));
+        let padded = format!("{valid}\n{}", " ".repeat(22_528));
         assert!(Catalogue::parse(&valid).is_ok());
         assert!(Catalogue::parse(&padded).is_err());
     }

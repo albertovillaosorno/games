@@ -249,7 +249,7 @@ pub(super) fn bundle_limits() -> Result<ManifestLimits, RenderError> {
     })
 }
 
-fn camera_at_limit(limit: u16) -> Result<Cabinet, RenderError> {
+pub(super) fn camera_at_limit(limit: u16) -> Result<Cabinet, RenderError> {
     let mut cabinet = Cabinet::new(StreetLayout::DOWNTOWN)
         .map_err(failure)?
         .with_scroll_limit(limit)
