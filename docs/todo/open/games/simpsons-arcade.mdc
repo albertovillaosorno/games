@@ -4113,3 +4113,23 @@ combined private ledger contains 925 identities and 3,419 detailed flow
 observations, with 267 discovered, 655 unresolved, one intentional
 replacement and two non-runtime functions. These are static evidence
 and dispositions, not original gameplay or audio equivalence.
+
+### Audio function dispositions and table classification
+
+All 686 currently identified Z80 functions now have explicit
+dispositions: 685 unresolved semantic reviews and one non-runtime
+interrupt return. The final 64 reviews cover individual pitch ramps,
+attenuation, repeat and timed continuations, including shared
+fallthrough and interior-entry paths. No original cue equivalence
+or Rust implementation mapping is claimed. The combined private ledger
+at this checkpoint has 925 identities, 203 discovered, 719 unresolved,
+one intentional replacement and two non-runtime.
+
+Further static classification verifies two additional effect streams,
+seven pan/attenuation pairs and contiguous instrument and sample
+tables. The additional 465 metadata bytes do not overlap decoded
+instructions or traversed sequence data. Of the 131,072 audio ROM
+bytes, 122,555 are classified; 8,517 remain unclassified. The sequence
+outcomes are unchanged. Unselected table entries are structurally
+classified, not proven reachable. Original data, detailed semantic
+reviews and reproduction evidence remain private.

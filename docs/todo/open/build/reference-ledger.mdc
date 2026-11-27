@@ -232,3 +232,23 @@ bytes, 3,114 reciprocal graph pairs and 3,419 detailed observations,
 including 69 interior and 61 unresolved flow observations. Dispositions
 are 267 discovered, 655 unresolved, one intentional replacement and
 two non-runtime. Function coverage and runtime equivalence remain open.
+
+The remaining 64 Z80 functions now have individually reviewed semantic
+dispositions, following the earlier 440-entry pass. All 686 currently
+discovered audio identities have explicit dispositions: 685 unresolved
+and one non-runtime. The private checker reports 925 combined identities,
+with 203 discovered, 719 unresolved, one intentional replacement and
+two non-runtime at this checkpoint. Graph identities and unrelated
+records are preserved. This does not establish exhaustive discovery,
+verified cue meaning or Rust equivalence.
+
+Two further sentinel-terminated effect streams, seven indexed
+pan/attenuation pairs and structurally checked instrument tables add
+465 non-overlapping metadata bytes. Every pointer in the contiguous
+54-entry FM and 28-entry PCM tables follows its descriptor stride; the
+sample table admits 163 eight-byte records. The private classification
+now accounts for 18,339 native instruction bytes, 95,927 sequence bytes
+and 8,289 metadata bytes (122,555 total). All 576 sequence outcomes
+remain unchanged. The remaining 8,517 bytes are unclassified, including
+uniform runs and possible undecoded native routines. The additional
+table entries are not asserted to be dynamically selected.
