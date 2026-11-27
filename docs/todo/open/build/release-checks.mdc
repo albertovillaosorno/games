@@ -605,3 +605,32 @@ earlier 4,154,377-byte package was a working-tree observation while
 native launch changes were in flight; it is not an exact committed
 source reproduction. This new pair is same-host reproducibility,
 not independent-host or physical-device acceptance.
+
+The same be9826d native package admitted four offline remaps spanning
+keyboard, mouse, controller and touch. Five invalid or conflicting
+edits preserved the exact 4,032-byte profile envelope. Subsequent
+touch smokes in all five display modes retained that profile and
+completed 3,100 movement and combat submissions without a 16.667 ms
+work-budget miss (maximum 4.140 ms). The Fill panel and additional
+adaptive scene columns were verified. Disposable truncated,
+group-writable and multiply linked save files all rejected direct
+edits without changing their contents. Restoring safe access allowed
+edits again for the latter two. A normal smoke rejected the truncated
+profile, while an explicit default-profile smoke override completed
+without replacing the corrupt save (one of 620 work-budget misses,
+maximum 20.955 ms). The package still verified with its original
+receipt. The tests used virtual input and display and dummy audio.
+
+A separate read-only observation of the configured shared store
+matched all 252 version-two manifest directory digests and 486
+payload directory digests. All 660 declared payload records matched
+their stored content lengths; 486 unique references matched 486
+distinct payload inodes. No unreferenced objects, linked entries,
+non-owner entries or shared-write files or directories were observed.
+Five ordinary sidecars remained outside the canonical manifest and
+object directories. The records describe 88,246,580 logical payload
+bytes, versus 43,026,520 bytes counted once per stored payload.
+The 45,220,060-byte difference measures repeated logical references,
+not actual allocated storage saved. No assets were changed or
+exported. This is host-local readback, not provenance verification
+or authority to retire any source media.
