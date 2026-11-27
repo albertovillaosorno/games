@@ -134,6 +134,18 @@ impl StereoGain {
         left: u16::MAX,
         right: u16::MAX,
     };
+
+    /// Apply an independent source level while preserving its stereo balance.
+    #[must_use]
+    pub fn attenuated(self, level: MasterVolume) -> Self {
+        let scale = |gain| {
+            u16::try_from(level.attenuate(i64::from(gain))).unwrap_or(u16::MAX)
+        };
+        Self {
+            left: scale(self.left),
+            right: scale(self.right),
+        }
+    }
 }
 
 /// Master output attenuation, independent of the game's individual gains.
@@ -578,6 +590,39 @@ mod tests {
 
     fn rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+    }
+
+    #[test]
+    fn source_attenuation_preserves_independent_mix_and_timing()
+    -> Result<(), AudioError> {
+        let music =
+            Clip::new(&[8000, -8000, 4000, -4000], Channels::Stereo, rate(1))?;
+        let effect = Clip::new(&[4000, 8000], Channels::Mono, rate(1))?;
+        let mut mixer = Mixer::new(rate(1), NonZeroU16::MIN.saturating_add(1))?;
+        let _track = mixer.play_loop(
+            music,
+            StereoGain::UNITY.attenuated(MasterVolume::Half),
+            0..2,
+        )?;
+        let _cue = mixer.play(
+            effect,
+            StereoGain {
+                left: 32768,
+                right: 16384,
+            }
+            .attenuated(MasterVolume::Quarter),
+        )?;
+        let mut frames = [[0; 2]; 2];
+        mixer.render(&mut frames);
+        if frames != [[4499, -3749], [2999, -1499]] || mixer.active() != 1 {
+            return Err(AudioError::InvalidVolume);
+        }
+        let _muted = mixer
+            .play(effect, StereoGain::UNITY.attenuated(MasterVolume::Muted))?;
+        mixer.render(&mut frames);
+        (frames == [[3999, -3999], [1999, -1999]] && mixer.active() == 1)
+            .then_some(())
+            .ok_or(AudioError::InvalidVolume)
     }
 
     #[test]

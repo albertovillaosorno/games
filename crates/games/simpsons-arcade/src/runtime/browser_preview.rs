@@ -305,6 +305,7 @@ const fn unavailable(error: PreferenceError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use games::audio::MasterVolume;
     use games::presentation::PresentationMode;
     use games_assets::{ContentHash, ManifestLimits};
 
@@ -329,7 +330,6 @@ mod tests {
     #[test]
     fn browser_preferences_reuse_typed_slots_and_profile_admission()
     -> Result<(), RenderError> {
-        use games::audio::MasterVolume;
         use games_platform::ir::storage::fixtures::TestRoot;
 
         use super::super::{DEFAULT_PROFILES, configured_profiles};
@@ -447,7 +447,8 @@ mod tests {
             ".",
             &format!(
                 "poses=launch-poses.txt\ndisplay=integer\n\
-                 audio={hash}\naudio_mod={hash}\nmusic={hash}\n"
+                 audio={hash}\naudio_mod={hash}\nmusic={hash}\n\
+                 effects_volume=25\nmusic_volume=75\n"
             ),
         );
         let fields = Catalogue::parse(&text).map_err(failure)?;
@@ -457,6 +458,8 @@ mod tests {
                 audio.base != hash
                     || audio.replacement != Some(hash)
                     || audio.music != Some(hash)
+                    || audio.effects_volume != MasterVolume::Quarter
+                    || audio.music_volume != MasterVolume::ThreeQuarters
             })
             || result.display.presentation != PresentationMode::Integer
             || result.poses != Some("pose fixture")
@@ -508,7 +511,9 @@ mod tests {
             actors: [actor; 4],
             audio: Some(AudioSelection {
                 base,
+                effects_volume: MasterVolume::Full,
                 music: Some(music),
+                music_volume: MasterVolume::Full,
                 replacement: Some(replacement),
             }),
             display: DisplaySettings::default(),

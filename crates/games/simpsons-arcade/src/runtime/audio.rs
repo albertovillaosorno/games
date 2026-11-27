@@ -96,13 +96,17 @@ const CLIPS: [(&str, u64); 4] = [
 
 type SharedSamples = Rc<[i16]>;
 
-/// Pinned canonical attack samples and an optional selective replacement.
+/// Pinned attack samples, optional music and their source levels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AudioSelection {
     /// Manifest providing the four observed attack clips.
     pub base: ContentHash,
+    /// Independent attack attenuation before the master level.
+    pub effects_volume: MasterVolume,
     /// Optional canonical opening-street music manifest.
     pub music: Option<ContentHash>,
+    /// Independent music attenuation before the master level.
+    pub music_volume: MasterVolume,
     /// Optional compatible replacement manifest.
     pub replacement: Option<ContentHash>,
 }
@@ -113,7 +117,9 @@ impl AudioSelection {
     ) -> Result<Self, RenderError> {
         Ok(Self {
             base: parse_hash(&selection.base)?,
+            effects_volume: selection.effects_volume,
             music: selection.music.as_deref().map(parse_hash).transpose()?,
+            music_volume: selection.music_volume,
             replacement: selection
                 .replacement
                 .as_deref()
@@ -125,7 +131,9 @@ impl AudioSelection {
 
 pub(super) struct Samples {
     clips: [Rc<[i16]>; 4],
+    effects_volume: MasterVolume,
     music: Option<OwnedClip>,
+    music_volume: MasterVolume,
 }
 
 impl Samples {
@@ -176,10 +184,12 @@ impl Samples {
         }
         Ok(Self {
             clips: clips.try_into().map_err(|_error| failure("clip count"))?,
+            effects_volume: selection.effects_volume,
             music: selection
                 .music
                 .map(|hash| load_music(store, hash))
                 .transpose()?,
+            music_volume: selection.music_volume,
         })
     }
 }
@@ -189,10 +199,13 @@ pub(super) struct Playback {
     cues: [u64; 4],
     device: NativeAudio,
     discard_queued: bool,
+    effects_volume: MasterVolume,
+    gains: [StereoGain; 4],
     live_output: bool,
     mixer: OwnedMixer,
     music: Option<OwnedClip>,
     music_started: bool,
+    music_volume: MasterVolume,
     scratch: [[i16; 2]; CHUNK],
     volume: MasterVolume,
 }
@@ -243,6 +256,8 @@ impl Playback {
             cues: [0; 4],
             device,
             discard_queued: false,
+            effects_volume: samples.effects_volume,
+            gains: GAINS.map(|gain| gain.attenuated(samples.effects_volume)),
             live_output: false,
             mixer: OwnedMixer::new(
                 RATE,
@@ -253,6 +268,7 @@ impl Playback {
             .map_err(failure)?,
             music: samples.music.clone(),
             music_started: false,
+            music_volume: samples.music_volume,
             scratch: [[0; 2]; CHUNK],
             volume: MasterVolume::default(),
         })
@@ -371,7 +387,12 @@ impl Playback {
             .first()
             .ok_or(RenderError::InvalidSprite)?
             .clone();
-        play(&mut self.mixer, clip, StereoGain::UNITY)?;
+        play(
+            &mut self.mixer,
+            clip,
+            StereoGain::UNITY.attenuated(self.effects_volume),
+        )?;
+        self.device.clear().map_err(failure)?;
         self.fill()?;
         self.verify_submission(1)?;
         simulation
@@ -439,7 +460,7 @@ impl Playback {
                 .mixer
                 .play_loop(
                     clip.clone(),
-                    StereoGain::UNITY,
+                    StereoGain::UNITY.attenuated(self.music_volume),
                     MUSIC_LOOP_START..MUSIC_FRAMES,
                 )
                 .map_err(failure)?;
@@ -450,7 +471,7 @@ impl Playback {
             .iter_mut()
             .zip(current)
             .zip(&self.clips)
-            .zip(GAINS)
+            .zip(self.gains)
         {
             let new_cues = count.saturating_sub(*previous);
             *previous = count;
@@ -490,11 +511,14 @@ impl Playback {
     }
 
     fn verify_submission(&self, active: usize) -> Result<(), RenderError> {
+        let audible = (active != 0
+            && self.effects_volume != MasterVolume::Muted)
+            || (self.music_started && self.music_volume != MasterVolume::Muted);
         if self.mixer.active() != active.saturating_add(self.music_voices())
             || self.queued_frames()? != QUEUE_FRAMES
-            || self.scratch.iter().all(|frame| *frame == [0, 0])
+            || self.scratch.iter().all(|frame| *frame == [0, 0]) == audible
         {
-            return Err(failure("unexpected native attack audio submission"));
+            return Err(failure("unexpected native audio submission"));
         }
         Ok(())
     }
@@ -742,7 +766,9 @@ mod tests {
         let base = CLIPS.map(|(key, frames)| (key, frames, 12));
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &base)?,
+            effects_volume: MasterVolume::Full,
             music: None,
+            music_volume: MasterVolume::Full,
             replacement: None,
         };
         let original = Samples::load(BundleSource::Local(parent), selection)?;
@@ -790,7 +816,9 @@ mod tests {
     -> Result<(), RenderError> {
         let samples = Samples {
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
+            effects_volume: MasterVolume::Full,
             music: None,
+            music_volume: MasterVolume::Full,
         };
         let expected = [[5451, 2443], [7383, 5182], [3430, 4887], [2027, 4523]];
         let clips = samples.clips()?;

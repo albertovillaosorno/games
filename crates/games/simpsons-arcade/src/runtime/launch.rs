@@ -66,7 +66,8 @@ const USAGE: &str = concat!(
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
     "[--enemy APPROACH_SHA STRIKE_SHA] ",
-    "[--audio SHA [--audio-mod SHA] [--music SHA]] ",
+    "[--audio SHA [--audio-mod SHA] [--music SHA] ",
+    "[--effects-volume PERCENT] [--music-volume PERCENT]] ",
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local ",
@@ -80,6 +81,7 @@ const USAGE: &str = concat!(
 
 type AdmittedEdit = (Profiles, String);
 type Arguments = Peekable<vec::IntoIter<OsString>>;
+type AudioVolumes = (Option<MasterVolume>, Option<MasterVolume>);
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
 type EnemyHashes = Option<[OsString; 2]>;
 type VolumePreferences = (Option<VolumeStore>, MasterVolume);
@@ -95,7 +97,9 @@ struct LocalPaths {
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct AudioSelection {
     pub(super) base: OsString,
+    pub(super) effects_volume: MasterVolume,
     pub(super) music: Option<OsString>,
+    pub(super) music_volume: MasterVolume,
     pub(super) replacement: Option<OsString>,
 }
 
@@ -105,21 +109,46 @@ impl AudioSelection {
         let replacement =
             flag(args, "--audio-mod").then(|| next(args)).transpose()?;
         let music = flag(args, "--music").then(|| next(args)).transpose()?;
-        Self::new(base, replacement, music)
+        let effects = flag(args, "--effects-volume")
+            .then(|| next(args))
+            .transpose()?;
+        let soundtrack = flag(args, "--music-volume")
+            .then(|| next(args))
+            .transpose()?;
+        let parse = |value: OsString| {
+            let text = value.to_str().ok_or("invalid volume text")?;
+            MasterVolume::parse(text).map_err(|error| format!("{error:?}"))
+        };
+        Self::new(
+            base,
+            replacement,
+            music,
+            (
+                effects.map(parse).transpose()?,
+                soundtrack.map(parse).transpose()?,
+            ),
+        )
     }
 
     fn new(
         base: Option<OsString>,
         replacement: Option<OsString>,
         music: Option<OsString>,
+        volumes: AudioVolumes,
     ) -> Result<Option<Self>, String> {
+        let (effects_volume, music_volume) = volumes;
+        if music.is_none() && music_volume.is_some() {
+            return Err(String::from("music volume requires a music bundle"));
+        }
         match (base, replacement, music) {
             (Some(digest), changes, track) => Ok(Some(Self {
                 base: digest,
+                effects_volume: effects_volume.unwrap_or_default(),
                 music: track,
+                music_volume: music_volume.unwrap_or_default(),
                 replacement: changes,
             })),
-            (None, None, None) => Ok(None),
+            (None, None, None) if effects_volume.is_none() => Ok(None),
             (None, _, _) => {
                 Err(String::from("audio options require a base bundle"))
             },
@@ -160,10 +189,17 @@ impl<'text> Catalogue<'text> {
             hash(required(&mut values, "lisa")?)?,
         ];
         let enemy = enemy_hashes(&mut values)?;
+        let volume = |value| {
+            MasterVolume::parse(value).map_err(|error| format!("{error:?}"))
+        };
         let audio = AudioSelection::new(
             values.remove("audio").map(hash).transpose()?,
             values.remove("audio_mod").map(hash).transpose()?,
             values.remove("music").map(hash).transpose()?,
+            (
+                values.remove("effects_volume").map(volume).transpose()?,
+                values.remove("music_volume").map(volume).transpose()?,
+            ),
         )?;
         let audio_device = selected_audio_device(
             values
@@ -1145,7 +1181,9 @@ mod tests {
             actors: [DIGEST, DIGEST, DIGEST, DIGEST].map(OsString::from),
             audio: Some(AudioSelection {
                 base: DIGEST.into(),
+                effects_volume: MasterVolume::Full,
                 music: None,
+                music_volume: MasterVolume::Full,
                 replacement: None,
             }),
             directory: OsString::from("/package/../local assets"),
@@ -1273,7 +1311,9 @@ mod tests {
             actors: ["m", "h", "b", "l"].map(OsString::from),
             audio: Some(AudioSelection {
                 base: "audio".into(),
+                effects_volume: MasterVolume::Full,
                 music: None,
+                music_volume: MasterVolume::Full,
                 replacement: None,
             }),
             directory: OsString::from("parent"),
@@ -1304,22 +1344,53 @@ mod tests {
     }
 
     #[test]
+    fn source_volume_catalogue_requires_matching_assets() -> Result<(), String>
+    {
+        let path = OsStr::new("local");
+        let base = catalogue();
+        let music = format!("{base}music={DIGEST}\n");
+        if Assets::catalogue(path, &music).is_ok() {
+            return Err(String::from("music without base accepted"));
+        }
+        let (music_config, _, _) = Assets::catalogue(
+            path,
+            &format!(
+                "{music}audio={DIGEST}\neffects_volume=25\nmusic_volume=50\n"
+            ),
+        )?;
+        if music_config.audio.is_none_or(|audio| {
+            audio.music != Some(DIGEST.into())
+                || audio.effects_volume != MasterVolume::Quarter
+                || audio.music_volume != MasterVolume::Half
+        }) {
+            return Err(String::from("catalogue lost music or source volumes"));
+        }
+        for extra in [
+            "effects_volume=50\n",
+            "music_volume=50\n",
+            "effects_volume=51\n",
+        ] {
+            if Assets::catalogue(path, &format!("{base}{extra}")).is_ok() {
+                return Err(String::from("invalid source volume accepted"));
+            }
+        }
+        if Assets::catalogue(
+            path,
+            &format!("{base}audio={DIGEST}\nmusic_volume=50\n"),
+        )
+        .is_ok()
+        {
+            return Err(String::from("volume without music accepted"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn passive_audio_replacement_requires_explicit_base_selection()
     -> Result<(), String> {
         let path = OsStr::new("local");
         let base = catalogue();
         let replacement = format!("{base}audio_mod={DIGEST}\n");
-        let music = format!("{base}music={DIGEST}\n");
-        if Assets::catalogue(path, &music).is_ok() {
-            return Err(String::from("music without base accepted"));
-        }
-        let (music_config, _, _) =
-            Assets::catalogue(path, &format!("{music}audio={DIGEST}\n"))?;
-        if music_config.audio.and_then(|audio| audio.music)
-            != Some(DIGEST.into())
-        {
-            return Err(String::from("catalogue lost music"));
-        }
         if Assets::catalogue(path, &replacement).is_ok() {
             return Err(String::from("replacement without base accepted"));
         }
@@ -1340,6 +1411,10 @@ mod tests {
             "mod",
             "--music",
             "track",
+            "--effects-volume",
+            "25",
+            "--music-volume",
+            "50",
             "parent",
             "m",
             "h",
@@ -1350,7 +1425,9 @@ mod tests {
         if launch.assets.audio
             != Some(AudioSelection {
                 base: "base".into(),
+                effects_volume: MasterVolume::Quarter,
                 music: Some("track".into()),
+                music_volume: MasterVolume::Half,
                 replacement: Some("mod".into()),
             })
         {

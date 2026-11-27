@@ -35,6 +35,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::num::{NonZeroU8, NonZeroU32, NonZeroU64, NonZeroUsize};
 
+use games::audio::MasterVolume;
 use games::presentation::DisplaySettings;
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
@@ -61,7 +62,9 @@ fn main() -> Result<(), RenderError> {
             actors: [digest; 4],
             audio: Some(AudioSelection {
                 base: audio,
+                effects_volume: MasterVolume::Full,
                 music: None,
+                music_volume: MasterVolume::Full,
                 replacement: None,
             }),
             display: DisplaySettings::default(),
