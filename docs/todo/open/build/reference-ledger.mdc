@@ -1043,3 +1043,20 @@ records retain the evidence without changing their dispositions.
 Visual assembly, exact native interactions and Rust mapping remain
 open. The checker retains 1,603 identities, 43 partial mappings
 and the preceding graph and dependency counts.
+
+Two matched parent-specific replays now reproduce all six secondary
+state selectors and the separate parent callback. The isolated static
+admission adds eight bodies and 197 decoded bytes, with no previous
+ownership changes or unowned decoded instructions. The parent waits
+for the 1,248-column travel threshold, retries child allocation timing
+while the primary count exceeds four, and has a separate 96-tick
+return hold. The checker reports 1,611 reviewed identities, 58,651
+bytes, 4,382 reciprocal pairs, 4,964 flow observations, 263 interior
+entries and 180 unresolved flows. The 43 partial mappings, three
+intentional replacements and 25 non-runtime records are unchanged;
+1,583 dispositions remain unresolved. Seven isolated parent and child
+poses independently reproduce identical payloads across the two
+movement schedules; all sixteen full-frame reconstructions match.
+Two additional cropped action candidates did not match and are
+excluded. The exact native interaction and full visual sequences
+remain open.
