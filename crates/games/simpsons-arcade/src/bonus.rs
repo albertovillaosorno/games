@@ -195,6 +195,29 @@ impl Bonus {
         }
     }
 
+    /// The displayed pumping countdown in centiseconds, if pumping.
+    ///
+    /// The original display advances by two hundredths each tick and
+    /// carries to the next second on the tick reaching zero hundredths.
+    #[must_use]
+    pub fn countdown(self) -> Option<u16> {
+        if self.phase != BonusPhase::Pumping {
+            return None;
+        }
+        if self.tick == 0 {
+            return Some(1000);
+        }
+        let elapsed = self.tick.saturating_sub(1);
+        let seconds = 9u16.saturating_sub(elapsed.checked_div(49)?);
+        let hundredths =
+            98u16.saturating_sub(elapsed.checked_rem(49)?.saturating_mul(2));
+        Some(if self.tick >= 491 {
+            0
+        } else {
+            seconds.saturating_mul(100).saturating_add(hundredths)
+        })
+    }
+
     /// Inflation for an admitted character; absent for other characters.
     #[must_use]
     pub fn inflation(self, player: Player) -> Option<u8> {
@@ -291,6 +314,29 @@ mod tests {
         assert_eq!(bonus.phase(), BonusPhase::Pumping);
         assert_eq!(bonus.inflation(Player::Marge), Some(0));
         bonus
+    }
+
+    #[test]
+    fn pump_clock_matches_decimal_carry_and_timeout() {
+        let mut bonus = start_pump([true; 4]);
+        for tick in 0..PUMP_TICKS {
+            let expected = match tick {
+                0 => Some(1000),
+                1 => Some(998),
+                49 => Some(902),
+                50 => Some(898),
+                489 => Some(4),
+                490 => Some(2),
+                491 => Some(0),
+                _ => None,
+            };
+            if let Some(value) = expected {
+                assert_eq!(bonus.countdown(), Some(value));
+            }
+            bonus.advance([false; 4]);
+        }
+        assert_eq!(bonus.countdown(), None);
+        assert_eq!(bonus.phase(), BonusPhase::Results);
     }
 
     #[test]

@@ -927,7 +927,12 @@ impl Scene {
                 .ok_or(RenderError::InvalidSprite)?;
             art.queue(
                 bonus,
-                cabinet.session().language_index(),
+                (
+                    cabinet.session().language_index(),
+                    self.score_digits
+                        .as_ref()
+                        .ok_or(RenderError::InvalidSprite)?,
+                ),
                 &mut self.draws,
             )?;
         } else {

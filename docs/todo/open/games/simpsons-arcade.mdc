@@ -4487,3 +4487,26 @@ remain provisional. Tests cover the measured single-step/first-leak
 values, leak delay and neutral recovery, sparse and rapid inputs,
 independent participants and tied results. The routed winning-result
 smoke uses a larger bounded press budget for the non-linear response.
+
+### Balloon countdown and result readouts
+
+The matched original pumping trace starts its displayed countdown at
+10.00, changes to 9.98 on the next update, and carries from 9.02 to
+8.98. The final sparse-pulse countdown reaches 0.02 before results;
+the neutral control also observes 0.00. The native countdown exposes
+this decimal carry rule while pumping. Its localized scene now shows
+the countdown and the final balloon points alongside each rank. The
+existing combat digit atlas is reused, with one additional punctuation
+glyph; cumulative street score remains unchanged. The display anchors
+are native reconstruction choices, not recovered original pixel
+placement. Tests exercise decimal carry and timeout, and the native
+atlas fixture verifies the clock and result glyph ordering/readback.
+
+Before the readout change, the optimized 3,970,312-byte Linux build
+passed the original-backed full-campaign offscreen OpenGL, synthetic
+touch and dummy-audio smoke in all five display modes. Each verified
+wrestler clearance, nonlinear bonus pumping, pause, winning result,
+completion, second-stage travel and finite soundtrack cues. All 600
+movement and 20 combat submissions per mode met the 16.667 ms host
+budget; whole-smoke peak RSS ranged from 181,018,624 to 181,276,672
+bytes. These are synthetic diagnostics, not physical device acceptance.

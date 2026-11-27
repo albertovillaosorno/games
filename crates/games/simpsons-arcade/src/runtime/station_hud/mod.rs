@@ -50,8 +50,8 @@ const WIDTH: u16 = 64;
 const HEIGHT: u16 = 24;
 const DIGIT_WIDTH: u16 = 6;
 const DIGIT_HEIGHT: u16 = 10;
-// Ten 6-by-10 RGBA glyph plates shared across locales.
-pub(super) const SCORE_BYTES: usize = 10 * 6 * 10 * 4;
+// Eleven 6-by-10 RGBA glyph plates shared across locales.
+pub(super) const SCORE_BYTES: usize = 11 * 6 * 10 * 4;
 
 /// At most four decimal glyphs per active station.
 pub(super) const SCORE_SPRITES: usize = 4 * 4;
@@ -195,36 +195,67 @@ impl StationHud {
     }
 }
 
+pub(super) fn queue_centiseconds(
+    digits: &TextAtlas,
+    value: u16,
+    (right, top): (i32, i32),
+    draws: &mut Vec<SpriteDraw>,
+) -> Result<(), RenderError> {
+    let hundredths = value.checked_rem(100).unwrap_or_default();
+    let seconds = value.checked_div(100).unwrap_or_default();
+    let left = draw_number(digits, (hundredths, 2), (right, top), draws)?
+        .saturating_sub(i32::from(DIGIT_WIDTH));
+    draws.push(digits.draw(10, left, top)?);
+    queue_decimal(digits, seconds, (left, top), draws)
+}
+
+pub(super) fn queue_decimal(
+    digits: &TextAtlas,
+    value: u16,
+    anchor: (i32, i32),
+    draws: &mut Vec<SpriteDraw>,
+) -> Result<(), RenderError> {
+    draw_number(digits, (value, 1), anchor, draws).map(|_| ())
+}
+
 pub(super) fn queue_score(
     digits: &TextAtlas,
     player: Player,
     (score, offset, prompted): (u16, i32, bool),
     draws: &mut Vec<SpriteDraw>,
 ) -> Result<(), RenderError> {
-    let mut remaining = score;
-    let mut left = station_x(player)?.saturating_add(offset).saturating_add(64);
+    let right = station_x(player)?.saturating_add(offset).saturating_add(64);
     let top = if prompted {
         28i32
     } else {
         2i32
     };
-    for _ in 0..4u8 {
+    queue_decimal(digits, score, (right, top), draws)
+}
+
+fn draw_number(
+    digits: &TextAtlas,
+    (mut remaining, minimum): (u16, u8),
+    (mut left, top): (i32, i32),
+    draws: &mut Vec<SpriteDraw>,
+) -> Result<i32, RenderError> {
+    for index in 0..4u8 {
         left = left.saturating_sub(i32::from(DIGIT_WIDTH));
         let digit = usize::from(remaining.checked_rem(10).unwrap_or_default());
         draws.push(digits.draw(digit, left, top)?);
         remaining = remaining.checked_div(10).unwrap_or_default();
-        if remaining == 0 {
+        if remaining == 0 && index.saturating_add(1) >= minimum {
             break;
         }
     }
-    Ok(())
+    Ok(left)
 }
 
 pub(super) fn load_digits(
     scene: &mut SceneSession<'_, '_>,
 ) -> Result<TextAtlas, RenderError> {
     let plates =
-        ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"].map(|digit| {
+        ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "."].map(|digit| {
             vec![TextLine {
                 color: INK,
                 scale: 2,
@@ -839,7 +870,7 @@ pub(super) mod tests {
                         .saturating_add(SCORE_BYTES),
                 )?,
                 atlases: size(3)?,
-                sprites: size(4)?,
+                sprites: size(5)?,
             },
             |scene| {
                 let profiles = configured_profiles(concat!(
@@ -849,9 +880,48 @@ pub(super) mod tests {
                 .map_err(failure)?;
                 let digits = load_digits(scene)?;
                 check_scores(scene, &digits)?;
+                check_bonus_numbers(scene, &digits)?;
                 check_localised_stations(scene, &profiles, reserved)
             },
         )
+    }
+
+    fn check_bonus_numbers(
+        scene: &mut SceneSession<'_, '_>,
+        digits: &TextAtlas,
+    ) -> Result<(), RenderError> {
+        let mut draws = Vec::with_capacity(5);
+        queue_centiseconds(digits, 1000, (175i32, 26i32), &mut draws)?;
+        if draws.len() != 5 || !scene.present([0, 0, 0], &draws)? {
+            return Err(failure("initial bonus clock not rendered"));
+        }
+        if !draws
+            .iter()
+            .zip([0i32, 0i32, 100i32, 0i32, 10i32])
+            .all(|(draw, source_top)| draw.source.y == source_top)
+        {
+            return Err(failure("incorrect bonus clock glyph order"));
+        }
+        let initial = scene.readback()?;
+        draws.clear();
+        queue_centiseconds(digits, 2, (175i32, 26i32), &mut draws)?;
+        if draws.len() != 4
+            || !scene.present([0, 0, 0], &draws)?
+            || scene.readback()? == initial
+        {
+            return Err(failure("final bonus clock not rendered"));
+        }
+        draws.clear();
+        queue_decimal(digits, 64, (72i32, 52i32), &mut draws)?;
+        if draws.len() != 2
+            || !draws
+                .iter()
+                .zip([40i32, 60i32])
+                .all(|(draw, source_top)| draw.source.y == source_top)
+        {
+            return Err(failure("incorrect bonus result glyph order"));
+        }
+        Ok(())
     }
 
     fn check_scores(

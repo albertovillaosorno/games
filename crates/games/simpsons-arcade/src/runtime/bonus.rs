@@ -38,7 +38,9 @@ use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::BundleSource;
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
 
-use super::{Art, dimension, failure, open_bundle, size, title_messages};
+use super::{
+    Art, dimension, failure, open_bundle, size, station_hud, title_messages,
+};
 use crate::{BONUS_MAX_INFLATION, Bonus, BonusPhase, Player};
 
 const HEADER_WIDTH: u16 = 288;
@@ -229,7 +231,7 @@ impl BonusArt {
     pub(super) fn queue(
         &self,
         bonus: Bonus,
-        language: usize,
+        (language, digits): (usize, &TextAtlas),
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<(), RenderError> {
         let phase = match bonus.phase() {
@@ -242,20 +244,28 @@ impl BonusArt {
         };
         draws.push(self.background.draw(self.background.rect, false));
         for player in Player::ALL {
-            self.queue_player(bonus, player, draws)?;
+            self.queue_player(bonus, (player, digits), draws)?;
         }
         let header = self
             .headers
             .get(language)
             .ok_or(RenderError::InvalidSprite)?;
         draws.push(header.draw(phase, 16, 12)?);
+        if let Some(countdown) = bonus.countdown() {
+            station_hud::queue_centiseconds(
+                digits,
+                countdown,
+                (175i32, 26i32),
+                draws,
+            )?;
+        }
         Ok(())
     }
 
     fn queue_player(
         &self,
         bonus: Bonus,
-        player: Player,
+        (player, digits): (Player, &TextAtlas),
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<(), RenderError> {
         let Some(amount) = bonus.inflation(player) else {
@@ -277,6 +287,12 @@ impl BonusArt {
                 balloon.x.saturating_sub(8),
                 36,
             )?);
+            station_hud::queue_decimal(
+                digits,
+                u16::from(amount),
+                (balloon.x.saturating_add(24), 52i32),
+                draws,
+            )?;
         }
         Ok(())
     }

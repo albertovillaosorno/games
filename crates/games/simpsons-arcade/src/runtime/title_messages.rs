@@ -72,8 +72,8 @@ messages! {
     "title.bonus.ready" => "READY", "LISTOS";
     "title.bonus.pumping" => "GO - TAP TO PUMP",
         "YA - PULSA PARA INFLAR";
-    "title.bonus.results" => "RESULTS - RANK",
-        "RESULTADOS - PUESTO";
+    "title.bonus.results" => "RESULTS - RANK / SCORE",
+        "RESULTADOS - PUESTO / PUNTOS";
     "title.bonus.complete" => "BONUS COMPLETE",
         "BONO COMPLETADO";
     "title.action.pause" => "PAUSE", "PAUSA";
