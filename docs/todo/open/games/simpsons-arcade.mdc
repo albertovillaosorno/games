@@ -4233,3 +4233,14 @@ The main inventory has 301 identities and 14,523 owned bytes.
 The combined ledger has 990 identities, 971 unresolved dispositions
 and 72 unresolved flow observations. The complete campaign remains
 unverified.
+
+Another 47 main-CPU identities include original three-axis overlap,
+pair response, slot-update and map-sampling routines. The current
+native attack range checks use two-axis facing and proximity; the
+original per-record offsets, extents and response priorities are
+not yet mapped. Four additional explicit bank-selection chains
+are conditional on their runtime context. The main inventory has
+348 identities and 17,028 owned bytes; the combined ledger has
+1,037 identities, 1,018 unresolved dispositions and 81 unresolved
+flow observations. These are semantic findings, not a new playable
+milestone or verified combat equivalence.
