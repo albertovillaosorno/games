@@ -1173,3 +1173,29 @@ interior entries and 190 unresolved flows. There are now 69 partial
 Rust mappings, three intentional replacements, 25 non-runtime and
 1,644 unresolved dispositions. Terrain lookup, descriptor progression,
 other motion producers and complete scheduler behavior remain open.
+
+The generated Konami language now has a reproducible semantic fixture
+suite that steps exactly the 197 opcode values in the pinned MAME
+dispatch, with no missing or extra opcode. It covers all 104 indexed
+byte-read modes, 392 characterized register-transfer encodings, 32
+branch opcodes and all 1,024 push/pull stack masks. Additional binary,
+unary, stack, store, LEA, flags and direct-control fixtures passed
+291,468 assertions without repeating the common base fixture counts.
+This is opcode-level evidence, not the complete operand/mode cross
+product or live MAME differential execution. The reference DP
+transfer exception and processor/analysis limitations remain explicit.
+
+The board generator now emits a bounded bank-context traversal and a
+synthetic bank fixture. Two fresh headless projects produced identical
+reports: 595 states, 67 candidate roots, 791 edges and seven unknown
+observations. All 256 selector values resolve to their exact physical
+bank, all 64 overlays have distinct entries, and a fixed boundary
+fallthrough and an unresolved vector-alias boundary are distinguished.
+Only the matching direct-page selector chain adds a conditional edge.
+The local World four-player ROM verified with MAME and an isolated
+Ghidra traversal admitted 2,170 address/context states, 62 candidate
+roots, 2,430 edges, 13 bank-overlay candidate roots and 47 unresolved
+observations. Six conditional direct-page call edges were reproduced.
+The private canonical ledger is unchanged by this diagnostic; the
+candidate report does not certify function-body ownership, computed
+dispatch completeness or Rust mappings.

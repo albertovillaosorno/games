@@ -25,6 +25,8 @@ public class VerifyKonami extends GhidraScript {
   long code = 0x8000;
   long instruction;
   int checks;
+  int opcode;
+  final java.util.SortedSet<Integer> covered = new java.util.TreeSet<>();
   String[] regs = {"A", "B", "X", "Y", "U", "S"};
   int[] selectors = {0, 1, 2, 3, 5, 6};
   int[] initial = {0x12, 0x34, 0x4567, 0x89ab, 0xcdef, 0x2468};
@@ -60,6 +62,7 @@ public class VerifyKonami extends GhidraScript {
     return thread.getState().inspectConcrete(at(addr), 1)[0] & 0xff;
   }
   void start(int... bytes) {
+    opcode = bytes[0];
     instruction = code;
     code += 4;
     mem((int) instruction, bytes);
@@ -67,6 +70,12 @@ public class VerifyKonami extends GhidraScript {
   }
   void step() {
     thread.stepInstruction();
+    covered.add(opcode);
+  }
+  void reportCoverage() {
+    var codes = new java.util.StringJoiner(" ");
+    for (int op : covered) codes.add(String.format("%02x", op));
+    println("COVERED OPCODES: " + codes);
   }
   void fallthrough(int n) {
     eq("fallthrough", instruction + n, thread.getCounter().getOffset());

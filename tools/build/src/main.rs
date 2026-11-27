@@ -90,7 +90,7 @@ use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
     "games-build ghidra konami cspec|ldefs|pspec|slaspec\n",
-    "games-build ghidra-board simpsons\n",
+    "games-build ghidra-board simpsons [fixture|flow]\n",
     "games-build ledger check PATH BYTES ROWS\n",
     "games-build retention plan AGE_SECONDS QUOTA_BYTES ENTRIES BYTES\n",
     "games-build retention apply AGE_SECONDS QUOTA_BYTES ENTRIES BYTES HASH\n",

@@ -73,5 +73,6 @@ public class VerifyKonamiBranches extends VerifyKonami {
     eq("branch vector count", 2562, cases);
     println("PASS BRANCH TRUTH TABLE: " + cases + " vectors; "
         + (checks - before) + " assertions");
+    reportCoverage();
   }
 }

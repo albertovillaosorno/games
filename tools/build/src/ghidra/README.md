@@ -116,14 +116,15 @@ for part in ldefs pspec cspec slaspec sla; do
 done
 scratch=$(mktemp -d)
 mkdir "$scratch/project"
-printf '\\000' > "$scratch/synthetic.bin"
+printf '\000' > "$scratch/synthetic.bin"
 analyzeHeadless "$scratch/project" konami-check \
   -import "$scratch/synthetic.bin" \
   -processor Konami053248:BE:16:partial -cspec default -noanalysis \
   -scriptPath "$PWD/tools/build/src/ghidra/fixtures" \
   -postScript VerifyKonamiIndexed.java \
   -postScript VerifyKonamiArithmetic.java \
-  -postScript VerifyKonamiBranches.java > "$scratch/check.log" 2>&1
+  -postScript VerifyKonamiBranches.java \
+  -postScript VerifyKonamiControl.java > "$scratch/check.log" 2>&1
 ! grep -q 'ERROR' "$scratch/check.log" || exit 1
 grep -q 'PASS SYNTHETIC INDEXED TOTAL: 4226 assertions' \
   "$scratch/check.log" || exit 1
@@ -135,7 +136,7 @@ grep -q 'PASS BRANCH TRUTH TABLE: 2562 vectors; 5125 assertions' \
 
 Require the explicit markers as well as headless success: a failed script
 can otherwise be reported only in the log. No original media is needed.
-The three runs share 2,633 base assertions; do not sum those duplicates.
+The four runs share 2,633 base assertions; do not sum those duplicates.
 
 | Category | Admitted semantic evidence |
 | --- | --- |
@@ -160,3 +161,52 @@ The full opcode-by-addressing-mode semantic matrix, exact boundary
 instruction fetch and live differential execution against MAME remain
 open. The branch wrap cases keep instruction bytes inside the address
 space; a Ghidra p-code decode at 0xfffc failed in this environment.
+
+The additional fixture runs every documented binary and unary arithmetic
+opcode with deterministic boundary operands and the four carry/flag seeds
+0x00, 0x01, 0xfe and 0xff. All 256 byte values are exercised for each
+unary register and indexed opcode. Every stack mask is exercised on both
+stack registers for push and pull. The flag oracle follows the pinned
+MAME flag calculation, not the generated SLEIGH arithmetic.
+
+| Additional category | Vectors | Assertions |
+| --- | ---: | ---: |
+| Byte and word binary operations (64 opcodes) | 20,736 | 137,376 |
+| Unary operations (48 opcodes) | 34,392 | 126,504 |
+| Stack masks (four opcodes) | 1,024 | 17,408 |
+| Stores and LEA | 94 | 562 |
+| CC, SETLN, ABX, SEX | 4,096 | 9,472 |
+| JMP, JSR, RTS, BSR, LBSR, loops, MOVE, NOP | 40 | 146 |
+
+Require these markers and compare the actual stepped opcode set with the
+pinned dispatch table (including both EXG/TFR opcode aliases):
+
+```sh
+grep -q 'PASS BINARY: 12960 byte vectors; 7776 word vectors;' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS UNARY: 34392 vectors; 126504 assertions' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS STACK: 1024 masks; 17408 assertions' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS STORE/LEA: 94 vectors; 562 assertions' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS CONTROL: 4096 vectors; 9472 assertions' \
+  "$scratch/check.log" || exit 1
+grep -q 'PASS FLOW: 146 assertions' "$scratch/check.log" || exit 1
+mame=.reference/tools/mame/89185ed286c7830b4e6daa647d843a929077ecd2
+sed -n '/^MAIN:/,/^#include/p' \
+  "$mame/src/devices/cpu/m6809/konami.lst" |
+  grep -oE 'case 0x[0-9A-Fa-f]{2}:' | cut -c8-9 |
+  tr 'A-F' 'a-f' | LC_ALL=C sort -u > "$scratch/reference.txt"
+sed -nE 's/.*COVERED OPCODES: ([0-9a-f ]+) +\(GhidraScript\).*/\1/p' \
+  "$scratch/check.log" | tr ' ' '\n' |
+  grep -E '^[0-9a-f]{2}$' | LC_ALL=C sort -u > "$scratch/tested.txt"
+test "$(wc -l < "$scratch/reference.txt")" -eq 197 || exit 1
+cmp "$scratch/reference.txt" "$scratch/tested.txt" || exit 1
+```
+
+On 2026-11-27 all four suites passed and the two opcode sets matched
+exactly (197 of 197). This is opcode-level semantic evidence, not a
+complete cross product of operands and addressing modes. The DP
+exception, hardware timing, unresolved calling convention and live MAME
+differential execution remain outside the demonstrated contract.

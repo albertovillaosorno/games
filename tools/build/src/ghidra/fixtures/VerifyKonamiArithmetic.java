@@ -263,5 +263,6 @@ public class VerifyKonamiArithmetic extends VerifyKonami {
     println("PASS ADDITIONAL SYNTHETIC P-CODE: " + (checks - before)
         + " assertions");
     println("PASS TOTAL SYNTHETIC P-CODE: " + checks + " assertions");
+    reportCoverage();
   }
 }

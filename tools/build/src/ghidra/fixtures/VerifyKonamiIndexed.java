@@ -170,5 +170,6 @@ public class VerifyKonamiIndexed extends VerifyKonamiPc {
     super.run();
     allIndexed();
     println("PASS SYNTHETIC INDEXED TOTAL: " + checks + " assertions");
+    reportCoverage();
   }
 }
