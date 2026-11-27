@@ -2939,3 +2939,46 @@ validation 1795666435332980540-770777 passed 1,761 aggregate test
 executions, strict Clippy and all six portable core targets. This is
 profile admission and simulated input evidence, not physical-device
 or interactive remapping acceptance.
+
+### Opening street music and independent source levels
+
+The shared mixer admits explicit nonempty PCM loop regions, including
+an intro and fractional interpolation across the loop boundary. Inline
+regressions cover one-shot compatibility, partitioned rendering, repeated
+wraparound, slot reuse and independent source attenuation. The bounded
+WAV-window publication path retains complete interleaved frames and
+publishes through the existing private canonical asset store.
+
+Two isolated original-edition service captures of the opening street
+music matched all 7,200,001 stereo frames. The selected local PCM asset
+contains 2,607,286 frames at 48 kHz, with a roughly 50.66-second recurring
+passage. The approximate onset and seam are not sample-exact hardware
+reconstruction. No original media is committed or distributed.
+
+Set `music=SHA` alongside the existing `audio=SHA` in the private
+launch catalogue (or use `--music SHA` after the explicit audio options).
+Set optional `effects_volume=25` and `music_volume=50` independently
+(or `--effects-volume 25 --music-volume 50`). The permitted percentages
+are 0, 25, 50, 75 and 100; omitted values preserve full source gain.
+The existing persistent master volume still applies to the final mix.
+A music level requires a music selection, and effects require the base
+audio selection. The source levels persist in the catalogue, not in
+interactive settings rows. Native and browser selection share admission.
+
+The optimized native original-backed offscreen OpenGL diagnostic passed
+with full music, both sources muted, music alone at 50 percent, and
+effects alone at 25 percent. The latter exposed a stale test queue,
+corrected by refilling after cue admission in the paused smoke device.
+An explicit PipeWire HDMI output opened and passed the muted diagnostic;
+this verifies device selection and queue admission, not audible playback
+or physical listening. All six portable core targets and 1,997 aggregate
+test executions passed fresh validation
+1795741620123438255-1789147. Independent interactive volume settings,
+audible playback, browser live playback of the selected music, remaining
+sound events and exact sound parity remain open.
+
+The opening combat camera may proceed beyond the old 362-column gate
+after the six provisional reinforcements are defeated. Next-launch
+control editing also permits changing the selected touch panels.
+These supersede the earlier provisional limits; full stage progression
+and physical input acceptance remain open.
