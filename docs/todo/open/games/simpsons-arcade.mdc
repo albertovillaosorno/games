@@ -3112,3 +3112,31 @@ centered gain, unchanged replacement scope and exact defeat count.
 The capture, original samples and derived payloads remain private.
 Channel contention, other sound events and physical audibility are
 not established by these checks.
+
+### Observed light-hit reaction audio
+
+Four repeated solo idle controls captured the audio voice transitions
+together with five object snapshots surrounding each short reaction.
+All four complete audio traces and all twenty object snapshots were
+byte-identical to the respective earlier isolated observations.
+Each character starts a distinct differential PCM sample with its
+verified light-hit pose. The samples are canonical sample-0008 through
+sample-0011 in station order, at 11186 Hz. Observed stereo positions
+and levels differ by character.
+
+The prototype counts only actual nonlethal regular ground hits and
+preserves those station-local counters through a session reset.
+The effects runtime reuses the bounded cue and PCM-admission path,
+with the observed individual stereo gains. Missing reaction clips
+remain optional; an admitted clip must match its exact canonical
+mono layout. Airborne evasion, lethal hits and restraint damage do not
+emit these short-reaction cues. Repeated or simultaneous original
+damage audio and separate knockout and restraint sounds remain open.
+
+Fresh validation 1795744872055204595-2305690 passed with the native
+dummy-audio smoke enabled. The optimized 3,694,568-byte Linux title
+passed original-backed protected Fill/touch smoke with all eleven
+reinforcement meters, one defeat-impact cue and four distinct
+ground-hit station cues, without repeated cue admission on an
+unchanged simulation state. Physical listening, original mixing
+contention and exact sound parity remain open.

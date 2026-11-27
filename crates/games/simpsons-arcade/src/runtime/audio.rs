@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another title-local module duplicates native cue delivery.
 // - Summary:
-//   - Optional attack, impact and street music samples.
+//   - Optional attack, reaction, impact and street music samples.
 // - Description:
 //   - Observe each fixed-step cue once and refill a short software queue.
 // - Usage:
@@ -96,6 +96,32 @@ const GAINS: [StereoGain; 4] = [
         right: 9_048,
     },
 ];
+const HURT_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(11_185);
+// Character-specific short ground-hit samples, pitch 0xec0.
+const HURT_CLIPS: [(&str, u64); 4] = [
+    ("audio/sample-0008", 7288),
+    ("audio/sample-0009", 6644),
+    ("audio/sample-0010", 4294),
+    ("audio/sample-0011", 4770),
+];
+const HURT_GAINS: [StereoGain; 4] = [
+    StereoGain {
+        left: 29_464,
+        right: 13_208,
+    },
+    StereoGain {
+        left: 16_432,
+        right: 11_534,
+    },
+    StereoGain {
+        left: 16_206,
+        right: 23_088,
+    },
+    StereoGain {
+        left: 11_544,
+        right: 25_752,
+    },
+];
 const IMPACT_KEY: &str = "audio/sample-0056";
 const IMPACT_FRAMES: u64 = 4258;
 // Original centered volume 79, pitch 0xe40, differential PCM.
@@ -113,12 +139,12 @@ const CLIPS: [(&str, u64); 4] = [
 
 type SharedSamples = Rc<[i16]>;
 
-/// Pinned attack samples, optional music and their source levels.
+/// Pinned effects samples, optional music and their source levels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AudioSelection {
-    /// Manifest providing the four observed attack clips.
+    /// Manifest providing attack clips and optional combat effects.
     pub base: ContentHash,
-    /// Independent attack attenuation before the master level.
+    /// Independent effects attenuation before the master level.
     pub effects_volume: MasterVolume,
     /// Optional canonical opening-street music manifest.
     pub music: Option<ContentHash>,
@@ -149,6 +175,7 @@ impl AudioSelection {
 pub(super) struct Samples {
     clips: [Rc<[i16]>; 4],
     effects_volume: MasterVolume,
+    hurt: [Option<OwnedClip>; 4],
     impact: Option<OwnedClip>,
     music: Option<OwnedClip>,
     music_volume: MasterVolume,
@@ -193,10 +220,19 @@ impl Samples {
             let bytes = payload.map_err(failure)?;
             clips.push(mono_samples(record, &bytes, SOURCE_RATE, frames)?);
         }
+        let [marge, homer, bart, lisa] = HURT_CLIPS.map(|(key, frames)| {
+            load_optional_effect(&bundle, key, HURT_RATE, frames)
+        });
         Ok(Self {
             clips: clips.try_into().map_err(|_error| failure("clip count"))?,
             effects_volume: selection.effects_volume,
-            impact: load_impact(&bundle)?,
+            hurt: [marge?, homer?, bart?, lisa?],
+            impact: load_optional_effect(
+                &bundle,
+                IMPACT_KEY,
+                IMPACT_RATE,
+                IMPACT_FRAMES,
+            )?,
             music: selection
                 .music
                 .map(|hash| load_music(store, hash))
@@ -218,6 +254,8 @@ pub(super) struct Playback {
     cues: [u64; 4],
     device: NativeAudio,
     discard_queued: bool,
+    hurt: [Option<OwnedClip>; 4],
+    hurt_cues: [u64; 4],
     impact: Option<OwnedClip>,
     impact_cues: u64,
     live_output: bool,
@@ -298,6 +336,8 @@ impl Playback {
             cues: [0; 4],
             device,
             discard_queued: false,
+            hurt: samples.hurt.clone(),
+            hurt_cues: [0; 4],
             impact: samples.impact.clone(),
             impact_cues: 0,
             live_output: false,
@@ -310,19 +350,45 @@ impl Playback {
         })
     }
 
-    fn play_impacts(&mut self, count: u64) -> Result<(), RenderError> {
-        let new_cues = count.saturating_sub(self.impact_cues);
-        self.impact_cues = count;
+    fn play_effects(&mut self, cabinet: &Cabinet) -> Result<(), RenderError> {
+        let stations = cabinet.stations();
+        for (((previous, station), clip), gain) in self
+            .cues
+            .iter_mut()
+            .zip(stations)
+            .zip(&self.clips)
+            .zip(GAINS)
+        {
+            // A station can emit at most one attack cue per fixed tick.
+            play_cues(
+                &mut self.mixer,
+                (previous, station.attack_cues),
+                (Some(clip), gain),
+                8,
+            )?;
+        }
+        for (((previous, station), clip), gain) in self
+            .hurt_cues
+            .iter_mut()
+            .zip(stations)
+            .zip(&self.hurt)
+            .zip(HURT_GAINS)
+        {
+            // Each enemy can strike at most once within eight fixed ticks.
+            play_cues(
+                &mut self.mixer,
+                (previous, station.hurt_cues),
+                (clip.as_ref(), gain),
+                ENEMY_CAPACITY,
+            )?;
+        }
         // A session cannot defeat more enemies than its admitted capacity.
-        if usize::try_from(new_cues).map_err(failure)? > ENEMY_CAPACITY {
-            return Err(failure("impact cue count exceeded enemy capacity"));
-        }
-        if let Some(clip) = &self.impact {
-            for _ in 0..new_cues {
-                play(&mut self.mixer, clip.clone(), IMPACT_GAIN)?;
-            }
-        }
-        Ok(())
+        play_cues(
+            &mut self.mixer,
+            (&mut self.impact_cues, cabinet.impact_cues()),
+            (self.impact.as_ref(), IMPACT_GAIN),
+            ENEMY_CAPACITY,
+        )
     }
 
     fn queued_frames(&self) -> Result<u32, RenderError> {
@@ -371,7 +437,8 @@ impl Playback {
         self.smoke_maneuver(false)?;
         self.smoke_maneuver(true)?;
         self.smoke_source_changes()?;
-        self.smoke_impact()
+        self.smoke_impact()?;
+        self.smoke_hurts()
     }
 
     fn smoke_drain(
@@ -387,6 +454,71 @@ impl Playback {
             return Err(failure("held attack repeated"));
         }
         self.verify_idle_effects()
+    }
+
+    fn smoke_hurt_station(
+        &mut self,
+        player: Player,
+    ) -> Result<(), RenderError> {
+        let layout = StreetLayout::DOWNTOWN;
+        let position = layout
+            .spawn
+            .get(player.index())
+            .ok_or(RenderError::InvalidSprite)?;
+        let mut cabinet = Cabinet::with_encounter(layout, Point {
+            x: position.x.saturating_add(18),
+            y: position.y,
+        })
+        .map_err(failure)?;
+        cabinet.session = self.smoke_session();
+        let mut simulation = fixed(cabinet)?;
+        self.update(simulation.state())?;
+        simulation
+            .enqueue(
+                simulation.next_tick(),
+                [true, false]
+                    .map(|down| LogicalAction {
+                        action: Action {
+                            control: Control::Start,
+                            player,
+                        },
+                        down,
+                    })
+                    .to_vec(),
+            )
+            .map_err(|error| failure(error.reason))?;
+        let _entry = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        self.update(simulation.state())?;
+        self.verify_quiet()?;
+        for _ in 0..14u8 {
+            let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+            self.device.clear().map_err(failure)?;
+            self.update(simulation.state())?;
+        }
+        let expected = Player::ALL.map(|station| u64::from(station == player));
+        if self.hurt_cues != expected {
+            return Err(failure("ground hit did not admit the station cue"));
+        }
+        self.verify_submission(1)?;
+        self.update(simulation.state())?;
+        self.verify_submission(1)
+    }
+
+    fn smoke_hurts(&mut self) -> Result<(), RenderError> {
+        let available = self.hurt.each_ref().map(Option::is_some);
+        for (player, present) in Player::ALL.into_iter().zip(available) {
+            if present {
+                self.smoke_hurt_station(player)?;
+            }
+        }
+        let count = available.into_iter().filter(|present| *present).count();
+        if count != 0 {
+            write_status(format_args!(
+                "Ground hurt PCM: {count} station cues verified"
+            ))
+            .map_err(failure)?;
+        }
+        Ok(())
     }
 
     fn smoke_impact(&mut self) -> Result<(), RenderError> {
@@ -630,13 +762,13 @@ impl Playback {
         cabinet: &Cabinet,
     ) -> Result<(), RenderError> {
         self.sync_levels(cabinet.session());
-        let current = cabinet.stations().map(|station| station.attack_cues);
-        let impacts = cabinet.impact_cues();
         let phase = cabinet.phase();
         let playing = phase == Phase::Playing;
         if matches!(phase, Phase::MainMenu | Phase::Exited) {
-            self.cues = current;
-            self.impact_cues = impacts;
+            let stations = cabinet.stations();
+            self.cues = stations.map(|station| station.attack_cues);
+            self.hurt_cues = stations.map(|station| station.hurt_cues);
+            self.impact_cues = cabinet.impact_cues();
             self.discard_queued = true;
             self.mixer.clear();
             self.music_started = false;
@@ -661,24 +793,7 @@ impl Playback {
                 .map_err(failure)?;
             self.music_started = true;
         }
-        for (((previous, count), clip), gain) in self
-            .cues
-            .iter_mut()
-            .zip(current)
-            .zip(&self.clips)
-            .zip(GAINS)
-        {
-            let new_cues = count.saturating_sub(*previous);
-            *previous = count;
-            // At most eight fixed ticks can execute in one host update.
-            if new_cues > 8 {
-                return Err(failure("attack cue count exceeded tick budget"));
-            }
-            for _ in 0..new_cues {
-                play(&mut self.mixer, clip.clone(), gain)?;
-            }
-        }
-        self.play_impacts(impacts)?;
+        self.play_effects(cabinet)?;
         if ready {
             self.fill()
         } else {
@@ -700,7 +815,10 @@ impl Playback {
     }
 
     fn verify_quiet(&self) -> Result<(), RenderError> {
-        if self.cues != [0; 4] || self.impact_cues != 0 {
+        if self.cues != [0; 4]
+            || self.hurt_cues != [0; 4]
+            || self.impact_cues != 0
+        {
             return Err(failure("audio played before an admitted cue"));
         }
         self.verify_idle_effects()
@@ -810,15 +928,18 @@ fn mono_samples(
     copy_samples(pcm)
 }
 
-fn load_impact(
+fn load_optional_effect(
     bundle: &CanonicalBundle,
+    key: &str,
+    rate: NonZeroU32,
+    frames: u64,
 ) -> Result<Option<OwnedClip>, RenderError> {
-    let Some(record) = bundle.manifest().record(IMPACT_KEY) else {
+    let Some(record) = bundle.manifest().record(key) else {
         return Ok(None);
     };
-    let bytes = bundle.view_payload(IMPACT_KEY).map_err(failure)?;
-    let samples = mono_samples(record, &bytes, IMPACT_RATE, IMPACT_FRAMES)?;
-    OwnedClip::new(samples, Channels::Mono, IMPACT_RATE)
+    let bytes = bundle.view_payload(key).map_err(failure)?;
+    let samples = mono_samples(record, &bytes, rate, frames)?;
+    OwnedClip::new(samples, Channels::Mono, rate)
         .map(Some)
         .map_err(failure)
 }
@@ -868,6 +989,25 @@ fn play(
         Ok(_) | Err(AudioError::VoicesFull) => Ok(()),
         Err(error) => Err(failure(error)),
     }
+}
+
+fn play_cues(
+    mixer: &mut OwnedMixer,
+    (previous, count): (&mut u64, u64),
+    (available, gain): (Option<&OwnedClip>, StereoGain),
+    limit: usize,
+) -> Result<(), RenderError> {
+    let new_cues = count.saturating_sub(*previous);
+    *previous = count;
+    if usize::try_from(new_cues).map_err(failure)? > limit {
+        return Err(failure("effect cue count exceeded admission budget"));
+    }
+    if let Some(clip) = available {
+        for _ in 0..new_cues {
+            play(mixer, clip.clone(), gain)?;
+        }
+    }
+    Ok(())
 }
 
 fn smoke_entry(
@@ -951,11 +1091,11 @@ mod tests {
         clips: &[FixtureClip<'_>],
     ) -> Result<ContentHash, RenderError> {
         let limits = base_limits()?;
-        let maximum = NonZeroU64::MIN.saturating_add(65_535);
+        let maximum = NonZeroU64::MIN.saturating_add(131_071);
         let budget = ArchiveBudget::new(
             maximum,
             maximum,
-            NonZeroU64::MIN.saturating_add(7),
+            NonZeroU64::MIN.saturating_add(15),
         );
         let mut stage =
             CanonicalStaging::new(parent, budget).map_err(failure)?;
@@ -970,6 +1110,9 @@ mod tests {
                 frames: NonZeroU64::new(frames).ok_or(RenderError::TooLarge)?,
                 sample_rate: if key == IMPACT_KEY {
                     IMPACT_RATE
+                } else if HURT_CLIPS.iter().any(|(clip, _frames)| *clip == key)
+                {
+                    HURT_RATE
                 } else {
                     SOURCE_RATE
                 },
@@ -1016,6 +1159,7 @@ mod tests {
         };
         let original = Samples::load(BundleSource::Local(parent), selection)?;
         if original.impact.is_some()
+            || original.hurt.iter().any(Option::is_some)
             || original
                 .clips
                 .iter()
@@ -1098,11 +1242,48 @@ mod tests {
     }
 
     #[test]
+    fn optional_hurt_clips_preserve_character_rate_and_stereo()
+    -> Result<(), RenderError> {
+        let root = TestRoot::new().map_err(failure)?;
+        let parent = root.location();
+        let mut clips = Vec::from(CLIPS.map(|(key, frames)| (key, frames, 12)));
+        clips.extend(HURT_CLIPS.map(|(key, frames)| (key, frames, i16::MAX)));
+        let selection = AudioSelection {
+            base: publish_fixture(parent, &clips)?,
+            effects_volume: MasterVolume::Full,
+            music: None,
+            music_volume: MasterVolume::Full,
+            replacement: None,
+        };
+        let samples = Samples::load(BundleSource::Local(parent), selection)?;
+        let expected =
+            [[14731, 6603], [8215, 5766], [8102, 11543], [5771, 12875]];
+        for ((candidate, gain), frame) in
+            samples.hurt.into_iter().zip(HURT_GAINS).zip(expected)
+        {
+            let clip = candidate.ok_or_else(|| failure("missing hurt clip"))?;
+            if clip.rate() != HURT_RATE {
+                return Err(failure("hurt clip rate did not match pitch"));
+            }
+            let mut mixer =
+                OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+            play(&mut mixer, clip, gain)?;
+            let mut output = [[0; 2]];
+            mixer.render(&mut output);
+            if output != [frame] {
+                return Err(failure("hurt clip stereo gain mismatch"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn isolated_attack_clips_use_observed_stereo_ratios_and_rate()
     -> Result<(), RenderError> {
         let samples = Samples {
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
             effects_volume: MasterVolume::Full,
+            hurt: array::from_fn(|_| None),
             impact: None,
             music: None,
             music_volume: MasterVolume::Full,

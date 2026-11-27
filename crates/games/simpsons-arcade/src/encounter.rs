@@ -463,6 +463,10 @@ impl Enemy {
                     )
             }) {
                 slot.damage(ENEMY_DAMAGE);
+                slot.station.hurt_cues = slot
+                    .station
+                    .hurt_cues
+                    .saturating_add(u64::from(slot.station.health > 0));
             }
         }
         self.action = if next >= ENEMY_ATTACK_TICKS {
@@ -1487,6 +1491,10 @@ mod tests {
                 cabinet.stations().first().map(|slot| slot.health),
                 Some(expected)
             );
+            assert_eq!(
+                cabinet.stations().first().map(|slot| slot.hurt_cues),
+                Some(u64::from(tick >= ENEMY_STRIKE))
+            );
             cabinet.input_step(u64::from(tick).saturating_add(3), &[]);
         }
         assert_eq!(
@@ -1555,6 +1563,27 @@ mod tests {
             jumping.stations().first().map(|slot| slot.health),
             Some(PLAYER_HEALTH)
         );
+        assert_eq!(grounded.stations().map(|slot| slot.hurt_cues), [
+            1, 0, 0, 0
+        ]);
+        assert_eq!(jumping.stations().map(|slot| slot.hurt_cues), [0; 4]);
+    }
+
+    #[test]
+    fn lethal_ground_hit_does_not_emit_short_hurt_cue() {
+        let result = playing(Point { x: 128, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let [marge_slot, ..] = &mut cabinet.slots;
+        marge_slot.station.health = ENEMY_DAMAGE;
+        for tick in 3..17 {
+            cabinet.input_step(tick, &[]);
+        }
+        let [marge, ..] = cabinet.stations();
+        assert_eq!(marge.health, 0);
+        assert_eq!(marge.hurt_cues, 0);
     }
 
     #[test]
@@ -1596,9 +1625,16 @@ mod tests {
                 current.position,
                 current.health,
                 current.maneuver,
-                current.attack_cues
+                current.attack_cues,
+                current.hurt_cues
             ),
-            (previous.position, 0, Maneuver::Idle, previous.attack_cues),
+            (
+                previous.position,
+                0,
+                Maneuver::Idle,
+                previous.attack_cues,
+                previous.hurt_cues
+            ),
         );
         assert!(matches!(
             current.participation,

@@ -267,6 +267,8 @@ pub struct Station {
     pub facing: Facing,
     /// Experimental encounter health; zero means the station is knocked out.
     pub health: u8,
+    /// Cumulative nonlethal ground-hit reaction audio cues.
+    pub hurt_cues: u64,
     /// Current action or hit reaction, independent of rendering.
     pub maneuver: Maneuver,
     /// Whether the station has joined.
@@ -600,6 +602,7 @@ impl Slot {
                 display_health: PLAYER_HEALTH,
                 facing: Facing::Right,
                 health: PLAYER_HEALTH,
+                hurt_cues: 0,
                 maneuver: Maneuver::Idle,
                 participation: Participation::Absent,
                 position,
@@ -992,10 +995,12 @@ impl Cabinet {
         }
         for slot in &mut self.slots {
             let held = slot.held;
-            let cues = slot.station.attack_cues;
+            let attack_cues = slot.station.attack_cues;
+            let hurt_cues = slot.station.hurt_cues;
             *slot = Slot::new(slot.spawn);
             slot.held = held;
-            slot.station.attack_cues = cues;
+            slot.station.attack_cues = attack_cues;
+            slot.station.hurt_cues = hurt_cues;
         }
     }
 
