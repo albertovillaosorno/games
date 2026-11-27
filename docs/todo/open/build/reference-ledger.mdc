@@ -730,3 +730,25 @@ and 25 non-runtime. All decoded instructions have owners; prior
 decoded instructions, detailed observations and audio records are
 preserved. Actor and presentation mappings and other runtime
 contexts remain unresolved.
+
+A bounded paired-register selector observation admits nine unique
+selections at two bank-28 computed sites. Both contiguous indexing
+chains and the selected immutable words are verified: one extends
+the byte index with zero, the other with sign. Only the observed
+nonnegative even indices are admitted. The resulting direct paths
+and independent continuation entries add 21 reviewed identities and
+2,617 owned bytes. The ownership audit assigns all decoded bytes,
+including shared tails, with no prior decoded instruction lost.
+Four formerly inter-function transfers are now internal to a
+reviewed owner; their former edges and exact provenance are retained
+as historical observations, not counted as reciprocal pairs.
+
+The main inventory is 871 identities and 38,911 owned bytes, with
+1,205 possible observations. The combined checker reports 1,560
+identities, 57,309 owned bytes, 4,259 reciprocal pairs, 4,835 flow
+observations, 255 interior entries and 169 unresolved flows.
+Dispositions are 1,532 unresolved, three intentional replacements
+and 25 non-runtime. Previous semantic reviews and mappings, all
+audio records and all unresolved-flow observations are preserved.
+These motion, linked-record and selector reviews do not establish
+exact actor, scheduler, presentation or native gameplay equivalence.
