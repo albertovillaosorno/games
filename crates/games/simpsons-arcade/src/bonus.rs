@@ -321,7 +321,9 @@ pub struct Bonus {
 }
 
 impl Bonus {
-    pub(super) fn advance(&mut self, presses: [bool; 4]) {
+    // Live action edges advance instructions; individual competition
+    // edges affect pumping only through the ready-entry snapshot.
+    pub(super) fn advance(&mut self, presses: [bool; 4], active_edge: bool) {
         if matches!(
             self.phase,
             BonusPhase::Complete
@@ -331,14 +333,13 @@ impl Bonus {
             return;
         }
         self.tick = self.tick.saturating_add(1);
-        let any_edge = self.any_admitted_edge(presses);
         let next = match self.phase {
             BonusPhase::Victory if self.tick >= VICTORY_TICKS => {
                 BonusPhase::Instructions
             },
             BonusPhase::Instructions
                 if self.tick >= INSTRUCTION_MAX_TICKS
-                    || (self.tick >= INSTRUCTION_MIN_TICKS && any_edge) =>
+                    || (self.tick >= INSTRUCTION_MIN_TICKS && active_edge) =>
             {
                 BonusPhase::Ready
             },
@@ -388,13 +389,6 @@ impl Bonus {
             self.tick = 0;
         }
         false
-    }
-
-    fn any_admitted_edge(self, presses: [bool; 4]) -> bool {
-        self.participants
-            .iter()
-            .zip(presses)
-            .any(|(admitted, pressed)| *admitted && pressed)
     }
 
     /// The displayed pumping countdown in centiseconds, if pumping.
@@ -538,15 +532,15 @@ mod tests {
     fn start_pump(participants: [bool; 4]) -> Bonus {
         let mut bonus = Bonus::new(participants);
         for _ in 0..VICTORY_TICKS {
-            bonus.advance([true; 4]);
+            bonus.advance([true; 4], true);
         }
         assert_eq!(bonus.phase(), BonusPhase::Instructions);
         for _ in 0..INSTRUCTION_MIN_TICKS {
-            bonus.advance([true; 4]);
+            bonus.advance([true; 4], true);
         }
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         for _ in 0..READY_TICKS {
-            bonus.advance([true; 4]);
+            bonus.advance([true; 4], true);
         }
         assert_eq!(bonus.phase(), BonusPhase::Pumping);
         assert_eq!(bonus.inflation(Player::Marge), Some(0));
@@ -570,7 +564,7 @@ mod tests {
             if let Some(value) = expected {
                 assert_eq!(bonus.countdown(), Some(value));
             }
-            bonus.advance([false; 4]);
+            bonus.advance([false; 4], false);
         }
         assert_eq!(bonus.countdown(), None);
         assert_eq!(bonus.phase(), BonusPhase::Results);
@@ -580,7 +574,7 @@ mod tests {
     fn idle_timeout_preserves_zero_and_tied_ranks() {
         let mut bonus = start_pump([true, true, false, true]);
         for _ in 0..PUMP_TICKS {
-            bonus.advance([false, false, true, false]);
+            bonus.advance([false, false, true, false], false);
         }
         assert_eq!(bonus.phase(), BonusPhase::Results);
         assert_eq!(bonus.inflation(Player::Bart), None);
@@ -590,11 +584,11 @@ mod tests {
             if bonus.phase() == BonusPhase::Complete {
                 break;
             }
-            bonus.advance([true; 4]);
+            bonus.advance([true; 4], true);
         }
         assert_eq!(bonus.phase(), BonusPhase::Complete);
         let result = bonus;
-        bonus.advance([true; 4]);
+        bonus.advance([true; 4], true);
         assert_eq!(bonus, result);
     }
 
@@ -620,8 +614,10 @@ mod tests {
         let mut rapid = start_pump([true, true, false, false]);
         let mut sparse = rapid;
         for tick in 0..200u16 {
-            rapid.advance([tick.is_multiple_of(2), false, false, false]);
-            sparse.advance([tick.is_multiple_of(24), false, false, false]);
+            let rapid_edge = tick.is_multiple_of(2);
+            let sparse_edge = tick.is_multiple_of(24);
+            rapid.advance([rapid_edge, false, false, false], rapid_edge);
+            sparse.advance([sparse_edge, false, false, false], sparse_edge);
             if rapid.phase() == BonusPhase::Results {
                 break;
             }
@@ -638,7 +634,7 @@ mod tests {
     fn simultaneous_pumping_admits_independent_ties_and_early_finish() {
         let mut bonus = start_pump([true; 4]);
         for tick in 0..PUMP_TICKS {
-            bonus.advance([true, false, true, tick.is_multiple_of(2)]);
+            bonus.advance([true, false, true, tick.is_multiple_of(2)], true);
             if bonus.phase() == BonusPhase::Results {
                 break;
             }
@@ -653,7 +649,7 @@ mod tests {
 
     fn advance_quietly(bonus: &mut Bonus, ticks: u16) {
         for _ in 0..ticks {
-            bonus.advance([false; 4]);
+            bonus.advance([false; 4], false);
         }
     }
 
@@ -680,7 +676,8 @@ mod tests {
     fn winning_results() -> Bonus {
         let mut bonus = start_pump([true, true, false, false]);
         for tick in 0..200u16 {
-            bonus.advance([tick.is_multiple_of(2), false, false, false]);
+            let edge = tick.is_multiple_of(2);
+            bonus.advance([edge, false, false, false], edge);
             if bonus.phase() == BonusPhase::Results {
                 break;
             }
@@ -695,7 +692,7 @@ mod tests {
     fn results_reveal_then_count_without_changing_scores() {
         let mut bonus = winning_results();
         assert_eq!(bonus.displayed_result(Player::Marge), None);
-        bonus.advance([false; 4]);
+        bonus.advance([false; 4], false);
         assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 0)));
         assert_eq!(bonus.displayed_result(Player::Homer), None);
         advance_quietly(&mut bonus, 14);
@@ -716,8 +713,8 @@ mod tests {
         let mut first_departure = None;
         let mut last_departure = None;
         for elapsed in 0..400u16 {
-            bonus.advance([false; 4]);
-            with_input.advance([true; 4]);
+            bonus.advance([false; 4], false);
+            with_input.advance([true; 4], true);
             assert_results_unchanged(bonus, with_input);
             if bonus.visual_inflation(Player::Marge).is_none()
                 && first_departure.is_none()
@@ -743,13 +740,13 @@ mod tests {
     fn instruction_timeout_cannot_be_skipped_by_absent_station() {
         let mut bonus = Bonus::new([true, false, false, false]);
         for _ in 0..VICTORY_TICKS {
-            bonus.advance([false; 4]);
+            bonus.advance([false; 4], false);
         }
         for _ in 1..INSTRUCTION_MAX_TICKS {
-            bonus.advance([false, true, false, false]);
+            bonus.advance([false, true, false, false], false);
             assert_eq!(bonus.phase(), BonusPhase::Instructions);
         }
-        bonus.advance([false; 4]);
+        bonus.advance([false; 4], false);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
     }
 }

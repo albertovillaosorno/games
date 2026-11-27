@@ -5186,3 +5186,20 @@ The regression checks the pre-gate edge, an absent-station edge after
 the gate, and a fresh late-join edge that advances setup and preserves
 the station. The existing 65-tick gate and 192-tick timeout are unchanged.
 This does not reproduce exact original scheduler timing or title-card art.
+
+### Live station eligibility on bonus instructions
+
+Matched three-station original routes admit a fourth station during
+the instruction display. With later action edges withheld, ready
+setup begins at frame 16,957. Adding just one fourth-station action
+at frame 16,782 advances setup to frame 16,788, 169 frames earlier.
+The phase trace matches before that edge; an independently instrumented
+replay repeats it and confirms the same station-mask input gate used
+by the subsequent stage card.
+
+Both native gates now use one live campaign action-edge calculation.
+The bonus roster still samples at ready entry and remains frozen for
+competition. The regression exercises an early fourth-station edge,
+an absent station after the minimum wait and the eligible fresh edge
+that advances ready. Existing neutral timeout and independent balloon
+scoring behavior are unchanged. Original scheduler and art remain open.

@@ -829,6 +829,11 @@ impl Cabinet {
         let Some(bonus) = &mut self.bonus else {
             return false;
         };
+        let active = self.slots.map(|slot| slot.station.can_fight());
+        let active_edge = active
+            .into_iter()
+            .zip(presses)
+            .any(|(admitted, pressed)| admitted && pressed);
         if let Some(limit) = self.stage_two_limit
             && matches!(
                 bonus.phase(),
@@ -837,21 +842,14 @@ impl Cabinet {
                     | BonusPhase::StageSetup
             )
         {
-            let active_edge = self
-                .slots
-                .iter()
-                .zip(presses)
-                .any(|(slot, pressed)| slot.station.can_fight() && pressed);
             if bonus.advance_stage_card(active_edge) {
                 self.enter_stage_two(limit);
             }
             return true;
         }
         let was_results = bonus.phase() == BonusPhase::Results;
-        bonus.advance(presses);
-        bonus.refresh_participants(
-            self.slots.map(|slot| slot.station.can_fight()),
-        );
+        bonus.advance(presses, active_edge);
+        bonus.refresh_participants(active);
         if was_results && bonus.phase() == BonusPhase::Complete {
             for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
                 slot.award_bonus_health(bonus.rank(player));
@@ -3577,19 +3575,19 @@ mod tests {
                 .and_then(|bonus| bonus.inflation(Player::Homer)),
             None
         );
-        advance_until_bonus_phase(&mut state, BonusPhase::Ready);
+        assert_late_instruction_gate(&mut state);
         assert_eq!(
             state
                 .bonus()
                 .and_then(|bonus| bonus.inflation(Player::Homer)),
             Some(0)
         );
-        state.input_step(2001, &pulse(Player::Bart, Control::Start));
+        state.input_step(2211, &pulse(Player::Bart, Control::Start));
         let [_, _, bart, _] = state.stations();
         assert!(bart.can_fight());
         advance_until_bonus_phase(&mut state, BonusPhase::Pumping);
-        state.input_step(2002, &pulse(Player::Homer, Control::Primary));
-        state.input_step(2003, &pulse(Player::Bart, Control::Primary));
+        state.input_step(2212, &pulse(Player::Homer, Control::Primary));
+        state.input_step(2213, &pulse(Player::Bart, Control::Primary));
         assert_eq!(
             state
                 .bonus()
@@ -3615,6 +3613,22 @@ mod tests {
         );
         let [_, _, late_bart, _] = state.stations();
         assert!(late_bart.can_fight());
+    }
+
+    fn assert_late_instruction_gate(state: &mut Cabinet) {
+        advance_empty(state, 2001..2208);
+        state.input_step(2208, &pulse(Player::Homer, Control::Primary));
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::Instructions)
+        );
+        state.input_step(2209, &pulse(Player::Bart, Control::Primary));
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::Instructions)
+        );
+        state.input_step(2210, &pulse(Player::Homer, Control::Secondary));
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Ready));
     }
 
     fn advance_until_bonus_phase(state: &mut Cabinet, phase: BonusPhase) {
