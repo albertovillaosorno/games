@@ -4063,3 +4063,22 @@ canvas or stored preferences. The first directory chooser attempt timed
 out; a second explicit directory and upload selection succeeded. This
 is finite diagnostic evidence, not physical/browser audible playback,
 complete campaign parity or interactive controller/touch acceptance.
+
+### Further private static review
+
+Seventy additional audio callbacks have reviewed timing, pitch,
+attenuation and voice-state semantics but unresolved Rust mappings.
+The main-CPU analysis now owns 9,934 decoded instruction bytes across
+180 functions, including five independently partitioned entries.
+Three fixed-record tags and an omitted nested state supply conditional
+dispatch evidence; the latter corrects the earlier selector-two path.
+Twenty further main routines have unresolved semantic reviews.
+The private checker reconciles 866 total identities, 3,014 reciprocal
+pairs and 3,302 detailed flow records. Dispositions are 648 discovered,
+215 unresolved, one intentional replacement and two non-runtime.
+The remaining computed dispatch and original campaign semantics are
+not inferred from the numeric selectors.
+
+A separate attempted browser soundtrack diagnostic did not report
+completion in Firefox and is not retained in the tracked runtime.
+Browser audible playback remains unverified.

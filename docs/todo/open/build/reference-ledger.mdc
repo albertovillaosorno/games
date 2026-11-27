@@ -189,3 +189,21 @@ passed. The 2,978 reciprocal pairs reconcile with 3,264 detailed flow
 records, including 75 interior-entry observations and 31 explicit
 unresolved records. Interior labels are checked against numeric entry
 addresses, not asserted to be accurate function boundaries.
+
+Two contiguous Z80 callback groups add 70 semantic reviews covering
+pitch, attenuation, retriggering, delays and release behavior. These
+remain unresolved for Rust mapping. Main-CPU analysis partitions five
+independently entered bodies and admits three fixed-record callback
+paths with verified constant-tag producers. An omitted intermediate
+state is now decoded; its terminal callback supplies the corrected
+selector-two provenance and two further constant bank chains.
+
+The main inventory reaches 180 identities (130 fixed, 50 bank-overlay)
+and 9,934 decoded instruction bytes with no unowned decoded bytes.
+Twenty more main routines have unresolved semantic reviews. The
+reconciled private checker reports 866 identities, 28,273 bytes,
+3,014 pairs and 3,302 flow records, including 61 interior and 41
+unresolved flow observations. Dispositions are 648 discovered,
+215 unresolved, one intentional replacement and two non-runtime.
+The conditional selector paths do not establish runtime reachability,
+complete native implementation or original parity.
