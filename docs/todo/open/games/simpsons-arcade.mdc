@@ -3696,3 +3696,23 @@ independently read back from the local asset store. They remain
 unselected private transition evidence. No victory/bonus sequence,
 new stage admission or title-card timing has been implemented in
 the reconstruction.
+
+### Automatic refill attack-edge boundary
+
+For each of the four original stations, a one-frame Primary pulse
+at refill offset 55 leaves all 141 sampled object snapshots, the
+HUD trace and the full sampled voice trace identical to neutral.
+Holding that same input for twelve frames also leaves those three
+captures identical, despite crossing the movement recovery boundary.
+A fresh one-frame pulse at offset 56 instead first changes the
+object state at offset 60 for each station and changes its voice
+trace, while the sampled HUD remains identical. Following the
+rejected twelve-frame hold with a fresh pulse at offset 69 first
+changes the object state at offset 73 or 74. The offsets are
+relative to the first visible refill column, not internal input
+polling or simulation ticks. These controls support separate
+movement and attack admission observations; they do not establish
+an exact internal input-to-object delay or an automatic attack
+buffer. The reconstruction retains its existing fresh-edge rule.
+Exact early attack admission, secondary input and reentry
+presentation remain open. Original captures remain private.
