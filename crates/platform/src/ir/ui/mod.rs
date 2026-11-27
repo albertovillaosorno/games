@@ -160,8 +160,61 @@ impl TextLine<'_> {
     fn unit_extent(self) -> Option<u16> {
         u16::try_from(glyphs::display(self.text).count())
             .ok()?
+            .checked_sub(1)?
             .checked_mul(4)?
-            .checked_sub(1)
+            .checked_add(3)
+    }
+
+    /// Wrap compact text within a caller-selected plate and line spacing.
+    ///
+    /// Keep the requested scale. Prefer spaces as break opportunities,
+    /// discard boundary spaces, and split overlong words only between
+    /// rendered glyphs, never inside a supported decomposed accent.
+    /// This is compact left-to-right text layout, not Unicode shaping.
+    ///
+    /// # Errors
+    /// Reject empty or space-only text, zero scale, insufficient plate space
+    /// and failed allocation. Never silently discard a non-space scalar.
+    pub fn wrap(
+        self,
+        width: u16,
+        height: u16,
+        line_gap: u16,
+    ) -> Result<Vec<Self>, RenderError> {
+        let unit_width = width
+            .checked_div(self.scale)
+            .ok_or(RenderError::InvalidDimensions)?;
+        let limit =
+            usize::try_from(u32::from(unit_width).saturating_add(1) >> 2u32)
+                .map_err(|_error| RenderError::InvalidDimensions)?;
+        let mut remaining = self.text.trim_matches(' ');
+        if limit == 0 || remaining.is_empty() {
+            return Err(RenderError::InvalidDimensions);
+        }
+        let mut top = self.top;
+        let mut lines = Vec::new();
+        while !remaining.is_empty() {
+            let (text, tail) = split_line(remaining, limit)
+                .ok_or(RenderError::InvalidDimensions)?;
+            let line = Self { text, top, ..self };
+            if !line.fits(width, height) {
+                return Err(RenderError::InvalidDimensions);
+            }
+            lines
+                .try_reserve(1)
+                .map_err(|_error| RenderError::TooLarge)?;
+            lines.push(line);
+            remaining = tail;
+            if !remaining.is_empty() {
+                top = self
+                    .scale
+                    .checked_mul(5)
+                    .and_then(|pixels| top.checked_add(pixels))
+                    .and_then(|bottom| bottom.checked_add(line_gap))
+                    .ok_or(RenderError::InvalidDimensions)?;
+            }
+        }
+        Ok(lines)
     }
 }
 
@@ -239,6 +292,16 @@ fn dimension(value: u32) -> Result<NonZeroU32, RenderError> {
     NonZeroU32::new(value).ok_or(RenderError::InvalidDimensions)
 }
 
+/// Return the first scalar not covered by the compact bitmap font.
+///
+/// Supported decomposed accents are composed before inspection. An
+/// explicit replacement character is supported; an unknown scalar is
+/// still drawn as that replacement if the caller accepts it.
+#[must_use]
+pub fn first_missing_glyph(text: &str) -> Option<char> {
+    glyphs::first_missing(text)
+}
+
 /// Test a glyph bit, most significant in-width bit first.
 #[must_use]
 pub fn ink(rows: &[u8], width: u16, column: u16, row: u16) -> bool {
@@ -295,6 +358,25 @@ fn rasterize(
         }
     }
     Ok((layout, pixels.into_flattened()))
+}
+
+fn split_line(text: &str, limit: usize) -> Option<(&str, &str)> {
+    let mut end = 0;
+    let mut space = None;
+    for (index, glyph) in glyphs::spans(text).enumerate() {
+        if glyph.value == ' ' && glyph.start != 0 {
+            space = Some(glyph.start);
+        }
+        if index == limit {
+            let (line, rest) = text.split_at_checked(space.unwrap_or(end))?;
+            return Some((
+                line.trim_end_matches(' '),
+                rest.trim_start_matches(' '),
+            ));
+        }
+        end = glyph.end;
+    }
+    Some((text, ""))
 }
 
 #[cfg(test)]
@@ -428,6 +510,97 @@ mod tests {
                 ..text
             })
         );
+    }
+
+    #[test]
+    fn compact_font_reports_missing_scalars_after_composition() {
+        assert_eq!(first_missing_glyph("\u{bf}QUE\u{301}?"), None);
+        assert_eq!(first_missing_glyph("\u{fffd}"), None);
+        assert_eq!(first_missing_glyph("A\u{5b57}"), Some('\u{5b57}'));
+        assert_eq!(first_missing_glyph("A\u{627}"), Some('\u{627}'));
+        assert_eq!(first_missing_glyph("A\u{308}"), Some('\u{308}'));
+    }
+
+    #[test]
+    fn compact_wrapping_keeps_words_and_decomposed_glyphs() {
+        let line = TextLine {
+            color: [255; 4],
+            scale: 2,
+            text: "SI NO E\u{301}XYZ",
+            top: 1,
+        };
+        let wrapped = line.wrap(22, 47, 2);
+        assert!(wrapped.is_ok());
+        let lines = wrapped.unwrap_or_default();
+        let rows = lines.iter().map(|row| (row.text, row.top, row.scale));
+        assert_eq!(rows.collect::<Vec<_>>(), [
+            ("SI", 1, 2),
+            ("NO", 13, 2),
+            ("E\u{301}XY", 25, 2),
+            ("Z", 37, 2),
+        ]);
+        let spec = PlateLayout {
+            background: [0; 4],
+            height: 47,
+            max_bytes: NonZeroUsize::new(22 * 47 * 4)
+                .unwrap_or(NonZeroUsize::MIN),
+            width: 22,
+        };
+        let raster = rasterize(spec, &[lines]);
+        let composed = TextLine {
+            text: "SI NO \u{c9}XYZ",
+            ..line
+        };
+        assert_eq!(
+            raster,
+            rasterize(spec, &[composed.wrap(22, 47, 2).unwrap_or_default()])
+        );
+        assert!(raster.is_ok());
+    }
+
+    #[test]
+    fn compact_wrapping_discards_only_boundary_spaces() {
+        let line = TextLine {
+            color: [255; 4],
+            scale: 1,
+            text: "  A  B    C  ",
+            top: 0,
+        };
+        let lines = line.wrap(15, 10, 0).unwrap_or_default();
+        let labels = lines.iter().map(|row| row.text).collect::<Vec<_>>();
+        assert_eq!(labels, ["A  B", "C"]);
+        assert!(TextLine { text: "   ", ..line }.wrap(15, 10, 0).is_err());
+    }
+
+    #[test]
+    fn compact_wrapping_rejects_insufficient_geometry() {
+        let line = TextLine {
+            color: [255; 4],
+            scale: 2,
+            text: "AB CD",
+            top: 0,
+        };
+        assert!(line.wrap(5, 100, 0).is_err());
+        assert!(line.wrap(14, 19, 0).is_err());
+        assert!(line.wrap(14, 20, 0).is_ok());
+        assert!(line.wrap(14, u16::MAX, u16::MAX).is_err());
+        assert!(TextLine { scale: 0, ..line }.wrap(14, 20, 0).is_err());
+        assert!(TextLine { text: "", ..line }.wrap(14, 20, 0).is_err());
+    }
+
+    #[test]
+    fn compact_width_admits_exact_maximum_extent() {
+        let text = "A".repeat(16_384);
+        let line = TextLine {
+            color: [255; 4],
+            scale: 1,
+            text: &text,
+            top: 0,
+        };
+        assert_eq!(line.fit_width(u16::MAX).scale, 1u16);
+        let lines = line.wrap(u16::MAX, 5, 0).unwrap_or_default();
+        assert_eq!(lines.len(), 1usize);
+        assert_eq!(lines.first().map(|row| row.text), Some(text.as_str()));
     }
 
     #[test]

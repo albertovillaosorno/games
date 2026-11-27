@@ -779,7 +779,7 @@ mod tests {
     use games_platform::ir::storage::preferences::{
         DisplayStore, PublicationPolicy,
     };
-    use games_platform::ir::ui::TextLine;
+    use games_platform::ir::ui::{TextLine, first_missing_glyph};
 
     use super::super::{DEFAULT_PROFILES, launch, save_locale};
     use super::*;
@@ -803,6 +803,30 @@ mod tests {
             assert_eq!(locale_index(parsed.as_ref().ok()), expected);
         }
         assert_eq!(locale_index(None), 0usize);
+    }
+
+    #[test]
+    fn declared_message_templates_have_compact_font_coverage()
+    -> Result<(), RenderError> {
+        let catalog = catalogue()?;
+        for (index, (_tag, name)) in LOCALES.iter().enumerate() {
+            let locale = locale_tag(index)?;
+            let text = TitleText {
+                catalog: &catalog,
+                locale: &locale,
+            };
+            require(first_missing_glyph(name).is_none())?;
+            let keys = KEYS
+                .iter()
+                .chain(MENU_MESSAGE_KEYS)
+                .chain(station_hud::STATION_MESSAGE_KEYS)
+                .copied()
+                .chain(editor_message_keys());
+            for key in keys {
+                require(first_missing_glyph(text.label(key)?).is_none())?;
+            }
+        }
+        Ok(())
     }
 
     #[test]

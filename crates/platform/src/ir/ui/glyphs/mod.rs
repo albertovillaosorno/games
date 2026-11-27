@@ -48,6 +48,14 @@ const EXTRA: [char; 10] = [
 const ASCII_COUNT: usize = 95;
 pub(super) const COUNT: usize = ASCII_COUNT + EXTRA.len();
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Glyph {
+    pub(super) end: usize,
+    pub(super) source: char,
+    pub(super) start: usize,
+    pub(super) value: char,
+}
+
 pub(super) fn labels() -> impl Iterator<Item = char> {
     (b' '..=b'~').map(char::from).chain(EXTRA)
 }
@@ -65,16 +73,35 @@ pub(super) fn tile(letter: char) -> usize {
 }
 
 pub(super) fn display(text: &str) -> impl Iterator<Item = char> + '_ {
-    let mut characters = text.chars().peekable();
+    spans(text).map(|glyph| glyph.value)
+}
+
+pub(super) fn first_missing(text: &str) -> Option<char> {
+    spans(text).find_map(|glyph| {
+        (glyph.value == REPLACEMENT && glyph.source != REPLACEMENT)
+            .then_some(glyph.source)
+    })
+}
+
+pub(super) fn spans(text: &str) -> impl Iterator<Item = Glyph> + '_ {
+    let mut characters = text.char_indices().peekable();
     iter::from_fn(move || {
-        let letter = normalize(characters.next()?);
-        characters
+        let (start, source) = characters.next()?;
+        let letter = normalize(source);
+        let value = characters
             .peek()
-            .and_then(|mark| compose(letter, *mark))
-            .map_or(Some(letter), |composed| {
+            .and_then(|(_offset, mark)| compose(letter, *mark))
+            .map_or(letter, |composed| {
                 let _consumed = characters.next();
-                Some(composed)
-            })
+                composed
+            });
+        let end = characters.peek().map_or(text.len(), |(offset, _)| *offset);
+        Some(Glyph {
+            end,
+            source,
+            start,
+            value,
+        })
     })
 }
 
