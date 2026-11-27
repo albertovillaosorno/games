@@ -32,6 +32,7 @@
 //! Bounded compact bitmap UI and reusable static text plates.
 /// Shared digital control editor presentation.
 pub mod editor;
+mod glyphs;
 /// Portable menu layout and artwork.
 pub mod menu;
 /// Portable scene rendering commands.
@@ -64,7 +65,7 @@ pub struct TextLine<'text> {
     pub color: [u8; 4],
     /// Integer scale of one glyph pixel.
     pub scale: u16,
-    /// Text using uppercase ASCII glyphs; lowercase is accepted.
+    /// Text using compact uppercase English and Mexican Spanish glyphs.
     pub text: &'text str,
     /// Vertical offset within the plate.
     pub top: u16,
@@ -72,21 +73,13 @@ pub struct TextLine<'text> {
 
 impl TextLine<'_> {
     fn extent(self) -> Option<u16> {
-        u16::try_from(self.text.len())
-            .ok()?
-            .checked_mul(4)?
-            .checked_sub(1)?
-            .checked_mul(self.scale)
+        self.unit_extent()?.checked_mul(self.scale)
     }
 
     /// Clamp the glyph scale to fit this plate width.
     #[must_use]
     pub fn fit_width(mut self, width: u16) -> Self {
-        let extent = u16::try_from(self.text.len())
-            .ok()
-            .and_then(|length| length.checked_mul(4))
-            .and_then(|length| length.checked_sub(1))
-            .unwrap_or_default();
+        let extent = self.unit_extent().unwrap_or_default();
         self.scale = width
             .checked_div(extent)
             .unwrap_or_default()
@@ -104,17 +97,48 @@ impl TextLine<'_> {
                 .is_some_and(|bottom| bottom <= height)
     }
 
+    fn left(self, width: u16) -> Option<u16> {
+        width.saturating_sub(self.extent()?).checked_div(2)
+    }
+
+    fn paint_row(
+        self,
+        pixels: &mut [[u8; 4]],
+        row: u16,
+        width: u16,
+    ) -> Result<(), RenderError> {
+        let Some(glyph_y) = row
+            .checked_sub(self.top)
+            .and_then(|offset| offset.checked_div(self.scale))
+            .filter(|offset| *offset < 5)
+        else {
+            return Ok(());
+        };
+        let mut left = usize::from(
+            self.left(width).ok_or(RenderError::InvalidDimensions)?,
+        );
+        let scale = usize::from(self.scale);
+        for letter in glyphs::display(self.text) {
+            let rows = glyphs::rows(letter);
+            for bit in (0..3u16).filter(|bit| ink(&rows, 3, *bit, glyph_y)) {
+                let start =
+                    left.saturating_add(usize::from(bit).saturating_mul(scale));
+                let span = pixels
+                    .get_mut(start..start.saturating_add(scale))
+                    .ok_or(RenderError::InvalidDimensions)?;
+                span.fill(self.color);
+            }
+            left = left.saturating_add(scale.saturating_mul(4));
+        }
+        Ok(())
+    }
+
     /// Test ink at a pixel relative to a centered text plate.
     #[must_use]
     pub fn pixel(self, column: u16, row: u16, width: u16) -> bool {
-        let Some(extent) = self.extent() else {
-            return false;
-        };
-        let left = width
-            .saturating_sub(extent)
-            .checked_div(2)
-            .unwrap_or_default();
-        let Some(horizontal) = column.checked_sub(left) else {
+        let Some(horizontal) =
+            self.left(width).and_then(|left| column.checked_sub(left))
+        else {
             return false;
         };
         let Some(vertical) = row.checked_sub(self.top) else {
@@ -128,12 +152,16 @@ impl TextLine<'_> {
         };
         let character = glyph_x.checked_div(4).unwrap_or_default();
         let bit = glyph_x.checked_rem(4).unwrap_or_default();
-        self.text
-            .as_bytes()
-            .get(usize::from(character))
-            .is_some_and(|letter| {
-                ink(&rows(letter.to_ascii_uppercase()), 3, bit, glyph_y)
-            })
+        glyphs::display(self.text)
+            .nth(usize::from(character))
+            .is_some_and(|letter| ink(&glyphs::rows(letter), 3, bit, glyph_y))
+    }
+
+    fn unit_extent(self) -> Option<u16> {
+        u16::try_from(glyphs::display(self.text).count())
+            .ok()?
+            .checked_mul(4)?
+            .checked_sub(1)
     }
 }
 
@@ -251,108 +279,38 @@ fn rasterize(
     }) {
         return Err(RenderError::InvalidDimensions);
     }
+    let count = layout.bytes().checked_div(4).ok_or(RenderError::TooLarge)?;
     let mut pixels = Vec::new();
     pixels
-        .try_reserve_exact(layout.bytes())
+        .try_reserve_exact(count)
         .map_err(|_error| RenderError::TooLarge)?;
+    pixels.resize(count, background);
+    let mut rows = pixels.chunks_exact_mut(usize::from(width));
     for lines in plates {
         for row in 0..height {
-            for column in 0..width {
-                let color = lines
-                    .iter()
-                    .rev()
-                    .find(|line| line.pixel(column, row, width))
-                    .map_or(background, |line| line.color);
-                pixels.extend_from_slice(&color);
+            let row_pixels = rows.next().ok_or(RenderError::InvalidLength)?;
+            for line in lines {
+                line.paint_row(row_pixels, row, width)?;
             }
         }
     }
-    Ok((layout, pixels))
-}
-
-const fn rows(letter: u8) -> [u8; 5] {
-    match letter {
-        b'0' | b'O' => [7, 5, 5, 5, 7],
-        b'1' => [2, 6, 2, 2, 7],
-        b'2' => [7, 1, 7, 4, 7],
-        b'3' => [7, 1, 7, 1, 7],
-        b'4' => [5, 5, 7, 1, 1],
-        b'5' | b'S' => [7, 4, 7, 1, 7],
-        b'6' => [7, 4, 7, 5, 7],
-        b'7' => [7, 1, 2, 2, 2],
-        b'8' => [7, 5, 7, 5, 7],
-        b'9' => [7, 5, 7, 1, 7],
-        b'A' => [2, 5, 7, 5, 5],
-        b'B' => [6, 5, 6, 5, 6],
-        b'C' => [7, 4, 4, 4, 7],
-        b'D' => [6, 5, 5, 5, 6],
-        b'E' => [7, 4, 6, 4, 7],
-        b'F' => [7, 4, 6, 4, 4],
-        b'G' => [7, 4, 5, 5, 7],
-        b'H' => [5, 5, 7, 5, 5],
-        b'I' => [7, 2, 2, 2, 7],
-        b'J' => [1, 1, 1, 5, 7],
-        b'K' => [5, 5, 6, 5, 5],
-        b'L' => [4, 4, 4, 4, 7],
-        b'M' => [5, 7, 7, 5, 5],
-        b'N' => [5, 7, 7, 7, 5],
-        b'P' => [6, 5, 6, 4, 4],
-        b'Q' => [7, 5, 5, 7, 1],
-        b'R' => [6, 5, 6, 5, 5],
-        b'T' => [7, 2, 2, 2, 2],
-        b'U' => [5, 5, 5, 5, 7],
-        b'V' => [5, 5, 5, 5, 2],
-        b'W' => [5, 5, 7, 7, 5],
-        b'X' => [5, 5, 2, 5, 5],
-        b'Y' => [5, 5, 2, 2, 2],
-        b'Z' => [7, 1, 2, 4, 7],
-        _ => symbol_rows(letter),
-    }
-}
-
-const fn symbol_rows(letter: u8) -> [u8; 5] {
-    match letter {
-        b'!' => [2, 2, 2, 0, 2],
-        b'"' => [5, 5, 0, 0, 0],
-        b'#' => [5, 7, 5, 7, 5],
-        b'$' => [2, 7, 6, 3, 2],
-        b'%' => [5, 1, 2, 4, 5],
-        b'&' => [2, 5, 2, 5, 3],
-        b'\'' => [2, 2, 0, 0, 0],
-        b'(' => [1, 2, 2, 2, 1],
-        b')' => [4, 2, 2, 2, 4],
-        b'*' => [0, 5, 2, 5, 0],
-        b'+' => [0, 2, 7, 2, 0],
-        b',' => [0, 0, 0, 2, 4],
-        b'-' => [0, 0, 7, 0, 0],
-        b'.' => [0, 0, 0, 0, 2],
-        b'/' => [1, 1, 2, 4, 4],
-        b':' => [0, 2, 0, 2, 0],
-        b';' => [0, 2, 0, 2, 4],
-        b'<' => [1, 2, 4, 2, 1],
-        b'=' => [0, 7, 0, 7, 0],
-        b'>' => [4, 2, 1, 2, 4],
-        b'@' => [7, 5, 7, 4, 7],
-        b'[' => [3, 2, 2, 2, 3],
-        b'\\' => [4, 4, 2, 1, 1],
-        b']' => [6, 2, 2, 2, 6],
-        b'^' => [2, 5, 0, 0, 0],
-        b'_' => [0, 0, 0, 0, 7],
-        b'\x60' => [4, 2, 0, 0, 0],
-        b'{' => [1, 2, 6, 2, 1],
-        b'|' => [2, 2, 2, 2, 2],
-        b'}' => [4, 2, 3, 2, 4],
-        b'~' => [0, 0, 3, 6, 0],
-        b' ' => [0; 5],
-        _ => [7, 1, 2, 0, 2],
-    }
+    Ok((layout, pixels.into_flattened()))
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::slice;
 
     use super::*;
+
+    fn glyph_pixels(line: TextLine<'_>) -> Vec<bool> {
+        (0..5)
+            .flat_map(|row| {
+                (0..3).map(move |column| line.pixel(column, row, 3))
+            })
+            .collect()
+    }
 
     #[test]
     fn glyph_ink_rejects_outside_and_preserves_spacing() {
@@ -374,11 +332,7 @@ mod tests {
                 text: &text,
                 top: 0,
             };
-            let pixels: Vec<_> = (0..5)
-                .flat_map(|row| {
-                    (0..3).map(move |column| line.pixel(column, row, 3))
-                })
-                .collect();
+            let pixels = glyph_pixels(line);
             assert!(pixels.contains(&true), "{text} is blank");
             assert!(seen.insert(pixels), "{text} duplicates punctuation");
         }
@@ -427,5 +381,122 @@ mod tests {
             ),
             Err(RenderError::TooLarge),
         );
+    }
+
+    #[test]
+    fn spanish_text_measures_composed_glyphs_and_shows_missing_glyphs() {
+        let text = TextLine {
+            color: [255; 4],
+            scale: 2,
+            text: "\u{bf}Qu\u{e9}?",
+            top: 1,
+        };
+        let decomposed = TextLine {
+            text: "\u{bf}QUE\u{301}?",
+            ..text
+        };
+        assert_eq!(text.fit_width(38).scale, 2);
+        assert_eq!(decomposed.fit_width(38).scale, 2);
+        assert_eq!(text.fit_width(37).scale, 1);
+        let spec = PlateLayout {
+            background: [0; 4],
+            height: 12,
+            max_bytes: NonZeroUsize::new(38 * 12 * 4)
+                .unwrap_or(NonZeroUsize::MIN),
+            width: 38,
+        };
+        let raster = |line| rasterize(spec, &[vec![line]]);
+        assert_eq!(raster(text), raster(decomposed));
+        assert_ne!(raster(text), raster(TextLine { text: "?QUE?", ..text }));
+        assert_eq!(
+            raster(TextLine {
+                text: "\u{bf}Q\u{5b57}?",
+                ..text
+            }),
+            raster(TextLine {
+                text: "\u{bf}Q\u{fffd}?",
+                ..text
+            })
+        );
+        assert_ne!(
+            raster(TextLine {
+                text: "\u{bf}Q\u{5b57}?",
+                ..text
+            }),
+            raster(TextLine {
+                text: "\u{bf}Q??",
+                ..text
+            })
+        );
+    }
+
+    #[test]
+    fn compact_spanish_glyphs_are_distinct_from_unaccented_forms() {
+        for (plain, accented) in [
+            ("A", "\u{c1}"),
+            ("E", "\u{c9}"),
+            ("I", "\u{cd}"),
+            ("O", "\u{d3}"),
+            ("U", "\u{da}"),
+            ("U", "\u{dc}"),
+            ("N", "\u{d1}"),
+            ("!", "\u{a1}"),
+            ("?", "\u{bf}"),
+        ] {
+            let line = TextLine {
+                color: [255; 4],
+                scale: 1,
+                text: accented,
+                top: 0,
+            };
+            let plain_line = TextLine { text: plain, ..line };
+            let pixels = glyph_pixels(line);
+            assert!(pixels.contains(&true), "{accented} is blank");
+            assert_ne!(pixels, glyph_pixels(plain_line));
+        }
+    }
+
+    #[test]
+    fn row_rasterization_matches_centered_pixel_and_overdraw_order()
+    -> Result<(), RenderError> {
+        let spec = PlateLayout {
+            background: [9, 8, 7, 255],
+            height: 14,
+            max_bytes: NonZeroUsize::new(48 * 14 * 4)
+                .ok_or(RenderError::TooLarge)?,
+            width: 48,
+        };
+        let lines = vec![
+            TextLine {
+                color: [255, 255, 255, 255],
+                scale: 2,
+                text: "A\u{d1}O 3",
+                top: 1,
+            },
+            TextLine {
+                color: [255, 0, 0, 255],
+                scale: 1,
+                text: "\u{a1}S\u{ed}!",
+                top: 4,
+            },
+        ];
+        let (_, actual) = rasterize(spec, slice::from_ref(&lines))?;
+        let expected: Vec<_> = (0..spec.height)
+            .flat_map(|row| {
+                let line_refs = &lines;
+                (0..spec.width).map(move |column| {
+                    line_refs
+                        .iter()
+                        .rev()
+                        .find(|line| line.pixel(column, row, spec.width))
+                        .map_or(spec.background, |line| line.color)
+                })
+            })
+            .collect();
+        if actual == expected.into_flattened() {
+            Ok(())
+        } else {
+            Err(RenderError::InvalidLength)
+        }
     }
 }

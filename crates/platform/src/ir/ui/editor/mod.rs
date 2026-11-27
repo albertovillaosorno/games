@@ -42,12 +42,11 @@ use games::input::profile::{DigitalBinding, DigitalProfiles, KeyNamer};
 
 use crate::ir::frame::RenderError;
 use crate::ir::scene::{AtlasUpload, SpriteDraw};
-use crate::ir::ui::{PlateLayout, TextAtlas, TextLine};
+use crate::ir::ui::{PlateLayout, TextAtlas, TextLine, glyphs};
 
 const GLYPH_WIDTH: u16 = 8;
 const GLYPH_HEIGHT: u16 = 10;
-const GLYPH_COUNT: usize = 95;
-const GLYPH_BYTES: usize = 4 * 8 * 10 * GLYPH_COUNT;
+const GLYPH_BYTES: usize = 4 * 8 * 10 * glyphs::COUNT;
 const DYNAMIC_LINES: usize = 5;
 const INK: [u8; 4] = [248, 228, 168, 255];
 
@@ -112,9 +111,7 @@ impl ControlEditorArt {
             },
             &[panel_lines(spec.width, touch_hints)],
         )?;
-        let labels = (b' '..=b'~')
-            .map(|byte| String::from(char::from(byte)))
-            .collect::<Vec<_>>();
+        let labels = glyphs::labels().map(String::from).collect::<Vec<_>>();
         let lines = labels
             .iter()
             .map(|label| {
@@ -189,7 +186,7 @@ impl ControlEditorArt {
         let capacity = usize::from(
             self.width.checked_div(GLYPH_WIDTH).unwrap_or_default(),
         );
-        let count = text.chars().count();
+        let count = glyphs::display(text).count();
         if count > capacity {
             return Err(RenderError::InvalidDimensions);
         }
@@ -202,13 +199,9 @@ impl ControlEditorArt {
                 .checked_div(2)
                 .unwrap_or_default(),
         );
-        for character in text.chars() {
+        for character in glyphs::display(text) {
             if character != ' ' {
-                let glyph = u8::try_from(character)
-                    .ok()
-                    .filter(|byte| (b' '..=b'~').contains(byte))
-                    .unwrap_or(b'?');
-                let tile = usize::from(glyph.saturating_sub(b' '));
+                let tile = glyphs::tile(character);
                 draws.push(self.glyphs.draw(tile, left, origin.1)?);
             }
             left = left.saturating_add(i32::from(GLYPH_WIDTH));
@@ -458,5 +451,39 @@ mod tests {
             art.queue_line(&"A".repeat(36), (0i32, 0i32), &mut draws)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn dynamic_labels_share_spanish_glyphs_and_composition()
+    -> Result<(), RenderError> {
+        let mut capture = Capture::default();
+        let spec = PlateLayout {
+            background: [24, 22, 30, 255],
+            height: 192,
+            max_bytes: NonZeroUsize::new(ControlEditorArt::bytes(280, 192))
+                .ok_or(RenderError::TooLarge)?,
+            width: 280,
+        };
+        let art = ControlEditorArt::load(&mut capture, spec, None)?;
+        let mut composed = Vec::new();
+        let mut decomposed = Vec::new();
+        art.queue_line("\u{bf}A\u{d1}O?", (0i32, 0i32), &mut composed)?;
+        art.queue_line("\u{bf}AN\u{303}O?", (0i32, 0i32), &mut decomposed)?;
+        let mut plain = Vec::new();
+        art.queue_line("?ANO?", (0i32, 0i32), &mut plain)?;
+        let mut unsupported = Vec::new();
+        let mut replacement = Vec::new();
+        art.queue_line("\u{5b57}", (0i32, 0i32), &mut unsupported)?;
+        art.queue_line("\u{fffd}", (0i32, 0i32), &mut replacement)?;
+        if composed.len() == 5
+            && composed == decomposed
+            && composed != plain
+            && unsupported == replacement
+            && capture.uploads == 2
+        {
+            Ok(())
+        } else {
+            Err(RenderError::InvalidSprite)
+        }
     }
 }
