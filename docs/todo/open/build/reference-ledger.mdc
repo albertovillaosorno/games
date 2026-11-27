@@ -663,3 +663,29 @@ Dispositions are 1,465 unresolved, three intentional replacements
 and 25 non-runtime. No decoded instructions are unowned. Earlier
 semantic and Rust mappings, detailed observations and all audio
 records are preserved. This is not complete executable coverage.
+
+A stage-transition replay retains the earlier score and phase traces
+byte for byte. It captures 17 indexed selections and one four-byte
+region selection. Fourteen indexed selections confirm existing edges;
+three new selections and their direct continuations admit eight
+reviewed main identities and 427 owned bytes. The observed title-card
+selector chooses a distinct timer callback with a 192-tick limit and
+the conditional 64-tick input helper. The completion tail is shared
+with a previously reviewed callback; its ownership transfers without
+losing decoded instructions or direct-call evidence.
+
+The region selection verifies the immutable bank byte and target
+word against the contiguous selector chain. The selected callback
+and direct continuation admit two further identities and 57 bytes.
+They update a global descriptor and linked motion records; the
+specific actor identities and Rust equivalence are not established.
+The remaining selector contexts and computed paths stay unresolved.
+
+The main inventory is 814 identities and 35,447 owned bytes, with
+1,000 possible observations. The combined checker reports 1,503
+identities, 53,845 owned bytes, 4,124 reciprocal pairs, 4,594 flow
+observations, 208 interior entries and 167 unresolved flows.
+Dispositions are 1,475 unresolved, three intentional replacements
+and 25 non-runtime. Every prior decoded instruction, detailed
+observation and audio record is preserved; all decoded bytes have
+owners. Full original execution coverage remains unverified.
