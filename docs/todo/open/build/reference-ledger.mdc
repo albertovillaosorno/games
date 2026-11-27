@@ -1002,8 +1002,8 @@ that are not yet represented in the portable encounter, so adding
 redundant regular-only caps would not establish original parity.
 
 Narrow primary-record dispatch observations cover five additional
-actor families at the second-stage gates, including the late regular
-cohort. The control and delayed regular object traces retain 5,405
+actor families at the second-stage gates, including the late counted
+record. The control and delayed regular object traces retain 5,405
 and 7,950 byte-identical rows, respectively. Paired immutable reads
 establish five primary dispatch targets and 22 state-table targets;
 reviewed state and helper bodies retain explicit field dependencies.

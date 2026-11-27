@@ -5264,9 +5264,11 @@ traces in full, despite different movement timing. A distinct control
 record holds the horizontal accumulator at 1,264 columns while its
 primary actor count exceeds one. The control and delayed runs retain
 422 and 180 active ticks respectively, with no threshold violations.
-Both release with one eligible regular actor remaining. The other
+Both release with one eligible type-07 record remaining. The other
 surviving record is excluded from the original count; the delay until
-movement resumes differs between runs.
+movement resumes differs between runs. The counted record is a linked
+child, distinct from the verified regular descriptor admissions. Its
+visual family remains unverified.
 
 The native encounter now caps extended second-stage travel at 1,264
 columns while more than one regular enemy admitted by that boundary
