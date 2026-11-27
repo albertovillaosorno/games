@@ -3156,3 +3156,19 @@ not physical audibility or original channel contention.
 Two core regressions additionally exercise two simultaneous defeats
 from one ground strike without duplicate cues on later ticks, and a
 station's monotonic hurt count across world reset and another hit.
+
+### Restraint sound attribution remains open
+
+Independent centered and right-edge passive restraint controls captured
+PCM voice state alongside the existing object observation interval.
+All 260 object DMA snapshots per control matched the earlier captures.
+A second replay of each control reproduced its complete 369,312-byte
+voice trace. During the observed damage interval Marge's already known
+light-hit sample starts at some visible meter-drain edges (centered
+2815, 2905 and 3019; right-edge 2759, 2879 and 2947). Other drain
+sequences lack a corresponding start of this sample. Multiple nearby
+enemies, delayed displayed health and original voice allocation prevent
+attributing these observations to the restraining enemy alone. No
+separate restraint or stock-depletion cue is established. The runtime
+continues to exclude these events rather than play a guessed sound.
+The reference captures and original PCM remain private.
