@@ -3903,3 +3903,30 @@ enemies and traversed all 270 admitted columns. All measured movement
 and combat-strike submissions met the 16.667 ms budget. This is a
 bounded playable slice, not original gameplay parity, physical audio
 or browser playback acceptance.
+
+### Optional second-stage music
+
+Two independent 240-second service captures agree on all 11,520,001
+stereo PCM frames. The second-stage cue has an approximately 18.7 ms
+silent interval immediately before its onset. The locally published
+48 kHz stereo selection contains 2,880,000 PCM frames (60 seconds).
+The recurrence analysis does not establish an exact loop seam, so this
+is a finite excerpt rather than a recovered original playback program.
+No original media or digest is tracked.
+
+The optional `stage_two_music` launch selection requires the bonus
+music pair and second-stage art. Native and browser admission enforce
+the role and exact PCM bounds. The mixer selects the cue on entry into
+the second stage; it does not replay it after exhaustion. The synthetic
+mixer and catalogue tests passed fresh workspace validation.
+
+The optimized 3,958,176-byte Linux executable passed original-backed
+offscreen OpenGL and dummy-audio diagnostics in all five display modes.
+Each verified entry, pause/resume and exhaustion without restart, plus
+existing handoff, bonus and second-stage travel smoke. All 600 movement
+and 20 combat-strike submissions per mode met the 16.667 ms budget.
+Whole-smoke lifetime peak RSS ranged from 180,879,360 to 181,149,696
+bytes. Omitting the optional selection preserved legacy stage travel;
+malformed identity and substitution of the street cue were rejected.
+These diagnostics do not establish physical or browser audio playback,
+exact music looping or complete second-stage gameplay parity.

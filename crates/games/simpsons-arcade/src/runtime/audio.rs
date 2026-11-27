@@ -72,6 +72,8 @@ const RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(47_999);
 const MUSIC_KEY: &str = "audio/street-music";
 const MUSIC_FRAMES: usize = 2_607_286;
 const MUSIC_LOOP_START: usize = 175_680;
+// Finite original service excerpt; no verified recurring seam yet.
+const STAGE_TWO_TRACK: (&str, usize) = ("audio/stage-two-music", 2_880_000);
 // Bounded service captures: ten seconds of pumping music and the
 // five-second results cue including its verified silent tail.
 const BONUS_TRACKS: [(&str, usize); 2] = [
@@ -173,6 +175,8 @@ pub struct AudioSelection {
     pub music_volume: MasterVolume,
     /// Optional compatible replacement manifest.
     pub replacement: Option<ContentHash>,
+    /// Optional finite second-stage music manifest.
+    pub stage_two_music: Option<ContentHash>,
 }
 
 impl AudioSelection {
@@ -199,10 +203,18 @@ impl AudioSelection {
                 .as_deref()
                 .map(parse_hash)
                 .transpose()?,
+            stage_two_music: selection
+                .stage_two_music
+                .as_deref()
+                .map(parse_hash)
+                .transpose()?,
         })
     }
 
     fn validate_music(&self) -> Result<(), RenderError> {
+        if self.stage_two_music.is_some() && self.bonus_music.is_none() {
+            return Err(failure("stage-two music requires bonus music"));
+        }
         if self.handoff_music.is_some() && self.bonus_music.is_none() {
             return Err(failure("handoff music requires bonus music"));
         }
@@ -222,6 +234,7 @@ pub(super) struct Samples {
     impact: Option<OwnedClip>,
     music: Option<OwnedClip>,
     music_volume: MasterVolume,
+    stage_two_music: Option<OwnedClip>,
 }
 
 impl Samples {
@@ -290,6 +303,10 @@ impl Samples {
                 .map(|hash| load_street_music(store, hash))
                 .transpose()?,
             music_volume: selection.music_volume,
+            stage_two_music: selection
+                .stage_two_music
+                .map(|hash| load_stage_two_music(store, hash))
+                .transpose()?,
         })
     }
 
@@ -308,6 +325,7 @@ enum MusicCue {
     Pumping,
     Quiet,
     Results,
+    StageTwo,
     Street,
     Transition,
     Victory,
@@ -316,7 +334,7 @@ enum MusicCue {
 impl MusicCue {
     fn select(cabinet: &Cabinet) -> Self {
         if cabinet.stage_two() {
-            return Self::Quiet;
+            return Self::StageTwo;
         }
         if let Some(bonus) = cabinet.bonus() {
             return match bonus.phase() {
@@ -350,6 +368,7 @@ struct Soundtrack {
     bonus: Option<[OwnedClip; 2]>,
     cue: MusicCue,
     handoff: Option<[OwnedClip; 4]>,
+    stage_two: Option<OwnedClip>,
     street: Option<OwnedClip>,
 }
 
@@ -374,6 +393,7 @@ impl Soundtrack {
             MusicCue::Results => {
                 self.bonus.as_ref().map(|[_, results]| results)
             },
+            MusicCue::StageTwo => self.stage_two.as_ref(),
             MusicCue::Street => self.street.as_ref(),
             MusicCue::Quiet => None,
         }
@@ -507,6 +527,7 @@ impl Playback {
                 bonus: samples.bonus_music.clone(),
                 cue: MusicCue::Quiet,
                 handoff: samples.handoff_music.clone(),
+                stage_two: samples.stage_two_music.clone(),
                 street: samples.music.clone(),
             },
             scratch: [[0; 2]; CHUNK],
@@ -616,6 +637,9 @@ impl Playback {
             .map_err(failure)?
             .with_late_wrestler(true)
             .with_bonus(true);
+        if self.music.stage_two.is_some() {
+            cabinet = cabinet.with_stage_two(270).map_err(failure)?;
+        }
         cabinet.session = self.smoke_session();
         self.update(&cabinet)?;
         cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
@@ -643,7 +667,8 @@ impl Playback {
         write_status(format_args!(
             "Bonus music PCM: street, pumping, results and silence verified"
         ))
-        .map_err(failure)
+        .map_err(failure)?;
+        self.smoke_stage_two_music(&mut cabinet)
     }
 
     fn smoke_bonus_pause(
@@ -1068,6 +1093,37 @@ impl Playback {
         self.verify_submission(1)
     }
 
+    fn smoke_stage_two_music(
+        &mut self,
+        cabinet: &mut Cabinet,
+    ) -> Result<(), RenderError> {
+        if self.music.stage_two.is_none() {
+            return Ok(());
+        }
+        cabinet.input_step(0, &[]);
+        self.update(cabinet)?;
+        if !cabinet.stage_two()
+            || self.music.cue != MusicCue::StageTwo
+            || self.music_voices() != 1
+        {
+            return Err(failure("second-stage music not selected"));
+        }
+        self.smoke_bonus_pause(cabinet)?;
+        // No simulation step during draining: the finite selected cue
+        // must remain exhausted until a new soundtrack state is entered.
+        for _ in 0..1500u16 {
+            self.device.clear().map_err(failure)?;
+            self.update(cabinet)?;
+        }
+        if self.music_voices() != 0 || self.queued_frames()? != 0 {
+            return Err(failure("finished stage-two music restarted"));
+        }
+        write_status(format_args!(
+            "Second-stage music PCM: entry, pause and finite end verified"
+        ))
+        .map_err(failure)
+    }
+
     fn sync_levels(&mut self, session: LocalSession) {
         let volume = session.volume();
         let sources = session.source_settings();
@@ -1218,6 +1274,10 @@ pub(super) fn handoff_music_limits() -> Result<ManifestLimits, RenderError> {
     track_limits(HANDOFF_TRACKS)
 }
 
+pub(super) fn stage_two_music_limits() -> Result<ManifestLimits, RenderError> {
+    stereo_limits(STAGE_TWO_TRACK.1)
+}
+
 fn track_limits<const COUNT: usize>(
     tracks: [(&str, usize); COUNT],
 ) -> Result<ManifestLimits, RenderError> {
@@ -1305,6 +1365,13 @@ fn load_music(
         return Err(failure("unexpected music PCM format"));
     }
     OwnedClip::new(copy_samples(pcm)?, Channels::Stereo, RATE).map_err(failure)
+}
+
+fn load_stage_two_music(
+    store: BundleSource<'_>,
+    hash: ContentHash,
+) -> Result<OwnedClip, RenderError> {
+    load_music(store, hash, STAGE_TWO_TRACK, stage_two_music_limits()?)
 }
 
 fn load_street_music(
@@ -1533,6 +1600,7 @@ mod tests {
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
+            stage_two_music: None,
         };
         let original = Samples::load(BundleSource::Local(parent), &selection)?;
         if original.impact.is_some()
@@ -1591,6 +1659,7 @@ mod tests {
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
+            stage_two_music: None,
         };
         let samples = Samples::load(BundleSource::Local(parent), &selection)?;
         let impact = samples.impact.ok_or_else(|| failure("missing impact"))?;
@@ -1635,6 +1704,7 @@ mod tests {
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
+            stage_two_music: None,
         };
         let samples = Samples::load(BundleSource::Local(parent), &selection)?;
         let expected =
@@ -1675,6 +1745,7 @@ mod tests {
             bonus: Some([stereo([1, 2, 3, 4])?, stereo([5, 6, 7, 8])?]),
             cue: MusicCue::Quiet,
             handoff: None,
+            stage_two: Some(stereo([9, 10, 11, 12])?),
             street: Some(street),
         };
         let mut mixer =
@@ -1693,6 +1764,7 @@ mod tests {
         for (cue, expected) in [
             (MusicCue::Pumping, [[1, 2], [3, 4]]),
             (MusicCue::Results, [[5, 6], [7, 8]]),
+            (MusicCue::StageTwo, [[9, 10], [11, 12]]),
         ] {
             let admitted = soundtrack.select(&mut mixer, cue)?;
             let mut output = [[0; 2]; 2];
@@ -1721,6 +1793,7 @@ mod tests {
             impact: None,
             music: None,
             music_volume: MasterVolume::Full,
+            stage_two_music: None,
         };
         let expected = [[5451, 2443], [7383, 5182], [3430, 4887], [2027, 4523]];
         let clips = samples.clips()?;

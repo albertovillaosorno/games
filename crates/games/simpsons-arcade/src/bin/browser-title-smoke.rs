@@ -207,6 +207,7 @@ fn selection(digest: ContentHash, audio: ContentHash) -> Selection<'static> {
             music: None,
             music_volume: MasterVolume::Full,
             replacement: None,
+            stage_two_music: None,
         }),
         display: DisplaySettings::default(),
         enemy: None,

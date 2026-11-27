@@ -334,6 +334,45 @@ fn selection_from(
     selection(&catalogue, pose_text, touch_enabled)
 }
 
+fn append_audio_requests(
+    requests: &mut Vec<ManifestRequest>,
+    audio: &AudioSelection,
+) -> Result<(), RenderError> {
+    requests.push(ManifestRequest {
+        digest: audio.base,
+        limits: audio::base_limits()?,
+    });
+    if let Some(digest) = audio.music {
+        requests.push(ManifestRequest {
+            digest,
+            limits: audio::music_limits()?,
+        });
+    }
+    if let Some(hashes) = audio.bonus_music {
+        let limits = audio::bonus_music_limits()?;
+        requests
+            .extend(hashes.map(|digest| ManifestRequest { digest, limits }));
+    }
+    if let Some(hashes) = audio.handoff_music {
+        let limits = audio::handoff_music_limits()?;
+        requests
+            .extend(hashes.map(|digest| ManifestRequest { digest, limits }));
+    }
+    if let Some(digest) = audio.stage_two_music {
+        requests.push(ManifestRequest {
+            digest,
+            limits: audio::stage_two_music_limits()?,
+        });
+    }
+    if let Some(digest) = audio.replacement {
+        requests.push(ManifestRequest {
+            digest,
+            limits: audio::replacement_limits()?,
+        });
+    }
+    Ok(())
+}
+
 fn manifest_requests(
     selection: &Selection<'_>,
 ) -> Result<Vec<ManifestRequest>, RenderError> {
@@ -366,34 +405,7 @@ fn manifest_requests(
         });
     }
     if let Some(audio) = selection.audio {
-        requests.push(ManifestRequest {
-            digest: audio.base,
-            limits: audio::base_limits()?,
-        });
-        if let Some(digest) = audio.music {
-            requests.push(ManifestRequest {
-                digest,
-                limits: audio::music_limits()?,
-            });
-        }
-        if let Some(hashes) = audio.bonus_music {
-            let limits = audio::bonus_music_limits()?;
-            requests.extend(
-                hashes.map(|digest| ManifestRequest { digest, limits }),
-            );
-        }
-        if let Some(hashes) = audio.handoff_music {
-            let limits = audio::handoff_music_limits()?;
-            requests.extend(
-                hashes.map(|digest| ManifestRequest { digest, limits }),
-            );
-        }
-        if let Some(digest) = audio.replacement {
-            requests.push(ManifestRequest {
-                digest,
-                limits: audio::replacement_limits()?,
-            });
-        }
+        append_audio_requests(&mut requests, &audio)?;
     }
     Ok(requests)
 }
@@ -771,6 +783,7 @@ mod tests {
         let pump = ContentHash::calculate(b"pump");
         let results = ContentHash::calculate(b"results");
         let handoff = handoff_fixture();
+        let stage_two_music = ContentHash::calculate(b"stage two music");
         let poses = pose_fixture(pose, scenic, background);
         let selection = Selection {
             actors: [actor; 4],
@@ -782,6 +795,7 @@ mod tests {
                 music: Some(music),
                 music_volume: MasterVolume::Full,
                 replacement: Some(replacement),
+                stage_two_music: Some(stage_two_music),
             }),
             display: DisplaySettings::default(),
             enemy: Some([enemy; 2]),
@@ -804,6 +818,7 @@ mod tests {
             (pump, 1, audio::bonus_music_limits()?),
             (results, 1, audio::bonus_music_limits()?),
             (replacement, 1, audio::replacement_limits()?),
+            (stage_two_music, 1, audio::stage_two_music_limits()?),
         ] {
             if !has_manifest_requests(&requests, digest, count, limit) {
                 return Err(failure(

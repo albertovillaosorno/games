@@ -1042,6 +1042,14 @@ impl<'source> Sources<'source> {
         actors: [ContentHash; 4],
         options: OptionalSources,
     ) -> Result<Self, RenderError> {
+        if options
+            .audio
+            .as_ref()
+            .is_some_and(|audio| audio.stage_two_music.is_some())
+            && options.poses.stage_two_strip().is_none()
+        {
+            return Err(failure("stage-two music requires second-stage art"));
+        }
         Ok(Self {
             actors: open_bundles(store, actors)?,
             audio: options

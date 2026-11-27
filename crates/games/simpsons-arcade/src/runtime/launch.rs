@@ -69,6 +69,7 @@ const USAGE: &str = concat!(
     "[--audio SHA [--audio-mod SHA] [--music SHA] ",
     "[--bonus-music PUMP_SHA RESULT_SHA] ",
     "[--handoff-music DEFEAT_SHA VICTORY_SHA TRANSITION_SHA INSTRUCTIONS_SHA] ",
+    "[--stage-two-music SHA] ",
     "[--effects-volume PERCENT] [--music-volume PERCENT]] ",
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -88,7 +89,12 @@ type BonusMusicHashes = Option<[OsString; 2]>;
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
 type EnemyHashes = Option<[OsString; 2]>;
 type HandoffMusicHashes = Option<[OsString; 4]>;
-type MusicHashes = (Option<OsString>, BonusMusicHashes, HandoffMusicHashes);
+type MusicHashes = (
+    Option<OsString>,
+    BonusMusicHashes,
+    HandoffMusicHashes,
+    Option<OsString>,
+);
 type OptionalHashes<const COUNT: usize> = Option<[OsString; COUNT]>;
 type VolumePreferences = (Option<VolumeStore>, MasterVolume);
 pub(super) type Fields<'text> = BTreeMap<&'text str, &'text str>;
@@ -109,6 +115,7 @@ pub(super) struct AudioSelection {
     pub(super) music: Option<OsString>,
     pub(super) music_volume: MasterVolume,
     pub(super) replacement: Option<OsString>,
+    pub(super) stage_two_music: Option<OsString>,
 }
 
 impl AudioSelection {
@@ -130,6 +137,9 @@ impl AudioSelection {
                 ])
             })
             .transpose()?;
+        let stage_two_music = flag(args, "--stage-two-music")
+            .then(|| next(args))
+            .transpose()?;
         let effects = flag(args, "--effects-volume")
             .then(|| next(args))
             .transpose()?;
@@ -143,7 +153,7 @@ impl AudioSelection {
         Self::new(
             base,
             replacement,
-            (music, bonus_music, handoff_music),
+            (music, bonus_music, handoff_music, stage_two_music),
             (
                 effects.map(parse).transpose()?,
                 soundtrack.map(parse).transpose()?,
@@ -162,6 +172,7 @@ impl AudioSelection {
                 values.remove("music").map(hash).transpose()?,
                 music_hashes(values.remove("bonus_music"))?,
                 music_hashes(values.remove("handoff_music"))?,
+                values.remove("stage_two_music").map(hash).transpose()?,
             ),
             (
                 values.remove("effects_volume").map(volume).transpose()?,
@@ -173,10 +184,13 @@ impl AudioSelection {
     fn new(
         base: Option<OsString>,
         replacement: Option<OsString>,
-        (music, bonus_music, handoff_music): MusicHashes,
+        (music, bonus_music, handoff_music, stage_two_music): MusicHashes,
         volumes: AudioVolumes,
     ) -> Result<Option<Self>, String> {
         let (effects_volume, music_volume) = volumes;
+        if stage_two_music.is_some() && bonus_music.is_none() {
+            return Err(String::from("stage-two music requires bonus music"));
+        }
         if handoff_music.is_some() && bonus_music.is_none() {
             return Err(String::from("handoff music requires bonus music"));
         }
@@ -195,6 +209,7 @@ impl AudioSelection {
                 music: track,
                 music_volume: music_volume.unwrap_or_default(),
                 replacement: changes,
+                stage_two_music,
             })),
             (None, None, None) if effects_volume.is_none() => Ok(None),
             (None, _, _) => {
@@ -1278,6 +1293,7 @@ mod tests {
                 music: None,
                 music_volume: MasterVolume::Full,
                 replacement: None,
+                stage_two_music: None,
             }),
             directory: OsString::from("/package/../local assets"),
             enemy: Some([DIGEST.into(), DIGEST.into()]),
@@ -1506,6 +1522,7 @@ mod tests {
                 music: None,
                 music_volume: MasterVolume::Full,
                 replacement: None,
+                stage_two_music: None,
             }),
             directory: OsString::from("parent"),
             enemy: Some(["approach".into(), "strike".into()]),
@@ -1556,6 +1573,34 @@ mod tests {
         ] {
             if Assets::catalogue(path, &invalid).is_ok() {
                 return Err(String::from("invalid bonus music admitted"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn second_stage_music_catalogue_requires_bonus_music() -> Result<(), String>
+    {
+        let path = OsStr::new("local");
+        let base = catalogue();
+        let street = format!("audio={DIGEST}\nmusic={DIGEST}\n");
+        let bonus = format!("bonus_music={DIGEST},{DIGEST}\n");
+        let stage = format!("stage_two_music={DIGEST}\n");
+        let (configured, _, _) =
+            Assets::catalogue(path, &format!("{base}{street}{bonus}{stage}"))?;
+        if configured.audio.and_then(|audio| audio.stage_two_music)
+            != Some(DIGEST.into())
+        {
+            return Err(String::from("second-stage music lost"));
+        }
+        for invalid in [
+            format!("{base}{street}{stage}"),
+            format!("{base}{street}{bonus}stage_two_music=invalid"),
+        ] {
+            if Assets::catalogue(path, &invalid).is_ok() {
+                return Err(String::from(
+                    "invalid second-stage music admitted",
+                ));
             }
         }
         Ok(())
@@ -1622,6 +1667,10 @@ mod tests {
         if Launch::parse(invalid.map(OsString::from).into()).is_ok() {
             return Err(String::from("explicit replacement without base"));
         }
+        assert_explicit_soundtrack()
+    }
+
+    fn assert_explicit_soundtrack() -> Result<(), String> {
         let valid = [
             "--audio",
             "base",
@@ -1637,6 +1686,8 @@ mod tests {
             "victory",
             "transition",
             "instructions",
+            "--stage-two-music",
+            "second",
             "--effects-volume",
             "25",
             "--music-volume",
@@ -1660,6 +1711,7 @@ mod tests {
                 music: Some("track".into()),
                 music_volume: MasterVolume::Half,
                 replacement: Some("mod".into()),
+                stage_two_music: Some("second".into()),
             })
         {
             return Err(String::from("explicit replacement lost"));

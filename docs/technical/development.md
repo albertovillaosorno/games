@@ -227,6 +227,11 @@ four comma-separated SHA values in defeat, victory, transition and
 instructions order. Native launch accepts `--handoff-music` followed by
 the same four values after `--bonus-music`. These finite cues also use
 the existing music volume.
+With the bonus music pair and second-stage art admitted, set
+`stage_two_music=SHA` for the finite second-stage stereo excerpt.
+Native explicit launch accepts `--stage-two-music SHA` after the
+optional handoff selection. The excerpt plays once upon stage entry;
+no exact repeating loop is claimed.
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`
 to distinguish the filename from a misplaced option.
