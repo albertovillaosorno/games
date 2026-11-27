@@ -3628,3 +3628,32 @@ arena through defeat, then exposes the cleared state; the victory
 sequence, bonus game, camera release and subsequent playable stage
 still require implementation. Physical acceptance and original
 combat parity remain open.
+
+### Regular stock-loss reaction and automatic refill input
+
+Eight isolated original-edition idle sessions reproduce the complete
+105-second audio and voice traces pairwise for all four characters.
+The four first-stock-depleting regular strikes use their established
+station reaction samples at the visible meter-drain onset, within
+one reference frame. Two final-stock regular strikes likewise start
+their respective reaction clips. The other two final-stock events
+have restraint-related object states and lack those station clip
+starts. No independent knockout sample or exact restraint audio rule
+is established. This supersedes the earlier exclusion of all lethal
+hits: the same regular-hit cue now admits stock-depleting strikes,
+without changing the separate restraint path or the optional asset
+catalogue. Exact original audio contention remains open.
+
+Twelve further original controls admit no new credits or Start input
+during the first automatic recovery: neutral, held Left and held
+Right for each of the four stations. The four neutral HUD traces
+match the earlier observations byte-for-byte through frame 3600.
+Each station's regular shadow first returns at offset 58 from its
+first visible refill column. At offset 59 the held direction moves
+the ground anchor two columns left or right, with continued movement
+at two columns per reference frame. The meter completes at offset 62
+in all four cases. The fixed-step prototype now restores ordinary
+control on the corresponding refill tick rather than waiting for
+the full meter. The meter cadence is unchanged. Exact reentry
+animation, invulnerability, combat-edge timing and respawn position
+remain provisional. Original captures and PCM remain private.

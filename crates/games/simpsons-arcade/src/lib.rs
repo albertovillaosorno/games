@@ -97,7 +97,8 @@ const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;
 const FINAL_KNOCKOUT_TICKS: u16 = 168;
-const REFILL_TICKS: u16 = 64;
+// Control returns 59 frames after the first displayed refill column.
+const REFILL_TICKS: u16 = 60;
 // The first visible column follows an in-game Start edge by four ticks.
 const JOIN_METER_DELAY: u8 = 4;
 // Original ground-attack follow-up edges first take effect at offset 20.
@@ -282,7 +283,7 @@ pub struct Station {
     pub facing: Facing,
     /// Experimental encounter health; zero means the station is knocked out.
     pub health: u8,
-    /// Cumulative nonlethal ground-hit reaction audio cues.
+    /// Cumulative regular ground-hit reaction audio cues.
     pub hurt_cues: u64,
     /// Current action or hit reaction, independent of rendering.
     pub maneuver: Maneuver,
@@ -933,7 +934,7 @@ impl Cabinet {
             .filter(|enemy| enemy.health > 0)
             .min_by_key(|enemy| distance(marge.position, enemy.position));
         let direction = target.map_or(Some(Control::Right), |enemy| {
-            diagnostic_direction(marge, enemy)
+            diagnostic_direction(marge, enemy.position)
         });
         let action = if matches!(
             marge.participation,
@@ -1295,9 +1296,8 @@ const fn axis(negative: bool, positive: bool) -> i16 {
 }
 
 #[cfg(any(test, feature = "native-preview"))]
-fn diagnostic_direction(station: Station, enemy: Enemy) -> Option<Control> {
+fn diagnostic_direction(station: Station, to: Point) -> Option<Control> {
     let from = station.position;
-    let to = enemy.position;
     let facing_right = station.facing == Facing::Right;
     if from.x != to.x
         && (from.x.abs_diff(to.x) > 24 || (from.x < to.x) != facing_right)
@@ -1362,14 +1362,7 @@ fn player_strike(
 
 const fn hurt_slot(slot: &mut Slot, amount: u8) {
     slot.damage(amount);
-    slot.station.hurt_cues =
-        slot.station
-            .hurt_cues
-            .saturating_add(if slot.station.health > 0 {
-                1
-            } else {
-                0
-            });
+    slot.station.hurt_cues = slot.station.hurt_cues.saturating_add(1);
 }
 
 fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {

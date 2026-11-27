@@ -41,7 +41,7 @@ use games::audio::{
 };
 use games::input::{InputEvent, LogicalAction};
 use games::presentation::DisplaySettings;
-use games::replay::LiveSimulation;
+use games::replay::{InputStep as _, LiveSimulation};
 use games::session::LocalSession;
 use games_assets::pcm::PcmSamples;
 use games_assets::{AssetRecord, ContentHash, ManifestLimits};
@@ -459,6 +459,7 @@ impl Playback {
     fn smoke_hurt_station(
         &mut self,
         player: Player,
+        depleted_stock: Option<u8>,
     ) -> Result<(), RenderError> {
         let layout = StreetLayout::DOWNTOWN;
         let position = layout
@@ -471,29 +472,43 @@ impl Playback {
         })
         .map_err(failure)?;
         cabinet.session = self.smoke_session();
+        self.update(&cabinet)?;
+        cabinet.input_step(
+            0,
+            &[true, false].map(|down| LogicalAction {
+                action: Action {
+                    control: Control::Start,
+                    player,
+                },
+                down,
+            }),
+        );
+        if let Some(stocks) = depleted_stock {
+            let slot = cabinet
+                .slots
+                .get_mut(player.index())
+                .ok_or(RenderError::InvalidSprite)?;
+            slot.station.health = 1;
+            slot.station.display_health = 1;
+            slot.station.stocks = stocks;
+        }
+        self.update(&cabinet)?;
         let mut simulation = fixed(cabinet)?;
-        self.update(simulation.state())?;
-        simulation
-            .enqueue(
-                simulation.next_tick(),
-                [true, false]
-                    .map(|down| LogicalAction {
-                        action: Action {
-                            control: Control::Start,
-                            player,
-                        },
-                        down,
-                    })
-                    .to_vec(),
-            )
-            .map_err(|error| failure(error.reason))?;
-        let _entry = simulation.advance(TICK_INTERVAL).map_err(failure)?;
-        self.update(simulation.state())?;
         self.verify_quiet()?;
         for _ in 0..14u8 {
             let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
             self.device.clear().map_err(failure)?;
             self.update(simulation.state())?;
+        }
+        if let Some(stocks) = depleted_stock {
+            let stations = simulation.state().stations();
+            let station = stations
+                .get(player.index())
+                .ok_or(RenderError::InvalidSprite)?;
+            if station.health != 0 || station.stocks != stocks.saturating_sub(1)
+            {
+                return Err(failure("ground hit did not deplete the stock"));
+            }
         }
         let expected = Player::ALL.map(|station| u64::from(station == player));
         if self.hurt_cues != expected {
@@ -507,14 +522,17 @@ impl Playback {
     fn smoke_hurts(&mut self) -> Result<(), RenderError> {
         let available = self.hurt.each_ref().map(Option::is_some);
         for (player, present) in Player::ALL.into_iter().zip(available) {
-            if present {
-                self.smoke_hurt_station(player)?;
+            if !present {
+                continue;
+            }
+            for stock in [None, Some(crate::PLAYER_STOCKS), Some(1)] {
+                self.smoke_hurt_station(player, stock)?;
             }
         }
         let count = available.into_iter().filter(|present| *present).count();
         if count != 0 {
             write_status(format_args!(
-                "Ground hurt PCM: {count} station cues verified"
+                "Ground hurt PCM: {count} stations, three hit cases each"
             ))
             .map_err(failure)?;
         }

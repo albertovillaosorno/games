@@ -1138,6 +1138,7 @@ mod tests {
     fn assert_restraint_depleted(cabinet: &mut Cabinet) {
         let [marge, ..] = cabinet.stations();
         assert_eq!(marge.health, 0);
+        assert_eq!(marge.hurt_cues, 0);
         assert_eq!(marge.stocks, PLAYER_STOCKS - 1);
         assert!(matches!(
             marge.participation,
@@ -1616,20 +1617,29 @@ mod tests {
     }
 
     #[test]
-    fn lethal_ground_hit_does_not_emit_short_hurt_cue() {
-        let result = playing(Point { x: 128, y: 190 });
-        assert!(result.is_ok());
-        let Ok(mut cabinet) = result else {
-            return;
-        };
-        let [marge_slot, ..] = &mut cabinet.slots;
-        marge_slot.station.health = ENEMY_DAMAGE;
-        for tick in 3..17 {
-            cabinet.input_step(tick, &[]);
+    fn regular_stock_depletion_emits_one_reaction_cue() {
+        for stocks in [PLAYER_STOCKS, 1] {
+            let result = playing(Point { x: 128, y: 190 });
+            assert!(result.is_ok());
+            let Ok(mut cabinet) = result else {
+                return;
+            };
+            let [marge_slot, ..] = &mut cabinet.slots;
+            marge_slot.station.health = ENEMY_DAMAGE;
+            marge_slot.station.stocks = stocks;
+            for tick in 3..17 {
+                cabinet.input_step(tick, &[]);
+            }
+            let [marge, ..] = cabinet.stations();
+            assert_eq!(marge.health, 0);
+            assert_eq!(marge.stocks, stocks - 1);
+            assert_eq!(marge.hurt_cues, 1);
+            for tick in 17..50 {
+                cabinet.input_step(tick, &[]);
+                let [recovering, ..] = cabinet.stations();
+                assert_eq!(recovering.hurt_cues, 1);
+            }
         }
-        let [marge, ..] = cabinet.stations();
-        assert_eq!(marge.health, 0);
-        assert_eq!(marge.hurt_cues, 0);
     }
 
     #[test]
@@ -2037,7 +2047,7 @@ mod tests {
         assert_eq!(refill.stocks, 1);
         assert!(!refill.can_fight());
         let recovered = advance_until(cabinet, Station::can_fight);
-        assert_eq!(recovered.display_health, PLAYER_HEALTH);
+        assert_eq!(recovered.display_health, PLAYER_HEALTH - 2);
         assert_eq!(recovered.stocks, 1);
         let final_empty = advance_until(cabinet, |station| {
             matches!(station.participation, Participation::Continuing { .. })
@@ -2048,6 +2058,36 @@ mod tests {
         let [continued, ..] = cabinet.stations();
         assert_eq!(continued.stocks, PLAYER_STOCKS);
         assert_eq!(continued.display_health, 0);
+    }
+
+    #[test]
+    fn automatic_refill_admits_held_movement_before_full_meter() {
+        let result = playing(Point { x: 128, y: 190 });
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let empty = advance_until(&mut cabinet, |station| {
+            station.stocks == 1 && station.display_health == 0
+        });
+        assert_eq!(empty.health, 0);
+        let [press, _] = pulse(Control::Left);
+        cabinet.input_step(0, slice::from_ref(&press));
+        let restored = advance_until(&mut cabinet, |station| {
+            station.health == PLAYER_HEALTH && station.display_health == 0
+        });
+        for offset in 0..=62u8 {
+            cabinet.input_step(u64::from(offset), &[]);
+            let [station, ..] = cabinet.stations();
+            let distance = i16::from(offset.saturating_sub(58)) * 2;
+            assert_eq!(station.display_health, (offset + 1).div_ceil(2));
+            assert_eq!(station.position, Point {
+                x: restored.position.x - distance,
+                ..restored.position
+            });
+            assert_eq!(station.can_fight(), offset >= 59);
+            assert_eq!(station.stocks, 1);
+        }
     }
 
     #[test]
