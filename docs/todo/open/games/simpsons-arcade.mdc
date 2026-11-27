@@ -3943,8 +3943,9 @@ inference. Existing playable slices and regression evidence remain
 useful but are not evidence of complete function coverage. The main
 Konami 053248 processor uses 64 banked 8 KiB regions and a fixed
 32 KiB window. The audio processor is Z80. Ghidra 12.2 was acquired;
-custom main-processor language admission and function inventory are
-pending. The new private ledger must distinguish CPU, bank and entry
+custom main-processor language admission and function inventory were
+pending at that checkpoint. The new private ledger must distinguish
+CPU, bank and entry
 address and record verified semantic mappings, unresolved functions
 and deliberate free-play or modern-platform replacements. Preserve
 the existing asset importer and shared Rust capability architecture.
@@ -4008,3 +4009,15 @@ provide conditional transfer evidence; unresolved bank contexts and
 computed targets still require review. Together with the 686 audio
 functions this yields 767 unique private ledger identities. No
 additional campaign or platform acceptance is claimed.
+
+Further bounded descriptor and pitch-table analysis classifies 7,776
+metadata bytes (122,042 classified ROM bytes in total), leaving 9,030
+unclassified. The structural sequence outcomes are unchanged.
+The latest private main-CPU snapshot has 102 functions, with 7,464
+owned decoded instruction bytes. The combined inventory has 788
+identities. One hundred and one audio functions and one main-CPU
+function have explicit semantic reviews; the two CPU-only interrupt
+returns are non-runtime. The generic bounded ledger checker verified
+all identities and 2,893 distinct reciprocal caller/callee pairs.
+Individual flow sites, unresolved dispatch, complete semantics and
+Rust mappings remain open. No playable campaign milestone changed.

@@ -113,3 +113,31 @@ bank transitions, not a proof of runtime bank context. Alternate
 contexts, computed transfers, function boundaries and semantic
 dispositions remain open. The combined private ledger contains 767
 unique identities at this checkpoint.
+
+Subsequent conditional dispatch and bank-selector discovery increases
+the main-CPU inventory to 102 identities and 7,464 owned instruction
+bytes (72 fixed, nine and 21 in two overlays). The private graph
+retains 69 possible bank/table edges and 13 unresolved flow records;
+two interior entry targets remain ambiguous. The audio classification
+now accounts for 122,042 bytes, including 7,776 metadata bytes.
+Additional FM effect reviews bring the audio semantic-review count to
+101. Both CPU-only interrupt returns have an explicit non-runtime
+disposition; no authored gameplay equivalence is implied.
+
+The bounded read-only inventory check is available as:
+
+```sh
+cargo run --locked -p games-build -- ledger check PATH BYTES ROWS
+```
+
+It verifies stable identity components, distinct caller/callee pairs,
+recognized dispositions and the presence of evidence and Rust mappings
+where required for completion claims. It reports aggregate counts,
+not original function data, and does not certify semantic accuracy,
+individual call sites or dynamic reachability. Synthetic tests cover
+malformed identities, duplicate records, dangling or nonreciprocal
+pairs, row bounds and missing implementation evidence. On the private
+ledger it reported 788 functions, 25,803 owned instruction bytes,
+2,893 distinct graph pairs, 686 discovered, 100 unresolved and two
+non-runtime functions. No implemented function is claimed by that
+check. The task remains open.
