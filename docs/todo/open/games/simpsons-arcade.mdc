@@ -4824,3 +4824,38 @@ visibility, not whole-raster equality to the original. Exact
 post-release landing artwork, unsampled source clipping and priority,
 physical input/display acceptance and later-stage gameplay remain
 open. The task remains incomplete.
+
+### Post-release landing observation
+
+Two neutral original replays captured 238 distinct consecutive
+frames through the release, landing and subsequent effect retirement.
+Both overlaps with earlier observations matched byte for byte.
+The source scene decoder matched all 71,680 pixels for 77
+consecutive displayed frames and fourteen additional boundary
+samples (one repeated), using the preceding callback for graphics
+state and the displayed palette.
+
+The first ordinary airborne body crops match the four existing
+selected jump poses exactly. The early bounce alternates two-frame
+object admission intervals for ordinary character bodies; the
+separate station-identification bubbles and the ropes persist.
+The four bubbles share a 32 by 31 extent, with station-specific
+payloads. The ropes initially retain the release position and then
+withdraw upward without changing horizontal registration in the
+neutral replay.
+
+The first frame without the rope object groups is displayed tick
+324; the first frame without the station bubble groups is tick
+383. Object admission is not necessarily the same as raster
+visibility. The current registered-descent interval ends at tick
+231, and its absence check at tick 232 verifies native admission,
+not original rope retirement. The simulation landing state ends
+at tick 295, before either original presentation lifetime ends.
+
+Retain responsive gameplay while independently advancing the
+remaining presentation effects. Verify directional input and
+partial station admission, ordinary body cadence, isolated rope
+clipping and withdrawal, bubble registration, and depth ordering
+before extending native presentation beyond the bounded descent.
+No gameplay change or additional parity claim follows from these
+neutral observations.
