@@ -1000,3 +1000,19 @@ The earlier input prefix is shared, while the later observations
 have distinct movement timing. Both gates count nonregular actors
 that are not yet represented in the portable encounter, so adding
 redundant regular-only caps would not establish original parity.
+
+Narrow primary-record dispatch observations cover five additional
+actor families at the second-stage gates, including the late regular
+cohort. The control and delayed regular object traces retain 5,405
+and 7,950 byte-identical rows, respectively. Paired immutable reads
+establish five primary dispatch targets and 22 state-table targets;
+reviewed state and helper bodies retain explicit field dependencies.
+The isolated static audit adds 23 function identities and 458 bytes,
+with no changed prior ownership or unowned instructions. The ledger
+adds 60 reciprocal pairs and flow observations and nine unresolved
+computed sites. The checker reports 1,588 reviewed identities,
+57,916 bytes, 4,336 reciprocal pairs, 4,918 flow observations, 263
+interior targets, 179 unresolved flows and 1,560 unresolved
+dispositions. The 43 partial mappings, three intentional replacements
+and 25 non-runtime dispositions remain unchanged. Further substate
+paths and the unmodeled actor gameplay remain open.
