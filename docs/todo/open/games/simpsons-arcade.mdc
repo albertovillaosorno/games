@@ -4197,3 +4197,19 @@ three intentional replacements and two non-runtime dispositions.
 Sixty-two flow observations remain unresolved. Conditional state
 transitions do not establish campaign-stage identities or runtime
 equivalence; no additional playable milestone is claimed.
+
+### Board-specific startup exclusions
+
+Fourteen original board-only diagnostic or delay routines now have
+non-runtime dispositions supported by their instructions, callers and
+the pinned hardware map. Native gameplay need not reproduce destructive
+service EEPROM checks, board memory tests, checksum status screens or
+serial watchdog timing. The general board exchange and configuration
+persistence remain unresolved. The 946-identity inventory and graph
+are unchanged; there are 927 unresolved, three intentional replacements
+and 16 non-runtime dispositions. Modern asset and persistence integrity
+are separate requirements.
+
+The audio startup checksum and nominal timer-B period are independently
+verified. Eight FM and four PCM records receive sequence opportunities
+every eight modeled timer ticks. Physical cadence remains unverified.

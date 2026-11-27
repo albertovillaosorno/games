@@ -333,3 +333,19 @@ Dispositions are 941 unresolved, three intentional replacements and
 two non-runtime. Descriptor and timer state paths are conditional;
 no runtime reachability, campaign semantics or Rust equivalence is
 claimed.
+
+A board-only diagnostic review resolves 14 main-CPU identities as
+non-runtime: destructive service EEPROM testing and its entry stub,
+startup memory and checksum testing, diagnostic result presentation,
+diagnostic audio-board queries and a serial-hardware watchdog delay.
+The pinned board map and admitted callers establish these narrow
+roles; the general board exchange and configuration persistence paths
+remain unresolved. The graph is unchanged. The combined 946
+identities now comprise 927 unresolved, three intentional replacements
+and 16 non-runtime dispositions. Revisit these classifications if new
+gameplay-relevant callers are established.
+
+The audio startup review verifies the complete reset checksum and
+nominal timer-B period of 7,168 clocks. Eight FM and four PCM service
+records receive sequence opportunities every eight timer ticks.
+This is a nominal model, not verified physical playback cadence.
