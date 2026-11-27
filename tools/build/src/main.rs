@@ -46,6 +46,8 @@ pub mod publication;
 pub mod reference_audio;
 /// Bounded background-reference comparison.
 pub mod reference_background;
+/// Bounded read-only function ledger consistency check.
+pub mod reference_ledger;
 /// Read-only CPU and device object buffer comparison.
 pub mod reference_objects;
 /// Bounded read-only palette comparison against local observations.
@@ -89,6 +91,7 @@ use games_platform::ir::toolchain;
 const USAGE: &str = concat!(
     "games-build ghidra konami cspec|ldefs|pspec|slaspec\n",
     "games-build ghidra-board simpsons\n",
+    "games-build ledger check PATH BYTES ROWS\n",
     "games-build retention plan AGE_SECONDS QUOTA_BYTES ENTRIES BYTES\n",
     "games-build retention apply AGE_SECONDS QUOTA_BYTES ENTRIES BYTES HASH\n",
     "usage: games-build build TITLE [linux-x86-64|webassembly]\n",
@@ -243,6 +246,7 @@ enum Command {
     Ghidra(ghidra::Component),
     GhidraBoard(ghidra_board::Board),
     Import(ImportProfile, Arguments),
+    LedgerCheck(reference_ledger::Arguments),
     MigrationAudit(store_migration::Audit),
     MigrationCatalogue(Box<store_migration::Catalogue>),
     MigrationRehearsal(Box<store_migration::rehearsal::Rehearsal>),
@@ -283,6 +287,9 @@ impl Command {
             (Some("ghidra"), Some(processor)) => Ok(Self::Ghidra(
                 ghidra::Component::parse(processor, &args.collect::<Vec<_>>())?,
             )),
+            (Some("ledger"), Some("check")) => Ok(Self::LedgerCheck(
+                reference_ledger::Arguments::parse(args.collect())?,
+            )),
             (Some("retention"), Some(operation)) => {
                 Ok(Self::Retention(reference_retention::Arguments::parse(
                     operation,
@@ -315,18 +322,9 @@ impl Command {
             (Some(kind @ ("zip" | "neo")), Some("verify")) => {
                 Self::parse_verification(kind, args.collect())
             },
-            (Some("wave"), Some("compare")) => {
-                let [left, right, limit] =
-                    <[OsString; 3]>::try_from(args.collect::<Vec<_>>())
-                        .map_err(|_args| String::from(USAGE))?;
-                Ok(Self::WaveCompare(left, right, parse_limit(&limit)?))
+            (Some("wave"), Some(operation)) => {
+                Self::parse_wave(operation, args.collect())
             },
-            (Some("wave"), Some("recurrence")) => Ok(Self::WaveRecurrence(
-                reference_audio::Recurrence::parse(args.collect())?,
-            )),
-            (Some("wave"), Some("publish")) => Ok(Self::WavePublish(
-                reference_audio::Publication::parse(args.collect())?,
-            )),
             (Some("neo"), Some(operation)) => Self::parse_neo(operation, args),
             (Some("mame"), Some(operation)) => {
                 Self::parse_mame(operation, args)
@@ -678,9 +676,30 @@ impl Command {
         Ok(Self::Verify(verification, Arguments::parse(args)?))
     }
 
+    fn parse_wave(
+        operation: &str,
+        args: Vec<OsString>,
+    ) -> Result<Self, String> {
+        match operation {
+            "compare" => {
+                let [left, right, limit] = <[OsString; 3]>::try_from(args)
+                    .map_err(|_args| String::from(USAGE))?;
+                Ok(Self::WaveCompare(left, right, parse_limit(&limit)?))
+            },
+            "recurrence" => Ok(Self::WaveRecurrence(
+                reference_audio::Recurrence::parse(args)?,
+            )),
+            "publish" => Ok(Self::WavePublish(
+                reference_audio::Publication::parse(args)?,
+            )),
+            _ => Err(String::from(USAGE)),
+        }
+    }
+
     fn run(self) -> Result<(), String> {
         match self {
             Self::BuildTitle(title) => title.run(),
+            Self::LedgerCheck(arguments) => arguments.run(),
             Self::Retention(arguments) => arguments.run(),
             Self::Ghidra(component) => component.run(),
             Self::GhidraBoard(board) => board.run(),
@@ -760,6 +779,7 @@ impl Command {
             | Self::BackgroundCheck(..)
             | Self::BackgroundPublish(..)
             | Self::BuildTitle(..)
+            | Self::LedgerCheck(..)
             | Self::ObjectCheck(..)
             | Self::PackageCheck(..)
             | Self::PackageTitle(..)
