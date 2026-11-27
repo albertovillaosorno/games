@@ -93,3 +93,23 @@ identities. This is discovery, not verified implementation coverage:
 unclassified ROM regions, sequence data and semantic/Rust dispositions
 remain open. The custom main-CPU language is a partial extension with
 synthetic admission evidence, not a complete main-CPU analysis.
+
+A bounded sequence traversal now distinguishes all 576 channel roots:
+348 recur and 228 terminate. A separate timing-state traversal resolves
+514 roots; 62 exceed its explicit limits. Of the 131,072 audio ROM bytes,
+18,339 are decoded instructions, 95,927 are sequence data and 7,370 are
+verified descriptor or table data, with no overlap. The remaining 9,436
+bytes are unclassified, including long uniform runs. Seventy-four audio
+functions have explicit semantic reviews; one is a CPU-only interrupt
+return, with no title behavior to port. The remaining reviews do not
+establish Rust implementation equivalence.
+
+The custom main-CPU language and board loader now admit the fixed ROM
+and all 64 physical bank overlays. Synthetic opcode and indexed-address
+fixtures pass. Conditional static bank-flow discovery identifies 81
+functions (51 fixed, nine in one bank and 21 in another) with 6,408
+owned instruction bytes. Six constant-selector chains support possible
+bank transitions, not a proof of runtime bank context. Alternate
+contexts, computed transfers, function boundaries and semantic
+dispositions remain open. The combined private ledger contains 767
+unique identities at this checkpoint.

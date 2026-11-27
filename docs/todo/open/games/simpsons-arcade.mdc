@@ -3980,3 +3980,31 @@ not additional native function entries. The remaining data/code
 classification, behavior reviews, Rust dispositions and gameplay
 parity are not established. All original bytes, detailed graph and
 decompiler evidence remain under the ignored private reference root.
+
+### Static sequence and main-CPU ledger progress
+
+All 576 channel roots were classified structurally with explicit
+per-root work limits: 348 recur and 228 terminate. Timing-state
+traversal resolves 514 roots and leaves 62 unresolved. The audio
+inventory now separates 18,339 native instruction bytes, 95,927
+sequence bytes and 7,370 verified metadata bytes. No classified
+regions overlap; 9,436 bytes remain unclassified. Seventy-four native
+functions have semantic reviews, one of which is a CPU-only interrupt
+return requiring no title behavior. These reviews are not equivalent
+to verified Rust mappings.
+
+All 12 second-stage channel sequences recur in the bounded timing
+model. The generic read-only `wave recurrence` diagnostic measures
+candidate PCM frame lags using explicit sample-pair and file budgets.
+The existing mixed recording has nonzero recurrence error and different
+best lags in different windows; an exact loop seam remains unverified.
+The finite optional cue is retained rather than silently looping it.
+
+The partial custom Konami processor language and board loader now
+support provisional fixed and bank-overlay discovery. The private
+main-CPU inventory at this checkpoint contains 81 distinct functions
+and 6,408 owned instruction bytes. Constant bank-selector chains
+provide conditional transfer evidence; unresolved bank contexts and
+computed targets still require review. Together with the 686 audio
+functions this yields 767 unique private ledger identities. No
+additional campaign or platform acceptance is claimed.
