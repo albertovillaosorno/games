@@ -919,3 +919,14 @@ station award. The canonical checker reports 35 partial mappings,
 three intentional runtime replacements and unchanged function, graph,
 semantic review and disposition counts. Original scheduler details,
 exact record predicates and meter presentation remain unresolved.
+
+The matched three-station controls and selective late-join replays
+confirm that bonus competition flags sample the live station mask at
+setup and remain fixed after ready entry. The reviewed flag routine
+now has a partial Rust mapping to the validated instruction and ready
+snapshots; the existing ready-interval mapping also names that
+boundary. The private checker reports 36 partial mappings and three
+intentional runtime replacements across the unchanged 1,562
+identities, with 1,534 unresolved dispositions. All other records and
+the graph counts remain unchanged. The original linked presentation,
+late-station animation and exact sampling remain unresolved.
