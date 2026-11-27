@@ -482,6 +482,12 @@ mod tests {
         let output = local_path(root.location(), "package")?;
         let report = Receipt::verify(TITLE, &output)?;
         let licence = format!("package/{LICENCE}");
+        root.hard_link(&licence, "alias")
+            .map_err(|error| error.to_string())?;
+        require(Receipt::verify(TITLE, &output).is_err())?;
+        root.remove_file("alias")
+            .map_err(|error| error.to_string())?;
+        require(Receipt::verify(TITLE, &output) == Ok(report.clone()))?;
         root.remove_file(&licence)
             .map_err(|error| error.to_string())?;
         require(Receipt::verify(TITLE, &output).is_err())?;

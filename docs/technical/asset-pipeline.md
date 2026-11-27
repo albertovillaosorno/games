@@ -130,10 +130,11 @@ content. This command does not remove or overwrite historical files.
 Use `bundle migration-verify` with the same arguments to independently
 re-audit the legacy inputs and compare the published namespace against
 the normalized inventory. The read-only check verifies all manifests
-and payloads, exact directory membership and translated catalogue
-bytes; it rejects stale metadata, missing or extra files, and corrupt
-objects. It neither stages another store nor grants permission to
-delete the legacy source.
+and payloads, exact owner-controlled directory membership and private
+translated catalogue bytes; it rejects stale metadata, shared-write
+directories, unsafe catalogue permissions or links, missing or extra
+files, and corrupt objects. It neither stages another store nor
+grants permission to delete the legacy source.
 
 Downloaded originals and tools remain in `.reference/games/` and
 `.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.

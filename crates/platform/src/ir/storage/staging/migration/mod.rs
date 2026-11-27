@@ -47,8 +47,12 @@ use crate::ir::storage::bundle::{
     CanonicalBundle, MANIFEST_NAME, OBJECT_PAYLOAD, OBJECTS_DIRECTORY,
     PAYLOADS_DIRECTORY, bundle_name,
 };
+#[cfg(test)]
 use crate::ir::storage::file::snapshot;
-use crate::ir::storage::{PathKind, directory_entries, join_path};
+use crate::ir::storage::file::snapshot_secret;
+use crate::ir::storage::{
+    PathKind, directory_entries, join_path, trusted_directory_entries,
+};
 
 /// Explicit source selection for migration; its parent must remain trusted.
 #[derive(Clone, Copy, Debug)]
@@ -166,8 +170,8 @@ impl MigrationMetadata<'_> {
             let size = u64::try_from(file.bytes.len())
                 .map_err(|_error| AssetError::TooLarge)?;
             let limit = NonZeroU64::new(size).unwrap_or(NonZeroU64::MIN);
-            if !snapshot(&location, limit)
-                .is_ok_and(|bytes| bytes == file.bytes)
+            if !snapshot_secret(&location, limit)
+                .is_ok_and(|bytes| bytes.as_slice() == file.bytes)
             {
                 return Err(StagingError::ChangedStorage);
             }
@@ -364,7 +368,7 @@ fn check_directory(
 ) -> Result<(), StagingError> {
     let maximum =
         NonZeroUsize::new(expected.len()).unwrap_or(NonZeroUsize::MIN);
-    let entries = directory_entries(path, maximum)?;
+    let entries = trusted_directory_entries(path, maximum)?;
     if entries.len() != expected.len()
         || entries
             .iter()
@@ -660,6 +664,10 @@ mod tests {
         metadata: MigrationMetadata<'_>,
     ) -> Result<(), StagingError> {
         let verify = || metadata.verify_published(output, limits().manifest);
+        verify()?;
+        parent.hard_link("assets/launch.local", "alias")?;
+        require(verify().is_err())?;
+        parent.remove_file("alias")?;
         verify()?;
         parent.write_file("assets/launch.local", b"parent=x\n")?;
         require(verify().is_err())?;

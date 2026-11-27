@@ -563,3 +563,13 @@ modes 0770, 0702 and 0777 on the root and on the licenses directory
 mode 0755 licenses directory and returned their original receipt
 identities after restoration to mode 0700. This is access-policy
 admission, not isolation against concurrent directory replacement.
+
+Published migration verification now reuses owner-controlled directory
+observation and the private configuration snapshot for generated
+catalogue files. The legacy input audit is unchanged. A tiny fixture
+adds a second hard link outside the published asset directory without
+changing its inventory or bytes; verification rejects the linked
+catalogue and succeeds after removing the alias. Package receipt tests
+also exercise this unchanged-content hard-link rejection. These checks
+do not establish concurrent same-user isolation or authorise retirement
+of the source store.

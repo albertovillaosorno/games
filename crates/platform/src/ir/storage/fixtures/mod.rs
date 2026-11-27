@@ -53,6 +53,7 @@ pub(crate) trait FixtureStorage: Debug {
     fn create_directories(&self, name: &str) -> IoResult<()>;
     fn create_sized_file(&self, name: &str, length: u64) -> IoResult<()>;
     fn entry_count(&self) -> IoResult<usize>;
+    fn hard_link(&self, source: &str, name: &str) -> IoResult<()>;
     fn link(&self, target: &OsStr, name: &str) -> IoResult<()>;
     fn location(&self) -> &OsStr;
     fn make_executable(&self, name: &str) -> IoResult<()>;
@@ -81,6 +82,13 @@ impl TestRoot {
     /// Reports enumeration failure.
     pub fn entry_count(&self) -> IoResult<usize> {
         self.0.entry_count()
+    }
+
+    /// Hard-link a local ordinary file to a new local name.
+    /// # Errors
+    /// Reports unsafe paths, non-ordinary sources or link failures.
+    pub fn hard_link(&self, source: &str, name: &str) -> IoResult<()> {
+        self.0.hard_link(admitted(source)?, admitted(name)?)
     }
 
     /// Create a local link for a rejection fixture.

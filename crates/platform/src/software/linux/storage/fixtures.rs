@@ -45,7 +45,7 @@ use games_assets::archive::validate_path;
 use nix::errno::Errno;
 use nix::fcntl::{AtFlags, OFlag, open, openat};
 use nix::sys::stat::{Mode, fchmod, fstat, fstatat, mkdirat};
-use nix::unistd::{UnlinkatFlags, mkdtemp, symlinkat, unlinkat};
+use nix::unistd::{UnlinkatFlags, linkat, mkdtemp, symlinkat, unlinkat};
 
 use super::file::{
     DIRECTORY_FLAGS, private_regular, same_inode, trusted_directory,
@@ -186,6 +186,20 @@ impl FixtureStorage for TestRoot {
         })
     }
 
+    /// Hard-link one ordinary file within this fixture.
+    /// # Errors
+    /// Rejects unsafe names, linked ancestors and non-ordinary files.
+    fn hard_link(&self, source: &str, name: &str) -> io::Result<()> {
+        let (parent, leaf) = self.open_parent(source)?;
+        let (target, alias) = self.open_parent(name)?;
+        let stat = fstatat(&parent, leaf, AtFlags::AT_SYMLINK_NOFOLLOW)?;
+        if !private_regular(&stat) {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        linkat(&parent, leaf, &target, alias, AtFlags::empty())?;
+        Ok(())
+    }
+
     /// Create a link at a local fixture leaf for rejection tests.
     /// # Errors
     /// Rejects unsafe link locations and native link creation failures.
@@ -316,6 +330,29 @@ mod tests {
         root.remove_file("local/nested/ordinary")?;
         root.remove_directory("local/nested")?;
         valid
+            .then_some(())
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+
+    #[test]
+    fn fixture_hard_links_stay_inside_the_owned_tree() -> io::Result<()> {
+        let root = TestRoot::new()?;
+        let other = TestRoot::new()?;
+        root.create_directories("nested")?;
+        root.write_file("nested/source", b"fixture")?;
+        other.write_file("outside", b"untouched")?;
+        root.link(other.location(), "linked")?;
+        let valid = root.hard_link("linked/outside", "alias").is_err()
+            && root.hard_link("nested/source", "linked/alias").is_err()
+            && root.hard_link("nested", "alias").is_err()
+            && root.hard_link("nested/source", "../alias").is_err();
+        root.hard_link("nested/source", "alias")?;
+        let source = fstatat(&root.root, "nested/source", AtFlags::empty())?;
+        let alias = fstatat(&root.root, "alias", AtFlags::empty())?;
+        let linked = same_inode(&source, &alias) && source.st_nlink == 2;
+        root.remove_file("alias")?;
+        let restored = fstatat(&root.root, "nested/source", AtFlags::empty())?;
+        (valid && linked && restored.st_nlink == 1)
             .then_some(())
             .ok_or_else(|| io::ErrorKind::InvalidData.into())
     }
