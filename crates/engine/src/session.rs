@@ -66,6 +66,36 @@ const SETTINGS_WITH_CONTROL_RESET: [MenuItem; 6] = [
     MenuItem::Back,
 ];
 
+const SETTINGS_LANGUAGES: [MenuItem; 5] = [
+    MenuItem::Display,
+    MenuItem::Window,
+    MenuItem::Audio,
+    MenuItem::Language,
+    MenuItem::Back,
+];
+const FIXED_SETTINGS_LANGUAGES: [MenuItem; 4] = [
+    MenuItem::Display,
+    MenuItem::Audio,
+    MenuItem::Language,
+    MenuItem::Back,
+];
+const SETTINGS_RESET_LANGUAGES: [MenuItem; 7] = [
+    MenuItem::Display,
+    MenuItem::Window,
+    MenuItem::Audio,
+    MenuItem::ResetControls,
+    MenuItem::EditControls,
+    MenuItem::Language,
+    MenuItem::Back,
+];
+const FIXED_SETTINGS_RESET_LANGUAGES: [MenuItem; 6] = [
+    MenuItem::Display,
+    MenuItem::Audio,
+    MenuItem::ResetControls,
+    MenuItem::EditControls,
+    MenuItem::Language,
+    MenuItem::Back,
+];
 const AUDIO_ITEMS: [MenuItem; 2] = [MenuItem::Volume, MenuItem::Back];
 const AUDIO_EFFECTS: [MenuItem; 3] =
     [MenuItem::Volume, MenuItem::EffectsVolume, MenuItem::Back];
@@ -125,6 +155,8 @@ pub enum MenuItem {
     EffectsVolume,
     /// Close the host.
     Exit,
+    /// Cycle the title-declared available presentation languages.
+    Language,
     /// Abandon the current world and return to the main menu.
     MainMenu,
     /// Cycle the music source level.
@@ -231,6 +263,8 @@ pub struct LocalSession {
     control_reset: ControlReset,
     display: DisplaySettings,
     fixed_window: bool,
+    language_count: usize,
+    language_index: usize,
     phase: SessionPhase,
     restrict_fill: bool,
     selection: usize,
@@ -285,6 +319,13 @@ impl LocalSession {
             Some(MenuItem::Settings) => {
                 self.settings_origin = self.phase;
                 self.transition(SessionPhase::Settings);
+            },
+            Some(MenuItem::Language) => {
+                self.language_index = self
+                    .language_index
+                    .saturating_add(1)
+                    .checked_rem(self.language_count)
+                    .unwrap_or_default();
             },
             Some(MenuItem::Volume) => self.volume = self.volume.next(),
             Some(MenuItem::Window) => {
@@ -342,6 +383,12 @@ impl LocalSession {
         }
     }
 
+    /// Whether the title has multiple selectable languages.
+    #[must_use]
+    pub const fn has_languages(self) -> bool {
+        self.language_count > 1
+    }
+
     /// Apply a single logical input edge and report title or host effects.
     pub fn input(&mut self, input: MenuInput) -> SessionEffect {
         match input {
@@ -361,11 +408,29 @@ impl LocalSession {
     /// Visible choices for the current screen, empty while playing.
     #[must_use]
     pub const fn items(self) -> &'static [MenuItem] {
+        if matches!(self.phase, SessionPhase::Settings) && self.has_languages()
+        {
+            return match (
+                self.fixed_window,
+                matches!(self.control_reset, ControlReset::Disabled),
+            ) {
+                (true, true) => &FIXED_SETTINGS_LANGUAGES,
+                (true, false) => &FIXED_SETTINGS_RESET_LANGUAGES,
+                (false, true) => &SETTINGS_LANGUAGES,
+                (false, false) => &SETTINGS_RESET_LANGUAGES,
+            };
+        }
         self.phase.items_with_sources(
             !matches!(self.control_reset, ControlReset::Disabled),
             self.window_switching(),
             self.sources,
         )
+    }
+
+    /// Current index in the title-declared locale list.
+    #[must_use]
+    pub const fn language_index(self) -> usize {
+        self.language_index
     }
 
     fn navigate(&mut self, input: MenuInput) {
@@ -490,6 +555,25 @@ impl LocalSession {
         self
     }
 
+    /// Offer a title-declared locale list and an admitted initial index.
+    ///
+    /// Out-of-range initial requests resolve to index zero; the title
+    /// orders the list with its selected default first.
+    #[must_use]
+    pub const fn with_languages(
+        mut self,
+        count: usize,
+        initial: usize,
+    ) -> Self {
+        self.language_count = count;
+        self.language_index = if initial < count {
+            initial
+        } else {
+            0
+        };
+        self
+    }
+
     /// Initialise a session with portable display and volume preferences.
     #[must_use]
     pub const fn with_preferences(
@@ -511,6 +595,8 @@ impl LocalSession {
             control_reset: ControlReset::Disabled,
             display: adjusted,
             fixed_window: false,
+            language_count: 0,
+            language_index: 0,
             phase: SessionPhase::MainMenu,
             restrict_fill,
             selection: 0,
@@ -550,6 +636,27 @@ impl LocalSession {
 mod tests {
     use super::*;
     use crate::presentation::WindowMode;
+
+    #[test]
+    fn language_selection_is_optional_and_wraps_without_gameplay_effects() {
+        let mut session = LocalSession::default().with_languages(3, 2);
+        assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert!(session.items().contains(&MenuItem::Language));
+        for _step in 0u8..3 {
+            assert_eq!(session.input(MenuInput::Next), SessionEffect::None);
+        }
+        assert_eq!(session.selected(), Some(MenuItem::Language));
+        verify_language_cycle(&mut session);
+    }
+
+    fn verify_language_cycle(session: &mut LocalSession) {
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert_eq!(session.language_index(), 0);
+        assert_eq!(session.input(MenuInput::Confirm), SessionEffect::None);
+        assert_eq!(session.language_index(), 1);
+        assert_eq!(session.phase(), SessionPhase::Settings);
+    }
 
     #[test]
     fn control_reset_is_hidden_without_host_support() {

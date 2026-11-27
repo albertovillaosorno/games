@@ -53,7 +53,7 @@ const PHASES: [SessionPhase; 4] = [
     SessionPhase::Paused,
     SessionPhase::Settings,
 ];
-const ROW_HEIGHT: u16 = 16;
+const ROW_HEIGHT: u16 = 14;
 const ROW_TOP: u16 = 48;
 const ROWS: [Row; 32] = [
     Row::Choice(MenuItem::Audio),
@@ -162,6 +162,7 @@ impl Row {
             MenuItem::Audio
             | MenuItem::Back
             | MenuItem::EditControls
+            | MenuItem::Language
             | MenuItem::Exit
             | MenuItem::MainMenu
             | MenuItem::Play
@@ -176,6 +177,16 @@ impl Row {
         limit: NonZeroUsize,
     ) -> Result<String, RenderError> {
         match self {
+            Self::Choice(MenuItem::Language) => text.format(
+                "menu.language.value",
+                MessageParameter {
+                    name: "name",
+                    value: MessageValue::Text(
+                        text.language_name.ok_or(RenderError::InvalidSprite)?,
+                    ),
+                },
+                limit,
+            ),
             Self::Choice(item) => {
                 text.literal(choice_key(item)).map(str::to_owned)
             },
@@ -241,6 +252,7 @@ impl Row {
 #[derive(Clone, Copy, Debug)]
 pub struct MenuArt {
     control_reset: bool,
+    language: bool,
     panels: TextAtlas,
     rows: TextAtlas,
     sources: SourceSettings,
@@ -268,6 +280,21 @@ impl MenuArt {
         )
     }
 
+    /// Exact atlas bytes with an additional language-selection row.
+    #[must_use]
+    pub fn bytes_with_language(
+        width: u16,
+        height: u16,
+        control_reset: bool,
+        sources: SourceSettings,
+    ) -> usize {
+        Self::bytes(width, height, control_reset, sources).saturating_add(
+            usize::from(width)
+                .saturating_mul(8)
+                .saturating_mul(usize::from(ROW_HEIGHT)),
+        )
+    }
+
     /// Upload static menu backgrounds and row variants under one byte budget.
     ///
     /// # Errors
@@ -283,6 +310,7 @@ impl MenuArt {
         let (locale, catalog) = english_catalog()?;
         Self::load_localised(scene, spec, content, MenuText {
             catalog: &catalog,
+            language_name: None,
             locale: &locale,
         })
     }
@@ -323,6 +351,11 @@ impl MenuArt {
             let highlighted = format!("> {label}");
             labels.extend([label, highlighted]);
         }
+        if text.language_name.is_some() {
+            let label = Row::Choice(MenuItem::Language).label(text, limit)?;
+            let highlighted = format!("> {label}");
+            labels.extend([label, highlighted]);
+        }
         let rows = labels
             .iter()
             .enumerate()
@@ -332,6 +365,7 @@ impl MenuArt {
             .collect::<Vec<_>>();
         Ok(Self {
             control_reset: content.control_reset,
+            language: text.language_name.is_some(),
             panels: TextAtlas::load(scene, spec, &panels)?,
             rows: TextAtlas::load(
                 scene,
@@ -363,7 +397,8 @@ impl MenuArt {
         if session.phase() == SessionPhase::Settings
             && (self.control_reset
                 == matches!(session.control_reset(), ControlReset::Disabled)
-                || self.window_switching != session.window_switching())
+                || self.window_switching != session.window_switching()
+                || self.language != session.has_languages())
         {
             return Err(RenderError::InvalidSprite);
         }
@@ -382,9 +417,16 @@ impl MenuArt {
             .ok_or(RenderError::InvalidSprite)?;
         draws.push(self.panels.draw(panel, left, top)?);
         for (index, item) in session.items().iter().copied().enumerate() {
-            let tile = Row::for_item(item, session)
-                .tile(item == selected, self.control_reset, self.sources)
-                .ok_or(RenderError::InvalidSprite)?;
+            let tile = if item == MenuItem::Language {
+                available_rows(self.control_reset, self.sources)
+                    .count()
+                    .saturating_mul(2)
+                    .saturating_add(usize::from(item == selected))
+            } else {
+                Row::for_item(item, session)
+                    .tile(item == selected, self.control_reset, self.sources)
+                    .ok_or(RenderError::InvalidSprite)?
+            };
             let offset = i32::try_from(index)
                 .map_err(|_error| RenderError::InvalidDimensions)?
                 .saturating_mul(i32::from(ROW_HEIGHT));
@@ -456,7 +498,10 @@ fn panel<'text>(
             .len(),
     )
     .unwrap_or(u16::MAX);
-    append_hints(&mut lines, width, hints, count);
+    let rows = count.saturating_add(u16::from(
+        matches!(phase, SessionPhase::Settings) && text.language_name.is_some(),
+    ));
+    append_hints(&mut lines, width, hints, rows);
     Ok(lines)
 }
 
@@ -491,6 +536,7 @@ const fn choice_key(item: MenuItem) -> &'static str {
         MenuItem::EffectsVolume => "menu.effects",
         MenuItem::EditControls => "menu.control.edit",
         MenuItem::Exit => "menu.exit",
+        MenuItem::Language => "menu.language.value",
         MenuItem::MainMenu => "menu.main",
         MenuItem::MusicVolume => "menu.music",
         MenuItem::Play => "menu.play",
@@ -630,6 +676,7 @@ mod tests {
         assert_eq!(catalog.first_missing(&es, MENU_MESSAGE_KEYS), None);
         let text = MenuText {
             catalog: &catalog,
+            language_name: None,
             locale: &es,
         };
         let limit = NonZeroUsize::new(256).unwrap_or(NonZeroUsize::MIN);
@@ -670,6 +717,73 @@ mod tests {
     }
 
     #[test]
+    fn language_menu_row_fits_and_matches_exact_budget() {
+        let loaded = english_catalog();
+        assert!(loaded.is_ok());
+        let Ok((locale, catalog)) = loaded else {
+            return;
+        };
+        let sources = SourceSettings::default();
+        let bytes = MenuArt::bytes_with_language(280, 192, true, sources);
+        let mut capture = Capture::default();
+        let art = MenuArt::load_localised(
+            &mut capture,
+            PlateLayout {
+                background: [0, 0, 0, 255],
+                height: 192,
+                max_bytes: NonZeroUsize::new(bytes)
+                    .unwrap_or(NonZeroUsize::MIN),
+                width: 280,
+            },
+            MenuContent {
+                control_reset: true,
+                main_hints: &["START"],
+                pause_hints: &["RESUME"],
+                settings_hints: &["FIRST", "SECOND", "THIRD"],
+                sources,
+                title: "TEST",
+                window_switching: true,
+            },
+            MenuText {
+                catalog: &catalog,
+                language_name: Some("English"),
+                locale: &locale,
+            },
+        );
+        assert!(art.is_ok());
+        let Ok(menu) = art else {
+            return;
+        };
+        verify_language_row(menu);
+        assert_eq!(
+            capture
+                .layouts
+                .iter()
+                .map(|layout| layout.bytes())
+                .sum::<usize>(),
+            bytes
+        );
+    }
+
+    fn verify_language_row(menu: MenuArt) {
+        let mut session = LocalSession::default()
+            .with_control_reset(true)
+            .with_languages(2, 0);
+        for input in [
+            MenuInput::Next,
+            MenuInput::Confirm,
+            MenuInput::Previous,
+            MenuInput::Previous,
+        ] {
+            assert_eq!(session.input(input), SessionEffect::None);
+        }
+        assert_eq!(session.selected(), Some(MenuItem::Language));
+        let mut draws = Vec::new();
+        assert_eq!(menu.queue(session, (0i32, 0i32), &mut draws), Ok(()));
+        assert_eq!(draws.len(), 8);
+    }
+
+    #[test]
     fn setting_rows_reflect_the_requested_value() {
         let loaded = english_catalog();
         assert!(loaded.is_ok());
@@ -678,6 +792,7 @@ mod tests {
         };
         let text = MenuText {
             catalog: &catalog,
+            language_name: None,
             locale: &locale,
         };
         let limit = NonZeroUsize::new(256).unwrap_or(NonZeroUsize::MIN);

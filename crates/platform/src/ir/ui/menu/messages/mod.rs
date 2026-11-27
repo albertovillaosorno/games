@@ -73,6 +73,7 @@ messages! {
     "menu.effects.value" => "EFFECTS: {percent}%", "EFECTOS: {percent}%";
     "menu.exit" => "EXIT", "SALIR";
     "menu.free-play" => "FREE PLAY", "JUEGO LIBRE";
+    "menu.language.value" => "LANGUAGE: {name}", "IDIOMA: {name}";
     "menu.main" => "MAIN MENU", "MEN\u{da} PRINCIPAL";
     "menu.master.value" => "MASTER: {percent}%", "GENERAL: {percent}%";
     "menu.music" => "MUSIC", "M\u{da}SICA";
@@ -94,6 +95,8 @@ messages! {
 pub struct MenuText<'text> {
     /// Catalogue containing shared message keys.
     pub catalog: &'text TranslationCatalog,
+    /// Current title-declared language name; None hides the selector.
+    pub language_name: Option<&'text str>,
     /// Locale used to resolve menu messages.
     pub locale: &'text LocaleTag,
 }
