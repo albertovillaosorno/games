@@ -3010,8 +3010,11 @@ master and source levels and reports them at startup. An original-backed
 native diagnostic using saved master 0, effects 25 and music 0 percent
 passed with dummy output; all three stored payload digests were unchanged.
 Fresh validation 1795743693663657586-2132651 passed 2,017 aggregate test
-executions. Physical audible playback, remaining sound events and exact
-sound parity remain open.
+executions. The rebuilt asset-free browser package verified 88 files
+(1,558,425 bytes), and both isolated Firefox live launches again passed
+the music mute, effects, reload and restore observations. Physical
+audible playback, remaining sound events and exact sound parity remain
+open.
 
 The opening combat camera may proceed beyond the old 362-column gate
 after the six provisional reinforcements are defeated. Next-launch
