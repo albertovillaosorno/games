@@ -118,6 +118,7 @@ pub(super) struct Catalogue {
     arrival: Option<ContentHash>,
     pub(super) backdrop: backdrop::Catalogue,
     bonus: Option<ContentHash>,
+    bonus_departure: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
     landing_markers: Option<ContentHash>,
     scenery: scenery::Catalogue,
@@ -171,6 +172,10 @@ impl Catalogue {
                     .saturating_mul(bonus::ATLAS_BYTES),
             )
             .saturating_add(
+                usize::from(self.bonus_departure.is_some())
+                    .saturating_mul(bonus::DEPARTURE_ATLAS_BYTES),
+            )
+            .saturating_add(
                 usize::from(self.stage_two.is_some())
                     .saturating_mul(world::stage_atlas_budget()),
             )
@@ -191,10 +196,20 @@ impl Catalogue {
                 usize::from(self.bonus.is_some())
                     .saturating_mul(bonus::ATLAS_COUNT.saturating_sub(1)),
             )
+            .saturating_add(
+                usize::from(self.bonus_departure.is_some()).saturating_mul(
+                    bonus::DEPARTURE_ATLAS_COUNT.saturating_sub(1),
+                ),
+            )
     }
 
     pub(super) fn backdrop_count(&self) -> usize {
         self.backdrop.count()
+    }
+
+    pub(super) fn bonus_departure_sprite_count(&self) -> usize {
+        usize::from(self.bonus_departure.is_some())
+            .saturating_mul(bonus::DEPARTURE_EXTRA_SPRITES)
     }
 
     fn complete(&self) -> bool {
@@ -229,6 +244,7 @@ impl Catalogue {
             && self.backdrop.complete()
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
+            && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.stage_two.is_none() || self.bonus.is_some())
     }
 
@@ -241,6 +257,7 @@ impl Catalogue {
             .saturating_add(self.backdrop_count())
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
+            .saturating_add(usize::from(self.bonus_departure.is_some()))
             .saturating_add(
                 usize::from(self.stage_two.is_some()).saturating_mul(2),
             )
@@ -254,6 +271,7 @@ impl Catalogue {
             .chain(self.backdrop.digests())
             .chain(self.wrestler.digests())
             .chain(self.bonus)
+            .chain(self.bonus_departure)
             .chain(self.arrival)
             .chain(self.landing_markers)
             .chain(self.stage_two.into_iter().flatten())
@@ -279,6 +297,13 @@ impl Catalogue {
             Some("bonus") => {
                 self.bonus =
                     Some(parse_single_bundle("bonus", line, self.bonus)?);
+            },
+            Some("bonus-departure") => {
+                self.bonus_departure = Some(parse_single_bundle(
+                    "bonus-departure",
+                    line,
+                    self.bonus_departure,
+                )?);
             },
             Some("arrival") => {
                 self.arrival =
@@ -348,7 +373,13 @@ impl Catalogue {
             backdrop: self.backdrop.load(store, scene)?,
             bonus: self
                 .bonus
-                .map(|digest| bonus::BonusArt::load(store, scene, digest))
+                .map(|digest| {
+                    bonus::BonusArt::load(
+                        store,
+                        scene,
+                        (digest, self.bonus_departure),
+                    )
+                })
                 .transpose()?,
             entries,
             scenery: self.scenery.load(store, scene)?,
@@ -1518,12 +1549,67 @@ mod tests {
             return;
         };
         assert_bonus_budget(&plain, &selected);
+        assert_departure_catalogue(&fighter, &record, &selected);
+
         assert_stage_two_catalogue(&fighter, &record, &selected);
         assert!(
             Catalogue::parse(&format!("{fighter}{record}{record}")).is_err()
         );
         assert!(
             Catalogue::parse(&format!("{fighter}bonus {HASH} extra")).is_err()
+        );
+    }
+
+    fn assert_departure_catalogue(
+        fighter: &str,
+        bonus_record: &str,
+        selected: &Catalogue,
+    ) {
+        let other = "c".repeat(64);
+        let departure = format!("bonus-departure {other}\n");
+        assert!(Catalogue::parse(&format!("{fighter}{departure}")).is_err());
+        let text = format!("{fighter}{bonus_record}{departure}");
+        let parsed = Catalogue::parse(&text);
+        assert!(parsed.is_ok());
+        if let Ok(value) = parsed {
+            assert_departure_budget(selected, &value, &other);
+        }
+        assert!(Catalogue::parse(&format!("{text}{departure}")).is_err());
+        assert!(
+            Catalogue::parse(&format!(
+                "{fighter}{bonus_record}bonus-departure invalid"
+            ))
+            .is_err()
+        );
+    }
+
+    fn assert_departure_budget(
+        selected: &Catalogue,
+        value: &Catalogue,
+        other: &str,
+    ) {
+        assert_eq!(value.count(), selected.count().saturating_add(1));
+        assert_eq!(value.digests().count(), value.count());
+        assert!(
+            value
+                .digests()
+                .any(|digest| Some(digest) == other.parse().ok())
+        );
+        assert_eq!(
+            value.atlas_count(),
+            selected
+                .atlas_count()
+                .saturating_add(bonus::DEPARTURE_ATLAS_COUNT)
+        );
+        assert_eq!(
+            value.atlas_bytes(),
+            selected
+                .atlas_bytes()
+                .saturating_add(bonus::DEPARTURE_ATLAS_BYTES)
+        );
+        assert_eq!(
+            value.bonus_departure_sprite_count(),
+            bonus::DEPARTURE_EXTRA_SPRITES
         );
     }
 

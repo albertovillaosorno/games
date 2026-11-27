@@ -55,13 +55,14 @@ use super::{
     ground_position, live, live_with_scroll, size,
 };
 use crate::{
-    BONUS_MAX_INFLATION, Bonus, BonusPhase, CONTINUE_TICKS, Cabinet, Control,
-    DiagnosticIntent, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS, Encounter, Enemy,
-    EnemyAction, FAR_STREET_ADMISSION, Facing, GROUND_ATTACK_RECOVERY_TICKS,
-    LATER_COMBAT_GATE, MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE,
-    MID_STREET_ENEMY_COUNT, Maneuver, OPPOSING_ENEMY_COUNT, PLAYER_HEALTH,
-    PLAYER_STOCKS, Participation, Phase, Player, Point, REFILL_TICKS,
-    STOCK_REENTRY_TICKS, Station, TICK_INTERVAL, Wrestler, WrestlerAction,
+    BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase, CONTINUE_TICKS,
+    Cabinet, Control, DiagnosticIntent, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
+    Encounter, Enemy, EnemyAction, FAR_STREET_ADMISSION, Facing,
+    GROUND_ATTACK_RECOVERY_TICKS, LATER_COMBAT_GATE, MID_STREET_ADMISSION,
+    MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT, Maneuver,
+    OPPOSING_ENEMY_COUNT, PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase,
+    Player, Point, REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
+    Wrestler, WrestlerAction,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -725,8 +726,11 @@ fn verify_bonus_results(
     if counted == ranked {
         return Err(failure("bonus score count did not change readback"));
     }
+    verify_bonus_motion(scene, art, simulation)?;
     await_bonus(simulation, BonusPhase::Complete)?;
     let _complete = art.present(scene, simulation.state())?;
+    super::bonus::verify_departure(scene, art, simulation.state(), None)?;
+
     if counted == scene.readback()?
         || simulation.state().bonus().is_none_or(|bonus| {
             bonus.visual_inflation(Player::Marge).is_some()
@@ -737,6 +741,44 @@ fn verify_bonus_results(
         return Err(failure("bonus departure did not retain final score"));
     }
     Ok(())
+}
+
+fn verify_bonus_motion(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    if !art
+        .poses
+        .bonus
+        .as_ref()
+        .is_some_and(super::bonus::BonusArt::has_departure)
+    {
+        return Ok(());
+    }
+    for _ in 0..600u16 {
+        if simulation
+            .state()
+            .bonus()
+            .and_then(|bonus| bonus.departure(Player::Marge))
+            == Some(BonusDeparture::Rising { balloon: 0, character: 0 })
+        {
+            break;
+        }
+        advance(simulation, 1)?;
+    }
+    for expected in [(11i32, 0i32), (25i32, 5i32)] {
+        advance(simulation, 20)?;
+        let _drawn = art.present(scene, simulation.state())?;
+        super::bonus::verify_departure(
+            scene,
+            art,
+            simulation.state(),
+            Some(expected),
+        )?;
+    }
+    write_status(format_args!("Bonus: independent departure layers verified"))
+        .map_err(failure)
 }
 
 fn verify_stage_card(

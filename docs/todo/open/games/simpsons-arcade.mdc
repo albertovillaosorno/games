@@ -5215,3 +5215,37 @@ competition. The regression exercises an early fourth-station edge,
 an absent station after the minimum wait and the eligible fresh edge
 that advances ready. Existing neutral timeout and independent balloon
 scoring behavior are unchanged. Original scheduler and art remain open.
+
+### Separate balloon departure layers
+
+Three retained original routes provide 1,760 paired fixed-point height
+and velocity samples across eleven ranked departures, including retirement.
+A separate neutral replay provides 640 linked-character samples. Balloon
+height increases at 160 units per tick after the first tick, with 256
+units per pixel. The character remains at its initial height through
+tick 32; both rise together as velocity increases by eight units per
+tick from tick 33. Both moving records retire at tick 159. Stationary
+pump records retain their height. Rank delays remain 15 ticks apart.
+
+The portable bonus exposes the two relative displacements without
+changing frozen scores, participant admission or the existing completion
+boundary. An optional `bonus-departure SHA` pose catalogue record
+requires the existing bonus selection. One exactly reproduced neutral
+scene supplies four isolated hanging character layers and four identical
+ground pump payloads. The renderer admits five additional atlases
+(39,096 RGBA bytes), sharing one pump atlas across stations. During each
+ranked departure the balloon and character rise independently; the pump
+stays after both retire. Earlier catalogues retain their existing
+presentation. The hanging pose is a single captured frame, and balloon
+scaling, original pose cadence, initial alignment and pixel parity
+remain provisional. No original art or private captures are distributed.
+
+Fresh workspace validation passed. The optimized 4,052,144-byte Linux
+build passed the original-backed full-campaign synthetic-touch smoke
+with the departure selection in adaptive, aspect-fit, fill, integer and
+stretch modes under Xvfb software OpenGL and dummy audio. Readback and
+draw registration check the two rising layers at departure ticks 20
+and 40, and the stationary pump after retirement. All 600 movement and
+20 strike submissions per mode met the 16.667 ms budget. Whole-smoke
+peak RSS ranged from 186,777,600 to 188,354,560 bytes. Physical graphics,
+audio and input acceptance remain open.

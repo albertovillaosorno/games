@@ -35,13 +35,16 @@ use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::{SpriteDraw, SpriteRect};
-use games_platform::ir::storage::bundle::BundleSource;
+use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
 
 use super::{
-    Art, dimension, failure, open_bundle, size, station_hud, title_messages,
+    Art, Scene, dimension, failure, open_bundle, scenery, size, station_hud,
+    title_messages,
 };
-use crate::{BONUS_MAX_INFLATION, Bonus, BonusPhase, Player};
+use crate::{
+    BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase, Cabinet, Player,
+};
 
 const HEADER_WIDTH: u16 = 288;
 const PLATE_HEIGHT: u16 = 12;
@@ -61,6 +64,9 @@ const RANK_BYTES: usize = 48 * 12 * 4 * 4;
 pub(super) const ATLAS_BYTES: usize =
     333_572 + HEADER_BYTES * title_messages::LOCALES.len() + RANK_BYTES;
 pub(super) const ATLAS_COUNT: usize = 10 + title_messages::LOCALES.len();
+pub(super) const DEPARTURE_ATLAS_BYTES: usize = 39_096;
+pub(super) const DEPARTURE_ATLAS_COUNT: usize = 5;
+pub(super) const DEPARTURE_EXTRA_SPRITES: usize = 4;
 
 const BACKGROUND: SpriteSpec = SpriteSpec {
     height: 224,
@@ -130,6 +136,62 @@ const PUMPS: [SpriteSpec; 4] = [
     },
 ];
 
+const HANGING: [SpriteSpec; 4] = [
+    SpriteSpec {
+        height: 76,
+        key: "bonus/marge-hanging",
+        width: 31,
+        x: 59,
+        y: 122,
+    },
+    SpriteSpec {
+        height: 64,
+        key: "bonus/homer-hanging",
+        width: 30,
+        x: 123,
+        y: 134,
+    },
+    SpriteSpec {
+        height: 80,
+        key: "bonus/bart-hanging",
+        width: 28,
+        x: 187,
+        y: 118,
+    },
+    SpriteSpec {
+        height: 80,
+        key: "bonus/lisa-hanging",
+        width: 26,
+        x: 252,
+        y: 118,
+    },
+];
+const GROUND_PUMP: SpriteSpec = SpriteSpec {
+    height: 31,
+    key: "bonus/marge-ground-pump",
+    width: 38,
+    x: 53,
+    y: 169,
+};
+const GROUND_PUMPS: [SpriteSpec; 4] = [
+    GROUND_PUMP,
+    SpriteSpec {
+        key: "bonus/homer-ground-pump",
+        x: 115,
+        ..GROUND_PUMP
+    },
+    SpriteSpec {
+        key: "bonus/bart-ground-pump",
+        x: 179,
+        ..GROUND_PUMP
+    },
+    SpriteSpec {
+        key: "bonus/lisa-ground-pump",
+        x: 241,
+        ..GROUND_PUMP
+    },
+];
+
 #[derive(Clone, Copy, Debug)]
 struct SpriteSpec {
     height: u32,
@@ -163,48 +225,132 @@ impl SpriteSpec {
             height: dimension(self.height.saturating_add(extra_height))?,
         })
     }
+
+    fn load(
+        self,
+        scene: &mut SceneSession<'_, '_>,
+        bundle: &CanonicalBundle,
+    ) -> Result<Art, RenderError> {
+        let (art, pixels) = Art::load_with_pixels(scene, bundle, self.key)?;
+        if art.rect.width.get() != self.width
+            || art.rect.height.get() != self.height
+        {
+            return Err(failure("unexpected bonus sprite extent"));
+        }
+        if self.key == BACKGROUND.key
+            && pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel.last() != Some(&255))
+        {
+            return Err(failure("bonus background must be opaque"));
+        }
+        Ok(art)
+    }
+
+    fn rising_destination(
+        self,
+        inflation: u8,
+        rise: u32,
+    ) -> Result<SpriteRect, RenderError> {
+        let mut destination = self.destination(inflation)?;
+        let pixels = i32::try_from(rise >> 8u32).map_err(failure)?;
+        destination.y = destination.y.saturating_sub(pixels);
+        Ok(destination)
+    }
+}
+
+#[derive(Debug)]
+struct DepartureArt {
+    hanging: [Art; 4],
+    pump: Art,
+}
+
+impl DepartureArt {
+    fn load(
+        store: BundleSource<'_>,
+        scene: &mut SceneSession<'_, '_>,
+        digest: ContentHash,
+    ) -> Result<Self, RenderError> {
+        let bundle = open_bundle(store, digest)?;
+        let [marge, homer, bart, lisa] = HANGING;
+        let hanging = [
+            marge.load(scene, &bundle)?,
+            homer.load(scene, &bundle)?,
+            bart.load(scene, &bundle)?,
+            lisa.load(scene, &bundle)?,
+        ];
+        let [first, second, third, fourth] = GROUND_PUMPS;
+        let record = bundle
+            .manifest()
+            .record(first.key)
+            .ok_or_else(|| failure("missing ground pump"))?;
+        // All four pumps use the same observed immutable payload.
+        for spec in [second, third, fourth] {
+            let other = bundle
+                .manifest()
+                .record(spec.key)
+                .ok_or_else(|| failure("missing ground pump"))?;
+            if other.digest != record.digest || other.format != record.format {
+                return Err(failure("ground pump art differs by station"));
+            }
+        }
+        Ok(Self {
+            hanging,
+            pump: first.load(scene, &bundle)?,
+        })
+    }
+
+    fn queue(
+        &self,
+        player: Player,
+        departure: BonusDeparture,
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        let index = player.index();
+        let pump = GROUND_PUMPS.get(index).ok_or(RenderError::InvalidSprite)?;
+        draws.push(self.pump.draw(pump.destination(0)?, false));
+        if let BonusDeparture::Rising { character, .. } = departure {
+            let spec = HANGING.get(index).ok_or(RenderError::InvalidSprite)?;
+            let art =
+                self.hanging.get(index).ok_or(RenderError::InvalidSprite)?;
+            draws.push(art.draw(spec.rising_destination(0, character)?, false));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 pub(super) struct BonusArt {
     background: Art,
     balloons: [Art; 4],
+    departure: Option<DepartureArt>,
     headers: Vec<TextAtlas>,
     pumps: [Art; 4],
     ranks: TextAtlas,
 }
 
 impl BonusArt {
+    pub(super) const fn has_departure(&self) -> bool {
+        self.departure.is_some()
+    }
+
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
-        digest: ContentHash,
+        (digest, departure_digest): (ContentHash, Option<ContentHash>),
     ) -> Result<Self, RenderError> {
         let bundle = open_bundle(store, digest)?;
-        let mut load = |spec: SpriteSpec| {
-            let (art, pixels) =
-                Art::load_with_pixels(scene, &bundle, spec.key)?;
-            if art.rect.width.get() != spec.width
-                || art.rect.height.get() != spec.height
-            {
-                return Err(failure("unexpected bonus sprite extent"));
-            }
-            if spec.key == BACKGROUND.key
-                && pixels
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .any(|pixel| pixel.last() != Some(&255))
-            {
-                return Err(failure("bonus background must be opaque"));
-            }
-            Ok(art)
-        };
+        let mut load = |spec: SpriteSpec| spec.load(scene, &bundle);
         let background = load(BACKGROUND)?;
         let [marge, homer, bart, lisa] = BALLOONS;
         let balloons = [load(marge)?, load(homer)?, load(bart)?, load(lisa)?];
         let [first, second, third, fourth] = PUMPS;
         let pumps = [load(first)?, load(second)?, load(third)?, load(fourth)?];
+        let departure = departure_digest
+            .map(|address| DepartureArt::load(store, scene, address))
+            .transpose()?;
         let catalogue = title_messages::catalogue()?;
         let mut headers = Vec::with_capacity(title_messages::LOCALES.len());
         for index in 0..title_messages::LOCALES.len() {
@@ -223,6 +369,7 @@ impl BonusArt {
         Ok(Self {
             background,
             balloons,
+            departure,
             headers,
             pumps,
             ranks,
@@ -287,10 +434,23 @@ impl BonusArt {
             self.balloons.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump_art =
             self.pumps.get(index).ok_or(RenderError::InvalidSprite)?;
-        if let Some(amount) = bonus.visual_inflation(player) {
+        if let Some((art, departure)) =
+            self.departure.as_ref().zip(bonus.departure(player))
+        {
+            if let BonusDeparture::Rising { balloon: rise, .. } = departure
+                && let Some(amount) = bonus.visual_inflation(player)
+            {
+                draws.push(
+                    balloon_art
+                        .draw(balloon.rising_destination(amount, rise)?, false),
+                );
+            }
+            art.queue(player, departure, draws)?;
+        } else if let Some(amount) = bonus.visual_inflation(player) {
             draws.push(balloon_art.draw(balloon.destination(amount)?, false));
             draws.push(pump_art.draw(pump.destination(0)?, false));
         }
+
         if let Some((rank, score)) = bonus.displayed_result(player) {
             let tile = usize::from(rank.saturating_sub(1));
             draws.push(self.ranks.draw(
@@ -307,6 +467,41 @@ impl BonusArt {
         }
         Ok(())
     }
+}
+
+fn departure_checkpoint(
+    bonus: &BonusArt,
+    departure: &DepartureArt,
+    draws: &[SpriteDraw],
+    expected: Option<(i32, i32)>,
+) -> Result<Vec<SpriteDraw>, RenderError> {
+    let balloon = bonus.balloons.first().ok_or(RenderError::InvalidSprite)?;
+    let hanging = departure
+        .hanging
+        .first()
+        .ok_or(RenderError::InvalidSprite)?;
+    let pump = departure.pump.draw(GROUND_PUMP.destination(0)?, false);
+    let mut layers = vec![pump];
+    if let Some((balloon_rise, character_rise)) = expected {
+        let balloon_spec =
+            BALLOONS.first().ok_or(RenderError::InvalidSprite)?;
+        let hanging_spec = HANGING.first().ok_or(RenderError::InvalidSprite)?;
+        let mut balloon_rect = balloon_spec.destination(BONUS_MAX_INFLATION)?;
+        balloon_rect.y = balloon_rect.y.saturating_sub(balloon_rise);
+        let mut hanging_rect = hanging_spec.destination(0)?;
+        hanging_rect.y = hanging_rect.y.saturating_sub(character_rise);
+        layers.push(balloon.draw(balloon_rect, false));
+        layers.push(hanging.draw(hanging_rect, false));
+    } else if draws
+        .iter()
+        .any(|draw| draw.atlas == balloon.atlas || draw.atlas == hanging.atlas)
+    {
+        return Err(failure("departed bonus layers still drawn"));
+    }
+    if layers.iter().any(|layer| !draws.contains(layer)) {
+        return Err(failure("bonus departure layer registration differs"));
+    }
+    Ok(layers)
 }
 
 fn plates(
@@ -341,9 +536,60 @@ fn plates(
     )
 }
 
+/// Verify the winning Marge departure at independent motion checkpoints.
+pub(super) fn verify_departure(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    expected: Option<(i32, i32)>,
+) -> Result<(), RenderError> {
+    let Some(bonus) = &art.poses.bonus else {
+        return Ok(());
+    };
+    let Some(departure) = &bonus.departure else {
+        return Ok(());
+    };
+    let layers = departure_checkpoint(bonus, departure, &art.draws, expected)?;
+    let view = art.presentation_view(scene, cabinet)?;
+    let actual = scene.readback()?;
+    let baseline_draws: Vec<_> = art
+        .draws
+        .iter()
+        .copied()
+        .filter(|draw| !layers.contains(draw))
+        .collect();
+    let bounds: Vec<_> = layers.iter().map(|draw| draw.destination).collect();
+    let _baseline = scene.present([24, 22, 30], &baseline_draws)?;
+    let baseline = scene.readback()?;
+    let _restored = art.present(scene, cabinet)?;
+    scenery::verify_pixels(&actual, &baseline, view.width, &bounds)
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn departure_translation_preserves_sprite_extent() {
+        for (sprite, inflation) in HANGING
+            .into_iter()
+            .map(|spec| (spec, 0))
+            .chain(BALLOONS.into_iter().map(|spec| (spec, BONUS_MAX_INFLATION)))
+        {
+            let start = sprite.destination(inflation);
+            let end = sprite.rising_destination(inflation, 5_288);
+            assert!(start.is_ok());
+            assert!(end.is_ok());
+            let (Ok(initial), Ok(rising)) = (start, end) else {
+                return;
+            };
+            assert_eq!(rising.x, initial.x);
+            assert_eq!(rising.y, initial.y.saturating_sub(20));
+            assert_eq!(rising.width, initial.width);
+            assert_eq!(rising.height, initial.height);
+        }
+    }
 
     #[test]
     fn inflation_preserves_bottom_and_grows_within_lane() {

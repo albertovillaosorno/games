@@ -3607,6 +3607,7 @@ fn scene_limits(
         sprites: size(
             enemy_sprites
                 .saturating_add(source.poses.scenic_sprite_count())
+                .saturating_add(source.poses.bonus_departure_sprite_count())
                 .saturating_add(
                     usize::from(source.poses.has_wrestler()).saturating_mul(2),
                 )
@@ -3633,6 +3634,7 @@ fn draw_capacity(source: &Sources<'_>) -> usize {
         21usize
     };
     base.saturating_add(source.poses.scenic_sprite_count())
+        .saturating_add(source.poses.bonus_departure_sprite_count())
         .saturating_add(
             usize::from(source.poses.has_wrestler()).saturating_mul(2),
         )

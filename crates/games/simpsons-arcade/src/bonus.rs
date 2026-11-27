@@ -49,6 +49,9 @@ const RESULT_COUNT_TICKS: u16 = 4;
 const RESULT_INFLATION_TARGET: u16 = 192;
 const RESULT_EXIT_STAGGER: u16 = 15;
 const RESULT_EXIT_TICKS: u16 = 160;
+const DEPARTURE_HOLD_TICKS: u16 = 32;
+const DEPARTURE_SPEED: u32 = 160;
+const DEPARTURE_ACCELERATION: u32 = 8;
 const STAGE_CARD_MIN_TICKS: u16 = 65;
 const STAGE_CARD_MAX_TICKS: u16 = 192;
 // Separate measured setup phase; the entrance starts with its own tick 0.
@@ -83,6 +86,48 @@ pub enum BonusPhase {
     StageSetup,
     /// Hold the cleared street before the bonus.
     Victory,
+}
+
+/// Read-only motion of a ranked participant during the bonus departure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BonusDeparture {
+    /// The balloon and character have retired; the pump stays on the ground.
+    Departed,
+    /// The character is attached to the balloon independently of the pump.
+    Rising {
+        /// Balloon displacement above its starting height, in 1/256 pixels.
+        balloon: u32,
+        /// Character displacement above its starting height, in 1/256 pixels.
+        character: u32,
+    },
+}
+
+impl BonusDeparture {
+    fn at(elapsed: u16) -> Self {
+        if elapsed >= RESULT_EXIT_TICKS - 1 {
+            return Self::Departed;
+        }
+        let (balloon, character) = Self::displacement(elapsed);
+        Self::Rising { balloon, character }
+    }
+
+    fn displacement(elapsed: u16) -> (u32, u32) {
+        // The balloon advances at constant speed before the linked character
+        // begins moving. Both accelerate together after the hold.
+        let constant_ticks = u32::from(elapsed.saturating_sub(1));
+        let acceleration_ticks =
+            u32::from(elapsed.saturating_sub(DEPARTURE_HOLD_TICKS + 1));
+        let acceleration = acceleration_ticks
+            .saturating_mul(acceleration_ticks.saturating_add(1))
+            .saturating_mul(DEPARTURE_ACCELERATION >> 1u32);
+        let balloon = constant_ticks
+            .saturating_mul(DEPARTURE_SPEED)
+            .saturating_add(acceleration);
+        let character = balloon.saturating_sub(
+            u32::from(DEPARTURE_HOLD_TICKS - 1).saturating_mul(DEPARTURE_SPEED),
+        );
+        (balloon, character)
+    }
 }
 
 /// Inverse balloon axes in fixed-point units, with a brief leak delay.
@@ -216,6 +261,15 @@ impl ResultSequence {
             .saturating_add(1)
     }
 
+    fn departure(self, score: u8) -> Option<BonusDeparture> {
+        if self.stage != ResultStage::Exit {
+            return None;
+        }
+        self.stage_tick
+            .checked_sub(self.exit_start(score))
+            .map(BonusDeparture::at)
+    }
+
     fn displayed(self, score: u8, tick: u16) -> Option<(u8, u8)> {
         let rank = self.rank(score);
         if self.stage != ResultStage::Reveal {
@@ -246,10 +300,12 @@ impl ResultSequence {
         u8::try_from(bits.count_ones()).unwrap_or_default()
     }
 
+    fn exit_start(self, score: u8) -> u16 {
+        u16::from(self.rank(score)).saturating_mul(RESULT_EXIT_STAGGER)
+    }
+
     fn exit_ticks(self, score: u8) -> u16 {
-        u16::from(self.rank(score))
-            .saturating_mul(RESULT_EXIT_STAGGER)
-            .saturating_add(RESULT_EXIT_TICKS)
+        self.exit_start(score).saturating_add(RESULT_EXIT_TICKS)
     }
 
     fn group(self, score: u8) -> u8 {
@@ -310,7 +366,7 @@ impl ResultSequence {
 
 /// Read-only bonus state, in character rather than physical-seat order.
 ///
-/// Axis scheduling and departure animation remain independent native choices.
+/// Axis scheduling remains an independent native choice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Bonus {
     balloons: [Balloon; 4],
@@ -412,6 +468,13 @@ impl Bonus {
         } else {
             seconds.saturating_mul(100).saturating_add(hundredths)
         })
+    }
+
+    /// Departure motion once this admitted station's ranked delay expires.
+    #[must_use]
+    pub fn departure(self, player: Player) -> Option<BonusDeparture> {
+        let result = self.result?;
+        result.departure(result.score(player)?)
     }
 
     /// Revealed rank and animated point count during the results sequence.
@@ -656,6 +719,15 @@ mod tests {
     fn assert_departed(bonus: Bonus) {
         assert_eq!(bonus.phase(), BonusPhase::Complete);
         assert_eq!(bonus.visual_inflation(Player::Homer), None);
+        assert_eq!(
+            bonus.departure(Player::Homer),
+            Some(BonusDeparture::Departed)
+        );
+        assert_eq!(
+            bonus.departure(Player::Marge),
+            Some(BonusDeparture::Departed)
+        );
+        assert_eq!(bonus.departure(Player::Bart), None);
         assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 64)));
     }
 
@@ -686,6 +758,58 @@ mod tests {
         assert_eq!(bonus.inflation(Player::Marge), Some(64));
         assert_eq!(bonus.rank(Player::Homer), Some(4));
         bonus
+    }
+
+    #[test]
+    fn departure_matches_fixed_point_hold_and_acceleration() {
+        let checkpoints = [
+            (0, 0, 0),
+            (1, 0, 0),
+            (2, 160, 0),
+            (32, 4_960, 0),
+            (33, 5_120, 160),
+            (34, 5_288, 328),
+            (159, 0x184c8 - 0x2800, 0x184c8 - 0x3b60),
+        ];
+        for (elapsed, balloon, character) in checkpoints {
+            assert_eq!(
+                BonusDeparture::displacement(elapsed),
+                (balloon, character)
+            );
+        }
+        assert!(matches!(
+            BonusDeparture::at(158),
+            BonusDeparture::Rising { .. }
+        ));
+        assert_eq!(BonusDeparture::at(159), BonusDeparture::Departed);
+        assert_eq!(BonusDeparture::at(160), BonusDeparture::Departed);
+    }
+
+    #[test]
+    fn departures_are_rank_staggered_and_exclude_nonparticipants() {
+        let mut bonus = winning_results();
+        let mut first = None;
+        let mut fourth = None;
+        for elapsed in 0..800u16 {
+            assert_eq!(bonus.departure(Player::Bart), None);
+            if first.is_none() && bonus.departure(Player::Marge).is_some() {
+                first = Some(elapsed);
+            }
+            if fourth.is_none() && bonus.departure(Player::Homer).is_some() {
+                fourth = Some(elapsed);
+            }
+            if bonus.phase() == BonusPhase::Complete {
+                break;
+            }
+            bonus.advance([false; 4], false);
+        }
+        assert_eq!(
+            fourth
+                .zip(first)
+                .map(|(late, early)| late.saturating_sub(early)),
+            Some(45)
+        );
+        assert_departed(bonus);
     }
 
     #[test]

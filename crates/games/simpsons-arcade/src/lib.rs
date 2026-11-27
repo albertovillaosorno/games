@@ -49,7 +49,7 @@ mod wrestler;
 use std::mem;
 use std::time::Duration;
 
-pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusPhase};
+pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
