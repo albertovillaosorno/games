@@ -148,11 +148,12 @@ region reports the terminal message; reload the page to launch again.
 The catalogue must use `parent=.`, windowed presentation, no native
 settings/control/device paths, and `launch-poses.txt` if poses are used.
 No original assets are included in the package or automatically uploaded.
-Display mode, master volume and admitted control edits use a fixed
-origin-local preference namespace. Control edits take effect on the next
-launch; fullscreen remains unavailable. If storage is unavailable at
-startup, display and volume remain session-only and control editing is
-not offered. Incompatible stored values are rejected rather than replaced.
+Display mode, master volume, admitted effects and music levels, and control
+edits use a fixed origin-local preference namespace. Control edits take
+effect on the next launch; fullscreen remains unavailable. If storage is
+unavailable at startup, display and volume remain session-only and control
+editing is not offered. Incompatible stored values are rejected rather
+than replaced.
 Browser control profiles reject keyboard names the adapter cannot translate.
 They also reject controller buttons outside the standard Gamepad mapping;
 extended native paddles, miscellaneous and touchpad buttons remain native-only.
@@ -197,7 +198,11 @@ that overlap the running executable's directory. Both checks resolve paths
 before comparison, including links. These are preflights, not isolation
 guarantees against concurrent filesystem changes.
 Without this selection, display and volume changes are session-only and
-control editing/reset is unavailable. A normal launch with the directory
+control editing/reset is unavailable. The Audio submenu of Settings cycles
+master and admitted source levels through 100, 75, 50, 25 and 0 percent.
+Saved effects and music levels override their launch defaults independently
+when the matching source is admitted; unavailable sources have no row and
+retain any saved setting. A normal launch with the directory
 selected enables the next-launch control editor; smoke never writes it.
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`

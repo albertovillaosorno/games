@@ -2500,8 +2500,9 @@ progression remains open.
 Fill may crop the game HUD. With touch enabled, only the game scene is
 cropped; the complete control strip is fitted in its protected region.
 Settings can also be changed through the main or pause menu: Up/Down selects,
-Primary cycles display, toggles desktop fullscreen or cycles master
-volume (100, 75, 50, 25 and 0 percent); Back returns.
+Primary cycles display, toggles desktop fullscreen or opens the Audio
+submenu; Back returns. Audio cycles master and admitted effects and music
+levels independently (100, 75, 50, 25 and 0 percent).
 Menus temporarily use aspect-fit when Fill is selected for gameplay.
 Settings describes whether the selected world strip permits adaptive width.
 Changes apply immediately. To retain them across launches, create a
@@ -2514,7 +2515,8 @@ values. In-game display and volume changes are stored; smoke runs never write
 settings.
 The directory must exist and be trusted, and must not contain game-progress
 slots. The versioned display payload is stored atomically in slot-0.gms;
-master volume uses the independent slot-2.gms.
+master volume uses the independent slot-2.gms. Effects and music use
+separately typed slot-3.gms and slot-4.gms.
 Malformed data or failed persistence is reported as an error. Saved Fill
 is available with touch; settings menus temporarily fit the whole frame.
 
@@ -2962,8 +2964,9 @@ Set optional `effects_volume=25` and `music_volume=50` independently
 are 0, 25, 50, 75 and 100; omitted values preserve full source gain.
 The existing persistent master volume still applies to the final mix.
 A music level requires a music selection, and effects require the base
-audio selection. The source levels persist in the catalogue, not in
-interactive settings rows. Native and browser selection share admission.
+audio selection. The catalogue specifies defaults; persisted interactive
+source levels take precedence when their source is admitted. Native and
+browser selection share admission.
 
 The optimized native original-backed offscreen OpenGL diagnostic passed
 with full music, both sources muted, music alone at 50 percent, and
@@ -2973,9 +2976,37 @@ An explicit PipeWire HDMI output opened and passed the muted diagnostic;
 this verifies device selection and queue admission, not audible playback
 or physical listening. All six portable core targets and 1,997 aggregate
 test executions passed fresh validation
-1795741620123438255-1789147. Independent interactive volume settings,
-audible playback, browser live playback of the selected music, remaining
-sound events and exact sound parity remain open.
+1795741620123438255-1789147.
+
+The shared session now exposes Audio settings with separate master, effects
+and music rows for admitted sources. Source changes attenuate active and
+new voices without restarting them and invalidate already-mixed queued PCM.
+The native and browser stores use independent typed preferences. An
+absent source is not editable and retains its stored setting. Smoke runs
+do not write the selected preference store.
+
+Four optimized original-backed native offscreen diagnostics passed with
+full effects and music, both muted, effects muted with music at 50 percent,
+and effects only. The isolated source-change diagnostic confirms stale PCM
+is discarded, active voices survive and playback resumes after settings.
+Four isolated Xvfb live launches with synthetic input verified effects and
+music persistence, a missing music source preserving its saved setting,
+and recovery of that setting when music was readmitted. Master remained
+unchanged, with no slot-2.gms write.
+
+Firefox with a trusted directory selection and isolated virtual audio sink
+passed two live launches on the same origin. In the observed left channel,
+intro music submitted 17,142 nonzero samples, muted music submitted zero
+in 16,384 frames, and an attack still submitted 12,784 nonzero samples.
+After reload, muted music submitted zero in 16,640 frames; restoring music
+to 100 percent submitted 16,878 nonzero samples. Effects remained at 75
+percent, master was unchanged, and both launches closed their audio context
+and frame loop. This verifies browser audio submission and local persistence,
+not physical audibility. The asset-free browser package contained 88 files
+(1,557,904 bytes). Fresh validation with the native dummy audio smoke
+passed in 1795743084666126958-2027088; the shared follow-up gate also passed
+in 1795743165010875652-2039583. Physical audible playback, remaining sound
+events and exact sound parity remain open.
 
 The opening combat camera may proceed beyond the old 362-column gate
 after the six provisional reinforcements are defeated. Next-launch
