@@ -41,6 +41,7 @@ use games_assets::{
 use games_platform::ir::importer::reference::{Machine, Pixel};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::staging::CanonicalStaging;
+use games_platform::ir::toolchain;
 
 use super::{
     Arguments, GraphicsPayloads, Observation, SceneAssets, SpriteObservation,
@@ -124,9 +125,13 @@ impl Art {
             false,
         )?;
         background.stage("scene/background", &mut records, &mut stage)?;
+        let mut placements = Vec::with_capacity(self.groups.len());
         for group in &self.groups {
-            let actor =
-                isolate((machine, assets), observation, &sprites, group)?;
+            let Crop {
+                image: actor,
+                origin: (left, top),
+            } = isolate((machine, assets), observation, &sprites, group)?;
+            placements.push((&group.key, left, top));
             actor.stage(&group.key, &mut records, &mut stage)?;
         }
         let manifest = AssetManifest::new(
@@ -135,7 +140,12 @@ impl Art {
             limits,
         )
         .map_err(|error| format!("manifest: {error:?}"))?;
-        publication::finish(stage, &manifest, limits)
+        publication::finish(stage, &manifest, limits)?;
+        for (key, left, top) in placements {
+            toolchain::write_line(&format!("Crop origin {key}: {left},{top}"))
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     /// Verify a scene and publish the selected layers independently.
@@ -270,8 +280,14 @@ struct Image {
     width: usize,
 }
 
+#[derive(Debug)]
+struct Crop {
+    image: Image,
+    origin: (usize, usize),
+}
+
 impl Image {
-    fn crop(&self) -> Result<Self, String> {
+    fn crop(&self) -> Result<Crop, String> {
         let bounds = self
             .pixels
             .chunks_exact(self.width)
@@ -313,7 +329,10 @@ impl Image {
                 .ok_or_else(|| String::from("crop outside raster"))?;
             pixels.extend_from_slice(slice);
         }
-        Ok(Self { height, pixels, width })
+        Ok(Crop {
+            image: Self { height, pixels, width },
+            origin: (left, top),
+        })
     }
 
     fn from_pens(
@@ -477,7 +496,7 @@ fn isolate(
     observation: &Observation,
     sprites: &SpriteObservation,
     group: &Group,
-) -> Result<Image, String> {
+) -> Result<Crop, String> {
     let (machine, assets) = context;
     let ram = select(&sprites.ram, &group.indices)?;
     let (_, mixer_raw) = observation
@@ -686,13 +705,14 @@ mod tests {
             [1, 2, 3, 255];
         *pixels.get_mut(10).ok_or_else(|| String::from("fixture"))? =
             [4, 5, 6, 255];
-        let cropped = Image {
+        let Crop { image: cropped, origin } = Image {
             height: 4,
             pixels,
             width: 4,
         }
         .crop()?;
-        ((cropped.width, cropped.height) == (2, 2)
+        (origin == (1, 1)
+            && (cropped.width, cropped.height) == (2, 2)
             && cropped.pixels
                 == [[1, 2, 3, 255], [0; 4], [0; 4], [4, 5, 6, 255]])
         .then_some(())
