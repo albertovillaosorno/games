@@ -950,9 +950,10 @@ fn smoke_cemetery(
     art: &mut Scene,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    if art.poses.cemetery.is_none() {
+    let Some(cemetery_art) = art.poses.cemetery.as_deref() else {
         return Ok(());
-    }
+    };
+    let animated = cemetery_art.animated();
     if simulation.state().cemetery_entrance().is_none() {
         advance(simulation, 1)?;
     }
@@ -961,8 +962,14 @@ fn smoke_cemetery(
     cemetery::verify(scene, art, simulation.state())?;
     advance(simulation, 187)?;
     cemetery::verify(scene, art, simulation.state())?;
-    for ticks in [13u16, 5, 7, 7, 133, 6, 66] {
+    for ticks in [13u16, 5, 7, 7, 133, 6] {
         advance(simulation, ticks)?;
+        cemetery::verify(scene, art, simulation.state())?;
+    }
+    if animated {
+        smoke_cemetery_landing(scene, art, simulation)?;
+    } else {
+        advance(simulation, 66)?;
         cemetery::verify(scene, art, simulation.state())?;
     }
     if simulation
@@ -975,6 +982,35 @@ fn smoke_cemetery(
     }
     write_status(format_args!(
         "Cemetery entrance: routed card, four backdrops and landing"
+    ))
+    .map_err(failure)
+}
+
+fn smoke_cemetery_landing(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    let mut previous = [None; 4];
+    let mut samples = 0u8;
+    for _ in 0u16..66 {
+        advance(simulation, 1)?;
+        let cabinet = simulation.state();
+        let entrance = cabinet
+            .cemetery_entrance()
+            .ok_or(RenderError::InvalidSprite)?;
+        let poses = Player::ALL.map(|player| entrance.landing_pose(player));
+        if poses != previous {
+            cemetery::verify(scene, art, cabinet)?;
+            previous = poses;
+            samples = samples.saturating_add(1);
+        }
+    }
+    if samples < 8 {
+        return Err(failure("cemetery grounded pose progression incomplete"));
+    }
+    write_status(format_args!(
+        "Cemetery landing: {samples} grounded pose transitions verified"
     ))
     .map_err(failure)
 }

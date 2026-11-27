@@ -23,7 +23,7 @@
 // - Summary:
 //   - Present the optional cemetery arrival with sparse local artwork.
 // - Description:
-//   - Hold the first isolated landing pose; further animation is open.
+//   - Select optional verified grounded poses through the entrance boundary.
 // - Usage:
 //   - Select all roles and an explicit verified rotation in the catalogue.
 // - Defaults:
@@ -43,7 +43,11 @@ use crate::{
 };
 
 pub(super) const ROLE_COUNT: usize = 16;
+const LANDING_POSE_COUNT: usize = CemeteryEntrance::LANDING_POSE_COUNT;
+const EXTRA_LANDING_COUNT: usize = 4 * (LANDING_POSE_COUNT - 1);
+const ANIMATED_ROLE_COUNT: usize = ROLE_COUNT + EXTRA_LANDING_COUNT;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
+const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -53,7 +57,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; ROLE_COUNT] = [
+const ROLES: [Role; ANIMATED_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -70,6 +74,35 @@ const ROLES: [Role; ROLE_COUNT] = [
     Role::new("actor/land-homer", (39, 62), (-79i32, -39i32)),
     Role::new("actor/land-bart", (49, 49), (-82i32, -26i32)),
     Role::new("actor/land-lisa", (57, 38), (-86i32, -14i32)),
+    // Grounded continuation, seven further families per station.
+    Role::new("actor/land-marge", (56, 48), (-66i32, -24i32)),
+    Role::new("actor/land-marge", (54, 42), (-62i32, -27i32)),
+    Role::new("actor/land-marge", (84, 24), (-64i32, 0i32)),
+    Role::new("actor/land-marge", (74, 23), (-73i32, 0i32)),
+    Role::new("actor/land-marge", (71, 39), (-78i32, -15i32)),
+    Role::new("actor/land-marge", (43, 58), (-77i32, -34i32)),
+    Role::new("actor/land-marge", (36, 74), (-78i32, -50i32)),
+    Role::new("actor/land-homer", (63, 31), (-71i32, -7i32)),
+    Role::new("actor/land-homer", (60, 31), (-69i32, -15i32)),
+    Role::new("actor/land-homer", (64, 24), (-72i32, 0i32)),
+    Role::new("actor/land-homer", (61, 31), (-68i32, -7i32)),
+    Role::new("actor/land-homer", (55, 35), (-65i32, -12i32)),
+    Role::new("actor/land-homer", (43, 49), (-68i32, -26i32)),
+    Role::new("actor/land-homer", (25, 64), (-76i32, -40i32)),
+    Role::new("actor/land-bart", (52, 32), (-83i32, -9i32)),
+    Role::new("actor/land-bart", (54, 35), (-83i32, -11i32)),
+    Role::new("actor/land-bart", (55, 23), (-83i32, 0i32)),
+    Role::new("actor/land-bart", (50, 31), (-81i32, -8i32)),
+    Role::new("actor/land-bart", (47, 47), (-81i32, -24i32)),
+    Role::new("actor/land-bart", (37, 54), (-81i32, -31i32)),
+    Role::new("actor/land-bart", (37, 58), (-81i32, -35i32)),
+    Role::new("actor/land-lisa", (46, 36), (-60i32, -12i32)),
+    Role::new("actor/land-lisa", (48, 30), (-62i32, -6i32)),
+    Role::new("actor/land-lisa", (53, 23), (-67i32, 1i32)),
+    Role::new("actor/land-lisa", (48, 27), (-70i32, -3i32)),
+    Role::new("actor/land-lisa", (43, 32), (-65i32, -8i32)),
+    Role::new("actor/land-lisa", (40, 39), (-66i32, -15i32)),
+    Role::new("actor/land-lisa", (39, 47), (-91i32, -23i32)),
 ];
 
 type BodySample = (usize, Point, i16);
@@ -109,10 +142,22 @@ impl Role {
 #[derive(Debug)]
 pub(super) struct Selection {
     first: Player,
-    hashes: [ContentHash; ROLE_COUNT],
+    hashes: Vec<ContentHash>,
 }
 
 impl Selection {
+    pub(super) const fn atlas_bytes(&self) -> usize {
+        if self.count() == ANIMATED_ROLE_COUNT {
+            ANIMATED_ATLAS_BYTES
+        } else {
+            ATLAS_BYTES
+        }
+    }
+
+    pub(super) const fn count(&self) -> usize {
+        self.hashes.len()
+    }
+
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
         self.hashes.iter().copied()
     }
@@ -144,10 +189,14 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
+            .take(ANIMATED_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_error| failure("expected sixteen cemetery roles"))?;
+            .collect::<Result<Vec<_>, _>>()?;
+        if !matches!(hashes.len(), ROLE_COUNT | ANIMATED_ROLE_COUNT) {
+            return Err(failure(
+                "expected sixteen or forty-four cemetery roles",
+            ));
+        }
         let selection = Self { first, hashes };
         if !selection.distinct_roles() {
             return Err(failure("duplicate cemetery art role"));
@@ -159,10 +208,14 @@ impl Selection {
 #[derive(Debug)]
 pub(super) struct CemeteryArt {
     first: Player,
-    roles: [RoleArt; ROLE_COUNT],
+    roles: Vec<RoleArt>,
 }
 
 impl CemeteryArt {
+    pub(super) const fn animated(&self) -> bool {
+        self.roles.len() == ANIMATED_ROLE_COUNT
+    }
+
     fn background(&self, entrance: CemeteryEntrance) -> Option<SpriteDraw> {
         let index = background_index(entrance)?;
         let (art, role) = self.role(index)?;
@@ -176,7 +229,9 @@ impl CemeteryArt {
         entrance: CemeteryEntrance,
         player: Player,
     ) -> Option<SpriteDraw> {
-        let (index, point, elevation) = body_sample(entrance, player)?;
+        let animated = self.animated();
+        let (index, point, elevation) =
+            body_sample(entrance, player, animated)?;
         let (art, role) = self.role(index)?;
         let mut destination = art.rect;
         (destination.x, destination.y) = role.body_offset(point, elevation);
@@ -218,9 +273,7 @@ impl CemeteryArt {
                     .digest;
                 Ok(RoleArt { art, digest })
             })
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_error| RenderError::InvalidSprite)?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             first: selection.first,
             roles,
@@ -256,6 +309,7 @@ fn background_index(entrance: CemeteryEntrance) -> Option<usize> {
 fn body_sample(
     entrance: CemeteryEntrance,
     player: Player,
+    animated: bool,
 ) -> Option<BodySample> {
     if let Some(body) = entrance.body(player) {
         let index = match body.pose {
@@ -268,14 +322,19 @@ fn body_sample(
         };
         return Some((index, body.position, body.elevation));
     }
-    if entrance.height(player) == Some(0) {
-        return Some((
-            player.index().saturating_add(12),
-            entrance.position(player)?,
-            0,
-        ));
-    }
-    None
+    let pose = entrance.landing_pose(player)?;
+    let index = if animated && pose > 0 {
+        ROLE_COUNT
+            .saturating_add(
+                player
+                    .index()
+                    .saturating_mul(LANDING_POSE_COUNT.saturating_sub(1)),
+            )
+            .saturating_add(pose.saturating_sub(1))
+    } else {
+        player.index().saturating_add(12)
+    };
+    Some((index, entrance.position(player)?, 0))
 }
 
 pub(super) fn verify(
@@ -341,18 +400,101 @@ fn verify_background(
 #[cfg(test)]
 mod tests {
     use super::*;
+    type LandingOrigins = [(i32, i32); LANDING_POSE_COUNT];
 
     #[test]
     fn atlas_budget_matches_the_exact_roles() {
-        let bytes = ROLES.iter().fold(0u32, |sum, role| {
-            sum.saturating_add(
-                role.extent
-                    .0
-                    .saturating_mul(role.extent.1)
-                    .saturating_mul(4),
-            )
-        });
-        assert_eq!(usize::try_from(bytes).ok(), Some(ATLAS_BYTES));
+        for (count, budget) in [
+            (ROLE_COUNT, ATLAS_BYTES),
+            (ANIMATED_ROLE_COUNT, ANIMATED_ATLAS_BYTES),
+        ] {
+            let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
+                sum.saturating_add(
+                    role.extent
+                        .0
+                        .saturating_mul(role.extent.1)
+                        .saturating_mul(4),
+                )
+            });
+            assert_eq!(usize::try_from(bytes).ok(), Some(budget));
+        }
+    }
+
+    fn assert_animated_landing(player: Player, expected: LandingOrigins) {
+        let mut state = CemeteryEntrance::new([true; 4], player);
+        for _ in 0u64..381 {
+            state.advance(false);
+        }
+        let mut seen = [false; LANDING_POSE_COUNT];
+        for _ in 0u64..49 {
+            let pose = state.landing_pose(player).unwrap_or(usize::MAX);
+            assert!(pose < LANDING_POSE_COUNT);
+            let offset = body_sample(state, player, true).and_then(
+                |(index, point, elevation)| {
+                    ROLES
+                        .get(index)
+                        .map(|role| role.body_offset(point, elevation))
+                },
+            );
+            assert_eq!(offset, expected.get(pose).copied());
+            if let Some(value) = seen.get_mut(pose) {
+                *value = true;
+            }
+            let legacy =
+                body_sample(state, player, false).map(|(index, _, _)| index);
+            assert_eq!(legacy, Some(player.index().saturating_add(12)));
+            state.advance(false);
+        }
+        assert!(seen.into_iter().all(|value| value));
+    }
+
+    #[test]
+    fn animated_roles_register_all_ground_families() {
+        let origins: [LandingOrigins; 4] = [
+            [
+                (44, 138),
+                (50, 152),
+                (54, 149),
+                (52, 176),
+                (43, 176),
+                (38, 161),
+                (39, 142),
+                (38, 126),
+            ],
+            [
+                (65, 137),
+                (73, 169),
+                (75, 161),
+                (72, 176),
+                (76, 169),
+                (79, 164),
+                (76, 150),
+                (68, 136),
+            ],
+            [
+                (90, 150),
+                (89, 167),
+                (89, 165),
+                (89, 176),
+                (91, 168),
+                (91, 152),
+                (91, 145),
+                (91, 141),
+            ],
+            [
+                (114, 162),
+                (140, 164),
+                (138, 170),
+                (133, 177),
+                (130, 173),
+                (135, 168),
+                (134, 161),
+                (109, 153),
+            ],
+        ];
+        for (player, expected) in Player::ALL.into_iter().zip(origins) {
+            assert_animated_landing(player, expected);
+        }
     }
 
     #[test]
@@ -370,7 +512,7 @@ mod tests {
             (90i32, 150i32),
             (114i32, 162i32),
         ]) {
-            let actual = body_sample(entrance, player).and_then(
+            let actual = body_sample(entrance, player, false).and_then(
                 |(index, point, elevation)| {
                     ROLES
                         .get(index)

@@ -170,8 +170,9 @@ impl Catalogue {
                     .saturating_mul(balloon::ATLAS_BYTES),
             )
             .saturating_add(
-                usize::from(self.cemetery.is_some())
-                    .saturating_mul(cemetery::ATLAS_BYTES),
+                self.cemetery
+                    .as_deref()
+                    .map_or(0, cemetery::Selection::atlas_bytes),
             )
             .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
@@ -301,8 +302,9 @@ impl Catalogue {
                     .saturating_mul(balloon::POSE_COUNT),
             )
             .saturating_add(
-                usize::from(self.cemetery.is_some())
-                    .saturating_mul(cemetery::ROLE_COUNT),
+                self.cemetery
+                    .as_deref()
+                    .map_or(0, cemetery::Selection::count),
             )
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
@@ -1978,12 +1980,57 @@ mod tests {
         assert_eq!(selected.digests().count(), selected.count());
     }
 
+    fn assert_animated_cemetery_catalogue(with_boss: &str, record: &str) {
+        let animated: Vec<_> = (0u32..28)
+            .map(|index| format!("{:064x}", index.saturating_add(100)))
+            .collect();
+        let extended =
+            format!("{} {}\n", record.trim_end(), animated.join(" "));
+        let selected = Catalogue::parse(&format!("{with_boss}{extended}"));
+        assert!(selected.is_ok());
+        if let (Ok(baseline), Ok(value)) =
+            (Catalogue::parse(with_boss), selected)
+        {
+            assert_eq!(value.count(), baseline.count().saturating_add(44));
+            assert_eq!(
+                value.atlas_count(),
+                baseline.atlas_count().saturating_add(44),
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                baseline.atlas_bytes().saturating_add(1_888_656),
+            );
+            assert_eq!(value.digests().count(), value.count());
+            assert_eq!(
+                value.scenic_sprite_count(),
+                baseline
+                    .scenic_sprite_count()
+                    .saturating_add(cemetery::EXTRA_SPRITES),
+            );
+        }
+        let partial = animated.iter().take(27).cloned().collect::<Vec<_>>();
+        assert!(
+            Catalogue::parse(&format!(
+                "{with_boss}{} {}\n",
+                record.trim_end(),
+                partial.join(" ")
+            ))
+            .is_err()
+        );
+        let repeated = animated.first().map_or_else(String::new, |first| {
+            let duplicate = format!(" {first}").repeat(28);
+            format!("{}{duplicate}\n", record.trim_end())
+        });
+        assert!(Catalogue::parse(&format!("{with_boss}{repeated}")).is_err());
+    }
+
     fn assert_cemetery_catalogue(with_boss: &str, without_boss: &str) {
         let hashes: Vec<_> = "0123456789abcdef"
             .chars()
             .map(|digit| digit.to_string().repeat(64))
             .collect();
         let record = format!("cemetery-entrance homer {}\n", hashes.join(" "));
+        assert_animated_cemetery_catalogue(with_boss, &record);
         let base = Catalogue::parse(with_boss);
         let selected = Catalogue::parse(&format!("{with_boss}{record}"));
         assert!(base.is_ok() && selected.is_ok());

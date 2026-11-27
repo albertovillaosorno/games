@@ -14,7 +14,7 @@
 //   - Decode original media, choose a random seed or render sprites.
 // - Allows:
 //   - Inputs: Admitted stations, selected fall order and fresh action edges.
-//   - Outputs: Scene phase, rank, fixed-point height and sparse body pose.
+//   - Outputs: Scene phase, rank, fixed-point height and body pose.
 //   - Side effects: Deterministic in-memory progression only.
 // - Split-When:
 //   - Cemetery gameplay needs a distinct encounter policy.
@@ -41,6 +41,12 @@ const PLAYABLE_TICK: u64 = 237;
 const DESCENT_TICKS: u64 = 130;
 const FALL_RANK_DELAY: i32 = 16;
 const UNITS_PER_PIXEL: u32 = 256;
+const LANDING_POSE_COUNT: usize = CemeteryEntrance::LANDING_POSE_COUNT;
+
+const MARGE_LANDING: [u8; LANDING_POSE_COUNT] = [0, 4, 9, 15, 23, 31, 38, 44];
+const HOMER_LANDING: [u8; LANDING_POSE_COUNT] = [0, 5, 11, 17, 23, 29, 36, 44];
+const BART_LANDING: [u8; LANDING_POSE_COUNT] = [0, 5, 10, 16, 23, 30, 37, 44];
+const LISA_LANDING: [u8; LANDING_POSE_COUNT] = [0, 5, 10, 15, 23, 32, 39, 45];
 
 /// Entrance progress, excluding any unimplemented subsequent encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +103,9 @@ pub struct CemeteryEntrance {
 }
 
 impl CemeteryEntrance {
+    /// Number of observed grounded presentation families per character.
+    pub const LANDING_POSE_COUNT: usize = 8;
+
     /// Advance once with a fresh button edge from an admitted station.
     pub fn advance(&mut self, active_edge: bool) {
         self.tick = self.tick.saturating_add(1);
@@ -199,6 +208,27 @@ impl CemeteryEntrance {
             _ => 0i32,
         };
         u32::try_from(height).ok()
+    }
+
+    /// Grounded presentation family after the preceding airborne sample.
+    ///
+    /// The preview holds the final entrance sample at the input boundary;
+    /// later gameplay has not been implemented.
+    #[must_use]
+    pub fn landing_pose(self, player: Player) -> Option<usize> {
+        let source = self.at(self.tick.min(PLAYABLE_TICK).saturating_sub(1));
+        let elapsed =
+            u8::try_from(source.rank_elapsed(player)?.saturating_sub(81))
+                .ok()?;
+        let track = match player {
+            Player::Marge => MARGE_LANDING,
+            Player::Homer => HOMER_LANDING,
+            Player::Bart => BART_LANDING,
+            Player::Lisa => LISA_LANDING,
+        };
+        track
+            .partition_point(|tick| *tick <= elapsed)
+            .checked_sub(1)
     }
 
     /// Begin the title card with a selected first-landing station.
@@ -425,6 +455,49 @@ mod tests {
         assert_eq!(sample(189, Player::Homer), None);
     }
 
+    fn assert_landing_holds(
+        initial: CemeteryEntrance,
+        player: Player,
+        holds: [u64; LANDING_POSE_COUNT],
+    ) {
+        let landing = 189u64.saturating_add(
+            16u64.saturating_mul(u64::from(initial.rank(player))),
+        );
+        let before = initial.at(landing.saturating_sub(1));
+        assert!(before.body(player).is_some());
+        assert_eq!(before.landing_pose(player), None);
+        for tick in landing..=PLAYABLE_TICK {
+            let state = initial.at(tick);
+            let expected = holds
+                .iter()
+                .take_while(|hold| **hold <= tick.saturating_sub(landing))
+                .count()
+                .checked_sub(1);
+            assert_eq!(state.body(player), None);
+            assert_eq!(state.landing_pose(player), expected);
+        }
+        assert_eq!(
+            initial.at(1000).landing_pose(player),
+            initial.at(PLAYABLE_TICK).landing_pose(player),
+        );
+    }
+
+    #[test]
+    fn landing_pose_holds_follow_all_four_rank_rotations() {
+        let keys = [
+            [0u64, 4, 9, 15, 23, 31, 38, 44],
+            [0, 5, 11, 17, 23, 29, 36, 44],
+            [0, 5, 10, 16, 23, 30, 37, 44],
+            [0, 5, 10, 15, 23, 32, 39, 45],
+        ];
+        for first in Player::ALL {
+            let initial = arrival(first);
+            for (player, holds) in Player::ALL.into_iter().zip(keys) {
+                assert_landing_holds(initial, player, holds);
+            }
+        }
+    }
+
     #[test]
     fn absent_stations_do_not_acquire_preview_bodies() {
         let mut state =
@@ -437,6 +510,7 @@ mod tests {
             assert_eq!(sampled.position(player), None);
             assert_eq!(sampled.height(player), None);
             assert_eq!(sampled.body(player), None);
+            assert_eq!(state.at(237).landing_pose(player), None);
         }
         assert!(sampled.body(Player::Homer).is_some());
         assert!(sampled.body(Player::Lisa).is_some());
