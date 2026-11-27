@@ -164,6 +164,7 @@ const USAGE: &str = concat!(
     "PARENT SHA256 KEY RAW FIRST COUNT COLUMNS PEN_START PEN_COUNT FRAMES",
     "\n",
     "wave compare LEFT RIGHT LIMIT\n",
+    "wave recurrence WAV START END FIRST LAST STEP STRIDE WORK LIMIT\n",
     "wave publish TITLE REV PARENT WAV KEY START END LIMIT"
 );
 
@@ -261,6 +262,7 @@ enum Command {
     Verify(Verification, Arguments),
     WaveCompare(OsString, OsString, NonZeroU64),
     WavePublish(reference_audio::Publication),
+    WaveRecurrence(reference_audio::Recurrence),
 }
 
 impl Command {
@@ -312,6 +314,9 @@ impl Command {
                         .map_err(|_args| String::from(USAGE))?;
                 Ok(Self::WaveCompare(left, right, parse_limit(&limit)?))
             },
+            (Some("wave"), Some("recurrence")) => Ok(Self::WaveRecurrence(
+                reference_audio::Recurrence::parse(args.collect())?,
+            )),
             (Some("wave"), Some("publish")) => Ok(Self::WavePublish(
                 reference_audio::Publication::parse(args.collect())?,
             )),
@@ -704,6 +709,7 @@ impl Command {
                 reference_audio::check(&left, &right, limit)
             },
             Self::WavePublish(publication) => publication.run(),
+            Self::WaveRecurrence(recurrence) => recurrence.run(),
             Self::SampleCheck(machine, raw, limit, args) => {
                 report_samples(machine, &raw, limit, &args)
             },
@@ -758,7 +764,8 @@ impl Command {
             | Self::StripPublish(..)
             | Self::TilemapCheck(..)
             | Self::WaveCompare(..)
-            | Self::WavePublish(..) => Err(String::from(USAGE)),
+            | Self::WavePublish(..)
+            | Self::WaveRecurrence(..) => Err(String::from(USAGE)),
         }
     }
 }
