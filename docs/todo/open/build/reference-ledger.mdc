@@ -523,3 +523,18 @@ possible observations. The combined checker reports 1,262 identities,
 1,234 unresolved, three intentional replacements and 25 non-runtime.
 No decoded instruction is unowned. Of the 252 captured nested word
 selections, 77 are now admitted; the other 175 remain review inputs.
+
+The bank-27 pass admits 31 further observed nested selections
+and 29 reviewed main identities with 752 additional owned bytes.
+It establishes conditional motion and countdown transitions, child
+allocation from station-count-selected rows, and a shared linked
+record placement helper. Existing bodies and all detailed flow
+observations remain intact.
+
+The main inventory is 602 identities, 26,455 owned bytes and 655
+possible observations. The combined checker reports 1,291 identities,
+44,853 owned bytes, 3,728 reciprocal pairs, 4,151 flow observations,
+147 interior entries and 138 unresolved flows. Dispositions are
+1,263 unresolved, three intentional replacements and 25 non-runtime.
+No decoded instruction is unowned. Of 252 captured nested selections,
+108 are now admitted; 144 remain in four unreviewed overlays.
