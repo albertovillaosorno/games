@@ -306,6 +306,8 @@ impl Playback {
         self.update(simulation.state())?;
         self.verify_quiet()?;
         let _cue = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        // The hidden smoke has no device consumer. Refill after admission.
+        self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
         self.verify_submission(2)?;
         let _second = simulation.advance(TICK_INTERVAL).map_err(failure)?;
@@ -355,6 +357,8 @@ impl Playback {
         self.update(simulation.state())?;
         self.verify_quiet()?;
         let _cue = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+        // The hidden smoke has no device consumer. Refill after admission.
+        self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
         self.verify_submission(4)?;
         self.smoke_drain(&mut simulation)
