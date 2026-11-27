@@ -220,11 +220,31 @@ macro pushret() {
     $(V)=X==0x8000; X=X-1; nz(X); if ($(Z)==0) goto R8;
 }
 :RTS is op=0x8f { local dest:2=*:2 S; S=S+2; return [dest]; }
+:RTI is op=0x9f {
+    CC=*:1 S; S=S+1;
+    if ((CC&0x80)==0) goto <pc>;
+    A=*:1 S; S=S+1;
+    B=*:1 S; S=S+1;
+    DP=*:1 S; S=S+1;
+    X=*:2 S; S=S+2;
+    Y=*:2 S; S=S+2;
+    U=*:2 S; S=S+2;
+<pc>
+    local dest:2=*:2 S; S=S+2; return [dest];
+}
 :BSR R8 is op=0xaa; R8 { pushret(); call R8; }
 :LBSR R16 is op=0xab; R16 { pushret(); call R16; }
 :NOP is op=0xae { }
 :ABX is op=0xb0 { X=X+zext(B); }
 :SEX is op=0xb2 { D=sext(B); nz(D); }
+:BMOVE is op=0xb6 {
+<loop>
+    if (U==0) goto <done>;
+    *:1 X=*:1 Y;
+    X=X+1; Y=Y+1; U=U-1;
+    goto <loop>;
+<done>
+}
 :MOVE is op=0xb7 { *:1 X=*:1 Y; X=X+1; Y=Y+1; U=U-1; }
 "#;
 
@@ -283,6 +303,20 @@ const BRANCHES: [(&str, &str); 16] = [
     ("BLE", "$(Z) || ($(N)!=$(V))"),
 ];
 
+// Read and write selections differ for code 1. Code 0 reads a widened A
+// with high byte 0x10, but writes only A. DP and PC are deliberately
+// excluded: the former is not fully characterized and the latter needs
+// dedicated control-flow semantics.
+const TRANSFER_REGISTERS: [TransferRegister; 6] = [
+    (0, "A", "zext(A)|0x1000", 1),
+    (1, "B", "D", 1),
+    (2, "X", "X", 2),
+    (3, "Y", "Y", 2),
+    (5, "U", "U", 2),
+    (6, "S", "S", 2),
+];
+
+type TransferRegister = (u8, &'static str, &'static str, u8);
 type ByteOp = (u8, &'static str, &'static str);
 type WordOp = (u8, &'static str, &'static str, &'static str);
 
@@ -622,6 +656,64 @@ fn stacks(output: &mut String) -> Result<(), String> {
     Ok(())
 }
 
+fn transfer_write(register: &str, size: u8, value: &str) -> String {
+    if size == 1 {
+        format!("{register}={value}:1;")
+    } else {
+        format!("{register}={value};")
+    }
+}
+
+fn transfer_pair(
+    output: &mut String,
+    source_reg: TransferRegister,
+    target_reg: TransferRegister,
+    operation: (u8, &str),
+) -> Result<(), String> {
+    let (source, src, src_read, src_size) = source_reg;
+    let (target, dst, dst_read, dst_size) = target_reg;
+    let (mode, mnemonic) = operation;
+    let write_dst = transfer_write(dst, dst_size, "source");
+    let exchange = if mode == 0 {
+        format!(
+            "local target:2={dst_read}; {}",
+            transfer_write(src, src_size, "target")
+        )
+    } else {
+        String::new()
+    };
+    // The opcode low bit and argument bit 3 are aliases.
+    // Argument bit 7 selects the operation.
+    for opcode in [0x3eu8, 0x3f] {
+        for alias in [0u8, 8] {
+            let post = mode | (target << 4u8) | source | alias;
+            writeln!(
+                output,
+                ":{mnemonic} \"{src},{dst}\" is op=0x{opcode:02x}; \
+                 postbyte=0x{post:02x}"
+            )
+            .map_err(|error| error.to_string())?;
+            writeln!(
+                output,
+                "{{ local source:2={src_read}; {exchange} {write_dst} }}"
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn transfers(output: &mut String) -> Result<(), String> {
+    for source in TRANSFER_REGISTERS {
+        for target in TRANSFER_REGISTERS {
+            for (mode, mnemonic) in [(0u8, "EXG"), (0x80, "TFR")] {
+                transfer_pair(output, source, target, (mode, mnemonic))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn sleigh() -> Result<String, String> {
     let mut output = String::from(BASE);
     addressing(&mut output)?;
@@ -629,6 +721,7 @@ pub(super) fn sleigh() -> Result<String, String> {
     branches(&mut output)?;
     unary(&mut output)?;
     stacks(&mut output)?;
+    transfers(&mut output)?;
     Ok(output)
 }
 
@@ -668,6 +761,32 @@ mod tests {
         }
         if text.contains("op=0x00") || text.contains("op=0xff") {
             return Err(String::from("unsupported instruction admitted"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn transfers_preserve_asymmetric_register_selection() -> Result<(), String>
+    {
+        let text = sleigh()?;
+        for expected in [
+            ":EXG \"A,B\" is op=0x3e; postbyte=0x10",
+            ":EXG \"A,B\" is op=0x3f; postbyte=0x18",
+            ":TFR \"A,B\" is op=0x3e; postbyte=0x90",
+            "local source:2=zext(A)|0x1000;",
+            "local target:2=D; A=target:1;",
+            "B=source:1;",
+            ":RTI is op=0x9f",
+            "if ((CC&0x80)==0) goto <pc>;",
+            ":BMOVE is op=0xb6",
+            "if (U==0) goto <done>;",
+        ] {
+            if !text.contains(expected) {
+                return Err(format!("missing processor behavior: {expected}"));
+            }
+        }
+        if text.contains(":TFR \"A,DP\"") || text.contains(":EXG \"PC,A\"") {
+            return Err(String::from("unsupported transfer admitted"));
         }
         Ok(())
     }
