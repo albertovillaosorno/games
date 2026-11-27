@@ -167,7 +167,9 @@ files, and corrupt objects. It neither stages another store nor
 grants permission to delete the legacy source.
 
 Downloaded originals and tools remain in `.reference/games/` and
-`.reference/tools/`. Persistent ledgers belong in `.reference/ledger/`.
+`.reference/tools/`. The single private function inventory belongs in
+`.reference/games/<title>/ledger.jsonl`. Preserve historical ledgers in
+`.reference/ledger/`.
 Do not store reference data in disposable `.cache/` or `.temp/`.
 
 The host build tool selects arcade originals by MAME machine and revision.

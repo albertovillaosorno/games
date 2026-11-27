@@ -263,18 +263,55 @@
   `cargo download craft-libs` to fetch just that repository. Tools and
   sources live under `.reference/tools/`. Each snapshot has a revision
   directory and a LATEST pointer. Use ripgrep to inspect them.
-- Use lawful local reference emulators (MAME, and other appropriate
-  systems) to investigate original behaviour and asset layouts. Fetch
-  upstream source snapshots under `.reference/tools/` and use ripgrep
-  (`rg`) to locate device definitions, memory maps, rendering, audio and
-  timing implementations. Record the exact revision and independent
-  observations in the canonical task. Observe and compare in controlled
-  runs; do not execute originals during import. Do not copy incompatible
-  emulator code or turn the remake into an emulator. Implement reusable
-  mechanisms once in their correct shared owner.
-- Download only tools needed for the current task. Official release
-  archives are not automatically installed or executed. Use no Python
-  in project-owned code; third-party reference files are excluded.
+- Prefer systematic static reference analysis over reconstructing game
+  rules from repeated screenshots or isolated input experiments. For
+  lawfully supplied executables or ROM program regions where permitted,
+  use system Ghidra and its supported disassembly/decompiler workflow.
+  Identify the edition, processor, address spaces, program regions and
+  entry points using trusted format and hardware definitions. Record
+  analysis tool versions and unresolved code/data boundaries.
+- Maintain a durable per-title function ledger at
+  `.reference/games/<title>/ledger.jsonl` as one private UTF-8 JSON Lines
+  file. Inventory all discovered functions, including unresolved FUN
+  identifiers, with edition, module, CPU, address space, bank, entry
+  address, original symbol, semantic name, inputs, outputs, state
+  mutations, callers, callees, data dependencies, evidence, behaviour,
+  confidence, disposition, Rust owner and test evidence.
+  Account for every discovered function: implemented behaviour, shared
+  equivalent, platform or library replacement, deliberate omission,
+  unreachable or unresolved. Do not equate automatic discovery with
+  complete coverage; inspect indirect calls, dispatch tables and
+  additional executable regions as appropriate.
+- Inspect the private decompiler output, listings and cross-references
+  directly. Derive behavioural specifications from static evidence and
+  implement independent Rust using the existing engine, importer and IR.
+  Keep private analysis and any permitted decompiler output local.
+  Do not publish proprietary pseudocode, mechanically translate protected
+  implementations into distributed source, or bypass access controls.
+  Preserve original semantics where required and record deliberate modern
+  deviations such as free play, adaptive display and offline operation.
+- Prioritise complete playable progression. Analyse function groups and
+  their dependencies, reuse existing mechanisms and implement vertical
+  gameplay slices; do not wait for an entire ledger to start integration.
+  Review already authored behaviour against the ledger before rewriting
+  it. Close the title only when all relevant discovered functions are
+  accounted for and gameplay acceptance passes. Report unresolved
+  discovery limits honestly.
+- Use lawful local reference emulators (MAME and other appropriate
+  systems) to verify static findings, resolve hardware/timing ambiguities,
+  inspect media layouts and compare end-to-end behaviour. Pin revisions
+  and use ripgrep (`rg`) to inspect device definitions and memory maps.
+  Prefer focused tests that distinguish competing interpretations over
+  repeated equivalent captures. Do not execute originals during import,
+  copy incompatible emulator code or turn the remake into an emulator.
+  Record independently verified results in the canonical title task.
+- Prefer the installed system Ghidra, MAME and appropriate format tools.
+  Read the applicable local skills under `~/.codex/skills/`:
+  `game-static-analysis`, `game-reference-testing` and
+  `android-game-analysis`. Download only missing tools or required pinned
+  reference sources. Release archives are not automatically installed or
+  executed. Use no Python in project-owned code; third-party reference
+  files are excluded.
 - The only designated reusable upstream project is
   `storytold/craft-libs`. Verify its licences and actual suitability.
 - Configure persistent publication roots and the requested target in local
@@ -290,8 +327,9 @@
   existing local assets until a verified migration explicitly admits them.
   Use tiny generated payloads in isolated test fixtures, not real asset
   copies. Never delete, move or overwrite original media as a shortcut.
-- Keep durable local reference ledgers in `.reference/ledger/`; keep
-  downloaded originals in `.reference/games/` and tools in
+- Keep the single canonical private function ledger alongside original
+  media in `.reference/games/<title>/ledger.jsonl`; preserve historical
+  research in `.reference/ledger/` and source snapshots in
   `.reference/tools/`. These directories survive cache cleanup.
   Everything in `.cache/` and `.temp/` must be disposable and
   regenerable; never place authoritative research records or the sole
