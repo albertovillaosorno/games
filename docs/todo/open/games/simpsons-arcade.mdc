@@ -3388,3 +3388,36 @@ columns; these measurements alone do not attribute a burst to a
 particular collision or actor. The late encounter's victory
 condition, exact attack and damage rules, successful stage
 transition and modern free-continue behavior remain open.
+
+### Free-continue health refill
+
+An isolated original rejoin control starts at device frame 9570,
+after the first player's final stock is lost. The first restored
+health column appears at 9574 and the last at 9636. Held Right
+changes the reentry sprite positions before the refill finishes.
+The camera remains at raw scroll 245 during the rejoin and
+subsequent combat, rather than restarting the street. The separate
+late-join control also admits all three additional seats and
+restores their meters to 32 columns by frame 8361. All four seats
+later reach empty meters; neither control proves a victory or
+successful stage transition.
+
+The modern free-continue path now restores logical health and
+control immediately while the existing displayed meter starts
+empty, fills its first column after four fixed ticks, and adds
+one column per two ticks thereafter. Pause freezes this timing.
+New joins and automatic stock recovery retain their existing
+behavior. No historical credit requirement is introduced.
+Core tests verify immediate movement and the meter cadence;
+native readback verifies the empty and first-filled-column
+states on the ordinary continue path.
+
+The optimized Linux original-backed adaptive touch smoke passed
+with the 260-record stationary/scenic configuration, including
+continue readback, two cooperative families and eleven
+reinforcements. The 426 by 304 scene extends the original street
+by 106 visible columns. All 600 movement and 20 combat frames met
+the sampled 16.667 ms budget; peak RSS was 148,115,456 bytes.
+Fresh workspace validation passed. Exact original reentry motion,
+late encounter interactions, physical input and audio acceptance
+remain open.
