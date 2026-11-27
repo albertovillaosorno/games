@@ -38,7 +38,9 @@ use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
-use games_platform::ir::importer::reference::{Machine, Pixel};
+use games_platform::ir::importer::reference::{
+    Background, Machine, Pixel, Raster,
+};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::staging::CanonicalStaging;
 use games_platform::ir::toolchain;
@@ -532,6 +534,97 @@ impl Image {
         self.height = self.height.saturating_sub(top);
         Ok(self)
     }
+}
+
+/// Report independently registered tile maps after full-scene admission.
+pub(super) fn report_layers(
+    (machine, assets): (Machine, &SceneAssets<'_>),
+    mut observation: Observation,
+    pens: &mut [Pixel],
+) -> Result<(), String> {
+    let _sprites = observation.sprites.take();
+    observation.reconstruct(machine, assets, pens)?;
+    let (state, mixer) = observation.tile_state(machine)?;
+    let raster = machine.background_raster();
+    let (width, height) = Raster::LAYER_EXTENT;
+    let mut map = vec![Pixel::default(); width.saturating_mul(height)];
+    let backdrop = u16::from(mixer.backdrop.palette_bank) << 4u32;
+    let mut composed = vec![backdrop; pens.len()];
+    let mut reports = Vec::with_capacity(3);
+    let background = Background {
+        scroll_control: observation.scroll,
+        state,
+        tiles: &assets.tiles,
+    };
+    for index in mixer.ordered_layers() {
+        let origin = raster
+            .isolate_layer(background, index, &mut map)
+            .map_err(|error| format!("isolated layer: {error:?}"))?;
+        overlay_layer(&map, origin, raster.extent(), &mut composed)?;
+        let image =
+            Image::from_pens(&map, (width, height), &observation.colors, true)?;
+        reports.push(format!(
+            "Layer {index}: origin {},{} RGBA8 {}",
+            origin.0,
+            origin.1,
+            ContentHash::calculate(image.pixels.as_flattened())
+        ));
+    }
+    if !pens.iter().copied().map(Pixel::pen).eq(composed) {
+        return Err(String::from("isolated layer composition differs"));
+    }
+    toolchain::write_line(&format!("Backdrop: palette pen {backdrop}"))
+        .map_err(|error| error.to_string())?;
+    for report in reports {
+        toolchain::write_line(&report).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn overlay_layer(
+    map: &[Pixel],
+    origin: (usize, usize),
+    extent: (usize, usize),
+    output: &mut [u16],
+) -> Result<(), String> {
+    let (width, height) = Raster::LAYER_EXTENT;
+    let (view_width, view_height) = extent;
+    if view_width == 0
+        || view_height == 0
+        || output.len() != view_width.saturating_mul(view_height)
+        || map.len() != width.saturating_mul(height)
+        || origin.0 >= width
+        || origin.1 >= height
+    {
+        return Err(String::from("invalid isolated layer registration"));
+    }
+    for (row, pixels) in output.chunks_exact_mut(view_width).enumerate() {
+        let y = origin.1.wrapping_add(row) & height.saturating_sub(1);
+        let start = y.saturating_mul(width);
+        let source = map
+            .get(start..start.saturating_add(width))
+            .ok_or_else(|| String::from("missing isolated layer row"))?;
+        overlay_layer_row(source, origin.0, pixels)?;
+    }
+    Ok(())
+}
+
+fn overlay_layer_row(
+    row: &[Pixel],
+    x: usize,
+    output: &mut [u16],
+) -> Result<(), String> {
+    let (width, _) = Raster::LAYER_EXTENT;
+    for (column, pen) in output.iter_mut().enumerate() {
+        let source = row
+            .get(x.wrapping_add(column) & width.saturating_sub(1))
+            .ok_or_else(|| String::from("missing isolated layer pixel"))?
+            .pen();
+        if source != TRANSPARENT {
+            *pen = source;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn report_background(

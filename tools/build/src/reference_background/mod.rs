@@ -69,6 +69,7 @@ pub struct Arguments {
     background_top: Option<usize>,
     digest: ContentHash,
     frame: OsString,
+    layer_digests: bool,
     #[cfg(feature = "native-preview")]
     native: bool,
     palette: OsString,
@@ -99,10 +100,19 @@ impl Arguments {
         observation.reconstruct(machine, &assets, &mut pens)?;
         let colors = &observation.colors;
         let matched = count_matches(&pens, colors, &frame)?;
+        if (self.layer_digests || self.background_top.is_some())
+            && matched != pens.len()
+        {
+            return Err(String::from("scene differs from observation"));
+        }
+        if self.layer_digests {
+            return art::report_layers(
+                (machine, &assets),
+                observation,
+                &mut pens,
+            );
+        }
         if let Some(top) = self.background_top {
-            if matched != pens.len() {
-                return Err(String::from("scene differs from observation"));
-            }
             return art::report_background(
                 (machine, &assets),
                 observation,
@@ -140,6 +150,7 @@ impl Arguments {
                 .parse()
                 .map_err(|_error| String::from("invalid manifest hash"))?,
             frame,
+            layer_digests: false,
             #[cfg(feature = "native-preview")]
             native: false,
             palette,
@@ -161,6 +172,11 @@ impl Arguments {
         match action {
             "background-check" => Self::parse(args),
             "scene-check" => Self::parse_scene(args),
+            "scene-layer-digests" => {
+                let mut parsed = Self::parse_scene(args)?;
+                parsed.layer_digests = true;
+                Ok(parsed)
+            },
             "scene-background-digest" => {
                 let top = args.pop().ok_or_else(|| String::from(USAGE))?;
                 let mut parsed = Self::parse_scene(args)?;
@@ -541,6 +557,32 @@ mod tests {
         );
         scene.push(OsString::from("extra"));
         assert!(Arguments::parse_command("scene-check", scene).is_err());
+    }
+
+    #[test]
+    fn layer_digests_require_complete_scene() {
+        let digest = "0".repeat(64);
+        let mut args = [
+            "parent",
+            &digest,
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        let parse = |values| {
+            Arguments::parse_command("scene-layer-digests", values)
+                .map(|value| value.layer_digests)
+        };
+        assert!(parse(args.clone()).is_err());
+        args.push(OsString::from("controls"));
+        assert_eq!(parse(args.clone()), Ok(true));
+        args.push(OsString::from("extra"));
+        assert!(parse(args).is_err());
     }
 
     #[test]

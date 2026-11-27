@@ -147,6 +147,8 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "mame scene-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
+    "mame scene-layer-digests MACHINE REV PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame scene-background-digest MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS TOP\n",
     "mame scene-background-publish MACHINE REV OUTPUT PARENT SHA256 ",
@@ -486,6 +488,7 @@ impl Command {
             "background-check"
             | "scene-check"
             | "scene-render-check"
+            | "scene-layer-digests"
             | "scene-background-digest" => Ok(Self::BackgroundCheck(
                 selected,
                 reference_background::Arguments::parse_command(

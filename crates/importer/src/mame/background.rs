@@ -120,6 +120,9 @@ pub struct Raster {
 }
 
 impl Raster {
+    /// Extent of an unscrolled source tile layer.
+    pub const LAYER_EXTENT: (usize, usize) = (512, 256);
+
     /// Compose only the three tile layers and their backdrop.
     ///
     /// Sprite pixels, shadows, line scroll and global reversal are excluded.
@@ -131,10 +134,7 @@ impl Raster {
         background: Background<'_, '_>,
         output: &mut [Pixel],
     ) -> Result<(), ImportError> {
-        if output.len() != self.pixels()
-            || background.tiles.width().get() != 8
-            || background.tiles.height().get() != 8
-        {
+        if output.len() != self.pixels() || !Self::tiles_admitted(background) {
             return Err(ImportError::UnsupportedMember);
         }
         let scroll = background
@@ -169,13 +169,7 @@ impl Raster {
         offset: Offset,
         output: &mut [Pixel],
     ) -> Result<(), ImportError> {
-        let (scroll_x, scroll_y) = offset;
-        let alignment = *self
-            .layer_x
-            .get(layer.index)
-            .ok_or(ImportError::UnsupportedMember)?;
-        let start_x = scroll_x.wrapping_add(alignment);
-        let start_y = scroll_y.wrapping_add(self.origin_y);
+        let (start_x, start_y) = self.layer_origin(layer.index, offset)?;
         for (row, pixels) in output.chunks_exact_mut(self.width).enumerate() {
             layer.compose_row((start_x, start_y.wrapping_add(row)), pixels)?;
         }
@@ -188,10 +182,67 @@ impl Raster {
         (self.width, self.height)
     }
 
+    /// Isolate one complete unscrolled layer and return its visible origin.
+    ///
+    /// Transparent tile pens remain the `u16::MAX` sentinel; the returned
+    /// origin includes the machine alignment and wraps in the layer map.
+    /// # Errors
+    /// Rejects unsupported scroll, layer identity, tiles or output extent.
+    pub fn isolate_layer(
+        self,
+        background: Background<'_, '_>,
+        index: usize,
+        output: &mut [Pixel],
+    ) -> Result<Offset, ImportError> {
+        let (width, height) = Self::LAYER_EXTENT;
+        if output.len() != width.saturating_mul(height)
+            || !Self::tiles_admitted(background)
+        {
+            return Err(ImportError::UnsupportedMember);
+        }
+        let scroll = background
+            .state
+            .standard_scroll(background.scroll_control)?;
+        let offset =
+            *scroll.get(index).ok_or(ImportError::UnsupportedMember)?;
+        let origin = self.layer_origin(index, offset)?;
+        let layer = Layer {
+            background,
+            coverage: 0,
+            index,
+        };
+        output.fill(Pixel::from_pen(u16::MAX));
+        for (row, pixels) in output.chunks_exact_mut(width).enumerate() {
+            layer.compose_row((0, row), pixels)?;
+        }
+        Ok(origin)
+    }
+
+    fn layer_origin(
+        self,
+        index: usize,
+        offset: Offset,
+    ) -> Result<Offset, ImportError> {
+        let alignment = *self
+            .layer_x
+            .get(index)
+            .ok_or(ImportError::UnsupportedMember)?;
+        let (width, height) = Self::LAYER_EXTENT;
+        Ok((
+            offset.0.wrapping_add(alignment) & width.saturating_sub(1),
+            offset.1.wrapping_add(self.origin_y) & height.saturating_sub(1),
+        ))
+    }
+
     /// Number of visible pixels in the machine's bounded raster.
     #[must_use]
     pub const fn pixels(self) -> usize {
         self.width.saturating_mul(self.height)
+    }
+
+    const fn tiles_admitted(background: Background<'_, '_>) -> bool {
+        background.tiles.width().get() == 8
+            && background.tiles.height().get() == 8
     }
 }
 
@@ -269,6 +320,52 @@ mod tests {
 
     use super::*;
     use crate::mame::Machine;
+
+    #[test]
+    fn isolated_layer_retains_map_pixels_and_wrapped_registration()
+    -> Result<(), ImportError> {
+        let machine = Machine::select("simpsons", "world-4p-set-1")?;
+        let mut tiles = [0u8; 64];
+        *tiles.first_mut().ok_or(ImportError::UnsupportedMember)? = 5;
+        *tiles.last_mut().ok_or(ImportError::UnsupportedMember)? = 7;
+        let sheet = sheet(&tiles)?;
+        let ram = vec![0u8; 24_576];
+        let mixer = machine.decode_video_priority(&[0; 16])?;
+        let state = machine.tilemap_snapshot(&ram, &[0; 6], mixer)?;
+        let raster = Raster {
+            height: 1,
+            layer_x: [511, 0, 0],
+            origin_y: 255,
+            width: 2,
+        };
+        let background = Background {
+            scroll_control: 0,
+            state,
+            tiles: &sheet,
+        };
+        let (width, height) = Raster::LAYER_EXTENT;
+        let mut map = vec![Pixel::default(); width.saturating_mul(height)];
+        if raster.isolate_layer(background, 0, &mut map)? != (511, 255)
+            || map.first().copied().map(Pixel::pen) != Some(5)
+            || map.get(1).copied().map(Pixel::pen) != Some(u16::MAX)
+            || map.last().copied().map(Pixel::pen) != Some(7)
+        {
+            return Err(ImportError::UnsupportedMember);
+        }
+        if raster.isolate_layer(background, 3, &mut map).is_ok()
+            || raster.isolate_layer(background, 0, &mut []).is_ok()
+        {
+            return Err(ImportError::UnsupportedMember);
+        }
+        let unsupported = Background {
+            scroll_control: 1,
+            ..background
+        };
+        if raster.isolate_layer(unsupported, 0, &mut map).is_ok() {
+            return Err(ImportError::UnsupportedMember);
+        }
+        Ok(())
+    }
 
     #[test]
     fn isolated_shadow_retains_transparency_and_palette_attenuation() {
