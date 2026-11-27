@@ -4576,3 +4576,25 @@ are retained. Native uses a simple localized title instead of the
 unrecovered original card art and omits the original scheduler overhead,
 stage setup and scripted entrance. This is the logical input gate, not
 exact stage-cue timing or second-stage gameplay parity.
+
+The optimized 3,984,352-byte Linux executable passed the original-backed
+offscreen OpenGL, synthetic touch and dummy-audio campaign checks in all
+five display modes. Each exercised a distinct stage-card readback and the
+neutral timeout before second-stage travel. All 600 movement and 20 combat
+submissions per mode met the 16.667 ms budget; whole-smoke peak RSS ranged
+from 180,858,880 to 181,075,968 bytes. The input regression additionally
+checks the adjacent 64th and 65th card ticks and suspended card time.
+
+### Scripted second-stage entrance boundary
+
+Independent reference controls release all directions or reverse the
+first station's direction after the bonus. Both match the held-right
+baseline on all four sampled actor records for all 232 consecutive
+frames from the start of the scripted entrance through two frames
+after its phase transition. The scripted phase lasts 229 frames;
+the first actor-record differences occur three frames after transition.
+The card and stage-setup phase boundaries are unchanged across these
+controls. This establishes an input-independent entrance interval,
+not the complete movement script or its art. Native still admits
+playable movement directly after the card; the original scripted
+entrance, associated art and cue alignment remain open.

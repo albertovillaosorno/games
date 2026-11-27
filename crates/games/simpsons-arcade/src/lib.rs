@@ -3295,6 +3295,8 @@ mod tests {
             Some(BonusPhase::StageCard)
         );
         assert_card_input_gate(state);
+        assert_card_boundary(state);
+        assert_card_pause(state);
         advance_empty(&mut state, 4003..4194);
         assert!(!state.stage_two());
         state.input_step(4194, &[]);
@@ -3327,6 +3329,25 @@ mod tests {
         assert!(!state.stage_two());
         state.input_step(4070, &pulse(Player::Marge, Control::Secondary));
         assert!(state.stage_two());
+    }
+
+    fn assert_card_boundary(mut state: Cabinet) {
+        advance_empty(&mut state, 4003..4066);
+        state.input_step(4066, &pulse(Player::Marge, Control::Primary));
+        assert!(!state.stage_two());
+        state.input_step(4067, &pulse(Player::Marge, Control::Secondary));
+        assert!(state.stage_two());
+    }
+
+    fn assert_card_pause(mut state: Cabinet) {
+        advance_empty(&mut state, 4003..4033);
+        let before = state.bonus().map(Bonus::tick);
+        state.input_step(4033, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 4034..4234);
+        assert_eq!(state.bonus().map(Bonus::tick), before);
+        assert!(!state.stage_two());
+        state.input_step(4234, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.bonus().map(Bonus::tick), Some(31));
     }
 
     fn assert_stage_two_stations(before: &[Station; 4], after: &[Station; 4]) {
