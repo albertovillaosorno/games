@@ -1110,3 +1110,12 @@ verified that no other ledger fields changed. The checker retains
 263 interior entries and 190 unresolved flows, now with 56 partial
 mappings and the same three intentional replacements, 25 non-runtime
 and 1,644 unresolved dispositions.
+
+The reviewed group-placement routine also has a partial Rust mapping
+to the existing tested four-station cemetery rank rotations, initial
+positions and rank-dependent elevation offsets. Explicit selection
+of the first rank does not resolve original recurrence invocation,
+descriptor behavior or participation-subset semantics. The candidate
+audit preserved every non-mapping field and all unrelated records;
+the checker reports 57 partial mappings with unchanged identity,
+flow and disposition counts.
