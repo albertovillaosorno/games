@@ -65,7 +65,8 @@ const USAGE: &str = concat!(
     "[--controls FILE | --reset-controls] ",
     "[--lan-host FILE] ",
     "[--config FILE | [--poses FILE] ",
-    "[--enemy APPROACH_SHA STRIKE_SHA] [--audio SHA [--audio-mod SHA]] ",
+    "[--enemy APPROACH_SHA STRIKE_SHA] ",
+    "[--audio SHA [--audio-mod SHA] [--music SHA]] ",
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local ",
@@ -94,6 +95,7 @@ struct LocalPaths {
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct AudioSelection {
     pub(super) base: OsString,
+    pub(super) music: Option<OsString>,
     pub(super) replacement: Option<OsString>,
 }
 
@@ -102,21 +104,24 @@ impl AudioSelection {
         let base = flag(args, "--audio").then(|| next(args)).transpose()?;
         let replacement =
             flag(args, "--audio-mod").then(|| next(args)).transpose()?;
-        Self::new(base, replacement)
+        let music = flag(args, "--music").then(|| next(args)).transpose()?;
+        Self::new(base, replacement, music)
     }
 
     fn new(
         base: Option<OsString>,
         replacement: Option<OsString>,
+        music: Option<OsString>,
     ) -> Result<Option<Self>, String> {
-        match (base, replacement) {
-            (Some(digest), changes) => Ok(Some(Self {
+        match (base, replacement, music) {
+            (Some(digest), changes, track) => Ok(Some(Self {
                 base: digest,
+                music: track,
                 replacement: changes,
             })),
-            (None, None) => Ok(None),
-            (None, Some(_)) => {
-                Err(String::from("audio replacement requires a base bundle"))
+            (None, None, None) => Ok(None),
+            (None, _, _) => {
+                Err(String::from("audio options require a base bundle"))
             },
         }
     }
@@ -158,6 +163,7 @@ impl<'text> Catalogue<'text> {
         let audio = AudioSelection::new(
             values.remove("audio").map(hash).transpose()?,
             values.remove("audio_mod").map(hash).transpose()?,
+            values.remove("music").map(hash).transpose()?,
         )?;
         let audio_device = selected_audio_device(
             values
@@ -1139,6 +1145,7 @@ mod tests {
             actors: [DIGEST, DIGEST, DIGEST, DIGEST].map(OsString::from),
             audio: Some(AudioSelection {
                 base: DIGEST.into(),
+                music: None,
                 replacement: None,
             }),
             directory: OsString::from("/package/../local assets"),
@@ -1266,6 +1273,7 @@ mod tests {
             actors: ["m", "h", "b", "l"].map(OsString::from),
             audio: Some(AudioSelection {
                 base: "audio".into(),
+                music: None,
                 replacement: None,
             }),
             directory: OsString::from("parent"),
@@ -1301,6 +1309,17 @@ mod tests {
         let path = OsStr::new("local");
         let base = catalogue();
         let replacement = format!("{base}audio_mod={DIGEST}\n");
+        let music = format!("{base}music={DIGEST}\n");
+        if Assets::catalogue(path, &music).is_ok() {
+            return Err(String::from("music without base accepted"));
+        }
+        let (music_config, _, _) =
+            Assets::catalogue(path, &format!("{music}audio={DIGEST}\n"))?;
+        if music_config.audio.and_then(|audio| audio.music)
+            != Some(DIGEST.into())
+        {
+            return Err(String::from("catalogue lost music"));
+        }
         if Assets::catalogue(path, &replacement).is_ok() {
             return Err(String::from("replacement without base accepted"));
         }
@@ -1319,6 +1338,8 @@ mod tests {
             "base",
             "--audio-mod",
             "mod",
+            "--music",
+            "track",
             "parent",
             "m",
             "h",
@@ -1329,6 +1350,7 @@ mod tests {
         if launch.assets.audio
             != Some(AudioSelection {
                 base: "base".into(),
+                music: Some("track".into()),
                 replacement: Some("mod".into()),
             })
         {

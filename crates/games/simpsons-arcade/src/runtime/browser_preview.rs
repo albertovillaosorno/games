@@ -167,14 +167,7 @@ const fn limits() -> DirectoryLimits {
 fn audio_selection(
     selection: &CatalogueAudio,
 ) -> Result<AudioSelection, RenderError> {
-    Ok(AudioSelection {
-        base: parse_hash(&selection.base)?,
-        replacement: selection
-            .replacement
-            .as_deref()
-            .map(parse_hash)
-            .transpose()?,
-    })
+    AudioSelection::from_local(selection)
 }
 
 fn selection<'text>(
@@ -262,6 +255,12 @@ fn manifest_requests(
             digest: audio.base,
             limits: audio::base_limits()?,
         });
+        if let Some(digest) = audio.music {
+            requests.push(ManifestRequest {
+                digest,
+                limits: audio::music_limits()?,
+            });
+        }
         if let Some(digest) = audio.replacement {
             requests.push(ManifestRequest {
                 digest,
@@ -448,14 +447,16 @@ mod tests {
             ".",
             &format!(
                 "poses=launch-poses.txt\ndisplay=integer\n\
-                 audio={hash}\naudio_mod={hash}\n"
+                 audio={hash}\naudio_mod={hash}\nmusic={hash}\n"
             ),
         );
         let fields = Catalogue::parse(&text).map_err(failure)?;
         let result = selection(&fields, Some("pose fixture"), true)?;
         if result.actors != [hash; 4]
             || result.audio.is_none_or(|audio| {
-                audio.base != hash || audio.replacement != Some(hash)
+                audio.base != hash
+                    || audio.replacement != Some(hash)
+                    || audio.music != Some(hash)
             })
             || result.display.presentation != PresentationMode::Integer
             || result.poses != Some("pose fixture")
@@ -495,6 +496,7 @@ mod tests {
         let pose = ContentHash::calculate(b"pose");
         let base = ContentHash::calculate(b"base");
         let replacement = ContentHash::calculate(b"replacement");
+        let music = ContentHash::calculate(b"music");
         let poses: String = ["marge", "homer", "bart", "lisa"]
             .into_iter()
             .flat_map(|name| {
@@ -506,6 +508,7 @@ mod tests {
             actors: [actor; 4],
             audio: Some(AudioSelection {
                 base,
+                music: Some(music),
                 replacement: Some(replacement),
             }),
             display: DisplaySettings::default(),
@@ -523,6 +526,7 @@ mod tests {
             (world, 1, world::bundle_limits()?),
             (pose, 8, art_bundle_limits()?),
             (base, 1, audio::base_limits()?),
+            (music, 1, audio::music_limits()?),
             (replacement, 1, audio::replacement_limits()?),
         ] {
             if !has_manifest_requests(&requests, digest, count, limit) {

@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Local attack cue selection and bounded host audio presentation.
+//   - Local attack and street music selection and bounded audio presentation.
 // - Must-Not:
 //   - Interpret ROM bytes, duplicate mixing or influence simulation time.
 // - Allows:
@@ -21,15 +21,15 @@
 // - Merge-When:
 //   - Another title-local module duplicates native cue delivery.
 // - Summary:
-//   - Optional four-station attack sample playback.
+//   - Optional four-station attack samples and street music.
 // - Description:
 //   - Observe each fixed-step cue once and refill a short software queue.
 // - Usage:
 //   - Load the verified local audio catalogue before opening the device.
 // - Defaults:
-//   - No device unless requested; no music or original audio parity claim.
+//   - No device or music unless requested; no exact audio parity claim.
 
-//! Opt-in playback of observed attack-associated PCM clips.
+//! Opt-in playback of observed attack-associated PCM and street music.
 
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::rc::Rc;
@@ -60,6 +60,9 @@ const CHUNK: usize = 256;
 const MAX_CHUNKS: u8 = 8;
 const QUEUE_FRAMES: u32 = 2048;
 const RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(47_999);
+const MUSIC_KEY: &str = "audio/street-music";
+const MUSIC_FRAMES: usize = 2_607_286;
+const MUSIC_LOOP_START: usize = 175_680;
 const SOURCE_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(9_999);
 // Observed PCM pitch 0xe9b with the 3,579,545 Hz chip clock:
 // round(3,579,545 / (4096 - 0xe9b)). The catalogue stays nominal.
@@ -91,11 +94,15 @@ const CLIPS: [(&str, u64); 4] = [
     ("audio/sample-0007", 3828),
 ];
 
+type SharedSamples = Rc<[i16]>;
+
 /// Pinned canonical attack samples and an optional selective replacement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AudioSelection {
     /// Manifest providing the four observed attack clips.
     pub base: ContentHash,
+    /// Optional canonical opening-street music manifest.
+    pub music: Option<ContentHash>,
     /// Optional compatible replacement manifest.
     pub replacement: Option<ContentHash>,
 }
@@ -106,6 +113,7 @@ impl AudioSelection {
     ) -> Result<Self, RenderError> {
         Ok(Self {
             base: parse_hash(&selection.base)?,
+            music: selection.music.as_deref().map(parse_hash).transpose()?,
             replacement: selection
                 .replacement
                 .as_deref()
@@ -117,6 +125,7 @@ impl AudioSelection {
 
 pub(super) struct Samples {
     clips: [Rc<[i16]>; 4],
+    music: Option<OwnedClip>,
 }
 
 impl Samples {
@@ -163,15 +172,14 @@ impl Samples {
             {
                 return Err(failure("unexpected attack PCM format"));
             }
-            let mut samples = Vec::new();
-            samples
-                .try_reserve_exact(pcm.samples().len())
-                .map_err(failure)?;
-            samples.extend(pcm.samples());
-            clips.push(Rc::<[i16]>::from(samples));
+            clips.push(copy_samples(pcm)?);
         }
         Ok(Self {
             clips: clips.try_into().map_err(|_error| failure("clip count"))?,
+            music: selection
+                .music
+                .map(|hash| load_music(store, hash))
+                .transpose()?,
         })
     }
 }
@@ -183,6 +191,8 @@ pub(super) struct Playback {
     discard_queued: bool,
     live_output: bool,
     mixer: OwnedMixer,
+    music: Option<OwnedClip>,
+    music_started: bool,
     scratch: [[i16; 2]; CHUNK],
     volume: MasterVolume,
 }
@@ -205,6 +215,10 @@ impl Playback {
                 .map_err(failure)?;
         }
         Ok(())
+    }
+
+    fn music_voices(&self) -> usize {
+        usize::from(self.music_started)
     }
 
     pub(super) fn open(
@@ -230,8 +244,15 @@ impl Playback {
             device,
             discard_queued: false,
             live_output: false,
-            mixer: OwnedMixer::new(RATE, NonZeroU16::MIN.saturating_add(15))
-                .map_err(failure)?,
+            mixer: OwnedMixer::new(
+                RATE,
+                NonZeroU16::MIN.saturating_add(
+                    15u16.saturating_add(u16::from(samples.music.is_some())),
+                ),
+            )
+            .map_err(failure)?,
+            music: samples.music.clone(),
+            music_started: false,
             scratch: [[0; 2]; CHUNK],
             volume: MasterVolume::default(),
         })
@@ -262,16 +283,12 @@ impl Playback {
     pub(super) fn smoke(&mut self) -> Result<(), RenderError> {
         let mut simulation = smoke_entry()?;
         self.update(simulation.state())?;
-        if self.queued_frames()? != 0 {
-            return Err(failure("entry incorrectly triggered attack audio"));
-        }
+        self.verify_quiet()?;
         let _first = simulation
             .advance(TICK_INTERVAL.saturating_mul(4))
             .map_err(failure)?;
         self.update(simulation.state())?;
-        if self.queued_frames()? != 0 {
-            return Err(failure("attack audio started before cue"));
-        }
+        self.verify_quiet()?;
         let _cue = simulation.advance(TICK_INTERVAL).map_err(failure)?;
         self.update(simulation.state())?;
         self.verify_submission(2)?;
@@ -295,13 +312,10 @@ impl Playback {
             let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
             self.update(simulation.state())?;
         }
-        if self.cues != [1; 4]
-            || self.mixer.active() != 0
-            || self.queued_frames()? != 0
-        {
-            return Err(failure("held attack repeated or audio did not drain"));
+        if self.cues != [1; 4] {
+            return Err(failure("held attack repeated"));
         }
-        Ok(())
+        self.verify_idle_effects()
     }
 
     fn smoke_maneuver(&mut self, airborne: bool) -> Result<(), RenderError> {
@@ -338,7 +352,9 @@ impl Playback {
         smoke_press(&mut controls, simulation, Control::Pause)?;
         self.device.clear().map_err(failure)?;
         self.update(simulation.state())?;
-        if self.queued_frames()? != 0 || self.mixer.active() != 4 {
+        if self.queued_frames()? != 0
+            || self.mixer.active() != 4usize.saturating_add(self.music_voices())
+        {
             return Err(failure("paused audio advanced"));
         }
         smoke_press(&mut controls, simulation, Control::Pause)?;
@@ -380,6 +396,7 @@ impl Playback {
         if simulation.state().phase() != Phase::MainMenu
             || self.queued_frames()? != 0
             || self.mixer.active() != 0
+            || self.music_started
         {
             return Err(failure(format!(
                 "reset retained stale audio: {:?}, {}, {}",
@@ -409,10 +426,24 @@ impl Playback {
             self.cues = current;
             self.discard_queued = true;
             self.mixer.clear();
+            self.music_started = false;
         }
         let ready = self.ready(self.live_output && playing)?;
         if !playing {
             return Ok(());
+        }
+        if !self.music_started
+            && let Some(clip) = &self.music
+        {
+            let _voice = self
+                .mixer
+                .play_loop(
+                    clip.clone(),
+                    StereoGain::UNITY,
+                    MUSIC_LOOP_START..MUSIC_FRAMES,
+                )
+                .map_err(failure)?;
+            self.music_started = true;
         }
         for (((previous, count), clip), gain) in self
             .cues
@@ -438,18 +469,28 @@ impl Playback {
         }
     }
 
-    fn verify_quiet(&self) -> Result<(), RenderError> {
-        if self.cues != [0; 4]
-            || self.mixer.active() != 0
-            || self.queued_frames()? != 0
-        {
-            return Err(failure("audio played before an admitted cue"));
+    fn verify_idle_effects(&self) -> Result<(), RenderError> {
+        if self.music.is_some() {
+            if !self.music_started {
+                return Err(failure("street music did not start"));
+            }
+            return self.verify_submission(0);
+        }
+        if self.mixer.active() != 0 || self.queued_frames()? != 0 {
+            return Err(failure("attack audio did not drain"));
         }
         Ok(())
     }
 
+    fn verify_quiet(&self) -> Result<(), RenderError> {
+        if self.cues != [0; 4] {
+            return Err(failure("audio played before an admitted cue"));
+        }
+        self.verify_idle_effects()
+    }
+
     fn verify_submission(&self, active: usize) -> Result<(), RenderError> {
-        if self.mixer.active() != active
+        if self.mixer.active() != active.saturating_add(self.music_voices())
             || self.queued_frames()? != QUEUE_FRAMES
             || self.scratch.iter().all(|frame| *frame == [0, 0])
         {
@@ -494,6 +535,49 @@ pub(super) fn base_limits() -> Result<ManifestLimits, RenderError> {
         records: size(161)?,
         total_bytes: NonZeroU64::MIN.saturating_add(3_798_887),
     })
+}
+
+pub(super) fn music_limits() -> Result<ManifestLimits, RenderError> {
+    let bytes = u64::try_from(MUSIC_FRAMES)
+        .ok()
+        .and_then(|frames| frames.checked_mul(4))
+        .and_then(NonZeroU64::new)
+        .ok_or(RenderError::TooLarge)?;
+    Ok(ManifestLimits {
+        manifest_bytes: size(4096)?,
+        payload_bytes: bytes,
+        records: size(1)?,
+        total_bytes: bytes,
+    })
+}
+
+fn copy_samples(pcm: PcmSamples<'_>) -> Result<SharedSamples, RenderError> {
+    let mut samples = Vec::new();
+    samples
+        .try_reserve_exact(pcm.samples().len())
+        .map_err(failure)?;
+    samples.extend(pcm.samples());
+    Ok(Rc::from(samples))
+}
+
+fn load_music(
+    store: BundleSource<'_>,
+    hash: ContentHash,
+) -> Result<OwnedClip, RenderError> {
+    let bundle = open_selected_bundle(store, hash, music_limits()?)?;
+    let record = bundle
+        .manifest()
+        .record(MUSIC_KEY)
+        .ok_or_else(|| failure("missing street music PCM"))?;
+    let bytes = bundle.view_payload(MUSIC_KEY).map_err(failure)?;
+    let pcm = PcmSamples::new(record, &bytes).map_err(failure)?;
+    if pcm.channels() != NonZeroU8::MIN.saturating_add(1)
+        || pcm.sample_rate() != RATE
+        || usize::try_from(pcm.frames().get()).ok() != Some(MUSIC_FRAMES)
+    {
+        return Err(failure("unexpected street music PCM format"));
+    }
+    OwnedClip::new(copy_samples(pcm)?, Channels::Stereo, RATE).map_err(failure)
 }
 
 pub(super) fn replacement_limits() -> Result<ManifestLimits, RenderError> {
@@ -658,6 +742,7 @@ mod tests {
         let base = CLIPS.map(|(key, frames)| (key, frames, 12));
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &base)?,
+            music: None,
             replacement: None,
         };
         let original = Samples::load(BundleSource::Local(parent), selection)?;
@@ -705,6 +790,7 @@ mod tests {
     -> Result<(), RenderError> {
         let samples = Samples {
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
+            music: None,
         };
         let expected = [[5451, 2443], [7383, 5182], [3430, 4887], [2027, 4523]];
         let clips = samples.clips()?;

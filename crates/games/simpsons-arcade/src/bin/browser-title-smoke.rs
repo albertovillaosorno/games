@@ -61,6 +61,7 @@ fn main() -> Result<(), RenderError> {
             actors: [digest; 4],
             audio: Some(AudioSelection {
                 base: audio,
+                music: None,
                 replacement: None,
             }),
             display: DisplaySettings::default(),
