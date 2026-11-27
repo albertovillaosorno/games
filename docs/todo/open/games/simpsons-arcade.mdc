@@ -5633,3 +5633,20 @@ twelve-tick holds; Homer and Bart each retain one family. All six
 manifests and 24 payload occurrences pass independent readback. Dust,
 landing pose variants and full native rendering remain open. All
 reference captures and original artwork remain private.
+
+### Optional second-stage boss prototype
+
+The boardwalk route now admits an opt-in fixed-step boss after regular
+and linked actor clearance. A routed-input test clears the boss after
+forty successful hits and observes 25 total defeat cues and one delayed
+boss point. Entrance and scale response landmarks inform the model;
+steering, collision, contact damage, the 140-tick terminal delay and
+score attribution are provisional. Projectile behavior remains open.
+
+The optional `balloon-boss` catalogue record requires four distinct
+canonical pose hashes and the complete boardwalk and linked catalogue.
+The four isolated RGBA8 pose roles reserve 374,352 atlas bytes and one
+sprite. Presentation uses the shared depth queue with sparse scale
+approximation. The native route diagnostic checks pose readback and
+terminal scoring, but its boss-specific GPU run and physical acceptance
+are still pending. No third-stage runtime handoff is claimed.
