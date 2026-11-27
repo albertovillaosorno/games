@@ -2402,28 +2402,44 @@ fn smoke_settings(
     scene.apply_display_settings(options.display)
 }
 
+fn smoke_select_menu_row(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+    item: MenuItem,
+) -> Result<(), RenderError> {
+    for _step in simulation.state().session().items() {
+        if simulation.state().session().selected() == Some(item) {
+            return Ok(());
+        }
+        smoke_press(controls, simulation, Control::Down)?;
+    }
+    Err(failure(("menu row unreachable", item)))
+}
+
+fn smoke_open_language_menu(
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<LocalSession, RenderError> {
+    if simulation.state().session().phase() != Phase::MainMenu {
+        return Err(failure("language diagnostic must begin at main menu"));
+    }
+    smoke_select_menu_row(controls, simulation, MenuItem::Settings)?;
+    smoke_press(controls, simulation, Control::Primary)?;
+    let initial = simulation.state().session();
+    if initial.phase() != Phase::Settings || !initial.has_languages() {
+        return Err(failure("language menu unavailable"));
+    }
+    smoke_select_menu_row(controls, simulation, MenuItem::Language)?;
+    Ok(simulation.state().session())
+}
+
 fn smoke_language_menu(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     controls: &mut Controls,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<LocalSession, RenderError> {
-    for control in [Control::Down, Control::Primary] {
-        smoke_press(controls, simulation, control)?;
-    }
-    let initial = simulation.state().session();
-    if initial.phase() != Phase::Settings || !initial.has_languages() {
-        return Err(failure("language menu unavailable"));
-    }
-    for _step in initial.items() {
-        if simulation.state().session().selected() == Some(MenuItem::Language) {
-            break;
-        }
-        smoke_press(controls, simulation, Control::Down)?;
-    }
-    if simulation.state().session().selected() != Some(MenuItem::Language) {
-        return Err(failure("language row unreachable"));
-    }
+    let initial = smoke_open_language_menu(controls, simulation)?;
     let _drawn = art.present(scene, simulation.state())?;
     let before = scene.readback()?;
     smoke_press(controls, simulation, Control::Primary)?;
@@ -3451,15 +3467,46 @@ mod tests {
 
     use super::{
         Action, CONTROLS, Cabinet, Control, Controls, DEFAULT_PROFILES, KEYS,
-        LiveInputLimits, NativeBatch, OptionalSources, Phase, Player, Profiles,
-        Sources, Station, StepClock, StreetLayout, TICK_INTERVAL,
-        configured_profiles, dimension, failure, frame_due, live, poses,
-        presentation_wait, size,
+        LiveInputLimits, LocalSession, MenuItem, NativeBatch, OptionalSources,
+        Phase, Player, Profiles, Sources, Station, StepClock, StreetLayout,
+        TICK_INTERVAL, configured_profiles, dimension, failure, frame_due,
+        live, live_with_session, poses, presentation_wait, size,
+        smoke_open_language_menu, smoke_press,
     };
     use crate::remote::{HostedCabinet, HostedInput};
 
     type TestCabinet = (Controls, LiveSimulation<Cabinet>);
     type MemoryActor = (ContentHash, Vec<u8>);
+
+    #[test]
+    fn language_diagnostic_reopens_settings_after_previous_visit()
+    -> Result<(), RenderError> {
+        let session = LocalSession::default().with_languages(2, 0);
+        let mut simulation = live_with_session(false, session)?;
+        let mut controls =
+            Controls::with_smoke_profiles(false, &DEFAULT_PROFILES)?;
+        for control in [Control::Down, Control::Primary, Control::Start] {
+            smoke_press(&mut controls, &mut simulation, control)?;
+        }
+        let returned = simulation.state().session();
+        if returned.phase() != Phase::MainMenu
+            || returned.selected() != Some(MenuItem::Settings)
+        {
+            return Err(failure("settings selection was not retained"));
+        }
+        let language =
+            smoke_open_language_menu(&mut controls, &mut simulation)?;
+        if language.phase() != Phase::Settings
+            || language.selected() != Some(MenuItem::Language)
+        {
+            return Err(failure("language row not reopened"));
+        }
+        smoke_press(&mut controls, &mut simulation, Control::Primary)?;
+        if simulation.state().session().language_index() != 1 {
+            return Err(failure("language selection did not advance"));
+        }
+        Ok(())
+    }
 
     fn memory_actor(
         revision: &str,
@@ -3915,7 +3962,7 @@ mod tests {
     -> Result<(), RenderError> {
         let mut simulation = live(false)?;
         let mut controls = Controls::new(false)?;
-        super::smoke_press(&mut controls, &mut simulation, Control::Start)?;
+        smoke_press(&mut controls, &mut simulation, Control::Start)?;
         let [first, others @ ..] = simulation.state().stations();
         if first.participation != crate::Participation::Playing
             || others.iter().any(|station| {
@@ -3937,11 +3984,11 @@ mod tests {
         }) {
             return Err(failure("default mouse attack did not start"));
         }
-        super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        smoke_press(&mut controls, &mut simulation, Control::Pause)?;
         if simulation.state().phase() != Phase::Paused {
             return Err(failure("Escape did not pause"));
         }
-        super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        smoke_press(&mut controls, &mut simulation, Control::Pause)?;
         if simulation.state().phase() != Phase::Playing {
             return Err(failure("Escape did not resume"));
         }
@@ -3968,8 +4015,8 @@ mod tests {
         .map_err(failure)?;
         let mut controls = Controls::with_profiles(false, &profiles)?;
         let mut simulation = live(false)?;
-        super::smoke_press(&mut controls, &mut simulation, Control::Start)?;
-        super::smoke_press(&mut controls, &mut simulation, Control::Pause)?;
+        smoke_press(&mut controls, &mut simulation, Control::Start)?;
+        smoke_press(&mut controls, &mut simulation, Control::Pause)?;
         if simulation.state().phase() != Phase::Paused {
             return Err(failure("custom profile lost global Escape pause"));
         }
