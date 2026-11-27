@@ -72,7 +72,9 @@ const STRIP_VIEWPORT: StripViewport = StripViewport {
     side_inset: SIDE,
 };
 
-const ENEMY_CAPACITY: usize = 7;
+const ENEMY_CAPACITY: usize = 9;
+const OPENING_ENEMY_COUNT: usize = 7;
+const LATER_COMBAT_GATE: i16 = 458;
 const PLAYER_HEALTH: u8 = 32;
 const PLAYER_STOCKS: u8 = 2;
 const STOCK_REENTRY_TICKS: u16 = 150;
@@ -80,6 +82,9 @@ const FINAL_KNOCKOUT_TICKS: u16 = 168;
 const REFILL_TICKS: u16 = 64;
 // Original ground-attack follow-up edges first take effect at offset 20.
 const GROUND_ATTACK_RECOVERY_TICKS: u8 = 20;
+
+#[cfg(any(test, feature = "native-preview"))]
+type DiagnosticIntent = (Option<Control>, Option<Control>);
 
 /// Characters and default input seat order for the four-player edition.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -840,6 +845,34 @@ impl Cabinet {
         }
     }
 
+    // Shared input policy for portable traversal and native readback tests.
+    // It is not a simulation or production input rule.
+    #[cfg(any(test, feature = "native-preview"))]
+    fn diagnostic_intent(&self) -> DiagnosticIntent {
+        let [marge, ..] = self.stations();
+        let target = self
+            .enemies()
+            .filter(|enemy| enemy.health > 0)
+            .min_by_key(|enemy| distance(marge.position, enemy.position));
+        let direction = target.map_or(Some(Control::Right), |enemy| {
+            diagnostic_direction(marge, enemy)
+        });
+        let action = if matches!(
+            marge.participation,
+            Participation::Continuing { .. }
+        ) {
+            Some(Control::Start)
+        } else if target.is_some()
+            && direction.is_none()
+            && marge.maneuver == Maneuver::Idle
+        {
+            Some(Control::Primary)
+        } else {
+            None
+        };
+        (direction, action)
+    }
+
     /// Inspect admitted enemies in stable arrival order, including defeat.
     pub fn enemies(&self) -> impl Iterator<Item = Enemy> + '_ {
         self.encounter.iter().flat_map(Encounter::enemies)
@@ -1070,8 +1103,8 @@ impl Cabinet {
     /// Enable bounded rightward opening-street travel.
     ///
     /// The host supplies the extent of verified additional world art.
-    /// Progressive combat gates the remaining art until the opening
-    /// encounter is cleared.
+    /// Progressive combat gates the remaining art until the admitted
+    /// encounters are cleared.
     /// Rendering dimensions are not simulation inputs.
     /// # Errors
     /// Rejects travel outside the representable world coordinates.
@@ -1112,6 +1145,35 @@ const fn axis(negative: bool, positive: bool) -> i16 {
         (false, true) => 2,
         _ => 0,
     }
+}
+
+#[cfg(any(test, feature = "native-preview"))]
+fn diagnostic_direction(station: Station, enemy: Enemy) -> Option<Control> {
+    let from = station.position;
+    let to = enemy.position;
+    let facing_right = station.facing == Facing::Right;
+    if from.x != to.x
+        && (from.x.abs_diff(to.x) > 24 || (from.x < to.x) != facing_right)
+    {
+        Some(if from.x < to.x {
+            Control::Right
+        } else {
+            Control::Left
+        })
+    } else if from.y.abs_diff(to.y) > 6 {
+        Some(if from.y < to.y {
+            Control::Down
+        } else {
+            Control::Up
+        })
+    } else {
+        None
+    }
+}
+
+fn distance(first: Point, second: Point) -> u32 {
+    u32::from(first.x.abs_diff(second.x))
+        .saturating_add(u32::from(first.y.abs_diff(second.y)))
 }
 
 fn queue_maneuver(queued: &mut PendingManeuver, slot: &Slot, control: Control) {

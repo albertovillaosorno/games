@@ -56,9 +56,10 @@ use super::{
 };
 use crate::{
     CONTINUE_TICKS, Cabinet, Control, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
-    Enemy, EnemyAction, Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver,
-    PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase, Player, Point,
-    REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
+    Enemy, EnemyAction, Facing, GROUND_ATTACK_RECOVERY_TICKS,
+    LATER_COMBAT_GATE, Maneuver, OPENING_ENEMY_COUNT, PLAYER_HEALTH,
+    PLAYER_STOCKS, Participation, Phase, Player, Point, REFILL_TICKS,
+    STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -434,8 +435,72 @@ fn smoke_reinforcements(
             (limit, gate, verified),
         )?;
     }
+    if i16::try_from(limit).map_err(failure)? >= LATER_COMBAT_GATE {
+        smoke_later_reinforcements(scene, art, touch_enabled, limit)?;
+        verified = ENEMY_CAPACITY - 1;
+    }
     write_status(format_args!("Reinforcements: {verified} meters verified"))
         .map_err(failure)
+}
+
+fn smoke_later_reinforcements(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    touch_enabled: bool,
+    limit: u16,
+) -> Result<(), RenderError> {
+    let mut simulation =
+        live_with_scroll(true, LocalSession::default(), limit)?;
+    let mut controls = Controls::new(touch_enabled)?;
+    pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
+    advance(&mut simulation, 1)?;
+    let mut held = None;
+    for _ in 0..3000u16 {
+        if simulation.state().camera_origin() >= LATER_COMBAT_GATE {
+            break;
+        }
+        let (direction, requested) = simulation.state().diagnostic_intent();
+        if held != direction {
+            if let Some(previous) = held {
+                let scan = controls.key(Player::Marge, previous)?;
+                key(&mut controls, &mut simulation, scan, false)?;
+            }
+            if let Some(next) = direction {
+                let scan = controls.key(Player::Marge, next)?;
+                key(&mut controls, &mut simulation, scan, true)?;
+            }
+            held = direction;
+        }
+        if let Some(action) = requested {
+            let scan = controls.key(Player::Marge, action)?;
+            pulse(&mut controls, &mut simulation, scan)?;
+        }
+        advance(&mut simulation, 1)?;
+    }
+    if let Some(previous) = held {
+        let scan = controls.key(Player::Marge, previous)?;
+        key(&mut controls, &mut simulation, scan, false)?;
+    }
+    let cabinet = simulation.state();
+    if cabinet.camera_origin() != LATER_COMBAT_GATE
+        || cabinet.enemies().count() != ENEMY_CAPACITY
+        || cabinet
+            .enemies()
+            .take(OPENING_ENEMY_COUNT)
+            .any(|enemy| enemy.health > 0)
+    {
+        return Err(failure("later encounter was not reached through combat"));
+    }
+    let mut seen = [false; ENEMY_CAPACITY - 1];
+    for checked in seen.iter_mut().take(OPENING_ENEMY_COUNT - 1) {
+        *checked = true;
+    }
+    verify_reinforcements(
+        scene,
+        art,
+        &mut simulation,
+        (ENEMY_CAPACITY - 1, &mut seen),
+    )
 }
 
 fn smoke_reinforcement_gate(

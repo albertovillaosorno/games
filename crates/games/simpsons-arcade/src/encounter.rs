@@ -27,13 +27,14 @@
 // - Usage:
 //   - Opt in through Cabinet::with_opening_street or with_encounter.
 // - Defaults:
-//   - At most seven enemies; no original combat parity claim.
+//   - At most nine enemies; no original combat parity claim.
 
 //! Provisional fixed-step encounter for the first street.
 
 use super::{
-    BASE_WIDTH, ENEMY_CAPACITY, Encounter, Facing, Maneuver, Point, Slot,
-    StreetLayout, strip_width, view_origin, viewport_width,
+    BASE_WIDTH, ENEMY_CAPACITY, Encounter, Facing, LATER_COMBAT_GATE, Maneuver,
+    OPENING_ENEMY_COUNT, Point, Slot, StreetLayout, distance, strip_width,
+    view_origin, viewport_width,
 };
 
 const ENEMY_HEALTH: u8 = 1;
@@ -67,6 +68,8 @@ const REINFORCEMENTS: [(i16, Point); ENEMY_CAPACITY - 1] = [
     (210, Point { x: 334, y: 208 }),
     (274, Point { x: -18, y: 176 }),
     (OPENING_COMBAT_LIMIT, Point { x: 334, y: 160 }),
+    (LATER_COMBAT_GATE, Point { x: 334, y: 192 }),
+    (LATER_COMBAT_GATE, Point { x: -18, y: 192 }),
 ];
 
 impl Encounter {
@@ -156,13 +159,16 @@ impl Encounter {
     }
 
     pub(super) fn limit_travel(&self, travel: i16) -> i16 {
-        if self.progressive
-            && !self
-                .enemies
-                .iter()
-                .all(|entry| entry.is_some_and(|enemy| enemy.health == 0))
-        {
+        if !self.progressive {
+            return travel;
+        }
+        let defeated = |entry: &Option<Enemy>| {
+            entry.is_some_and(|enemy| enemy.health == 0)
+        };
+        if !self.enemies.iter().take(OPENING_ENEMY_COUNT).all(defeated) {
             travel.min(OPENING_COMBAT_LIMIT)
+        } else if !self.enemies.iter().skip(OPENING_ENEMY_COUNT).all(defeated) {
+            travel.min(LATER_COMBAT_GATE)
         } else {
             travel
         }
@@ -570,11 +576,6 @@ fn arrival_x(travel: i16, camera: i16, offset: i16) -> i16 {
     }
 }
 
-fn distance(first: Point, second: Point) -> u32 {
-    u32::from(first.x.abs_diff(second.x))
-        .saturating_add(u32::from(first.y.abs_diff(second.y)))
-}
-
 const fn in_range(
     from: Point,
     facing: Facing,
@@ -646,8 +647,10 @@ mod tests {
             (274, 6),
             (361, 6),
             (362, 7),
-            (362, 7),
-            (0, 7),
+            (457, 7),
+            (458, 9),
+            (458, 9),
+            (0, 9),
         ] {
             encounter.admit(camera);
             assert_eq!(encounter.enemies().count(), count);
@@ -660,6 +663,8 @@ mod tests {
             Point { x: 544, y: 208 },
             Point { x: 256, y: 176 },
             Point { x: 696, y: 160 },
+            Point { x: 792, y: 192 },
+            Point { x: 440, y: 192 },
         ]));
         assert_eq!(
             encounter.enemies().nth(2).map(|enemy| enemy.facing),
@@ -669,6 +674,50 @@ mod tests {
         assert!(encounter.enemies().eq([Enemy::new(spawn)]));
         encounter.admit(50);
         assert_eq!(encounter.enemies().count(), 2);
+    }
+
+    fn defeat_prefix(encounter: &mut Encounter, count: usize) {
+        for enemy in encounter.enemies.iter_mut().flatten().take(count) {
+            enemy.health = 0;
+        }
+    }
+
+    #[test]
+    fn later_pair_gates_travel_until_both_are_defeated() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, true);
+        encounter.admit(OPENING_COMBAT_LIMIT);
+        assert_eq!(encounter.limit_travel(1350), OPENING_COMBAT_LIMIT);
+        defeat_prefix(&mut encounter, OPENING_ENEMY_COUNT);
+        assert_eq!(
+            (encounter.limit_travel(444), encounter.limit_travel(1350)),
+            (444, LATER_COMBAT_GATE)
+        );
+        encounter.admit(LATER_COMBAT_GATE);
+        assert_eq!(encounter.enemies().count(), ENEMY_CAPACITY);
+        defeat_prefix(&mut encounter, ENEMY_CAPACITY - 1);
+        assert_eq!(encounter.limit_travel(1350), LATER_COMBAT_GATE);
+        defeat_prefix(&mut encounter, ENEMY_CAPACITY);
+        encounter.admit(LATER_COMBAT_GATE);
+        assert_eq!(encounter.limit_travel(1350), 1350);
+        assert!(encounter.enemies().all(|enemy| enemy.health == 0));
+        encounter.restart();
+        assert_eq!(
+            (encounter.enemies().count(), encounter.limit_travel(1350)),
+            (1, OPENING_COMBAT_LIMIT)
+        );
+    }
+
+    #[test]
+    fn later_pair_approaches_from_opposite_edges() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, true);
+        encounter.admit(LATER_COMBAT_GATE);
+        assert!(
+            encounter
+                .enemies()
+                .skip(OPENING_ENEMY_COUNT)
+                .map(|enemy| enemy.facing)
+                .eq([Facing::Left, Facing::Right])
+        );
     }
 
     #[test]
@@ -775,7 +824,9 @@ mod tests {
 
     #[test]
     fn opening_street_clear_releases_remaining_verified_travel() {
-        for (limit, expected) in [(80, 2), (154, 4), (444, 7), (1350, 7)] {
+        for (limit, expected) in
+            [(80, 2), (154, 4), (444, 7), (458, 9), (1350, 9)]
+        {
             let result = Cabinet::with_opening_street()
                 .and_then(|cabinet| cabinet.with_scroll_limit(limit));
             assert!(result.is_ok());
@@ -797,28 +848,20 @@ mod tests {
         let mut held = None;
         let end = i16::try_from(limit).unwrap_or_default();
         for tick in 1..3000 {
-            let [marge, ..] = cabinet.stations();
-            let target = cabinet
-                .enemies()
-                .filter(|enemy| enemy.health > 0)
-                .min_by_key(|enemy| distance(marge.position, enemy.position));
-            if cabinet.camera_origin() > OPENING_COMBAT_LIMIT {
-                assert!(target.is_none());
+            let living = cabinet.enemies().any(|enemy| enemy.health > 0);
+            if (OPENING_COMBAT_LIMIT < cabinet.camera_origin()
+                && cabinet.camera_origin() < LATER_COMBAT_GATE)
+                || cabinet.camera_origin() > LATER_COMBAT_GATE
+            {
+                assert!(!living);
             }
-            if target.is_none() && cabinet.camera_origin() == end {
+            if !living && cabinet.camera_origin() == end {
                 return;
             }
-            let direction = target.map_or(Some(Control::Right), |enemy| {
-                pursuit_direction(marge, enemy)
-            });
+            let (direction, requested) = cabinet.diagnostic_intent();
             let mut actions = direction_changes(&mut held, direction);
-            if matches!(marge.participation, Participation::Continuing { .. }) {
-                actions.extend(pulse(Control::Start));
-            } else if target.is_some()
-                && direction.is_none()
-                && marge.maneuver == Maneuver::Idle
-            {
-                actions.extend(pulse(Control::Primary));
+            if let Some(action) = requested {
+                actions.extend(pulse(action));
             }
             cabinet.input_step(tick, &actions);
             assert_eq!(cabinet.phase(), Phase::Playing);
@@ -843,32 +886,6 @@ mod tests {
         }
         *held = direction;
         actions
-    }
-
-    fn pursuit_direction(
-        station: crate::Station,
-        enemy: Enemy,
-    ) -> Option<Control> {
-        let from = station.position;
-        let to = enemy.position;
-        if from.x != to.x
-            && (from.x.abs_diff(to.x) > 24
-                || !in_range(from, station.facing, to, (u16::MAX, u16::MAX)))
-        {
-            Some(if from.x < to.x {
-                Control::Right
-            } else {
-                Control::Left
-            })
-        } else if from.y.abs_diff(to.y) > 6 {
-            Some(if from.y < to.y {
-                Control::Down
-            } else {
-                Control::Up
-            })
-        } else {
-            None
-        }
     }
 
     #[test]
