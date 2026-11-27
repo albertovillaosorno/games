@@ -36,6 +36,8 @@ pub mod audio_check;
 
 /// Independent portable canonical bundle verification.
 pub mod bundle_check;
+/// Generate contributor Ghidra processor descriptions.
+pub mod ghidra;
 /// Native canonical bundle publication.
 pub mod publication;
 /// Exact bounded comparison of private PCM reference recordings.
@@ -83,6 +85,7 @@ use games_platform::ir::storage::file::snapshot;
 use games_platform::ir::toolchain;
 
 const USAGE: &str = concat!(
+    "games-build ghidra konami cspec|ldefs|pspec|slaspec\n",
     "games-build retention plan AGE_SECONDS QUOTA_BYTES ENTRIES BYTES\n",
     "games-build retention apply AGE_SECONDS QUOTA_BYTES ENTRIES BYTES HASH\n",
     "usage: games-build build TITLE [linux-x86-64|webassembly]\n",
@@ -233,6 +236,7 @@ enum Command {
     ),
     BuildTitle(title_build::Distribution),
     Check(ImportProfile, OsString, ContentHash),
+    Ghidra(ghidra::Component),
     Import(ImportProfile, Arguments),
     MigrationAudit(store_migration::Audit),
     MigrationCatalogue(Box<store_migration::Catalogue>),
@@ -267,6 +271,9 @@ impl Command {
         let format = args.next().ok_or_else(|| String::from(USAGE))?;
         let action = args.next().ok_or_else(|| String::from(USAGE))?;
         match (format.to_str(), action.to_str()) {
+            (Some("ghidra"), Some(processor)) => Ok(Self::Ghidra(
+                ghidra::Component::parse(processor, &args.collect::<Vec<_>>())?,
+            )),
             (Some("retention"), Some(operation)) => {
                 Ok(Self::Retention(reference_retention::Arguments::parse(
                     operation,
@@ -663,6 +670,7 @@ impl Command {
         match self {
             Self::BuildTitle(title) => title.run(),
             Self::Retention(arguments) => arguments.run(),
+            Self::Ghidra(component) => component.run(),
             Self::PackageCheck(title, output) => {
                 title_package::check(title, &output)
             },
@@ -745,6 +753,7 @@ impl Command {
             | Self::PaletteCheck(..)
             | Self::PriorityCheck(..)
             | Self::Retention(..)
+            | Self::Ghidra(..)
             | Self::SampleCheck(..)
             | Self::StripPublish(..)
             | Self::TilemapCheck(..)
