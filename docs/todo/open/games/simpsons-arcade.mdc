@@ -5847,8 +5847,8 @@ Neutral, opposed and reversed movements have independent piecewise
 trace regressions, including diagonal movement and the shared offset.
 The entrance-only presentation remains the default. Subset admission,
 general terrain, camera descriptor progression, final sprite
-registration, moving backdrop, attacks and subsequent encounters
-are not implemented by this diagnostic.
+registration, moving backdrop and subsequent encounters are not
+implemented by this diagnostic. Isolated actions are extended below.
 
 The strengthened cemetery visibility check also passes the remaining
 three original-backed browser rank rotations, with 144, 129 and 138
@@ -5876,3 +5876,33 @@ static entrance backdrop. Unobserved offset-phase combinations,
 independent layer registration, walk-body isolation and general
 composition remain unresolved. No moving-room presentation assets
 or additional native gameplay are admitted from these captures.
+
+### Bounded cemetery station actions
+
+An independent original replay preserves all 1,258 transition samples
+preceding the first targeted action. Five fresh button controls then
+admit two Marge attacks, a 20-tick Homer jump, a Bart button chord and
+a Lisa attack. The jump has 51 nonzero height samples and the chord
+has 30, followed in each case by a grounded sample. Their floored
+heights match the shared station trajectories. Ground coordinates
+and the shared offset remain unchanged during this isolated sequence.
+
+Three independent saved-state controls reproduce the 12 preceding
+transition samples before altering the held inputs. A fresh attack
+and downward input do not start a depth stride. A ground attack
+after six downward steps retains the previous two-unit depth stride
+on its admission tick but contributes no further camera request
+until recovery ends. Reversing that held direction on the attack
+edge still consumes the preceding depth stride. A separate fresh
+direction-plus-chord control selects the ordinary jump.
+
+The bounded portable room now admits the existing station maneuvers
+on its 116 fixed action ticks. Camera requests use the same vertical
+motion eligibility as station movement; the ground attack admission
+retains only the previous walking depth component. Inline cabinet
+regressions cover the observed isolated height tracks, fresh and
+preheld downward inputs, attack recovery, cue counters, pause and
+both admission boundaries. The final diagnostic state is frozen at
+the unsupported encounter boundary. Exact action art and audio,
+general terrain, interactions and encounter progression remain open.
+The entrance-only renderer and default campaign selection are unchanged.

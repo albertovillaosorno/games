@@ -537,6 +537,19 @@ impl Slot {
         }
     }
 
+    fn depth_step(&self, dy: i16) -> i16 {
+        match self.station.maneuver {
+            Maneuver::Jump(_) => dy,
+            Maneuver::Idle if self.action_recovery == Recovery::Ready => dy,
+            Maneuver::AirAttack(_)
+            | Maneuver::Attack { .. }
+            | Maneuver::Hurt { .. }
+            | Maneuver::Idle
+            | Maneuver::Restrained
+            | Maneuver::Special { .. } => 0,
+        }
+    }
+
     const fn direction(self) -> (i16, i16) {
         (
             axis(self.held(Control::Left), self.held(Control::Right)),
@@ -595,34 +608,36 @@ impl Slot {
     }
 
     fn maneuver_step(&mut self, dx: i16, dy: i16) -> (i16, i16) {
-        match self.station.maneuver {
+        let step_y = self.depth_step(dy);
+        let step_x = match self.station.maneuver {
             Maneuver::AirAttack(motion) => {
                 let forward = if self.station.facing == Facing::Left {
                     -1
                 } else {
                     1
                 };
-                (motion.step().saturating_mul(forward), 0)
+                motion.step().saturating_mul(forward)
             },
             Maneuver::Attack { tick: 2.., .. } => {
-                (self.fractional_step(dx.signum()), 0)
+                self.fractional_step(dx.signum())
             },
             Maneuver::Special { drift_quarters, .. } => {
-                (self.fractional_step(drift_quarters), 0)
+                self.fractional_step(drift_quarters)
             },
             Maneuver::Attack { .. }
             | Maneuver::Restrained
-            | Maneuver::Hurt { .. } => (0, 0),
+            | Maneuver::Hurt { .. } => 0,
             // Original drift continues through offset 18, then stops.
             Maneuver::Idle
                 if matches!(self.action_recovery, Recovery::Ground(2..)) =>
             {
-                (self.fractional_step(dx.signum()), 0)
+                self.fractional_step(dx.signum())
             },
-            Maneuver::Idle if self.action_recovery != Recovery::Ready => (0, 0),
-            Maneuver::Jump(ref mut motion) => (motion.horizontal_step(dx), dy),
-            Maneuver::Idle => (dx, dy),
-        }
+            Maneuver::Idle if self.action_recovery != Recovery::Ready => 0,
+            Maneuver::Jump(ref mut motion) => motion.horizontal_step(dx),
+            Maneuver::Idle => dx,
+        };
+        (step_x, step_y)
     }
 
     fn move_tick(&mut self, layout: StreetLayout) {
@@ -997,7 +1012,7 @@ impl Cabinet {
             self.camera.max(target.min(self.camera.saturating_add(2)));
     }
 
-    fn advance_cemetery(&mut self, presses: [bool; 4]) -> bool {
+    fn advance_cemetery(&mut self, pending: [PendingManeuver; 4]) -> bool {
         let Some(mut entrance) = self.cemetery else {
             return false;
         };
@@ -1005,8 +1020,8 @@ impl Cabinet {
             .stations()
             .map(Station::can_fight)
             .into_iter()
-            .zip(presses)
-            .any(|(active, pressed)| active && pressed);
+            .zip(pending)
+            .any(|(active, queued)| active && queued.button_edges != 0);
         let previous_phase = entrance.phase();
         entrance.advance(active_edge);
         if previous_phase == CemeteryPhase::Setup
@@ -1014,7 +1029,9 @@ impl Cabinet {
         {
             self.move_cemetery_stations(entrance);
         }
-        entrance.advance_room(&mut self.slots);
+        if entrance.advance_room(&mut self.slots, pending) {
+            self.record_attack_cues();
+        }
         self.cemetery = Some(entrance);
         true
     }
@@ -1089,10 +1106,7 @@ impl Cabinet {
         let index = character.index();
         let playing = self.session.phase() == Phase::Playing;
         let control = change.action.control;
-        let interlude = playing
-            && ((self.bonus.is_some() && control != Control::Start)
-                || self.cemetery.is_some()
-                || self.stage_entrance().is_some());
+        let interlude = playing && self.input_interlude(control);
         let (Some(slot), Some(queued)) =
             (self.slots.get_mut(index), pending.get_mut(index))
         else {
@@ -1302,7 +1316,7 @@ impl Cabinet {
             return;
         }
         let presses = pending.map(|queued| queued.button_edges != 0);
-        if self.advance_cemetery(presses)
+        if self.advance_cemetery(pending)
             || self.advance_bonus(presses)
             || self.advance_stage_entrance()
         {
@@ -1363,6 +1377,15 @@ impl Cabinet {
     #[must_use]
     pub const fn impact_cues(&self) -> u64 {
         self.impact_cues
+    }
+
+    fn input_interlude(&self, control: Control) -> bool {
+        (self.bonus.is_some() && control != Control::Start)
+            || self.cemetery.is_some_and(|entrance| {
+                !matches!(control, Control::Primary | Control::Secondary)
+                    || !entrance.accepts_room_actions()
+            })
+            || self.stage_entrance().is_some()
     }
 
     /// Fixed playing ticks since the current stage backdrop admission.
@@ -1654,10 +1677,10 @@ impl Cabinet {
         })
     }
 
-    /// Select the bounded four-station first-room locomotion diagnostic.
+    /// Select the bounded four-station first-room action diagnostic.
     ///
     /// The ordinary rendered entrance remains unchanged. Only a full
-    /// four-station admission enables the room, and its movement ends
+    /// four-station admission enables the room, and its actions end
     /// before the first unmodeled encounter. Station positions in this
     /// room are world coordinates with depth increasing away from the
     /// viewer; use the room projection to inspect the camera offset.
@@ -4153,6 +4176,168 @@ mod tests {
         let [marge, ..] = state.stations();
         assert_eq!(marge.position, Point { x: 116, y: 176 });
         assert_cemetery_room_pause_and_boundary(state);
+    }
+
+    fn ready_cemetery_room() -> Cabinet {
+        let mut state = room_cabinet([true; 4]);
+        advance_empty(&mut state, 0..433);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::tick),
+            Some(241)
+        );
+        state
+    }
+
+    #[test]
+    fn cemetery_room_reuses_isolated_action_trajectories() {
+        let mut state = ready_cemetery_room();
+        let jump = [
+            7, 14, 21, 27, 33, 39, 45, 51, 56, 61, 66, 70, 74, 78, 82, 86, 89,
+            92, 95, 97, 99, 101, 102, 102, 101, 101, 100, 99, 98, 96, 95, 93,
+            90, 88, 85, 82, 79, 75, 72, 68, 63, 59, 54, 49, 44, 38, 33, 27, 20,
+            14, 7, 0,
+        ];
+        let special = [
+            5, 10, 15, 20, 24, 28, 31, 34, 37, 39, 41, 42, 43, 44, 45, 45, 44,
+            43, 42, 41, 39, 37, 34, 31, 28, 24, 20, 15, 10, 5, 0,
+        ];
+        let positions = state.stations().map(|station| station.position);
+        for tick in 0usize..100 {
+            apply_cemetery_action_trace(&mut state, tick);
+            let [marge, homer, bart, lisa] = state.stations();
+            let expected = |start: usize, samples: &[i16]| {
+                tick.checked_sub(start)
+                    .and_then(|index| samples.get(index).copied())
+                    .unwrap_or(0)
+            };
+            assert_eq!(homer.maneuver.elevation(), expected(12, &jump));
+            assert_eq!(bart.maneuver.elevation(), expected(26, &special));
+            assert_cemetery_attack_edges(marge, lisa, tick);
+            assert_eq!(
+                state.stations().map(|station| station.position),
+                positions
+            );
+        }
+        assert_eq!(state.stations().map(|station| station.attack_cues), [
+            2, 0, 1, 1
+        ]);
+    }
+
+    fn assert_cemetery_attack_edges(
+        marge: Station,
+        lisa: Station,
+        tick: usize,
+    ) {
+        assert_eq!(
+            matches!(marge.maneuver, Maneuver::Attack { tick: 0, .. }),
+            matches!(tick, 0 | 82)
+        );
+        assert_eq!(
+            matches!(lisa.maneuver, Maneuver::Attack { tick: 0, .. }),
+            tick == 42
+        );
+    }
+
+    fn apply_cemetery_action_trace(state: &mut Cabinet, tick: usize) {
+        match tick {
+            0 | 82 => {
+                state.input_step(0, &pulse(Player::Marge, Control::Primary));
+            },
+            12 => state.input_step(0, &[change(
+                Player::Homer,
+                Control::Secondary,
+                true,
+            )]),
+            26 => state.input_step(0, &[
+                change(Player::Bart, Control::Primary, true),
+                change(Player::Bart, Control::Secondary, true),
+                change(Player::Bart, Control::Primary, false),
+                change(Player::Bart, Control::Secondary, false),
+            ]),
+            32 => state.input_step(0, &[change(
+                Player::Homer,
+                Control::Secondary,
+                false,
+            )]),
+            42 => {
+                state.input_step(0, &pulse(Player::Lisa, Control::Primary));
+            },
+            _ => state.input_step(0, &[]),
+        }
+    }
+
+    #[test]
+    fn cemetery_attack_retains_only_the_previous_depth_stride() {
+        let mut state = ready_cemetery_room();
+        state.input_step(0, &[change(Player::Marge, Control::Down, true)]);
+        advance_empty(&mut state, 0..5);
+        assert_room_projection(&state, 2, [166, 178, 178, 178]);
+        state.input_step(0, &pulse(Player::Marge, Control::Primary));
+        assert_room_projection(&state, 2, [164, 178, 178, 178]);
+        for _ in 0u8..19 {
+            state.input_step(0, &[]);
+            assert_room_projection(&state, 2, [164, 178, 178, 178]);
+        }
+        state.input_step(0, &[]);
+        assert_room_projection(&state, 4, [164, 180, 180, 180]);
+    }
+
+    #[test]
+    fn cemetery_fresh_attack_does_not_start_a_depth_stride() {
+        let mut state = ready_cemetery_room();
+        state.input_step(0, &[
+            change(Player::Marge, Control::Down, true),
+            change(Player::Marge, Control::Primary, true),
+        ]);
+        for _ in 0u8..19 {
+            assert_room_projection(&state, 0, [176; 4]);
+            state.input_step(0, &[]);
+        }
+        assert_room_projection(&state, 0, [176; 4]);
+        state.input_step(0, &[]);
+        assert_room_projection(&state, 0, [174, 176, 176, 176]);
+    }
+
+    fn assert_room_projection(state: &Cabinet, offset: i16, depths: [i16; 4]) {
+        let room = state.cemetery_entrance().and_then(CemeteryEntrance::room);
+        assert_eq!(room.map(CemeteryRoom::depth_offset), Some(offset));
+        assert_eq!(
+            room.map(|projection| state
+                .stations()
+                .map(|station| { projection.project(station.position).y })),
+            Some(depths)
+        );
+    }
+
+    #[test]
+    fn cemetery_actions_obey_room_boundaries_and_pause() {
+        let mut state = room_cabinet([true; 4]);
+        advance_empty(&mut state, 0..432);
+        state.input_step(0, &pulse(Player::Marge, Control::Primary));
+        assert_eq!(
+            state.stations().map(|station| station.maneuver),
+            [Maneuver::Idle; 4]
+        );
+        state.input_step(0, &pulse(Player::Marge, Control::Primary));
+        let admitted = state.stations();
+        let [marge, ..] = admitted;
+        assert!(matches!(marge.maneuver, Maneuver::Attack { tick: 0, .. }));
+        state.input_step(0, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 0..20);
+        assert_eq!(state.stations(), admitted);
+        state.input_step(0, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 0..113);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::tick),
+            Some(356)
+        );
+        state.input_step(0, &[change(Player::Homer, Control::Secondary, true)]);
+        let last = state.stations().map(|station| station.maneuver);
+        let [_, homer, ..] = last;
+        assert_eq!(homer.elevation(), 7);
+        state.input_step(0, &pulse(Player::Lisa, Control::Primary));
+        advance_empty(&mut state, 0..20);
+        assert_eq!(state.stations().map(|station| station.maneuver), last);
     }
 
     fn assert_cemetery_room_pause_and_boundary(mut state: Cabinet) {

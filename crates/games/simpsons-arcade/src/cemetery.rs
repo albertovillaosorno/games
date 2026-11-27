@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Fixed-step third-stage entrance, body timing and bounded room motion.
+//   - Fixed-step third-stage entrance, body timing and bounded room actions.
 // - Must-Not:
 //   - Decode original media, choose a random seed or render sprites.
 // - Allows:
@@ -23,7 +23,8 @@
 // - Summary:
 //   - Reproduce the observed ranked entrance without assuming RNG cadence.
 // - Description:
-//   - Four-station motion is verified; subset admission is provisional.
+//   - Four-station motion and isolated actions are verified in a bounded
+//     window.
 // - Usage:
 //   - Advance only on unpaused playing ticks.
 // - Defaults:
@@ -33,7 +34,10 @@
 
 use games::animation::cycle_tick;
 
-use super::{Player, Point, Slot, StreetLayout, stage_card_departed};
+use super::{
+    Maneuver, PendingManeuver, Player, Point, Slot, StreetLayout,
+    stage_card_departed,
+};
 
 const FIRST_BACKGROUND: u64 = 13;
 const FIRST_STATION: u64 = 107;
@@ -101,7 +105,7 @@ pub struct CemeteryBody {
     pub position: Point,
 }
 
-/// Bounded first-room locomotion and shared vertical projection.
+/// Bounded first-room actions and shared vertical projection.
 ///
 /// World depth increases away from the viewer. The projected depth adds
 /// the shared camera offset, so neutral stations retain their world
@@ -110,13 +114,23 @@ pub struct CemeteryBody {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CemeteryRoom {
     depth_offset: i16,
+    walk_depth: [i16; 4],
 }
 
 impl CemeteryRoom {
-    fn advance(&mut self, slots: &mut [Slot; 4]) {
+    fn advance(
+        &mut self,
+        slots: &mut [Slot; 4],
+        pending: [PendingManeuver; 4],
+    ) -> bool {
         // Only the four-station, pre-encounter interval is established.
         if !slots.iter().all(|slot| slot.station.can_fight()) {
-            return;
+            return false;
+        }
+        for ((player, slot), queued) in
+            Player::ALL.into_iter().zip(&mut *slots).zip(pending)
+        {
+            slot.advance_maneuver(player, queued);
         }
         let projected = slots.map(|slot| self.project(slot.station.position));
         let motion = slots.map(|slot| {
@@ -125,9 +139,11 @@ impl CemeteryRoom {
         });
         let toward = projected.iter().all(|point| point.y < 320);
         let away = projected.iter().all(|point| point.y > 168);
-        let request = projected.into_iter().zip(motion).fold(
+        let depth_motion = slots
+            .map(|slot| slot.depth_step(slot.direction().1.saturating_neg()));
+        let request = projected.into_iter().zip(depth_motion).fold(
             0i16,
-            |total, (point, (_, dy))| {
+            |total, (point, dy)| {
                 if (dy < 0 && point.y < 168 && toward)
                     || (dy > 0 && point.y > 192 && away)
                 {
@@ -142,9 +158,28 @@ impl CemeteryRoom {
             .depth_offset
             .saturating_add(request.clamp(-2, 2))
             .clamp(0, 31);
-        for (slot, direction) in slots.iter_mut().zip(motion) {
+        for ((slot, direction), previous) in
+            slots.iter_mut().zip(motion).zip(&mut self.walk_depth)
+        {
             slot.move_with_direction(ROOM_LAYOUT, direction);
+            if matches!(slot.station.maneuver, Maneuver::Attack { tick: 0, .. })
+            {
+                // The admission tick retains the preceding depth stride,
+                // without issuing another camera request.
+                slot.station.position.y = slot
+                    .station
+                    .position
+                    .y
+                    .saturating_add(*previous)
+                    .clamp(ROOM_LAYOUT.min.y, ROOM_LAYOUT.max.y);
+            }
+            *previous = if slot.station.walking.is_some() {
+                direction.1
+            } else {
+                0
+            };
         }
+        true
     }
 
     /// Current shared depth offset, in logical units.
@@ -183,6 +218,10 @@ impl CemeteryEntrance {
     /// Number of observed grounded presentation families per character.
     pub const LANDING_POSE_COUNT: usize = 8;
 
+    pub(super) fn accepts_room_actions(self) -> bool {
+        self.at(self.tick.saturating_add(1)).room_walkable()
+    }
+
     /// Advance once with a fresh button edge from an admitted station.
     pub fn advance(&mut self, active_edge: bool) {
         self.tick = self.tick.saturating_add(1);
@@ -197,18 +236,24 @@ impl CemeteryEntrance {
         }
     }
 
-    pub(super) fn advance_room(&mut self, slots: &mut [Slot; 4]) {
+    pub(super) fn advance_room(
+        &mut self,
+        slots: &mut [Slot; 4],
+        pending: [PendingManeuver; 4],
+    ) -> bool {
         let walking = self.room_walkable();
         let Some(room) = &mut self.room else {
-            return;
+            return false;
         };
         if walking {
-            room.advance(slots);
-        } else if !self.card && self.tick == LAST_WALK_TICK.saturating_add(1) {
+            return room.advance(slots, pending);
+        }
+        if !self.card && self.tick == LAST_WALK_TICK.saturating_add(1) {
             for slot in slots {
                 slot.station.walking = None;
             }
         }
+        false
     }
 
     const fn at(self, tick: u64) -> Self {
@@ -484,7 +529,7 @@ mod tests {
             Some(Control::Right),
         ]);
         for tick in 1i16..=116 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = downward_sample(tick);
             let idle = 176i16.saturating_add(offset);
             let expected = [
@@ -512,7 +557,7 @@ mod tests {
         marge.held = Control::Down.mask() | Control::Right.mask();
         bart.held = Control::Down.mask() | Control::Left.mask();
         for tick in 1i16..=40 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = downward_sample(tick);
             let idle = 176i16.saturating_add(offset);
             assert_eq!(room.depth_offset(), offset);
@@ -549,13 +594,13 @@ mod tests {
     fn assert_diagonal_return(mut room: CemeteryRoom, mut slots: [Slot; 4]) {
         hold(&mut slots, [None; 4]);
         for _ in 0u8..8 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
         }
         let [marge, _, bart, _] = &mut slots;
         marge.held = Control::Up.mask() | Control::Left.mask();
         bart.held = Control::Up.mask() | Control::Right.mask();
         for tick in 1i16..=40 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = upward_sample(tick);
             assert_eq!(room.depth_offset(), offset);
             assert_eq!(room_positions(room, &slots), [
@@ -591,20 +636,20 @@ mod tests {
         };
         hold(&mut slots, controls(Control::Down));
         for tick in 1i16..=27 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = downward_sample(tick);
             assert_eq!(room.depth_offset(), offset);
             assert_depths(room, &slots, all, depth);
         }
         hold(&mut slots, [None; 4]);
         for _ in 0u8..21 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             assert_eq!(room.depth_offset(), 31);
             assert_depths(room, &slots, all, 153);
         }
         hold(&mut slots, controls(Control::Up));
         for tick in 1i16..=38 {
-            room.advance(&mut slots);
+            assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = upward_sample(tick);
             assert_eq!(room.depth_offset(), offset, "tick {tick}");
             assert_depths(room, &slots, all, depth);
