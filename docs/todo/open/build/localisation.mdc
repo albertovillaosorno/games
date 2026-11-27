@@ -131,9 +131,38 @@ Firefox execution reported both localisation and title smoke success,
 49 delivered callbacks, 55 blits and clean canvas removal. Native and
 browser diagnostics use isolated preference locations.
 
-The task remains open. Remaining scope includes startup and asset-admission
-diagnostics, localised original-media resource metadata where applicable,
-and evaluation of additional script coverage, shaping, bidirectional text
-and pluralisation before admitting languages that require them. The
-procedural readbacks do not establish physical touchscreen/controller
-acceptance, original-edition gameplay parity or broader browser support.
+### Localisation acceptance progress, 2026-11-26
+
+- `d036c2e`: native and browser startup messages, directory chooser
+  prompts, terminal outcomes and diagnostics use the selected catalogue.
+  Underlying diagnostic detail remains intact. The package shell preserves
+  a Rust diagnostic and uses a generic fallback only before Rust starts.
+- `3636b70`: compact bitmap glyph measurement admits the exact maximum
+  representable extent. Glyph coverage reporting and bounded wrapping
+  preserve decomposed supported accents, reject insufficient geometry,
+  and identify unsupported scripts. Both declared title catalogues pass
+  glyph coverage checks.
+- `b33ed9b`: shared menu hints that cannot fit a single line use the
+  bounded glyph-aware wrapping mechanism. The regression covers rendered
+  atlas allocation, following-hint placement and insufficient height.
+
+All three commits passed fresh validation and fresh commit-hook checks.
+The asset-free browser package was checked at 88 files, 1,695,117 bytes;
+receipt 3ce159fa51bd85bcdc1aa7e28b67990eb49c4a0aaaeb2577e4874cb45b9e3f97.
+Seven actual Firefox startup cases passed: English and restored Spanish
+prompt/label; English and Spanish unsupported picker capability; missing
+JavaScript and missing WebAssembly; and corrupt persisted locale before
+selection. The Spanish fixture was written by the Rust diagnostic.
+Each verified the status, picker presence or absence, absence of a
+canvas and unchanged saved locale. Two additional cases exercised trusted
+chooser cancellation in English and Spanish in isolated Xvfb and
+Bubblewrap environments. The picker was removed and no preference was
+overwritten. The invalid-directory chooser harness timed out and is not
+a passing case. These tests are not physical-device acceptance.
+
+The task remains open. Remaining scope includes localised original-media
+resource metadata where applicable and the assessment of additional
+script coverage, shaping, bidirectional text and pluralisation before
+admitting languages that require them. The procedural readbacks do not
+establish physical touchscreen/controller acceptance, original-edition
+gameplay parity or broader browser support.
