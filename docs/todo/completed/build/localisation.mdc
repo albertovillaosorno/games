@@ -1,6 +1,6 @@
 ---
 id: "localisation"
-status: "open"
+status: "completed"
 lane: "3"
 priority: "p3"
 area: "build"
@@ -160,9 +160,56 @@ Bubblewrap environments. The picker was removed and no preference was
 overwritten. The invalid-directory chooser harness timed out and is not
 a passing case. These tests are not physical-device acceptance.
 
-The task remains open. Remaining scope includes localised original-media
-resource metadata where applicable and the assessment of additional
-script coverage, shaping, bidirectional text and pluralisation before
-admitting languages that require them. The procedural readbacks do not
-establish physical touchscreen/controller acceptance, original-edition
-gameplay parity or broader browser support.
+### Shared contract acceptance, 2026-11-26
+
+- `ed28fd8`: optional bounded typed edition-media metadata selects
+  canonical records by exact locale, parents, configured fallback or
+  original resource. It reuses existing content identities and the engine
+  locale candidate chain. Synthetic bundles verify canonical admission,
+  independent limits, incompatible formats, missing assets, direct
+  nonrecursive references, shared object bytes and integrity failures.
+  No manifest version change or separate asset store is required.
+- `d32afe7`: the native diagnostic now navigates to the selected menu
+  item rather than assuming the selection was reset on leaving settings.
+  The original-backed launch and locale cycling passed after this fix.
+- `0325172`: malformed and oversized locale save envelopes are classified
+  as incompatible preferences, enabling the existing session-only
+  fallback. Regression tests preserve rejected contents and keep unsafe
+  storage and unrelated I/O errors as hard failures.
+
+The selected Simpsons Arcade World four-player set 1 importer exposes
+verified graphics and sample regions. No independently identified
+language-specific original resource was verified for this edition. No
+fabricated translation of original media or edition substitution was
+introduced. Authored translations remain independent of original assets.
+
+The Craft Libraries source snapshot reviewed is revision
+`a9949872bd91ecf6bcec4e86339e3f50ad007fb9`. Its text library provides
+optional UAX #14 line breaking and UAX #9 directional runs, leaving
+shaping and font selection to the caller. Its internationalisation
+library implements CLDR plural rules and parameter isolation, but
+falls back to English source strings and skips malformed rows. That
+policy differs from our strict stable-key admission and title-selected
+fallback. The initial English and Mexican Spanish catalogues use compact
+left-to-right glyphs and numeric countdowns without inflected plurals.
+No new shaping or plural mechanism is necessary for these locales.
+Synthetic script-tag and missing-glyph fixtures exercise the boundary;
+they do not establish Arabic or CJK rendering support. Future titles
+requiring other scripts, directional layout or plural forms must verify
+licensed glyph coverage and the necessary shaping or grammar mechanisms
+before declaring those locales supported.
+
+All changes passed fresh workspace and commit-hook validation, including
+WebAssembly compilation and portable execution. The optimized native
+original-backed smoke passed with a malformed locale slot and with an
+oversized slot in all five display modes. Rejected slot bytes remained
+identical and no additional settings files were created. The existing
+Firefox execution and nine startup/cancellation checks above establish
+the supported browser integration; the new envelope classification was
+not independently re-executed in Firefox.
+
+The shared contract is accepted for the first title's declared locales.
+Physical device acceptance, original-edition gameplay parity, additional
+scripts, full BCP 47 extension and alias handling, and broader browser
+support are not established. Each future title must verify the coverage
+and requirements of its own locales using the shared mechanism.

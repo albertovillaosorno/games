@@ -3466,7 +3466,7 @@ preceding device frame. All 221 normalized digests per control
 agree from relative ticks 30 through 250, holding the same
 background as tick 24. Combined with the previous dense captures,
 the original sprite-free sequence is established through tick 331.
-nTwelve additional exact complete-frame checks across the two
+Twelve additional exact complete-frame checks across the two
 controls from device frame 8600 through 9300 also reproduce the
 held final phase. Intervening unsampled ticks after 331 and the
 scene changes following loss remain unproved.
@@ -3484,11 +3484,11 @@ cargo run --locked -p games-build -- mame scene-background-publish \
 The optional `backdrop TICK SHA256` records select all 15 distinct
 320 by 196 opaque phases. Each pinned local bundle reproduces the
 digest of its measured reference phase. The complete track requires
-the verified 1,360-column street. The cabinet begins this provisional
-visual timing at camera 1,360, freezes it with gameplay, and clears
+the verified 1,360-column street. At initial publication the cabinet began
+visual timing at camera 1,360, froze it with gameplay, and cleared
 it on reset. The eight-tick observed cycle is preserved through
 tick 319; the last observed phase is held from tick 320. The
-original camera's one-column retreat to 1,359 is not simulated.
+original camera's one-column retreat to 1,359 was not yet simulated.
 No boss combat or successful stage-transition rule is introduced.
 Adaptive presentation falls back to the verified 320 logical
 columns at admission rather than fabricating additional backdrop
@@ -3540,3 +3540,28 @@ both scenic tracks and all 15 backdrop phases. Its executable was
 3,740,624 bytes; lifetime peak RSS was 152,588,288 bytes. All sampled
 movement and combat submissions met the 16.667 ms budget. Exact
 original join movement and physical acceptance remain open.
+
+### Settled late encounter camera and localisation acceptance
+
+`414acd4` preserves the pre-admission street at camera 1,360 for one
+playing tick and settles at 1,359 on the next playing tick, when the
+first backdrop phase begins. The fixed-step regression checks pause
+before and after admission, the hold, and reset. The runtime diagnostic
+checks the settled origin throughout all 15 measured backdrop phases.
+Shorter street selections retain their existing behavior. Subsequent
+camera release, boss combat, victory and stage progression remain open.
+
+`d32afe7` fixes diagnostic settings navigation when the previous audio
+settings visit retained the Settings selection. `0325172` preserves
+invalid locale envelopes and permits session-only language selection.
+With a malformed slot, and separately an oversized slot, the optimized
+Linux offscreen touch smoke completed without changing the rejected
+bytes or creating other preference files. The oversized-slot run passed
+in adaptive, aspect-fit, integer, fill and stretch modes. Each verified
+the complete street, all 15 exact backdrop phases, 11 reinforcement
+meters, 600 movement submissions and 20 combat submissions. No sampled
+submission missed its 16.667 ms budget. The executable was 3,873,840
+bytes; lifetime peak RSS across those five runs ranged from 154,537,984
+to 154,923,008 bytes. The private 275-record catalogue remained unchanged.
+All related changes passed fresh workspace and commit-hook validation.
+This is not fresh Firefox execution or physical device acceptance.

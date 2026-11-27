@@ -25,7 +25,7 @@ Completed. See `docs/todo/completed/assets/`.
 
 Native Linux, browser and distribution delivery completed. See
 `docs/todo/completed/build/`. Android runtime remains independently open.
-Shared localisation must be integrated before first-title completion.
+Shared localisation is complete for the first title's declared locales.
 
 ### TODO - Android ARM64 runtime and packaging
 
@@ -34,14 +34,6 @@ exist. Do not block supported-target title implementation.
 
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Android ARM64 runtime and packaging](docs/todo/open/build/android-runtime.mdc)
-
-### TODO - Shared internationalisation and localisation
-
-Localise all titles through one shared catalogue, text and settings
-mechanism, with supported languages declared by each title.
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - Shared internationalisation and localisation](docs/todo/open/build/localisation.mdc)
 
 ## P4 - Title implementation
 
