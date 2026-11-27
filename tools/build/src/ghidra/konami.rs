@@ -101,15 +101,33 @@ R16: target is simm16 [ target=inst_next+simm16; ]
 EA: imm16 is postbyte=0x07; imm16
 { export *[const]:2 imm16; }
 EA: "["imm16"]" is postbyte=0x0f; imm16
-{ local ptr:2 = imm16; export *:2 ptr; }
+{ local ptr:2 = imm16; local pointer:2=*:2 ptr; export pointer; }
 EA: imm8 is postbyte=0xc4; imm8
 { local addr:2=(zext(DP)<<8)|zext(imm8:1); export addr; }
 EA: "["imm8"]" is postbyte=0xcc; imm8
-{ local addr:2=(zext(DP)<<8)|zext(imm8:1); export *:2 addr; }
+{ local addr:2=(zext(DP)<<8)|zext(imm8:1);
+  local pointer:2=*:2 addr; export pointer; }
+EAD1: "-"^PC is postbyte=0x72 & PC
+{ local addr:2=inst_next-1; export addr; }
+EAD1: "[""-"^PC"]" is postbyte=0x7a & PC
+{ local addr:2=inst_next-1; local pointer:2=*:2 addr; export pointer; }
+EAD2: "--"^PC is postbyte=0x73 & PC
+{ local addr:2=inst_next-2; export addr; }
+EAD2: "[""--"^PC"]" is postbyte=0x7b & PC
+{ local addr:2=inst_next-2; local pointer:2=*:2 addr; export pointer; }
 M8: EA is EA { export *:1 EA; }
 M16: EA is EA { export *:2 EA; }
+M8D1: EAD1 is EAD1 { export *:1 EAD1; }
+M16D1: EAD1 is EAD1 { export *:2 EAD1; }
+M8D2: EAD2 is EAD2 { export *:1 EAD2; }
+M16D2: EAD2 is EAD2 { export *:2 EAD2; }
+
 ABS: imm16 is postbyte=0x07; imm16
 { export *:2 imm16; }
+PCR: target is postbyte=0x74; simm8
+[ target=inst_next-1+simm8; ] { export *:2 target; }
+PCR: target is postbyte=0x75; simm16
+[ target=inst_next-2+simm16; ] { export *:2 target; }
 
 macro nz(result) {
     $(Z) = result == 0;
@@ -212,17 +230,22 @@ macro pushret() {
 }
 
 :SETLN I8 is op=0x38; I8 { BANK=I8; }
-:SETLN M8 is op=0x39; M8 { BANK=M8; }
 :ANDCC I8 is op=0x3c; I8 { CC=CC&I8; }
 :ORCC I8 is op=0x3d; I8 { CC=CC|I8; }
-:LEAX EA is op=0x08; EA { X=EA; $(Z)=X==0; }
-:LEAY EA is op=0x09; EA { Y=EA; $(Z)=Y==0; }
-:LEAU EA is op=0x0a; EA { U=EA; }
-:LEAS EA is op=0x0b; EA { S=EA; }
 :JMP ABS is op=0xa8; ABS { goto ABS; }
 :JSR ABS is op=0xa9; ABS { pushret(); call ABS; }
+:JMP PCR is op=0xa8; PCR { goto PCR; }
+:JSR PCR is op=0xa9; PCR { pushret(); call PCR; }
 :JMP EA is op=0xa8; EA { goto [EA]; }
 :JSR EA is op=0xa9; EA { pushret(); call [EA]; }
+:JMP EAD1 is op=0xa8; EAD1 { goto [EAD1]; }
+:JMP EAD2 is op=0xa8; EAD2 { goto [EAD2]; }
+:JSR EAD1 is op=0xa9; EAD1 {
+    S=S-2; *:2 S=inst_next-1; call [EAD1];
+}
+:JSR EAD2 is op=0xa9; EAD2 {
+    S=S-2; *:2 S=inst_next-2; call [EAD2];
+}
 :DBJNZ R8 is op=0xac; R8 {
     $(V)=B==0x80; B=B-1; nz(B); if ($(Z)==0) goto R8;
 }
@@ -364,16 +387,17 @@ const BRANCHES: [(&str, &str); 16] = [
 ];
 
 // Read and write selections differ for code 1. Code 0 reads a widened A
-// with high byte 0x10, but writes only A. DP and PC are deliberately
-// excluded: the former is not fully characterized and the latter needs
-// dedicated control-flow semantics.
-const TRANSFER_REGISTERS: [TransferRegister; 6] = [
+// with high byte 0x10, but writes only A. DP is deliberately excluded:
+// its hidden low byte is not characterized. PC reads the next fetch
+// address; writes are emitted as control-flow operations.
+const TRANSFER_REGISTERS: [TransferRegister; 7] = [
     (0, "A", "zext(A)|0x1000", 1),
     (1, "B", "D", 1),
     (2, "X", "X", 2),
     (3, "Y", "Y", 2),
     (5, "U", "U", 2),
     (6, "S", "S", 2),
+    (7, "PC", "inst_next", 2),
 ];
 
 type TransferRegister = (u8, &'static str, &'static str, u8);
@@ -400,7 +424,25 @@ fn instruction(
         output,
         ":{name} {operand} is op=0x{opcode:02x}; {operand} {{ {body} }}"
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    if matches!(operand, "EA" | "M8" | "M16") {
+        for decrement in [1u8, 2] {
+            let variant = format!("{operand}D{decrement}");
+            let semantics = body.replace(operand, &variant);
+            writeln!(
+                output,
+                ":{name} {variant} is op=0x{opcode:02x}; {variant} {{"
+            )
+            .map_err(|error| error.to_string())?;
+            writeln!(
+                output,
+                "{semantics} local next:2=inst_next-{decrement}; \
+                 goto [next]; }}"
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn change_register(register: &str, kind: &str) -> String {
@@ -413,11 +455,13 @@ fn change_register(register: &str, kind: &str) -> String {
     }
 }
 
-const fn index_destination(indirect: u8) -> &'static str {
+// Materialize the indirect pointer before exporting an effective address.
+// A dynamic memory reference alone does not survive nested M8/M16 exports.
+const fn index_export(indirect: u8) -> &'static str {
     if indirect == 0 {
-        "addr"
+        "export addr;"
     } else {
-        "*:2 addr"
+        "local pointer:2=*:2 addr; export pointer;"
     }
 }
 
@@ -453,7 +497,7 @@ fn offset_modes(
         let after = change_register(register, post);
         for indirect in [0u8, 8] {
             let mode = base | offset | indirect;
-            let dest = index_destination(indirect);
+            let dest = index_export(indirect);
             let display = if indirect == 0 {
                 disp.clone()
             } else {
@@ -466,7 +510,7 @@ fn offset_modes(
             .map_err(|error| error.to_string())?;
             writeln!(
                 output,
-                "{{ {before} local addr:2={addr}; {after} export {dest}; }}"
+                "{{ {before} local addr:2={addr}; {after} {dest} }}"
             )
             .map_err(|error| error.to_string())?;
         }
@@ -487,7 +531,7 @@ fn accumulator_modes(
         };
         for indirect in [0u8, 8] {
             let mode = base | 0x80 | offset | indirect;
-            let dest = index_destination(indirect);
+            let dest = index_export(indirect);
             let display = if indirect == 0 {
                 format!("{value},{register}")
             } else {
@@ -497,7 +541,40 @@ fn accumulator_modes(
                 .map_err(|error| error.to_string())?;
             writeln!(output, "{value} & {register} {{ local addr:2={addr};")
                 .map_err(|error| error.to_string())?;
-            writeln!(output, "export {dest}; }}")
+            writeln!(output, "{dest} }}").map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+// The PC has already advanced past the postbyte. Offset fetches do not
+// change the base; postincrement skips inline data; predecrement changes
+// subsequent execution and is therefore emitted in separate subtables.
+fn pc_modes(output: &mut String) -> Result<(), String> {
+    for (offset, display, operand, address) in [
+        (0u8, "PC^\"+\"", "; imm8", "inst_next-1"),
+        (1, "PC^\"++\"", "; imm16", "inst_next-2"),
+        (4, "simm8,PC", "; simm8", "inst_next-1+sext(simm8:1)"),
+        (5, "simm16,PC", "; simm16", "inst_next-2+simm16"),
+        (6, "PC", "", "inst_next"),
+        (0x80, "A,PC", " & A", "inst_next+sext(A)"),
+        (0x81, "B,PC", " & B", "inst_next+sext(B)"),
+        (0x87, "D,PC", " & D", "inst_next+D"),
+    ] {
+        for indirect in [0u8, 8] {
+            let postbyte = 0x70 | offset | indirect;
+            let dest = index_export(indirect);
+            let shown = if indirect == 0 {
+                String::from(display)
+            } else {
+                format!("\"[\"{display}\"]\"")
+            };
+            writeln!(
+                output,
+                "EA: {shown} is postbyte=0x{postbyte:02x}{operand} & PC"
+            )
+            .map_err(|error| error.to_string())?;
+            writeln!(output, "{{ local addr:2={address}; {dest} }}")
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -509,10 +586,20 @@ fn addressing(output: &mut String) -> Result<(), String> {
         offset_modes(output, base, register)?;
         accumulator_modes(output, base, register)?;
     }
-    Ok(())
+    pc_modes(output)
 }
 
 fn arithmetic(output: &mut String) -> Result<(), String> {
+    for (opcode, mnemonic, operand, body) in [
+        (0x08, "LEAX", "EA", "X=EA; $(Z)=X==0;"),
+        (0x09, "LEAY", "EA", "Y=EA; $(Z)=Y==0;"),
+        (0x0a, "LEAU", "EA", "U=EA;"),
+        (0x0b, "LEAS", "EA", "S=EA;"),
+        (0x39, "SETLN", "M8", "BANK=M8;"),
+    ] {
+        instruction(output, (opcode, mnemonic, operand), body)?;
+    }
+
     for (base, name, action) in BYTE_OPS {
         for (offset, reg) in [(0u8, "A"), (1, "B")] {
             let mnemonic = format!("{name}{reg}");
@@ -739,7 +826,9 @@ fn stacks(output: &mut String) -> Result<(), String> {
 }
 
 fn transfer_write(register: &str, size: u8, value: &str) -> String {
-    if size == 1 {
+    if register == "PC" {
+        String::new()
+    } else if size == 1 {
         format!("{register}={value}:1;")
     } else {
         format!("{register}={value};")
@@ -764,6 +853,13 @@ fn transfer_pair(
     } else {
         String::new()
     };
+    let flow = if dst == "PC" && src != "PC" {
+        "goto [source];"
+    } else if mode == 0 && src == "PC" && dst != "PC" {
+        "goto [target];"
+    } else {
+        ""
+    };
     // The opcode low bit and argument bit 3 are aliases.
     // Argument bit 7 selects the operation.
     for opcode in [0x3eu8, 0x3f] {
@@ -777,7 +873,7 @@ fn transfer_pair(
             .map_err(|error| error.to_string())?;
             writeln!(
                 output,
-                "{{ local source:2={src_read}; {exchange} {write_dst} }}"
+                "{{ local source:2={src_read}; {exchange} {write_dst} {flow} }}"
             )
             .map_err(|error| error.to_string())?;
         }
@@ -824,21 +920,17 @@ mod tests {
             ":LDX I16 is op=0x42;",
             ":BRA R8 is op=0x60;",
             ":LBEQ R16 is op=0x7b;",
-            ":LEAX EA is op=0x08; EA { X=EA; $(Z)=X==0; }
-:LEAY EA is op=0x09; EA { Y=EA; $(Z)=Y==0; }
-:LEAU EA is op=0x0a; EA { U=EA; }
-:LEAS EA is op=0x0b; EA { S=EA; }
-:JMP ABS is op=0xa8; ABS { goto ABS; }
-:JSR ABS is op=0xa9; ABS { pushret(); call ABS; }
-:JMP EA is op=0xa8; EA { goto [EA]; }
-:JSR EA is op=0xa9; EA { pushret(); call [EA]; }
-:DBJNZ R8 is op=0xac; R8 {
-    $(V)=B==0x80; B=B-1; nz(B); if ($(Z)==0) goto R8;
-}
-:DXJNZ R8 is op=0xad; R8 {
-    $(V)=X==0x8000; X=X-1; nz(X); if ($(Z)==0) goto R8;
-}
-:RTS is op=0x8f",
+            ":LEAX EA is op=0x08; EA { X=EA; $(Z)=X==0; }",
+            ":LEAY EA is op=0x09; EA { Y=EA; $(Z)=Y==0; }",
+            ":LEAU EA is op=0x0a; EA { U=EA; }",
+            ":LEAS EA is op=0x0b; EA { S=EA; }",
+            ":JMP ABS is op=0xa8; ABS { goto ABS; }",
+            ":JSR ABS is op=0xa9; ABS { pushret(); call ABS; }",
+            ":JMP EA is op=0xa8; EA { goto [EA]; }",
+            ":JSR EA is op=0xa9; EA { pushret(); call [EA]; }",
+            ":DBJNZ R8 is op=0xac; R8",
+            ":DXJNZ R8 is op=0xad; R8",
+            ":RTS is op=0x8f",
         ] {
             if !text.contains(expected) {
                 return Err(format!("missing constructor: {expected}"));
@@ -870,8 +962,56 @@ mod tests {
                 return Err(format!("missing processor behavior: {expected}"));
             }
         }
-        if text.contains(":TFR \"A,DP\"") || text.contains(":EXG \"PC,A\"") {
+        if text.contains(":TFR \"A,DP\"") {
             return Err(String::from("unsupported transfer admitted"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_forms_and_pc_control_flow_are_generated() -> Result<(), String> {
+        let text = sleigh()?;
+        let observed = text
+            .lines()
+            .filter(|line| {
+                line.starts_with("EA:")
+                    || line.starts_with("EAD1:")
+                    || line.starts_with("EAD2:")
+            })
+            .map(|line| {
+                line.split_once("postbyte=0x")
+                    .and_then(|(_, rest)| rest.get(..2))
+                    .ok_or_else(|| String::from("missing indexed postbyte"))
+                    .and_then(|value| {
+                        u8::from_str_radix(value, 16)
+                            .map_err(|error| error.to_string())
+                    })
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let mut expected = BTreeSet::from([0x07, 0x0f, 0xc4, 0xcc]);
+        for base in [0x20, 0x30, 0x50, 0x60, 0x70] {
+            for mode in [0, 1, 2, 3, 4, 5, 6, 0x80, 0x81, 0x87] {
+                expected.extend([base | mode, base | mode | 8]);
+            }
+        }
+        if observed != expected {
+            return Err(String::from("indexed encoding set mismatch"));
+        }
+        for fragment in [
+            "local pointer:2=*:2 addr; export pointer;",
+            "inst_next-1+sext(simm8:1)",
+            "inst_next-2+simm16",
+            "local next:2=inst_next-1; goto [next];",
+            "local next:2=inst_next-2; goto [next];",
+            "*:2 S=inst_next-1; call [EAD1];",
+            ":TFR \"PC,X\" is op=0x3f; postbyte=0xa7",
+            ":TFR \"X,PC\" is op=0x3f; postbyte=0xf2",
+            "local source:2=inst_next;",
+            "goto [source];",
+        ] {
+            if !text.contains(fragment) {
+                return Err(format!("missing indexed/PC behavior: {fragment}"));
+            }
         }
         Ok(())
     }
