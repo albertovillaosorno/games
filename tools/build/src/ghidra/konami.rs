@@ -152,6 +152,16 @@ macro negate16(dst) {
     local value:2=dst;
     dst=0-value; nz(dst); $(C)=value!=0; $(V)=value==0x8000;
 }
+macro absolute8(dst) {
+    local old:1=dst; local sign:1=old s>>7;
+    dst=(old^sign)-sign;
+    $(C)=old s<0; $(V)=old==0x80; nz(dst);
+}
+macro absolute16(dst) {
+    local old:2=dst; local sign:2=old s>>15;
+    dst=(old^sign)-sign;
+    $(C)=old s<0; $(V)=old==0x8000; nz(dst);
+}
 macro inc8(dst) { $(V)=dst==0x7f; dst=dst+1; nz(dst); }
 macro dec8(dst) { $(V)=dst==0x80; dst=dst-1; nz(dst); }
 macro inc16(dst) { add(dst,1:2); }
@@ -176,7 +186,7 @@ macro rol8(dst) {
 macro rol16(dst) {
     local old:2=dst; local carryin:2=zext($(C));
     $(C)=(old&0x8000)!=0; dst=(old<<1)|carryin;
-    $(V)=((old^dst)&0x8000)!=0; nz(dst);
+    $(V)=0; nz(dst);
 }
 macro adc8(dst,val) {
     local left:1=dst; local right:1=val;
@@ -237,6 +247,38 @@ macro pushret() {
 :NOP is op=0xae { }
 :ABX is op=0xb0 { X=X+zext(B); }
 :SEX is op=0xb2 { D=sext(B); nz(D); }
+:DAA is op=0xb1 {
+    local low:1=A&0x0f; local high:1=A&0xf0;
+    local adjustment:2=0;
+    if ((low<=9) && ($(H)==0)) goto <high_check>;
+    adjustment=6;
+<high_check>
+    if ((high>0x80 && low>9) || high>0x90 || $(C)!=0) goto <adjust_high>;
+    goto <adjust>;
+<adjust_high>
+    adjustment=adjustment|0x60;
+<adjust>
+    local result:2=zext(A)+adjustment;
+    A=result:1; $(V)=0; $(C)=$(C)||(result>0xff); nz(A);
+}
+:MUL is op=0xb3 {
+    local result:2=zext(A)*zext(B);
+    D=result; $(Z)=result==0; $(C)=(result&0x80)!=0;
+}
+:LMUL is op=0xb4 {
+    local result:4=zext(X)*zext(Y);
+    local upper:4=result>>16;
+    X=upper:2; Y=result:2; $(Z)=result==0; $(C)=(result&0x8000)!=0;
+}
+:DIVX is op=0xb5 {
+    local quotient:2=0; local remainder:2=0;
+    if (B==0) goto <done>;
+    local divisor:2=zext(B);
+    quotient=X/divisor; remainder=X%divisor;
+<done>
+    X=quotient; B=remainder:1;
+    $(Z)=quotient==0; $(C)=(quotient&0x80)!=0;
+}
 :BMOVE is op=0xb6 {
 <loop>
     if (U==0) goto <done>;
@@ -246,6 +288,24 @@ macro pushret() {
 <done>
 }
 :MOVE is op=0xb7 { *:1 X=*:1 Y; X=X+1; Y=Y+1; U=U-1; }
+:ABSA is op=0xcc { absolute8(A); }
+:ABSB is op=0xcd { absolute8(B); }
+:ABSD is op=0xce { absolute16(D); }
+:BSET is op=0xcf {
+<loop>
+    if (U==0) goto <done>;
+    *:1 X=A; X=X+1; U=U-1;
+    goto <loop>;
+<done>
+}
+:BSETW is op=0xd0 {
+<loop>
+    if (U==0) goto <done>;
+    *:1 X=A; X=X+1;
+    *:1 X=B; X=X+1; U=U-1;
+    goto <loop>;
+<done>
+}
 "#;
 
 // Opcode assignments and addressing forms checked against the BSD-3-Clause
@@ -572,6 +632,28 @@ fn unary(output: &mut String) -> Result<(), String> {
     Ok(())
 }
 
+fn repeat_word_shifts(output: &mut String) -> Result<(), String> {
+    for (opcode, mnemonic, action) in [
+        (0xb8u8, "LSRDI", "lsr"),
+        (0xba, "RORDI", "ror16"),
+        (0xbc, "ASRDI", "asr"),
+        (0xbe, "ASLDI", "asl"),
+        (0xc0, "ROLDI", "rol16"),
+    ] {
+        for (offset, operand, value, count) in
+            [(0u8, "I8", "D", "I8"), (1, "M16", "M16", "A")]
+        {
+            let body = format!(
+                "local count:1={count}&0xf; local value:2={value}; \
+                 <again> if (count==0) goto <done>; {action}(value); \
+                 count=count-1; goto <again>; <done> {value}=value;"
+            );
+            instruction(output, (opcode | offset, mnemonic, operand), &body)?;
+        }
+    }
+    Ok(())
+}
+
 const fn stack_registers(other: &str) -> [(&str, u8); 8] {
     [
         ("CC", 1),
@@ -720,6 +802,7 @@ pub(super) fn sleigh() -> Result<String, String> {
     arithmetic(&mut output)?;
     branches(&mut output)?;
     unary(&mut output)?;
+    repeat_word_shifts(&mut output)?;
     stacks(&mut output)?;
     transfers(&mut output)?;
     Ok(output)
@@ -727,6 +810,8 @@ pub(super) fn sleigh() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -787,6 +872,48 @@ mod tests {
         }
         if text.contains(":TFR \"A,DP\"") || text.contains(":EXG \"PC,A\"") {
             return Err(String::from("unsupported transfer admitted"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn documented_opcode_values_and_repeat_counts_are_admitted()
+    -> Result<(), String> {
+        let text = sleigh()?;
+        let opcodes = text
+            .split("op=0x")
+            .skip(1)
+            .map(|suffix| {
+                suffix
+                    .get(..2)
+                    .ok_or_else(|| String::from("missing opcode"))
+                    .and_then(|digits| {
+                        u8::from_str_radix(digits, 16)
+                            .map_err(|error| error.to_string())
+                    })
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if opcodes.len() != 197
+            || !(0xb0..=0xd0).all(|opcode| opcodes.contains(&opcode))
+        {
+            return Err(String::from("documented opcode coverage changed"));
+        }
+        for expected in [
+            ":DAA is op=0xb1",
+            ":LMUL is op=0xb4",
+            ":DIVX is op=0xb5",
+            ":ABSD is op=0xce",
+            ":BSETW is op=0xd0",
+            ":LSRDI I8 is op=0xb8",
+            ":ROLDI M16 is op=0xc1",
+            "local count:1=I8&0xf;",
+            "local count:1=A&0xf;",
+            "if (count==0) goto <done>;",
+            "local result:4=zext(X)*zext(Y);",
+        ] {
+            if !text.contains(expected) {
+                return Err(format!("missing processor behavior: {expected}"));
+            }
         }
         Ok(())
     }

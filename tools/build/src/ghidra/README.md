@@ -30,7 +30,7 @@ Select `Konami053248:BE:16:partial` with compiler specification
 
 ## Scope
 
-The current model has constructors for 178 of the 197 distinct opcode
+The current model has constructors for all 197 distinct opcode
 values documented by the pinned MAME Konami processor dispatch. It
 includes register and memory arithmetic, flag updates, direct and
 indirect indexed addressing for X/Y/U/S, loads/stores, relative branches,
@@ -39,11 +39,12 @@ Interrupt return supports both partial and complete stack frames.
 Block move handles zero counts, overlap and 16-bit address wrapping.
 Register exchange and transfer preserve the distinct read and write
 selectors, including the opcode and postbyte aliases.
-This count is not exhaustive instruction semantics verification.
+This admits each documented opcode value, not every operand encoding
+or exhaustive instruction semantics verification.
 
-The extension does not model all PC-indexed modes, DP/PC register
-transfers, decimal adjustments, special multiplication/division,
-multi-bit shifts, block fills or all remaining instructions.
+The extension does not model all PC-indexed modes or DP/PC register
+transfer forms. It does not model hardware cycle timing. Division by
+zero follows the pinned emulator model; the physical result is unknown.
 Unsupported forms are left undecodable. The calling convention is a
 conservative provisional analysis convention. Hardware flag edge cases,
 operand aliasing, all addressing variants and instruction effects need
@@ -70,6 +71,15 @@ frames, and zero-count, ordinary, overlapping and wrapping block moves.
 All 2,633 register, memory and control-flow assertions passed. This
 tests the generated p-code, not just the existence of a constructor.
 DP and PC transfer operands remain deliberately undecodable.
+
+A third isolated fixture exercised all accumulator and half-carry/carry
+combinations for decimal adjustment, 217 multiplication and division
+vectors, 521 signed absolute-value cases, 1,440 immediate and indexed
+repeated shifts and rotations, two single rotates, and byte/word fills.
+The additional 13,570 assertions passed, for 16,203 total when the
+earlier transfer, interrupt and block-move cases were rerun. Word
+rotate-left follows the pinned emulator model that clears overflow;
+byte rotate-left retains its distinct overflow calculation.
 
 The opcode and addressing assignments were checked against the MAME
 processor descriptions (revision
