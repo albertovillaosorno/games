@@ -38,6 +38,7 @@ mod entrance;
 #[cfg(feature = "native-preview")]
 /// Native authenticated host input for the local arcade screen.
 pub mod lan;
+mod linked;
 mod maneuver;
 /// Host-authoritative remote input for the free-play cabinet.
 pub mod remote;
@@ -62,6 +63,7 @@ use games::presentation::StripViewport;
 use games::replay::InputStep;
 pub use games::session::SessionPhase as Phase;
 use games::session::{LocalSession, MenuInput, SessionEffect};
+pub use linked::{ChildPose, LinkedChild, LinkedParent, ParentPose};
 pub use maneuver::{AirAttackMotion, JumpMotion, Maneuver};
 pub use wrestler::{Wrestler, WrestlerAction};
 
@@ -80,6 +82,8 @@ const STRIP_VIEWPORT: StripViewport = StripViewport {
 };
 
 const ENEMY_CAPACITY: usize = Encounter::CAPACITY;
+const LINKED_CHILD_CAPACITY: usize = 7;
+const LINKED_PARENT_CAPACITY: usize = 3;
 const PLAYER_STRIKE: u8 = 10;
 const WRESTLER_ATTACK_STRIKE: u8 = 24;
 const OPENING_ENEMY_COUNT: usize = 7;
@@ -771,10 +775,17 @@ enum PairSupport {
 struct Encounter {
     art_travel: i16,
     enemies: [Option<Enemy>; ENEMY_CAPACITY],
+    linked: Option<LinkedEncounter>,
     marge_restraint: bool,
     opening_spawn: Point,
     progressive: bool,
     stage_two: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LinkedEncounter {
+    children: [Option<LinkedChild>; LINKED_CHILD_CAPACITY],
+    parents: [LinkedParent; LINKED_PARENT_CAPACITY],
 }
 
 /// Deterministic arcade title state, independent of the host platform.
@@ -1087,8 +1098,20 @@ impl Cabinet {
         let target = self
             .enemies()
             .filter(|enemy| enemy.health > 0)
+            .chain(
+                self.linked_children()
+                    .filter(|child| child.can_fight())
+                    .map(LinkedChild::enemy),
+            )
             .min_by_key(|enemy| distance(marge.position, enemy.position));
-        let direction = target.map_or(Some(Control::Right), |enemy| {
+        let fallback = self
+            .encounter
+            .as_ref()
+            .filter(|encounter| encounter.stage_two)
+            .and_then(|encounter| encounter.linked.as_ref())
+            .is_none_or(|linked| !linked.diagnostic_wait(self.camera))
+            .then_some(Control::Right);
+        let direction = target.map_or(fallback, |enemy| {
             diagnostic_direction(marge, enemy.position)
         });
         let action = if matches!(
@@ -1199,6 +1222,24 @@ impl Cabinet {
     #[must_use]
     pub const fn late_backdrop_tick(&self) -> Option<u16> {
         self.late_backdrop_tick
+    }
+
+    /// Inspect linked second-stage child actors in admission order.
+    pub fn linked_children(&self) -> impl Iterator<Item = LinkedChild> + '_ {
+        self.encounter
+            .iter()
+            .filter(|encounter| encounter.stage_two)
+            .filter_map(|encounter| encounter.linked.as_ref())
+            .flat_map(LinkedEncounter::children)
+    }
+
+    /// Inspect linked second-stage parent actors.
+    pub fn linked_parents(&self) -> impl Iterator<Item = LinkedParent> + '_ {
+        self.encounter
+            .iter()
+            .filter(|encounter| encounter.stage_two)
+            .filter_map(|encounter| encounter.linked.as_ref())
+            .flat_map(LinkedEncounter::parents)
     }
 
     fn move_entrance_stations(&mut self, entrance: StageEntrance) {
@@ -1444,6 +1485,18 @@ impl Cabinet {
             self.bonus = None;
             self.bonus_enabled = false;
             self.stage_two_limit = None;
+        }
+        self
+    }
+
+    /// Opt into the independently timed linked second-stage encounter.
+    /// Requires the verified late second-stage art extent.
+    #[must_use]
+    pub fn with_linked_actors(mut self, enabled: bool) -> Self {
+        if let Some(encounter) = self.encounter.as_mut() {
+            encounter.linked = (enabled
+                && self.stage_two_limit.is_some_and(|limit| limit >= 1264))
+            .then(LinkedEncounter::new);
         }
         self
     }

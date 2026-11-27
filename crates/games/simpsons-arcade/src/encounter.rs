@@ -140,21 +140,7 @@ impl Encounter {
         (base, scroll_limit): (StreetLayout, i16),
         (slots, restraint_edge): (&mut [Slot; 4], bool),
     ) -> u64 {
-        let street = StreetLayout {
-            max: Point {
-                x: base
-                    .max
-                    .x
-                    .saturating_add(scroll_limit.max(self.art_travel))
-                    .saturating_add(46),
-                ..base.max
-            },
-            min: Point {
-                x: base.min.x.saturating_sub(50),
-                ..base.min
-            },
-            ..base
-        };
+        let street = self.street_bounds(base, scroll_limit);
         // Resolve admitted player strikes before any same-tick counterstrike
         // can change a station's maneuver. Ground strikes may hit multiple
         // targets; aerial and special strikes retain their one-hit budget.
@@ -165,7 +151,12 @@ impl Encounter {
                 .as_mut()
                 .is_some_and(|enemy| enemy.resolve_strikes(slots))
         });
-        let defeated = hits.into_iter().map(u64::from).sum();
+        let linked_hits = self
+            .linked
+            .as_mut()
+            .filter(|_| self.stage_two)
+            .map(|linked| linked.resolve_strikes(slots));
+        let defeated: u64 = hits.into_iter().map(u64::from).sum();
         for ((index, entry), hit) in
             self.enemies.iter_mut().enumerate().zip(hits)
         {
@@ -188,7 +179,18 @@ impl Encounter {
                 enemy.advance(bounds, slots, (restraint, restraint_edge));
             }
         }
-        defeated
+        let count = self.enemies().filter(|enemy| enemy.health > 0).count();
+        let linked_defeated = self.linked.as_mut().zip(linked_hits).map_or(
+            0,
+            |(linked, child_hits)| {
+                linked.advance(
+                    street,
+                    (slots, child_hits),
+                    (view.max.x.saturating_sub(base.max.x), count),
+                )
+            },
+        );
+        defeated.saturating_add(linked_defeated)
     }
 
     pub(super) fn enemies(&self) -> impl Iterator<Item = Enemy> + '_ {
@@ -197,6 +199,7 @@ impl Encounter {
 
     pub(super) fn enter_stage_two(&mut self, travel: i16) {
         self.stage_two = true;
+        self.linked = self.linked.map(|_| super::LinkedEncounter::new());
         self.art_travel = travel;
         let [initial, remaining @ ..] = &mut self.enemies;
         *initial = Some(Enemy::new(Point { x: 246, y: 190 }));
@@ -262,6 +265,7 @@ impl Encounter {
         Self {
             art_travel: 0,
             enemies,
+            linked: None,
             marge_restraint: false,
             opening_spawn: spawn,
             progressive,
@@ -271,6 +275,7 @@ impl Encounter {
 
     pub(super) fn restart(&mut self) {
         self.stage_two = false;
+        self.linked = self.linked.map(|_| super::LinkedEncounter::new());
         let [initial, remaining @ ..] = &mut self.enemies;
         *initial = Some(Enemy::new(self.opening_spawn));
         remaining.fill(None);
@@ -282,6 +287,28 @@ impl Encounter {
             .filter(|(trigger, _)| *trigger <= camera)
             .count()
             .saturating_add(1)
+    }
+
+    fn street_bounds(
+        &self,
+        base: StreetLayout,
+        scroll_limit: i16,
+    ) -> StreetLayout {
+        StreetLayout {
+            max: Point {
+                x: base
+                    .max
+                    .x
+                    .saturating_add(scroll_limit.max(self.art_travel))
+                    .saturating_add(46),
+                ..base.max
+            },
+            min: Point {
+                x: base.min.x.saturating_sub(50),
+                ..base.min
+            },
+            ..base
+        }
     }
 }
 
@@ -415,11 +442,8 @@ impl Enemy {
         let next = tick.saturating_add(1);
         self.knockback(layout, next, DEFEAT_KNOCKBACK_TICKS);
         self.action = EnemyAction::Defeat { tick: next };
-        if next == ENEMY_DEFEAT_TICKS
-            && let Some(player) = self.defeat_credit.take()
-            && let Some(slot) = slots.get_mut(player.index())
-        {
-            slot.station.award_defeat_point();
+        if next == ENEMY_DEFEAT_TICKS {
+            self.award_credit(slots);
         }
     }
 
@@ -561,6 +585,14 @@ impl Enemy {
         };
     }
 
+    pub(super) fn award_credit(&mut self, slots: &mut [Slot; 4]) {
+        if let Some(player) = self.defeat_credit.take()
+            && let Some(slot) = slots.get_mut(player.index())
+        {
+            slot.station.award_defeat_point();
+        }
+    }
+
     fn knockback(&mut self, layout: StreetLayout, tick: u8, duration: u8) {
         if tick <= duration {
             let displacement = match self.facing {
@@ -586,27 +618,34 @@ impl Enemy {
         }
     }
 
-    fn receive_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
+    pub(super) fn receive_hit(
+        &mut self,
+        slots: &mut [Slot; 4],
+        damage: u8,
+    ) -> bool {
         for (player, slot) in Player::ALL.into_iter().zip(slots) {
             let station = &mut slot.station;
-            if player_strike(station, self.position, (32, 12)) {
-                self.health = 0;
-                // The original observed rightward knockback faces left.
-                self.facing = match station.facing {
-                    Facing::Left => Facing::Right,
-                    Facing::Right => Facing::Left,
-                };
+            if !player_strike(station, self.position, (32, 12)) {
+                continue;
+            }
+            self.health = self.health.saturating_sub(damage);
+            // The original observed rightward knockback faces left.
+            self.facing = match station.facing {
+                Facing::Left => Facing::Right,
+                Facing::Right => Facing::Left,
+            };
+            if self.health == 0 {
                 self.action = EnemyAction::Defeat { tick: 0 };
                 self.defeat_credit = Some(player);
-                return true;
             }
+            return true;
         }
         false
     }
 
     fn resolve_strikes(&mut self, slots: &mut [Slot; 4]) -> bool {
         let held = matches!(self.action, EnemyAction::Restrain(_));
-        let hit = self.health > 0 && self.receive_strikes(slots);
+        let hit = self.health > 0 && self.receive_hit(slots, self.health);
         if held && hit {
             release_marge(slots);
         }
@@ -894,6 +933,51 @@ mod tests {
             cabinet.enemies().filter(|enemy| enemy.health > 0).count(),
             1
         );
+    }
+
+    #[test]
+    fn linked_encounter_is_reachable_through_routed_stage_two_play() {
+        let initial = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1871))
+            .map(|state| state.with_linked_actors(true));
+        assert!(initial.is_ok());
+        let Ok(mut cabinet) = initial else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        cabinet.enter_stage_two(1871);
+        assert_eq!(cabinet.linked_parents().count(), 3);
+        assert!(cabinet.linked_children().next().is_none());
+        route_stage_two(&mut cabinet, 1871);
+        assert_eq!(cabinet.camera_origin(), 1871);
+        assert_eq!(cabinet.linked_children().count(), 7);
+        assert!(cabinet.linked_children().all(|child| {
+            child.pose().is_none() && child.enemy().health == 0
+        }));
+        assert!(
+            cabinet
+                .linked_parents()
+                .all(|parent| parent.pose().is_none())
+        );
+        assert!(cabinet.enemies().all(|enemy| enemy.health == 0));
+        assert_eq!(cabinet.impact_cues(), 24);
+    }
+
+    fn route_stage_two(cabinet: &mut Cabinet, limit: i16) {
+        let mut held = None;
+        for tick in 1..8000 {
+            let (direction, requested) = cabinet.diagnostic_intent();
+            let mut actions = direction_changes(&mut held, direction);
+            if let Some(action) = requested {
+                actions.extend(pulse(action));
+            }
+            cabinet.input_step(tick, &actions);
+            if cabinet.camera_origin() == limit {
+                return;
+            }
+        }
     }
 
     fn defeat_prefix(encounter: &mut Encounter, count: usize) {

@@ -42,6 +42,7 @@ mod controller;
 mod encounter;
 mod lan;
 mod launch;
+mod linked;
 mod measurement;
 /// Path-independent event-driven title presentation.
 pub mod memory_preview;
@@ -656,7 +657,8 @@ impl Scene {
                 .transpose()?,
             world: Vec::with_capacity(
                 world_capacity(source.enemy.is_some())
-                    .saturating_add(usize::from(source.poses.has_wrestler())),
+                    .saturating_add(usize::from(source.poses.has_wrestler()))
+                    .saturating_add(source.poses.linked_sprite_count()),
             ),
             world_art,
         })
@@ -860,6 +862,11 @@ impl Scene {
                     )?,
                 ));
             }
+        }
+        if cabinet.session().world_visible()
+            && let Some(linked) = &self.poses.linked
+        {
+            linked.queue(cabinet, view, &mut self.world)?;
         }
         if cabinet.session().world_visible()
             && let Some(boss) = cabinet.wrestler()

@@ -48,7 +48,7 @@ use games_platform::ir::storage::file::snapshot;
 use super::world::{self, StageArt, WorldArt};
 use super::{
     Art, KEYS, Maneuver, Player, Station, arrival, backdrop, bonus, failure,
-    open_bundle, scenery, wrestler,
+    linked, open_bundle, scenery, wrestler,
 };
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
@@ -122,6 +122,7 @@ pub(super) struct Catalogue {
     bonus_inflated: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
     landing_markers: Option<ContentHash>,
+    linked: Option<[ContentHash; linked::POSE_COUNT]>,
     scenery: scenery::Catalogue,
     stage_two: Option<[ContentHash; 2]>,
     wrestler: wrestler::Catalogue,
@@ -156,6 +157,11 @@ impl Catalogue {
             .len()
             .saturating_add(self.wrestler.count())
             .saturating_mul(65_536)
+            .saturating_add(
+                usize::from(self.linked.is_some())
+                    .saturating_mul(linked::POSE_COUNT)
+                    .saturating_mul(65_536),
+            )
             .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
                 usize::from(self.arrival.is_some())
@@ -257,12 +263,17 @@ impl Catalogue {
             && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.bonus_inflated.is_none() || self.bonus.is_some())
             && (self.stage_two.is_none() || self.bonus.is_some())
+            && (self.linked.is_none() || self.stage_two.is_some())
     }
 
     pub(super) fn count(&self) -> usize {
         self.entries
             .len()
             .saturating_add(self.scenery.count())
+            .saturating_add(
+                usize::from(self.linked.is_some())
+                    .saturating_mul(linked::POSE_COUNT),
+            )
             .saturating_add(usize::from(self.arrival.is_some()))
             .saturating_add(usize::from(self.landing_markers.is_some()))
             .saturating_add(self.backdrop_count())
@@ -288,6 +299,7 @@ impl Catalogue {
             .chain(self.arrival)
             .chain(self.landing_markers)
             .chain(self.stage_two.into_iter().flatten())
+            .chain(self.linked.into_iter().flatten())
     }
 
     pub(super) const fn has_arrival(&self) -> bool {
@@ -304,6 +316,9 @@ impl Catalogue {
 
     fn insert(&mut self, line: &str) -> Result<(), RenderError> {
         match line.split_whitespace().next() {
+            Some("linked-actors") => {
+                self.linked = Some(linked::parse(line, self.linked.is_some())?);
+            },
             Some("stage-two") => {
                 self.stage_two = Some(parse_stage_two(line, self.stage_two)?);
             },
@@ -351,6 +366,10 @@ impl Catalogue {
             },
         }
         Ok(())
+    }
+
+    pub(super) fn linked_sprite_count(&self) -> usize {
+        usize::from(self.linked.is_some()).saturating_mul(linked::EXTRA_SPRITES)
     }
 
     pub(super) fn load(
@@ -402,6 +421,11 @@ impl Catalogue {
                 })
                 .transpose()?,
             entries,
+            linked: self
+                .linked
+                .as_ref()
+                .map(|poses| linked::LinkedArt::load(store, scene, poses))
+                .transpose()?,
             scenery: self.scenery.load(store, scene)?,
             stage_two: self
                 .stage_two
@@ -435,6 +459,7 @@ impl Catalogue {
     pub(super) fn scenic_sprite_count(&self) -> usize {
         self.scenery
             .track_count()
+            .saturating_add(self.linked_sprite_count())
             .saturating_add(
                 usize::from(self.arrival.is_some())
                     .saturating_mul(arrival::EXTRA_SPRITES),
@@ -456,6 +481,7 @@ pub(super) struct PoseArt {
     pub(super) backdrop: backdrop::BackdropArt,
     pub(super) bonus: Option<bonus::BonusArt>,
     entries: BTreeMap<Key, Art>,
+    pub(super) linked: Option<linked::LinkedArt>,
     pub(super) scenery: scenery::PlacedArt,
     pub(super) stage_two: Option<StageArt>,
     pub(super) wrestler: wrestler::WrestlerArt,
@@ -482,8 +508,15 @@ impl PoseArt {
         cabinet: &Cabinet,
     ) -> Result<Cabinet, RenderError> {
         if let Some(stage) = self.stage_two {
+            let travel = stage.world.scroll_limit()?;
+            if self.linked.is_some() && travel < 1264 {
+                return Err(failure(
+                    "linked actors require late second-stage travel",
+                ));
+            }
             (*cabinet)
-                .with_stage_two(stage.world.scroll_limit()?)
+                .with_stage_two(travel)
+                .map(|state| state.with_linked_actors(self.linked.is_some()))
                 .map_err(failure)
         } else {
             Ok(*cabinet)
@@ -602,6 +635,7 @@ impl PoseArt {
                 .entries
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
                 .collect(),
+            linked: None,
             scenery: scenery::PlacedArt::default(),
             stage_two: None,
             wrestler: wrestler::WrestlerArt::default(),

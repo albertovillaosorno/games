@@ -52,7 +52,7 @@ use games_platform::ir::storage::bundle::CanonicalBundle;
 
 use super::{
     Art, Controls, Scene, cabinet_with_scroll, dimension, failure, fixed,
-    ground_position, live, live_with_scroll, size,
+    ground_position, linked, live, live_with_scroll, size,
 };
 use crate::{
     BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase, CONTINUE_TICKS,
@@ -837,8 +837,10 @@ fn smoke_stage_two(
     verify_stage_entrance(scene, art, simulation, &entry_pixels)?;
     let limit = i16::try_from(stage.world.scroll_limit()?).map_err(failure)?;
     let mut held = None;
-    for _ in 0..5000u16 {
+    let mut linked_samples = 0u8;
+    for _ in 0..8000u16 {
         let cabinet = simulation.state();
+        linked::observe(scene, art, cabinet, &mut linked_samples)?;
         if cabinet.stage_two()
             && cabinet.camera_origin() == limit
             && cabinet.impact_cues() > impacts
@@ -851,6 +853,7 @@ fn smoke_stage_two(
                     "second-stage admission count differs from route",
                 ));
             }
+            linked::verify_route(scene, art, cabinet, linked_samples)?;
             let _drawn = art.present(scene, cabinet)?;
             if entry_pixels == scene.readback()? {
                 return Err(failure(
