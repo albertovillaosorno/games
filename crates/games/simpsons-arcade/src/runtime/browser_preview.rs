@@ -144,10 +144,11 @@ pub fn start(touch_enabled: bool) -> Result<(), RenderError> {
     result.map_err(|rejected| rejected.error)
 }
 
-/// Check selected scenic and backdrop tracks through the resident renderer.
-/// Unlike live play, this explicit diagnostic runs one finite readback.
+/// Check selected scene tracks through the resident renderer.
+/// With second-stage art, also drive the existing routed handoff smoke.
+/// Unlike live play, this explicit diagnostic runs a finite readback suite.
 /// # Errors
-/// Rejects absent scene tracks, invalid assets or failed pixel verification.
+/// Rejects absent scene tracks, invalid assets or failed verification.
 pub fn scenery_smoke(
     touch_enabled: bool,
     complete: SmokeCompletion,

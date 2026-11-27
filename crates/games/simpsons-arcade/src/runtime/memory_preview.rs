@@ -53,7 +53,7 @@ pub use super::audio::AudioSelection;
 use super::title_messages::{LaunchFailure, LaunchNotice};
 use super::{
     Controls, Interactive, OptionalSources, PreviewOptions, Scene, Sources,
-    WindowSwitching, audio, backdrop, dimension, failure, launch,
+    WindowSwitching, audio, backdrop, dimension, encounter, failure, launch,
     live_with_session, poses, preview_layout, profile_limit, scene_limits,
     scenery, size, smoke_language_menu, title_messages, world,
 };
@@ -272,7 +272,15 @@ pub(super) fn verify_scenery(
     let options = preview_options(selection, preferences, &source)?;
     let Resident { mut art, mut scene, .. } = open_scene(&source, options)?;
     scenery::smoke(&mut scene, &mut art)?;
-    backdrop::smoke(&mut scene, &mut art, &source)
+    backdrop::smoke(&mut scene, &mut art, &source)?;
+    if source.poses.stage_two_strip().is_some() {
+        encounter::smoke_wrestler(
+            &mut scene,
+            &mut art,
+            selection.touch_enabled,
+        )?;
+    }
+    Ok(())
 }
 
 /// Exercise locale switching, renderer readbacks and isolated persistence.

@@ -23,7 +23,8 @@
 // - Summary:
 //   - Verify the admitted scenery in the ordinary browser renderer.
 // - Description:
-//   - Reuse the browser catalogue and title's native scene-track smoke.
+//   - Reuse the browser catalogue and title's native scene-track and optional
+//     second-stage handoff smoke.
 // - Usage:
 //   - Load with the matching WebAssembly browser binding.
 // - Defaults:

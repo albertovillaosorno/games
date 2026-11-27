@@ -557,7 +557,7 @@ fn smoke_later_reinforcements(
     )
 }
 
-fn smoke_wrestler(
+pub(super) fn smoke_wrestler(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     touch_enabled: bool,
@@ -659,7 +659,8 @@ fn smoke_stage_two(
     }
     let impacts = entry.impact_cues();
     let _entry = art.present(scene, entry)?;
-    if before == scene.readback()? {
+    let entry_pixels = scene.readback()?;
+    if before == entry_pixels {
         return Err(failure("second-stage entry did not change readback"));
     }
     let limit = i16::try_from(stage.world.scroll_limit()?).map_err(failure)?;
@@ -671,6 +672,11 @@ fn smoke_stage_two(
             && cabinet.impact_cues() > impacts
         {
             let _drawn = art.present(scene, cabinet)?;
+            if entry_pixels == scene.readback()? {
+                return Err(failure(
+                    "second-stage travel did not change readback",
+                ));
+            }
             return write_status(format_args!(
                 "Second stage: routed combat and {limit} columns verified"
             ))
