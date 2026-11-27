@@ -4391,3 +4391,25 @@ terminal hit. The routed native diagnostic also checks the delayed award
 and score preservation during the bonus. Simultaneous-strike ordering,
 the number of boss hits, the exact pose sequence and original campaign
 parity remain provisional.
+
+### Original-backed wrestler and score isolation
+
+The optimized native executable (3,969,352 bytes) passed the full
+optional original-backed campaign diagnostic in all five display modes.
+It verifies the routed delayed wrestler point, all bonus phases without
+a cumulative score transfer, and second-stage travel. The 600 movement
+and 20 combat submissions had zero budget misses in each run; peak
+whole-smoke RSS ranged from 181,088,256 to 181,469,184 bytes. These
+are offscreen OpenGL and dummy-audio results, not physical acceptance.
+
+Two longer matched multiplayer original replays admit Homer after
+Marge's final loss. Marge's 22 points remain stored after her
+continuation expires. Homer then earns a point while her station is
+absent. Both replays match through the subsequent fresh admission
+input: in one, Marge starts anew and her score alone clears, while
+Homer's earned point and active station state remain intact. The
+matched withheld control retains both scores. The native regression
+uses real strike and Start inputs to distinguish station-local expiry
+and rejoin from a campaign reset. The original coin admission rules
+remain reference-only; exact multiplayer simultaneous-hit ordering
+and full campaign parity remain unresolved.

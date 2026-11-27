@@ -1581,6 +1581,61 @@ mod tests {
         assert_eq!(expired.stations().map(|station| station.score), [0; 4]);
     }
 
+    #[test]
+    fn expired_station_rejoins_without_resetting_teammate_score() {
+        let result = scored_and_knocked_out();
+        assert!(result.is_ok());
+        let Ok(mut cabinet) = result else {
+            return;
+        };
+        let [waiting, ..] = cabinet.stations();
+        assert_eq!(waiting.score, 1);
+        assert!(matches!(
+            waiting.participation,
+            Participation::Continuing { .. }
+        ));
+        // Isolate a second legal encounter beside the newly joining station.
+        if let Some(encounter) = &mut cabinet.encounter {
+            let [_, second, ..] = &mut encounter.enemies;
+            *second = Some(Enemy::new(Point { x: 106, y: 190 }));
+        }
+        cabinet.input_step(2000, &pulse_for(Player::Homer, Control::Start));
+        cabinet.input_step(2001, &pulse_for(Player::Homer, Control::Primary));
+        assert_multiplayer_expiry_and_rejoin(&mut cabinet);
+    }
+
+    fn assert_multiplayer_expiry_and_rejoin(cabinet: &mut Cabinet) {
+        for tick in 2002..2080 {
+            cabinet.input_step(tick, &[]);
+        }
+        assert_eq!(cabinet.stations().map(|station| station.score), [
+            1, 1, 0, 0
+        ]);
+        let end = 2080u64.saturating_add(u64::from(CONTINUE_TICKS));
+        for tick in 2080..end {
+            cabinet.input_step(tick, &[]);
+        }
+        let [expired, teammate, ..] = cabinet.stations();
+        assert_eq!(cabinet.phase(), Phase::Playing);
+        assert_eq!(expired.participation, Participation::Absent);
+        assert_eq!(expired.score, 1);
+        assert_eq!(teammate.participation, Participation::Playing);
+        assert_eq!(teammate.score, 1);
+        assert_local_rejoin(cabinet, end, teammate);
+    }
+
+    fn assert_local_rejoin(
+        cabinet: &mut Cabinet,
+        tick: u64,
+        teammate: Station,
+    ) {
+        cabinet.input_step(tick, &pulse(Control::Start));
+        let [rejoined, preserved, ..] = cabinet.stations();
+        assert_eq!(rejoined.participation, Participation::Playing);
+        assert_eq!(rejoined.score, 0);
+        assert_eq!(preserved, teammate);
+    }
+
     fn scored_and_knocked_out() -> Result<Cabinet, LayoutError> {
         let mut cabinet = playing(Point { x: 132, y: 190 })?;
         // Keep a second, initially out-of-range opponent alive to exhaust
