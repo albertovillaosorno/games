@@ -38,6 +38,7 @@ use super::{
 };
 
 const ACTIVATION: i16 = 1248;
+const PARENT_LEAD: i16 = 336;
 const RECOVERY: u8 = 40;
 const CHILD_HEALTH: u8 = 12;
 const CHILD_DAMAGE: u8 = 4;
@@ -45,19 +46,16 @@ const GROUND: i16 = 132;
 
 const SCHEDULES: [Schedule; PARENT_CAPACITY] = [
     Schedule {
-        admission: 1042,
         delays: &[16, 32],
         initial: 48,
         x: 1376,
     },
     Schedule {
-        admission: 1106,
         delays: &[64, 64, 32],
         initial: 16,
         x: 1440,
     },
     Schedule {
-        admission: 1170,
         delays: &[128, 224],
         initial: 192,
         x: 1504,
@@ -68,7 +66,6 @@ type ChildHits<'slots> = (&'slots mut [Slot; 4], [bool; CHILD_CAPACITY]);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Schedule {
-    admission: i16,
     delays: &'static [u8],
     initial: u8,
     x: i16,
@@ -107,7 +104,9 @@ pub struct LinkedParent {
 impl LinkedParent {
     fn advance(&mut self, camera: i16, counted: usize) -> bool {
         self.phase = match self.phase {
-            ParentPhase::Dormant if camera >= self.schedule.admission => {
+            ParentPhase::Dormant
+                if camera >= self.schedule.x.saturating_sub(PARENT_LEAD) =>
+            {
                 ParentPhase::Waiting
             },
             ParentPhase::Waiting if camera >= ACTIVATION => {
@@ -398,12 +397,31 @@ mod tests {
     }
 
     #[test]
+    fn parent_admission_uses_world_threshold_not_sampled_overshoot() {
+        for (schedule, threshold) in
+            SCHEDULES.into_iter().zip([1040i16, 1104, 1168])
+        {
+            let mut exact = LinkedParent::new(schedule);
+            let mut overshot = exact;
+            assert_parent_wait(&mut exact, threshold.saturating_sub(1), 0, 3);
+            assert_eq!(exact.pose(), None);
+            assert!(!exact.advance(threshold, 0));
+            assert!(!overshot.advance(threshold.saturating_add(2), 0));
+            assert_eq!(exact.pose(), Some(ParentPose::Closed));
+            assert_eq!(overshot.pose(), exact.pose());
+            assert_parent_wait(&mut exact, 1247, 0, 100);
+            assert_eq!(exact.pose(), Some(ParentPose::Closed));
+            assert_eq!(exact.x(), threshold.saturating_add(336));
+        }
+    }
+
+    #[test]
     fn parent_waits_for_travel_and_primary_capacity() {
         let [_, schedule, _] = SCHEDULES;
         let mut parent = LinkedParent::new(schedule);
-        assert!(!parent.advance(1105, 0));
+        assert!(!parent.advance(1103, 0));
         assert_eq!(parent.pose(), None);
-        assert!(!parent.advance(1106, 0));
+        assert!(!parent.advance(1104, 0));
         assert_parent_wait(&mut parent, 1247, 0, 100);
         assert!(!parent.advance(1248, 5));
         assert_parent_wait(&mut parent, 1248, 5, 100);
@@ -412,6 +430,30 @@ mod tests {
         assert_parent_wait(&mut parent, 1248, 0, 9);
         assert_eq!(parent.pose(), Some(ParentPose::Open));
         assert_parent_wait(&mut parent, 1248, 0, 96);
+        assert_eq!(parent.pose(), Some(ParentPose::Intermediate));
+    }
+
+    #[test]
+    fn parent_returns_to_the_next_scheduled_spawn_after_open_hold() {
+        let [_, schedule, _] = SCHEDULES;
+        let mut parent = LinkedParent::new(schedule);
+        assert_parent_wait(&mut parent, 1248, 0, 2);
+        assert_parent_wait(&mut parent, 1248, 0, 15);
+        assert_eq!(parent.pose(), Some(ParentPose::Closed));
+        assert!(parent.advance(1248, 0));
+        assert_eq!(parent.pose(), Some(ParentPose::Intermediate));
+        for (ticks, pose) in [
+            (8, ParentPose::Intermediate),
+            (1, ParentPose::Open),
+            (95, ParentPose::Open),
+            (1, ParentPose::Intermediate),
+            (285, ParentPose::Closed),
+            (63, ParentPose::Closed),
+        ] {
+            assert_parent_wait(&mut parent, 1248, 0, ticks);
+            assert_eq!(parent.pose(), Some(pose));
+        }
+        assert!(parent.advance(1248, 0));
         assert_eq!(parent.pose(), Some(ParentPose::Intermediate));
     }
 
