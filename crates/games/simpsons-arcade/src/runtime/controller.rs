@@ -46,7 +46,9 @@ use games_platform::ir::scene::{EventBatch, SceneLimits, SpriteDraw};
 use games_platform::ir::ui::{PlateLayout, TextAtlas, TextLine};
 
 use super::launch::ControllerLaunch;
-use super::title_messages::{self, TitleText, parameter};
+use super::title_messages::{
+    self, LaunchNotice, TitleText, launch_error, parameter,
+};
 use super::{
     CONTROLS, Controls, EVENT_BUDGET, LocalActions, Profiles, dimension,
     failure, key_label, lan, project_contact, size, touch,
@@ -453,11 +455,15 @@ fn interactive(
 }
 
 pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
-    let connection = lan::open_client(ControllerLaunch::parse(args)?)?;
+    let launch = ControllerLaunch::parse(args).map_err(|detail| {
+        launch_error(0, LaunchNotice::Configuration, &detail)
+    })?;
+    let connection = lan::open_client(launch)?;
+    let locale_index = connection.locale_index;
     let touch_enabled = connection.touch_enabled;
     let result = (|| {
         let catalog = title_messages::catalogue()?;
-        let locale = title_messages::locale_tag(connection.locale_index)?;
+        let locale = title_messages::locale_tag(locale_index)?;
         let text = TitleText {
             catalog: &catalog,
             locale: &locale,
@@ -476,7 +482,13 @@ pub(super) fn run(args: Vec<OsString>) -> Result<(), String> {
             interactive(scene, startup, connection, text)
         })
     })();
-    result.map_err(|error: RenderError| format!("{error:?}"))
+    result.map_err(|error: RenderError| {
+        launch_error(
+            locale_index,
+            LaunchNotice::Presentation,
+            &format!("{error:?}"),
+        )
+    })
 }
 
 #[cfg(test)]

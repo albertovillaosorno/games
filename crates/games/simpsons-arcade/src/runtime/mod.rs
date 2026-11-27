@@ -106,6 +106,7 @@ use games_platform::ir::storage::preferences::{
     DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
 use games_platform::ir::ui::editor::ControlEditorView;
+use title_messages::{LaunchNotice, launch_error, launch_label};
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Pair, Participation, Phase,
@@ -1481,8 +1482,8 @@ impl Interactive {
     fn run(
         mut self,
         scene: &mut SceneSession<'_, '_>,
-        art: &mut Scene,
-        mut playback: Option<&mut audio::Playback>,
+        (art, mut playback): (&mut Scene, Option<&mut audio::Playback>),
+        active_locale: &mut usize,
     ) -> Result<(), RenderError> {
         if let Some(audio) = &mut playback {
             audio.enable_output();
@@ -1492,7 +1493,10 @@ impl Interactive {
                 self.simulation.state(),
                 scene.last_presented_layout().is_some(),
             );
-            if !self.step(scene, (art, playback.as_deref_mut()), wait_ms)? {
+            let step =
+                self.step(scene, (art, playback.as_deref_mut()), wait_ms);
+            *active_locale = self.locale_index;
+            if !step? {
                 break;
             }
         }
@@ -1987,7 +1991,11 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
         return audio::list_devices().map_err(|error| format!("{error:?}"));
     }
     if !NativeWindow::supported() {
-        return Err(format!("{:?}", RenderError::Unsupported));
+        return Err(launch_error(
+            0,
+            LaunchNotice::Unsupported,
+            &format!("{:?}", RenderError::Unsupported),
+        ));
     }
     if args.first().is_some_and(|arg| arg == "--lan-controller") {
         return controller::run(args);
@@ -1996,55 +2004,60 @@ pub fn run(args: Vec<OsString>) -> Result<(), String> {
 }
 
 fn run_preview(args: Vec<OsString>) -> Result<(), String> {
-    let load_started = now().map_err(|error| error.to_string())?;
-    let launch::Launch {
-        assets,
-        audio_device,
-        controls,
-        display,
-        host,
-        locale_index,
-        locale_store,
-        measure,
-        preferences,
-        smoke,
-        touch_enabled,
-        volume,
-        volume_store,
-    } = launch::Launch::parse(args)?;
-    let resolved = Rc::new(controls.resolve()?);
-    let display_store = preferences.map(Rc::new);
-    let shared_locale_store = locale_store.map(Rc::new);
-    let shared_volume_store = volume_store.map(Rc::new);
-    let listener = host.as_deref().map(lan::open_host).transpose()?;
-    let result = Sources::local(&assets).and_then(|source| {
-        let source_settings = audio::source_settings(
-            source.audio.as_ref(),
-            shared_volume_store.as_deref(),
-        )?;
-        window(
-            &source,
-            PreviewOptions {
-                audio_device: audio_device.as_deref(),
-                controls: &resolved,
-                display,
-                hidden: smoke,
-                locale_index,
-                locale_store: shared_locale_store.as_ref(),
-                measure,
-                preferences: display_store.as_ref(),
-                publication: PublicationPolicy::Durable,
-                source_settings,
-                touch_enabled,
-                volume,
-                volume_store: shared_volume_store.as_ref(),
-                window_switching: WindowSwitching::Supported,
-            },
-            listener,
-            load_started,
-        )
-    });
-    result.map_err(|error| format!("{error:?}"))
+    let load_started = now().map_err(|error| {
+        launch_error(0, LaunchNotice::Presentation, &error.to_string())
+    })?;
+    let launch = launch::Launch::parse(args)?;
+    let locale_index = launch.locale_index;
+    let resolved = Rc::new(launch.controls.resolve().map_err(|detail| {
+        launch_error(locale_index, LaunchNotice::Controls, &detail)
+    })?);
+    let display_store = launch.preferences.map(Rc::new);
+    let shared_locale_store = launch.locale_store.map(Rc::new);
+    let shared_volume_store = launch.volume_store.map(Rc::new);
+    let listener = launch
+        .host
+        .as_deref()
+        .map(lan::open_host)
+        .transpose()
+        .map_err(|detail| {
+            launch_error(locale_index, LaunchNotice::Connection, &detail)
+        })?;
+    let source = Sources::local(&launch.assets).map_err(|error| {
+        launch_error(locale_index, LaunchNotice::Assets, &format!("{error:?}"))
+    })?;
+    let source_settings = audio::source_settings(
+        source.audio.as_ref(),
+        shared_volume_store.as_deref(),
+    )
+    .map_err(|error| preview_error(locale_index, &error))?;
+    let mut active_locale = locale_index;
+    window(
+        &source,
+        PreviewOptions {
+            audio_device: launch.audio_device.as_deref(),
+            controls: &resolved,
+            display: launch.display,
+            hidden: launch.smoke,
+            locale_index,
+            locale_store: shared_locale_store.as_ref(),
+            measure: launch.measure,
+            preferences: display_store.as_ref(),
+            publication: PublicationPolicy::Durable,
+            source_settings,
+            touch_enabled: launch.touch_enabled,
+            volume: launch.volume,
+            volume_store: shared_volume_store.as_ref(),
+            window_switching: WindowSwitching::Supported,
+        },
+        listener,
+        (load_started, &mut active_locale),
+    )
+    .map_err(|error| preview_error(active_locale, &error))
+}
+
+fn preview_error(index: usize, error: &RenderError) -> String {
+    launch_error(index, LaunchNotice::Presentation, &format!("{error:?}"))
 }
 
 fn profile_limit() -> Result<NonZeroU64, String> {
@@ -3260,7 +3273,8 @@ fn host_reservations(
     }
     if let Some(listener) = host {
         write_status(format_args!(
-            "LAN host: {}",
+            "{}: {}",
+            launch_label(options.locale_index, LaunchNotice::Host)?,
             listener.local_addr().map_err(failure)?
         ))
         .map_err(failure)?;
@@ -3272,12 +3286,12 @@ fn window(
     source: &Sources<'_>,
     options: PreviewOptions<'_>,
     host: Option<HostLan>,
-    load_started: Duration,
+    (load_started, active_locale): (Duration, &mut usize),
 ) -> Result<(), RenderError> {
     let touch_enabled = options.touch_enabled;
     let reserved = host_reservations(options, host.as_ref())?;
     let mut window = NativeWindow::open(
-        "The Simpsons Arcade - movement prototype",
+        "The Simpsons Arcade",
         dimension(if options.hidden && source.world.is_some() {
             1280
         } else {
@@ -3330,7 +3344,7 @@ fn window(
             return smoke_peak_report();
         }
         let preview = Interactive::for_scene(startup, options, &art, host)?;
-        preview.run(scene, &mut art, playback.as_mut())
+        preview.run(scene, (&mut art, playback.as_mut()), active_locale)
     })
 }
 

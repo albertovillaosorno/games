@@ -44,6 +44,7 @@ use super::launch::{
     ControllerLaunch, Fields, ResolvedControls, fields,
     optional_catalogue_path, required, resolve_local,
 };
+use super::title_messages::{LaunchNotice, launch_error};
 use crate::lan::{HostLan, session_config};
 
 const MAX_CATALOGUE: NonZeroU64 = NonZeroU64::MIN.saturating_add(4095);
@@ -251,24 +252,37 @@ pub(super) struct ControllerConnection {
 pub(super) fn open_client(
     launch: ControllerLaunch,
 ) -> Result<ControllerConnection, String> {
-    let selection = ClientSelection::parse(
-        &launch.catalogue,
-        &catalogue(&launch.catalogue)?,
-    )?;
-    let locale_index = launch.locale_index(selection.settings.as_deref())?;
-    let controls = launch.select_controls(
-        selection.controls.as_deref(),
-        selection.settings.as_deref(),
-    )?;
+    let configuration =
+        |detail: String| launch_error(0, LaunchNotice::Configuration, &detail);
+    let contents = catalogue(&launch.catalogue).map_err(configuration)?;
+    let selection = ClientSelection::parse(&launch.catalogue, &contents)
+        .map_err(configuration)?;
+    let locale_index = launch
+        .locale_index(selection.settings.as_deref())
+        .map_err(configuration)?;
+    let controls = launch
+        .select_controls(
+            selection.controls.as_deref(),
+            selection.settings.as_deref(),
+        )
+        .map_err(|detail| {
+            launch_error(locale_index, LaunchNotice::Controls, &detail)
+        })?;
     if selection.touch_enabled
         && controls.profiles.touch_players != [true, false, false, false]
     {
-        return Err(String::from("remote touch requires station 1 only"));
+        return Err(launch_error(
+            locale_index,
+            LaunchNotice::Controls,
+            "remote touch requires station 1 only",
+        ));
     }
     Ok(ControllerConnection {
         controls,
         locale_index,
-        stream: selection.connect()?,
+        stream: selection.connect().map_err(|detail| {
+            launch_error(locale_index, LaunchNotice::Connection, &detail)
+        })?,
         touch_enabled: selection.touch_enabled,
     })
 }

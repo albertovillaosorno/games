@@ -39,11 +39,12 @@ use std::str;
 
 use games::presentation::{DisplaySettings, WindowMode};
 use games_platform::ir::frame::RenderError;
-use games_platform::ir::storage::bundle::MemoryBundleLimits;
+use games_platform::ir::process::{write_diagnostic, write_status};
 use games_platform::ir::storage::bundle::directory::{
-    DirectoryLimits, DirectorySelectionError, ManifestRequest,
-    SelectedDirectory, SidecarSnapshot, select,
+    DirectoryLimits, DirectoryRequest, DirectorySelectionError,
+    ManifestRequest, SelectedDirectory, SidecarSnapshot, select,
 };
+use games_platform::ir::storage::bundle::{BundleError, MemoryBundleLimits};
 use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, LocaleStore, PreferenceError,
     PublicationPolicy, VolumeStore,
@@ -57,6 +58,7 @@ use super::memory_preview::{
     AudioSelection, Preferences, Selection, start_with_preferences,
     verify_scenery,
 };
+use super::title_messages::{self, LaunchFailure, LaunchNotice, launch_label};
 use super::{
     art_bundle_limits, audio, failure, parse_hash, parse_hashes, poses,
     profile_limit, world,
@@ -66,13 +68,14 @@ const CATALOGUE: &str = "launch.local";
 const POSES: &str = "launch-poses.txt";
 const PREFERENCES: &str = "simpsons-arcade";
 
-type Completion = fn(Result<(), RenderError>);
+type Completion = Rc<dyn Fn(usize, Result<(), LaunchFailure>)>;
+type SmokeCompletion = fn(Result<(), RenderError>);
 type Start = fn(
     &SelectedDirectory,
     bool,
     &Preferences,
-    Completion,
-) -> Result<(), RenderError>;
+    &Completion,
+) -> Result<(), LaunchFailure>;
 
 #[derive(Debug)]
 struct Stores {
@@ -93,7 +96,7 @@ impl Stores {
         }
         let volume = self.volume.load().map_err(failure)?.unwrap_or_default();
         let (locale_store, locale_index) =
-            super::title_messages::restore_locale(Some(self.locale))
+            title_messages::restore_locale(Some(self.locale))
                 .map_err(failure)?;
         let publication = PublicationPolicy::BestEffort;
         let controls = ResolvedControls::from_store(self.controls, publication)
@@ -130,11 +133,15 @@ impl Stores {
 /// are held only for initialization and the live title owns the loaded art.
 /// # Errors
 /// Rejects unavailable selection, invalid catalogue or startup failure.
-pub fn start(
-    touch_enabled: bool,
-    complete: Completion,
-) -> Result<(), RenderError> {
-    select_with(touch_enabled, start_selected, complete)
+pub fn start(touch_enabled: bool) -> Result<(), RenderError> {
+    let locale = picker_locale(OsStr::new(PREFERENCES));
+    let result =
+        select_with(touch_enabled, locale, start_selected, Rc::new(report));
+    match &result {
+        Ok(()) => report_status(locale, LaunchNotice::Choose),
+        Err(rejected) => report_failure(locale, rejected),
+    }
+    result.map_err(|rejected| rejected.error)
 }
 
 /// Check selected scenic and backdrop tracks through the resident renderer.
@@ -143,40 +150,111 @@ pub fn start(
 /// Rejects absent scene tracks, invalid assets or failed pixel verification.
 pub fn scenery_smoke(
     touch_enabled: bool,
-    complete: Completion,
+    complete: SmokeCompletion,
 ) -> Result<(), RenderError> {
-    select_with(touch_enabled, smoke_selected, complete)
+    let locale = picker_locale(OsStr::new(PREFERENCES));
+    select_with(
+        touch_enabled,
+        locale,
+        smoke_selected,
+        Rc::new(move |_index, result| {
+            complete(result.map_err(|rejected| rejected.error));
+        }),
+    )
+    .map_err(|rejected| rejected.error)
 }
 
 fn select_with(
     touch_enabled: bool,
+    locale: usize,
     start: Start,
     complete: Completion,
-) -> Result<(), RenderError> {
+) -> Result<(), LaunchFailure> {
+    let prompt = launch_label(locale, LaunchNotice::Choose)?;
     select(
-        limits(),
-        &[CATALOGUE, POSES],
+        DirectoryRequest {
+            limits: limits(),
+            prompt: &prompt,
+            sidecars: &[CATALOGUE, POSES],
+        },
         move |sidecars| {
             let options = selection_from(sidecars, touch_enabled)?;
             let requests = manifest_requests(&options)?;
             let admitted = preferences(options.display)?;
             Ok((requests, admitted))
         },
-        move |result| {
-            let opened = result
-                .map_err(|rejected| match rejected {
-                    DirectorySelectionError::Bundle(error) => failure(error),
-                    DirectorySelectionError::Selection(error) => error,
-                })
-                .and_then(|(directory, admitted)| {
-                    start(&directory, touch_enabled, &admitted, complete)
-                });
-            if let Err(error) = opened {
-                complete(Err(error));
-            }
+        move |result| match result {
+            Ok((directory, admitted)) => {
+                let index = admitted.locale_index;
+                if let Err(rejected) =
+                    start(&directory, touch_enabled, &admitted, &complete)
+                {
+                    complete(index, Err(rejected));
+                }
+            },
+            Err(rejected) => complete(locale, Err(directory_failure(rejected))),
         },
     )
-    .map_err(failure)
+    .map_err(bundle_failure)
+}
+
+fn picker_locale(namespace: &OsStr) -> usize {
+    let stored = LocaleStore::open(namespace)
+        .and_then(|store| store.load())
+        .ok()
+        .flatten();
+    title_messages::locale_index(stored.as_ref())
+}
+
+fn bundle_failure(error: BundleError) -> LaunchFailure {
+    let notice = match error {
+        BundleError::Io(ErrorKind::Interrupted) => LaunchNotice::Cancelled,
+        BundleError::Io(ErrorKind::Unsupported) => LaunchNotice::Unsupported,
+        BundleError::Asset(_)
+        | BundleError::Io(_)
+        | BundleError::MissingKey
+        | BundleError::UnsafeStorage => LaunchNotice::Assets,
+    };
+    LaunchFailure::new(notice, failure(error))
+}
+
+fn directory_failure(
+    rejected: DirectorySelectionError<RenderError>,
+) -> LaunchFailure {
+    match rejected {
+        DirectorySelectionError::Bundle(error) => bundle_failure(error),
+        DirectorySelectionError::Selection(error) => {
+            LaunchFailure::new(LaunchNotice::Configuration, error)
+        },
+    }
+}
+
+fn report(index: usize, result: Result<(), LaunchFailure>) {
+    match result {
+        Ok(()) => report_status(index, LaunchNotice::Ended),
+        Err(rejected) => report_failure(index, &rejected),
+    }
+}
+
+fn report_status(index: usize, notice: LaunchNotice) {
+    match launch_label(index, notice) {
+        Ok(label) => {
+            let _reported = write_status(format_args!("{label}"));
+        },
+        Err(error) => {
+            let _reported = write_diagnostic(format_args!("{error:?}"));
+        },
+    }
+}
+
+fn report_failure(index: usize, rejected: &LaunchFailure) {
+    if rejected.notice == LaunchNotice::Cancelled {
+        report_status(index, LaunchNotice::Cancelled);
+        return;
+    }
+    let detail = format!("browser-preview: failed: {:?}", rejected.error);
+    let message = title_messages::launch_error(index, rejected.notice, &detail);
+    let _reported = write_diagnostic(format_args!("{message}"));
 }
 
 const fn limits() -> DirectoryLimits {
@@ -304,21 +382,33 @@ fn start_selected(
     directory: &SelectedDirectory,
     touch_enabled: bool,
     admitted: &Preferences,
-    complete: Completion,
-) -> Result<(), RenderError> {
-    let options = selection_from(directory.sidecars(), touch_enabled)?;
-    start_with_preferences(directory.bundles(), &options, admitted, complete)
+    complete: &Completion,
+) -> Result<(), LaunchFailure> {
+    let options = selection_from(directory.sidecars(), touch_enabled).map_err(
+        |error| LaunchFailure::new(LaunchNotice::Configuration, error),
+    )?;
+    let callback = Rc::clone(complete);
+    start_with_preferences(
+        directory.bundles(),
+        &options,
+        admitted,
+        move |index, result| {
+            callback(index, result.map_err(LaunchFailure::from));
+        },
+    )?;
+    report_status(admitted.locale_index, LaunchNotice::Ready);
+    Ok(())
 }
 
 fn smoke_selected(
     directory: &SelectedDirectory,
     touch_enabled: bool,
     admitted: &Preferences,
-    complete: Completion,
-) -> Result<(), RenderError> {
+    complete: &Completion,
+) -> Result<(), LaunchFailure> {
     let options = selection_from(directory.sidecars(), touch_enabled)?;
     verify_scenery(directory.bundles(), &options, admitted)?;
-    complete(Ok(()));
+    complete(admitted.locale_index, Ok(()));
     Ok(())
 }
 
@@ -366,6 +456,64 @@ mod tests {
         ] {
             assert!(!unavailable(error));
         }
+    }
+
+    #[test]
+    fn picker_language_uses_stored_locale_without_rewriting()
+    -> Result<(), RenderError> {
+        use games_platform::ir::storage::fixtures::TestRoot;
+
+        let root = TestRoot::new().map_err(failure)?;
+        let store = LocaleStore::open(root.location()).map_err(failure)?;
+        if picker_locale(root.location()) != 0 {
+            return Err(failure("unexpected picker default"));
+        }
+        for (tag, expected) in [("es-MX", 1usize), ("ja", 0usize)] {
+            let locale = LocaleTag::parse(tag).map_err(failure)?;
+            PublicationPolicy::Durable
+                .confirm(store.store(&locale).map_err(failure)?)
+                .map_err(failure)?;
+            if picker_locale(root.location()) != expected
+                || store.load().map_err(failure)? != Some(locale)
+            {
+                return Err(failure("picker changed stored preference"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn directory_rejection_preserves_category_and_technical_detail()
+    -> Result<(), RenderError> {
+        let cancelled = bundle_failure(BundleError::Io(ErrorKind::Interrupted));
+        if cancelled.notice != LaunchNotice::Cancelled
+            || launch_label(1, cancelled.notice)?
+                != "Se cancel\u{f3} la selecci\u{f3}n de carpeta."
+        {
+            return Err(failure("cancelled directory treated as a failure"));
+        }
+        let missing = directory_failure(DirectorySelectionError::Bundle(
+            BundleError::MissingKey,
+        ));
+        let detail = format!("{:?}", missing.error);
+        let message = title_messages::launch_error(1, missing.notice, &detail);
+        if missing.notice != LaunchNotice::Assets
+            || !message.starts_with("Revisa los recursos can\u{f3}nicos")
+            || !message.ends_with(&detail)
+            || !detail.contains("MissingKey")
+        {
+            return Err(failure(message));
+        }
+        let malformed = RenderError::Backend(String::from("invalid sidecar"));
+        let rejected = directory_failure(DirectorySelectionError::Selection(
+            malformed.clone(),
+        ));
+        if rejected.notice != LaunchNotice::Configuration
+            || rejected.error != malformed
+        {
+            return Err(failure("configuration rejection lost detail"));
+        }
+        Ok(())
     }
 
     #[test]

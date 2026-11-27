@@ -31,6 +31,7 @@
 
 //! Event-driven title preview from a caller-provided memory snapshot.
 
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -49,6 +50,7 @@ use games_platform::ir::storage::preferences::{
 };
 
 pub use super::audio::AudioSelection;
+use super::title_messages::{LaunchFailure, LaunchNotice};
 use super::{
     Controls, Interactive, OptionalSources, PreviewOptions, Scene, Sources,
     WindowSwitching, audio, backdrop, dimension, failure, launch,
@@ -166,8 +168,9 @@ where
         store,
         selection,
         &Preferences::transient(selection.display),
-        complete,
+        move |_locale, result| complete(result),
     )
+    .map_err(|failure| failure.error)
 }
 
 pub(super) fn start_with_preferences<Complete>(
@@ -175,11 +178,12 @@ pub(super) fn start_with_preferences<Complete>(
     selection: &Selection<'_>,
     preferences: &Preferences,
     complete: Complete,
-) -> Result<(), RenderError>
+) -> Result<(), LaunchFailure>
 where
-    Complete: FnOnce(Result<(), RenderError>) + 'static,
+    Complete: FnOnce(usize, Result<(), RenderError>) + 'static,
 {
-    let source = sources(store, selection)?;
+    let source = sources(store, selection)
+        .map_err(|error| LaunchFailure::new(LaunchNotice::Assets, error))?;
     let options = preview_options(selection, preferences, &source)?;
     let Resident {
         mut art,
@@ -196,12 +200,18 @@ where
     if let Some(output) = &mut playback {
         output.enable_output();
     }
+    let active = Rc::new(Cell::new(preferences.locale_index));
+    let selected = Rc::clone(&active);
     frame_loop::start(
         move |_timestamp| {
-            preview.step(&mut scene, (&mut art, playback.as_mut()), 0)
+            let result =
+                preview.step(&mut scene, (&mut art, playback.as_mut()), 0);
+            active.set(preview.locale_index);
+            result
         },
-        complete,
+        move |result| complete(selected.get(), result),
     )
+    .map_err(LaunchFailure::from)
 }
 
 fn sources<'source>(
@@ -234,7 +244,7 @@ fn open_scene(
         preview_layout(options.touch_enabled, &options.controls.profiles)?;
     let limits = scene_limits(source, options, reserved)?;
     let mut window = NativeWindow::open(
-        "The Simpsons Arcade - movement prototype",
+        "The Simpsons Arcade",
         dimension(960)?,
         dimension(if options.touch_enabled {
             912

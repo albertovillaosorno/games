@@ -60,7 +60,7 @@ struct Picker {
 }
 
 impl Picker {
-    fn new() -> Result<(Self, Promise), BundleError> {
+    fn new(prompt: &str) -> Result<(Self, Promise), BundleError> {
         let document = web_sys::window()
             .and_then(|window| window.document())
             .ok_or(BundleError::Io(ErrorKind::Unsupported))?;
@@ -69,8 +69,7 @@ impl Picker {
             .ok_or(BundleError::Io(ErrorKind::Unsupported))?;
         let container =
             document.create_element("label").map_err(host_failure)?;
-        container
-            .set_text_content(Some("Select the canonical assets directory: "));
+        container.set_text_content(Some(prompt));
         let input = document
             .create_element("input")
             .map_err(host_failure)?
@@ -132,6 +131,7 @@ impl Drop for Picker {
 impl DirectoryPicker for () {
     fn select<State, Error>(
         plan: DirectoryPlan,
+        prompt: &str,
         choose: DirectorySelector<State, Error>,
         complete: DirectoryComplete<State, Error>,
     ) -> Result<(), BundleError>
@@ -139,7 +139,7 @@ impl DirectoryPicker for () {
         State: 'static,
         Error: 'static,
     {
-        let (picker, event) = Picker::new()?;
+        let (picker, event) = Picker::new(prompt)?;
         spawn_local(async move {
             let result = drive(picker, event, plan, choose).await;
             complete(result);

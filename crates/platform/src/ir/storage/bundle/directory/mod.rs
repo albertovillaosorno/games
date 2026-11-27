@@ -57,6 +57,17 @@ pub struct DirectoryLimits {
     pub sidecar: NonZeroU64,
 }
 
+/// Fresh explicit directory selection with caller-localised prompt.
+#[derive(Clone, Copy, Debug)]
+pub struct DirectoryRequest<'request> {
+    /// Inventory and transfer budgets.
+    pub limits: DirectoryLimits,
+    /// Visible plain-text label for the host file chooser.
+    pub prompt: &'request str,
+    /// Explicit direct sidecar names to read.
+    pub sidecars: &'request [&'request str],
+}
+
 /// A caller-pinned manifest and its logical asset admission limits.
 #[derive(Clone, Copy, Debug)]
 pub struct ManifestRequest {
@@ -517,6 +528,7 @@ pub(crate) type DirectorySelector<State, Error> =
 pub(crate) trait DirectoryPicker {
     fn select<State, Error>(
         plan: DirectoryPlan,
+        prompt: &str,
         choose: DirectorySelector<State, Error>,
         complete: DirectoryComplete<State, Error>,
     ) -> Result<(), BundleError>
@@ -536,6 +548,7 @@ fn intersect(first: ManifestLimits, second: ManifestLimits) -> ManifestLimits {
 
 /// Present an explicit local directory selection to the user.
 ///
+/// The caller supplies the visible, localised directory prompt.
 /// The complete namespace is preflighted. Only named sidecars, the caller's
 /// pinned manifests and their verified payload closure are transferred.
 /// Completion receives the caller state only after successful admission.
@@ -544,8 +557,7 @@ fn intersect(first: ManifestLimits, second: ManifestLimits) -> ManifestLimits {
 /// # Errors
 /// Rejects unsupported hosts, invalid budgets or picker setup failure.
 pub fn select<Choose, Complete, State, Error>(
-    limits: DirectoryLimits,
-    sidecars: &[&str],
+    request: DirectoryRequest<'_>,
     choose: Choose,
     complete: Complete,
 ) -> Result<(), BundleError>
@@ -555,8 +567,13 @@ where
     State: 'static,
     Error: 'static,
 {
-    let plan = DirectoryPlan::new(limits, sidecars)?;
-    <() as DirectoryPicker>::select(plan, Box::new(choose), Box::new(complete))
+    let plan = DirectoryPlan::new(request.limits, request.sidecars)?;
+    <() as DirectoryPicker>::select(
+        plan,
+        request.prompt,
+        Box::new(choose),
+        Box::new(complete),
+    )
 }
 
 fn reserved_root(name: &str) -> bool {

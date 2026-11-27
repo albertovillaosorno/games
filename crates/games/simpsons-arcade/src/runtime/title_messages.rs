@@ -165,10 +165,84 @@ messages! {
     "title.controller.caption" =>
         "The Simpsons Arcade - remote controller",
         "The Simpsons Arcade - control remoto";
+    "title.launch.choose" =>
+        "Select the canonical assets directory: ",
+        "Selecciona la carpeta can\u{f3}nica de recursos: ";
+    "title.launch.ready" => "Preview ready.", "Vista previa lista.";
+    "title.launch.ended" => "browser-preview: ended",
+        "Termin\u{f3} la vista previa.";
+    "title.launch.cancelled" => "Directory selection cancelled.",
+        "Se cancel\u{f3} la selecci\u{f3}n de carpeta.";
+    "title.launch.configuration" =>
+        "Check the launch configuration and preferences.",
+        "Revisa la configuraci\u{f3}n de inicio y las preferencias.";
+    "title.launch.assets" => "Check the selected canonical assets.",
+        "Revisa los recursos can\u{f3}nicos seleccionados.";
+    "title.launch.controls" => "Check the control preferences.",
+        "Revisa las preferencias de control.";
+    "title.launch.host" => "LAN host", "Anfitri\u{f3}n LAN";
+    "title.launch.connection" => "Check the LAN configuration.",
+        "Revisa la configuraci\u{f3}n de la red LAN.";
+    "title.launch.presentation" => "Could not open or continue the preview.",
+        "No se pudo abrir o continuar la vista previa.";
+    "title.launch.unsupported" => "Preview unavailable on this platform.",
+        "Vista previa no disponible en esta plataforma.";
     "title.control.touch.first" => "TOUCH: ARROWS, B SOURCE, A EDIT",
         "T\u{c1}CTIL: FLECHAS, B TIPO, A EDITA";
     "title.control.touch.second" => "TOUCH: START CLEAR, PAUSE BACK",
         "T\u{c1}CTIL: INICIO BORRA, PAUSA REGRESA";
+}
+
+/// Authored launch notices; technical identifiers and details stay intact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LaunchNotice {
+    Assets,
+    Cancelled,
+    Choose,
+    Configuration,
+    Connection,
+    Controls,
+    Ended,
+    Host,
+    Presentation,
+    Ready,
+    Unsupported,
+}
+
+impl LaunchNotice {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Assets => "title.launch.assets",
+            Self::Cancelled => "title.launch.cancelled",
+            Self::Choose => "title.launch.choose",
+            Self::Configuration => "title.launch.configuration",
+            Self::Connection => "title.launch.connection",
+            Self::Controls => "title.launch.controls",
+            Self::Ended => "title.launch.ended",
+            Self::Host => "title.launch.host",
+            Self::Presentation => "title.launch.presentation",
+            Self::Ready => "title.launch.ready",
+            Self::Unsupported => "title.launch.unsupported",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct LaunchFailure {
+    pub(super) error: RenderError,
+    pub(super) notice: LaunchNotice,
+}
+
+impl LaunchFailure {
+    pub(super) const fn new(notice: LaunchNotice, error: RenderError) -> Self {
+        Self { error, notice }
+    }
+}
+
+impl From<RenderError> for LaunchFailure {
+    fn from(error: RenderError) -> Self {
+        Self::new(LaunchNotice::Presentation, error)
+    }
 }
 
 /// Native and browser preference admission share this result.
@@ -290,6 +364,33 @@ impl<'text> TitleText<'text> {
             })
             .map_err(failure)
     }
+}
+
+pub(super) fn launch_label(
+    index: usize,
+    notice: LaunchNotice,
+) -> Result<String, RenderError> {
+    let catalog = catalogue()?;
+    let locale = locale_tag(index)?;
+    TitleText {
+        catalog: &catalog,
+        locale: &locale,
+    }
+    .label(notice.key())
+    .map(String::from)
+}
+
+// Preserve the exact developer detail, including paths and machine codes.
+// A broken authored catalogue must not mask the original startup failure.
+pub(super) fn launch_error(
+    index: usize,
+    notice: LaunchNotice,
+    detail: &str,
+) -> String {
+    launch_label(index, notice).map_or_else(
+        |_error| detail.to_owned(),
+        |summary| format!("{summary}\n{detail}"),
+    )
 }
 
 pub(super) fn catalogue() -> Result<Rc<TranslationCatalog>, RenderError> {

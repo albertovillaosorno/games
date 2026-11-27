@@ -665,6 +665,7 @@ impl FrameLoopPort for () {
 impl DirectoryPicker for () {
     fn select<State, Error>(
         plan: DirectoryPlan,
+        prompt: &str,
         choose: DirectorySelector<State, Error>,
         complete: DirectoryComplete<State, Error>,
     ) -> Result<(), BundleError>
@@ -672,7 +673,7 @@ impl DirectoryPicker for () {
         State: 'static,
         Error: 'static,
     {
-        drop((plan, choose, complete));
+        drop((plan, prompt, choose, complete));
         Err(BundleError::Io(ErrorKind::Unsupported))
     }
 }

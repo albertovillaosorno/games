@@ -628,6 +628,20 @@ pub(super) struct Launch {
 
 impl Launch {
     pub(super) fn parse(args: Vec<OsString>) -> Result<Self, String> {
+        let mut index = 0;
+        Self::parse_with_locale(args, &mut index).map_err(|detail| {
+            super::title_messages::launch_error(
+                index,
+                super::title_messages::LaunchNotice::Configuration,
+                &detail,
+            )
+        })
+    }
+
+    fn parse_with_locale(
+        args: Vec<OsString>,
+        index: &mut usize,
+    ) -> Result<Self, String> {
         let mut remaining = args.into_iter().peekable();
         let smoke = flag(&mut remaining, "--smoke");
         let measure = measurement_flag(&mut remaining, smoke)?;
@@ -650,6 +664,8 @@ impl Launch {
         )?;
         let settings = explicit_settings.or(paths.settings);
         admit_settings_location(settings.as_deref(), Some(&assets.directory))?;
+        let (locale_store, locale_index) = load_locale(settings.as_deref())?;
+        *index = locale_index;
         let preferences = settings
             .as_deref()
             .map(DisplayStore::open)
@@ -662,7 +678,6 @@ impl Launch {
             .map_err(|error| format!("display preferences: {error:?}"))?
             .flatten();
         let (volume_store, volume) = load_volume(settings.as_deref())?;
-        let (locale_store, locale_index) = load_locale(settings.as_deref())?;
         let display = resolve_display(defaults, stored, [
             mode.as_deref(),
             window.as_deref(),
@@ -1270,6 +1285,55 @@ mod tests {
                 != configured_profiles(FALLBACK_PROFILE)?
         {
             return Err("locale or other preferences not restored".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn launch_diagnostics_follow_admitted_locale_and_keep_detail()
+    -> Result<(), String> {
+        use games::presentation::LocaleTag;
+
+        let fixture = ProfileFixture::new()?;
+        let config = resolve_local(fixture.0.location(), "launch.local")?;
+        let args = || {
+            vec![
+                "--display".into(),
+                "invalid".into(),
+                "--config".into(),
+                config.clone(),
+            ]
+        };
+        let english = Launch::parse(args()).err().ok_or("accepted mode")?;
+        let detail = "expected adaptive, aspect-fit, fill, integer or stretch";
+        if !english.starts_with("Check the launch configuration")
+            || !english.ends_with(detail)
+        {
+            return Err(english);
+        }
+        let store = LocaleStore::open(fixture.0.location())
+            .map_err(|error| format!("{error:?}"))?;
+        let spanish =
+            LocaleTag::parse("es-MX").map_err(|error| format!("{error:?}"))?;
+        let receipt = store
+            .store(&spanish)
+            .map_err(|error| format!("{error:?}"))?;
+        receipt.durability.map_err(|error| format!("{error:?}"))?;
+        let translated = Launch::parse(args()).err().ok_or("accepted mode")?;
+        if !translated.starts_with("Revisa la configuraci\u{f3}n de inicio")
+            || !translated.ends_with(detail)
+        {
+            return Err(translated);
+        }
+        let assets = super::super::run_preview(vec!["--config".into(), config])
+            .err()
+            .ok_or("accepted absent bundle")?;
+        if !assets.starts_with("Revisa los recursos can\u{f3}nicos")
+            || !assets.contains("NotFound")
+            || store.load().map_err(|error| format!("{error:?}"))?
+                != Some(spanish)
+        {
+            return Err(assets);
         }
         Ok(())
     }
