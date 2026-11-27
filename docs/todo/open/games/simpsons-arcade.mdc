@@ -3729,3 +3729,11 @@ traces between those two controls. These observations establish
 neither the exact combined-action rule nor an internal polling
 model. No early reentry or combined-action implementation is
 inferred from them.
+
+Eight staggered controls hold one button from offset 55 for twelve
+frames and pulse the other at offset 56, in both orders for every
+station. Each reproduces all 141 object snapshots, the HUD and the
+voice trace of the fresh button alone, not the simultaneous pulse.
+This excludes an earlier held button contributing to the combined
+response in these particular refill controls; it does not resolve
+combined attacks outside recovery.
