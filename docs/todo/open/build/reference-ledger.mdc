@@ -1016,3 +1016,17 @@ interior targets, 179 unresolved flows and 1,560 unresolved
 dispositions. The 43 partial mappings, three intentional replacements
 and 25 non-runtime dispositions remain unchanged. Further substate
 paths and the unmodeled actor gameplay remain open.
+
+A matched delayed replay now verifies 16 primary substate targets
+across four actor families, retaining all 7,950 regular trace rows
+byte-for-byte. The isolated static audit admits 14 observed state
+bodies and one fixed continuation (538 decoded bytes), with no
+changed prior ownership or unowned instructions. The checker reports
+1,603 identities and semantic reviews, 58,454 decoded bytes,
+4,370 reciprocal pairs, 4,952 flow observations, 263 interior
+entries and 179 unresolved flows. There are still 43 partial
+mappings, three intentional replacements, 25 non-runtime records
+and 1,575 unresolved dispositions. The type-07 linked record's
+observed setup includes successive 64- and 32-tick countdowns before
+motion and conditional terrain activation; its presentation and
+native gameplay mapping remain unresolved.
