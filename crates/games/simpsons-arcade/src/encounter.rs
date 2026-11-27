@@ -1543,6 +1543,66 @@ mod tests {
     }
 
     #[test]
+    fn earned_score_survives_continue_and_resets_on_new_campaign() {
+        let result = scored_and_knocked_out();
+        assert!(result.is_ok());
+        let Ok(cabinet) = result else {
+            return;
+        };
+        let [waiting, ..] = cabinet.stations();
+        assert_eq!(waiting.score, 1);
+        assert!(matches!(
+            waiting.participation,
+            Participation::Continuing { .. }
+        ));
+        verify_scored_continue(cabinet, waiting.score);
+        verify_scored_expiry(cabinet);
+    }
+
+    fn verify_scored_continue(mut continued: Cabinet, earned: u16) {
+        continued.input_step(2000, &pulse(Control::Start));
+        let [restored, ..] = continued.stations();
+        assert_eq!(restored.score, earned);
+        assert_eq!(restored.health, PLAYER_HEALTH);
+        assert_eq!(restored.participation, Participation::Playing);
+        continued.input_step(2001, &pulse_for(Player::Homer, Control::Start));
+        assert_eq!(continued.stations().map(|station| station.score), [
+            1, 0, 0, 0
+        ]);
+    }
+
+    fn verify_scored_expiry(mut expired: Cabinet) {
+        for tick in 0..u64::from(CONTINUE_TICKS) {
+            expired.input_step(tick, &[]);
+        }
+        assert_eq!(expired.phase(), Phase::MainMenu);
+        expired.input_step(2000, &pulse(Control::Start));
+        assert_eq!(expired.phase(), Phase::Playing);
+        assert_eq!(expired.stations().map(|station| station.score), [0; 4]);
+    }
+
+    fn scored_and_knocked_out() -> Result<Cabinet, LayoutError> {
+        let mut cabinet = playing(Point { x: 132, y: 190 })?;
+        // Keep a second, initially out-of-range opponent alive to exhaust
+        // the station after a genuine input-driven defeat earns a point.
+        if let Some(encounter) = &mut cabinet.encounter {
+            let [_, second, ..] = &mut encounter.enemies;
+            *second = Some(Enemy::new(Point { x: 250, y: 190 }));
+        }
+        cabinet.input_step(3, &pulse(Control::Primary));
+        for tick in 4..2000 {
+            cabinet.input_step(tick, &[]);
+            if matches!(
+                cabinet.stations().first().map(|slot| slot.participation),
+                Some(Participation::Continuing { .. })
+            ) {
+                break;
+            }
+        }
+        Ok(cabinet)
+    }
+
+    #[test]
     fn score_retains_continue_but_resets_new_participation() {
         let mut slot = Slot::new(Point { x: 132, y: 190 });
         slot.start(0, false);

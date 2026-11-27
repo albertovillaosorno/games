@@ -4343,3 +4343,21 @@ pointer table. Four group dispatchers yielded 42 observed callback
 word selections with active ROM banks. This establishes a bounded
 reference for further static discovery; original group allocation,
 callback coverage and native behavior mapping remain unresolved.
+
+### Score continuation and campaign reset
+
+Three isolated original replays share the same opening input sequence.
+The first station earns 22 points before its final stock is lost.
+The accepted-continue control restores the station with all 22 points
+intact; the withheld control remains inactive and retains the old word
+until a later campaign initialization. Starting after expiry clears
+that word at global campaign initialization and again at the station's
+first admission. The next observed defeat awards one point from zero.
+The other original payment and admission rules are not adopted.
+
+An input-driven fixed-step regression exercises an earned regular
+defeat point, damage and stock exhaustion, free continuation, a late
+second-station join and a separate branch that expires and starts a
+new campaign. This distinguishes the continuing station's existing
+score from a newly admitted station's zero score. Exact multiplayer
+expiry, boss awards and complete score parity remain open.
