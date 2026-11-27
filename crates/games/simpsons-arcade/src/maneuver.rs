@@ -23,7 +23,7 @@
 // - Summary:
 //   - Isolated attacks and variable-height jump trajectories.
 // - Description:
-//   - Uses observed action timings and verified isolated solo jump lift.
+//   - Uses observed action timings and verified isolated airborne arcs.
 // - Usage:
 //   - Advance once per tick before admitting new button edges.
 // - Defaults:
@@ -145,7 +145,7 @@ impl JumpMotion {
 }
 
 /// A forward airborne attack, with height and velocity in sixteenths
-/// of a pixel. The forward rate is selected at the attack edge.
+/// of a pixel. Height at the attack edge selects the observed profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AirAttackMotion {
     fast: bool,
@@ -396,10 +396,10 @@ mod tests {
         heights
     }
 
-    fn air_trace(takeoff_ticks: u8) -> (Vec<i16>, i16) {
+    fn air_trace(takeoff_ticks: u8, hold: u8) -> (Vec<i16>, i16) {
         let mut state = Maneuver::jump();
-        for _ in 1..takeoff_ticks {
-            state = state.advance(Player::Marge, true);
+        for tick in 1..takeoff_ticks {
+            state = state.advance(Player::Marge, tick < hold);
         }
         let Maneuver::Jump(jump) = state else {
             return (Vec::new(), 0);
@@ -458,11 +458,46 @@ mod tests {
             107, 105, 103, 101, 99, 96, 93, 90, 87, 83, 79, 75, 71, 66, 61, 56,
             51, 45, 39, 33, 27, 20, 13, 6,
         ];
-        assert_eq!(air_trace(5), (early.to_vec(), 66));
-        assert_eq!(air_trace(15), (late.to_vec(), 84));
-        assert_eq!(air_trace(30), (apex.to_vec(), 96));
-        assert_eq!(air_trace(10).0.first(), Some(&63));
-        assert_eq!(air_trace(11).0.first(), Some(&64));
+        assert_eq!(air_trace(5, 60), (early.to_vec(), 66));
+        assert_eq!(air_trace(15, 60), (late.to_vec(), 84));
+        assert_eq!(air_trace(30, 60), (apex.to_vec(), 96));
+    }
+
+    #[test]
+    fn aerial_profile_switches_at_height_not_jump_age() {
+        let below = [
+            63, 65, 67, 68, 70, 71, 72, 73, 73, 74, 74, 74, 74, 73, 73, 72, 71,
+            70, 69, 68, 66, 64, 62, 60, 58, 55, 52, 49, 46, 43, 39, 36, 32, 28,
+            24, 19, 15, 10, 5,
+        ];
+        let above = [
+            64, 63, 61, 59, 56, 54, 51, 48, 44, 41, 37, 33, 28, 24, 19, 14, 8,
+            3,
+        ];
+        let descending = [
+            58, 60, 62, 63, 65, 66, 67, 68, 68, 69, 69, 69, 69, 68, 68, 67, 66,
+            65, 64, 63, 61, 59, 57, 55, 53, 50, 47, 44, 41, 38, 34, 31, 27, 23,
+            19, 14, 10, 5,
+        ];
+        assert_eq!(air_trace(10, 60), (below.to_vec(), 78));
+        assert_eq!(air_trace(11, 60), (above.to_vec(), 72));
+        assert_eq!(air_trace(50, 60), (descending.to_vec(), 76));
+    }
+
+    #[test]
+    fn released_jump_retains_aerial_attack_profile_by_height() {
+        let minimum = [
+            29, 31, 33, 34, 36, 37, 38, 39, 39, 40, 40, 40, 40, 40, 39, 39, 38,
+            37, 35, 34, 32, 30, 28, 26, 24, 21, 19, 16, 13, 9, 6, 2,
+        ];
+        let released = [
+            45, 47, 49, 50, 52, 53, 54, 55, 55, 56, 56, 56, 56, 56, 55, 55, 54,
+            53, 51, 50, 48, 46, 44, 42, 40, 37, 35, 32, 29, 25, 22, 18, 14, 10,
+            6, 1,
+        ];
+        assert_eq!(air_trace(4, 1), (minimum.to_vec(), 64));
+        assert_eq!(air_trace(4, 60), (minimum.to_vec(), 64));
+        assert_eq!(air_trace(20, 1), (released.to_vec(), 72));
     }
 
     #[test]

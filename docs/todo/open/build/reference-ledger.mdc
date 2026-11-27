@@ -777,3 +777,28 @@ unresolved, three intentional replacements and 25 non-runtime.
 All prior decoded instructions, graph observations, function bodies
 and audio records are preserved; every decoded instruction has an
 owner. These are partial gameplay mappings, not completed parity.
+
+Nine matched solo aerial attack flights, including released jumps,
+confirm both signed vertical profiles and the two- or four-pixel
+forward stride through the projected-floor landing boundary. Adjacent
+attack offsets bracket the height threshold, and a descending jump
+below it selects the slower rising profile again. The stationary
+special matches its complete 30-tick arc without horizontal movement.
+Two new native regressions retain the observed height and displacement
+sequences across the threshold, early release and descending attack.
+Three additional partial Rust mappings cover initial aerial motion,
+per-tick aerial updates and the stationary special continuation. The
+existing native motion is unchanged; terrain, linked effects, damage,
+other stations and complete presentation equivalence remain open.
+
+Two additional observed selections admit one special continuation and
+103 newly decoded bytes. Six previously decoded shared-tail bytes
+change owners; three historical graph observations retain their exact
+provenance while the current edges follow the reviewed owner. The main
+inventory is 873 identities and 39,035 owned bytes, with 1,221 possible
+observations. The combined checker reports 1,562 identities, 57,433
+owned bytes, 4,270 reciprocal pairs, 4,851 flow observations, 262
+interior entries and 169 unresolved flows. Dispositions are 1,534
+unresolved, three intentional replacements and 25 non-runtime.
+All prior decoded instructions, unresolved observations, and audio
+records are preserved, and every decoded instruction has an owner.
