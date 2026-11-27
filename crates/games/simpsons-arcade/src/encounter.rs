@@ -62,6 +62,7 @@ const RESTRAINT_DAMAGE_INTERVAL: u8 = 48;
 // Anchors are approximate; the observed arrivals start outside the view.
 const RESTRAINT_THRESHOLD: i16 = 154;
 const OPENING_COMBAT_LIMIT: i16 = 362;
+const STAGE_TWO_LATE_COMBAT_GATE: i16 = 1264;
 const REINFORCEMENTS: &[(i16, Point)] = &[
     (50, Point { x: 334, y: 176 }),
     (82, Point { x: -18, y: 208 }),
@@ -221,16 +222,32 @@ impl Encounter {
                 (MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT),
             ]
         };
-        gates
-            .into_iter()
-            .find(|&(_, count)| {
-                !self
-                    .enemies
-                    .iter()
-                    .take(count)
-                    .all(|entry| entry.is_some_and(|enemy| enemy.health == 0))
-            })
-            .map_or(travel, |(gate, _)| travel.min(gate))
+        let limit =
+            gates
+                .into_iter()
+                .find(|&(_, count)| {
+                    !self.enemies.iter().take(count).all(|entry| {
+                        entry.is_some_and(|enemy| enemy.health == 0)
+                    })
+                })
+                .map_or(travel, |(gate, _)| travel.min(gate));
+        if self.stage_two && limit > STAGE_TWO_LATE_COMBAT_GATE {
+            // The observed gate releases with one counted actor left.
+            // Only regular enemies are modeled here; keep later arrivals
+            // outside the cohort so release cannot be revoked.
+            let count = Self::stage_two_enemy_count(STAGE_TWO_LATE_COMBAT_GATE);
+            let survivors = self
+                .enemies
+                .iter()
+                .take(count)
+                .flatten()
+                .filter(|enemy| enemy.health > 0)
+                .count();
+            if survivors > 1 {
+                return STAGE_TWO_LATE_COMBAT_GATE;
+            }
+        }
+        limit
     }
 
     pub(super) const fn new(spawn: Point, progressive: bool) -> Self {
@@ -254,7 +271,6 @@ impl Encounter {
         remaining.fill(None);
     }
 
-    #[cfg(feature = "native-preview")]
     pub(super) fn stage_two_enemy_count(camera: i16) -> usize {
         STAGE_TWO_REINFORCEMENTS
             .iter()
@@ -783,7 +799,6 @@ mod tests {
         ] {
             encounter.admit(camera);
             assert_eq!(encounter.enemies().count(), count);
-            assert_eq!(encounter.limit_travel(1416), 1416);
         }
         assert!(encounter.enemies().skip(12).map(|enemy| enemy.facing).eq([
             Facing::Right,
@@ -794,6 +809,70 @@ mod tests {
         ]));
         encounter.restart();
         assert_eq!(encounter.enemies().count(), 1);
+    }
+
+    #[test]
+    fn late_second_stage_gate_releases_with_one_regular_survivor() {
+        let mut encounter = Encounter::new(Point { x: 246, y: 190 }, true);
+        encounter.enter_stage_two(1416);
+        encounter.admit(1258);
+        defeat_prefix(&mut encounter, 11);
+        assert_eq!(encounter.limit_travel(1263), 1263);
+        assert_eq!(encounter.limit_travel(1416), 1264);
+        defeat_prefix(&mut encounter, 12);
+        assert_eq!(encounter.limit_travel(1416), 1416);
+        assert_eq!(
+            encounter.enemies().filter(|enemy| enemy.health > 0).count(),
+            1
+        );
+        encounter.admit(1370);
+        assert_eq!(
+            encounter.enemies().filter(|enemy| enemy.health > 0).count(),
+            5
+        );
+        assert_eq!(encounter.limit_travel(1416), 1416);
+        encounter.restart();
+        encounter.enter_stage_two(1416);
+        encounter.admit(1258);
+        defeat_prefix(&mut encounter, 11);
+        assert_eq!(encounter.limit_travel(1416), 1264);
+    }
+
+    #[test]
+    fn late_second_stage_camera_holds_then_resumes_with_live_enemy() {
+        let initial = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1416));
+        assert!(initial.is_ok());
+        let Ok(mut cabinet) = initial else {
+            return;
+        };
+        cabinet.input_step(0, &pulse(Control::Start));
+        cabinet.enter_stage_two(1416);
+        cabinet.stage_entrance = None;
+        cabinet.camera = 1262;
+        let [marge, ..] = &mut cabinet.slots;
+        marge.station.position = Point { x: 1500, y: 190 };
+        let Some(encounter) = &mut cabinet.encounter else {
+            assert!(cabinet.encounter.is_some());
+            return;
+        };
+        encounter.admit(1258);
+        defeat_prefix(encounter, 11);
+        cabinet.advance_camera();
+        assert_eq!(cabinet.camera_origin(), 1264);
+        cabinet.advance_camera();
+        assert_eq!(cabinet.camera_origin(), 1264);
+        if let Some(remaining) = &mut cabinet.encounter {
+            defeat_prefix(remaining, 12);
+        }
+        cabinet.advance_camera();
+        assert_eq!(cabinet.camera_origin(), 1266);
+        assert_eq!(
+            cabinet.enemies().filter(|enemy| enemy.health > 0).count(),
+            1
+        );
     }
 
     fn defeat_prefix(encounter: &mut Encounter, count: usize) {

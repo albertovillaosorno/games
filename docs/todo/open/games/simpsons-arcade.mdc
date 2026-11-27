@@ -5249,3 +5249,24 @@ and 40, and the stationary pump after retirement. All 600 movement and
 20 strike submissions per mode met the 16.667 ms budget. Whole-smoke
 peak RSS ranged from 186,777,600 to 188,354,560 bytes. Physical graphics,
 audio and input acceptance remain open.
+
+### Late second-stage travel threshold
+
+Two isolated original replays reproduce their retained regular-object
+traces in full, despite different movement timing. A distinct control
+record holds the horizontal accumulator at 1,264 columns while its
+primary actor count exceeds one. The control and delayed runs retain
+422 and 180 active ticks respectively, with no threshold violations.
+Both release with one eligible regular actor remaining. The other
+surviving record is excluded from the original count; the delay until
+movement resumes differs between runs.
+
+The native encounter now caps extended second-stage travel at 1,264
+columns while more than one regular enemy admitted by that boundary
+remains alive. The cap releases with one survivor, excludes later
+waves, and resets with the campaign. Portable regressions exercise the
+camera hold and release, short extent, later arrivals and restart.
+Original count eligibility includes additional unmodeled actor types;
+this is a provisional regular-cohort gate, not exact scroll or combat
+parity. Other source thresholds and distinct actor interactions remain
+open.
