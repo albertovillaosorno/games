@@ -5789,3 +5789,28 @@ perform 150, 144, 129 and 138 readbacks and 218, 210, 190 and 202 blits,
 respectively. All four dispose of the canvas and leave origin-local
 preferences empty. This is isolated software-rendered browser evidence,
 not physical-device or playable third-stage acceptance.
+
+### First playable cemetery room movement controls
+
+Three fresh original replays reproduce all 1,259 dense transition
+rows through the station-ready boundary. Each records 301 additional
+first-room station samples. The playable transition precedes the
+ready status by two ticks; held opposed directions first displace
+stations three ticks after that status. Neutral station positions
+hold until the first non-ready state 119 ticks after readiness.
+
+Opposed horizontal movement reaches raw positions 112 and 320,
+with two-unit steps when unobstructed. One downward input initially
+reduces depth from 176 to 166, then stalls while the other three
+stations are displaced together from 176 to 207. It subsequently
+reaches depth 153. A separate single-station downward control
+reproduces all 33 aligned four-station depth samples without any
+input to the other stations. Both sampled scroll registers remain
+unchanged. A prior upward hold alone did not move that station.
+
+These measurements reject an independent rectangular terrain clamp
+as a faithful model of the first room. They do not establish the
+general party-dependent terrain, direction mapping or collision
+policy. The first non-ready state occurs at the same tick in all
+three schedules; subsequent enemy interactions remain unresolved.
+The cemetery preview continues to stop at its entrance boundary.
