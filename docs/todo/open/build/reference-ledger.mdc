@@ -141,3 +141,12 @@ ledger it reported 788 functions, 25,803 owned instruction bytes,
 2,893 distinct graph pairs, 686 discovered, 100 unresolved and two
 non-runtime functions. No implemented function is claimed by that
 check. The task remains open.
+
+At the final checkpoint, two sentinel-terminated effect tables add
+48 verified data bytes without overlapping existing classifications.
+The audio ROM has 7,824 classified metadata bytes and 8,982
+unclassified bytes. Eleven more audio functions and one main-CPU
+sound transport function have explicit unresolved semantic reviews.
+The inventory check still reports 788 identities and 2,893 reciprocal
+pairs; disposition totals are 674 discovered, 112 unresolved and two
+non-runtime. No additional runtime equivalence is claimed.

@@ -4021,3 +4021,10 @@ returns are non-runtime. The generic bounded ledger checker verified
 all identities and 2,893 distinct reciprocal caller/callee pairs.
 Individual flow sites, unresolved dispatch, complete semantics and
 Rust mappings remain open. No playable campaign milestone changed.
+
+Two sentinel-terminated effect tables contribute another 48 classified
+metadata bytes. The audio ROM has 8,982 unclassified bytes remaining.
+Additional callback and table-effect reviews bring the audio total
+to 112 reviewed functions, and the main CPU to two reviewed functions.
+The latter include the sound-command transport, whose gameplay command
+meaning and Rust replacement remain unresolved.
