@@ -709,3 +709,24 @@ and 25 non-runtime. All prior decoded instructions, detailed
 observations and audio records remain intact; every decoded byte
 has an owner. These observed selectors do not establish complete
 execution coverage.
+
+A wider overlay observation is bounded to the first 4,389 replay
+frames; the matching score-transition prefix is byte identical.
+The expensive full-window tap is stopped after this verified prefix,
+not treated as a completed campaign replay. It captures 177 unique
+indexed selections, including 84 not in the previous inventory.
+Verified startup, display and first-stage record continuations
+add 24 reviewed main identities and 522 owned bytes. Two direct
+fixed-ROM transfers are explicitly admitted after an initial audit
+finds 12 unowned bytes. A shared completion tail changes owners
+without losing its direct-call evidence.
+
+The main inventory is 850 identities and 36,294 owned bytes, with
+1,102 possible observations. The combined checker reports 1,539
+identities, 54,692 owned bytes, 4,188 reciprocal pairs, 4,729 flow
+observations, 211 interior entries and 168 unresolved flows.
+Dispositions are 1,511 unresolved, three intentional replacements
+and 25 non-runtime. All decoded instructions have owners; prior
+decoded instructions, detailed observations and audio records are
+preserved. Actor and presentation mappings and other runtime
+contexts remain unresolved.
