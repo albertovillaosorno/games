@@ -457,6 +457,7 @@ pub(super) fn verify_entrance(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
     cabinet: &Cabinet,
+    visible: bool,
 ) -> Result<(), RenderError> {
     if !has_track(&art.poses.scenery.entries, Kind::Entrance) {
         return Ok(());
@@ -464,11 +465,31 @@ pub(super) fn verify_entrance(
     let tick = Kind::Entrance
         .tick(cabinet)
         .ok_or_else(|| failure("missing entrance"))?;
-    verify_visible(scene, art, cabinet, (Kind::Entrance, tick))?;
-    write_status(format_args!(
-        "Second stage vehicle: clipped reference art verified"
-    ))
-    .map_err(failure)
+    if visible {
+        verify_visible(scene, art, cabinet, (Kind::Entrance, tick))?;
+    } else if scene.readback()?
+        != readback_without_scenery(scene, art, cabinet)?
+    {
+        return Err(failure("second-stage vehicle outside its interval"));
+    }
+    let state = if visible {
+        "visible"
+    } else {
+        "absent"
+    };
+    write_status(format_args!("Second stage vehicle: {state} at tick {tick}"))
+        .map_err(failure)
+}
+
+fn readback_without_scenery(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<Vec<u8>, RenderError> {
+    let saved = take(&mut art.poses.scenery);
+    let baseline = art.present(scene, cabinet).and_then(|_| scene.readback());
+    art.poses.scenery = saved;
+    baseline
 }
 
 fn verify_visible(
@@ -483,10 +504,8 @@ fn verify_visible(
             failure("scripted scene did not provide visible art")
         })?;
     let actual = scene.readback()?;
-    let saved = take(&mut art.poses.scenery);
-    let baseline = art.present(scene, cabinet).and_then(|_| scene.readback());
-    art.poses.scenery = saved;
-    verify_pixels(&actual, &baseline?, view.width, draw.destination)
+    let baseline = readback_without_scenery(scene, art, cabinet)?;
+    verify_pixels(&actual, &baseline, view.width, draw.destination)
 }
 
 fn verify_pixels(

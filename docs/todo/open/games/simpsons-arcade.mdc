@@ -4747,3 +4747,26 @@ stage frame, the vehicle and landing, and routed combat through all
 per mode met the 16.667 ms budget; whole-smoke peak RSS ranged from
 183,214,080 to 183,365,632 bytes. Exact card art, fade, audible cue
 alignment and physical presentation acceptance remain open.
+
+### Second-stage vehicle visibility boundaries
+
+The native campaign now compares readback with the optional scenic
+track disabled at both visibility boundaries and the existing
+descent sample. Ticks 1 and 222 produce identical readback without
+the vehicle; ticks 2, 180 and 221 change pixels only inside its
+projected rectangle. The 4,001,888-byte optimized Linux build passed
+all five offscreen OpenGL display modes with synthetic touch and
+dummy audio. The ten blank setup frames, landing and 270-column
+routed combat remain verified. All 600 movement and 20 combat
+submissions per mode met the 16.667 ms budget; peak whole-smoke RSS
+ranged from 182,988,800 to 183,320,576 bytes.
+
+Independent arrival-object extraction reproduced all four previously
+retained actor crop digests at a common observed frame. Six more
+fully visible four-group samples and two earlier three-group samples
+passed the exact source-scene check. The fourth group is fully
+clipped in both early samples. These are candidate isolated art
+groups, not an accepted station-presentation track: their clipped
+extents change, and the body and rope depth order interleave.
+Separate visibility, placement, priority composition and landing
+art still require original-backed verification.
