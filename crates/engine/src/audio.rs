@@ -490,6 +490,16 @@ where
         self.voices.iter().flatten().count()
     }
 
+    /// Number of currently playing voices on an independent source.
+    #[must_use]
+    pub fn active_on(&self, source: AudioSource) -> usize {
+        self.voices
+            .iter()
+            .flatten()
+            .filter(|voice| voice.gain.source == source)
+            .count()
+    }
+
     fn admit(
         &mut self,
         clip: PcmClip<S>,
@@ -552,7 +562,7 @@ where
         clip: PcmClip<S>,
         gain: StereoGain,
     ) -> Result<usize, AudioError> {
-        self.admit(clip, SourceGain::effects(gain), None)
+        self.play_on(clip, SourceGain::effects(gain))
     }
 
     /// Play from frame zero, then repeat the specified source region.
@@ -591,6 +601,17 @@ where
                 start: region.start,
             }),
         )
+    }
+
+    /// Play a one-shot clip through an independently controlled source.
+    /// # Errors
+    /// Rejects a full mixer without replacing or advancing any voice.
+    pub fn play_on(
+        &mut self,
+        clip: PcmClip<S>,
+        gain: SourceGain,
+    ) -> Result<usize, AudioError> {
+        self.admit(clip, gain, None)
     }
 
     /// Device-independent output rate in stereo frames per second.
@@ -634,6 +655,18 @@ where
         self.voices
             .get_mut(index)
             .is_some_and(|slot| slot.take().is_some())
+    }
+
+    /// Stop every voice on a source, preserving other voices and positions.
+    pub fn stop_source(&mut self, source: AudioSource) {
+        for slot in &mut self.voices {
+            if slot
+                .as_ref()
+                .is_some_and(|voice| voice.gain.source == source)
+            {
+                *slot = None;
+            }
+        }
     }
 }
 
@@ -789,6 +822,41 @@ mod tests {
         mixer.set_volume(MasterVolume::Half);
         mixer.render(&mut frame);
         (frame == [[1000, -1000]] && mixer.active() == 2)
+            .then_some(())
+            .ok_or(AudioError::InvalidVolume)
+    }
+
+    #[test]
+    fn source_switch_preserves_unrelated_one_shot_progress()
+    -> Result<(), AudioError> {
+        let music = Clip::new(&[1000, -1000], Channels::Stereo, rate(1))?;
+        let effect = Clip::new(&[4000, 8000, 12000], Channels::Mono, rate(1))?;
+        let mut mixer = Mixer::new(rate(1), NonZeroU16::MIN.saturating_add(1))?;
+        let gain = SourceGain {
+            source: AudioSource::Music,
+            stereo: StereoGain::UNITY,
+        };
+        let _music = mixer.play_loop_on(music, gain, 0..1)?;
+        let _effect = mixer.play(effect, StereoGain::UNITY)?;
+        let mut frame = [[0; 2]];
+        mixer.render(&mut frame);
+        if frame != [[5000, 3000]] {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.stop_source(AudioSource::Music);
+        if mixer.active_on(AudioSource::Music) != 0
+            || mixer.active_on(AudioSource::Effects) != 1
+        {
+            return Err(AudioError::InvalidVolume);
+        }
+        let _next = mixer.play_on(music, gain)?;
+        mixer.render(&mut frame);
+        if frame != [[9000, 7000]] || mixer.active_on(AudioSource::Music) != 0 {
+            return Err(AudioError::InvalidVolume);
+        }
+        mixer.stop_source(AudioSource::Music);
+        mixer.render(&mut frame);
+        (frame == [[12000; 2]] && mixer.active() == 0)
             .then_some(())
             .ok_or(AudioError::InvalidVolume)
     }
