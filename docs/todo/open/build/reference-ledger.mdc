@@ -558,3 +558,22 @@ No decoded instruction is unowned. Of the 252 captured nested
 selections, 139 are now admitted; 113 in three overlays remain review
 inputs. Function boundaries, complete dispatch coverage and gameplay
 semantics remain provisional.
+
+The bank-20 pass admits 37 further observed nested selections and
+24 reviewed main identities, adding 535 owned instruction bytes.
+The new reviews cover linked record initialization, conditional
+retirement, subtype-selected descriptor initialization and shared
+orientation and terrain updates. A fixed tail transfer reaches
+two previously unowned fixed roots; the bounded body audit admits
+all 23 of their bytes. Previous instruction ownership, semantic
+mappings and observation provenance are unchanged.
+
+The main inventory is 656 identities and 28,142 owned bytes, with
+788 possible observations. The combined checker reports 1,345
+identities, 46,540 owned bytes, 3,866 reciprocal pairs, 4,302 flow
+observations, 189 interior entries and 143 unresolved flows.
+Dispositions are 1,317 unresolved, three intentional replacements
+and 25 non-runtime. No decoded instruction is unowned. Of the 252
+captured nested selections, 176 are now admitted and 76 remain in
+two overlays. New indirect dispatch sites and original gameplay
+mapping remain open.
