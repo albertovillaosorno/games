@@ -449,3 +449,20 @@ balloon bonus despite different balloon results. A late-attack
 withholding control delays the increase and changes its recipient.
 The exact boss attribution, score table bounds and lifecycle remain
 unresolved; the graph and all dispositions are unchanged.
+
+Four additional conditional selector paths admit nine main identities
+and 1,151 owned bytes. They include slot motion and state transitions,
+a region initialization path and previously unnamed helpers. All earlier
+instruction and flow observations are preserved. The main inventory is
+370 identities, 18,829 owned bytes and 376 possible bank/table
+observations; the combined checker reports 1,059 identities, 37,227
+owned bytes, 3,343 reciprocal pairs and 3,714 flow observations, with
+108 interior entries and 83 unresolved flows. Dispositions are 1,031
+unresolved, three intentional replacements and 25 non-runtime.
+
+A fresh isolated MAME 0.289 campaign replay reproduced all 39 score
+transitions in its matched control. Read-only taps confirm double
+indirection in the first two region descriptor selections, and record
+42 callback word selections in four fixed group dispatchers with their
+active ROM banks. These are bounded observations, not exhaustive type
+coverage; no additional roots are admitted on this evidence alone.

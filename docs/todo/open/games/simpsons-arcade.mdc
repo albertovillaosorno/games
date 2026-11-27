@@ -4333,3 +4333,13 @@ budget misses. The optimized executable measured 3,968,912 bytes;
 whole-smoke peak RSS ranged from 181,141,504 to 181,399,552 bytes.
 These measurements do not establish an improvement or physical display,
 controller, touch or audio acceptance.
+
+### Region group dispatch reference
+
+A matched original campaign replay reproduced all 39 score transitions
+with targeted read-only dispatcher observation enabled. The first two
+region descriptor selections use both a fixed table and a banked
+pointer table. Four group dispatchers yielded 42 observed callback
+word selections with active ROM banks. This establishes a bounded
+reference for further static discovery; original group allocation,
+callback coverage and native behavior mapping remain unresolved.
