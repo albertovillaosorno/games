@@ -5310,3 +5310,9 @@ stage passed; all 3,000 movement and 100 strike submissions met the
 same nine ordered browser checkpoints with a trusted directory picker,
 1,316 selected files, 81 readbacks and 106 blits. No canvas or stored
 preferences remained. Physical-device acceptance remains open.
+
+The same optimized binary also passed the legacy catalogue without
+either optional record in all five native display modes. Departure-only
+and inflated-only catalogues each passed the adaptive native route.
+All seven independent regression runs reached 1,416 columns; the
+departure-only run retained its separate layer readback checkpoint.
