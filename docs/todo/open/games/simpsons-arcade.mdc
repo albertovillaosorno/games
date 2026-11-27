@@ -5856,3 +5856,23 @@ readbacks and 210, 190 and 202 blits for Homer, Bart and Lisa first.
 All four routes visit the thirteen ordered checkpoints and dispose
 of the canvas and origin-local preferences. This is not physical
 device acceptance or moving-room presentation acceptance.
+
+### Moving-room reference presentation
+
+A fresh diagonal-input replay with dense video-state capture matches
+all 1,601 transition records, 141 projection records and 301 room
+records of its independent control. The unchanged strict full-scene
+verifier accepts all 119 consecutive ready-window samples. Of these,
+24 initial comparisons during offset changes require the preceding
+tile RAM and scroll sample; every retry matches all original pixels.
+Both rejected and accepted observations are retained privately.
+
+The accepted backgrounds contain 32 distinct digests across 25 sampled
+offsets. Grouping by the preceding projected camera offset and the
+established four-phase animation clock yields 32 observed groups with
+no digest conflicts. All four phases are present at offsets 15 and 31.
+This supports a delayed camera-relative presentation rather than a
+static entrance backdrop. Unobserved offset-phase combinations,
+independent layer registration, walk-body isolation and general
+composition remain unresolved. No moving-room presentation assets
+or additional native gameplay are admitted from these captures.

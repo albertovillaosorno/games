@@ -1156,3 +1156,20 @@ Commit c0a6bef passed fresh validation. Five rebuilt original-backed
 native display-mode runs retain all seven linked pose families and
 seven defeats, through the 1,871-column route. These sparse selections
 and timing observations do not establish complete original behavior.
+
+The first-room movement implementation in commit 56b0254 preserves
+world positions under shared vertical projection, combines party
+scroll requests, and bounds both the offset and the observed movement
+interval. Three reviewed routines receive partial mappings to the
+tested scroll request, accumulation and vertical limit behavior.
+The existing coordinate-integration mapping gains the partial global
+projection correction. Six movement and admission regressions pass;
+the fresh workspace gate reports 2,409 successful test executions
+and no failures. An independent candidate comparison confirms exactly
+four records changed and all non-mapping fields are identical.
+Candidate and canonical checker runs retain 1,672 identities, 60,807
+decoded bytes, 4,494 reciprocal pairs, 5,084 flow observations, 263
+interior entries and 190 unresolved flows. There are now 69 partial
+Rust mappings, three intentional replacements, 25 non-runtime and
+1,644 unresolved dispositions. Terrain lookup, descriptor progression,
+other motion producers and complete scheduler behavior remain open.
