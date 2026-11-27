@@ -854,3 +854,12 @@ sound transport and original audio-CPU state remain unresolved.
 The canonical checker reports 33 partial mappings, three intentional
 runtime replacements and unchanged function, graph and disposition
 counts.
+
+The checker now rejects missing dependency inventories for every
+resolved disposition and every partial Rust mapping. An explicit
+empty list remains valid for a function with no identified data
+dependencies. Unmapped unresolved records can still express unknown
+dependencies without implying completeness. All 1,562 canonical
+records carry a semantic review; 129 unmapped unresolved records
+retain unknown dependency inventories. The mapped and resolved
+records already satisfy the stronger check, with unchanged counts.

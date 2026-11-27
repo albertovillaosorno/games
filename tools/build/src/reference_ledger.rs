@@ -277,6 +277,9 @@ impl Function {
         if self.analysis_state.as_deref() != Some("semantic-reviewed") {
             return Err("resolved function lacks semantic review");
         }
+        if !review_list(self.data_dependencies.as_deref()) {
+            return Err("resolved function lacks reviewed data dependencies");
+        }
         if !self.test_evidence.as_ref().is_some_and(evidence) {
             return Err("resolved function lacks test evidence");
         }
@@ -305,6 +308,9 @@ impl Function {
             && self.analysis_state.as_deref() != Some("semantic-reviewed")
         {
             return Err("partial Rust mapping lacks semantic review");
+        }
+        if !review_list(self.data_dependencies.as_deref()) {
+            return Err("Rust mapping lacks reviewed data dependencies");
         }
         Ok(())
     }
@@ -736,6 +742,7 @@ mod tests {
             ("inputs", serde_json::json!([])),
             ("outputs", serde_json::json!([])),
             ("state_mutations", serde_json::json!([])),
+            ("data_dependencies", serde_json::json!([])),
             ("rust_owner", Value::from("fixture.rs")),
             ("rust_symbol", Value::from("fixture")),
             ("test_evidence", serde_json::json!(["partial fixture"])),
@@ -755,6 +762,7 @@ mod tests {
             ("test_evidence", Value::Null),
             ("test_evidence", serde_json::json!([""])),
             ("analysis_state", Value::Null),
+            ("data_dependencies", Value::Null),
             ("status", Value::from("discovered")),
             ("status", Value::from("non-runtime")),
         ] {
@@ -788,6 +796,7 @@ mod tests {
             ("inputs", serde_json::json!([])),
             ("outputs", serde_json::json!([])),
             ("state_mutations", serde_json::json!([])),
+            ("data_dependencies", serde_json::json!([])),
             ("test_evidence", serde_json::json!(["fixture"])),
         ] {
             set_field(&mut fixture, field, value)?;
@@ -806,6 +815,13 @@ mod tests {
             if audit(&unreviewed.to_string(), NonZeroUsize::MIN).is_ok() {
                 return Err(format!("accepted unreviewed {status}"));
             }
+            let mut unknown = fixture.clone();
+            set_field(&mut unknown, "data_dependencies", Value::Null)?;
+            if audit(&unknown.to_string(), NonZeroUsize::MIN).is_ok() {
+                return Err(format!(
+                    "accepted unknown dependencies for {status}"
+                ));
+            }
             let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
             if report.statuses.get(status) != Some(&1)
                 || report.partial_mappings != 0
@@ -823,6 +839,10 @@ mod tests {
             return Err(String::from("accepted duplicate status key"));
         }
 
+        check_non_runtime(fixture)
+    }
+
+    fn check_non_runtime(mut fixture: Value) -> Result<(), String> {
         set_field(&mut fixture, "status", Value::from("non-runtime"))?;
         set_field(&mut fixture, "rust_owner", Value::Null)?;
         set_field(&mut fixture, "rust_symbol", Value::Null)?;
@@ -836,6 +856,17 @@ mod tests {
         set_field(&mut fixture, "analysis_state", Value::Null)?;
         if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {
             return Err(String::from("accepted unreviewed non-runtime"));
+        }
+        set_field(
+            &mut fixture,
+            "analysis_state",
+            Value::from("semantic-reviewed"),
+        )?;
+        set_field(&mut fixture, "data_dependencies", Value::Null)?;
+        if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {
+            return Err(String::from(
+                "accepted unknown non-runtime dependencies",
+            ));
         }
         Ok(())
     }
