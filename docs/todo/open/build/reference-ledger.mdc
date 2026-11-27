@@ -268,3 +268,14 @@ A parallel main-CPU review adds 101 semantic dispositions covering the
 remaining banked identities. The private checker now reports 102
 discovered, 820 unresolved, one intentional replacement and two
 non-runtime functions across the unchanged 925 identities and graph.
+
+The last 102 discovered fixed main-CPU entries now have individually
+reviewed semantic dispositions. The current inventory has no
+discovered-only rows: 922 unresolved, one intentional replacement and
+two non-runtime identities across both processors. The graph and
+30,541 owned instruction bytes remain unchanged. The checker rejects
+explicit semantic-review claims without nonblank name, behavior and
+evidence or well-formed input, output and mutation lists. Unknown
+dependencies remain admissible without implying Rust equivalence.
+The private ledger passes this gate. Exhaustive discovery, the 61
+unresolved flow observations and native behavior mapping remain open.

@@ -4151,3 +4151,11 @@ A parallel main-CPU semantic pass reviews 101 further identities,
 including all remaining currently identified banked functions.
 The combined ledger retains 925 identities, with 102 discovered,
 820 unresolved, one intentional replacement and two non-runtime.
+
+The final 102 currently discovered fixed main-CPU functions now
+have semantic dispositions, covering board initialization, diagnostic
+and interrupt work, record handling, display updates and nested state
+callbacks. All 925 currently identified functions have dispositions:
+922 unresolved, one intentional replacement and two non-runtime.
+This completes the review of the current inventory, not exhaustive
+function discovery or original gameplay equivalence.
