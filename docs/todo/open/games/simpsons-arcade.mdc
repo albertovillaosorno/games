@@ -3949,3 +3949,34 @@ address and record verified semantic mappings, unresolved functions
 and deliberate free-play or modern-platform replacements. Preserve
 the existing asset importer and shared Rust capability architecture.
 Do not claim a complete campaign from provisional encounters.
+
+### Static audio function discovery
+
+The installed Ghidra Z80 processor was applied to the verified
+World four-player set. The private project models the fixed 32 KiB
+audio ROM, all six physical 16 KiB banks (including selector aliases),
+2 KiB RAM and the sound hardware register regions. All mapped ROM
+bytes match the selected original chip; RAM and device blocks are
+non-executable. The dynamic bank window is not silently assigned to
+one physical page.
+
+Starting from 48 automatic entries, the interrupt handler, four native
+effect dispatch tables, two instrument-note tables and constant
+callback setters were reconciled to 686 unique function identities.
+Every decoded native instruction byte (18,339 total) belongs to one
+function; three omitted branch regions were restored to their existing
+handler rather than counted as new functions. The private graph records
+2,315 direct transfers, 18 inter-function fallthroughs, and 633
+possible callback assignment observations, including aliases and a
+return sentinel. All observed direct targets have owners. The other
+computed dispatch is an internal 32-entry sequence-command switch
+with 28 distinct targets matching the listing. These are static
+possible edges, not an observed execution trace.
+
+The 48 music headers contain 576 channel pointers resolving to 551
+distinct roots in the fixed ROM and bank overlays. None overlaps
+decoded native instructions. They reference interpreted sequence data,
+not additional native function entries. The remaining data/code
+classification, behavior reviews, Rust dispositions and gameplay
+parity are not established. All original bytes, detailed graph and
+decompiler evidence remain under the ignored private reference root.

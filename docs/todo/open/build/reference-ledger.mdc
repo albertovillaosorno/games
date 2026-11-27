@@ -78,3 +78,18 @@ appends, links, bounds, protected unsealed runs and absent roots. The
 operation reports logical bytes and retained record identities; no actual
 historical run has been classified or removed. Function inventory and
 semantic mapping acceptance remain open.
+
+The Simpsons audio analysis now uses the installed Z80 language and
+the board-specific fixed ROM, six physical bank pages, sound RAM and
+device map. Bank selector aliases are preserved rather than choosing an
+arbitrary default overlay. Static interrupt, effect and instrument
+dispatch discovery followed by callback continuation reconciliation
+produced 686 unique native function identities in the canonical
+private ledger. All 18,339 decoded instruction bytes have a function
+owner. All observed direct transfer targets have a function owner;
+both computed native dispatch sites have bounded table or setter
+evidence. The exported direct and possible indirect graph has reciprocal
+identities. This is discovery, not verified implementation coverage:
+unclassified ROM regions, sequence data and semantic/Rust dispositions
+remain open. The custom main-CPU language is a partial extension with
+synthetic admission evidence, not a complete main-CPU analysis.
