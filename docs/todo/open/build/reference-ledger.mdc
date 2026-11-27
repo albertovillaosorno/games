@@ -802,3 +802,17 @@ interior entries and 169 unresolved flows. Dispositions are 1,534
 unresolved, three intentional replacements and 25 non-runtime.
 All prior decoded instructions, unresolved observations, and audio
 records are preserved, and every decoded instruction has an owner.
+
+Separate solo replays on the remaining three stations reproduce the
+held-jump attack at offset fifteen and the stationary special. All
+37 sampled jump, attack and landing ticks per station agree in
+height, signed vertical speed, state and relative horizontal motion;
+the 31 sampled special and landing ticks also agree. Native
+regression now checks the full observed fast-flight sequence for all
+four characters. Early attack offsets one through three preserve
+the ordinary jump, confirming the existing rejection boundary.
+Opposite directional controls cancel coordinate displacement in the
+original; its pose selection with opposed inputs still needs review.
+These station samples add no new admitted selector, function or graph
+edge. Cooperative, other-height and terrain-specific behavior remain
+outside the four-station verification.

@@ -396,10 +396,14 @@ mod tests {
         heights
     }
 
-    fn air_trace(takeoff_ticks: u8, hold: u8) -> (Vec<i16>, i16) {
+    fn air_trace(
+        player: Player,
+        takeoff_ticks: u8,
+        hold: u8,
+    ) -> (Vec<i16>, i16) {
         let mut state = Maneuver::jump();
         for tick in 1..takeoff_ticks {
-            state = state.advance(Player::Marge, tick < hold);
+            state = state.advance(player, tick < hold);
         }
         let Maneuver::Jump(jump) = state else {
             return (Vec::new(), 0);
@@ -413,7 +417,7 @@ mod tests {
             };
             heights.push(state.elevation());
             distance = distance.saturating_add(motion.step());
-            state = state.advance(Player::Marge, true);
+            state = state.advance(player, true);
         }
         assert_eq!(state, Maneuver::Idle);
         (heights, distance)
@@ -458,9 +462,11 @@ mod tests {
             107, 105, 103, 101, 99, 96, 93, 90, 87, 83, 79, 75, 71, 66, 61, 56,
             51, 45, 39, 33, 27, 20, 13, 6,
         ];
-        assert_eq!(air_trace(5, 60), (early.to_vec(), 66));
-        assert_eq!(air_trace(15, 60), (late.to_vec(), 84));
-        assert_eq!(air_trace(30, 60), (apex.to_vec(), 96));
+        assert_eq!(air_trace(Player::Marge, 5, 60), (early.to_vec(), 66));
+        for player in Player::ALL {
+            assert_eq!(air_trace(player, 15, 60), (late.to_vec(), 84));
+        }
+        assert_eq!(air_trace(Player::Marge, 30, 60), (apex.to_vec(), 96));
     }
 
     #[test]
@@ -479,9 +485,9 @@ mod tests {
             65, 64, 63, 61, 59, 57, 55, 53, 50, 47, 44, 41, 38, 34, 31, 27, 23,
             19, 14, 10, 5,
         ];
-        assert_eq!(air_trace(10, 60), (below.to_vec(), 78));
-        assert_eq!(air_trace(11, 60), (above.to_vec(), 72));
-        assert_eq!(air_trace(50, 60), (descending.to_vec(), 76));
+        assert_eq!(air_trace(Player::Marge, 10, 60), (below.to_vec(), 78));
+        assert_eq!(air_trace(Player::Marge, 11, 60), (above.to_vec(), 72));
+        assert_eq!(air_trace(Player::Marge, 50, 60), (descending.to_vec(), 76));
     }
 
     #[test]
@@ -495,9 +501,9 @@ mod tests {
             53, 51, 50, 48, 46, 44, 42, 40, 37, 35, 32, 29, 25, 22, 18, 14, 10,
             6, 1,
         ];
-        assert_eq!(air_trace(4, 1), (minimum.to_vec(), 64));
-        assert_eq!(air_trace(4, 60), (minimum.to_vec(), 64));
-        assert_eq!(air_trace(20, 1), (released.to_vec(), 72));
+        assert_eq!(air_trace(Player::Marge, 4, 1), (minimum.to_vec(), 64));
+        assert_eq!(air_trace(Player::Marge, 4, 60), (minimum.to_vec(), 64));
+        assert_eq!(air_trace(Player::Marge, 20, 1), (released.to_vec(), 72));
     }
 
     #[test]
