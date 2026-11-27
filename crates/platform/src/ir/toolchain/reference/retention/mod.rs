@@ -10,6 +10,7 @@
 // Boundary-Contract:
 // - Owns:
 //   - Bounded retention requests, deterministic selection and plan identity.
+//   - Completed archive evidence admission and run classification.
 // - Must-Not:
 //   - Access storage, clocks or native operating-system resources.
 // - Allows:
@@ -35,8 +36,61 @@ use std::fmt::{Error as FormatError, Write as _};
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use games_assets::ContentHash;
+use serde::Deserialize;
 
 use super::ToolchainError;
+
+/// Kind of a retained investigation record eligible for archive retirement.
+pub const ARCHIVED_EVIDENCE_KIND: &str = "archived-investigation";
+
+/// Explicit owner classification required for archive retirement.
+pub const ARCHIVED_EVIDENCE_STATUS: &str = "completed-archived-regenerable";
+
+/// Durable evidence of one completed, independently regenerable run.
+///
+/// Admission verifies the owner's record, not the underlying research.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchivedEvidence {
+    evidence: String,
+    kind: String,
+    reproduce: String,
+    run: String,
+    status: String,
+}
+
+impl ArchivedEvidence {
+    /// Whether the record identifies the exact run and seal reproduction.
+    #[must_use]
+    pub fn matches(&self, run: &str, reproduce: &str) -> bool {
+        self.run == run && self.reproduce == reproduce
+    }
+
+    /// Admit one explicitly classified JSON Lines evidence record.
+    ///
+    /// # Errors
+    /// Rejects malformed, unclassified, incomplete or unsafe records.
+    pub fn parse(line: &[u8]) -> Result<Self, ToolchainError> {
+        let record: Self = serde_json::from_slice(line).map_err(|_error| {
+            evidence_error("invalid archived evidence JSON")
+        })?;
+        if record.kind != ARCHIVED_EVIDENCE_KIND
+            || record.status != ARCHIVED_EVIDENCE_STATUS
+            || !safe_component(&record.run)
+            || record.evidence.trim().is_empty()
+            || !valid_reproduction(&record.reproduce)
+        {
+            return Err(evidence_error("invalid archived evidence record"));
+        }
+        Ok(record)
+    }
+
+    /// The exact run directory named by this retained record.
+    #[must_use]
+    pub fn run(&self) -> &str {
+        &self.run
+    }
+}
 
 /// Explicit age, quota and inventory admission bounds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,6 +246,26 @@ pub fn select(
         protected,
         removals,
     })
+}
+
+pub(crate) fn safe_component(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.starts_with('.')
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+pub(crate) fn valid_reproduction(note: &str) -> bool {
+    !note.trim().is_empty() && !note.chars().any(char::is_control)
+}
+
+fn evidence_error(diagnostic: &str) -> ToolchainError {
+    ToolchainError::Failed {
+        operation: "research retention",
+        diagnostic: diagnostic.to_owned(),
+    }
 }
 
 fn invalid_inventory() -> ToolchainError {

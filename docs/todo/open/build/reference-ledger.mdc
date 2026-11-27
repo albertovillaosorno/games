@@ -891,3 +891,13 @@ and 1,562 reviewed dependency lists, with zero pending lists. All
 other record fields and the 1,534 unresolved dispositions are preserved.
 This is coverage of the current inventory, not exhaustive executable
 discovery, transitive dependency completeness or Rust equivalence.
+
+Retention admission now requires one explicitly completed archived
+investigation record in the canonical ledger. Its exact digest, run
+directory name and reproduction note must agree with the seal; an
+arbitrary hashed line or duplicate retained record is insufficient.
+The read-only checker validates the same record schema and rejects
+duplicate classified run names without changing function counts.
+Tiny fixtures cover invalid classification, blank retained evidence,
+unrelated run names, changed reproduction notes and ambiguous records.
+No historical capture is classified or removed by this change.

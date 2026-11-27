@@ -95,6 +95,22 @@ run, record retained evidence and reproduction inputs in the canonical
 private ledger, and stop all writers before sealing it. Unsealed runs are
 protected; unexpected entries in a sealed run reject the preview.
 
+Before sealing, append a record to the title's private ledger. Store
+the following JSON object on a single line, replacing the example values
+with the exact run directory name, retained evidence and reproduction
+inputs. The read-only ledger checker validates this record and rejects
+duplicate classified run names.
+
+```json
+{
+  "kind": "archived-investigation",
+  "run": "reviewed-run",
+  "status": "completed-archived-regenerable",
+  "evidence": "retained findings and supporting references",
+  "reproduce": "REPRODUCTION_INPUTS_AND_COMMAND"
+}
+```
+
 The UTF-8 seal contains these five lines (replace the placeholders):
 
 ```text
@@ -105,13 +121,15 @@ sha256=RETAINED_RECORD_SHA256
 reproduce=REPRODUCTION_INPUTS_AND_COMMAND
 ```
 
-The digest identifies an exact nonempty line in
+The digest identifies one exact line in
 `.reference/games/<title>/ledger.jsonl`, excluding its final LF. The guard
-checks that the record still exists with that identity; it does not infer
-completion, inspect the opaque archive or certify reproducibility. The
-seal is an explicit owner attestation. Later ledger appends do not change
-an unchanged retained record. No historical capture is automatically moved
-or classified.
+requires a classified archived-investigation record, not an arbitrary
+line with a matching hash. Its run name and reproduction note must
+match the directory and seal, and the retained evidence must be nonempty.
+Later ledger appends do not change an unchanged retained record.
+Duplicate retained records are rejected. The seal and record are owner
+attestations: the guard does not inspect the opaque archive or certify
+reproducibility. No historical capture is automatically moved or classified.
 
 Preview using minimum age in seconds, logical byte quota, observed entry
 bound and aggregate logical scan-byte bound, respectively:

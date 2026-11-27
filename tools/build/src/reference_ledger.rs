@@ -37,6 +37,9 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::str::from_utf8;
 
 use games_platform::ir::storage::file::snapshot;
+use games_platform::ir::toolchain::reference::retention::{
+    ARCHIVED_EVIDENCE_KIND, ARCHIVED_EVIDENCE_STATUS, ArchivedEvidence,
+};
 use games_platform::ir::toolchain::write_line;
 use serde::Deserialize;
 use serde_json::Value;
@@ -394,6 +397,7 @@ impl Report {
 
 fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
     let mut functions = BTreeMap::new();
+    let mut archived_runs = BTreeSet::new();
     let mut selected_edition = None;
     let mut report = Report::default();
     for (index, line) in input.lines().enumerate() {
@@ -412,11 +416,8 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
             .iter()
             .any(|key| record.contains_key(*key))
         {
-            if !record.contains_key("evidence")
-                || !record.contains_key("reproduce")
-            {
-                return Err(failure("unrecognized auxiliary record"));
-            }
+            validate_auxiliary(&value, line, &mut archived_runs)
+                .map_err(failure)?;
             report.auxiliary = report.auxiliary.saturating_add(1);
             continue;
         }
@@ -439,6 +440,29 @@ fn audit(input: &str, limit: NonZeroUsize) -> Result<Report, String> {
     report.functions = functions.len();
     graph(&functions, &mut report)?;
     Ok(report)
+}
+
+fn validate_auxiliary(
+    value: &Value,
+    line: &str,
+    archived_runs: &mut BTreeSet<String>,
+) -> Result<(), &'static str> {
+    let archive = value.get("kind").and_then(Value::as_str)
+        == Some(ARCHIVED_EVIDENCE_KIND)
+        || value.get("status").and_then(Value::as_str)
+            == Some(ARCHIVED_EVIDENCE_STATUS);
+    if archive {
+        let retained = ArchivedEvidence::parse(line.as_bytes())
+            .map_err(|_error| "invalid archived evidence")?;
+        if !archived_runs.insert(retained.run().to_owned()) {
+            return Err("duplicate archived investigation run");
+        }
+    } else if !value.get("evidence").is_some_and(evidence)
+        || !value.get("reproduce").is_some_and(evidence)
+    {
+        return Err("unrecognized auxiliary record");
+    }
+    Ok(())
 }
 
 fn evidence(value: &Value) -> bool {
@@ -600,6 +624,53 @@ mod tests {
             || audit(&input, NonZeroUsize::MIN).is_ok()
         {
             return Err(String::from("ledger counts or row budget differ"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn archive_evidence_requires_classification_and_unique_run()
+    -> Result<(), String> {
+        let [first, second] = pair();
+        let archive = serde_json::json!({
+            "kind": ARCHIVED_EVIDENCE_KIND,
+            "run": "old-run",
+            "status": ARCHIVED_EVIDENCE_STATUS,
+            "evidence": "retained fixture",
+            "reproduce": "fixture command and inputs"
+        });
+        let limit = NonZeroUsize::new(4).ok_or("fixture limit")?;
+        let report = audit(
+            &lines(&[first.clone(), second.clone(), archive.clone()]),
+            limit,
+        )?;
+        if report.auxiliary != 1 || report.functions != 2 {
+            return Err(String::from(
+                "archive evidence changed function count",
+            ));
+        }
+        let duplicate = lines(&[
+            first.clone(),
+            second.clone(),
+            archive.clone(),
+            archive.clone(),
+        ]);
+        if audit(&duplicate, limit).is_ok() {
+            return Err(String::from("duplicate archived run accepted"));
+        }
+        for (field, value) in [
+            ("kind", Value::from("other")),
+            ("run", Value::from("../outside")),
+            ("status", Value::from("active")),
+            ("evidence", Value::from(" ")),
+            ("reproduce", Value::from("command\nsecond line")),
+        ] {
+            let mut invalid = archive.clone();
+            set_field(&mut invalid, field, value)?;
+            let input = lines(&[first.clone(), second.clone(), invalid]);
+            if audit(&input, limit).is_ok() {
+                return Err(format!("invalid archive field accepted: {field}"));
+            }
         }
         Ok(())
     }

@@ -50,8 +50,9 @@ use super::file::{
 };
 use super::pinned_directory_entries;
 use crate::ir::toolchain::reference::retention::{
-    Candidate, Inventory, Operation, Plan, Policy, Removal, RetentionBackend,
-    select,
+    ARCHIVED_EVIDENCE_STATUS, ArchivedEvidence, Candidate, Inventory,
+    Operation, Plan, Policy, Removal, RetentionBackend, safe_component, select,
+    valid_reproduction,
 };
 use crate::ir::toolchain::{ToolchainError, workspace_root};
 
@@ -138,6 +139,7 @@ impl Budget {
 struct Seal {
     digest: ContentHash,
     evidence: String,
+    reproduce: String,
 }
 
 impl Seal {
@@ -145,13 +147,8 @@ impl Seal {
         let text =
             from_utf8(bytes).map_err(|_error| failure("seal must be UTF-8"))?;
         let lines: Vec<_> = text.lines().collect();
-        let [
-            "games-disposable-v1",
-            "status=completed-archived-regenerable",
-            evidence,
-            digest,
-            reproduce,
-        ] = lines.as_slice()
+        let ["games-disposable-v1", status, evidence, digest, reproduce] =
+            lines.as_slice()
         else {
             return Err(failure("invalid disposable run seal"));
         };
@@ -161,13 +158,15 @@ impl Seal {
         let (title, record) = path
             .split_once('/')
             .ok_or_else(|| failure("expected title/ledger.jsonl"))?;
-        if !safe_component(title)
+        let note = reproduce
+            .strip_prefix("reproduce=")
+            .filter(|note| valid_reproduction(note))
+            .ok_or_else(|| failure("invalid reproduction note"))?;
+        if status.strip_prefix("status=") != Some(ARCHIVED_EVIDENCE_STATUS)
+            || !safe_component(title)
             || record != "ledger.jsonl"
-            || !reproduce.strip_prefix("reproduce=").is_some_and(|note| {
-                !note.trim().is_empty() && !note.chars().any(char::is_control)
-            })
         {
-            return Err(failure("invalid evidence path or reproduction note"));
+            return Err(failure("invalid archive status or evidence path"));
         }
         let identity = digest
             .strip_prefix("sha256=")
@@ -177,10 +176,16 @@ impl Seal {
         Ok(Self {
             digest: identity,
             evidence: path.to_owned(),
+            reproduce: note.to_owned(),
         })
     }
 
-    fn verify(&self, reference: &OwnedFd, budget: &mut Budget) -> Outcome<()> {
+    fn verify(
+        &self,
+        reference: &OwnedFd,
+        run: &str,
+        budget: &mut Budget,
+    ) -> Outcome<()> {
         let (title, record) = self
             .evidence
             .split_once('/')
@@ -190,11 +195,18 @@ impl Seal {
         let stat = ordinary(&directory, record)?;
         budget.bytes(size(&stat)?)?;
         let bytes = read_bounded(&directory, record, size(&stat)?)?;
-        if !bytes.split(|byte| *byte == b'\n').any(|line| {
+        let mut matches = bytes.split(|byte| *byte == b'\n').filter(|line| {
             !line.is_empty() && ContentHash::calculate(line) == self.digest
-        }) || stamp(&ordinary(&directory, record)?) != stamp(&stat)
+        });
+        let line = matches
+            .next()
+            .ok_or_else(|| failure("retained evidence identity changed"))?;
+        let evidence = ArchivedEvidence::parse(line)?;
+        if matches.next().is_some()
+            || !evidence.matches(run, &self.reproduce)
+            || stamp(&ordinary(&directory, record)?) != stamp(&stat)
         {
-            return Err(failure("retained evidence identity changed"));
+            return Err(failure("retained evidence is ambiguous or changed"));
         }
         Ok(())
     }
@@ -229,7 +241,7 @@ impl Run {
         budget.bytes(bytes)?;
         let seal_bytes = read_bounded(directory, SEAL, SEAL_LIMIT)?;
         let record = Seal::parse(&seal_bytes)?;
-        record.verify(&roots.reference, budget)?;
+        record.verify(&roots.reference, name, budget)?;
         let fingerprint = ContentHash::calculate(
             format!(
                 "{} {} {} {}",
@@ -268,7 +280,7 @@ impl Run {
         let mut budget = Budget::new(policy);
         Self::verify_layout(&directory, &mut budget)?;
         let seal = Seal::parse(&read_bounded(&directory, SEAL, SEAL_LIMIT)?)?;
-        seal.verify(&roots.reference, &mut budget)?;
+        seal.verify(&roots.reference, name, &mut budget)?;
         self.verify_files(&directory)?;
         // Never recursively delete or remove an unobserved entry. An
         // unexpected concurrent entry makes the final empty-directory
@@ -337,15 +349,6 @@ const fn io_failure(source: io::Error) -> ToolchainError {
         operation: OPERATION,
         source,
     }
-}
-
-fn safe_component(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && !name.starts_with('.')
-        && name.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-        })
 }
 
 fn trusted(directory: &OwnedFd) -> Outcome<FileStat> {
@@ -565,7 +568,12 @@ mod tests {
 
     const ROOT: &str = ".reference/investigations/archived-disposable";
     const LEDGER: &str = ".reference/games/title";
-    const EVIDENCE: &[u8] = br#"{"evidence":"retained","reproduce":"fixture"}"#;
+    const EVIDENCE: &[u8] = concat!(
+        r#"{"kind":"archived-investigation","run":"old-run","#,
+        r#""status":"completed-archived-regenerable","#,
+        r#""evidence":"retained","reproduce":"fixture command and inputs"}"#
+    )
+    .as_bytes();
 
     fn require(condition: bool, message: &str) -> io::Result<()> {
         if condition {
@@ -603,6 +611,11 @@ mod tests {
         let run = root.path().join(ROOT).join("old-run");
         fs::create_dir_all(&run)?;
         fs::write(run.join(PAYLOAD), b"tiny disposable fixture")?;
+        write_seal(&run, EVIDENCE)?;
+        Ok(root)
+    }
+
+    fn write_seal(run: &Path, evidence: &[u8]) -> io::Result<()> {
         fs::write(
             run.join(SEAL),
             format!(
@@ -612,10 +625,9 @@ mod tests {
                     "evidence=title/ledger.jsonl\nsha256={}\n",
                     "reproduce=fixture command and inputs\n"
                 ),
-                ContentHash::calculate(EVIDENCE)
+                ContentHash::calculate(evidence)
             ),
-        )?;
-        Ok(root)
+        )
     }
 
     fn preview(root: &TestRoot, limits: Policy) -> io::Result<Plan> {
@@ -739,6 +751,41 @@ mod tests {
             "changed evidence accepted",
         )?;
         require(payload.exists(), "archive removed without evidence")
+    }
+
+    #[test]
+    fn matching_hash_is_not_sufficient_to_authorize_removal() -> io::Result<()>
+    {
+        let root = fixture()?;
+        let run = root.path().join(ROOT).join("old-run");
+        let ledger = root.path().join(LEDGER).join("ledger.jsonl");
+        let valid = from_utf8(EVIDENCE).map_err(io::Error::other)?;
+        let invalid = [
+            String::from("arbitrary non-JSON evidence"),
+            valid.replace("completed-archived-regenerable", "active"),
+            valid.replace("old-run", "other-run"),
+            valid.replace("fixture command and inputs", "different inputs"),
+            valid.replace("retained", " "),
+        ];
+        for record in &invalid {
+            fs::write(&ledger, record)?;
+            write_seal(&run, record.as_bytes())?;
+            require(
+                preview(&root, policy()?).is_err(),
+                "matching digest accepted invalid or unrelated evidence",
+            )?;
+            require(
+                run.join(PAYLOAD).exists() && run.join(SEAL).exists(),
+                "invalid evidence changed archive",
+            )?;
+        }
+        fs::write(&ledger, [EVIDENCE, b"\n", EVIDENCE].concat())?;
+        write_seal(&run, EVIDENCE)?;
+        require(
+            preview(&root, policy()?).is_err(),
+            "duplicate retained record accepted",
+        )?;
+        require(run.join(PAYLOAD).exists(), "ambiguous evidence removed run")
     }
 
     #[test]

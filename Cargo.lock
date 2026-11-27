@@ -264,6 +264,8 @@ dependencies = [
  "rcgen",
  "rustls",
  "sdl2",
+ "serde",
+ "serde_json",
  "sha2",
  "wasm-bindgen",
  "web-sys",
