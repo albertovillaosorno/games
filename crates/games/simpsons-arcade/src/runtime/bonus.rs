@@ -67,6 +67,8 @@ pub(super) const ATLAS_COUNT: usize = 10 + title_messages::LOCALES.len();
 pub(super) const DEPARTURE_ATLAS_BYTES: usize = 39_096;
 pub(super) const DEPARTURE_ATLAS_COUNT: usize = 5;
 pub(super) const DEPARTURE_EXTRA_SPRITES: usize = 4;
+pub(super) const INFLATED_ATLAS_BYTES: usize = 83_536;
+pub(super) const INFLATED_ATLAS_COUNT: usize = 4;
 
 const BACKGROUND: SpriteSpec = SpriteSpec {
     height: 224,
@@ -103,6 +105,37 @@ const BALLOONS: [SpriteSpec; 4] = [
         width: 30,
         x: 237,
         y: 128,
+    },
+];
+// All four isolated assemblies were captured at inverse zoom 107, 51.
+const INFLATED: [SpriteSpec; 4] = [
+    SpriteSpec {
+        height: 158,
+        key: "bonus/marge-inflated",
+        width: 38,
+        x: 41,
+        y: 2,
+    },
+    SpriteSpec {
+        height: 120,
+        key: "bonus/homer-inflated",
+        width: 38,
+        x: 105,
+        y: 40,
+    },
+    SpriteSpec {
+        height: 120,
+        key: "bonus/bart-inflated",
+        width: 38,
+        x: 169,
+        y: 40,
+    },
+    SpriteSpec {
+        height: 120,
+        key: "bonus/lisa-inflated",
+        width: 48,
+        x: 229,
+        y: 40,
     },
 ];
 const PUMPS: [SpriteSpec; 4] = [
@@ -226,6 +259,27 @@ impl SpriteSpec {
         })
     }
 
+    fn inverse_destination(
+        self,
+        (inverse_width, inverse_height): (u8, u8),
+        rise: u32,
+    ) -> Result<SpriteRect, RenderError> {
+        let width = inverse_extent(self.width, 107, inverse_width)?;
+        let height = inverse_extent(self.height, 51, inverse_height)?;
+        let center = self.x.saturating_add_unsigned(self.width >> 1);
+        let bottom = self.y.saturating_add_unsigned(self.height);
+        let left = center.saturating_sub_unsigned(width >> 1);
+        let top = bottom
+            .saturating_sub_unsigned(height)
+            .saturating_sub_unsigned(rise >> 8);
+        Ok(SpriteRect {
+            x: left,
+            y: top,
+            width: dimension(width)?,
+            height: dimension(height)?,
+        })
+    }
+
     fn load(
         self,
         scene: &mut SceneSession<'_, '_>,
@@ -321,17 +375,50 @@ impl DepartureArt {
     }
 }
 
+pub(super) type BonusDigests =
+    (ContentHash, Option<ContentHash>, Option<ContentHash>);
+
 #[derive(Debug)]
 pub(super) struct BonusArt {
     background: Art,
     balloons: [Art; 4],
     departure: Option<DepartureArt>,
     headers: Vec<TextAtlas>,
+    inflated: Option<[Art; 4]>,
     pumps: [Art; 4],
     ranks: TextAtlas,
 }
 
 impl BonusArt {
+    fn balloon_layer(
+        &self,
+        bonus: Bonus,
+        player: Player,
+        rise: u32,
+    ) -> Result<Option<SpriteDraw>, RenderError> {
+        let Some(axes) = bonus.visual_axes(player) else {
+            return Ok(None);
+        };
+        let index = player.index();
+        if let Some(inflated) = &self.inflated
+            && axes != (0xb0, 0xb0)
+        {
+            let spec = INFLATED.get(index).ok_or(RenderError::InvalidSprite)?;
+            let art = inflated.get(index).ok_or(RenderError::InvalidSprite)?;
+            return Ok(Some(
+                art.draw(spec.inverse_destination(axes, rise)?, false),
+            ));
+        }
+        let spec = BALLOONS.get(index).ok_or(RenderError::InvalidSprite)?;
+        let art = self.balloons.get(index).ok_or(RenderError::InvalidSprite)?;
+        let amount = bonus
+            .visual_inflation(player)
+            .ok_or(RenderError::InvalidSprite)?;
+        Ok(Some(
+            art.draw(spec.rising_destination(amount, rise)?, false),
+        ))
+    }
+
     pub(super) const fn has_departure(&self) -> bool {
         self.departure.is_some()
     }
@@ -339,7 +426,7 @@ impl BonusArt {
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
-        (digest, departure_digest): (ContentHash, Option<ContentHash>),
+        (digest, departure_digest, inflated_digest): BonusDigests,
     ) -> Result<Self, RenderError> {
         let bundle = open_bundle(store, digest)?;
         let mut load = |spec: SpriteSpec| spec.load(scene, &bundle);
@@ -350,6 +437,9 @@ impl BonusArt {
         let pumps = [load(first)?, load(second)?, load(third)?, load(fourth)?];
         let departure = departure_digest
             .map(|address| DepartureArt::load(store, scene, address))
+            .transpose()?;
+        let inflated = inflated_digest
+            .map(|address| load_inflated(store, scene, address))
             .transpose()?;
         let catalogue = title_messages::catalogue()?;
         let mut headers = Vec::with_capacity(title_messages::LOCALES.len());
@@ -371,6 +461,7 @@ impl BonusArt {
             balloons,
             departure,
             headers,
+            inflated,
             pumps,
             ranks,
         })
@@ -430,24 +521,19 @@ impl BonusArt {
         let index = player.index();
         let balloon = BALLOONS.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump = PUMPS.get(index).ok_or(RenderError::InvalidSprite)?;
-        let balloon_art =
-            self.balloons.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump_art =
             self.pumps.get(index).ok_or(RenderError::InvalidSprite)?;
         if let Some((art, departure)) =
             self.departure.as_ref().zip(bonus.departure(player))
         {
             if let BonusDeparture::Rising { balloon: rise, .. } = departure
-                && let Some(amount) = bonus.visual_inflation(player)
+                && let Some(layer) = self.balloon_layer(bonus, player, rise)?
             {
-                draws.push(
-                    balloon_art
-                        .draw(balloon.rising_destination(amount, rise)?, false),
-                );
+                draws.push(layer);
             }
             art.queue(player, departure, draws)?;
-        } else if let Some(amount) = bonus.visual_inflation(player) {
-            draws.push(balloon_art.draw(balloon.destination(amount)?, false));
+        } else if let Some(layer) = self.balloon_layer(bonus, player, 0)? {
+            draws.push(layer);
             draws.push(pump_art.draw(pump.destination(0)?, false));
         }
 
@@ -475,7 +561,15 @@ fn departure_checkpoint(
     draws: &[SpriteDraw],
     expected: Option<(i32, i32)>,
 ) -> Result<Vec<SpriteDraw>, RenderError> {
-    let balloon = bonus.balloons.first().ok_or(RenderError::InvalidSprite)?;
+    let (balloon, mut balloon_rect) = if let Some(inflated) = &bonus.inflated {
+        let layer = inflated.first().ok_or(RenderError::InvalidSprite)?;
+        let spec = INFLATED.first().ok_or(RenderError::InvalidSprite)?;
+        (layer, spec.inverse_destination((64, 32), 0)?)
+    } else {
+        let layer = bonus.balloons.first().ok_or(RenderError::InvalidSprite)?;
+        let spec = BALLOONS.first().ok_or(RenderError::InvalidSprite)?;
+        (layer, spec.destination(BONUS_MAX_INFLATION)?)
+    };
     let hanging = departure
         .hanging
         .first()
@@ -483,10 +577,7 @@ fn departure_checkpoint(
     let pump = departure.pump.draw(GROUND_PUMP.destination(0)?, false);
     let mut layers = vec![pump];
     if let Some((balloon_rise, character_rise)) = expected {
-        let balloon_spec =
-            BALLOONS.first().ok_or(RenderError::InvalidSprite)?;
         let hanging_spec = HANGING.first().ok_or(RenderError::InvalidSprite)?;
-        let mut balloon_rect = balloon_spec.destination(BONUS_MAX_INFLATION)?;
         balloon_rect.y = balloon_rect.y.saturating_sub(balloon_rise);
         let mut hanging_rect = hanging_spec.destination(0)?;
         hanging_rect.y = hanging_rect.y.saturating_sub(character_rise);
@@ -502,6 +593,34 @@ fn departure_checkpoint(
         return Err(failure("bonus departure layer registration differs"));
     }
     Ok(layers)
+}
+
+fn inverse_extent(
+    extent: u32,
+    captured: u32,
+    current: u8,
+) -> Result<u32, RenderError> {
+    let inverse = u32::from(current);
+    extent
+        .saturating_mul(captured)
+        .saturating_add(inverse >> 1)
+        .checked_div(inverse)
+        .ok_or(RenderError::InvalidSprite)
+}
+
+fn load_inflated(
+    store: BundleSource<'_>,
+    scene: &mut SceneSession<'_, '_>,
+    digest: ContentHash,
+) -> Result<[Art; 4], RenderError> {
+    let bundle = open_bundle(store, digest)?;
+    let [marge, homer, bart, lisa] = INFLATED;
+    Ok([
+        marge.load(scene, &bundle)?,
+        homer.load(scene, &bundle)?,
+        bart.load(scene, &bundle)?,
+        lisa.load(scene, &bundle)?,
+    ])
 }
 
 fn plates(
@@ -589,6 +708,47 @@ mod tests {
             assert_eq!(rising.width, initial.width);
             assert_eq!(rising.height, initial.height);
         }
+    }
+
+    fn assert_inverse_extents(
+        spec: SpriteSpec,
+        base: SpriteRect,
+        wider: SpriteRect,
+        taller: SpriteRect,
+    ) {
+        assert_eq!((base.x, base.y), (spec.x, spec.y));
+        assert_eq!(
+            (base.width.get(), base.height.get()),
+            (spec.width, spec.height)
+        );
+        assert!(wider.width > base.width);
+        assert_eq!(wider.height, base.height);
+        assert_eq!(taller.width, base.width);
+        assert!(taller.height > base.height);
+        assert_eq!(
+            taller.y.saturating_add_unsigned(taller.height.get()),
+            160i32
+        );
+    }
+
+    #[test]
+    fn inverse_axes_scale_independently_from_captured_assembly() {
+        for spec in INFLATED {
+            let captured = spec.inverse_destination((107, 51), 0);
+            let wide = spec.inverse_destination((64, 51), 0);
+            let tall = spec.inverse_destination((107, 32), 0);
+            assert!(captured.is_ok());
+            assert!(wide.is_ok());
+            assert!(tall.is_ok());
+            let (Ok(base), Ok(wider), Ok(taller)) = (captured, wide, tall)
+            else {
+                return;
+            };
+            assert_inverse_extents(spec, base, wider, taller);
+        }
+        assert_eq!(inverse_extent(38, 107, 64), Ok(64));
+        assert_eq!(inverse_extent(38, 107, 75), Ok(54));
+        assert!(inverse_extent(38, 107, 0).is_err());
     }
 
     #[test]

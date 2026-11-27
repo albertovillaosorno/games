@@ -568,11 +568,7 @@ impl Bonus {
         self.tick
     }
 
-    /// Visible balloon inflation, which can grow after the score is frozen.
-    ///
-    /// Absent stations and departed balloons return no visual.
-    #[must_use]
-    pub fn visual_inflation(self, player: Player) -> Option<u8> {
+    fn visible_balloon(self, player: Player) -> Option<Balloon> {
         let index = player.index();
         let _admitted = self
             .participants
@@ -584,7 +580,26 @@ impl Bonus {
         {
             return None;
         }
-        self.balloons.get(index).copied().map(Balloon::inflation)
+        self.balloons.get(index).copied()
+    }
+
+    /// Visible inverse width and height high bytes, independently of score.
+    ///
+    /// Absent stations and retired balloons return no visual axes.
+    #[must_use]
+    pub fn visual_axes(self, player: Player) -> Option<(u8, u8)> {
+        let balloon = self.visible_balloon(player)?;
+        let [width, _] = balloon.width.to_be_bytes();
+        let [height, _] = balloon.height.to_be_bytes();
+        Some((width, height))
+    }
+
+    /// Visible balloon inflation, which can grow after the score is frozen.
+    ///
+    /// Absent stations and departed balloons return no visual.
+    #[must_use]
+    pub fn visual_inflation(self, player: Player) -> Option<u8> {
+        self.visible_balloon(player).map(Balloon::inflation)
     }
 }
 
@@ -653,6 +668,18 @@ mod tests {
         let result = bonus;
         bonus.advance([true; 4], true);
         assert_eq!(bonus, result);
+    }
+
+    #[test]
+    fn visual_axes_expose_independent_growth_without_score_rounding() {
+        let mut bonus = start_pump([true, true, false, false]);
+        assert_eq!(bonus.visual_axes(Player::Marge), Some((0xb0, 0xb0)));
+        assert_eq!(bonus.visual_axes(Player::Bart), None);
+        bonus.advance([true, false, false, false], true);
+        assert_eq!(bonus.visual_axes(Player::Marge), Some((0xa2, 0xb0)));
+        bonus.advance([true, false, false, false], true);
+        assert_eq!(bonus.visual_axes(Player::Marge), Some((0xa2, 0xa2)));
+        assert_eq!(bonus.visual_axes(Player::Homer), Some((0xb0, 0xb0)));
     }
 
     #[test]

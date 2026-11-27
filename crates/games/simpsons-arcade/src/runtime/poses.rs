@@ -119,6 +119,7 @@ pub(super) struct Catalogue {
     pub(super) backdrop: backdrop::Catalogue,
     bonus: Option<ContentHash>,
     bonus_departure: Option<ContentHash>,
+    bonus_inflated: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
     landing_markers: Option<ContentHash>,
     scenery: scenery::Catalogue,
@@ -176,6 +177,10 @@ impl Catalogue {
                     .saturating_mul(bonus::DEPARTURE_ATLAS_BYTES),
             )
             .saturating_add(
+                usize::from(self.bonus_inflated.is_some())
+                    .saturating_mul(bonus::INFLATED_ATLAS_BYTES),
+            )
+            .saturating_add(
                 usize::from(self.stage_two.is_some())
                     .saturating_mul(world::stage_atlas_budget()),
             )
@@ -199,6 +204,11 @@ impl Catalogue {
             .saturating_add(
                 usize::from(self.bonus_departure.is_some()).saturating_mul(
                     bonus::DEPARTURE_ATLAS_COUNT.saturating_sub(1),
+                ),
+            )
+            .saturating_add(
+                usize::from(self.bonus_inflated.is_some()).saturating_mul(
+                    bonus::INFLATED_ATLAS_COUNT.saturating_sub(1),
                 ),
             )
     }
@@ -245,6 +255,7 @@ impl Catalogue {
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
             && (self.bonus_departure.is_none() || self.bonus.is_some())
+            && (self.bonus_inflated.is_none() || self.bonus.is_some())
             && (self.stage_two.is_none() || self.bonus.is_some())
     }
 
@@ -258,6 +269,7 @@ impl Catalogue {
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
             .saturating_add(usize::from(self.bonus_departure.is_some()))
+            .saturating_add(usize::from(self.bonus_inflated.is_some()))
             .saturating_add(
                 usize::from(self.stage_two.is_some()).saturating_mul(2),
             )
@@ -272,6 +284,7 @@ impl Catalogue {
             .chain(self.wrestler.digests())
             .chain(self.bonus)
             .chain(self.bonus_departure)
+            .chain(self.bonus_inflated)
             .chain(self.arrival)
             .chain(self.landing_markers)
             .chain(self.stage_two.into_iter().flatten())
@@ -303,6 +316,13 @@ impl Catalogue {
                     "bonus-departure",
                     line,
                     self.bonus_departure,
+                )?);
+            },
+            Some("bonus-inflated") => {
+                self.bonus_inflated = Some(parse_single_bundle(
+                    "bonus-inflated",
+                    line,
+                    self.bonus_inflated,
                 )?);
             },
             Some("arrival") => {
@@ -377,7 +397,7 @@ impl Catalogue {
                     bonus::BonusArt::load(
                         store,
                         scene,
-                        (digest, self.bonus_departure),
+                        (digest, self.bonus_departure, self.bonus_inflated),
                     )
                 })
                 .transpose()?,
@@ -1550,6 +1570,7 @@ mod tests {
         };
         assert_bonus_budget(&plain, &selected);
         assert_departure_catalogue(&fighter, &record, &selected);
+        assert_inflated_catalogue(&fighter, &record, &selected);
 
         assert_stage_two_catalogue(&fighter, &record, &selected);
         assert!(
@@ -1581,6 +1602,36 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    fn assert_inflated_catalogue(
+        fighter: &str,
+        bonus_record: &str,
+        selected: &Catalogue,
+    ) {
+        let other = "d".repeat(64);
+        let inflated = format!("bonus-inflated {other}\n");
+        assert!(Catalogue::parse(&format!("{fighter}{inflated}")).is_err());
+        let text = format!("{fighter}{bonus_record}{inflated}");
+        let parsed = Catalogue::parse(&text);
+        assert!(parsed.is_ok());
+        if let Ok(value) = parsed {
+            assert_eq!(value.count(), selected.count().saturating_add(1));
+            assert_eq!(value.digests().count(), value.count());
+            assert_eq!(
+                value.atlas_count(),
+                selected
+                    .atlas_count()
+                    .saturating_add(bonus::INFLATED_ATLAS_COUNT)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                selected
+                    .atlas_bytes()
+                    .saturating_add(bonus::INFLATED_ATLAS_BYTES)
+            );
+        }
+        assert!(Catalogue::parse(&format!("{text}{inflated}")).is_err());
     }
 
     fn assert_departure_budget(
