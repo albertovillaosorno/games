@@ -33,6 +33,7 @@
 
 mod audio;
 mod axis_smoke;
+mod backdrop;
 /// Local canonical directory browser launch.
 pub mod browser_preview;
 mod controller;
@@ -51,6 +52,7 @@ mod world;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
+use std::mem::take;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::rc::Rc;
 use std::time::Duration;
@@ -746,7 +748,18 @@ impl Scene {
         scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
     ) -> Result<world::View, RenderError> {
-        let width = if let Some(art) = self.world_art {
+        let width = if self.poses.backdrop.draw(cabinet).is_some() {
+            let base = FrameLayout::new(
+                dimension(world::BASE_WIDTH)?,
+                scene.layout().height(),
+                size(
+                    320usize
+                        .saturating_mul(usize::from(touch::MAX_SCENE_HEIGHT))
+                        .saturating_mul(4),
+                )?,
+            )?;
+            scene.fit_adaptive_width(base)?.width().get()
+        } else if let Some(art) = self.world_art {
             let maximum = art.maximum(scene.layout())?;
             scene.fit_adaptive_width(maximum)?.width().get()
         } else {
@@ -763,7 +776,9 @@ impl Scene {
         cabinet: &Cabinet,
         view: world::View,
     ) -> Result<(), RenderError> {
-        if let Some(art) = self.world_art {
+        if let Some(draw) = self.poses.backdrop.draw(cabinet) {
+            self.draws.push(draw);
+        } else if let Some(art) = self.world_art {
             art.queue(self.background, view, &mut self.draws)?;
         } else {
             self.draws
@@ -3333,7 +3348,10 @@ fn window(
         if options.hidden {
             smoke_settings(scene, &mut art, options)?;
             if let Some(bundle) = &source.world {
-                world::smoke(scene, &mut art, bundle, options)?;
+                let backdrop = take(&mut art.poses.backdrop);
+                let result = world::smoke(scene, &mut art, bundle, options);
+                art.poses.backdrop = backdrop;
+                result?;
             }
             smoke_character_selection(scene, &mut art, options)?;
             smoke_controller_selection(&options.controls.profiles)?;
@@ -3342,6 +3360,7 @@ fn window(
             }
             smoke(scene, &mut art, touch_enabled, &options.controls.profiles)?;
             smoke_optional(scene, &mut art, touch_enabled, playback.as_mut())?;
+            backdrop::smoke(scene, &mut art, source)?;
             return smoke_peak_report();
         }
         let preview = Interactive::for_scene(startup, options, &art, host)?;
@@ -3397,7 +3416,8 @@ fn scene_limits(
                 } else {
                     0
                 })
-                .saturating_add(count.saturating_mul(65_536))
+                .saturating_add(source.poses.atlas_bytes())
+                .saturating_add(enemy_atlases.saturating_mul(65_536))
                 .saturating_add(shadows.saturating_mul(shadow::MAX_BYTES))
                 .saturating_add(extension.saturating_mul(
                     usize::try_from(world::atlas_budget()).map_err(failure)?,

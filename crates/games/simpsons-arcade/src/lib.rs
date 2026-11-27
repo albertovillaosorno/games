@@ -81,6 +81,8 @@ const STATIONARY_SCENE_ORIGIN: i16 = 482;
 const STATIONARY_SCENE_CYCLE: u16 = 100;
 const STATIONARY_SCENE_END: u16 = 65;
 const MID_STREET_ADMISSION: i16 = 562;
+const LATE_BACKDROP_ORIGIN: i16 = 1360;
+const LATE_BACKDROP_HOLD_TICK: u16 = 320;
 const MID_STREET_SCRIPT_ORIGIN: i16 = 674;
 const MID_STREET_SCRIPT_TICKS: u16 = 336;
 const MID_STREET_COMBAT_GATE: i16 = 770;
@@ -715,6 +717,7 @@ pub struct Cabinet {
     cooperation: Cooperation,
     encounter: Option<Encounter>,
     impact_cues: u64,
+    late_backdrop_tick: Option<u16>,
     layout: StreetLayout,
     scripted_tick: Option<u16>,
     scroll_limit: i16,
@@ -778,6 +781,12 @@ impl Cabinet {
     }
 
     fn advance_scripted_scene(&mut self) {
+        if self.camera >= LATE_BACKDROP_ORIGIN {
+            self.late_backdrop_tick =
+                Some(self.late_backdrop_tick.map_or(0, |tick| {
+                    tick.saturating_add(1).min(LATE_BACKDROP_HOLD_TICK)
+                }));
+        }
         if self.camera >= MID_STREET_SCRIPT_ORIGIN {
             self.scripted_tick = Some(self.scripted_tick.map_or(0, |tick| {
                 tick.saturating_add(1).min(MID_STREET_SCRIPT_TICKS)
@@ -981,6 +990,12 @@ impl Cabinet {
         self.impact_cues
     }
 
+    /// Fixed playing ticks since the late backdrop camera admission.
+    #[must_use]
+    pub const fn late_backdrop_tick(&self) -> Option<u16> {
+        self.late_backdrop_tick
+    }
+
     const fn movement_layout(&self) -> StreetLayout {
         let mut layout = self.layout;
         layout.min.x = layout.min.x.saturating_add(self.camera);
@@ -1002,6 +1017,7 @@ impl Cabinet {
             cooperation: Cooperation::default(),
             encounter: None,
             impact_cues: 0,
+            late_backdrop_tick: None,
             layout,
             scripted_tick: None,
             scroll_limit: 0,
@@ -1037,6 +1053,7 @@ impl Cabinet {
     fn reset_world(&mut self) {
         self.cooperation.reset();
         self.camera = 0;
+        self.late_backdrop_tick = None;
         self.scripted_tick = None;
         self.stationary_tick = None;
         if let Some(encounter) = &mut self.encounter {
@@ -1317,6 +1334,7 @@ fn cabinet() -> Cabinet {
         cooperation: Cooperation::default(),
         encounter: None,
         impact_cues: 0,
+        late_backdrop_tick: None,
         layout: StreetLayout::DOWNTOWN,
         scripted_tick: None,
         scroll_limit: 0,
@@ -2903,6 +2921,41 @@ mod tests {
             assert!(fast_clock.advance(TICK_INTERVAL, &mut fast).is_ok());
         }
         assert_eq!(slow.state(), fast.state());
+    }
+
+    #[test]
+    fn late_backdrop_clock_pauses_holds_and_resets() {
+        let Ok(mut state) = cabinet().with_scroll_limit(1360) else {
+            assert!(cabinet().with_scroll_limit(1360).is_ok());
+            return;
+        };
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.input_step(1, &[change(Player::Marge, Control::Right, true)]);
+        for tick in 2..1000 {
+            state.input_step(tick, &[]);
+            if state.camera_origin() == LATE_BACKDROP_ORIGIN {
+                break;
+            }
+            assert_eq!(state.late_backdrop_tick(), None);
+        }
+        assert_eq!(state.camera_origin(), LATE_BACKDROP_ORIGIN);
+        assert_eq!(state.late_backdrop_tick(), Some(0));
+        assert_late_backdrop_pause_and_hold(state);
+    }
+
+    fn assert_late_backdrop_pause_and_hold(mut state: Cabinet) {
+        state.input_step(1000, &[change(Player::Marge, Control::Right, false)]);
+        assert_eq!(state.late_backdrop_tick(), Some(1));
+        state.input_step(1001, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 1002..1020);
+        assert_eq!(state.late_backdrop_tick(), Some(1));
+        state.input_step(1020, &pulse(Player::Marge, Control::Pause));
+        assert_eq!(state.late_backdrop_tick(), Some(2));
+        advance_empty(&mut state, 1021..1400);
+        assert_eq!(state.late_backdrop_tick(), Some(LATE_BACKDROP_HOLD_TICK));
+        state.reset_world();
+        assert_eq!(state.late_backdrop_tick(), None);
+        assert_eq!(state.camera_origin(), 0);
     }
 
     fn advance_empty(state: &mut Cabinet, ticks: Range<u64>) {

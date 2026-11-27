@@ -47,7 +47,8 @@ use games_platform::ir::storage::file::snapshot;
 
 use super::world::WorldArt;
 use super::{
-    Art, KEYS, Maneuver, Player, Station, failure, open_bundle, scenery,
+    Art, KEYS, Maneuver, Player, Station, backdrop, failure, open_bundle,
+    scenery,
 };
 use crate::{
     BART_LISA_JUMP_TICKS, Cabinet, ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS,
@@ -57,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(22_527);
+    NonZeroU64::MIN.saturating_add(24_575);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -114,6 +115,7 @@ enum Subject {
 
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
+    pub(super) backdrop: backdrop::Catalogue,
     entries: BTreeMap<Key, ContentHash>,
     scenery: scenery::Catalogue,
 }
@@ -123,6 +125,13 @@ impl Catalogue {
         &self,
         world: Option<WorldArt>,
     ) -> Result<(), RenderError> {
+        if self.backdrop_count() != 0
+            && world.map_or(Ok(0), WorldArt::scroll_limit)?
+                != u16::try_from(crate::LATE_BACKDROP_ORIGIN)
+                    .map_err(failure)?
+        {
+            return Err(failure("backdrop requires the verified long street"));
+        }
         if self.has_scenery()
             && world.map_or(Ok(0), WorldArt::scroll_limit)?
                 < u16::try_from(MID_STREET_SCRIPT_ORIGIN).map_err(failure)?
@@ -132,12 +141,33 @@ impl Catalogue {
         Ok(())
     }
 
+    pub(super) fn atlas_bytes(&self) -> usize {
+        self.entries
+            .len()
+            .saturating_add(self.scenery.count())
+            .saturating_mul(65_536)
+            .saturating_add(
+                self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
+            )
+    }
+
+    pub(super) fn backdrop_count(&self) -> usize {
+        self.backdrop.count()
+    }
+
     pub(super) fn count(&self) -> usize {
-        self.entries.len().saturating_add(self.scenery.count())
+        self.entries
+            .len()
+            .saturating_add(self.scenery.count())
+            .saturating_add(self.backdrop_count())
     }
 
     pub(super) fn digests(&self) -> impl Iterator<Item = ContentHash> + '_ {
-        self.entries.values().copied().chain(self.scenery.digests())
+        self.entries
+            .values()
+            .copied()
+            .chain(self.scenery.digests())
+            .chain(self.backdrop.digests())
     }
 
     pub(super) fn has_scenery(&self) -> bool {
@@ -171,6 +201,7 @@ impl Catalogue {
             let _prior = entries.insert(key, art);
         }
         Ok(PoseArt {
+            backdrop: self.backdrop.load(store, scene)?,
             entries,
             scenery: self.scenery.load(store, scene)?,
         })
@@ -189,7 +220,12 @@ impl Catalogue {
         }
         let mut entries = BTreeMap::new();
         let mut scenery = scenery::Catalogue::default();
+        let mut backdrop = backdrop::Catalogue::default();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            if line.split_whitespace().next() == Some("backdrop") {
+                backdrop.insert(line)?;
+                continue;
+            }
             if matches!(
                 line.split_whitespace().next(),
                 Some("scenic-pair" | "scenic-stationary")
@@ -228,10 +264,15 @@ impl Catalogue {
             || !repelled_requires_restraint(&entries)
             || !pair_complete(&entries)
             || !scenery.complete()
+            || !backdrop.complete()
         {
             return Err(failure("missing tick-zero pose"));
         }
-        Ok(Self { entries, scenery })
+        Ok(Self {
+            backdrop,
+            entries,
+            scenery,
+        })
     }
 
     pub(super) fn scenic_sprite_count(&self) -> usize {
@@ -241,6 +282,7 @@ impl Catalogue {
 
 #[derive(Debug, Default)]
 pub(super) struct PoseArt {
+    pub(super) backdrop: backdrop::BackdropArt,
     entries: BTreeMap<Key, Art>,
     pub(super) scenery: scenery::PlacedArt,
 }
@@ -355,6 +397,7 @@ impl PoseArt {
 
     pub(super) fn take_enemy(&mut self) -> Self {
         Self {
+            backdrop: backdrop::BackdropArt::default(),
             entries: self
                 .entries
                 .extract_if(.., |key, _| key.0 == Subject::Enemy)
@@ -1000,6 +1043,41 @@ mod tests {
         assert!(Catalogue::parse(&format!("{base}{entries}")).is_err());
     }
 
+    fn backdrop_fixture(missing: Option<u16>) -> String {
+        let mut text = String::new();
+        for tick in backdrop::KEYS {
+            if Some(tick) != missing {
+                assert!(writeln!(text, "backdrop {tick} {HASH}").is_ok());
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn backdrop_track_is_optional_complete_and_requires_long_street() {
+        let base = complete();
+        let track = backdrop_fixture(None);
+        let parsed = Catalogue::parse(&format!("{base}{track}"));
+        assert!(parsed.is_ok_and(|value| {
+            value.count() == 23
+                && value.backdrop_count() == 15
+                && value.digests().count() == 23
+                && value.admit_world(None).is_err()
+        }));
+        for missing in backdrop::KEYS {
+            let partial = backdrop_fixture(Some(missing));
+            assert!(Catalogue::parse(&format!("{base}{partial}")).is_err());
+        }
+        assert!(
+            Catalogue::parse(&format!("{base}{track}backdrop 0 {HASH}\n"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{base}{track}backdrop 266 {HASH}\n"))
+                .is_err()
+        );
+    }
+
     #[test]
     fn catalogue_enforces_total_pose_budget() {
         let extra: String = ["marge", "homer", "bart", "lisa"]
@@ -1031,6 +1109,13 @@ mod tests {
             Some(MAX_POSES.saturating_add(41))
         );
         let stationary = stationary_fixture();
+        let late = backdrop_fixture(None);
+        assert_eq!(
+            Catalogue::parse(&format!("{text}{scenic}{stationary}{late}"))
+                .map(|value| value.count())
+                .ok(),
+            Some(MAX_POSES.saturating_add(59))
+        );
         assert_eq!(
             Catalogue::parse(&format!("{text}{scenic}{stationary}"))
                 .map(|value| (value.count(), value.scenic_sprite_count()))
@@ -1091,7 +1176,7 @@ mod tests {
     #[test]
     fn memory_pose_text_has_the_same_byte_budget_as_local_text() {
         let valid = complete();
-        let padded = format!("{valid}\n{}", " ".repeat(22_528));
+        let padded = format!("{valid}\n{}", " ".repeat(24_576));
         assert!(Catalogue::parse(&valid).is_ok());
         assert!(Catalogue::parse(&padded).is_err());
     }
