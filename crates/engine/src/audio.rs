@@ -27,11 +27,13 @@
 // - Usage:
 //   - Bind mono or stereo clips and render into caller-provided frames.
 // - Defaults:
-//   - No implicit replacement, looping, device access or title policy.
+//   - One-shot playback unless an explicit loop region is admitted. No implicit
+//     replacement, device access or title policy.
 
 //! Deterministic PCM playback independently of presentation and device rate.
 
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize};
+use std::ops::Range;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -214,6 +216,8 @@ pub enum AudioError {
     FrameOverflow,
     /// Empty or incomplete source frames.
     InvalidClip,
+    /// The loop region is empty or extends beyond the clip.
+    InvalidLoop,
     /// The master volume percentage is not a supported level.
     InvalidVolume,
     /// No free voice slot; existing playback remains unchanged.
@@ -263,10 +267,32 @@ impl FrameClock {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct LoopRegion {
+    end: usize,
+    start: usize,
+}
+
+impl LoopRegion {
+    fn advance(self, frame: usize, advance: usize) -> usize {
+        let remaining = self.end.saturating_sub(frame);
+        if advance < remaining {
+            return frame.saturating_add(advance);
+        }
+        let length = self.end.saturating_sub(self.start);
+        let offset = advance
+            .saturating_sub(remaining)
+            .checked_rem(length)
+            .unwrap_or(0);
+        self.start.saturating_add(offset)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct Voice<S> {
     clip: PcmClip<S>,
     frame: usize,
     gain: StereoGain,
+    looping: Option<LoopRegion>,
     phase: u64,
 }
 
@@ -291,19 +317,26 @@ where
             )
         };
         self.phase = remainder;
-        self.frame = self
-            .frame
-            .saturating_add(usize::try_from(advance).unwrap_or(usize::MAX));
+        let steps = usize::try_from(advance).unwrap_or(usize::MAX);
+        if let Some(region) = self.looping {
+            self.frame = region.advance(self.frame, steps);
+            return true;
+        }
+        self.frame = self.frame.saturating_add(steps);
         self.frame < self.clip.frames()
     }
 
     fn sample(&self, output_rate: u64) -> [i64; 2] {
         let [first_left, first_right] = self.clip.stereo(self.frame);
-        let [last_left, last_right] = self.clip.stereo(
-            self.frame
-                .saturating_add(1)
-                .min(self.clip.frames().saturating_sub(1)),
+        let next = self.looping.map_or_else(
+            || {
+                self.frame
+                    .saturating_add(1)
+                    .min(self.clip.frames().saturating_sub(1))
+            },
+            |region| region.advance(self.frame, 1),
         );
+        let [last_left, last_right] = self.clip.stereo(next);
         let fraction = i64::try_from(self.phase).unwrap_or(0);
         let divisor = i64::try_from(output_rate).unwrap_or(1);
         let interpolate = |first: i16, last: i16| {
@@ -333,7 +366,7 @@ where
 
 type VoiceSlot<S> = Option<Voice<S>>;
 
-/// One-shot stereo mixer with bounded, reusable voice slots.
+/// Stereo mixer with bounded, reusable one-shot and looping voice slots.
 ///
 /// Rendering is independent of chunk size and allocates no memory. The
 /// borrowed or owned sample storage determines the lifetime of each voice.
@@ -358,6 +391,28 @@ where
     #[must_use]
     pub fn active(&self) -> usize {
         self.voices.iter().flatten().count()
+    }
+
+    fn admit(
+        &mut self,
+        clip: PcmClip<S>,
+        gain: StereoGain,
+        looping: Option<LoopRegion>,
+    ) -> Result<usize, AudioError> {
+        let (index, slot) = self
+            .voices
+            .iter_mut()
+            .enumerate()
+            .find(|(_index, voice)| voice.is_none())
+            .ok_or(AudioError::VoicesFull)?;
+        *slot = Some(Voice {
+            clip,
+            frame: 0,
+            gain,
+            looping,
+            phase: 0,
+        });
+        Ok(index)
     }
 
     /// Stop all voices without releasing the allocated slots.
@@ -396,19 +451,33 @@ where
         clip: PcmClip<S>,
         gain: StereoGain,
     ) -> Result<usize, AudioError> {
-        let (index, slot) = self
-            .voices
-            .iter_mut()
-            .enumerate()
-            .find(|(_index, voice)| voice.is_none())
-            .ok_or(AudioError::VoicesFull)?;
-        *slot = Some(Voice {
+        self.admit(clip, gain, None)
+    }
+
+    /// Play from frame zero, then repeat the specified source region.
+    ///
+    /// The end is exclusive. Interpolation wraps to the loop start rather
+    /// than reading samples beyond the loop end. A loop remains active
+    /// until explicitly stopped or cleared.
+    /// # Errors
+    /// Rejects empty or out-of-range regions and a full mixer.
+    pub fn play_loop(
+        &mut self,
+        clip: PcmClip<S>,
+        gain: StereoGain,
+        region: Range<usize>,
+    ) -> Result<usize, AudioError> {
+        if region.is_empty() || region.end > clip.frames() {
+            return Err(AudioError::InvalidLoop);
+        }
+        self.admit(
             clip,
-            frame: 0,
             gain,
-            phase: 0,
-        });
-        Ok(index)
+            Some(LoopRegion {
+                end: region.end,
+                start: region.start,
+            }),
+        )
     }
 
     /// Device-independent output rate in stereo frames per second.
@@ -712,6 +781,65 @@ mod tests {
             && mixer.play(clip, StereoGain::UNITY)? == slot)
             .then_some(())
             .ok_or(AudioError::InvalidClip)
+    }
+
+    #[test]
+    fn loop_preserves_intro_fraction_and_chunk_partition()
+    -> Result<(), AudioError> {
+        let clip =
+            Clip::new(&[0, 12_000, -12_000, 30_000], Channels::Mono, rate(2))?;
+        let mut whole = Mixer::new(rate(3), NonZeroU16::MIN)?;
+        let mut split = Mixer::new(rate(3), NonZeroU16::MIN)?;
+        let slot = whole.play_loop(clip, StereoGain::UNITY, 1..3)?;
+        let _slot = split.play_loop(clip, StereoGain::UNITY, 1..3)?;
+        let mut expected = [[0; 2]; 10];
+        let mut first = [[0; 2]; 3];
+        let mut last = [[0; 2]; 7];
+        whole.render(&mut expected);
+        split.render(&mut first);
+        split.render(&mut last);
+        let samples = [
+            0, 8_000, 4_000, -12_000, 4_000, 4_000, -12_000, 4_000, 4_000,
+            -12_000,
+        ];
+        (expected == samples.map(|sample| [sample; 2])
+            && expected.into_iter().eq(first.into_iter().chain(last))
+            && whole.active() == 1
+            && split.active() == 1
+            && whole.stop(slot)
+            && whole.active() == 0)
+            .then_some(())
+            .ok_or(AudioError::InvalidLoop)
+    }
+
+    #[test]
+    fn loop_admission_and_multi_wrap_downsampling() -> Result<(), AudioError> {
+        let clip = Clip::new(&[1, 2, 3, 4], Channels::Mono, rate(11))?;
+        let mut mixer = Mixer::new(rate(1), NonZeroU16::MIN)?;
+        for (start, end) in [(0, 0), (2, 1), (2, 2), (0, 5)] {
+            if mixer.play_loop(clip, StereoGain::UNITY, start..end)
+                != Err(AudioError::InvalidLoop)
+            {
+                return Err(AudioError::InvalidLoop);
+            }
+        }
+        let slot = mixer.play_loop(clip, StereoGain::UNITY, 1..3)?;
+        let mut output = [[0; 2]; 5];
+        mixer.render(&mut output);
+        if output != [[1; 2], [2; 2], [3; 2], [2; 2], [3; 2]]
+            || mixer.play(clip, StereoGain::UNITY)
+                != Err(AudioError::VoicesFull)
+            || !mixer.stop(slot)
+        {
+            return Err(AudioError::InvalidLoop);
+        }
+        let _single = mixer.play_loop(clip, StereoGain::UNITY, 2..3)?;
+        mixer.render(&mut output);
+        mixer.clear();
+        (output == [[1; 2], [3; 2], [3; 2], [3; 2], [3; 2]]
+            && mixer.active() == 0)
+            .then_some(())
+            .ok_or(AudioError::InvalidLoop)
     }
 
     #[test]
