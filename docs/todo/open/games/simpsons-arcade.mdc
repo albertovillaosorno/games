@@ -2982,3 +2982,30 @@ after the six provisional reinforcements are defeated. Next-launch
 control editing also permits changing the selected touch panels.
 These supersede the earlier provisional limits; full stage progression
 and physical input acceptance remain open.
+
+### Extended opening street
+
+Eight complete reference scenes, reconstructed with exact pixel overlap,
+provide a 1638-by-196 RGBA8 street interior (1,284,192 bytes). The optional
+canonical strip provides 1350 columns of camera travel. A later sample
+at 1359 columns failed exact background overlap and is not admitted.
+The default selection is unchanged. The native world upload now uses
+its separately admitted atlas budget rather than the one-MiB actor
+budget. No original assets are distributed.
+
+The original-backed optimized offscreen OpenGL build, with dummy audio,
+passed adaptive (426 by 304 logical pixels), aspect-fit, integer and
+stretch (320 by 304) with touch. Each verified 1350 camera columns, 600
+movement submissions, 20 combat submissions, two cooperative families
+and all six provisional reinforcement meters. Adaptive verified 106
+additional columns. No host-work 16.667 ms budget misses were reported.
+The narrow-view meter probe had initially timed out during Marge's
+stock recovery; the bounded diagnostic now permits the complete
+recovery and meter drain without changing simulation or pixel checks.
+The portable combat regression also clears the six reinforcements and
+reaches 1350 camera columns, but does not model later original enemies.
+
+Fresh validation 1795742119526400256-1903518 passed 1,997 aggregate test
+executions and all six portable core targets. These results establish
+verified art and provisional opening combat, not complete street or
+campaign progression, physical display/input/audio or browser parity.
