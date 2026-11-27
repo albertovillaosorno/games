@@ -475,6 +475,31 @@ impl Image {
     }
 }
 
+pub(super) fn report_background(
+    context: (Machine, &SceneAssets<'_>),
+    mut observation: Observation,
+    pens: &mut [Pixel],
+    top: usize,
+) -> Result<(), String> {
+    let (machine, assets) = context;
+    let _sprites = observation.sprites.take();
+    observation.reconstruct(machine, assets, pens)?;
+    let image = Image::from_pens(
+        pens,
+        machine.background_raster().extent(),
+        &observation.colors,
+        false,
+    )?
+    .without_top(top)?;
+    toolchain::write_line(&format!(
+        "Verified background: {}x{} RGBA8 {}",
+        image.width,
+        image.height,
+        ContentHash::calculate(image.pixels.as_flattened()),
+    ))
+    .map_err(|error| error.to_string())
+}
+
 fn graphics_bundle(
     paths: &Arguments,
     machine: Machine,
@@ -602,6 +627,29 @@ fn verified_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_digest_excludes_only_explicit_top_rows() -> Result<(), String>
+    {
+        let colors = [[1, 2, 3, 255], [4, 5, 6, 255]];
+        let image = |hud| {
+            Image::from_pens(
+                &[hud, hud, Pixel::from_pen(0), Pixel::from_pen(1)],
+                (2, 2),
+                &colors,
+                false,
+            )
+        };
+        let first = image(Pixel::from_pen(0))?.without_top(1)?;
+        let second = image(Pixel::from_pen(1))?.without_top(1)?;
+        let expected = ContentHash::calculate(colors.as_flattened());
+        ((first.width, first.height) == (2, 1)
+            && ContentHash::calculate(first.pixels.as_flattened()) == expected
+            && ContentHash::calculate(second.pixels.as_flattened()) == expected
+            && image(Pixel::from_pen(0))?.without_top(2).is_err())
+        .then_some(())
+        .ok_or_else(|| String::from("incorrect background digest crop"))
+    }
 
     #[test]
     fn strip_requires_exact_overlap_and_retains_unique_pixels()

@@ -133,6 +133,8 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "mame scene-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
+    "mame scene-background-digest MACHINE REV PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS TOP\n",
     "native-preview: mame scene-sequence-bench MACHINE REV ",
     "PARENT SHA256 REPEATS RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS ",
     "CONTROLS [MORE SCENES...]\n",
@@ -454,15 +456,16 @@ impl Command {
             "art-publish" | "strip-publish" => {
                 Self::parse_art(action, selected, args.collect())
             },
-            "background-check" | "scene-check" | "scene-render-check" => {
-                Ok(Self::BackgroundCheck(
-                    selected,
-                    reference_background::Arguments::parse_command(
-                        action,
-                        args.collect(),
-                    )?,
-                ))
-            },
+            "background-check"
+            | "scene-check"
+            | "scene-render-check"
+            | "scene-background-digest" => Ok(Self::BackgroundCheck(
+                selected,
+                reference_background::Arguments::parse_command(
+                    action,
+                    args.collect(),
+                )?,
+            )),
             "sample-check" => Self::parse_sample(selected, args),
             "verify" => Ok(Self::Verify(
                 Verification::Mame(

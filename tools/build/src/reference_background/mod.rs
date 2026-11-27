@@ -66,6 +66,7 @@ use crate::{USAGE, reference_palette, text};
 /// Explicit paths to a single bounded, private original observation.
 #[derive(Debug)]
 pub struct Arguments {
+    background_top: Option<usize>,
     digest: ContentHash,
     frame: OsString,
     #[cfg(feature = "native-preview")]
@@ -98,6 +99,17 @@ impl Arguments {
         observation.reconstruct(machine, &assets, &mut pens)?;
         let colors = &observation.colors;
         let matched = count_matches(&pens, colors, &frame)?;
+        if let Some(top) = self.background_top {
+            if matched != pens.len() {
+                return Err(String::from("scene differs from observation"));
+            }
+            return art::report_background(
+                (machine, &assets),
+                observation,
+                &mut pens,
+                top,
+            );
+        }
         #[cfg(feature = "native-preview")]
         if self.native {
             native_check(machine.background_raster(), &pens, colors)?;
@@ -123,6 +135,7 @@ impl Arguments {
             <[OsString; 7]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
         Ok(Self {
+            background_top: None,
             digest: text(&digest)?
                 .parse()
                 .map_err(|_error| String::from("invalid manifest hash"))?,
@@ -143,11 +156,20 @@ impl Arguments {
     /// Rejects unknown commands or malformed arguments.
     pub fn parse_command(
         action: &str,
-        args: Vec<OsString>,
+        mut args: Vec<OsString>,
     ) -> Result<Self, String> {
         match action {
             "background-check" => Self::parse(args),
             "scene-check" => Self::parse_scene(args),
+            "scene-background-digest" => {
+                let top = args.pop().ok_or_else(|| String::from(USAGE))?;
+                let mut parsed = Self::parse_scene(args)?;
+                parsed.background_top =
+                    Some(text(&top)?.parse().map_err(|_error| {
+                        String::from("invalid top exclusion")
+                    })?);
+                Ok(parsed)
+            },
             #[cfg(feature = "native-preview")]
             "scene-render-check" => {
                 let mut parsed = Self::parse_scene(args)?;
@@ -519,6 +541,35 @@ mod tests {
         );
         scene.push(OsString::from("extra"));
         assert!(Arguments::parse_command("scene-check", scene).is_err());
+    }
+
+    #[test]
+    fn background_digest_requires_complete_scene_and_explicit_crop() {
+        let digest = "0".repeat(64);
+        let mut args = [
+            "parent",
+            &digest,
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+            "controls",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        let parse = |values| {
+            Arguments::parse_command("scene-background-digest", values)
+                .map(|value| value.background_top)
+        };
+        assert!(parse(args.clone()).is_err());
+        args.push(OsString::from("28"));
+        assert_eq!(parse(args.clone()), Ok(Some(28)));
+        assert!(Arguments::parse_command("scene-check", args.clone()).is_err());
+        let _top = args.pop();
+        args.push(OsString::from("-1"));
+        assert!(parse(args).is_err());
     }
 
     #[test]
