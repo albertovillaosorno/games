@@ -9,11 +9,11 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Local attack and street music selection and bounded audio presentation.
+//   - Local effects and street music selection and bounded audio presentation.
 // - Must-Not:
 //   - Interpret ROM bytes, duplicate mixing or influence simulation time.
 // - Allows:
-//   - Inputs: Canonical PCM and cumulative fixed-step station cues.
+//   - Inputs: Canonical PCM and cumulative fixed-step combat cues.
 //   - Outputs: Bounded mixed stereo submissions to the shared audio host.
 //   - Side effects: Local device playback and explicit voice admission.
 // - Split-When:
@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another title-local module duplicates native cue delivery.
 // - Summary:
-//   - Optional four-station attack samples and street music.
+//   - Optional attack, impact and street music samples.
 // - Description:
 //   - Observe each fixed-step cue once and refill a short software queue.
 // - Usage:
@@ -29,7 +29,7 @@
 // - Defaults:
 //   - No device or music unless requested; no exact audio parity claim.
 
-//! Opt-in playback of observed attack-associated PCM and street music.
+//! Opt-in playback of observed combat effects and street music.
 
 use std::num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
 use std::rc::Rc;
@@ -44,19 +44,24 @@ use games::presentation::DisplaySettings;
 use games::replay::LiveSimulation;
 use games::session::LocalSession;
 use games_assets::pcm::PcmSamples;
-use games_assets::{ContentHash, ManifestLimits};
+use games_assets::{AssetRecord, ContentHash, ManifestLimits};
 use games_platform::ir::audio::{NativeAudio, PlaybackControl, PlaybackSpec};
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::process::write_status;
-use games_platform::ir::storage::bundle::{BundleSource, MediaOverlay};
+use games_platform::ir::storage::bundle::{
+    BundleSource, CanonicalBundle, MediaOverlay,
+};
 use games_platform::ir::storage::preferences::VolumeStore;
 
 use super::launch::AudioSelection as LocalAudioSelection;
 use super::{
-    Controls, failure, live_with_session, open_selected_bundle, parse_hash,
-    size, smoke_press,
+    Controls, failure, fixed, live_with_session, open_selected_bundle,
+    parse_hash, size, smoke_press,
 };
-use crate::{Action, Cabinet, Control, Phase, Player, TICK_INTERVAL};
+use crate::{
+    Action, Cabinet, Control, ENEMY_CAPACITY, Phase, Player, Point,
+    StreetLayout, TICK_INTERVAL,
+};
 
 const CHUNK: usize = 256;
 // Cover two nominal presentation intervals plus a submission period.
@@ -91,6 +96,14 @@ const GAINS: [StereoGain; 4] = [
         right: 9_048,
     },
 ];
+const IMPACT_KEY: &str = "audio/sample-0056";
+const IMPACT_FRAMES: u64 = 4258;
+// Original centered volume 79, pitch 0xe40, differential PCM.
+const IMPACT_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(7989);
+const IMPACT_GAIN: StereoGain = StereoGain {
+    left: 14_220,
+    right: 14_220,
+};
 const CLIPS: [(&str, u64); 4] = [
     ("audio/sample-0004", 8335),
     ("audio/sample-0005", 3916),
@@ -136,6 +149,7 @@ impl AudioSelection {
 pub(super) struct Samples {
     clips: [Rc<[i16]>; 4],
     effects_volume: MasterVolume,
+    impact: Option<OwnedClip>,
     music: Option<OwnedClip>,
     music_volume: MasterVolume,
 }
@@ -177,18 +191,12 @@ impl Samples {
             let record =
                 descriptor.ok_or_else(|| failure("missing attack PCM"))?;
             let bytes = payload.map_err(failure)?;
-            let pcm = PcmSamples::new(record, &bytes).map_err(failure)?;
-            if pcm.channels() != NonZeroU8::MIN
-                || pcm.sample_rate() != SOURCE_RATE
-                || pcm.frames().get() != frames
-            {
-                return Err(failure("unexpected attack PCM format"));
-            }
-            clips.push(copy_samples(pcm)?);
+            clips.push(mono_samples(record, &bytes, SOURCE_RATE, frames)?);
         }
         Ok(Self {
             clips: clips.try_into().map_err(|_error| failure("clip count"))?,
             effects_volume: selection.effects_volume,
+            impact: load_impact(&bundle)?,
             music: selection
                 .music
                 .map(|hash| load_music(store, hash))
@@ -210,6 +218,8 @@ pub(super) struct Playback {
     cues: [u64; 4],
     device: NativeAudio,
     discard_queued: bool,
+    impact: Option<OwnedClip>,
+    impact_cues: u64,
     live_output: bool,
     mixer: OwnedMixer,
     music: Option<OwnedClip>,
@@ -288,6 +298,8 @@ impl Playback {
             cues: [0; 4],
             device,
             discard_queued: false,
+            impact: samples.impact.clone(),
+            impact_cues: 0,
             live_output: false,
             mixer,
             music: samples.music.clone(),
@@ -296,6 +308,21 @@ impl Playback {
             sources,
             volume,
         })
+    }
+
+    fn play_impacts(&mut self, count: u64) -> Result<(), RenderError> {
+        let new_cues = count.saturating_sub(self.impact_cues);
+        self.impact_cues = count;
+        // A session cannot defeat more enemies than its admitted capacity.
+        if usize::try_from(new_cues).map_err(failure)? > ENEMY_CAPACITY {
+            return Err(failure("impact cue count exceeded enemy capacity"));
+        }
+        if let Some(clip) = &self.impact {
+            for _ in 0..new_cues {
+                play(&mut self.mixer, clip.clone(), IMPACT_GAIN)?;
+            }
+        }
+        Ok(())
     }
 
     fn queued_frames(&self) -> Result<u32, RenderError> {
@@ -343,7 +370,8 @@ impl Playback {
         self.smoke_reset(&mut simulation)?;
         self.smoke_maneuver(false)?;
         self.smoke_maneuver(true)?;
-        self.smoke_source_changes()
+        self.smoke_source_changes()?;
+        self.smoke_impact()
     }
 
     fn smoke_drain(
@@ -359,6 +387,39 @@ impl Playback {
             return Err(failure("held attack repeated"));
         }
         self.verify_idle_effects()
+    }
+
+    fn smoke_impact(&mut self) -> Result<(), RenderError> {
+        if self.impact.is_none() {
+            return Ok(());
+        }
+        let mut cabinet =
+            Cabinet::with_encounter(StreetLayout::DOWNTOWN, Point {
+                x: 132,
+                y: 190,
+            })
+            .map_err(failure)?;
+        cabinet.session = self.smoke_session();
+        let mut simulation = fixed(cabinet)?;
+        let mut controls = Controls::new(false)?;
+        self.update(simulation.state())?;
+        smoke_press(&mut controls, &mut simulation, Control::Start)?;
+        self.update(simulation.state())?;
+        self.verify_quiet()?;
+        smoke_press(&mut controls, &mut simulation, Control::Primary)?;
+        for _ in 0..10u8 {
+            let _step = simulation.advance(TICK_INTERVAL).map_err(failure)?;
+            self.device.clear().map_err(failure)?;
+            self.update(simulation.state())?;
+        }
+        if self.impact_cues != 1 {
+            return Err(failure("defeat did not admit exactly one impact cue"));
+        }
+        self.verify_submission(2)?;
+        self.update(simulation.state())?;
+        self.verify_submission(2)?;
+        write_status(format_args!("Combat impact PCM: one cue verified"))
+            .map_err(failure)
     }
 
     fn smoke_maneuver(&mut self, airborne: bool) -> Result<(), RenderError> {
@@ -570,10 +631,12 @@ impl Playback {
     ) -> Result<(), RenderError> {
         self.sync_levels(cabinet.session());
         let current = cabinet.stations().map(|station| station.attack_cues);
+        let impacts = cabinet.impact_cues();
         let phase = cabinet.phase();
         let playing = phase == Phase::Playing;
         if matches!(phase, Phase::MainMenu | Phase::Exited) {
             self.cues = current;
+            self.impact_cues = impacts;
             self.discard_queued = true;
             self.mixer.clear();
             self.music_started = false;
@@ -615,6 +678,7 @@ impl Playback {
                 play(&mut self.mixer, clip.clone(), gain)?;
             }
         }
+        self.play_impacts(impacts)?;
         if ready {
             self.fill()
         } else {
@@ -636,7 +700,7 @@ impl Playback {
     }
 
     fn verify_quiet(&self) -> Result<(), RenderError> {
-        if self.cues != [0; 4] {
+        if self.cues != [0; 4] || self.impact_cues != 0 {
             return Err(failure("audio played before an admitted cue"));
         }
         self.verify_idle_effects()
@@ -728,6 +792,35 @@ fn copy_samples(pcm: PcmSamples<'_>) -> Result<SharedSamples, RenderError> {
         .map_err(failure)?;
     samples.extend(pcm.samples());
     Ok(Rc::from(samples))
+}
+
+fn mono_samples(
+    record: &AssetRecord,
+    bytes: &[u8],
+    rate: NonZeroU32,
+    frames: u64,
+) -> Result<SharedSamples, RenderError> {
+    let pcm = PcmSamples::new(record, bytes).map_err(failure)?;
+    if pcm.channels() != NonZeroU8::MIN
+        || pcm.sample_rate() != rate
+        || pcm.frames().get() != frames
+    {
+        return Err(failure("unexpected effects PCM format"));
+    }
+    copy_samples(pcm)
+}
+
+fn load_impact(
+    bundle: &CanonicalBundle,
+) -> Result<Option<OwnedClip>, RenderError> {
+    let Some(record) = bundle.manifest().record(IMPACT_KEY) else {
+        return Ok(None);
+    };
+    let bytes = bundle.view_payload(IMPACT_KEY).map_err(failure)?;
+    let samples = mono_samples(record, &bytes, IMPACT_RATE, IMPACT_FRAMES)?;
+    OwnedClip::new(samples, Channels::Mono, IMPACT_RATE)
+        .map(Some)
+        .map_err(failure)
 }
 
 fn load_music(
@@ -830,9 +923,7 @@ mod tests {
     use std::ffi::OsStr;
 
     use games_assets::archive::ArchiveBudget;
-    use games_assets::{
-        AssetFormat, AssetManifest, AssetRecord, SourceIdentity,
-    };
+    use games_assets::{AssetFormat, AssetManifest, SourceIdentity};
     use games_platform::ir::storage::fixtures::TestRoot;
     use games_platform::ir::storage::staging::CanonicalStaging;
 
@@ -859,7 +950,7 @@ mod tests {
         parent: &OsStr,
         clips: &[FixtureClip<'_>],
     ) -> Result<ContentHash, RenderError> {
-        let limits = replacement_limits()?;
+        let limits = base_limits()?;
         let maximum = NonZeroU64::MIN.saturating_add(65_535);
         let budget = ArchiveBudget::new(
             maximum,
@@ -877,7 +968,11 @@ mod tests {
             let format = AssetFormat::PcmS16Le {
                 channels: NonZeroU8::MIN,
                 frames: NonZeroU64::new(frames).ok_or(RenderError::TooLarge)?,
-                sample_rate: SOURCE_RATE,
+                sample_rate: if key == IMPACT_KEY {
+                    IMPACT_RATE
+                } else {
+                    SOURCE_RATE
+                },
             };
             stage.write_payload(digest, &bytes).map_err(failure)?;
             records.push(AssetRecord {
@@ -920,11 +1015,12 @@ mod tests {
             replacement: None,
         };
         let original = Samples::load(BundleSource::Local(parent), selection)?;
-        if original
-            .clips
-            .iter()
-            .flat_map(|clip| clip.iter())
-            .any(|sample| *sample != 12)
+        if original.impact.is_some()
+            || original
+                .clips
+                .iter()
+                .flat_map(|clip| clip.iter())
+                .any(|sample| *sample != 12)
         {
             return Err(failure("incorrect original clip samples"));
         }
@@ -960,11 +1056,54 @@ mod tests {
     }
 
     #[test]
+    fn optional_impact_clip_is_validated_and_not_replaceable()
+    -> Result<(), RenderError> {
+        let root = TestRoot::new().map_err(failure)?;
+        let parent = root.location();
+        let mut clips = Vec::from(CLIPS.map(|(key, frames)| (key, frames, 12)));
+        clips.push((IMPACT_KEY, IMPACT_FRAMES, i16::MAX));
+        let mut selection = AudioSelection {
+            base: publish_fixture(parent, &clips)?,
+            effects_volume: MasterVolume::Full,
+            music: None,
+            music_volume: MasterVolume::Full,
+            replacement: None,
+        };
+        let samples = Samples::load(BundleSource::Local(parent), selection)?;
+        let impact = samples.impact.ok_or_else(|| failure("missing impact"))?;
+        if impact.rate() != IMPACT_RATE {
+            return Err(failure("impact clip rate did not match pitch"));
+        }
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        play(&mut mixer, impact, IMPACT_GAIN)?;
+        let mut output = [[0; 2]];
+        mixer.render(&mut output);
+        if output != [[7109, 7109]] {
+            return Err(failure("impact clip center gain mismatch"));
+        }
+        selection.replacement =
+            Some(publish_fixture(parent, &[(IMPACT_KEY, IMPACT_FRAMES, -7)])?);
+        if Samples::load(BundleSource::Local(parent), selection).is_ok() {
+            return Err(failure("impact unexpectedly replaceable"));
+        }
+        let _impact = clips.pop();
+        clips.push((IMPACT_KEY, IMPACT_FRAMES.saturating_sub(1), 12));
+        selection.base = publish_fixture(parent, &clips)?;
+        selection.replacement = None;
+        if Samples::load(BundleSource::Local(parent), selection).is_ok() {
+            return Err(failure("invalid impact format accepted"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn isolated_attack_clips_use_observed_stereo_ratios_and_rate()
     -> Result<(), RenderError> {
         let samples = Samples {
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
             effects_volume: MasterVolume::Full,
+            impact: None,
             music: None,
             music_volume: MasterVolume::Full,
         };

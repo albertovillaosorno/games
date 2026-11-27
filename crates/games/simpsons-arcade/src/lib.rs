@@ -692,6 +692,7 @@ pub struct Cabinet {
     choices: [Player; 4],
     cooperation: Cooperation,
     encounter: Option<Encounter>,
+    impact_cues: u64,
     layout: StreetLayout,
     scroll_limit: i16,
     session: LocalSession,
@@ -910,11 +911,12 @@ impl Cabinet {
             self.cooperation
                 .advance(&mut self.slots, layout, pair_command);
             if let Some(encounter) = &mut self.encounter {
-                encounter.advance(
+                let defeated = encounter.advance(
                     layout,
                     (self.layout, self.scroll_limit),
                     (&mut self.slots, restraint_edge),
                 );
+                self.impact_cues = self.impact_cues.saturating_add(defeated);
             }
             self.cooperation.invalidate(&self.slots);
             self.advance_camera();
@@ -923,6 +925,12 @@ impl Cabinet {
             }
             self.record_attack_cues();
         }
+    }
+
+    /// Cumulative resolved enemy defeats for optional host audio.
+    #[must_use]
+    pub const fn impact_cues(&self) -> u64 {
+        self.impact_cues
     }
 
     const fn movement_layout(&self) -> StreetLayout {
@@ -945,6 +953,7 @@ impl Cabinet {
             choices: Player::ALL,
             cooperation: Cooperation::default(),
             encounter: None,
+            impact_cues: 0,
             layout,
             scroll_limit: 0,
             session: LocalSession::default(),
@@ -1240,6 +1249,7 @@ fn cabinet() -> Cabinet {
         choices: Player::ALL,
         cooperation: Cooperation::default(),
         encounter: None,
+        impact_cues: 0,
         layout: StreetLayout::DOWNTOWN,
         scroll_limit: 0,
         session: LocalSession::default(),

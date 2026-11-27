@@ -105,7 +105,7 @@ impl Encounter {
         view: StreetLayout,
         (base, scroll_limit): (StreetLayout, i16),
         (slots, restraint_edge): (&mut [Slot; 4], bool),
-    ) {
+    ) -> u64 {
         let street = StreetLayout {
             max: Point {
                 x: base
@@ -131,6 +131,7 @@ impl Encounter {
                 .as_mut()
                 .is_some_and(|enemy| enemy.resolve_strikes(slots))
         });
+        let defeated = hits.into_iter().map(u64::from).sum();
         for ((index, entry), hit) in
             self.enemies.iter_mut().enumerate().zip(hits)
         {
@@ -152,6 +153,7 @@ impl Encounter {
                 enemy.advance(bounds, slots, (restraint, restraint_edge));
             }
         }
+        defeated
     }
 
     pub(super) fn enemies(&self) -> impl Iterator<Item = Enemy> + '_ {
@@ -782,6 +784,7 @@ mod tests {
         *reinforcement = Some(Enemy::new(Point { x: 130, y: 190 }));
         cabinet.input_step(11, &[]);
         assert!(cabinet.enemies().map(|enemy| enemy.health).eq([1, 0]));
+        assert_eq!(cabinet.impact_cues(), 1);
         let [marge, ..] = cabinet.stations();
         assert_eq!(marge.health, PLAYER_HEALTH.saturating_sub(ENEMY_DAMAGE));
         let Some(outcome) = &mut cabinet.encounter else {
@@ -1264,6 +1267,9 @@ mod tests {
             cabinet.stations().first().map(|slot| slot.health),
             Some(PLAYER_HEALTH)
         );
+        assert_eq!(cabinet.impact_cues(), 1);
+        cabinet.reset_world();
+        assert_eq!(cabinet.impact_cues(), 1);
     }
 
     fn verify_defeat_timeline(cabinet: &mut Cabinet, impact: Enemy) {
@@ -1382,6 +1388,7 @@ mod tests {
             cabinet.input_step(2, &pulse_for(player, Control::Start));
             cabinet.input_step(3, &pulse_for(player, Control::Primary));
             for tick in 0..PLAYER_STRIKE {
+                assert_eq!(cabinet.impact_cues(), 0);
                 assert_eq!(
                     cabinet.enemy().map(|enemy| enemy.health),
                     Some(ENEMY_HEALTH)
@@ -1392,6 +1399,7 @@ mod tests {
                 cabinet.enemy().map(|enemy| enemy.health),
                 Some(ENEMY_HEALTH.saturating_sub(1))
             );
+            assert_eq!(cabinet.impact_cues(), 1);
         }
     }
 
@@ -1454,6 +1462,7 @@ mod tests {
                 cabinet.enemy().map(|enemy| enemy.health),
                 Some(ENEMY_HEALTH)
             );
+            assert_eq!(cabinet.impact_cues(), 0);
         }
     }
 
