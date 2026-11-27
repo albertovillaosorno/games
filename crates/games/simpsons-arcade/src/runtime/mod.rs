@@ -113,7 +113,7 @@ use title_messages::{LaunchNotice, launch_error, launch_label};
 
 use super::{
     Action, Cabinet, Control, Facing, Maneuver, Pair, Participation, Phase,
-    Player, Point, Station, StreetLayout, TICK_INTERVAL,
+    Player, Point, StageEntrance, Station, StreetLayout, TICK_INTERVAL,
 };
 use crate::lan::HostLan;
 use crate::remote::{HostedCabinet, HostedInput};
@@ -938,10 +938,14 @@ impl Scene {
         } else {
             self.queue_background(cabinet, view)?;
             self.queue_visible_stations(cabinet, view, hud)?;
-            self.queue_enemy_sprites(cabinet, view)?;
+            if cabinet.stage_entrance().is_none() {
+                self.queue_enemy_sprites(cabinet, view)?;
+            }
             self.world.sort_by_key(|(depth, _)| *depth);
             self.draws.extend(self.world.iter().map(|(_, draw)| *draw));
-            self.queue_enemy_meters(cabinet, view)?;
+            if cabinet.stage_entrance().is_none() {
+                self.queue_enemy_meters(cabinet, view)?;
+            }
         }
         Ok(())
     }
@@ -949,7 +953,7 @@ impl Scene {
     fn queue_station(
         &mut self,
         (player, seat): (Player, Player),
-        (station, paired): (Station, bool),
+        (station, paired, entrance): (Station, bool, Option<StageEntrance>),
         (view, hud): (world::View, station_hud::StationHud),
     ) -> Result<(), RenderError> {
         let offset = world::station_offset(view.width, player)?;
@@ -988,25 +992,51 @@ impl Scene {
             && station.participation == Participation::Playing
             && station.health > 0
         {
-            let position = view.project(station.position);
-            if let Some(shadow) = &self.shadow
-                && shadow::visible(player, station.maneuver)
-            {
-                self.draws.push(shadow.draw(position));
-            }
-            let pose = self.poses.select(player, station).unwrap_or(actor);
-            self.world.push((
-                station.position.y,
-                pose.draw(
-                    ground_position(
-                        pose,
-                        position,
-                        station.maneuver.elevation(),
-                    )?,
-                    station.facing == Facing::Left,
-                ),
-            ));
+            self.queue_station_actor(
+                player,
+                (station, entrance),
+                (actor, view),
+            )?;
         }
+        Ok(())
+    }
+
+    fn queue_station_actor(
+        &mut self,
+        player: Player,
+        (station, entrance): (Station, Option<StageEntrance>),
+        (actor, view): (Art, world::View),
+    ) -> Result<(), RenderError> {
+        let elevation = if let Some(motion) = entrance {
+            let Some(elevation) = motion.elevation(player) else {
+                return Ok(());
+            };
+            elevation
+        } else {
+            station.maneuver.elevation()
+        };
+        let position = view.project(station.position);
+        let airborne = entrance.is_some() && elevation > 0;
+        if let Some(shadow) = &self.shadow
+            && (airborne
+                || (entrance.is_none()
+                    && shadow::visible(player, station.maneuver)))
+        {
+            self.draws.push(shadow.draw(position));
+        }
+        let pose = if airborne {
+            self.poses.entrance(player)
+        } else {
+            self.poses.select(player, station)
+        }
+        .unwrap_or(actor);
+        self.world.push((
+            station.position.y,
+            pose.draw(
+                ground_position(pose, position, elevation)?,
+                station.facing == Facing::Left,
+            ),
+        ));
         Ok(())
     }
 
@@ -1030,7 +1060,7 @@ impl Scene {
                     || station.maneuver == Maneuver::Restrained;
             self.queue_station(
                 (character, seat),
-                (station, paired),
+                (station, paired, cabinet.stage_entrance()),
                 (view, hud),
             )?;
         }

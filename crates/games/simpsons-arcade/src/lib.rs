@@ -34,6 +34,7 @@
 mod bonus;
 mod cooperative;
 mod encounter;
+mod entrance;
 #[cfg(feature = "native-preview")]
 /// Native authenticated host input for the local arcade screen.
 pub mod lan;
@@ -54,6 +55,7 @@ pub use encounter::{
     ENEMY_ATTACK_TICKS, ENEMY_DEFEAT_TICKS, ENEMY_WALK_TICKS, Enemy,
     EnemyAction, RestraintMotion,
 };
+pub use entrance::StageEntrance;
 use games::animation::cycle_tick;
 use games::input::LogicalAction;
 use games::presentation::StripViewport;
@@ -352,7 +354,7 @@ struct PendingManeuver {
 }
 
 impl PendingManeuver {
-    fn capture_bonus(&mut self, active: bool, control: Control) -> bool {
+    fn capture_interlude(&mut self, active: bool, control: Control) -> bool {
         if !active || control == Control::Pause {
             return false;
         }
@@ -759,6 +761,7 @@ pub struct Cabinet {
     scroll_limit: i16,
     session: LocalSession,
     slots: [Slot; 4],
+    stage_entrance: Option<StageEntrance>,
     stage_two_limit: Option<i16>,
     stationary_tick: Option<u16>,
     wrestler: Option<Wrestler>,
@@ -898,6 +901,26 @@ impl Cabinet {
         };
     }
 
+    fn advance_stage_entrance(&mut self) -> bool {
+        let Some(mut entrance) = self.stage_entrance else {
+            return false;
+        };
+        entrance.advance();
+        let layout = self.movement_layout();
+        for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
+            if !slot.station.can_fight() {
+                continue;
+            }
+            if let Some(point) = entrance.scripted_position(player) {
+                slot.station.position = point;
+            } else if entrance.steering_tick() {
+                slot.move_tick(layout);
+            }
+        }
+        self.stage_entrance = (!entrance.complete()).then_some(entrance);
+        true
+    }
+
     fn apply(
         &mut self,
         change: &LogicalAction<Action>,
@@ -916,7 +939,11 @@ impl Cabinet {
         let control = change.action.control;
         let playing = self.session.phase() == Phase::Playing;
         if !slot.edge(control, change.down, queued)
-            || queued.capture_bonus(playing && self.bonus.is_some(), control)
+            || queued.capture_interlude(
+                playing
+                    && (self.bonus.is_some() || self.stage_entrance.is_some()),
+                control,
+            )
         {
             return;
         }
@@ -1010,6 +1037,9 @@ impl Cabinet {
     // It is not a simulation or production input rule.
     #[cfg(any(test, feature = "native-preview"))]
     fn diagnostic_intent(&self) -> DiagnosticIntent {
+        if self.stage_entrance.is_some() {
+            return (None, None);
+        }
         let [marge, ..] = self.stations();
         let target = self
             .enemies()
@@ -1057,6 +1087,7 @@ impl Cabinet {
         self.cooperation.reset();
         self.late_backdrop_tick = None;
         self.scripted_tick = None;
+        self.stage_entrance = Some(StageEntrance::default());
         self.stationary_tick = None;
         self.wrestler = None;
         for slot in &mut self.slots {
@@ -1068,7 +1099,9 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
-        if self.advance_bonus(pending.map(|queued| queued.button_edges != 0)) {
+        if self.advance_bonus(pending.map(|queued| queued.button_edges != 0))
+            || self.advance_stage_entrance()
+        {
             return;
         }
         let [marge, ..] = pending;
@@ -1153,6 +1186,7 @@ impl Cabinet {
             scroll_limit: 0,
             session: LocalSession::default(),
             slots: layout.spawn.map(Slot::new),
+            stage_entrance: None,
             stage_two_limit: None,
             stationary_tick: None,
             wrestler: None,
@@ -1189,6 +1223,7 @@ impl Cabinet {
         self.camera = 0;
         self.late_backdrop_tick = None;
         self.scripted_tick = None;
+        self.stage_entrance = None;
         self.stationary_tick = None;
         self.wrestler = None;
         if let Some(encounter) = &mut self.encounter {
@@ -1217,6 +1252,12 @@ impl Cabinet {
     #[must_use]
     pub const fn session(&self) -> LocalSession {
         self.session
+    }
+
+    /// Active second-stage arrival and landing sequence, if any.
+    #[must_use]
+    pub const fn stage_entrance(&self) -> Option<StageEntrance> {
+        self.stage_entrance
     }
 
     /// Whether the optional second stage has been admitted.
@@ -1580,6 +1621,7 @@ fn cabinet() -> Cabinet {
         scroll_limit: 0,
         session: LocalSession::default(),
         slots: StreetLayout::DOWNTOWN.spawn.map(Slot::new),
+        stage_entrance: None,
         stage_two_limit: None,
         stationary_tick: None,
         wrestler: None,
@@ -3306,6 +3348,7 @@ mod tests {
         assert_eq!(state.wrestler(), None);
         assert_eq!(state.enemies().count(), 2);
         assert_stage_two_stations(&before, &state.stations());
+        assert_stage_entrance(state);
         assert_stage_two_restart(state);
     }
 
@@ -3360,8 +3403,56 @@ mod tests {
         }
     }
 
+    fn assert_stage_entrance(mut state: Cabinet) {
+        assert_eq!(state.stage_entrance().map(StageEntrance::tick), Some(0));
+        let mut held = state;
+        let initial = state.stations();
+        let enemies = state.encounter;
+        held.input_step(4195, &[change(Player::Marge, Control::Right, true)]);
+        state.input_step(4195, &[]);
+        for tick in 4196..4426 {
+            held.input_step(tick, &pulse(Player::Marge, Control::Primary));
+            state.input_step(tick, &[]);
+            assert_eq!(state.stations(), held.stations());
+            assert_eq!(state.stage_entrance(), held.stage_entrance());
+        }
+        assert_eq!(state.stage_entrance().map(StageEntrance::tick), Some(231));
+        assert_stage_formation(&state);
+        assert_stage_two_stations(&initial, &state.stations());
+        assert_eq!(state.encounter, enemies);
+        assert_stage_steering_and_pause(state, held);
+    }
+
+    fn assert_stage_formation(state: &Cabinet) {
+        let [marge, homer, bart, lisa] = state.stations();
+        assert_eq!(marge.position, Point { x: 132, y: 192 });
+        assert_eq!(homer.position, Point { x: 164, y: 192 });
+        assert_eq!(bart.participation, Participation::Absent);
+        assert_eq!(lisa.participation, Participation::Absent);
+    }
+
+    fn assert_stage_steering_and_pause(mut state: Cabinet, mut held: Cabinet) {
+        held.input_step(4426, &[]);
+        state.input_step(4426, &[]);
+        assert_eq!(
+            held.stations().first().map(|station| station.position.x),
+            Some(134)
+        );
+        assert_eq!(
+            state.stations().first().map(|station| station.position.x),
+            Some(132)
+        );
+        held.input_step(4427, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut held, 4428..4528);
+        assert_eq!(held.stage_entrance().map(StageEntrance::tick), Some(232));
+        held.reset_world();
+        assert_eq!(held.stage_entrance(), None);
+    }
+
     fn assert_stage_two_restart(mut state: Cabinet) {
-        state.input_step(4195, &pulse(Player::Marge, Control::Primary));
+        advance_empty(&mut state, 4195..4490);
+        assert_eq!(state.stage_entrance(), None);
+        state.input_step(4490, &pulse(Player::Marge, Control::Primary));
         assert_ne!(
             state.stations().first().map(|station| station.maneuver),
             Some(Maneuver::Idle)

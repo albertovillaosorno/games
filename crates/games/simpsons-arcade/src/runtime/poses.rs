@@ -408,6 +408,11 @@ impl PoseArt {
         select_entry(&self.entries, (Subject::Enemy, kind, tick)).copied()
     }
 
+    pub(super) fn entrance(&self, player: Player) -> Option<Art> {
+        select_entry(&self.entries, station_key(player, Kind::Jump, 30))
+            .copied()
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

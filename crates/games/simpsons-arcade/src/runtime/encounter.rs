@@ -790,6 +790,7 @@ fn smoke_stage_two(
     if card_pixels == entry_pixels {
         return Err(failure("second-stage entry did not change readback"));
     }
+    verify_stage_entrance(scene, art, simulation, &entry_pixels)?;
     let limit = i16::try_from(stage.world.scroll_limit()?).map_err(failure)?;
     let mut held = None;
     for _ in 0..5000u16 {
@@ -813,6 +814,36 @@ fn smoke_stage_two(
         advance_diagnostic(controls, simulation, &mut held, intent)?;
     }
     Err(failure("second-stage combat or travel was not reached"))
+}
+
+fn verify_stage_entrance(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    before: &[u8],
+) -> Result<(), RenderError> {
+    let entry = *simulation.state();
+    advance(simulation, 180)?;
+    let descent = simulation.state();
+    if descent
+        .stage_entrance()
+        .and_then(|motion| motion.elevation(Player::Marge))
+        .is_none()
+        || descent.camera_origin() != 0
+        || descent.impact_cues() != entry.impact_cues()
+    {
+        return Err(failure("second-stage descent was not admitted"));
+    }
+    let _descent = art.present(scene, descent)?;
+    if before == scene.readback()? {
+        return Err(failure("second-stage descent did not change readback"));
+    }
+    advance(simulation, 115)?;
+    if simulation.state().stage_entrance().is_some() {
+        return Err(failure("second-stage landing did not finish"));
+    }
+    write_status(format_args!("Second stage: entrance and landing verified"))
+        .map_err(failure)
 }
 
 fn await_bonus(

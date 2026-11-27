@@ -4598,3 +4598,28 @@ controls. This establishes an input-independent entrance interval,
 not the complete movement script or its art. Native still admits
 playable movement directly after the card; the original scripted
 entrance, associated art and cue alignment remain open.
+
+The additional primary-edge control also preserves the complete scripted
+actor interval. In the neutral control, 676 consecutive station records
+from first actor initialization through landing and the following frame
+confirm a common descent equation in 8.8 fixed-point units. The actors
+initialize after 128 ticks, advance one position unit per tick over 100
+ticks and hold their formation across the phase boundary. A separate
+alternating-tick airborne arc ends with staggered landings; the last
+station's final landing occurs at elapsed tick 295. The observed neutral
+positions, floor and height fields agree with the reconstruction over
+this interval, including the final explicit landing.
+
+The native campaign now applies this timed arrival after the stage card,
+retaining the station health, stock and score state while suspending
+combat, camera progress and new action edges. Directional input held
+during the descent is available from the first observed steering tick
+after the phase boundary; pause suspends the arrival and reset clears
+it. Existing movement boundaries and directional movement are reused.
+The new presentation uses the existing optional shadow and jump artwork
+as a provisional substitute. Exact original actor-to-raster projection,
+vehicle artwork and motion, the card-to-entrance setup delay, original
+cue alignment and control/collision behavior during the landing remain
+open. Regression checks cover the shared arc, alternating steering,
+staggered landing, pause, reset and station preservation; campaign
+readback checks cover the arrival before ordinary combat resumes.
