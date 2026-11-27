@@ -131,7 +131,11 @@ impl StageEntrance {
     }
 
     #[cfg(any(test, feature = "native-preview"))]
-    pub(super) fn marker_elevation(self, player: Player) -> Option<i16> {
+    pub(super) fn marker_elevation(
+        self,
+        player: Player,
+        live_elevation: i16,
+    ) -> Option<i16> {
         if self.scripted_art()
             || self.presentation_complete()
             || !self.admitted.get(player.index()).copied()?
@@ -139,7 +143,7 @@ impl StageEntrance {
             return None;
         }
         if self.complete() {
-            return Some(0);
+            return Some(live_elevation.max(0));
         }
         let step =
             usize::from(self.tick.saturating_sub(RELEASE).checked_div(2)?);
@@ -313,6 +317,21 @@ const fn initial_height(player: Player) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn marker_lift_uses_live_elevation_only_during_released_play() {
+        let jump = crate::Maneuver::jump().advance(Player::Marge, true);
+        let lift = jump.elevation();
+        assert!(lift > 0);
+        assert_eq!(sample(294).marker_elevation(Player::Marge, lift), Some(0));
+        assert_eq!(
+            sample(295).marker_elevation(Player::Marge, lift),
+            Some(lift)
+        );
+        assert_eq!(sample(382).marker_elevation(Player::Marge, 0), Some(0));
+        assert_eq!(sample(383).marker_elevation(Player::Marge, lift), None);
+        let late = StageEntrance::new([false, true, true, true]).at(300);
+        assert_eq!(late.marker_elevation(Player::Marge, lift), None);
+    }
 
     fn sample(tick: u16) -> StageEntrance {
         StageEntrance::new([true; 4]).at(tick)
@@ -441,24 +460,24 @@ mod tests {
 
     #[test]
     fn markers_follow_the_sampled_bounce_and_expire_independently() {
-        assert_eq!(sample(231).marker_elevation(Player::Marge), None);
+        assert_eq!(sample(231).marker_elevation(Player::Marge, 0), None);
         assert_eq!(
-            Player::ALL.map(|player| sample(232).marker_elevation(player)),
+            Player::ALL.map(|player| sample(232).marker_elevation(player, 0)),
             [Some(59), Some(53), Some(66), Some(42)]
         );
-        assert_eq!(sample(233).marker_elevation(Player::Marge), Some(59));
-        assert_eq!(sample(244).marker_elevation(Player::Marge), Some(75));
-        assert_eq!(sample(294).marker_elevation(Player::Bart), Some(7));
-        assert_eq!(sample(295).marker_elevation(Player::Bart), Some(0));
-        assert_eq!(sample(382).marker_elevation(Player::Marge), Some(0));
-        assert_eq!(sample(383).marker_elevation(Player::Marge), None);
+        assert_eq!(sample(233).marker_elevation(Player::Marge, 0), Some(59));
+        assert_eq!(sample(244).marker_elevation(Player::Marge, 0), Some(75));
+        assert_eq!(sample(294).marker_elevation(Player::Bart, 0), Some(7));
+        assert_eq!(sample(295).marker_elevation(Player::Bart, 0), Some(0));
+        assert_eq!(sample(382).marker_elevation(Player::Marge, 0), Some(0));
+        assert_eq!(sample(383).marker_elevation(Player::Marge, 0), None);
     }
 
     #[test]
     fn markers_belong_to_initially_admitted_characters() {
         let selective = StageEntrance::new([false, true, false, true]).at(300);
-        assert_eq!(selective.marker_elevation(Player::Marge), None);
-        assert_eq!(selective.marker_elevation(Player::Homer), Some(0));
+        assert_eq!(selective.marker_elevation(Player::Marge, 0), None);
+        assert_eq!(selective.marker_elevation(Player::Homer, 0), Some(0));
     }
 
     #[test]

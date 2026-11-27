@@ -175,7 +175,9 @@ impl ArrivalArt {
             if !station.can_fight() {
                 continue;
             }
-            let Some(elevation) = entrance.marker_elevation(player) else {
+            let Some(elevation) =
+                entrance.marker_elevation(player, station.maneuver.elevation())
+            else {
                 continue;
             };
             let marker = *markers
@@ -538,6 +540,67 @@ pub(super) fn verify_release_shadows(
     write_status(format_args!(
         "Second stage release shadows: {stationary_count} at tick {:?}",
         motion.map(StageEntrance::tick)
+    ))
+    .map_err(failure)
+}
+
+pub(super) fn verify_live_marker(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    use games::input::LogicalAction;
+    use games::replay::InputStep as _;
+
+    use crate::{Action, Control};
+
+    let Some(markers) = art
+        .poses
+        .arrival
+        .as_ref()
+        .and_then(|arrival| arrival.markers.as_ref())
+    else {
+        return Ok(());
+    };
+    let marker = *markers.first().ok_or(RenderError::InvalidSprite)?;
+    let seat = Player::ALL
+        .into_iter()
+        .zip(cabinet.choices())
+        .find_map(|(seat, character)| {
+            (character == Player::Marge).then_some(seat)
+        })
+        .ok_or(RenderError::InvalidSprite)?;
+    let mut jumping = *cabinet;
+    jumping.input_step(0, &[LogicalAction {
+        action: Action {
+            control: Control::Secondary,
+            player: seat,
+        },
+        down: true,
+    }]);
+    for tick in 1..8u64 {
+        jumping.input_step(tick, &[]);
+    }
+    let [marge, ..] = jumping.stations();
+    let lift = marge.maneuver.elevation();
+    if lift <= 0 {
+        return Err(failure("post-landing jump did not gain elevation"));
+    }
+    let view = art.presentation_view(scene, &jumping)?;
+    let origin =
+        view.project(marker_position(Player::Marge, marge.position, lift));
+    let expected = marker.draw(
+        SpriteRect {
+            x: i32::from(origin.x),
+            y: i32::from(origin.y),
+            ..marker.rect
+        },
+        false,
+    );
+    let _drawn = art.present(scene, &jumping)?;
+    verify_draws(scene, art, &jumping, (view, &[expected]))?;
+    write_status(format_args!(
+        "Second stage live marker: {lift} pixels of jump lift"
     ))
     .map_err(failure)
 }

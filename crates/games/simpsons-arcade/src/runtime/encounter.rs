@@ -911,6 +911,7 @@ fn verify_stage_entrance(
         return Err(failure("second-stage landing did not finish"));
     }
     verify_arrival_sample(scene, art, simulation, (true, true, false, true))?;
+    super::arrival::verify_live_marker(scene, art, simulation.state())?;
     advance_body_check(scene, art, simulation, (1, true, true))?;
     advance_body_check(scene, art, simulation, (14, true, true))?;
     advance_body_check(scene, art, simulation, (1, true, true))?;

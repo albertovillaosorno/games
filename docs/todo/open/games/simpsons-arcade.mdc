@@ -5019,3 +5019,32 @@ shadow readback through tick 323, retirement at 324 and the bounded
 single-coverage union of stationary and moving masks. Subsequent routed
 combat and 270-column travel also pass. Exact directional retirement,
 original selective admission and whole-scene parity remain open.
+
+### Post-landing marker elevation
+
+A matched original replay after the gameplay landing boundary
+captured concurrent held jump, ground attack, special and directional
+movement. The first seven displayed scenes exactly match the neutral
+capture. The marker follows horizontal movement and the aerial
+elevation of its character. A repeated compact actor and DMA trace
+confirms the source marker group retires at displayed tick 396, rather
+than neutral tick 383, when all four station countdowns reach zero.
+Thirteen additional held display updates occur under concurrent
+maneuver load. Exact pose-dependent anchor offsets and source update
+scheduling remain unresolved.
+
+After the gameplay landing gate, the optional native marker follows
+the existing maneuver elevation while retaining the sampled bounce
+curve, initial ownership and independent presentation deadline.
+This is a bounded registration correction, not a claim of exact
+source marker trajectory or timing under load. Fixed-step native
+simulation does not inherit display-dependent stalls.
+
+Portable tests check scripted versus live elevation, initial ownership
+and the retirement boundary. Fresh workspace validation passed. The
+optimized original-backed native touch smoke verifies 51 pixels of
+marker lift during the sampled held jump in all five display modes,
+using isolated Xvfb software OpenGL and dummy audio. The unchanged
+arrival cadence and subsequent routed combat and travel also pass.
+Physical input, audible playback and exact loaded-source scheduling
+remain unverified by this smoke.
