@@ -4444,3 +4444,23 @@ baseline victory, transition and instruction offsets are 147, 371 and
 cue selection throughout the defeat and bonus handoff. These timings
 choose the matched baseline deterministically; the observed five-frame
 variation and exact original sound sequencing remain unresolved.
+
+### Balloon bonus phase countdowns
+
+Five isolated original controls sampled the first bonus phase fields and
+all four balloon records each frame. The original-backed baseline
+reproduced the earlier score and sound-command traces byte-for-byte.
+Neutral input exhausted the instruction counter; a boundary input
+control confirmed that the activity gate only opens after its counter
+exceeds 208. A static review found a 384-tick instruction countdown
+and a distinct 96-tick ready countdown. Neutral and early-edge controls
+both took 98 frames from ready admission to pumping; the idle pumping
+interval lasted 492 frames, including the original packed-decimal
+countdown and phase entry. The sparse baseline took 491 frames.
+
+The native phase model now opens the instruction skip gate on tick 210,
+uses a 384-tick timeout, holds Ready for 98 ticks and allows 492 pumping
+ticks. These constants retain the logical countdowns and deterministic
+neutral pumping duration; they do not model the original scheduler's
+instruction setup/exit overhead or its one-frame pumping variation.
+Result choreography and inflation remain separate acceptance work.

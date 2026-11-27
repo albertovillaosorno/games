@@ -36,10 +36,13 @@ use super::Player;
 // Baseline instruction entry is 953 reference frames after the terminal
 // response, of which 128 are the separate wrestler defeat phase.
 const VICTORY_TICKS: u16 = 825;
-const INSTRUCTION_MIN_TICKS: u16 = 120;
-const INSTRUCTION_MAX_TICKS: u16 = 400;
-const READY_TICKS: u16 = 160;
-const PUMP_TICKS: u16 = 420;
+// The activity gate opens after the counter has exceeded 208.
+const INSTRUCTION_MIN_TICKS: u16 = 210;
+const INSTRUCTION_MAX_TICKS: u16 = 384;
+// A 96-tick countdown bracketed by phase setup and pump entry.
+const READY_TICKS: u16 = 98;
+// Neutral timeout includes the packed-decimal countdown and entry.
+const PUMP_TICKS: u16 = 492;
 const RESULT_TICKS: u16 = 480;
 const DECAY_TICKS: u16 = 12;
 const INFLATION_PER_PRESS: u8 = 2;
