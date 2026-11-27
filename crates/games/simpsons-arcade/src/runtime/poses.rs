@@ -520,7 +520,10 @@ impl PoseArt {
                     "boardwalk backdrop requires the endpoint",
                 ));
             }
-            if self.linked.is_some() && travel < 1264 {
+            if self.linked.is_some()
+                && i16::try_from(travel).map_err(failure)?
+                    < crate::LINKED_MIN_TRAVEL
+            {
                 return Err(failure(
                     "linked actors require late second-stage travel",
                 ));
@@ -1725,12 +1728,52 @@ mod tests {
             assert_arrival_catalogue(&text, fighter, bonus_record, &value);
             assert_entrance_catalogue(&text, fighter, bonus_record, &value);
             assert_boardwalk_catalogue(&text, fighter, bonus_record, &value);
+            assert_linked_catalogue(&text, fighter, bonus_record, &value);
         }
         assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
         assert!(
             parse_stage_two(&format!("stage-two {HASH} {HASH}"), None).is_err()
         );
         assert!(parse_stage_two(&format!("stage-two {HASH}"), None).is_err());
+    }
+
+    fn assert_linked_catalogue(
+        stage_text: &str,
+        fighter: &str,
+        bonus_record: &str,
+        stage: &Catalogue,
+    ) {
+        let hashes: Vec<_> = ['1', '2', '3', '4', '5', '6', '7']
+            .into_iter()
+            .map(|digit| digit.to_string().repeat(64))
+            .collect();
+        let record = format!("linked-actors {}\n", hashes.join(" "));
+        let full = format!("{stage_text}{record}");
+        assert!(Catalogue::parse(&full).is_ok_and(|value| {
+            value.count() == stage.count().saturating_add(linked::POSE_COUNT)
+                && value.atlas_count()
+                    == stage.atlas_count().saturating_add(linked::POSE_COUNT)
+                && value.atlas_bytes()
+                    == stage.atlas_bytes().saturating_add(
+                        linked::POSE_COUNT.saturating_mul(65_536),
+                    )
+                && value.linked_sprite_count() == linked::EXTRA_SPRITES
+                && value.digests().count() == value.count()
+        }));
+        assert!(
+            Catalogue::parse(&format!("{fighter}{bonus_record}{record}"))
+                .is_err()
+        );
+        assert!(Catalogue::parse(&format!("{full}{record}")).is_err());
+        for hash in hashes {
+            let partial = record.replace(&hash, "");
+            assert!(
+                Catalogue::parse(&format!("{stage_text}{partial}")).is_err()
+            );
+        }
+        assert!(
+            Catalogue::parse(&format!("{} extra", full.trim_end())).is_err()
+        );
     }
 
     fn assert_boardwalk_catalogue(

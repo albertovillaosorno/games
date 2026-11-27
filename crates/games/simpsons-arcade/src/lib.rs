@@ -84,6 +84,7 @@ const STRIP_VIEWPORT: StripViewport = StripViewport {
 const ENEMY_CAPACITY: usize = Encounter::CAPACITY;
 const LINKED_CHILD_CAPACITY: usize = 7;
 const LINKED_PARENT_CAPACITY: usize = 3;
+const LINKED_MIN_TRAVEL: i16 = 1264;
 const PLAYER_STRIKE: u8 = 10;
 const WRESTLER_ATTACK_STRIKE: u8 = 24;
 const OPENING_ENEMY_COUNT: usize = 7;
@@ -1369,6 +1370,15 @@ impl Cabinet {
         self.session
     }
 
+    const fn set_stage_two_limit(&mut self, limit: Option<i16>) {
+        self.stage_two_limit = limit;
+        if !matches!(limit, Some(value) if value >= LINKED_MIN_TRAVEL)
+            && let Some(encounter) = &mut self.encounter
+        {
+            encounter.linked = None;
+        }
+    }
+
     // Unlike the gameplay entrance, this survives the landing boundary.
     #[cfg(any(test, feature = "native-preview"))]
     const fn stage_arrival(&self) -> Option<StageEntrance> {
@@ -1455,7 +1465,7 @@ impl Cabinet {
         self.bonus_enabled = enabled && self.wrestler_enabled;
         if !self.bonus_enabled {
             self.bonus = None;
-            self.stage_two_limit = None;
+            self.set_stage_two_limit(None);
         }
         self
     }
@@ -1500,7 +1510,7 @@ impl Cabinet {
             self.wrestler = None;
             self.bonus = None;
             self.bonus_enabled = false;
-            self.stage_two_limit = None;
+            self.set_stage_two_limit(None);
         }
         self
     }
@@ -1511,7 +1521,9 @@ impl Cabinet {
     pub fn with_linked_actors(mut self, enabled: bool) -> Self {
         if let Some(encounter) = self.encounter.as_mut() {
             encounter.linked = (enabled
-                && self.stage_two_limit.is_some_and(|limit| limit >= 1264))
+                && self
+                    .stage_two_limit
+                    .is_some_and(|limit| limit >= LINKED_MIN_TRAVEL))
             .then(LinkedEncounter::new);
         }
         self
@@ -1596,8 +1608,9 @@ impl Cabinet {
         if self.stage_two() || self.layout.max.x.checked_add(limit).is_none() {
             return Err(LayoutError::ScrollOverflow);
         }
-        self.stage_two_limit =
-            (self.bonus_enabled && limit > 0).then_some(limit);
+        self.set_stage_two_limit(
+            (self.bonus_enabled && limit > 0).then_some(limit),
+        );
         Ok(self)
     }
 
@@ -3795,6 +3808,48 @@ mod tests {
         let before = state.stations();
         finish_bonus_health_fixture(&mut state);
         assert_eq!(state.stations(), before);
+    }
+
+    #[test]
+    fn linked_actors_require_the_late_extent_after_reconfiguration() {
+        let initial = Cabinet::with_opening_street()
+            .and_then(|state| state.with_scroll_limit(1360))
+            .map(|state| state.with_late_wrestler(true).with_bonus(true))
+            .and_then(|state| state.with_stage_two(1871));
+        assert!(initial.is_ok());
+        let Ok(configured) = initial else {
+            return;
+        };
+        let selected = configured.with_linked_actors(true);
+        assert_linked_reconfiguration(&selected.with_stage_two(270));
+        assert_linked_reconfiguration(
+            &selected
+                .with_bonus(false)
+                .with_bonus(true)
+                .with_stage_two(1871),
+        );
+        assert_linked_reconfiguration(
+            &selected
+                .with_late_wrestler(false)
+                .with_late_wrestler(true)
+                .with_bonus(true)
+                .with_stage_two(1871),
+        );
+        let preserved = selected.with_stage_two(1871);
+        assert!(preserved.is_ok());
+        if let Ok(mut state) = preserved {
+            state.enter_stage_two(1871);
+            assert_eq!(state.linked_parents().count(), LINKED_PARENT_CAPACITY);
+        }
+    }
+
+    fn assert_linked_reconfiguration(result: &Result<Cabinet, LayoutError>) {
+        assert!(result.is_ok());
+        if let Ok(mut state) = *result {
+            state.enter_stage_two(state.stage_two_limit.unwrap_or_default());
+            assert_eq!(state.linked_parents().count(), 0);
+            assert_eq!(state.linked_children().count(), 0);
+        }
     }
 
     #[test]
