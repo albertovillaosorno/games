@@ -4770,3 +4770,23 @@ groups, not an accepted station-presentation track: their clipped
 extents change, and the body and rope depth order interleave.
 Separate visibility, placement, priority composition and landing
 art still require original-backed verification.
+
+### Second-stage music command boundary
+
+Five original phase traces, including two fresh audio-backed campaign
+replays with different card dismissal timings, select the stage music
+on setup tick one, ten ticks before entrance admission. Native now
+selects the finite second-stage cue at that boundary, preserving the
+same voice through admission. A synthetic PCM regression checks sample
+progression across all setup ticks and entrance without restarting.
+The original-backed optimized Linux smoke passed aspect-fit offscreen
+OpenGL, synthetic touch and dummy audio, including the quiet card,
+setup cue, entrance, pause and finite playback end. The executable
+measured 4,002,144 bytes and peak RSS was 183,173,120 bytes.
+
+This aligns the logical command, not the exact audible onset: the
+recordings show a small delay between the original command and its
+first nonzero sample. A further bounded recurrence comparison did not
+establish a recurring waveform seam, so the sixty-second excerpt
+remains finite rather than guessing a loop. Original sound transport,
+channel scheduling and physical audio presentation remain unresolved.

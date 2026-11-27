@@ -349,6 +349,7 @@ impl MusicCue {
                     Self::Victory
                 },
                 BonusPhase::Victory => Self::Transition,
+                BonusPhase::StageSetup if bonus.tick() >= 1 => Self::StageTwo,
                 BonusPhase::Complete
                 | BonusPhase::Ready
                 | BonusPhase::StageCard
@@ -1100,8 +1101,18 @@ impl Playback {
             if cabinet.stage_two() {
                 break;
             }
-            if self.music.cue != MusicCue::Quiet {
-                return Err(failure("stage card was not quiet"));
+            let setup_cue = cabinet.bonus().is_some_and(|bonus| {
+                bonus.phase() == BonusPhase::StageSetup && bonus.tick() >= 1
+            });
+            let expected = if setup_cue {
+                MusicCue::StageTwo
+            } else {
+                MusicCue::Quiet
+            };
+            if self.music.cue != expected
+                || self.music_voices() != usize::from(setup_cue)
+            {
+                return Err(failure("stage setup soundtrack timing differs"));
             }
         }
         self.update(cabinet)?;
@@ -1721,6 +1732,7 @@ mod tests {
     use games_platform::ir::storage::staging::CanonicalStaging;
 
     use super::*;
+    use crate::bonus::Bonus;
 
     type FixtureClip<'key> = (&'key str, u64, i16);
 
@@ -1765,6 +1777,59 @@ mod tests {
             || cabinet.phase() != Phase::Playing
         {
             return Err(failure("fixture did not enter stage two"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn soundtrack_starts_on_first_setup_tick_without_restarting()
+    -> Result<(), RenderError> {
+        let mut cabinet = smoke_campaign(LocalSession::default(), true)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        clear_smoke_wrestler(&mut cabinet);
+        let start = (1..6000u64)
+            .find(|&tick| {
+                cabinet.input_step(tick, &[]);
+                cabinet.bonus().is_some_and(|bonus| {
+                    bonus.phase() == BonusPhase::StageSetup
+                })
+            })
+            .ok_or_else(|| failure("fixture did not reach stage setup"))?;
+        if cabinet.bonus().map(Bonus::tick) != Some(0)
+            || MusicCue::select(&cabinet) != MusicCue::Quiet
+        {
+            return Err(failure("setup entry did not retain silence"));
+        }
+        let clip = OwnedClip::new(
+            Rc::from((1..=24i16).collect::<Vec<_>>()),
+            Channels::Stereo,
+            RATE,
+        )
+        .map_err(failure)?;
+        let mut soundtrack = Soundtrack {
+            bonus: None,
+            cue: MusicCue::Quiet,
+            handoff: None,
+            stage_two: Some(clip),
+            street: None,
+        };
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        for elapsed in 1..=12u64 {
+            cabinet.input_step(start.saturating_add(elapsed), &[]);
+            let cue = MusicCue::select(&cabinet);
+            let changed = soundtrack.select(&mut mixer, cue)?;
+            let mut frame = [[0; 2]];
+            mixer.render(&mut frame);
+            let sample =
+                i16::try_from(elapsed.saturating_mul(2)).map_err(failure)?;
+            if cue != MusicCue::StageTwo
+                || changed != (elapsed == 1)
+                || cabinet.stage_two() != (elapsed >= 11)
+                || frame != [[sample.saturating_sub(1), sample]]
+            {
+                return Err(failure("setup cue shifted or restarted"));
+            }
         }
         Ok(())
     }

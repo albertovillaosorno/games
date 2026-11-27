@@ -844,3 +844,13 @@ its non-runtime disposition is unchanged. The observed opposed
 horizontal attack pose latch adds one partial Rust mapping, with
 32 partial mappings and three intentional runtime replacements in
 all. Function, graph and disposition counts remain unchanged.
+
+Five original phase traces, including two fresh audio-backed replays,
+confirm second-stage soundtrack selection at setup tick one. The
+reviewed descriptor-selection function gains one partial native
+cue-selection and mixer-handoff mapping, with synthetic sample
+progression and original-backed native smoke evidence. The generic
+sound transport and original audio-CPU state remain unresolved.
+The canonical checker reports 33 partial mappings, three intentional
+runtime replacements and unchanged function, graph and disposition
+counts.
