@@ -505,14 +505,14 @@ fn verify_visible(
         })?;
     let actual = scene.readback()?;
     let baseline = readback_without_scenery(scene, art, cabinet)?;
-    verify_pixels(&actual, &baseline, view.width, draw.destination)
+    verify_pixels(&actual, &baseline, view.width, &[draw.destination])
 }
 
-fn verify_pixels(
+pub(super) fn verify_pixels(
     actual: &[u8],
     baseline: &[u8],
     width: u32,
-    bounds: SpriteRect,
+    bounds: &[SpriteRect],
 ) -> Result<(), RenderError> {
     if actual.len() != baseline.len() {
         return Err(failure("scripted scene changed readback extent"));
@@ -535,7 +535,10 @@ fn verify_pixels(
         let vertical = pixel_index
             .checked_div(width)
             .ok_or_else(|| failure("zero width"))?;
-        if !bounds.contains_pixel(horizontal, vertical) {
+        if !bounds
+            .iter()
+            .any(|rect| rect.contains_pixel(horizontal, vertical))
+        {
             return Err(failure("scripted scene changed unrelated pixels"));
         }
         changed = true;

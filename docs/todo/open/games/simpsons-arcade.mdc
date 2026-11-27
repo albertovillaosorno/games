@@ -4790,3 +4790,37 @@ first nonzero sample. A further bounded recurrence comparison did not
 establish a recurring waveform seam, so the sixty-second excerpt
 remains finite rather than guessing a loop. Original sound transport,
 channel scheduling and physical audio presentation remain unresolved.
+
+### Registered second-stage arrival layers
+
+The isolated body groups reuse four complete canonical RGBA8 payloads
+across 28 sampled station crops; another 15 clipped body crops agree
+byte for byte with their registered subregions. Ten translated rope
+crops agree byte for byte, and two earlier rope groups are entirely
+outside the raster. The four isolated ground masks are identical to
+the existing shared shadow payload. The verified source scene uses
+the preceding body sample, with rope and shadow positions following
+one additional tick earlier.
+
+The optional pose record `arrival SHA256` selects eight independent
+body and rope atlases with a combined 105,496-byte RGBA8 budget. The
+selection requires second-stage art and the existing shadow bundle.
+It projects the active stations in source-aligned world coordinates,
+draws ground masks before ropes and bodies, and retains the vehicle
+above these layers. It does not modify simulation, collision or
+steering. The registered art ends after displayed tick 231; the
+existing landing substitute remains available from tick 232.
+
+Fresh full workspace validation passed. An optimized 4,017,200-byte
+Linux executable passed the original-backed campaign with synthetic
+touch, dummy audio and offscreen OpenGL in all five display modes.
+Ordered layer submission and nonempty confined readback changes were
+verified at ticks 180, 229 and 231, with arrival atlas absence at
+ticks 1 and 232. The adaptive smoke verified 106 added columns.
+The landing, combat and 270-column second-stage travel still passed.
+
+This establishes isolated payload reuse and sampled native layer
+visibility, not whole-raster equality to the original. Exact
+post-release landing artwork, unsampled source clipping and priority,
+physical input/display acceptance and later-stage gameplay remain
+open. The task remains incomplete.

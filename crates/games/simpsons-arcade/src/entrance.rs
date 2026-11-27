@@ -114,6 +114,27 @@ impl StageEntrance {
         i16::try_from(height.max(0).checked_div(UNITS_PER_PIXEL)?).ok()
     }
 
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) fn presentation_sample(
+        self,
+        player: Player,
+        delay: u16,
+    ) -> Option<(Point, i16)> {
+        if !self.scripted_art() {
+            return None;
+        }
+        let tick = self.tick.saturating_sub(delay).min(SCRIPT_END);
+        let source = Self { tick };
+        source
+            .scripted_position(player)
+            .zip(source.elevation(player))
+    }
+
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn scripted_art(self) -> bool {
+        self.tick <= SCRIPT_END + 2
+    }
+
     pub(super) fn scripted_position(self, player: Player) -> Option<Point> {
         if !self.visible(player) || self.tick > SCRIPT_END {
             return None;
@@ -201,6 +222,55 @@ mod tests {
             Some(Point { x: 228, y: 192 }),
         ]);
         assert!(!end.steering_tick());
+    }
+
+    #[test]
+    fn scripted_art_tracks_display_admission() {
+        let before = StageEntrance { tick: 128 };
+        assert_eq!(
+            Player::ALL.map(|player| before.presentation_sample(player, 1)),
+            [None; 4]
+        );
+        let first = StageEntrance { tick: 129 };
+        assert_eq!(
+            first.presentation_sample(Player::Marge, 1),
+            Some((Point { x: 32, y: 192 }, 192))
+        );
+        assert_eq!(first.presentation_sample(Player::Marge, 2), None);
+        assert_eq!(first.presentation_sample(Player::Homer, 1), None);
+    }
+
+    #[test]
+    fn scripted_art_holds_layers_until_release() {
+        let end = StageEntrance { tick: 229 };
+        let next = StageEntrance { tick: 230 };
+        let held = StageEntrance { tick: 231 };
+        assert_eq!(
+            end.presentation_sample(Player::Marge, 1),
+            Some((Point { x: 132, y: 192 }, 58))
+        );
+        assert_eq!(
+            end.presentation_sample(Player::Marge, 2),
+            Some((Point { x: 131, y: 192 }, 58))
+        );
+        assert_eq!(
+            next.presentation_sample(Player::Marge, 1),
+            end.presentation_sample(Player::Marge, 1)
+        );
+        assert_eq!(
+            next.presentation_sample(Player::Marge, 2),
+            next.presentation_sample(Player::Marge, 1)
+        );
+        assert_eq!(
+            next.presentation_sample(Player::Marge, 2),
+            held.presentation_sample(Player::Marge, 2)
+        );
+        let released = StageEntrance { tick: 232 };
+        assert!(!released.scripted_art());
+        assert_eq!(
+            Player::ALL.map(|player| released.presentation_sample(player, 1)),
+            [None; 4]
+        );
     }
 
     #[test]

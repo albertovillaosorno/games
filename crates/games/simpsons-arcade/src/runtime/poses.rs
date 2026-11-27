@@ -47,7 +47,7 @@ use games_platform::ir::storage::file::snapshot;
 
 use super::world::{self, StageArt, WorldArt};
 use super::{
-    Art, KEYS, Maneuver, Player, Station, backdrop, bonus, failure,
+    Art, KEYS, Maneuver, Player, Station, arrival, backdrop, bonus, failure,
     open_bundle, scenery, wrestler,
 };
 use crate::{
@@ -115,6 +115,7 @@ enum Subject {
 
 #[derive(Debug, Default)]
 pub(super) struct Catalogue {
+    arrival: Option<ContentHash>,
     pub(super) backdrop: backdrop::Catalogue,
     bonus: Option<ContentHash>,
     entries: BTreeMap<Key, ContentHash>,
@@ -154,6 +155,10 @@ impl Catalogue {
             .saturating_mul(65_536)
             .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
+                usize::from(self.arrival.is_some())
+                    .saturating_mul(arrival::ATLAS_BYTES),
+            )
+            .saturating_add(
                 self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
             )
             .saturating_add(
@@ -167,10 +172,15 @@ impl Catalogue {
     }
 
     pub(super) fn atlas_count(&self) -> usize {
-        self.count().saturating_add(
-            usize::from(self.bonus.is_some())
-                .saturating_mul(bonus::ATLAS_COUNT.saturating_sub(1)),
-        )
+        self.count()
+            .saturating_add(
+                usize::from(self.arrival.is_some())
+                    .saturating_mul(arrival::ATLAS_COUNT.saturating_sub(1)),
+            )
+            .saturating_add(
+                usize::from(self.bonus.is_some())
+                    .saturating_mul(bonus::ATLAS_COUNT.saturating_sub(1)),
+            )
     }
 
     pub(super) fn backdrop_count(&self) -> usize {
@@ -203,7 +213,8 @@ impl Catalogue {
             && repelled_requires_restraint(entries)
             && pair_complete(entries)
             && self.scenery.complete()
-            && (!self.scenery.has_entrance() || self.stage_two.is_some())
+            && (!(self.scenery.has_entrance() || self.arrival.is_some())
+                || self.stage_two.is_some())
             && self.backdrop.complete()
             && self.wrestler.complete()
             && (self.bonus.is_none() || self.has_wrestler())
@@ -214,6 +225,7 @@ impl Catalogue {
         self.entries
             .len()
             .saturating_add(self.scenery.count())
+            .saturating_add(usize::from(self.arrival.is_some()))
             .saturating_add(self.backdrop_count())
             .saturating_add(self.wrestler.count())
             .saturating_add(usize::from(self.bonus.is_some()))
@@ -230,7 +242,12 @@ impl Catalogue {
             .chain(self.backdrop.digests())
             .chain(self.wrestler.digests())
             .chain(self.bonus)
+            .chain(self.arrival)
             .chain(self.stage_two.into_iter().flatten())
+    }
+
+    pub(super) const fn has_arrival(&self) -> bool {
+        self.arrival.is_some()
     }
 
     pub(super) fn has_scenery(&self) -> bool {
@@ -268,6 +285,10 @@ impl Catalogue {
             let _prior = entries.insert(key, art);
         }
         Ok(PoseArt {
+            arrival: self
+                .arrival
+                .map(|digest| arrival::ArrivalArt::load(store, scene, digest))
+                .transpose()?,
             backdrop: self.backdrop.load(store, scene)?,
             bonus: self
                 .bonus
@@ -299,6 +320,7 @@ impl Catalogue {
         let mut backdrop = backdrop::Catalogue::default();
         let mut wrestler = wrestler::Catalogue::default();
         let mut bonus = None;
+        let mut arrival = None;
         let mut stage_two = None;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             if line.split_whitespace().next() == Some("stage-two") {
@@ -306,7 +328,11 @@ impl Catalogue {
                 continue;
             }
             if line.split_whitespace().next() == Some("bonus") {
-                bonus = Some(parse_bonus(line, bonus)?);
+                bonus = Some(parse_single_bundle("bonus", line, bonus)?);
+                continue;
+            }
+            if line.split_whitespace().next() == Some("arrival") {
+                arrival = Some(parse_single_bundle("arrival", line, arrival)?);
                 continue;
             }
             if line.split_whitespace().next() == Some("wrestler") {
@@ -332,6 +358,7 @@ impl Catalogue {
             }
         }
         let catalogue = Self {
+            arrival,
             backdrop,
             bonus,
             entries,
@@ -346,7 +373,10 @@ impl Catalogue {
     }
 
     pub(super) fn scenic_sprite_count(&self) -> usize {
-        self.scenery.track_count()
+        self.scenery.track_count().saturating_add(
+            usize::from(self.arrival.is_some())
+                .saturating_mul(arrival::EXTRA_SPRITES),
+        )
     }
 
     pub(super) fn stage_two_strip(&self) -> Option<ContentHash> {
@@ -356,6 +386,7 @@ impl Catalogue {
 
 #[derive(Debug, Default)]
 pub(super) struct PoseArt {
+    pub(super) arrival: Option<arrival::ArrivalArt>,
     pub(super) backdrop: backdrop::BackdropArt,
     pub(super) bonus: Option<bonus::BonusArt>,
     entries: BTreeMap<Key, Art>,
@@ -498,6 +529,7 @@ impl PoseArt {
 
     pub(super) fn take_enemy(&mut self) -> Self {
         Self {
+            arrival: None,
             backdrop: backdrop::BackdropArt::default(),
             bonus: None,
             entries: self
@@ -651,18 +683,19 @@ fn parse_stage_two(
     ])
 }
 
-fn parse_bonus(
+fn parse_single_bundle(
+    role: &str,
     line: &str,
     selected: Option<ContentHash>,
 ) -> Result<ContentHash, RenderError> {
     let mut fields = line.split_whitespace();
-    let (Some("bonus"), Some(digest), None) =
+    let (Some(kind), Some(digest), None) =
         (fields.next(), fields.next(), fields.next())
     else {
-        return Err(failure("invalid bonus record"));
+        return Err(failure("invalid single-bundle record"));
     };
-    if selected.is_some() {
-        return Err(failure("duplicate bonus record"));
+    if kind != role || selected.is_some() {
+        return Err(failure("unexpected or duplicate single-bundle record"));
     }
     digest.parse().map_err(failure)
 }
@@ -1492,6 +1525,7 @@ mod tests {
         assert!(parsed.is_ok());
         if let Ok(value) = parsed {
             assert_stage_two_budget(selected, &value, &other);
+            assert_arrival_catalogue(&text, fighter, bonus_record, &value);
             assert_entrance_catalogue(&text, fighter, bonus_record, &value);
         }
         assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
@@ -1499,6 +1533,52 @@ mod tests {
             parse_stage_two(&format!("stage-two {HASH} {HASH}"), None).is_err()
         );
         assert!(parse_stage_two(&format!("stage-two {HASH}"), None).is_err());
+    }
+
+    fn assert_arrival_catalogue(
+        stage_text: &str,
+        fighter: &str,
+        bonus_record: &str,
+        stage: &Catalogue,
+    ) {
+        let record = format!("arrival {HASH}\n");
+        assert!(
+            Catalogue::parse(&format!("{fighter}{bonus_record}{record}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{stage_text}{record}{record}")).is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{stage_text}arrival {HASH} extra"))
+                .is_err()
+        );
+        let parsed = Catalogue::parse(&format!("{stage_text}{record}"));
+        assert!(parsed.is_ok());
+        let Ok(selected) = parsed else {
+            return;
+        };
+        assert_arrival_budget(stage, &selected);
+    }
+
+    fn assert_arrival_budget(stage: &Catalogue, selected: &Catalogue) {
+        assert!(selected.has_arrival());
+        assert_eq!(selected.count(), stage.count().saturating_add(1));
+        assert_eq!(selected.digests().count(), selected.count());
+        assert_eq!(
+            selected.atlas_bytes(),
+            stage.atlas_bytes().saturating_add(arrival::ATLAS_BYTES)
+        );
+        assert_eq!(
+            selected.atlas_count(),
+            stage.atlas_count().saturating_add(arrival::ATLAS_COUNT)
+        );
+        assert_eq!(
+            selected.scenic_sprite_count(),
+            stage
+                .scenic_sprite_count()
+                .saturating_add(arrival::EXTRA_SPRITES)
+        );
     }
 
     fn assert_entrance_catalogue(

@@ -872,6 +872,7 @@ fn verify_stage_entrance(
     before: &[u8],
 ) -> Result<(), RenderError> {
     let entry = *simulation.state();
+    super::arrival::verify(scene, art, &entry, false)?;
     super::scenery::verify_entrance(scene, art, &entry, false)?;
     advance_vehicle_check(scene, art, simulation, (1, true))?;
     advance(simulation, 178)?;
@@ -889,15 +890,33 @@ fn verify_stage_entrance(
     if before == scene.readback()? {
         return Err(failure("second-stage descent did not change readback"));
     }
+    super::arrival::verify(scene, art, descent, true)?;
     super::scenery::verify_entrance(scene, art, descent, true)?;
     advance_vehicle_check(scene, art, simulation, (41, true))?;
     advance_vehicle_check(scene, art, simulation, (1, false))?;
-    advance(simulation, 73)?;
+    advance(simulation, 7)?;
+    verify_arrival_sample(scene, art, simulation, true)?;
+    advance(simulation, 2)?;
+    verify_arrival_sample(scene, art, simulation, true)?;
+    advance(simulation, 1)?;
+    verify_arrival_sample(scene, art, simulation, false)?;
+    advance(simulation, 63)?;
     if simulation.state().stage_entrance().is_some() {
         return Err(failure("second-stage landing did not finish"));
     }
     write_status(format_args!("Second stage: entrance and landing verified"))
         .map_err(failure)
+}
+
+fn verify_arrival_sample(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &LiveSimulation<Cabinet>,
+    visible: bool,
+) -> Result<(), RenderError> {
+    let cabinet = simulation.state();
+    let _drawn = art.present(scene, cabinet)?;
+    super::arrival::verify(scene, art, cabinet, visible)
 }
 
 fn advance_vehicle_check(

@@ -31,6 +31,7 @@
 
 //! Title runtime composition for the initial street and session loop.
 
+mod arrival;
 mod audio;
 mod axis_smoke;
 mod backdrop;
@@ -762,6 +763,27 @@ impl Scene {
         })
     }
 
+    fn queue_arrival(
+        &mut self,
+        cabinet: &Cabinet,
+        view: world::View,
+    ) -> Result<(), RenderError> {
+        if let (Some(arrival), Some(entrance)) =
+            (self.poses.arrival.as_ref(), cabinet.stage_entrance())
+            && entrance.scripted_art()
+        {
+            arrival.queue(
+                (cabinet, entrance),
+                (
+                    view,
+                    self.shadow.as_ref().ok_or(RenderError::InvalidSprite)?,
+                ),
+                &mut self.draws,
+            )?;
+        }
+        Ok(())
+    }
+
     fn queue_background(
         &mut self,
         cabinet: &Cabinet,
@@ -772,6 +794,7 @@ impl Scene {
                 self.poses.stage_two.ok_or(RenderError::InvalidSprite)?;
             stage.world.queue(stage.background, view, &mut self.draws)?;
             if cabinet.session().world_visible() {
+                self.queue_arrival(cabinet, view)?;
                 self.poses.scenery.queue(cabinet, view, &mut self.draws)?;
             }
             return Ok(());
@@ -1019,6 +1042,11 @@ impl Scene {
         (station, entrance): (Station, Option<StageEntrance>),
         (actor, view): (Art, world::View),
     ) -> Result<(), RenderError> {
+        if self.poses.arrival.is_some()
+            && entrance.is_some_and(StageEntrance::scripted_art)
+        {
+            return Ok(());
+        }
         let elevation = if let Some(motion) = entrance {
             let Some(elevation) = motion.elevation(player) else {
                 return Ok(());
@@ -1111,6 +1139,9 @@ impl<'source> Sources<'source> {
             && options.poses.stage_two_strip().is_none()
         {
             return Err(failure("stage-two music requires second-stage art"));
+        }
+        if options.poses.has_arrival() && options.shadow.is_none() {
+            return Err(failure("arrival art requires the verified shadow"));
         }
         Ok(Self {
             actors: open_bundles(store, actors)?,
