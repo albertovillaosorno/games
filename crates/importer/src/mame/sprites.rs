@@ -14,7 +14,7 @@
 //   - Execute program ROMs, simulate device timing or implement gameplay.
 // - Allows:
 //   - Inputs: Bounded object records, control registers and canonical tiles.
-//   - Outputs: Visible sprite coverage over an observed background raster.
+//   - Outputs: Visible coverage or a bounded, independently registered group.
 //   - Side effects: Writes only to caller-owned pixels.
 // - Split-When:
 //   - A different object chip requires a different geometry decoder.
@@ -31,6 +31,7 @@
 
 //! Source-reference sprite reconstruction, not a gameplay renderer.
 
+use std::num::NonZeroUsize;
 use std::ops::Range;
 
 use games_assets::indexed::IndexedTiles;
@@ -61,7 +62,88 @@ pub struct Snapshot<'source> {
     ram: ObjectRam<'source>,
 }
 
+/// Complete isolated object-group pixels and their signed screen registration.
+#[derive(Debug)]
+pub struct ObjectRegion {
+    /// Width and height of the original object coverage bounds.
+    pub extent: (usize, usize),
+    /// Top-left location relative to the original visible raster.
+    pub origin: (i32, i32),
+    /// Row-major pixels; uncovered pixels have pen `u16::MAX`.
+    pub pixels: Vec<Pixel>,
+}
+
 impl<'source> Snapshot<'source> {
+    /// Reconstruct the entire selected group, including offscreen objects.
+    ///
+    /// No original display coordinates are altered before wrapping or zoom.
+    /// The caller chooses the maximum number of pixels that may be allocated.
+    /// # Errors
+    /// Rejects empty groups, unsupported objects, ambiguous depths or a
+    /// group whose checked extent exceeds the allocation budget.
+    pub fn isolate(
+        self,
+        raster: Raster,
+        tiles: &IndexedTiles<'_>,
+        max_pixels: NonZeroUsize,
+    ) -> Result<ObjectRegion, ImportError> {
+        let objects = self.objects(tiles)?;
+        let mut bounds = None;
+        for object in &objects {
+            let (horizontal, vertical) =
+                (object.x.bounds()?, object.y.bounds()?);
+            bounds = Some(bounds.map_or(
+                (
+                    horizontal.start,
+                    vertical.start,
+                    horizontal.end,
+                    vertical.end,
+                ),
+                |(left, top, right, bottom): (i32, i32, i32, i32)| {
+                    (
+                        left.min(horizontal.start),
+                        top.min(vertical.start),
+                        right.max(horizontal.end),
+                        bottom.max(vertical.end),
+                    )
+                },
+            ));
+        }
+        let (left, top, right, bottom) =
+            bounds.ok_or(ImportError::UnsupportedMember)?;
+        let width = usize::try_from(right.saturating_sub(left))
+            .map_err(|_error| ImportError::TooLarge)?;
+        let height = usize::try_from(bottom.saturating_sub(top))
+            .map_err(|_error| ImportError::TooLarge)?;
+        let count = width
+            .checked_mul(height)
+            .filter(|count| *count != 0 && *count <= max_pixels.get())
+            .ok_or(ImportError::TooLarge)?;
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(count)
+            .map_err(|_error| ImportError::TooLarge)?;
+        pixels.resize(count, Pixel::from_pen(u16::MAX));
+        let region = Raster {
+            height,
+            layer_x: [0; 3],
+            origin_y: 0,
+            width,
+        };
+        for mut object in objects {
+            object.x.start = object.x.start.saturating_sub(left);
+            object.y.start = object.y.start.saturating_sub(top);
+            object.draw(region, tiles, &mut pixels)?;
+        }
+        let origin_y = i32::try_from(raster.origin_y)
+            .map_err(|_error| ImportError::UnsupportedMember)?;
+        Ok(ObjectRegion {
+            extent: (width, height),
+            origin: (left, top.saturating_sub(origin_y)),
+            pixels,
+        })
+    }
+
     pub(super) fn new(
         wiring: Wiring,
         ram: &'source [u8],
@@ -93,20 +175,11 @@ impl<'source> Snapshot<'source> {
         })
     }
 
-    /// Overlay supported sprite records on an already composed raster.
-    /// # Errors
-    /// Rejects unsupported modes, equal depths, and invalid sprite tiles.
-    /// An invalid observation may leave a partly composed output.
-    pub fn overlay(
+    fn objects(
         self,
-        raster: Raster,
         tiles: &IndexedTiles<'_>,
-        output: &mut [Pixel],
-    ) -> Result<(), ImportError> {
-        if output.len() != raster.pixels()
-            || tiles.width().get() != 16
-            || tiles.height().get() != 16
-        {
+    ) -> Result<Vec<Object>, ImportError> {
+        if tiles.width().get() != 16 || tiles.height().get() != 16 {
             return Err(ImportError::UnsupportedMember);
         }
         let mut entries: Vec<_> =
@@ -117,8 +190,26 @@ impl<'source> Snapshot<'source> {
         }) {
             return Err(ImportError::UnsupportedMember);
         }
-        for entry in entries {
-            let object = Object::new(entry, self.display, self.mixer)?;
+        entries
+            .into_iter()
+            .map(|entry| Object::new(entry, self.display, self.mixer))
+            .collect()
+    }
+
+    /// Overlay supported sprite records on an already composed raster.
+    /// # Errors
+    /// Rejects unsupported modes, equal depths, and invalid sprite tiles.
+    /// An invalid observation may leave a partly composed output.
+    pub fn overlay(
+        self,
+        raster: Raster,
+        tiles: &IndexedTiles<'_>,
+        output: &mut [Pixel],
+    ) -> Result<(), ImportError> {
+        if output.len() != raster.pixels() {
+            return Err(ImportError::UnsupportedMember);
+        }
+        for object in self.objects(tiles)? {
             object.draw(raster, tiles, output)?;
         }
         Ok(())
@@ -136,6 +227,11 @@ struct Axis {
 }
 
 impl Axis {
+    fn bounds(self) -> Result<Range<i32>, ImportError> {
+        let last = self.part(self.count.saturating_sub(1))?;
+        Ok(self.start..last.end)
+    }
+
     fn part(self, cell: u32) -> Result<Part, ImportError> {
         let boundary = |index: u32| {
             i32::try_from(
@@ -638,6 +734,67 @@ mod tests {
                 &mut output,
             )?;
             if output.map(Pixel::pen) != expected {
+                return Err(ImportError::UnsupportedMember);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn isolated_group_retains_offscreen_scaled_flipped_pixels()
+    -> Result<(), ImportError> {
+        let machine = Machine::select("simpsons", "world-4p-set-1")?;
+        let mut pens = [1; 512];
+        pens.get_mut(256..)
+            .ok_or(ImportError::UnsupportedMember)?
+            .fill(2);
+        let tiles = sheet(&pens)?;
+        let mixer = machine.decode_video_priority(&[0; 16])?;
+        let raster = Raster {
+            height: 4,
+            layer_x: [0; 3],
+            origin_y: 18,
+            width: 14,
+        };
+        let controls = controls()?;
+        let mut ram = [0; RAM_BYTES];
+        let budget = NonZeroUsize::new(128).ok_or(ImportError::TooLarge)?;
+        for (raw_x, origin_x) in [(49u16, -2i32), (76u16, 25i32)] {
+            record(&mut ram, 0, [0x9101, 0, 981, raw_x, 128, 128, 0, 0])?;
+            let snapshot = machine.sprite_snapshot(&ram, &controls, mixer)?;
+            let group = snapshot.isolate(raster, &tiles, budget)?;
+            if group.extent != (16, 8)
+                || group.origin != (origin_x, -2i32)
+                || group.pixels.len() != budget.get()
+            {
+                return Err(ImportError::UnsupportedMember);
+            }
+            let row = [2; 8].into_iter().chain([1; 8]);
+            if !group.pixels.as_chunks::<16>().0.iter().all(|pixels| {
+                pixels.iter().copied().map(Pixel::pen).eq(row.clone())
+            }) {
+                return Err(ImportError::UnsupportedMember);
+            }
+            let mut visible = [Pixel::from_pen(u16::MAX); 56];
+            snapshot.overlay(raster, &tiles, &mut visible)?;
+            let expected = if origin_x < 0i32 {
+                [2; 6].into_iter().chain([1; 8]).collect::<Vec<_>>()
+            } else {
+                vec![u16::MAX; 14]
+            };
+            if !visible.as_chunks::<14>().0.iter().all(|pixels| {
+                pixels
+                    .iter()
+                    .copied()
+                    .map(Pixel::pen)
+                    .eq(expected.iter().copied())
+            }) {
+                return Err(ImportError::UnsupportedMember);
+            }
+            if !matches!(
+                snapshot.isolate(raster, &tiles, NonZeroUsize::MIN),
+                Err(ImportError::TooLarge)
+            ) {
                 return Err(ImportError::UnsupportedMember);
             }
         }

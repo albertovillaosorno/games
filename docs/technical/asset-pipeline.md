@@ -263,3 +263,11 @@ See the [title TODO](../../docs/todo/open/games/simpsons-arcade.mdc) and
 the performance contract in [TODO.md](../../TODO.md) for reproducible
 commands, observations and limitations. Other MAME profiles and platform
 publication remain open.
+
+The reference scene actor digest and art publication commands accept
+`--complete-objects` before the first named object group. The default
+remains clipped to the verified scene. Complete mode reconstructs the
+entire selected group after verifying the original full scene, using a
+pixel budget no larger than the original raster. The reported origin is
+signed and may lie outside the visible raster. This option does not
+infer actor identity, animation identity or draw order.

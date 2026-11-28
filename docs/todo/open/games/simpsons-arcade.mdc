@@ -6430,3 +6430,12 @@ diverging family and delayed phase in the routed position regressions.
 The sprite groups are linked to persistent actor positions rather than
 their incidental extraction order. Full, unclipped source registration,
 draw ordering and pixel composition are not yet admitted.
+
+A shared reference importer now isolates complete selected object groups
+without clipping them to the observed scene. All 88 original scenes
+from the two opposed controls were reconstructed exactly before
+extracting their 176 actor samples. Those samples reduce to sixteen
+unique left-facing pose families with invariant payload, dimensions and
+actor-relative registration, including objects initially beyond the
+right screen edge. Runtime admission, priority and pixel composition
+remain separate obligations.

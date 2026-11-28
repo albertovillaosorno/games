@@ -35,5 +35,6 @@ pub use games_importer::mame::background::{Background, Pixel, Raster};
 pub use games_importer::mame::objects::RAM_BYTES;
 pub use games_importer::mame::priority::VideoPriority;
 pub use games_importer::mame::samples::compare_observations;
+pub use games_importer::mame::sprites::ObjectRegion;
 pub use games_importer::mame::tilemap::TilemapSnapshot;
 pub use games_importer::wave::{WAVE_HEADER_BYTES, WavePcm};

@@ -63,10 +63,12 @@ use crate::{USAGE, publication, text};
 
 const RECORD_BYTES: usize = 16;
 const TRANSPARENT: u16 = u16::MAX;
+const COMPLETE_OBJECTS: &str = "--complete-objects";
 const DEFAULT_STRIP_SCENES: usize = 8;
 
 #[derive(Debug)]
 struct Group {
+    complete: bool,
     indices: BTreeSet<usize>,
     key: String,
 }
@@ -84,10 +86,10 @@ impl ActorDigests {
     /// # Errors
     /// Rejects incomplete observations and invalid or overlapping selections.
     pub fn parse(mut args: Vec<OsString>) -> Result<Self, String> {
-        if !(10..=41).contains(&args.len()) {
+        if !(10..=42).contains(&args.len()) {
             return Err(String::from(USAGE));
         }
-        let groups = parse_groups(args.split_off(9))?;
+        let groups = parse_selection(args.split_off(9))?;
         Ok(Self {
             groups,
             scene: Arguments::parse_scene(args)?,
@@ -144,10 +146,10 @@ impl Art {
     /// # Errors
     /// Rejects missing paths, invalid indices and overlapping selections.
     pub fn parse(mut args: Vec<OsString>) -> Result<Self, String> {
-        if !(11..=42).contains(&args.len()) {
+        if !(11..=43).contains(&args.len()) {
             return Err(String::from(USAGE));
         }
-        let groups = parse_groups(args.split_off(10))?;
+        let groups = parse_selection(args.split_off(10))?;
         let output = args.remove(0);
         Ok(Self {
             groups,
@@ -446,7 +448,7 @@ struct Image {
 #[derive(Debug)]
 struct Crop {
     image: Image,
-    origin: (usize, usize),
+    origin: (i32, i32),
 }
 
 impl Image {
@@ -494,7 +496,10 @@ impl Image {
         }
         Ok(Crop {
             image: Self { height, pixels, width },
-            origin: (left, top),
+            origin: (
+                i32::try_from(left).map_err(|error| error.to_string())?,
+                i32::try_from(top).map_err(|error| error.to_string())?,
+            ),
         })
     }
 
@@ -962,6 +967,26 @@ fn isolate(
         .as_ref()
         .ok_or_else(|| String::from("missing sprite tiles"))?;
     let raster = machine.background_raster();
+    if group.complete {
+        let budget = NonZeroUsize::new(raster.pixels())
+            .ok_or_else(|| String::from("empty object pixel budget"))?;
+        let state = machine
+            .sprite_snapshot(&ram, &sprites.controls, mixer)
+            .map_err(|error| format!("sprite state: {error:?}"))?;
+        let region = state
+            .isolate(raster, tiles, budget)
+            .map_err(|error| format!("object isolation: {error:?}"))?;
+        let mut crop = Image::from_pens(
+            &region.pixels,
+            region.extent,
+            &observation.colors,
+            true,
+        )?
+        .crop()?;
+        crop.origin.0 = crop.origin.0.saturating_add(region.origin.0);
+        crop.origin.1 = crop.origin.1.saturating_add(region.origin.1);
+        return Ok(crop);
+    }
     let mut pixels = vec![Pixel::from_pen(TRANSPARENT); raster.pixels()];
     SpriteObservation {
         controls: sprites.controls.clone(),
@@ -1015,7 +1040,23 @@ fn strip_limits() -> Result<ManifestLimits, String> {
     })
 }
 
-fn parse_groups(values: Vec<OsString>) -> Result<Vec<Group>, String> {
+fn parse_selection(mut values: Vec<OsString>) -> Result<Vec<Group>, String> {
+    let complete = values
+        .first()
+        .is_some_and(|value| value == OsStr::new(COMPLETE_OBJECTS));
+    if complete {
+        let _flag = values.remove(0);
+    }
+    if !(1..=32).contains(&values.len()) {
+        return Err(String::from(USAGE));
+    }
+    parse_groups(values, complete)
+}
+
+fn parse_groups(
+    values: Vec<OsString>,
+    complete: bool,
+) -> Result<Vec<Group>, String> {
     let mut used = BTreeSet::new();
     let mut keys = BTreeSet::new();
     let mut parsed = Vec::new();
@@ -1030,6 +1071,7 @@ fn parse_groups(values: Vec<OsString>) -> Result<Vec<Group>, String> {
         }
         let indices = parse_indices(raw_indices, &mut used)?;
         parsed.push(Group {
+            complete,
             indices,
             key: key.to_owned(),
         });
@@ -1135,8 +1177,23 @@ mod tests {
             )
         };
         assert!(parse(&["homer:2,3", "marge:4"]).is_ok());
+        assert!(
+            parse(&["homer:2"]).is_ok_and(|args| args
+                .groups
+                .iter()
+                .all(|group| !group.complete))
+        );
+        assert!(
+            parse(&[COMPLETE_OBJECTS, "homer:2", "marge:4"])
+                .is_ok_and(|args| args.groups.len() == 2
+                    && args.groups.iter().all(|group| group.complete))
+        );
         for invalid in [
             &[][..],
+            &[COMPLETE_OBJECTS],
+            &[COMPLETE_OBJECTS, COMPLETE_OBJECTS, "homer:2"],
+            &["homer:2", COMPLETE_OBJECTS],
+            &[COMPLETE_OBJECTS, "homer:2", "marge:2"],
             &["homer:2", "marge:2"],
             &["homer:2", "homer:3"],
             &[":2"],
