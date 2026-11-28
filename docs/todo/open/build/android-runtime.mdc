@@ -396,3 +396,54 @@ reliable volume attenuation, latency or audio quality. Physical ARM64,
 physical controller and sensor checks, soundtrack playback and release
 signing remain open. The private emulator and diagnostic host audio
 sink were stopped; original media and keys remain outside the package.
+
+A subsequent isolated ARM64 JNI diagnostic uses the actual shared
+NativeAudio queue and submits 576,000 synthetic stereo frames at
+48 kHz. It retains the full paused queue, resumes, observes monotonic
+drain to zero, pauses and clears, and returns 42. Two independent
+translated API 35 emulator runs reproduce all three four-second
+patterns in the 44.1 kHz WAV capture: 440 Hz left only, 880 Hz right
+only, 660 Hz left with 330 Hz right, and silence. Representative
+steady-state tone amplitudes are 283.5 to 283.7 signed-16 sample units;
+silent channels have no corresponding tone. The observed guest media
+level is 5 of 15. A requested zero level was not reliably observed
+and is not evidence of guest volume attenuation.
+
+The repaired signed title package was then installed in a separate
+private AVD with a 320 by 640 display, two cores, 2 GiB RAM and the
+QEMU WAV output backend. A canonical opening-street music manifest
+and its single 10,429,144-byte payload were admitted after independent
+length and generated-object digest checks. The package itself was
+unchanged; the existing local base catalogue and the selected music
+were provisioned into the app-private asset directory. The launch
+reported the actual OpenSL ES output and selected source levels.
+
+At verified guest media level 5 of 15 and master 100 percent, music
+100 percent with effects zero produced non-silent gameplay and resumed
+gameplay captures (peaks -42.92 and -43.46 dBFS). The menu and pause
+intervals were digitally silent. Each gameplay window contained over
+526,000 stereo frames at 44.1 kHz. The otherwise equivalent cold
+launch with music zero produced digital silence during gameplay,
+pause and resumed gameplay. A scan of the full-volume recording
+found no gaps of 15 ms or longer below -80 dBFS in the initial
+gameplay window, but three gaps totalling 164 ms after resume.
+
+A separate pair of launches isolated combat effects with music zero.
+At effects 100 percent, a sequence of 12 native keyboard attacks and
+another sequence after pause/resume produced peaks of -38.40 and
+-48.23 dBFS. The idle gameplay also contained combat effects, so this
+does not establish the exact contribution of each attack. At effects
+zero the same input sequences peaked at -84.29 dBFS, near the capture
+floor. Both pause intervals were digitally silent. Source levels were
+confirmed from the actual title diagnostics, not inferred from the
+requested settings alone. The capture used neither a host speaker nor
+a microphone.
+
+These paired results establish repeatable translated-emulator PCM
+output for the shared audio queue and actual title effects and opening
+street music, including independent zero-level controls and pause
+silence. They do not establish physical speaker output, exact cue or
+soundtrack parity, gap-free playback, latency, high-resolution emulator
+audio performance, physical ARM64, controllers, sensors or production
+release signing. No original content, diagnostic recordings, or signing
+keys are distributed. The emulator was shut down.
