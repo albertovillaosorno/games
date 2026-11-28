@@ -44,6 +44,8 @@ const FIRST_STATION: u64 = 107;
 const PLAYABLE_TICK: u64 = 237;
 const FIRST_WALK_TICK: u64 = 242;
 const LAST_WALK_TICK: u64 = 357;
+const FIRST_PROTECTED_BODY_SAMPLE: u64 = 240;
+const LAST_PROTECTED_BODY_SAMPLE: u64 = 358;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -481,6 +483,23 @@ impl CemeteryEntrance {
         }
     }
 
+    /// Body visibility in the observed protected room display samples.
+    ///
+    /// The original active body records receive zero object ordering
+    /// bytes on alternate samples. Shadows have separate admission.
+    /// Other rotations and the encounter boundary remain unverified.
+    #[must_use]
+    pub fn room_body_visibility(self) -> Option<bool> {
+        if self.room().is_none()
+            || self.first != Player::Marge
+            || !(FIRST_PROTECTED_BODY_SAMPLE..=LAST_PROTECTED_BODY_SAMPLE)
+                .contains(&self.tick)
+        {
+            return None;
+        }
+        Some(self.tick & 1 != 0)
+    }
+
     /// Whether the bounded room accepts motion on the current tick.
     #[must_use]
     pub fn room_walkable(self) -> bool {
@@ -806,6 +825,25 @@ mod tests {
             ),
             _ => (0, 0),
         };
+    }
+
+    #[test]
+    fn protected_room_body_visibility_matches_observed_transfer_samples() {
+        let mut state = arrival(Player::Marge).at(239);
+        assert_eq!(state.room_body_visibility(), None);
+        state.enable_room();
+        assert_eq!(state.room_body_visibility(), None);
+        for tick in 240..=358 {
+            state.advance(false);
+            let visible = tick & 1 == 1;
+            assert_eq!(state.tick(), tick);
+            assert_eq!(state.room_body_visibility(), Some(visible));
+        }
+        state.advance(false);
+        assert_eq!(state.room_body_visibility(), None);
+        let mut other = arrival(Player::Homer).at(240);
+        other.enable_room();
+        assert_eq!(other.room_body_visibility(), None);
     }
 
     #[test]

@@ -6108,3 +6108,22 @@ workspace gate with offscreen native-render smoke passed.
 Both leaf mappings are complete within their stated native policies.
 The canonical private ledger now contains eight implemented functions,
 104 discarded and 1,560 pending, with all identities and edges retained.
+
+### Protected cemetery body visibility
+
+Two new saved-state controls reproduce the same 12 transition rows as
+the independent diagonal replay. The active CPU body records persist on
+both parities, while the DMA body records alternate. Two extended
+controls compare all 1,110 CPU/device transfers exactly using the
+existing importer admission check. During the 120 protected captures,
+the 60 even samples assign zero object ordering bytes to the active
+bodies. The station record visibility flag and the fixed ordering
+routine explain the separate admission of shadows.
+
+At the interaction boundary the separated control stops alternating;
+the neutral control instead admits a cooperative reaction. The bounded
+Marge-first room exposes the 119 subsequent display samples (60 hidden
+and 59 visible), and the existing body selector observes that gate.
+The ordinary entrance and other rotations are unaffected. No new
+moving-room runtime selection, pose mapping, shadow presentation or
+post-boundary interaction is admitted.

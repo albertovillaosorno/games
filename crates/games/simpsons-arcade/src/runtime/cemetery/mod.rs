@@ -361,6 +361,9 @@ fn body_sample(
     player: Player,
     animated: bool,
 ) -> Option<BodySample> {
+    if entrance.room_body_visibility() == Some(false) {
+        return None;
+    }
     if let Some(body) = entrance.body(player) {
         let index = match body.pose {
             CemeteryPose::MargeA => 6,
@@ -601,6 +604,26 @@ mod tests {
         ];
         for (player, expected) in Player::ALL.into_iter().zip(origins) {
             assert_animated_landing(player, expected);
+        }
+    }
+
+    #[test]
+    fn protected_room_omits_bodies_only_on_the_observed_hidden_sample() {
+        let mut entrance = CemeteryEntrance::new([true; 4], Player::Marge);
+        for _ in 0u64..65 {
+            entrance.advance(true);
+        }
+        for _ in 0u64..240 {
+            entrance.advance(false);
+        }
+        assert!(body_sample(entrance, Player::Marge, true).is_some());
+        entrance.enable_room();
+        for player in Player::ALL {
+            assert_eq!(body_sample(entrance, player, true), None);
+        }
+        entrance.advance(false);
+        for player in Player::ALL {
+            assert!(body_sample(entrance, player, true).is_some());
         }
     }
 
