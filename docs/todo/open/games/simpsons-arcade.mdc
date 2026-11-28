@@ -6617,3 +6617,11 @@ together by two depth units per frame when the camera pans. This
 distinguishes shared camera projection from an enemy retreat action.
 The eight distinct left-facing strike keyframes are locally extracted;
 native and browser composition acceptance remain open.
+
+The opt-in 183-role protected-strike diagnostic passes the portable
+simulation and catalogue tests. Its first original-art native launch
+exposed the preceding catalogue byte limit: the private complete
+strike catalogue occupies 37,395 bytes. The limit must account for
+the eight additional addresses and the separate optional nine-address
+bonus-opponent record. Full original-art native/browser composition
+acceptance and later unprotected combat remain open.
