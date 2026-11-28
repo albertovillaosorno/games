@@ -6338,3 +6338,11 @@ the original room, including enemy objects and further dynamic
 overlaps, requires separate verification. All prior reflected pose,
 marker and layer readbacks pass in the offscreen Linux smoke.
 Browser and physical-device acceptance remain open.
+
+The shared procedural browser scene diagnostic now tests replacing
+and restoring the resident atlas through the existing sprite handles.
+An invalid-length replacement leaves the last accepted image intact.
+Isolated Firefox Canvas 2D and WebGL runs independently observe one
+exact replacement and one restored logical readback, with four total
+logical readbacks per diagnostic and no attached canvas on exit.
+These are synthetic renderer checks, not original-art browser parity.

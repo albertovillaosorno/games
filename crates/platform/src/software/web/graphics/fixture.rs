@@ -49,6 +49,8 @@ use crate::software::web::input;
 
 const SCOPE: u64 = 11;
 const BACKGROUND: [u8; 3] = [10, 20, 30];
+const INITIAL_ATLAS: [u8; 16] =
+    [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 255, 128];
 
 pub(in crate::software) fn verify_resident_scene() -> Result<(), RenderError> {
     let base = layout(4, 2)?;
@@ -112,9 +114,7 @@ where
         limits,
         PresentationMode::AspectFit,
     )?;
-    let atlas = scene.load_atlas(layout(2, 2)?, &[
-        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 255, 128,
-    ])?;
+    let atlas = scene.load_atlas(layout(2, 2)?, &INITIAL_ATLAS)?;
     let sprite = SpriteDraw {
         atlas,
         source: rectangle(0, 0, 2, 1)?,
@@ -152,6 +152,7 @@ where
     let surface_layout = layout(8, 8)?;
     verify_surface(&read(surface_layout)?, surface_layout)?;
     verify_order(&mut scene, sprite)?;
+    verify_replacement(&mut scene, &sprites)?;
     verify(
         scene.present(BACKGROUND, &sprites)?,
         "restore contact scene",
@@ -245,6 +246,38 @@ fn verify_contact(
             Ok(true)
         })?;
     verify(batch == EventBatch::Limited, "resident event batch")
+}
+
+fn verify_replacement(
+    scene: &mut SceneSession<'_, '_>,
+    sprites: &[SpriteDraw; 3],
+) -> Result<(), RenderError> {
+    let [sprite, ..] = sprites;
+    let replacement =
+        [0, 0, 255, 255, 0, 0, 0, 0, 255, 255, 0, 255, 0, 0, 0, 0];
+    scene.replace_atlas(sprite.atlas, &replacement)?;
+    verify(
+        scene.replace_atlas(sprite.atlas, &[0; 15])
+            == Err(RenderError::InvalidLength),
+        "reject short resident atlas replacement",
+    )?;
+    verify(
+        scene.present(BACKGROUND, sprites)?,
+        "present existing sprites with replaced atlas",
+    )?;
+    let blue = [0, 0, 255, 255];
+    let clear = [10, 20, 30, 255];
+    let expected = [blue, clear, clear, blue, clear, clear, clear, clear];
+    verify(
+        scene.readback()?.as_slice() == expected.as_flattened(),
+        "replacement updates opaque and transparent pixels",
+    )?;
+    scene.replace_atlas(sprite.atlas, &INITIAL_ATLAS)?;
+    verify(
+        scene.present(BACKGROUND, sprites)?,
+        "present restored resident atlas",
+    )?;
+    verify_pixels(&scene.readback()?)
 }
 
 fn verify_resize(
