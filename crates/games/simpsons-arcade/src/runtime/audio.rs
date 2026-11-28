@@ -59,8 +59,9 @@ use super::{
     parse_hash, parse_hashes, size, smoke_press,
 };
 use crate::{
-    Action, BonusPhase, Cabinet, CemeteryPhase, Control, ENEMY_CAPACITY, Phase,
-    Player, Point, StreetLayout, TICK_INTERVAL, Wrestler, WrestlerAction,
+    Action, BonusPhase, Cabinet, CemeteryEntrance, CemeteryPhase, Control,
+    ENEMY_CAPACITY, Phase, Player, Point, StreetLayout, TICK_INTERVAL,
+    Wrestler, WrestlerAction,
 };
 
 const CHUNK: usize = 256;
@@ -144,10 +145,20 @@ const HURT_GAINS: [StereoGain; 4] = [
         right: 25_752,
     },
 ];
+// Original centered volume 111; the programmed voice stops one byte
+// before the end of the canonical differential PCM catalogue entry.
+const CEMETERY_EFFECT_KEY: &str = "audio/sample-0070";
+const CEMETERY_EFFECT_FRAMES: u64 = 5818;
+const CEMETERY_EFFECT_TAIL: usize = 2;
+const CEMETERY_EFFECT_GAIN: StereoGain = StereoGain {
+    left: 19_980,
+    right: 19_980,
+};
 const IMPACT_KEY: &str = "audio/sample-0056";
 const IMPACT_FRAMES: u64 = 4258;
 // Original centered volume 79, pitch 0xe40, differential PCM.
-const IMPACT_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(7989);
+// Rounded playback rate for both effects using the original pitch 0xe40.
+const PITCH_E40_RATE: NonZeroU32 = NonZeroU32::MIN.saturating_add(7989);
 const IMPACT_GAIN: StereoGain = StereoGain {
     left: 14_220,
     right: 14_220,
@@ -243,6 +254,7 @@ pub(super) struct Samples {
     cemetery_music: Option<OwnedClip>,
     clips: [Rc<[i16]>; 4],
     effects_volume: MasterVolume,
+    entrance_effect: Option<OwnedClip>,
     handoff_music: Option<[OwnedClip; 4]>,
     hurt: [Option<OwnedClip>; 4],
     impact: Option<OwnedClip>,
@@ -276,7 +288,7 @@ impl Samples {
             .transpose()?;
         let clips = load_attack_clips(&bundle, replacement.as_ref())?;
         let [marge, homer, bart, lisa] = HURT_CLIPS.map(|(key, frames)| {
-            load_optional_effect(&bundle, key, HURT_RATE, frames)
+            load_optional_effect(&bundle, key, HURT_RATE, (frames, 0))
         });
         Ok(Self {
             bonus_music: selection
@@ -296,6 +308,12 @@ impl Samples {
                 .transpose()?,
             clips,
             effects_volume: selection.effects_volume,
+            entrance_effect: load_optional_effect(
+                &bundle,
+                CEMETERY_EFFECT_KEY,
+                PITCH_E40_RATE,
+                (CEMETERY_EFFECT_FRAMES, CEMETERY_EFFECT_TAIL),
+            )?,
             handoff_music: selection
                 .handoff_music
                 .map(|hashes| load_tracks(store, hashes, HANDOFF_TRACKS))
@@ -304,8 +322,8 @@ impl Samples {
             impact: load_optional_effect(
                 &bundle,
                 IMPACT_KEY,
-                IMPACT_RATE,
-                IMPACT_FRAMES,
+                PITCH_E40_RATE,
+                (IMPACT_FRAMES, 0),
             )?,
             music: selection
                 .music
@@ -456,11 +474,41 @@ impl Soundtrack {
     }
 }
 
+struct EntranceEffect {
+    clip: Option<OwnedClip>,
+    count: u8,
+}
+
+impl EntranceEffect {
+    const fn new(clip: Option<OwnedClip>) -> Self {
+        Self { clip, count: 0 }
+    }
+
+    fn observe(
+        &mut self,
+        mixer: &mut OwnedMixer,
+        count: u8,
+    ) -> Result<(), RenderError> {
+        let changed = count > self.count;
+        self.count = count;
+        if changed && let Some(clip) = &self.clip {
+            return match mixer
+                .retrigger_effect(clip.clone(), CEMETERY_EFFECT_GAIN)
+            {
+                Ok(_) | Err(AudioError::VoicesFull) => Ok(()),
+                Err(error) => Err(failure(error)),
+            };
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct Playback {
     clips: [OwnedClip; 4],
     cues: [u64; 4],
     device: NativeAudio,
     discard_queued: bool,
+    entrance: EntranceEffect,
     hurt: [Option<OwnedClip>; 4],
     hurt_cues: [u64; 4],
     impact: Option<OwnedClip>,
@@ -542,6 +590,7 @@ impl Playback {
             cues: [0; 4],
             device,
             discard_queued: false,
+            entrance: EntranceEffect::new(samples.entrance_effect.clone()),
             hurt: samples.hurt.clone(),
             hurt_cues: [0; 4],
             impact: samples.impact.clone(),
@@ -600,7 +649,11 @@ impl Playback {
             (&mut self.impact_cues, cabinet.impact_cues()),
             (self.impact.as_ref(), IMPACT_GAIN),
             ENEMY_CAPACITY,
-        )
+        )?;
+        let count = cabinet
+            .cemetery_entrance()
+            .map_or(0, CemeteryEntrance::entrance_effect_cues);
+        self.entrance.observe(&mut self.mixer, count)
     }
 
     fn queued_frames(&self) -> Result<u32, RenderError> {
@@ -747,6 +800,47 @@ impl Playback {
         Ok(())
     }
 
+    fn smoke_cemetery_descent(
+        &mut self,
+        cabinet: &mut Cabinet,
+    ) -> Result<(), RenderError> {
+        for tick in 194u64..430 {
+            cabinet.input_step(tick, &[]);
+            let entrance = cabinet
+                .cemetery_entrance()
+                .ok_or_else(|| failure("cemetery entrance disappeared"))?;
+            let elapsed = entrance.tick();
+            let expected = u8::from(elapsed >= 26)
+                .saturating_add(u8::from(elapsed >= 120));
+            let changed = expected > self.entrance.count;
+            if changed {
+                self.device.clear().map_err(failure)?;
+            }
+            self.update(cabinet)?;
+            if self.music.cue != MusicCue::Cemetery || self.music_voices() != 1
+            {
+                return Err(failure(
+                    "cemetery soundtrack stopped before landing",
+                ));
+            }
+            if self.entrance.count != expected {
+                return Err(failure("cemetery entrance effect timing differs"));
+            }
+            if changed {
+                self.verify_submission(usize::from(
+                    self.entrance.clip.is_some(),
+                ))?;
+            }
+        }
+        if self.entrance.clip.is_some() {
+            write_status(format_args!(
+                "Cemetery entrance PCM: two timed one-shot admissions verified"
+            ))
+            .map_err(failure)?;
+        }
+        Ok(())
+    }
+
     fn smoke_cemetery_music(&mut self) -> Result<(), RenderError> {
         if self.music.cemetery.is_none() {
             return Ok(());
@@ -776,16 +870,7 @@ impl Playback {
         }
         self.verify_submission(0)?;
         self.smoke_bonus_pause(&mut cabinet)?;
-        for tick in 194..430 {
-            cabinet.input_step(tick, &[]);
-            self.update(&cabinet)?;
-            if self.music.cue != MusicCue::Cemetery || self.music_voices() != 1
-            {
-                return Err(failure(
-                    "cemetery soundtrack stopped before landing",
-                ));
-            }
-        }
+        self.smoke_cemetery_descent(&mut cabinet)?;
         for _ in 0..1500u16 {
             self.device.clear().map_err(failure)?;
             self.update(&cabinet)?;
@@ -1260,6 +1345,7 @@ impl Playback {
             self.cues = stations.map(|station| station.attack_cues);
             self.hurt_cues = stations.map(|station| station.hurt_cues);
             self.impact_cues = cabinet.impact_cues();
+            self.entrance.count = 0;
             self.discard_queued = true;
             self.mixer.clear();
             self.music.cue = MusicCue::Quiet;
@@ -1301,6 +1387,7 @@ impl Playback {
         if self.cues != [0; 4]
             || self.hurt_cues != [0; 4]
             || self.impact_cues != 0
+            || self.entrance.count != 0
         {
             return Err(failure("audio played before an admitted cue"));
         }
@@ -1631,21 +1718,22 @@ fn stereo_limits(frames: usize) -> Result<ManifestLimits, RenderError> {
     })
 }
 
-fn copy_samples(pcm: PcmSamples<'_>) -> Result<SharedSamples, RenderError> {
+fn copy_samples<I>(source: I) -> Result<SharedSamples, RenderError>
+where
+    I: ExactSizeIterator<Item = i16>,
+{
     let mut samples = Vec::new();
-    samples
-        .try_reserve_exact(pcm.samples().len())
-        .map_err(failure)?;
-    samples.extend(pcm.samples());
+    samples.try_reserve_exact(source.len()).map_err(failure)?;
+    samples.extend(source);
     Ok(Rc::from(samples))
 }
 
-fn mono_samples(
+fn mono_pcm<'payload>(
     record: &AssetRecord,
-    bytes: &[u8],
+    bytes: &'payload [u8],
     rate: NonZeroU32,
     frames: u64,
-) -> Result<SharedSamples, RenderError> {
+) -> Result<PcmSamples<'payload>, RenderError> {
     let pcm = PcmSamples::new(record, bytes).map_err(failure)?;
     if pcm.channels() != NonZeroU8::MIN
         || pcm.sample_rate() != rate
@@ -1653,7 +1741,7 @@ fn mono_samples(
     {
         return Err(failure("unexpected effects PCM format"));
     }
-    copy_samples(pcm)
+    Ok(pcm)
 }
 
 fn load_attack_clips(
@@ -1673,7 +1761,8 @@ fn load_attack_clips(
         );
         let record = descriptor.ok_or_else(|| failure("missing attack PCM"))?;
         let bytes = payload.map_err(failure)?;
-        clips.push(mono_samples(record, &bytes, SOURCE_RATE, frames)?);
+        let pcm = mono_pcm(record, &bytes, SOURCE_RATE, frames)?;
+        clips.push(copy_samples(pcm.samples())?);
     }
     clips.try_into().map_err(|_error| failure("clip count"))
 }
@@ -1682,13 +1771,20 @@ fn load_optional_effect(
     bundle: &CanonicalBundle,
     key: &str,
     rate: NonZeroU32,
-    frames: u64,
+    extent: (u64, usize),
 ) -> Result<Option<OwnedClip>, RenderError> {
+    let (frames, trim) = extent;
     let Some(record) = bundle.manifest().record(key) else {
         return Ok(None);
     };
     let bytes = bundle.view_payload(key).map_err(failure)?;
-    let samples = mono_samples(record, &bytes, rate, frames)?;
+    let pcm = mono_pcm(record, &bytes, rate, frames)?;
+    let count = pcm
+        .samples()
+        .len()
+        .checked_sub(trim)
+        .ok_or(RenderError::TooLarge)?;
+    let samples = copy_samples(pcm.samples().take(count))?;
     OwnedClip::new(samples, Channels::Mono, rate)
         .map(Some)
         .map_err(failure)
@@ -1713,7 +1809,8 @@ fn load_music(
     {
         return Err(failure("unexpected music PCM format"));
     }
-    OwnedClip::new(copy_samples(pcm)?, Channels::Stereo, RATE).map_err(failure)
+    OwnedClip::new(copy_samples(pcm.samples())?, Channels::Stereo, RATE)
+        .map_err(failure)
 }
 
 fn load_stage_two_music(
@@ -1817,7 +1914,7 @@ fn clear_smoke_wrestler(cabinet: &mut Cabinet) {
 }
 
 const fn enter_smoke_cemetery(cabinet: &mut Cabinet) {
-    cabinet.cemetery = Some(crate::CemeteryEntrance::new(
+    cabinet.cemetery = Some(CemeteryEntrance::new(
         [true, false, false, false],
         Player::Marge,
     ));
@@ -2060,11 +2157,7 @@ mod tests {
                 return Err(failure("card did not retain silence"));
             }
         }
-        if cabinet
-            .cemetery_entrance()
-            .map(crate::CemeteryEntrance::tick)
-            != Some(0)
-        {
+        if cabinet.cemetery_entrance().map(CemeteryEntrance::tick) != Some(0) {
             return Err(failure("cemetery setup fixture did not start"));
         }
         Ok(())
@@ -2092,9 +2185,7 @@ mod tests {
         }
         let changed = soundtrack.select(mixer, MusicCue::select(cabinet))?;
         mixer.render(&mut frame);
-        if cabinet
-            .cemetery_entrance()
-            .map(crate::CemeteryEntrance::phase)
+        if cabinet.cemetery_entrance().map(CemeteryEntrance::phase)
             != Some(CemeteryPhase::Landed)
             || changed
             || frame != [[0; 2]]
@@ -2141,8 +2232,9 @@ mod tests {
             let format = AssetFormat::PcmS16Le {
                 channels: NonZeroU8::MIN,
                 frames: NonZeroU64::new(frames).ok_or(RenderError::TooLarge)?,
-                sample_rate: if key == IMPACT_KEY {
-                    IMPACT_RATE
+                sample_rate: if matches!(key, IMPACT_KEY | CEMETERY_EFFECT_KEY)
+                {
+                    PITCH_E40_RATE
                 } else if HURT_CLIPS.iter().any(|(clip, _frames)| *clip == key)
                 {
                     HURT_RATE
@@ -2196,6 +2288,7 @@ mod tests {
         };
         let original = Samples::load(BundleSource::Local(parent), &selection)?;
         if original.impact.is_some()
+            || original.entrance_effect.is_some()
             || original.hurt.iter().any(Option::is_some)
             || original
                 .clips
@@ -2237,6 +2330,89 @@ mod tests {
     }
 
     #[test]
+    fn optional_entrance_effect_validates_stored_and_playback_extents()
+    -> Result<(), RenderError> {
+        let root = TestRoot::new().map_err(failure)?;
+        let parent = root.location();
+        let mut clips = Vec::from(CLIPS.map(|(key, frames)| (key, frames, 12)));
+        clips.push((CEMETERY_EFFECT_KEY, CEMETERY_EFFECT_FRAMES, i16::MAX));
+        let mut selection = AudioSelection {
+            base: publish_fixture(parent, &clips)?,
+            bonus_music: None,
+            cemetery_music: None,
+            effects_volume: MasterVolume::Full,
+            handoff_music: None,
+            music: None,
+            music_volume: MasterVolume::Full,
+            replacement: None,
+            stage_two_music: None,
+        };
+        let samples = Samples::load(BundleSource::Local(parent), &selection)?;
+        let clip = samples
+            .entrance_effect
+            .ok_or_else(|| failure("missing entrance effect"))?;
+        if clip.rate() != PITCH_E40_RATE || clip.frames() != 5816 {
+            return Err(failure("entrance effect playback extent mismatch"));
+        }
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        let mut effect = EntranceEffect {
+            clip: Some(clip),
+            count: 0,
+        };
+        effect.observe(&mut mixer, 1)?;
+        let mut frame = [[0; 2]];
+        mixer.render(&mut frame);
+        if frame != [[9989; 2]] {
+            return Err(failure("entrance effect center gain mismatch"));
+        }
+        let _entry = clips.pop();
+        clips.push((CEMETERY_EFFECT_KEY, 5816, 12));
+        selection.base = publish_fixture(parent, &clips)?;
+        if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
+            return Err(failure("invalid entrance effect format accepted"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_entrance_observation_restarts_only_on_new_fixed_cues()
+    -> Result<(), RenderError> {
+        let clip = OwnedClip::new(
+            Rc::from([1000, 2000, 3000, 4000]),
+            Channels::Mono,
+            RATE,
+        )
+        .map_err(failure)?;
+        let mut effect = EntranceEffect {
+            clip: Some(clip),
+            count: 0,
+        };
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        for (count, expected) in [
+            (0, 0),
+            (1, 304),
+            (1, 609),
+            (3, 304),
+            (3, 609),
+            (3, 914),
+            (3, 1219),
+            (3, 0),
+            (0, 0),
+            (1, 304),
+        ] {
+            effect.observe(&mut mixer, count)?;
+            let mut frame = [[0; 2]];
+            mixer.render(&mut frame);
+            if frame != [[expected; 2]] {
+                return Err(failure("entrance effect retrigger mismatch"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn optional_impact_clip_is_validated_and_not_replaceable()
     -> Result<(), RenderError> {
         let root = TestRoot::new().map_err(failure)?;
@@ -2256,7 +2432,7 @@ mod tests {
         };
         let samples = Samples::load(BundleSource::Local(parent), &selection)?;
         let impact = samples.impact.ok_or_else(|| failure("missing impact"))?;
-        if impact.rate() != IMPACT_RATE {
+        if impact.rate() != PITCH_E40_RATE {
             return Err(failure("impact clip rate did not match pitch"));
         }
         let mut mixer =
@@ -2385,6 +2561,7 @@ mod tests {
             cemetery_music: None,
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
             effects_volume: MasterVolume::Full,
+            entrance_effect: None,
             handoff_music: None,
             hurt: array::from_fn(|_| None),
             impact: None,

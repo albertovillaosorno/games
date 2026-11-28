@@ -34,6 +34,7 @@
 
 use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize};
 use std::ops::Range;
+use std::ptr;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -631,6 +632,45 @@ where
         }
     }
 
+    /// Restart an already playing one-shot effect backed by this allocation.
+    ///
+    /// Other allocations, music and looping voices retain their progress.
+    /// If the effect has expired, admit it in the first free slot instead.
+    /// The result is a transient slot index, not a persistent voice handle.
+    /// # Errors
+    /// Rejects a full mixer if no matching one-shot effect is active.
+    pub fn retrigger_effect(
+        &mut self,
+        clip: PcmClip<S>,
+        gain: StereoGain,
+    ) -> Result<usize, AudioError> {
+        let effective_gain = gain.attenuated(self.sources.effects);
+        let matching =
+            self.voices
+                .iter_mut()
+                .enumerate()
+                .find_map(|(index, slot)| {
+                    let voice = slot.as_mut()?;
+                    (voice.gain.source == AudioSource::Effects
+                        && voice.looping.is_none()
+                        && voice.clip.channels == clip.channels
+                        && voice.clip.rate == clip.rate
+                        && ptr::eq(
+                            voice.clip.samples.as_ref(),
+                            clip.samples.as_ref(),
+                        ))
+                    .then_some((index, voice))
+                });
+        if let Some((index, voice)) = matching {
+            voice.frame = 0;
+            voice.phase = 0;
+            voice.gain = SourceGain::effects(gain);
+            voice.effective_gain = effective_gain;
+            return Ok(index);
+        }
+        self.play(clip, gain)
+    }
+
     /// Change source attenuation for active and future voices.
     pub fn set_source_volumes(&mut self, sources: SourceVolumes) {
         if self.sources == sources {
@@ -859,6 +899,44 @@ mod tests {
         (frame == [[12000; 2]] && mixer.active() == 0)
             .then_some(())
             .ok_or(AudioError::InvalidVolume)
+    }
+
+    #[test]
+    fn owned_effect_retrigger_restarts_only_the_matching_one_shot()
+    -> Result<(), AudioError> {
+        let cue =
+            OwnedClip::new(Rc::from([1000, 2000]), Channels::Mono, rate(1))?;
+        let other =
+            OwnedClip::new(Rc::from([1000, 2000]), Channels::Mono, rate(1))?;
+        let mut mixer =
+            OwnedMixer::new(rate(1), NonZeroU16::MIN.saturating_add(2))?;
+        let _music = mixer.play_on(cue.clone(), SourceGain {
+            source: AudioSource::Music,
+            stereo: StereoGain::UNITY,
+        })?;
+        let _other = mixer.play(other, StereoGain::UNITY)?;
+        let voice = mixer.play(cue.clone(), StereoGain::UNITY)?;
+        let mut frame = [[0; 2]];
+        mixer.render(&mut frame);
+        if frame != [[3000; 2]]
+            || mixer.retrigger_effect(cue.clone(), StereoGain::UNITY)? != voice
+            || mixer.active() != 3
+        {
+            return Err(AudioError::InvalidClip);
+        }
+        mixer.render(&mut frame);
+        if frame != [[5000; 2]] || mixer.active() != 1 {
+            return Err(AudioError::InvalidClip);
+        }
+        mixer.render(&mut frame);
+        if frame != [[2000; 2]] || mixer.active() != 0 {
+            return Err(AudioError::InvalidClip);
+        }
+        let _reused = mixer.retrigger_effect(cue, StereoGain::UNITY)?;
+        mixer.render(&mut frame);
+        (frame == [[1000; 2]] && mixer.active() == 1)
+            .then_some(())
+            .ok_or(AudioError::InvalidClip)
     }
 
     #[test]

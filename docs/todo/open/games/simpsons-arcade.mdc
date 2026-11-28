@@ -6722,3 +6722,26 @@ These tests do not establish the original visual parity of late joins.
 Native startup independently rejects a truncated opponent bundle list
 and a full opponent list without the inflated human art prerequisite.
 Both fail before renderer admission under isolated local selections.
+
+### Cemetery entrance effects
+
+Three independent original four-station arrival controls establish a
+centered scenery cue at setup tick 26 and four ranked descent cues at
+ticks 120, 136, 152 and 168. The optional canonical sample is admitted
+with its observed 7,990 Hz playback rate, centered gain and 5,816-frame
+extent; the original catalogue record retains its full 5,818 frames.
+Repeated admissions restart the matching one-shot voice instead of
+stacking copies or interrupting unrelated effects and music.
+
+The deterministic model covers all sixteen admitted station masks and
+four first-landing rotations. Omitting absent-station cues is a preview
+policy rather than original partial-roster parity. The native
+OpenGL/X11 smoke with local original-derived PCM verifies the two
+one-player cue admissions and finite soundtrack exhaustion using the
+SDL dummy audio device. Mixer and catalogue tests verify sample
+identity, retriggering, optional absence and rejection of wrong extents.
+
+The separately observed board-phase ambient cue and ranked landing
+command remain unresolved; no exact audio parity is claimed. Physical
+speaker and browser entrance-effect acceptance remain open. The
+reference captures and original assets stay private.

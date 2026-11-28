@@ -517,6 +517,26 @@ impl CemeteryEntrance {
         }
     }
 
+    /// Cumulative entrance effects after setup and admitted ranked descent.
+    ///
+    /// The count stays zero during the card and saturates after descent.
+    /// Presentation can observe it across a fixed-step cue boundary.
+    #[must_use]
+    pub fn entrance_effect_cues(self) -> u8 {
+        if self.card {
+            return 0;
+        }
+        Player::ALL.into_iter().fold(
+            u8::from(self.tick >= 26),
+            |count, player| {
+                count.saturating_add(u8::from(
+                    self.rank_elapsed(player)
+                        .is_some_and(|elapsed| elapsed >= 13i32),
+                ))
+            },
+        )
+    }
+
     /// Current elevation in 1/256 logical pixels.
     ///
     /// An absent or not-yet-initialized station has no elevation.
@@ -1546,6 +1566,39 @@ mod tests {
         }
         timeout.advance(false);
         assert_eq!(timeout, state);
+    }
+
+    fn assert_entrance_effect_cues(admitted: [bool; 4], first: Player) {
+        let mut entrance = CemeteryEntrance::new(admitted, first);
+        for _ in 0u16..192 {
+            entrance.advance(false);
+            assert_eq!(entrance.entrance_effect_cues(), 0);
+        }
+        for tick in 0..=260u64 {
+            let expected = Player::ALL
+                .into_iter()
+                .filter(|player| {
+                    admitted.get(player.index()).copied() == Some(true)
+                        && tick
+                            >= 120u64.saturating_add(16u64.saturating_mul(
+                                u64::from(entrance.rank(*player)),
+                            ))
+                })
+                .count()
+                .saturating_add(usize::from(tick >= 26));
+            assert_eq!(usize::from(entrance.entrance_effect_cues()), expected);
+            entrance.advance(false);
+        }
+    }
+
+    #[test]
+    fn entrance_effects_follow_visible_ranked_descent_and_not_card_time() {
+        for first in Player::ALL {
+            for bits in 0u8..16 {
+                let admitted = [1, 2, 4, 8].map(|bit| bits & bit != 0);
+                assert_entrance_effect_cues(admitted, first);
+            }
+        }
     }
 
     #[test]
