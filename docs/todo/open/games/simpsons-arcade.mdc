@@ -6695,6 +6695,16 @@ verified, and the route continues through the subsequent stages.
 This establishes bounded native presentation and input routing using
 local original art, not exact opponent animation or palette parity
 across every station. Original board-dependent scan initialization,
-arbitrary roster and late-join visual parity, browser opponent
-readback, and physical controller and audio acceptance remain open.
+arbitrary roster and late-join visual parity, and physical controller
+and audio acceptance remain open.
 The isolated selection does not change the owner's ordinary catalogue.
+
+The Firefox WebGL diagnostic accepts the same nine-bundle selection
+through the trusted local directory picker. It reports all fourteen
+ordered route milestones, with 1,698 readbacks and 1,770 framebuffer
+blits, including the new automatic competitor verification. The
+human-only catalogue still passes the original thirteen milestones,
+with 1,682 readbacks and 1,751 blits. All 523 reported cemetery checkpoints
+match between both browser selections and the earlier accepted browser
+run; 381 native enemy-room digests also match the browser. Both browser
+runs release the canvas and retain no preferences.
