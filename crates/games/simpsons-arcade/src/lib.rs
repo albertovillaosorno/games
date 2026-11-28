@@ -1037,7 +1037,7 @@ impl Cabinet {
         if previous_phase == CemeteryPhase::Setup
             && entrance.phase() == CemeteryPhase::Descent
         {
-            self.move_cemetery_stations(entrance);
+            self.move_cemetery_stations(&entrance);
         }
         if entrance.advance_room(&mut self.slots, pending) {
             self.record_attack_cues();
@@ -1425,7 +1425,7 @@ impl Cabinet {
             .flat_map(LinkedEncounter::parents)
     }
 
-    fn move_cemetery_stations(&mut self, entrance: CemeteryEntrance) {
+    fn move_cemetery_stations(&mut self, entrance: &CemeteryEntrance) {
         for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
             if let Some(point) = entrance.position(player) {
                 slot.restore_position(0);
@@ -4280,7 +4280,14 @@ mod tests {
         ];
         let positions = state.stations().map(|station| station.position);
         for tick in 0usize..100 {
+            let mut previous = state.stations();
+            if tick == 32 {
+                // Release edges precede the delayed simulation sample.
+                let [_, homer, ..] = &mut previous;
+                homer.maneuver.release_jump();
+            }
             apply_cemetery_action_trace(&mut state, tick);
+            assert_delayed_cemetery_actions(&state, &previous);
             let [marge, homer, bart, lisa] = state.stations();
             let expected = |start: usize, samples: &[i16]| {
                 tick.checked_sub(start)
@@ -4298,6 +4305,23 @@ mod tests {
         assert_eq!(state.stations().map(|station| station.attack_cues), [
             2, 0, 1, 1
         ]);
+    }
+
+    fn assert_delayed_cemetery_actions(
+        state: &Cabinet,
+        previous: &[Station; 4],
+    ) {
+        let bodies = state
+            .cemetery_entrance()
+            .and_then(CemeteryEntrance::room)
+            .unwrap_or_default()
+            .presentation_bodies();
+        for (body, station) in bodies.into_iter().zip(previous) {
+            assert_eq!(body.maneuver, station.maneuver);
+            assert_eq!(body.facing, station.facing);
+            assert_eq!(body.walking, station.walking);
+            assert_eq!(body.position, station.position);
+        }
     }
 
     fn assert_cemetery_attack_edges(

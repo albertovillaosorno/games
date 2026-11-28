@@ -6177,3 +6177,28 @@ operation and native fractional alpha are not equivalent when body
 regions overlap. Remaining enemy objects and action poses are not
 admitted, and the normal entrance still does not select the moving
 room. This is not full moving-room composition or device acceptance.
+
+### Protected-room jump registration
+
+Three independent original controls exercise a one-tick jump in each
+horizontal direction and a 20-tick held jump. All 62 selected scenes
+reconstruct exactly, including 232 airborne body observations. Their
+opening, raised and descending crops match twelve existing canonical
+jump payloads or their exact reflections. Each projected origin matches
+the preceding station position and floored elevation.
+
+The delayed station presentation snapshot retains the exact maneuver
+rather than a generic action flag. The bounded renderer selects those
+three jump families from the already loaded street atlas, using the
+observed room registration; no new atlas bytes or draws are reserved.
+The portable routed regression compares the preceding maneuver, facing,
+walking state and coordinates across 100 isolated action samples.
+The phase regression covers the observed short and held visible samples.
+The original-art native offscreen smoke verifies all twelve reflected
+jump pairs, the existing walking and marker readbacks, and all layer
+offsets. Older room catalogues retain their existing behavior.
+
+Ground attacks, air attacks and special phases remain unsupported in
+the room renderer. The normal campaign entrance still does not select
+the moving room. No complete room, physical device or campaign parity
+is claimed.

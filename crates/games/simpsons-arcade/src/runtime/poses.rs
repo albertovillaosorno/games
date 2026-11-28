@@ -507,7 +507,10 @@ impl Catalogue {
                         store,
                         scene,
                         selection,
-                        self.cemetery_layers.as_ref(),
+                        (
+                            self.cemetery_layers.as_ref(),
+                            &room_jump_sprites(&entries),
+                        ),
                     )
                     .map(Box::new)
                 })
@@ -883,6 +886,21 @@ const fn repelled_phase(tick: u8) -> u8 {
         77..=82 | 89..=90 => 77,
         _ => 83,
     }
+}
+
+fn room_jump_sprites(entries: &PoseEntries) -> cemetery::JumpSprites {
+    Player::ALL.map(|player| {
+        let descent = if player == Player::Bart {
+            3
+        } else {
+            4
+        };
+        [(Kind::Jump, 0), (Kind::Lift, 0), (Kind::Jump, descent)].map(
+            |(kind, tick)| {
+                entries.get(&station_key(player, kind, tick)).copied()
+            },
+        )
+    })
 }
 
 fn jump_entry<Value>(

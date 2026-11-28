@@ -861,7 +861,7 @@ impl Scene {
     fn queue_cemetery(
         &mut self,
         cabinet: &Cabinet,
-        entrance: crate::CemeteryEntrance,
+        entrance: &crate::CemeteryEntrance,
         (view, hud): (world::View, station_hud::StationHud),
     ) -> Result<(), RenderError> {
         let art = self
@@ -1049,7 +1049,7 @@ impl Scene {
         hud: station_hud::StationHud,
     ) -> Result<(), RenderError> {
         if let Some(entrance) = cabinet.cemetery_entrance() {
-            return self.queue_cemetery(cabinet, entrance, (view, hud));
+            return self.queue_cemetery(cabinet, &entrance, (view, hud));
         }
         if let Some(bonus) = cabinet.bonus().filter(|bonus| {
             bonus.phase() != crate::BonusPhase::Victory

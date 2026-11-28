@@ -45,7 +45,7 @@ use games_platform::ir::storage::bundle::BundleSource;
 use super::{Art, Scene, failure, open_bundle, scenery, world};
 use crate::{
     Cabinet, CemeteryEntrance, CemeteryPhase, CemeteryPose, CemeteryRoomBody,
-    Facing, Player, Point, WalkMotion,
+    Facing, JumpMotion, Maneuver, Player, Point, WalkMotion,
 };
 
 pub(super) const ROLE_COUNT: usize = 16;
@@ -181,6 +181,35 @@ const ROLES: [Role; MARKER_ROLE_COUNT] = [
     Role::new("actor/shadow-lisa", (32, 31), (-80i32, -55i32)),
 ];
 
+// Opening, raised and descending families reuse the street atlas handles.
+const JUMP_ROLES: [[Role; 3]; 4] = [
+    [
+        Role::new("actor/marge", (40, 69), (-82i32, -45i32)),
+        Role::new("actor/marge", (38, 64), (-88i32, -40i32)),
+        Role::new("actor/marge", (38, 85), (-86i32, -61i32)),
+    ],
+    [
+        Role::new("actor/homer", (41, 64), (-86i32, -40i32)),
+        Role::new("actor/homer", (41, 65), (-86i32, -41i32)),
+        Role::new("actor/homer", (44, 66), (-92i32, -42i32)),
+    ],
+    [
+        Role::new("actor/bart", (36, 57), (-85i32, -35i32)),
+        Role::new("actor/bart", (41, 56), (-89i32, -36i32)),
+        Role::new("actor/bart", (41, 63), (-85i32, -39i32)),
+    ],
+    [
+        Role::new("actor/lisa", (32, 54), (-82i32, -23i32)),
+        Role::new("actor/lisa", (44, 44), (-97i32, -22i32)),
+        Role::new("actor/lisa", (37, 50), (-90i32, -28i32)),
+    ],
+];
+
+pub(super) type JumpSprites = [[Option<Art>; 3]; 4];
+type RoomSupplement<'supplement> = (
+    Option<&'supplement [ContentHash; layers::PHASES]>,
+    &'supplement JumpSprites,
+);
 type BodySample = (usize, Point, i16);
 
 #[derive(Clone, Copy, Debug)]
@@ -346,6 +375,7 @@ impl Selection {
 #[derive(Debug)]
 pub(super) struct CemeteryArt {
     first: Player,
+    jumps: JumpSprites,
     layers: Option<layers::Layers>,
     roles: Vec<RoleArt>,
 }
@@ -355,7 +385,7 @@ impl CemeteryArt {
         self.roles.len() >= ANIMATED_ROLE_COUNT
     }
 
-    fn background(&self, entrance: CemeteryEntrance) -> Option<SpriteDraw> {
+    fn background(&self, entrance: &CemeteryEntrance) -> Option<SpriteDraw> {
         let index = background_index(entrance)?;
         let (art, role) = self.role(index)?;
         let mut destination = art.rect;
@@ -365,7 +395,7 @@ impl CemeteryArt {
 
     fn body(
         &self,
-        entrance: CemeteryEntrance,
+        entrance: &CemeteryEntrance,
         player: Player,
     ) -> Option<SpriteDraw> {
         let animated = self.animated();
@@ -381,11 +411,32 @@ impl CemeteryArt {
         self.first
     }
 
+    fn jump_draw(
+        &self,
+        player: Player,
+        body: CemeteryRoomBody,
+        motion: JumpMotion,
+    ) -> Option<SpriteDraw> {
+        let phase = jump_phase(player, motion);
+        let art = self.jumps.get(player.index())?.get(phase)?.as_ref()?;
+        let role = JUMP_ROLES.get(player.index())?.get(phase)?;
+        if (art.rect.width.get(), art.rect.height.get()) != role.extent {
+            return None;
+        }
+        let flip = body.facing == Facing::Left;
+        let mut destination = art.rect;
+        (destination.x, destination.y) = role.room_offset(body.position, flip);
+        destination.y = destination
+            .y
+            .saturating_sub(i32::from(body.maneuver.elevation()));
+        Some(art.draw(destination, flip))
+    }
+
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
         selection: &Selection,
-        layer_hashes: Option<&[ContentHash; layers::PHASES]>,
+        (layer_hashes, jumps): RoomSupplement<'_>,
     ) -> Result<Self, RenderError> {
         let roles = selection
             .digests()
@@ -411,6 +462,11 @@ impl CemeteryArt {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             first: selection.first,
+            jumps: if selection.count() == MARKER_ROLE_COUNT {
+                *jumps
+            } else {
+                [[None; 3]; 4]
+            },
             layers: layer_hashes
                 .map(|hashes| layers::Layers::load(store, scene, *hashes))
                 .transpose()?,
@@ -432,7 +488,7 @@ impl CemeteryArt {
 
     pub(super) fn queue(
         &self,
-        entrance: CemeteryEntrance,
+        entrance: &CemeteryEntrance,
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<usize, RenderError> {
         let start = draws.len();
@@ -493,6 +549,9 @@ impl CemeteryArt {
         player: Player,
         body: CemeteryRoomBody,
     ) -> Option<SpriteDraw> {
+        if let Maneuver::Jump(motion) = body.maneuver {
+            return self.jump_draw(player, body, motion);
+        }
         let (index, flip) = room_role(player, body)?;
         let (art, role) = self.role(index)?;
         let mut destination = art.rect;
@@ -525,13 +584,13 @@ impl CemeteryArt {
     fn verify_room_body(
         &self,
         scene: &mut SceneSession<'_, '_>,
-        sample: (Player, Option<WalkMotion>),
+        sample: (Player, Option<WalkMotion>, Maneuver),
         baseline: &[u8],
     ) -> Result<(), RenderError> {
-        let (player, walking) = sample;
+        let (player, walking, maneuver) = sample;
         let mut body = CemeteryRoomBody {
-            action: false,
             facing: Facing::Right,
+            maneuver,
             position: Point { x: 224, y: 176 },
             walking,
         };
@@ -553,6 +612,52 @@ impl CemeteryArt {
             return Err(failure("reflected cemetery body pixels differ"));
         }
         Ok(())
+    }
+
+    fn verify_room_jump(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        player: Player,
+        (maneuver, baseline): (Maneuver, &[u8]),
+    ) -> Result<bool, RenderError> {
+        let Maneuver::Jump(motion) = maneuver else {
+            return Err(failure("expected airborne cemetery sample"));
+        };
+        let phase = jump_phase(player, motion);
+        if self
+            .jumps
+            .get(player.index())
+            .and_then(|poses| poses.get(phase))
+            .is_none_or(Option::is_none)
+        {
+            return Ok(false);
+        }
+        self.verify_room_body(scene, (player, None, maneuver), baseline)?;
+        Ok(true)
+    }
+
+    fn verify_room_jumps(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        baseline: &[u8],
+    ) -> Result<(), RenderError> {
+        let mut count = 0usize;
+        for player in Player::ALL {
+            let opening = Maneuver::jump();
+            let descent = (0u8..4)
+                .fold(opening, |action, _| action.advance(player, false));
+            let raised = (0u8..12)
+                .fold(opening, |action, _| action.advance(player, true));
+            for maneuver in [opening, raised, descent] {
+                count = count.saturating_add(usize::from(
+                    self.verify_room_jump(scene, player, (maneuver, baseline))?,
+                ));
+            }
+        }
+        write_status(format_args!(
+            "Cemetery jumps: {count} reflected reused pose pairs"
+        ))
+        .map_err(failure)
     }
 
     fn verify_room_markers(
@@ -582,8 +687,8 @@ impl CemeteryArt {
             }
         }
         let bodies = [CemeteryRoomBody {
-            action: false,
             facing: Facing::Right,
+            maneuver: Maneuver::Idle,
             position: point,
             walking: None,
         }; 4];
@@ -611,7 +716,11 @@ impl CemeteryArt {
         let _presented = scene.present([24, 22, 30], &[])?;
         let baseline = scene.readback()?;
         for player in Player::ALL {
-            self.verify_room_body(scene, (player, None), &baseline)?;
+            self.verify_room_body(
+                scene,
+                (player, None, Maneuver::Idle),
+                &baseline,
+            )?;
             let (_, keys) = room_walk_track(player);
             for (away, &key) in [false, true]
                 .into_iter()
@@ -623,14 +732,30 @@ impl CemeteryArt {
                 };
                 self.verify_room_body(
                     scene,
-                    (player, Some(walking)),
+                    (player, Some(walking), Maneuver::Idle),
                     &baseline,
                 )?;
             }
         }
         write_status(format_args!("Cemetery walking: 64 reflected body pairs"))
             .map_err(failure)?;
+        self.verify_room_jumps(scene, &baseline)?;
         self.verify_room_markers(scene)
+    }
+}
+
+fn jump_phase(player: Player, motion: JumpMotion) -> usize {
+    let descent = if player == Player::Bart {
+        3
+    } else {
+        4
+    };
+    if motion.opening_pose() || motion.pose_tick() < descent {
+        0
+    } else if motion.raised_pose() {
+        1
+    } else {
+        2
     }
 }
 
@@ -696,7 +821,7 @@ fn room_order(
     order
 }
 
-fn background_index(entrance: CemeteryEntrance) -> Option<usize> {
+fn background_index(entrance: &CemeteryEntrance) -> Option<usize> {
     if entrance.phase() == CemeteryPhase::Card {
         Some(usize::from(entrance.tick() >= 5))
     } else {
@@ -705,7 +830,7 @@ fn background_index(entrance: CemeteryEntrance) -> Option<usize> {
 }
 
 fn body_sample(
-    entrance: CemeteryEntrance,
+    entrance: &CemeteryEntrance,
     player: Player,
     animated: bool,
 ) -> Option<BodySample> {
@@ -769,7 +894,7 @@ const fn room_walk_track(player: Player) -> (usize, &'static [u8]) {
 }
 
 fn room_role(player: Player, body: CemeteryRoomBody) -> Option<(usize, bool)> {
-    if body.action {
+    if body.maneuver != Maneuver::Idle {
         return None;
     }
     if let Some(walking) = body.walking {
@@ -808,8 +933,8 @@ pub(super) fn verify(
         .as_deref()
         .ok_or(RenderError::InvalidSprite)?;
     let mut expected = Vec::new();
-    let background_count = cemetery.queue(entrance, &mut expected)?;
-    let background = background_index(entrance)
+    let background_count = cemetery.queue(&entrance, &mut expected)?;
+    let background = background_index(&entrance)
         .and_then(|index| cemetery.roles.get(index))
         .map(|role| role.digest);
     let _presented = art.present(scene, cabinet)?;
@@ -929,8 +1054,8 @@ mod tests {
     #[test]
     fn room_draw_order_reverses_depth_and_cabinet_ties() {
         let body = |y| CemeteryRoomBody {
-            action: false,
             facing: Facing::Right,
+            maneuver: Maneuver::Idle,
             position: Point { x: 224, y },
             walking: None,
         };
@@ -1010,6 +1135,47 @@ mod tests {
     }
 
     #[test]
+    fn room_jump_tracks_match_short_and_held_visible_samples() {
+        for player in Player::ALL {
+            assert_jump_track(player, false, 30);
+            assert_jump_track(player, true, 50);
+        }
+    }
+
+    fn assert_jump_track(player: Player, held: bool, last: u8) {
+        let mut maneuver = Maneuver::jump();
+        for tick in 0u8..=last {
+            if tick.is_multiple_of(2) {
+                let expected = expected_jump_phase(held, tick);
+                let actual = match maneuver {
+                    Maneuver::Jump(motion) => Some(jump_phase(player, motion)),
+                    Maneuver::AirAttack(_)
+                    | Maneuver::Attack { .. }
+                    | Maneuver::Hurt { .. }
+                    | Maneuver::Idle
+                    | Maneuver::Restrained
+                    | Maneuver::Special { .. } => None,
+                };
+                assert_eq!(
+                    actual,
+                    Some(expected),
+                    "{player:?} held={held} tick={tick}"
+                );
+            }
+            maneuver =
+                maneuver.advance(player, held && tick.saturating_add(1) < 20);
+        }
+    }
+
+    fn expected_jump_phase(held: bool, tick: u8) -> usize {
+        match (held, tick) {
+            (true, ..=10) | (false, ..=2) => 0,
+            (true, 12..=20) => 1,
+            _ => 2,
+        }
+    }
+
+    #[test]
     fn room_idle_origins_follow_delayed_depth_and_reflection() {
         for (player, (point, expected)) in Player::ALL.into_iter().zip([
             (Point { x: 116, y: 176 }, (38i32, 126i32)),
@@ -1018,8 +1184,8 @@ mod tests {
             (Point { x: 200, y: 176 }, (109i32, 153i32)),
         ]) {
             let mut body = CemeteryRoomBody {
-                action: false,
                 facing: Facing::Right,
+                maneuver: Maneuver::Idle,
                 position: point,
                 walking: None,
             };
@@ -1037,7 +1203,7 @@ mod tests {
                 shifted,
                 Some((expected.0, expected.1.saturating_sub(31)))
             );
-            body.action = true;
+            body.maneuver = Maneuver::Attack { moving: false, tick: 0 };
             assert_eq!(room_role(player, body), None);
         }
     }
@@ -1048,8 +1214,8 @@ mod tests {
         index: usize,
     ) {
         let mut body = CemeteryRoomBody {
-            action: false,
             facing: Facing::Right,
+            maneuver: Maneuver::Idle,
             position: Point { x: 224, y: 176 },
             walking,
         };
@@ -1131,7 +1297,7 @@ mod tests {
         for _ in 0u64..49 {
             let pose = state.landing_pose(player).unwrap_or(usize::MAX);
             assert!(pose < LANDING_POSE_COUNT);
-            let offset = body_sample(state, player, true).and_then(
+            let offset = body_sample(&state, player, true).and_then(
                 |(index, point, elevation)| {
                     ROLES
                         .get(index)
@@ -1143,7 +1309,7 @@ mod tests {
                 *value = true;
             }
             let legacy =
-                body_sample(state, player, false).map(|(index, _, _)| index);
+                body_sample(&state, player, false).map(|(index, _, _)| index);
             assert_eq!(legacy, Some(player.index().saturating_add(12)));
             state.advance(false);
         }
@@ -1208,14 +1374,14 @@ mod tests {
         for _ in 0u64..240 {
             entrance.advance(false);
         }
-        assert!(body_sample(entrance, Player::Marge, true).is_some());
+        assert!(body_sample(&entrance, Player::Marge, true).is_some());
         entrance.enable_room();
         for player in Player::ALL {
-            assert_eq!(body_sample(entrance, player, true), None);
+            assert_eq!(body_sample(&entrance, player, true), None);
         }
         entrance.advance(false);
         for player in Player::ALL {
-            assert!(body_sample(entrance, player, true).is_some());
+            assert!(body_sample(&entrance, player, true).is_some());
         }
     }
 
@@ -1234,7 +1400,7 @@ mod tests {
             (90i32, 150i32),
             (114i32, 162i32),
         ]) {
-            let actual = body_sample(entrance, player, false).and_then(
+            let actual = body_sample(&entrance, player, false).and_then(
                 |(index, point, elevation)| {
                     ROLES
                         .get(index)

@@ -110,10 +110,10 @@ pub struct CemeteryBody {
 /// One projected first-room station from the preceding simulation step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoomBody {
-    /// Whether an active maneuver requires a separate body family.
-    pub action: bool,
     /// Horizontal facing at the displayed sample.
     pub facing: Facing,
+    /// Exact maneuver and phase at the displayed sample.
+    pub maneuver: Maneuver,
     /// Camera-relative station record position.
     pub position: Point,
     /// Walking phase at the displayed sample.
@@ -123,8 +123,8 @@ pub struct CemeteryRoomBody {
 impl CemeteryRoomBody {
     const fn idle(position: Point) -> Self {
         Self {
-            action: false,
             facing: Facing::Right,
+            maneuver: Maneuver::Idle,
             position,
             walking: None,
         }
@@ -167,8 +167,8 @@ impl CemeteryRoom {
             return false;
         }
         self.presentation_bodies = slots.map(|slot| CemeteryRoomBody {
-            action: slot.station.maneuver != Maneuver::Idle,
             facing: slot.station.facing,
+            maneuver: slot.station.maneuver,
             position: self.project(slot.station.position),
             walking: slot.station.walking,
         });
@@ -605,7 +605,7 @@ mod tests {
         }
     }
 
-    fn room_positions(room: CemeteryRoom, slots: &[Slot; 4]) -> [Point; 4] {
+    fn room_positions(room: &CemeteryRoom, slots: &[Slot; 4]) -> [Point; 4] {
         slots.map(|slot| room.project(slot.station.position))
     }
 
@@ -650,7 +650,7 @@ mod tests {
                 },
             ];
             assert_eq!(room.depth_offset(), offset, "tick {tick}");
-            assert_eq!(room_positions(room, &slots), expected, "tick {tick}");
+            assert_eq!(room_positions(&room, &slots), expected, "tick {tick}");
         }
     }
 
@@ -670,7 +670,7 @@ mod tests {
                 room.presentation_depth_offset(),
                 downward_sample(tick.saturating_sub(1)).0,
             );
-            assert_eq!(room_positions(room, &slots), [
+            assert_eq!(room_positions(&room, &slots), [
                 Point {
                     x: 116i16.saturating_add(tick.saturating_mul(2)),
                     y: depth,
@@ -716,7 +716,7 @@ mod tests {
                 room.presentation_depth_offset(),
                 upward_sample(tick.saturating_sub(1)).0,
             );
-            assert_eq!(room_positions(room, &slots), [
+            assert_eq!(room_positions(&room, &slots), [
                 Point {
                     x: 196i16.saturating_sub(tick.saturating_mul(2)),
                     y: depth,
@@ -752,25 +752,25 @@ mod tests {
             assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = downward_sample(tick);
             assert_eq!(room.depth_offset(), offset);
-            assert_depths(room, &slots, all, depth);
+            assert_depths(&room, &slots, all, depth);
         }
         hold(&mut slots, [None; 4]);
         for _ in 0u8..21 {
             assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             assert_eq!(room.depth_offset(), 31);
-            assert_depths(room, &slots, all, 153);
+            assert_depths(&room, &slots, all, 153);
         }
         hold(&mut slots, controls(Control::Up));
         for tick in 1i16..=38 {
             assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = upward_sample(tick);
             assert_eq!(room.depth_offset(), offset, "tick {tick}");
-            assert_depths(room, &slots, all, depth);
+            assert_depths(&room, &slots, all, depth);
         }
     }
 
     fn assert_depths(
-        room: CemeteryRoom,
+        room: &CemeteryRoom,
         slots: &[Slot; 4],
         all: bool,
         depth: i16,
@@ -894,7 +894,7 @@ mod tests {
         }
     }
 
-    fn assert_diagonal_body_sample(room: CemeteryRoom, tick: u64) {
+    fn assert_diagonal_body_sample(room: &CemeteryRoom, tick: u64) {
         let [marge, homer, bart, lisa] = room.presentation_bodies();
         let prior = tick.saturating_sub(1);
         let walking = observed_diagonal_walking(prior);
@@ -920,7 +920,11 @@ mod tests {
             },
             "Bart at {tick}",
         );
-        assert!(room.presentation_bodies().iter().all(|body| !body.action));
+        assert!(
+            room.presentation_bodies()
+                .iter()
+                .all(|body| body.maneuver == Maneuver::Idle)
+        );
     }
 
     #[test]
@@ -935,7 +939,7 @@ mod tests {
                 state.advance_room(&mut slots, [PendingManeuver::default(); 4]);
             assert!(state.room().is_some());
             let room = state.room().unwrap_or_default();
-            assert_diagonal_body_sample(room, tick);
+            assert_diagonal_body_sample(&room, tick);
         }
     }
 
@@ -1097,7 +1101,7 @@ mod tests {
     }
 
     fn assert_landing_holds(
-        initial: CemeteryEntrance,
+        initial: &CemeteryEntrance,
         player: Player,
         holds: [u64; LANDING_POSE_COUNT],
     ) {
@@ -1134,7 +1138,7 @@ mod tests {
         for first in Player::ALL {
             let initial = arrival(first);
             for (player, holds) in Player::ALL.into_iter().zip(keys) {
-                assert_landing_holds(initial, player, holds);
+                assert_landing_holds(&initial, player, holds);
             }
         }
     }
