@@ -559,11 +559,13 @@ impl Slot {
 
     fn edge(
         &mut self,
-        control: Control,
-        down: bool,
+        change: &LogicalAction<Action>,
         pending: &mut PendingManeuver,
+        release_jump: bool,
     ) -> bool {
-        if control == Control::Secondary && !down {
+        let control = change.action.control;
+        let down = change.down;
+        if release_jump && control == Control::Secondary && !down {
             self.station.maneuver.release_jump();
             if let Some(maneuver) = &mut pending.candidate {
                 maneuver.release_jump();
@@ -1107,12 +1109,15 @@ impl Cabinet {
         let playing = self.session.phase() == Phase::Playing;
         let control = change.action.control;
         let interlude = playing && self.input_interlude(control);
+        let release_jump = self
+            .cemetery
+            .is_none_or(CemeteryEntrance::accepts_room_actions);
         let (Some(slot), Some(queued)) =
             (self.slots.get_mut(index), pending.get_mut(index))
         else {
             return;
         };
-        if !slot.edge(control, change.down, queued)
+        if !slot.edge(change, queued, release_jump)
             || queued.capture_interlude(interlude, control)
         {
             return;
@@ -4298,6 +4303,50 @@ mod tests {
         assert_room_projection(&state, 0, [174, 176, 176, 176]);
     }
 
+    #[test]
+    fn cemetery_directional_jump_preserves_shared_projection() {
+        let mut state = ready_cemetery_room();
+        state.input_step(0, &[change(Player::Marge, Control::Down, true)]);
+        advance_empty(&mut state, 0..5);
+        state.input_step(0, &pulse(Player::Marge, Control::Primary));
+        advance_empty(&mut state, 0..27);
+        assert_room_projection(&state, 18, [164, 194, 194, 194]);
+        state.input_step(0, &[
+            change(Player::Homer, Control::Down, true),
+            change(Player::Homer, Control::Secondary, true),
+        ]);
+        assert_room_projection(&state, 20, [164, 194, 196, 196]);
+        assert_homer_room_height(&state, 7);
+        advance_empty(&mut state, 0..6);
+        assert_room_projection(&state, 31, [163, 193, 207, 207]);
+        assert_homer_room_height(&state, 45);
+        advance_empty(&mut state, 0..5);
+        assert_room_projection(&state, 31, [153, 183, 207, 207]);
+        assert_homer_room_height(&state, 70);
+        advance_empty(&mut state, 0..8);
+        state.input_step(0, &[change(
+            Player::Homer,
+            Control::Secondary,
+            false,
+        )]);
+        advance_empty(&mut state, 0..6);
+        assert_room_projection(&state, 31, [153, 153, 207, 207]);
+        assert_homer_room_height(&state, 100);
+        advance_empty(&mut state, 0..8);
+        state.input_step(0, &[change(Player::Homer, Control::Down, false)]);
+        assert_homer_room_height(&state, 82);
+        advance_empty(&mut state, 0..15);
+        assert_homer_room_height(&state, 7);
+        state.input_step(0, &[]);
+        assert_homer_room_height(&state, 0);
+        assert_room_projection(&state, 31, [153, 153, 207, 207]);
+    }
+
+    fn assert_homer_room_height(state: &Cabinet, expected: i16) {
+        let [_, homer, ..] = state.stations();
+        assert_eq!(homer.maneuver.elevation(), expected);
+    }
+
     fn assert_room_projection(state: &Cabinet, offset: i16, depths: [i16; 4]) {
         let room = state.cemetery_entrance().and_then(CemeteryEntrance::room);
         assert_eq!(room.map(CemeteryRoom::depth_offset), Some(offset));
@@ -4336,6 +4385,11 @@ mod tests {
         let [_, homer, ..] = last;
         assert_eq!(homer.elevation(), 7);
         state.input_step(0, &pulse(Player::Lisa, Control::Primary));
+        state.input_step(0, &[change(
+            Player::Homer,
+            Control::Secondary,
+            false,
+        )]);
         advance_empty(&mut state, 0..20);
         assert_eq!(state.stations().map(|station| station.maneuver), last);
     }

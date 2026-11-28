@@ -5906,3 +5906,10 @@ both admission boundaries. The final diagnostic state is frozen at
 the unsupported encounter boundary. Exact action art and audio,
 general terrain, interactions and encounter progression remain open.
 The entrance-only renderer and default campaign selection are unchanged.
+
+A mixed saved-state control combines the preceding attack recovery
+with a directional jump by another station. The shared camera reaches
+31, the two moving stations reach the projected depth floor of 153,
+and the jump's sampled elevations and landing match the portable
+cabinet. Secondary release now leaves the frozen diagnostic maneuver
+unchanged after its final action tick, while updating held input.
