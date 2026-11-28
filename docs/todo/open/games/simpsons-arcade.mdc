@@ -6202,3 +6202,29 @@ Ground attacks, air attacks and special phases remain unsupported in
 the room renderer. The normal campaign entrance still does not select
 the moving room. No complete room, physical device or campaign parity
 is claimed.
+
+### Protected-room special registration
+
+Four independent centered controls exercise both horizontal facings
+and both input parities. All 68 selected special-action scenes
+reconstruct exactly. The 120 paired active body samples match exact
+reflected payloads and projected origins, giving complete 30-tick
+tracks for each station. Twelve distinct room crops and twelve exact
+street poses cover the observed action. Duplicate publication
+collisions were checked against their canonical payload digests.
+
+The optional 120-role catalogue admits the twelve additional room
+objects and requires the twelve reused special keys. It reserves
+122,708 additional atlas bytes with no increase in draw count. Earlier
+catalogues remain valid. The phase regression covers every action
+tick, and the original-art native offscreen smoke passes all 120
+reflected special pairs alongside the walking, jump, marker and layer
+checks.
+
+Four centered moving ground-attack controls also reconstruct all 52
+selected scenes. The neutral ground-attack controls establish 72
+exact reflected pairs. The original pre-action and moving latch
+timing still needs independent reconciliation with the delayed
+maneuver. Ground and air attacks, enemy objects and exact shadow
+composition remain open. The normal entrance still does not select
+the moving room; no campaign or physical-device parity is claimed.

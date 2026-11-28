@@ -32,6 +32,7 @@
 //! Optional registered third-stage entrance art.
 
 pub(super) mod layers;
+mod special;
 
 use std::cmp::Reverse;
 
@@ -54,10 +55,12 @@ const EXTRA_LANDING_COUNT: usize = 4 * (LANDING_POSE_COUNT - 1);
 const ANIMATED_ROLE_COUNT: usize = ROLE_COUNT + EXTRA_LANDING_COUNT;
 const WALKING_ROLE_COUNT: usize = ANIMATED_ROLE_COUNT + 60;
 const MARKER_ROLE_COUNT: usize = WALKING_ROLE_COUNT + 4;
+const SPECIAL_ROLE_COUNT: usize = MARKER_ROLE_COUNT + 12;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
 const MARKER_ATLAS_BYTES: usize = WALKING_ATLAS_BYTES + 15_872;
+const SPECIAL_ATLAS_BYTES: usize = MARKER_ATLAS_BYTES + 122_708;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -67,7 +70,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; MARKER_ROLE_COUNT] = [
+const ROLES: [Role; SPECIAL_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -179,6 +182,19 @@ const ROLES: [Role; MARKER_ROLE_COUNT] = [
     Role::new("actor/shadow-homer", (32, 31), (-80i32, -71i32)),
     Role::new("actor/shadow-bart", (32, 31), (-80i32, -55i32)),
     Role::new("actor/shadow-lisa", (32, 31), (-80i32, -55i32)),
+    // New special families; the other twelve reuse street handles.
+    Role::new("actor/room-homer", (53, 61), (-85i32, -38i32)),
+    Role::new("actor/room-homer", (42, 62), (-79i32, -39i32)),
+    Role::new("actor/room-homer", (46, 62), (-74i32, -38i32)),
+    Role::new("actor/room-homer", (58, 60), (-82i32, -38i32)),
+    Role::new("actor/room-bart", (36, 52), (-72i32, -37i32)),
+    Role::new("actor/room-bart", (45, 53), (-71i32, -35i32)),
+    Role::new("actor/room-bart", (33, 51), (-73i32, -37i32)),
+    Role::new("actor/room-bart", (42, 54), (-90i32, -38i32)),
+    Role::new("actor/room-lisa", (41, 55), (-90i32, -31i32)),
+    Role::new("actor/room-lisa", (48, 55), (-82i32, -31i32)),
+    Role::new("actor/room-lisa", (55, 51), (-73i32, -27i32)),
+    Role::new("actor/room-lisa", (52, 50), (-73i32, -26i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -205,10 +221,16 @@ const JUMP_ROLES: [[Role; 3]; 4] = [
     ],
 ];
 
-pub(super) type JumpSprites = [[Option<Art>; 3]; 4];
+pub(super) type AirSprites = [[Option<Art>; 3]; 4];
+
+#[derive(Debug)]
+pub(super) struct RoomSprites {
+    pub(super) jumps: AirSprites,
+    pub(super) specials: AirSprites,
+}
 type RoomSupplement<'supplement> = (
     Option<&'supplement [ContentHash; layers::PHASES]>,
-    &'supplement JumpSprites,
+    &'supplement RoomSprites,
 );
 type BodySample = (usize, Point, i16);
 
@@ -291,7 +313,9 @@ impl Selection {
     }
 
     pub(super) const fn atlas_bytes(&self) -> usize {
-        if self.count() == MARKER_ROLE_COUNT {
+        if self.room_specials() {
+            SPECIAL_ATLAS_BYTES
+        } else if self.count() == MARKER_ROLE_COUNT {
             MARKER_ATLAS_BYTES
         } else if self.room_walking() {
             WALKING_ATLAS_BYTES
@@ -337,7 +361,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(MARKER_ROLE_COUNT.saturating_add(1))
+            .take(SPECIAL_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -346,8 +370,11 @@ impl Selection {
                 | ANIMATED_ROLE_COUNT
                 | WALKING_ROLE_COUNT
                 | MARKER_ROLE_COUNT
+                | SPECIAL_ROLE_COUNT
         ) {
-            return Err(failure("expected 16, 44, 104 or 108 cemetery roles"));
+            return Err(failure(
+                "expected 16, 44, 104, 108 or 120 cemetery roles",
+            ));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
             return Err(failure("room walking requires the Marge-first rank"));
@@ -359,12 +386,16 @@ impl Selection {
         Ok(selection)
     }
 
+    pub(super) const fn room_specials(&self) -> bool {
+        self.count() == SPECIAL_ROLE_COUNT
+    }
+
     pub(super) const fn room_walking(&self) -> bool {
         self.count() >= WALKING_ROLE_COUNT
     }
 
     pub(super) const fn sprite_count(&self) -> usize {
-        if self.count() == MARKER_ROLE_COUNT {
+        if self.count() >= MARKER_ROLE_COUNT {
             EXTRA_SPRITES + 4
         } else {
             EXTRA_SPRITES
@@ -375,9 +406,10 @@ impl Selection {
 #[derive(Debug)]
 pub(super) struct CemeteryArt {
     first: Player,
-    jumps: JumpSprites,
+    jumps: AirSprites,
     layers: Option<layers::Layers>,
     roles: Vec<RoleArt>,
+    specials: AirSprites,
 }
 
 impl CemeteryArt {
@@ -420,23 +452,14 @@ impl CemeteryArt {
         let phase = jump_phase(player, motion);
         let art = self.jumps.get(player.index())?.get(phase)?.as_ref()?;
         let role = JUMP_ROLES.get(player.index())?.get(phase)?;
-        if (art.rect.width.get(), art.rect.height.get()) != role.extent {
-            return None;
-        }
-        let flip = body.facing == Facing::Left;
-        let mut destination = art.rect;
-        (destination.x, destination.y) = role.room_offset(body.position, flip);
-        destination.y = destination
-            .y
-            .saturating_sub(i32::from(body.maneuver.elevation()));
-        Some(art.draw(destination, flip))
+        airborne_draw(*art, *role, body)
     }
 
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
         selection: &Selection,
-        (layer_hashes, jumps): RoomSupplement<'_>,
+        (layer_hashes, sprites): RoomSupplement<'_>,
     ) -> Result<Self, RenderError> {
         let roles = selection
             .digests()
@@ -462,8 +485,8 @@ impl CemeteryArt {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             first: selection.first,
-            jumps: if selection.count() == MARKER_ROLE_COUNT {
-                *jumps
+            jumps: if selection.count() >= MARKER_ROLE_COUNT {
+                sprites.jumps
             } else {
                 [[None; 3]; 4]
             },
@@ -471,6 +494,11 @@ impl CemeteryArt {
                 .map(|hashes| layers::Layers::load(store, scene, *hashes))
                 .transpose()?,
             roles,
+            specials: if selection.room_specials() {
+                sprites.specials
+            } else {
+                [[None; 3]; 4]
+            },
         })
     }
 
@@ -552,6 +580,9 @@ impl CemeteryArt {
         if let Maneuver::Jump(motion) = body.maneuver {
             return self.jump_draw(player, body, motion);
         }
+        if let Maneuver::Special { tick, .. } = body.maneuver {
+            return self.special_draw(player, body, tick);
+        }
         let (index, flip) = room_role(player, body)?;
         let (art, role) = self.role(index)?;
         let mut destination = art.rect;
@@ -561,6 +592,27 @@ impl CemeteryArt {
 
     const fn room_walking(&self) -> bool {
         self.roles.len() >= WALKING_ROLE_COUNT
+    }
+
+    fn special_draw(
+        &self,
+        player: Player,
+        body: CemeteryRoomBody,
+        tick: u8,
+    ) -> Option<SpriteDraw> {
+        if self.roles.len() != SPECIAL_ROLE_COUNT {
+            return None;
+        }
+        let (art, role) = match special::source(player, tick)? {
+            special::Source::Room(index) => {
+                self.role(MARKER_ROLE_COUNT.saturating_add(index))?
+            },
+            special::Source::Street(index) => (
+                *self.specials.get(player.index())?.get(index)?.as_ref()?,
+                special::street_role(player, index)?,
+            ),
+        };
+        airborne_draw(art, role, body)
     }
 
     pub(super) fn verify_layer_phases(
@@ -664,7 +716,7 @@ impl CemeteryArt {
         &self,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<(), RenderError> {
-        if self.roles.len() != MARKER_ROLE_COUNT {
+        if self.roles.len() < MARKER_ROLE_COUNT {
             return Ok(());
         }
         let point = Point { x: 224, y: 176 };
@@ -706,6 +758,31 @@ impl CemeteryArt {
             .map_err(failure)
     }
 
+    fn verify_room_specials(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        baseline: &[u8],
+    ) -> Result<(), RenderError> {
+        if self.roles.len() != SPECIAL_ROLE_COUNT {
+            return Ok(());
+        }
+        for player in Player::ALL {
+            let mut maneuver = Maneuver::special(0);
+            for _ in 0u8..30 {
+                self.verify_room_body(
+                    scene,
+                    (player, None, maneuver),
+                    baseline,
+                )?;
+                maneuver = maneuver.advance(player, false);
+            }
+        }
+        write_status(format_args!(
+            "Cemetery specials: 120 reflected tick pairs"
+        ))
+        .map_err(failure)
+    }
+
     fn verify_room_walk(
         &self,
         scene: &mut SceneSession<'_, '_>,
@@ -740,8 +817,26 @@ impl CemeteryArt {
         write_status(format_args!("Cemetery walking: 64 reflected body pairs"))
             .map_err(failure)?;
         self.verify_room_jumps(scene, &baseline)?;
-        self.verify_room_markers(scene)
+        self.verify_room_markers(scene)?;
+        self.verify_room_specials(scene, &baseline)
     }
+}
+
+fn airborne_draw(
+    art: Art,
+    role: Role,
+    body: CemeteryRoomBody,
+) -> Option<SpriteDraw> {
+    if (art.rect.width.get(), art.rect.height.get()) != role.extent {
+        return None;
+    }
+    let flip = body.facing == Facing::Left;
+    let mut destination = art.rect;
+    (destination.x, destination.y) = role.room_offset(body.position, flip);
+    destination.y = destination
+        .y
+        .saturating_sub(i32::from(body.maneuver.elevation()));
+    Some(art.draw(destination, flip))
 }
 
 fn jump_phase(player: Player, motion: JumpMotion) -> usize {
@@ -891,6 +986,10 @@ const fn room_walk_track(player: Player) -> (usize, &'static [u8]) {
         Player::Bart => (76, &[0, 4, 8, 12, 17, 21]),
         Player::Lisa => (88, &[0, 5, 10, 15, 20, 25, 30, 35]),
     }
+}
+
+pub(super) const fn special_keys(player: Player) -> [u8; 3] {
+    special::street_keys(player)
 }
 
 fn room_role(player: Player, body: CemeteryRoomBody) -> Option<(usize, bool)> {
@@ -1106,6 +1205,7 @@ mod tests {
             (ANIMATED_ROLE_COUNT, ANIMATED_ATLAS_BYTES),
             (WALKING_ROLE_COUNT, WALKING_ATLAS_BYTES),
             (MARKER_ROLE_COUNT, MARKER_ATLAS_BYTES),
+            (SPECIAL_ROLE_COUNT, SPECIAL_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(
