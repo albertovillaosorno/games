@@ -556,6 +556,7 @@ impl CanonicalStaging {
         })
     }
 
+    #[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
     fn stage_payload(
         &mut self,
         payload: &AdmittedPayload<'_>,
@@ -570,7 +571,10 @@ impl CanonicalStaging {
             }
             return Ok(());
         }
-        self.stage_shared_payload(payload)
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        return self.stage_shared_payload(payload);
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        Err(StagingError::Aborted)
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -582,14 +586,6 @@ impl CanonicalStaging {
         pool.put(payload.digest(), payload.bytes())?;
         self.stage.budget = payload.budget();
         Ok(())
-    }
-
-    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-    fn stage_shared_payload(
-        &mut self,
-        _payload: &AdmittedPayload<'_>,
-    ) -> Result<(), StagingError> {
-        Err(StagingError::Aborted)
     }
 
     /// Exercise the same admission for legacy and native staging fixtures.
@@ -661,29 +657,27 @@ impl CompletedArchivePort for StagedArchive {
         self.path().as_os_str()
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn publish_complete(
         self: Box<Self>,
         name: PublicationName<'_>,
     ) -> Result<PublishedDirectory, StagingError> {
-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
-        {
-            let mut complete = *self;
-            complete.temporary.verify_tree(
-                &complete.namespace,
-                &complete.stamps,
-                true,
-            )?;
-            complete.verify()?;
-            publication::publish_directory(
-                &mut complete.temporary,
-                name.value(),
-            )
-        }
-        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-        {
-            let _name = name;
-            Err(StagingError::Io(io::ErrorKind::Unsupported))
-        }
+        let mut complete = *self;
+        complete.temporary.verify_tree(
+            &complete.namespace,
+            &complete.stamps,
+            true,
+        )?;
+        complete.verify()?;
+        publication::publish_directory(&mut complete.temporary, name.value())
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn publish_complete(
+        self: Box<Self>,
+        _name: PublicationName<'_>,
+    ) -> Result<PublishedDirectory, StagingError> {
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
     }
 
     fn recheck(&self) -> Result<(), StagingError> {
@@ -718,11 +712,20 @@ impl CanonicalPort for CanonicalStaging {
         Ok(Box::new((*self).finish_encoded(manifest)?))
     }
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn write_verified(
         &mut self,
         payload: &AdmittedPayload<'_>,
     ) -> Result<(), StagingError> {
         self.stage_payload(payload)
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn write_verified(
+        &mut self,
+        _payload: &AdmittedPayload<'_>,
+    ) -> Result<(), StagingError> {
+        Err(StagingError::Aborted)
     }
 }
 

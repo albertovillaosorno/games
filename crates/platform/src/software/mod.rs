@@ -208,7 +208,10 @@ use crate::ir::toolchain::{
     ValidationTool, reference::ReferenceTool,
 };
 
-#[cfg(all(feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 impl PlaybackFactory for () {
     fn devices() -> Result<AudioDevices, PlaybackError> {
         linux::audio::devices()
@@ -242,6 +245,7 @@ impl PlaybackFactory for () {
     feature = "interactive",
     any(
         target_os = "linux",
+        target_os = "android",
         all(target_arch = "wasm32", target_os = "unknown")
     )
 )))]
@@ -277,7 +281,10 @@ impl AudioFixturePort for () {
     }
 }
 
-#[cfg(all(feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 impl WindowFactory for () {
     const SUPPORTED: bool = true;
 
@@ -313,6 +320,7 @@ impl WindowFactory for () {
     feature = "interactive",
     any(
         target_os = "linux",
+        target_os = "android",
         all(target_arch = "wasm32", target_os = "unknown")
     )
 )))]
@@ -329,7 +337,10 @@ impl WindowFactory for () {
     }
 }
 
-#[cfg(all(feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 impl InputNames for () {
     fn controller_button_supported(_button: ControllerButton) -> bool {
         true
@@ -361,7 +372,10 @@ impl InputNames for () {
 }
 
 #[cfg(not(any(
-    all(feature = "interactive", target_os = "linux"),
+    all(
+        feature = "interactive",
+        any(target_os = "linux", target_os = "android")
+    ),
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 impl InputNames for () {

@@ -30,7 +30,6 @@
 //   - Keep the temporary directory private and reject existing destinations.
 
 use std::ffi::OsStr;
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 use std::io::Write as _;
@@ -274,7 +273,7 @@ impl CompletedBundlePort for StagedBundle {
     fn publish_complete(
         self: Box<Self>,
     ) -> Result<PublishedBundle, StagingError> {
-        Err(StagingError::Io(std::io::ErrorKind::Unsupported))
+        Err(StagingError::Io(io::ErrorKind::Unsupported))
     }
 }
 

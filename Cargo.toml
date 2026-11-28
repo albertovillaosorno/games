@@ -31,7 +31,7 @@ proc-macro2 = "1.0.107"
 toml = "1.1.5"
 sha2 = "0.11"
 zeroize = "1.9.2"
-sdl2 = { version = "0.39.0", features = ["use-pkgconfig"] }
+sdl2 = "0.39.0"
 nix = { version = "0.31.3", features = ["fs", "user"] }
 # Match the official CLI schema and retain a single syn major version.
 js-sys = { version = "=0.3.104", default-features = false }

@@ -29,7 +29,7 @@
 //   - Open a paused device, queue complete frames and explicitly resume.
 // - Defaults:
 //   - Reject implicit sample-rate or channel conversion.
-//! Bounded SDL2 audio playback on Linux.
+//! Bounded SDL2 audio playback on Linux and Android.
 
 use std::fmt::{self, Debug, Formatter};
 

@@ -191,3 +191,23 @@ implementation and export attribute in the strict ARM64 probe and is
 not admitted. Neither probe modifies workspace dependencies. Native
 adapter migration remains blocked on a compatible safe integration,
 and Android title packaging and physical-device acceptance remain open.
+
+A separate SDL2 safe-entry proof removes the need for a wholesale
+SDL3 migration. Rust SDL2 0.39.0 with its pinned SDL 2.32.10 native
+source and JNI 0.22.4 link as an ARM64-only shared library with unsafe
+Rust forbidden and warnings denied. A private copy of SDLActivity
+delegates its existing SDLMain runner through one Java override;
+the probe's override calls the JNI-mangled Rust method. The Rust
+worker is created by Rust, letting SDL own its JNI attachment and
+detachment. There is no owned native shim or unsafe export attribute.
+The APK passes alignment and v2/v3 signature verification.
+
+On the translated API 35 emulator, a cold launch opens accelerated
+SDL2 rendering. Center pixels change from (40, 80, 180, 255) to
+(12, 180, 40, 255) after a touch and remain green after Home and
+foreground restoration. The Activity logs focus loss and recovery
+and the worker returns 42 normally. This result also requires a
+nonempty SDL audio driver name and an app-private preference path.
+The emulator shuts down. The isolated probe does not exercise
+shared IR rendering, the audio queue or a playable title. It uses
+no original media or production signing credentials.

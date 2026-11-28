@@ -97,6 +97,8 @@ pub type PathRecords<'input> = Vec<&'input [u8]>;
 /// Fixed contributor check with explicitly admitted dynamic inputs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Request<'input> {
+    /// Lint the ARM64 Android interactive platform adapter.
+    AndroidInteractive,
     /// Discover authored files using only the repository ignore policy.
     AuthoredFiles,
     /// Inspect the asset build graph across all targets.
@@ -261,7 +263,8 @@ impl<'input> Request<'input> {
             },
             Self::Git(request) => ("git", git(request)),
             Self::WasmSmokeRun(binary) => return wasm_smoke_runner(binary),
-            Self::BuildGraph
+            Self::AndroidInteractive
+            | Self::BuildGraph
             | Self::ClippyPackage(_)
             | Self::ClippyWorkspace
             | Self::CompileWorkspace { .. }
@@ -282,6 +285,7 @@ impl<'input> Request<'input> {
 
     fn cargo(self) -> Result<Vec<&'input str>, InvalidRequest> {
         match self {
+            Self::AndroidInteractive => Ok(interactive_clippy()),
             Self::BuildGraph => graph("games-build", "normal,build,dev"),
             Self::ClippyPackage(package) => clippy(package),
             Self::ClippyWorkspace => Ok(vec![
@@ -514,6 +518,24 @@ fn markdown(path: &OsStr) -> bool {
                 .rsplit_once('.')
                 .is_some_and(|(_, ext)| matches!(ext, "md" | "mdc"))
     })
+}
+
+fn interactive_clippy() -> Vec<&'static str> {
+    vec![
+        "clippy",
+        "--locked",
+        "--target",
+        Target::AndroidArm64.triple(),
+        "--lib",
+        "--no-default-features",
+        "-p",
+        "games-platform",
+        "--features",
+        "interactive",
+        "--",
+        "-D",
+        "warnings",
+    ]
 }
 
 fn clippy(package: &str) -> Result<Vec<&str>, InvalidRequest> {
@@ -825,6 +847,32 @@ mod tests {
             .admit()
             .is_err()
         );
+    }
+
+    #[test]
+    fn interactive_adapter_lint_is_admitted() -> Result<(), InvalidRequest> {
+        let request = Request::AndroidInteractive.admit()?;
+        if request.program() != "cargo"
+            || request.args()
+                != [
+                    "clippy",
+                    "--locked",
+                    "--target",
+                    "aarch64-linux-android",
+                    "--lib",
+                    "--no-default-features",
+                    "-p",
+                    "games-platform",
+                    "--features",
+                    "interactive",
+                    "--",
+                    "-D",
+                    "warnings",
+                ]
+        {
+            return Err(InvalidRequest);
+        }
+        Ok(())
     }
 
     #[test]

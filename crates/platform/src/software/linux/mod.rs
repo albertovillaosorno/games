@@ -29,13 +29,22 @@
 // - Defaults:
 //   - No host resources are accessed by module selection.
 
-//! Linux-kernel storage services and Linux SDL presentation.
+//! Linux-kernel storage services and shared SDL2 presentation.
 
-#[cfg(all(feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 pub(super) mod audio;
-#[cfg(all(feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 pub(super) mod graphics;
-#[cfg(all(feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 pub(super) mod input;
 #[cfg(all(feature = "secure-lan", not(target_arch = "wasm32")))]
 mod lan;
@@ -47,9 +56,17 @@ pub(super) mod storage;
 #[cfg(target_os = "linux")]
 mod toolchain;
 
-#[cfg(all(test, feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    test,
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 use std::sync::Mutex;
 
 /// Serialize test initialization of SDL across native capabilities.
-#[cfg(all(test, feature = "interactive", target_os = "linux"))]
+#[cfg(all(
+    test,
+    feature = "interactive",
+    any(target_os = "linux", target_os = "android")
+))]
 static NATIVE_SMOKE_LOCK: Mutex<()> = Mutex::new(());

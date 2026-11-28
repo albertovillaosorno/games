@@ -240,6 +240,7 @@ fn run_validation(root: &OsStr, log: &mut dyn Write) -> Result<(), String> {
     }
     validate_feature_graphs(root, &packages, log)?;
     validate_portable(root, &packages, log)?;
+    execute(root, Request::AndroidInteractive, log)?;
     execute(
         root,
         Request::WasmSmokeBuild {

@@ -29,7 +29,7 @@
 // - Defaults:
 //   - Require acceleration; do not request vertical synchronization.
 
-//! Accelerated SDL2 RGBA presentation for Linux hosts.
+//! Accelerated SDL2 RGBA presentation for Linux and Android.
 
 /// Bounded GPU-resident sprite atlases and ordered scene composition.
 mod scene_renderer;
