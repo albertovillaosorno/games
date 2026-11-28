@@ -82,9 +82,10 @@ impl Inventory {
         &mut self,
         package: &Package,
         selected: &[&Package],
+        root: &OsStr,
     ) -> Result<(), String> {
         let label = package.label()?;
-        for (name, source) in package.documents(selected)? {
+        for (name, source) in package.documents(selected, root)? {
             if self
                 .documents
                 .insert(format!("licenses/{label}/{name}"), source)
@@ -173,7 +174,7 @@ impl Metadata {
             if local {
                 continue;
             }
-            inventory.insert_documents(package, &selected)?;
+            inventory.insert_documents(package, &selected, root)?;
         }
         Ok(inventory)
     }
@@ -242,9 +243,17 @@ impl Package {
         })
     }
 
-    fn documents(&self, selected: &[&Self]) -> Result<Documents, String> {
+    fn documents(
+        &self,
+        selected: &[&Self],
+        root: &OsStr,
+    ) -> Result<Documents, String> {
         let directory = self.directory()?;
         let mut files = BTreeMap::new();
+        if matches!(self.name.as_str(), "jni" | "jni-macros" | "jni-sys-macros")
+        {
+            return self.jni_documents(selected, root);
+        }
         if self.name == "sdl2-sys" {
             return self.sdl_documents(selected);
         }
@@ -272,6 +281,39 @@ impl Package {
         }
         self.validate_documents(&files)?;
         Ok(files)
+    }
+
+    // The 0.22.4 registry archives omit the upstream root MIT text.
+    // The 0.4.1 sys macro text equals the companion crate licence.
+    fn jni_documents(
+        &self,
+        selected: &[&Self],
+        root: &OsStr,
+    ) -> Result<Documents, String> {
+        if self.license.as_deref() != Some("MIT OR Apache-2.0") {
+            return Err("review new JNI licence expression".into());
+        }
+        let path = match (self.name.as_str(), self.version.as_str()) {
+            ("jni" | "jni-macros", "0.22.4") => local_path(
+                root,
+                "tools/build/licenses/jni-rs-0.22.4/LICENSE-MIT",
+            )?,
+            ("jni-sys-macros", "0.4.1") => {
+                let companion = selected
+                    .iter()
+                    .find(|package| {
+                        package.name == "jni-sys"
+                            && package.version == "0.4.1"
+                            && package.source.as_deref() == Some(REGISTRY)
+                            && package.license.as_deref()
+                                == Some("MIT OR Apache-2.0")
+                    })
+                    .ok_or("missing companion JNI sys licence")?;
+                local_path(companion.directory()?, "LICENSE-MIT")?
+            },
+            _ => return Err("review new JNI licence files".into()),
+        };
+        Ok(BTreeMap::from([(String::from("LICENSE-MIT"), path)]))
     }
 
     fn label(&self) -> Result<String, String> {
@@ -364,7 +406,9 @@ impl Package {
                     && self.version == RING_VERSION
                     && RING_DOCUMENTS.iter().all(|name| has(name))
             },
-            Some("Unlicense OR MIT") => mit || has("UNLICENSE"),
+            Some("Unlicense OR MIT" | "Unlicense/MIT") => {
+                mit || has("UNLICENSE")
+            },
             Some("(MIT OR Apache-2.0) AND Unicode-3.0") => {
                 (mit || apache) && has("LICENSE-UNICODE")
             },

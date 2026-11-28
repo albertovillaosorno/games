@@ -53,6 +53,26 @@ pub struct CargoArguments<'name> {
 }
 
 impl<'name> CargoArguments<'name> {
+    /// Locked Android shared-library arguments for the same admitted title.
+    #[must_use]
+    pub const fn android_build(self) -> [&'name str; 13] {
+        [
+            "rustc",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            self.target,
+            "--package",
+            self.package,
+            "--lib",
+            "--features",
+            self.feature,
+            "--crate-type",
+            "cdylib",
+        ]
+    }
+
     /// Admitted artifact binary identifier.
     #[must_use]
     pub const fn binary(self) -> &'name str {
@@ -121,6 +141,12 @@ impl<'name> CargoArguments<'name> {
             package,
             target,
         })
+    }
+
+    /// Admitted Cargo package identifier.
+    #[must_use]
+    pub const fn package(self) -> &'name str {
+        self.package
     }
 
     /// Locked run arguments for the same authored title selection.

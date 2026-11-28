@@ -306,3 +306,23 @@ interactive result. Repeatable cold-restart acceptance, persistent
 settings writes in the actual title, production package automation,
 audible audio, physical ARM64, controllers and sensors remain open.
 The isolated emulator was shut down.
+
+Retained-installation checks of the preceding diagnostic APK across two
+full emulator boots observed three successful process-cold launches out
+of four. Successful launches recovered the expected touch panel and
+foreground Activity and selected OpenSL ES. The unsuccessful launch
+destroyed and recreated the Activity in the same process, emitted an
+EGL release diagnostic and returned to the home launcher. The cause
+remains unresolved. No reinstall or asset reprovisioning was used for
+these checks. The isolated emulator was shut down.
+
+The local package command now builds an unsigned debug ARM64 APK from
+locked Rust and SDL2 source with SDK 35 and NDK r28c. The title-specific
+launcher uses the existing safe JNI entry. Exact APK admission accepts
+the binary manifest, empty AAPT2 resource table, DEX and two aligned
+AArch64 libraries; additional archive members are rejected. The
+independent package check verified 137 files and 12,270,361 bytes
+including dependency licence documents; the APK is 11,637,997 bytes.
+AAPT2 identifies API 24 minimum, API 35 target and ARM64-only native
+code. SDK zipalign independently verifies 16 KiB alignment. This is
+unsigned development packaging, not a signed or portable release.

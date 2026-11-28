@@ -197,6 +197,12 @@ pub(crate) trait ToolchainFactory {
         root: &OsStr,
         manifest: &OsStr,
     ) -> Result<Vec<u8>, ToolchainError>;
+    fn package_android(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _parent: &OsStr,
+        _manifest: &OsStr,
+    ) -> Result<Vec<u8>, ToolchainError>;
     fn probe_version(
         root: &OsStr,
         tool: ValidationTool,
@@ -251,7 +257,9 @@ impl<'name> CargoTitle<'name> {
     where
         Factory: ToolchainFactory,
     {
-        if !Factory::available(self.target) {
+        if self.target == Target::AndroidArm64
+            || !Factory::available(self.target)
+        {
             return Err(ToolchainError::UnsupportedHost);
         }
         Factory::compile(self.args, root, self.target)
@@ -297,6 +305,28 @@ impl<'name> CargoTitle<'name> {
             CargoArguments::new(package, binary, feature, target.triple())
                 .map_err(|_error| ToolchainError::InvalidIdentifier)?;
         Ok(Self { args, target })
+    }
+
+    /// Build an unsigned Android ARM64 application using the local SDK.
+    ///
+    /// The parent must be trusted private staging space. No assets or
+    /// signing material are included.
+    /// # Errors
+    /// Rejects other targets, unavailable tools and failed builds.
+    pub fn package_android(
+        self,
+        root: &OsStr,
+        parent: &OsStr,
+        manifest: &OsStr,
+    ) -> Result<Vec<u8>, ToolchainError> {
+        if self.target != Target::AndroidArm64
+            || !<() as ToolchainFactory>::available(self.target)
+        {
+            return Err(ToolchainError::UnsupportedHost);
+        }
+        <() as ToolchainFactory>::package_android(
+            self.args, root, parent, manifest,
+        )
     }
 
     /// Run the admitted authored title with a finite smoke catalogue.
@@ -433,6 +463,15 @@ mod tests {
                 });
             }
             Ok(args.binary().as_bytes().to_vec())
+        }
+
+        fn package_android(
+            _args: CargoArguments<'_>,
+            _root: &OsStr,
+            _parent: &OsStr,
+            _manifest: &OsStr,
+        ) -> Result<Vec<u8>, ToolchainError> {
+            Err(ToolchainError::UnsupportedHost)
         }
 
         fn probe_version(

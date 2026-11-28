@@ -31,6 +31,8 @@
 
 //! Linux toolchain execution for independently authored workspace artifacts.
 
+#[cfg(feature = "android-packaging")]
+mod android;
 mod browser;
 mod environment;
 mod reference;
@@ -57,8 +59,13 @@ impl ToolchainFactory for () {
                     && identity.system == OperatingSystem::Linux
                     && cfg!(target_env = "gnu")
             },
-            Target::AndroidArm64
-            | Target::LinuxArm64Gnu
+            #[cfg(feature = "android-packaging")]
+            Target::AndroidArm64 => {
+                Self::available(Target::LinuxX86_64Gnu) && android::available()
+            },
+            #[cfg(not(feature = "android-packaging"))]
+            Target::AndroidArm64 => false,
+            Target::LinuxArm64Gnu
             | Target::WindowsArm64Gnullvm
             | Target::WindowsX86_64Gnu => false,
         }
@@ -132,6 +139,26 @@ impl ToolchainFactory for () {
             });
         }
         Ok(output.stdout)
+    }
+
+    #[cfg(feature = "android-packaging")]
+    fn package_android(
+        args: CargoArguments<'_>,
+        root: &OsStr,
+        parent: &OsStr,
+        manifest: &OsStr,
+    ) -> Result<Vec<u8>, ToolchainError> {
+        android::package(args, root, parent, manifest)
+    }
+
+    #[cfg(not(feature = "android-packaging"))]
+    fn package_android(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _parent: &OsStr,
+        _manifest: &OsStr,
+    ) -> Result<Vec<u8>, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
     }
 
     fn probe_version(

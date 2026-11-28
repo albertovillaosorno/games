@@ -141,6 +141,14 @@ impl Prepared {
                 INDEX_HTML.as_bytes().to_vec(),
                 false,
             )?;
+        } else if title.is_android() {
+            let manifest = local_path(root, title.title().manifest())?;
+            let bytes = request
+                .package_android(root, parent, &manifest)
+                .map_err(|error| error.to_string())?;
+            admit_executable(title.target(), &bytes)
+                .map_err(|error| error.to_string())?;
+            prepared.add(title.binary().into(), bytes, false)?;
         } else {
             let executable =
                 request.compile(root).map_err(|error| error.to_string())?;
@@ -667,11 +675,11 @@ mod tests {
                     == Err(String::from("package and asset paths overlap")),
             )?;
         }
-        fixture_configuration(&root, "assets", "output", "android-arm64")?;
+        fixture_configuration(&root, "assets", "output", "windows-arm64")?;
         require(
             configured_with(root.location(), title, unexpected)
                 == Err(String::from(concat!(
-                    "target android-arm64 is unavailable ",
+                    "target windows-arm64 is unavailable ",
                     "for distribution; core only"
                 ))),
         )?;

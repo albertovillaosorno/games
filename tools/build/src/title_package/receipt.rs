@@ -132,7 +132,10 @@ impl Receipt {
         path: &str,
         entry: Entry,
     ) -> Result<(), String> {
-        let kind = if path == title.binary() && !title.is_browser() {
+        let kind = if path == title.binary()
+            && !title.is_browser()
+            && !title.is_android()
+        {
             AuthoredFileKind::Executable
         } else {
             AuthoredFileKind::Document
@@ -194,19 +197,7 @@ impl Receipt {
         {
             return Err("missing required browser binding file".into());
         }
-        let label = if title.is_browser() {
-            "Module"
-        } else {
-            "Executable"
-        };
-        let requirements = if title.is_browser() {
-            concat!(
-                "Requires a modern browser with WebGL 2 ",
-                "and local directory selection.\n"
-            )
-        } else {
-            "Requires compatible GNU/Linux system libraries and SDL2.\n"
-        };
+        let (label, requirements) = distribution_description(title);
         let mut text = format!(
             "Title: {}\nTarget: {}\n{label} bytes: {}\n\
              {label} SHA-256: {}\n\
@@ -356,6 +347,33 @@ impl Receipt {
              receipt SHA-256: {}",
             ContentHash::calculate(&bytes),
         ))
+    }
+}
+
+const fn distribution_description(
+    title: Distribution,
+) -> (&'static str, &'static str) {
+    if title.is_android() {
+        (
+            "APK",
+            concat!(
+                "Unsigned debug development APK, ARM64, Android API 24+.\n",
+                "Sign separately; provision private assets locally.\n",
+            ),
+        )
+    } else if title.is_browser() {
+        (
+            "Module",
+            concat!(
+                "Requires a modern browser with WebGL 2 ",
+                "and local directory selection.\n",
+            ),
+        )
+    } else {
+        (
+            "Executable",
+            "Requires compatible GNU/Linux system libraries and SDL2.\n",
+        )
     }
 }
 

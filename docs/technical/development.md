@@ -3,7 +3,8 @@
 ## Native prerequisites and smoke tests
 
 Linux x86-64 and a WebGL 2 browser preview are available. Android ARM64
-and Windows remain planned targets; no blanket compatibility is promised.
+has local debug packaging; Windows remains planned. No blanket
+compatibility is promised.
 
 Linux development requires the system SDL2 library and its pkg-config
 development metadata. The native graphics adapter requests acceleration
@@ -214,7 +215,7 @@ cargo run --locked -p games-build -- build simpsons-arcade
 ```
 
 The optional native target is `linux-x86-64`. The browser target is
-`webassembly`; other targets and unknown titles are rejected. The build
+`webassembly`; Android uses the package command instead. The build
 produces an authored release executable or an unbound Wasm module.
 Create a local prototype package in a new directory with:
 
@@ -398,3 +399,23 @@ its features enabled independently. Aggregate all-feature workspace
 compilation and tests remain mandatory. This avoids linking unrelated
 runtime TLS dependencies into import tools merely through workspace-wide
 Cargo feature unification, without disabling any compiler or Clippy lint.
+
+## Android local debug packaging
+
+On a Linux x86-64 contributor host, install the Android ARM64 Rust target,
+Android SDK platform 35, Build Tools 35.0.0, NDK 28.2.13676358, CMake
+and a JDK with `javac`. Set `ANDROID_HOME` to the installed SDK root.
+Use a trusted existing output parent and a new package directory:
+
+```sh
+cargo run --locked -p games-build -- package simpsons-arcade \
+  .temp/android-game android-arm64
+cargo run --locked -p games-build -- package-check simpsons-arcade \
+  .temp/android-game android-arm64
+```
+
+The package contains an unsigned debug APK, dependency notices and a
+receipt. It targets API 35 with minimum API 24 and ARM64 native code.
+Sign a separate copy with an appropriate local test key before installing.
+Original game assets and signing credentials are never bundled. This is
+not a production release or a claim of physical-device compatibility.

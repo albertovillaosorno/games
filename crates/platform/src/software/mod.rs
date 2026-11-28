@@ -570,6 +570,15 @@ impl ToolchainFactory for () {
         Err(ToolchainError::UnsupportedHost)
     }
 
+    fn package_android(
+        _args: CargoArguments<'_>,
+        _root: &OsStr,
+        _parent: &OsStr,
+        _manifest: &OsStr,
+    ) -> Result<Vec<u8>, ToolchainError> {
+        Err(ToolchainError::UnsupportedHost)
+    }
+
     fn probe_version(
         _root: &OsStr,
         _tool: ValidationTool,

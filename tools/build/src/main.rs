@@ -976,7 +976,7 @@ mod tests {
         for invalid in [["build", "metal-slug", "linux-x86-64"], [
             "build",
             "simpsons-arcade",
-            "android-arm64",
+            "windows-arm64",
         ]] {
             assert!(
                 Command::parse(invalid.into_iter().map(OsString::from))
@@ -1029,6 +1029,20 @@ mod tests {
                     | Command::PackageExplicit(selection, _)
                     | Command::PackageCheck(selection, _))
                     if selection.is_browser()
+            ));
+        }
+    }
+
+    #[test]
+    fn android_package_commands_admit_the_arm64_target() {
+        for command in ["package", "package-check"] {
+            let args =
+                [command, "simpsons-arcade", "local-package", "android-arm64"];
+            assert!(matches!(
+                Command::parse(args.into_iter().map(OsString::from)),
+                Ok(Command::PackageExplicit(selection, _)
+                    | Command::PackageCheck(selection, _))
+                    if selection.is_android()
             ));
         }
     }

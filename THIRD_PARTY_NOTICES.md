@@ -9,7 +9,9 @@ adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
 Nix for descriptor-relative archive staging. Linux graphics and audio use
 Rust-SDL2 with the system SDL2 library (Zlib licence), linked dynamically.
 Optional packaged application entry uses Inventory registration and the
-Android JNI bindings. No
+Android JNI bindings. The Android development packaging adapter builds
+SDL2 from the locked Rust-SDL2 source, bundles its shared library and
+marks the minimal SDL Java entry adaptation. No
 original game assets, original game code or candidate project source is
 incorporated or distributed by this repository. The development validator
 uses Serde JSON, TOML and SHA-2; platform tests use Rcgen.
@@ -163,3 +165,15 @@ replace the applicable third-party licence terms.
 
 Original game names identify compatibility targets only; their trademarks
 and proprietary materials remain the property of their respective owners.
+
+## Android JNI licence texts
+
+The published `jni` and `jni-macros` 0.22.4 crates omit their root
+licence files. The identical upstream MIT text is preserved in
+`tools/build/licenses/jni-rs-0.22.4/LICENSE-MIT`, from revisions
+`5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7` and
+`33045a124105c939d1e2cbdcb5a39e5d868ffa03`, respectively.
+The `jni-sys-macros` 0.4.1 MIT text at revision
+`64d77b7a5f119d7b55b4e2c169a4668067ff59e6` is byte-identical
+to the cached `jni-sys` 0.4.1 licence. Packaging uses these exact
+versioned texts instead of silently omitting licence documents.

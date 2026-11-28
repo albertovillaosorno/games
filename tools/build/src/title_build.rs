@@ -42,6 +42,8 @@ use games_platform::ir::toolchain::{self, CargoTitle, Target};
 
 pub(crate) const NATIVE_TARGET: Target = Target::LinuxX86_64Gnu;
 const PREVIEW_FEATURE: &str = "native-preview";
+const ANDROID_FEATURE: &str = "application-entry";
+pub(crate) const ANDROID_APK: &str = "game.apk";
 const BROWSER_FEATURE: &str = "browser-preview";
 const BROWSER_BINARY: &str = "simpsons-arcade-browser-preview";
 pub(crate) const BROWSER_MODULE: &str = "game_bg.wasm";
@@ -113,11 +115,17 @@ pub struct Distribution {
 
 impl Distribution {
     pub(crate) const fn binary(self) -> &'static str {
-        if self.is_browser() {
+        if self.is_android() {
+            ANDROID_APK
+        } else if self.is_browser() {
             BROWSER_MODULE
         } else {
             self.title.binary()
         }
+    }
+
+    pub(crate) const fn is_android(self) -> bool {
+        matches!(self.target, Target::AndroidArm64)
     }
 
     pub(crate) const fn is_browser(self) -> bool {
@@ -134,7 +142,7 @@ impl Distribution {
     pub(crate) fn new(title: Title, target: Target) -> Result<Self, String> {
         if target == NATIVE_TARGET {
             Ok(Self::native(title))
-        } else if target == Target::WebAssembly {
+        } else if matches!(target, Target::WebAssembly | Target::AndroidArm64) {
             Ok(Self { target, title })
         } else {
             Err(format!(
@@ -154,22 +162,25 @@ impl Distribution {
             [name] => Target::portable_checks()
                 .into_iter()
                 .find(|target| name == target.name())
-                .ok_or(
-                    "expected optional target linux-x86-64 or webassembly",
-                )?,
+                .ok_or("expected linux-x86-64, webassembly or android-arm64")?,
             _ => return Err("expected one optional target".into()),
         };
         Self::new(selected, target)
     }
 
     pub(crate) fn request(self) -> Result<CargoTitle<'static>, String> {
-        if !self.is_browser() {
+        if self.target == NATIVE_TARGET {
             return self.title.request();
         }
         let package = match self.title {
             Title::SimpsonsArcade => "games-simpsons-arcade",
         };
-        CargoTitle::new(package, BROWSER_BINARY, BROWSER_FEATURE, self.target)
+        let (binary, feature) = if self.is_android() {
+            (self.title.binary(), ANDROID_FEATURE)
+        } else {
+            (BROWSER_BINARY, BROWSER_FEATURE)
+        };
+        CargoTitle::new(package, binary, feature, self.target)
             .map_err(|error| error.to_string())
     }
 
@@ -177,6 +188,9 @@ impl Distribution {
     /// # Errors
     /// Rejects unsupported hosts and unsuccessful builds.
     pub fn run(self) -> Result<(), String> {
+        if self.is_android() {
+            return Err("use package for Android applications".into());
+        }
         let executable = self
             .request()?
             .compile(&workspace_root()?)

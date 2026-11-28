@@ -78,6 +78,8 @@ pub mod fixtures {
     }
 }
 
+#[cfg(feature = "android-packaging")]
+mod apk;
 mod wasm;
 
 use std::fmt;
@@ -124,8 +126,15 @@ pub fn admit_executable(
             .ok_or(ExecutableAdmissionError::InvalidStructure),
         Target::WebAssembly => wasm::module(bytes)
             .ok_or(ExecutableAdmissionError::InvalidStructure),
-        Target::AndroidArm64
-        | Target::LinuxArm64Gnu
+        #[cfg(feature = "android-packaging")]
+        Target::AndroidArm64 => {
+            apk::apk(bytes).ok_or(ExecutableAdmissionError::InvalidStructure)
+        },
+        #[cfg(not(feature = "android-packaging"))]
+        Target::AndroidArm64 => {
+            Err(ExecutableAdmissionError::UnsupportedTarget)
+        },
+        Target::LinuxArm64Gnu
         | Target::WindowsArm64Gnullvm
         | Target::WindowsX86_64Gnu => {
             Err(ExecutableAdmissionError::UnsupportedTarget)
@@ -137,10 +146,11 @@ fn elf_field<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
     bytes.get(offset..offset.checked_add(N)?)?.try_into().ok()
 }
 
-fn elf_program_table(bytes: &[u8]) -> Option<ProgramHeaders<'_>> {
+fn elf_program_table(bytes: &[u8], machine: u16) -> Option<ProgramHeaders<'_>> {
     if !bytes.starts_with(b"\x7fELF\x02\x01\x01")
         || !matches!(bytes.get(16..18), Some([2 | 3, 0]))
-        || bytes.get(18..24) != Some(&[62, 0, 1, 0, 0, 0])
+        || u16::from_le_bytes(elf_field(bytes, 18)?) != machine
+        || bytes.get(20..24) != Some(&[1, 0, 0, 0])
         || usize::from(u16::from_le_bytes(elf_field(bytes, 52)?)) != ELF_HEADER
         || usize::from(u16::from_le_bytes(elf_field(bytes, 54)?))
             != ELF_PROGRAM_HEADER
@@ -151,7 +161,7 @@ fn elf_program_table(bytes: &[u8]) -> Option<ProgramHeaders<'_>> {
     let offset =
         usize::try_from(u64::from_le_bytes(elf_field(bytes, 32)?)).ok()?;
     let count = u16::from_le_bytes(elf_field(bytes, 56)?);
-    if entry == 0 || offset < ELF_HEADER || matches!(count, 0 | u16::MAX) {
+    if offset < ELF_HEADER || matches!(count, 0 | u16::MAX) {
         return None;
     }
     let end = offset
@@ -192,9 +202,40 @@ fn load_contains_entry(
     )
 }
 
+#[cfg(feature = "android-packaging")]
+fn android_shared(bytes: &[u8]) -> Option<()> {
+    let (entry, programs) = elf_program_table(bytes, 183)?;
+    if entry != 0 || bytes.get(16..18) != Some(&[3, 0]) {
+        return None;
+    }
+    let length = u64::try_from(bytes.len()).ok()?;
+    let mut executable = false;
+    let mut dynamic = false;
+    for program in programs {
+        let kind = u32::from_le_bytes(elf_field(program, 0)?);
+        match kind {
+            1 => {
+                let alignment = u64::from_le_bytes(elf_field(program, 48)?);
+                if alignment < 16_384 {
+                    return None;
+                }
+                let address = u64::from_le_bytes(elf_field(program, 16)?);
+                executable |= load_contains_entry(program, address, length)?;
+            },
+            2 => dynamic = true,
+            3 => return None,
+            _ => {},
+        }
+    }
+    (executable && dynamic).then_some(())
+}
+
 // This is a structural build-output check, not an ELF loader or ABI audit.
 fn native_entry(bytes: &[u8]) -> Option<()> {
-    let (entry, programs) = elf_program_table(bytes)?;
+    let (entry, programs) = elf_program_table(bytes, 62)?;
+    if entry == 0 {
+        return None;
+    }
     let length = u64::try_from(bytes.len()).ok()?;
     let mut executable_entry = false;
     for program in programs {
@@ -266,12 +307,19 @@ mod tests {
                 == Err(ExecutableAdmissionError::InvalidStructure),
         )?;
         for target in Target::portable_checks() {
-            if !matches!(target, Target::LinuxX86_64Gnu | Target::WebAssembly) {
-                require(
-                    admit_executable(target, &elf)
-                        == Err(ExecutableAdmissionError::UnsupportedTarget),
-                )?;
-            }
+            let expected = match target {
+                Target::LinuxX86_64Gnu | Target::WebAssembly => continue,
+                Target::AndroidArm64 if cfg!(feature = "android-packaging") => {
+                    ExecutableAdmissionError::InvalidStructure
+                },
+                Target::AndroidArm64
+                | Target::LinuxArm64Gnu
+                | Target::WindowsArm64Gnullvm
+                | Target::WindowsX86_64Gnu => {
+                    ExecutableAdmissionError::UnsupportedTarget
+                },
+            };
+            require(admit_executable(target, &elf) == Err(expected))?;
         }
         Ok(())
     }
