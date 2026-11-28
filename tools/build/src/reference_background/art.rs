@@ -35,12 +35,22 @@ use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
+#[cfg(feature = "native-preview")]
+use games::presentation::{Dimensions, Viewport};
 use games_assets::{
     AssetFormat, AssetManifest, AssetRecord, ContentHash, ManifestLimits,
 };
+#[cfg(feature = "native-preview")]
+use games_platform::ir::frame::{FrameLayout, RenderError};
+#[cfg(feature = "native-preview")]
+use games_platform::ir::graphics::NativeWindow;
+#[cfg(feature = "native-preview")]
+use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::importer::reference::{
     Background, Machine, Pixel, Raster,
 };
+#[cfg(feature = "native-preview")]
+use games_platform::ir::scene::{SceneLimits, SpriteDraw};
 use games_platform::ir::storage::bundle::CanonicalBundle;
 use games_platform::ir::storage::staging::CanonicalStaging;
 use games_platform::ir::toolchain;
@@ -536,12 +546,142 @@ impl Image {
     }
 }
 
-/// Report independently registered tile maps after full-scene admission.
-pub(super) fn report_layers(
+#[derive(Debug)]
+struct RegisteredLayer {
+    image: Image,
+    index: usize,
+    origin: (usize, usize),
+}
+
+#[derive(Debug)]
+pub(super) struct RegisteredLayers {
+    backdrop: u16,
+    layers: Vec<RegisteredLayer>,
+}
+
+impl RegisteredLayers {
+    #[cfg(feature = "native-preview")]
+    pub(super) fn native_check(
+        &self,
+        raster: Raster,
+        pens: &[Pixel],
+        colors: &[[u8; 4]],
+    ) -> Result<(), String> {
+        let expected = Image::from_pens(pens, raster.extent(), colors, false)?;
+        let layout =
+            super::native_layout(raster, expected.pixels.as_flattened().len())?;
+        let limits = self.native_limits()?;
+        let [red, green, blue, _alpha] = Pixel::from_pen(self.backdrop)
+            .rgba(colors)
+            .ok_or_else(|| String::from("backdrop pen outside palette"))?;
+        let mut window = NativeWindow::open(
+            "Independent layer verification",
+            layout.width(),
+            layout.height(),
+            true,
+        )
+        .map_err(|error| format!("native window: {error:?}"))?;
+        let renderer = window.renderer_name();
+        window
+            .with_scene(layout, limits, |scene| {
+                let mut commands = Vec::with_capacity(limits.sprites.get());
+                for layer in &self.layers {
+                    commands.extend(layer.commands(scene, layout)?);
+                }
+                if !scene.present([red, green, blue], &commands)?
+                    || scene.readback()? != expected.pixels.as_flattened()
+                {
+                    return Err(RenderError::Backend(String::from(
+                        "independent layer readback differs",
+                    )));
+                }
+                Ok(())
+            })
+            .map_err(|error| format!("native scene: {error:?}"))?;
+        toolchain::write_line(&format!(
+            "Native independent layer readback matches ({renderer})"
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "native-preview")]
+    fn native_limits(&self) -> Result<SceneLimits, String> {
+        let size = |value| {
+            NonZeroUsize::new(value)
+                .ok_or_else(|| String::from("empty independent layer budget"))
+        };
+        let bytes = self.layers.iter().fold(0usize, |sum, layer| {
+            sum.saturating_add(layer.image.pixels.as_flattened().len())
+        });
+        Ok(SceneLimits {
+            atlas_bytes: size(bytes)?,
+            atlases: size(self.layers.len())?,
+            sprites: size(self.layers.len().saturating_mul(4))?,
+        })
+    }
+
+    pub(super) fn report(&self) -> Result<(), String> {
+        toolchain::write_line(&format!(
+            "Backdrop: palette pen {}",
+            self.backdrop
+        ))
+        .map_err(|error| error.to_string())?;
+        for layer in &self.layers {
+            let (horizontal, vertical) = layer.origin;
+            let digest =
+                ContentHash::calculate(layer.image.pixels.as_flattened());
+            toolchain::write_line(&format!(
+                "Layer {}: origin {horizontal},{vertical} RGBA8 {digest}",
+                layer.index,
+            ))
+            .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "native-preview")]
+impl RegisteredLayer {
+    fn commands(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        frame: FrameLayout,
+    ) -> Result<impl Iterator<Item = SpriteDraw>, RenderError> {
+        let dim = |value| {
+            u32::try_from(value)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .ok_or(RenderError::InvalidDimensions)
+        };
+        let bytes = self.image.pixels.as_flattened();
+        let budget =
+            NonZeroUsize::new(bytes.len()).ok_or(RenderError::InvalidLength)?;
+        let atlas_layout = FrameLayout::new(
+            dim(self.image.width)?,
+            dim(self.image.height)?,
+            budget,
+        )?;
+        let atlas = scene.load_atlas(atlas_layout, bytes)?;
+        let view = Viewport {
+            height: frame.height().get(),
+            width: frame.width().get(),
+            x: u32::try_from(self.origin.0)
+                .map_err(|_error| RenderError::InvalidDimensions)?,
+            y: u32::try_from(self.origin.1)
+                .map_err(|_error| RenderError::InvalidDimensions)?,
+        };
+        let period =
+            Dimensions::new(atlas_layout.width(), atlas_layout.height());
+        SpriteDraw::wrapped(atlas, period, view)
+    }
+}
+
+/// Register independent maps and verify their sprite-free composition.
+pub(super) fn registered_layers(
     (machine, assets): (Machine, &SceneAssets<'_>),
-    mut observation: Observation,
+    observation: &mut Observation,
     pens: &mut [Pixel],
-) -> Result<(), String> {
+) -> Result<RegisteredLayers, String> {
     let _sprites = observation.sprites.take();
     observation.reconstruct(machine, assets, pens)?;
     let (state, mixer) = observation.tile_state(machine)?;
@@ -550,7 +690,7 @@ pub(super) fn report_layers(
     let mut map = vec![Pixel::default(); width.saturating_mul(height)];
     let backdrop = u16::from(mixer.backdrop.palette_bank) << 4u32;
     let mut composed = vec![backdrop; pens.len()];
-    let mut reports = Vec::with_capacity(3);
+    let mut layers = Vec::with_capacity(3);
     let background = Background {
         scroll_control: observation.scroll,
         state,
@@ -563,22 +703,12 @@ pub(super) fn report_layers(
         overlay_layer(&map, origin, raster.extent(), &mut composed)?;
         let image =
             Image::from_pens(&map, (width, height), &observation.colors, true)?;
-        reports.push(format!(
-            "Layer {index}: origin {},{} RGBA8 {}",
-            origin.0,
-            origin.1,
-            ContentHash::calculate(image.pixels.as_flattened())
-        ));
+        layers.push(RegisteredLayer { image, index, origin });
     }
     if !pens.iter().copied().map(Pixel::pen).eq(composed) {
         return Err(String::from("isolated layer composition differs"));
     }
-    toolchain::write_line(&format!("Backdrop: palette pen {backdrop}"))
-        .map_err(|error| error.to_string())?;
-    for report in reports {
-        toolchain::write_line(&report).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    Ok(RegisteredLayers { backdrop, layers })
 }
 
 fn overlay_layer(

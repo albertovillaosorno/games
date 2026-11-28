@@ -94,7 +94,7 @@ impl Arguments {
     ) -> Result<(), String> {
         let payloads = GraphicsPayloads::load(bundle, self.sprites.is_some())?;
         let assets = payloads.bind(bundle)?;
-        let (observation, frame) = Observation::load(self, machine)?;
+        let (mut observation, frame) = Observation::load(self, machine)?;
         let mut pens =
             vec![Pixel::default(); machine.background_raster().pixels()];
         observation.reconstruct(machine, &assets, &mut pens)?;
@@ -106,11 +106,20 @@ impl Arguments {
             return Err(String::from("scene differs from observation"));
         }
         if self.layer_digests {
-            return art::report_layers(
+            let layers = art::registered_layers(
                 (machine, &assets),
-                observation,
+                &mut observation,
                 &mut pens,
-            );
+            )?;
+            #[cfg(feature = "native-preview")]
+            if self.native {
+                layers.native_check(
+                    machine.background_raster(),
+                    &pens,
+                    &observation.colors,
+                )?;
+            }
+            return layers.report();
         }
         if let Some(top) = self.background_top {
             return art::report_background(
@@ -175,6 +184,13 @@ impl Arguments {
             "scene-layer-digests" => {
                 let mut parsed = Self::parse_scene(args)?;
                 parsed.layer_digests = true;
+                Ok(parsed)
+            },
+            #[cfg(feature = "native-preview")]
+            "scene-layer-render-check" => {
+                let mut parsed = Self::parse_scene(args)?;
+                parsed.layer_digests = true;
+                parsed.native = true;
                 Ok(parsed)
             },
             "scene-background-digest" => {
@@ -579,9 +595,23 @@ mod tests {
                 .map(|value| value.layer_digests)
         };
         assert!(parse(args.clone()).is_err());
+        assert!(
+            Arguments::parse_command("scene-layer-render-check", args.clone())
+                .is_err()
+        );
         args.push(OsString::from("controls"));
         assert_eq!(parse(args.clone()), Ok(true));
+        assert_eq!(
+            Arguments::parse_command("scene-layer-render-check", args.clone())
+                .map(|value| value.layer_digests)
+                .ok(),
+            cfg!(feature = "native-preview").then_some(true)
+        );
         args.push(OsString::from("extra"));
+        assert!(
+            Arguments::parse_command("scene-layer-render-check", args.clone())
+                .is_err()
+        );
         assert!(parse(args).is_err());
     }
 

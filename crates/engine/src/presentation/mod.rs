@@ -623,6 +623,59 @@ impl Viewport {
             y: 0,
         }
     }
+
+    /// Split a wrapped sampling rectangle into one-to-one regions.
+    ///
+    /// The source origin is periodic in both axes. The destination starts
+    /// at zero. A view within one period needs at most four regions, with
+    /// no empty rectangles or repeated destination pixels. Reject an empty
+    /// view or one wider or taller than the source period.
+    #[must_use]
+    pub fn wrapped_regions(
+        self,
+        period: Dimensions,
+    ) -> Option<[Option<PresentationRegion>; 4]> {
+        let width = period.width.get();
+        let height = period.height.get();
+        if self.width == 0
+            || self.height == 0
+            || self.width > width
+            || self.height > height
+        {
+            return None;
+        }
+        let origin_x = self.x.checked_rem(width)?;
+        let origin_y = self.y.checked_rem(height)?;
+        let first_width = self.width.min(width.saturating_sub(origin_x));
+        let first_height = self.height.min(height.saturating_sub(origin_y));
+        let left = (origin_x, 0, first_width);
+        let right = (0, first_width, self.width.saturating_sub(first_width));
+        let top = (origin_y, 0, first_height);
+        let bottom =
+            (0, first_height, self.height.saturating_sub(first_height));
+        let region = |(sx, dx, span_x), (sy, dy, span_y)| {
+            (span_x != 0 && span_y != 0).then_some(PresentationRegion {
+                destination: Self {
+                    height: span_y,
+                    width: span_x,
+                    x: dx,
+                    y: dy,
+                },
+                source: Self {
+                    height: span_y,
+                    width: span_x,
+                    x: sx,
+                    y: sy,
+                },
+            })
+        };
+        Some([
+            region(left, top),
+            region(right, top),
+            region(left, bottom),
+            region(right, bottom),
+        ])
+    }
 }
 
 /// Center an unchanged design in an expanded logical viewport.
@@ -705,8 +758,104 @@ mod tests {
         expanded_anchor, rgba_row, solid_mask,
     };
 
+    type SampledPixel = (u32, u32, Option<u32>, Option<u32>);
+
     fn nz(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+    }
+
+    #[test]
+    fn wrapped_regions_cover_each_pixel_once_with_exact_source() {
+        let period = Dimensions::new(nz(7), nz(5));
+        for horizontal in 0..15 {
+            for vertical in 0..11 {
+                let view = Viewport {
+                    height: 4,
+                    width: 6,
+                    x: horizontal,
+                    y: vertical,
+                };
+                verify_wrapped_view(view, period);
+            }
+        }
+    }
+
+    fn verify_wrapped_view(view: Viewport, period: Dimensions) {
+        let regions = view.wrapped_regions(period);
+        let mut actual: Vec<_> = regions
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(region_pixels)
+            .collect();
+        actual.sort_unstable();
+        let expected: Vec<_> = (0..view.width)
+            .flat_map(|column| {
+                (0..view.height).map(move |row| {
+                    (
+                        column,
+                        row,
+                        view.x
+                            .saturating_add(column)
+                            .checked_rem(period.width.get()),
+                        view.y
+                            .saturating_add(row)
+                            .checked_rem(period.height.get()),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    fn region_pixels(
+        region: super::PresentationRegion,
+    ) -> impl Iterator<Item = SampledPixel> {
+        let source = region.source;
+        let destination = region.destination;
+        assert_eq!(source.width, destination.width);
+        assert_eq!(source.height, destination.height);
+        (0..source.width).flat_map(move |column| {
+            (0..source.height).map(move |row| {
+                (
+                    destination.x.saturating_add(column),
+                    destination.y.saturating_add(row),
+                    source.x.checked_add(column),
+                    source.y.checked_add(row),
+                )
+            })
+        })
+    }
+
+    #[test]
+    fn wrapped_regions_admit_full_period_and_large_origins() {
+        let period = Dimensions::new(nz(512), nz(256));
+        let view = Viewport {
+            height: 256,
+            width: 512,
+            x: u32::MAX,
+            y: 255,
+        };
+        assert_eq!(
+            view.wrapped_regions(period)
+                .map(|regions| regions.into_iter().flatten().count()),
+            Some(4)
+        );
+        for invalid in [
+            Viewport { width: 513, ..view },
+            Viewport { height: 257, ..view },
+            Viewport { width: 0, ..view },
+            Viewport { height: 0, ..view },
+        ] {
+            assert_eq!(invalid.wrapped_regions(period), None);
+        }
+        let aligned = Viewport { x: 1024, y: 512, ..view };
+        assert_eq!(
+            aligned
+                .wrapped_regions(period)
+                .map(|regions| regions.into_iter().flatten().count()),
+            Some(1)
+        );
     }
 
     #[test]

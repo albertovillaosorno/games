@@ -156,6 +156,8 @@ const USAGE: &str = concat!(
     "native-preview: mame scene-sequence-bench MACHINE REV ",
     "PARENT SHA256 REPEATS RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS ",
     "CONTROLS [MORE SCENES...]\n",
+    "native-preview: mame scene-layer-render-check MACHINE REV ",
+    "PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "native-preview: mame scene-render-check MACHINE REV ",
     "PARENT SHA256 RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame sample-check MACHINE REV OBSERVATIONS LIMIT ",
@@ -489,6 +491,7 @@ impl Command {
             | "scene-check"
             | "scene-render-check"
             | "scene-layer-digests"
+            | "scene-layer-render-check"
             | "scene-background-digest" => Ok(Self::BackgroundCheck(
                 selected,
                 reference_background::Arguments::parse_command(
