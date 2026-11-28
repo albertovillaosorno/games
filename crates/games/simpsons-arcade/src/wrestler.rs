@@ -33,7 +33,8 @@
 
 use super::{
     Facing, Player, Point, Slot, StreetLayout, WRESTLER_ATTACK_STRIKE,
-    distance, in_range, player_strike, step_toward, strike_grounded_stations,
+    in_range, nearest_fighting_station, player_strike, step_toward,
+    strike_grounded_stations,
 };
 
 // The entrance landmarks are approximate reference observations. The remaining
@@ -149,11 +150,7 @@ impl Wrestler {
         layout: StreetLayout,
         slots: &[Slot; 4],
     ) -> WrestlerAction {
-        let Some(target) = slots
-            .iter()
-            .filter(|slot| slot.station.can_fight())
-            .min_by_key(|slot| distance(self.position, slot.station.position))
-            .map(|slot| slot.station.position)
+        let Some((_, target)) = nearest_fighting_station(self.position, slots)
         else {
             return WrestlerAction::Approach;
         };

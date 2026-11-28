@@ -55,8 +55,9 @@ use std::time::Duration;
 pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
 pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
 pub use cemetery::{
-    CemeteryBody, CemeteryEntrance, CemeteryGroundAttack, CemeteryPhase,
-    CemeteryPose, CemeteryRoom, CemeteryRoomBody,
+    CemeteryBody, CemeteryEnemyApproach, CemeteryEntrance,
+    CemeteryGroundAttack, CemeteryPhase, CemeteryPose, CemeteryRoom,
+    CemeteryRoomBody,
 };
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
@@ -1900,6 +1901,20 @@ fn distance(first: Point, second: Point) -> u32 {
     u32::from(first.x.abs_diff(second.x))
         .saturating_add(u32::from(first.y.abs_diff(second.y)))
 }
+
+// Cabinet order breaks ties consistently across encounter strategies.
+fn nearest_fighting_station(
+    origin: Point,
+    slots: &[Slot; 4],
+) -> Option<(Player, Point)> {
+    Player::ALL
+        .into_iter()
+        .zip(slots)
+        .filter(|(_, slot)| slot.station.can_fight())
+        .map(|(player, slot)| (player, slot.station.position))
+        .min_by_key(|&(_, position)| distance(origin, position))
+}
+
 const fn in_range(
     from: Point,
     facing: Facing,

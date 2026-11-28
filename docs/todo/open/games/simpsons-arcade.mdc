@@ -6393,3 +6393,29 @@ count sample through the final competitive score. This verifies the
 native result policy against the established logical rules, not the
 remaining original scheduling variation or complete display semantics.
 Fresh workspace validation passed, including both test runs.
+
+### Bounded first-room enemy pursuit
+
+Two independent original controls identify the same two persistent
+enemy records. They start moving one tick apart, retain fractional
+position at 1/256-pixel precision and refresh their steering at
+staggered eight-tick intervals. Target selection refreshes every
+sixteen ticks after the initial delay. The first actor selects the
+nearest station in Manhattan distance; the other falls back to the
+first least-reserved station when that target is already assigned.
+
+The opted-in four-station Marge-first room now exposes delayed approach
+samples using the same depth projection as its station presentation.
+The bounded horizontal steering bands and target reservations are
+driven by station input, not by replaying a captured position sequence.
+The closest eligible station policy is shared with the street,
+wrestler and balloon encounters. Two routed regressions compare
+42 preceding-step positions and selected targets per actor and
+control, for 168 actor samples. The opposed two-station control also
+checks that the sample is withdrawn at the first close-range change.
+
+This does not admit general steering, enemy animation, attacks, hit
+resolution, terrain responses or a normal campaign transition.
+Unsupported direction bands, station actions and close-range
+transitions terminate the bounded approach sample. Original-art
+composition and full third-stage acceptance remain open.

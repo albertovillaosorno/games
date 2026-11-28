@@ -32,8 +32,9 @@
 //! Bounded experimental boardwalk balloon boss.
 
 use super::{
-    Facing, Player, Point, Slot, StreetLayout, distance, in_range,
-    player_strike, step_toward, strike_grounded_stations,
+    Facing, Player, Point, Slot, StreetLayout, in_range,
+    nearest_fighting_station, player_strike, step_toward,
+    strike_grounded_stations,
 };
 
 /// Initial quantity and observed decrement per successful primary response.
@@ -245,16 +246,10 @@ impl BalloonBoss {
             self.target_hold = self.target_hold.saturating_sub(1);
             return Some(slot.station.position);
         }
-        let nearest = Player::ALL
-            .into_iter()
-            .zip(slots)
-            .filter(|(_, slot)| slot.station.can_fight())
-            .min_by_key(|(_, slot)| {
-                distance(self.position, slot.station.position)
-            });
+        let nearest = nearest_fighting_station(self.position, slots);
         self.target = nearest.map(|(player, _)| player);
         self.target_hold = TARGET_HOLD;
-        nearest.map(|(_, slot)| slot.station.position)
+        nearest.map(|(_, position)| position)
     }
 
     const fn respond(&mut self, phase: u8) -> BalloonAction {

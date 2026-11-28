@@ -32,7 +32,11 @@
 
 //! Observed third-stage arrival with an explicit fall order.
 
+mod pursuit;
+
 use games::animation::cycle_tick;
+pub use pursuit::CemeteryEnemyApproach;
+use pursuit::PursuitPair;
 
 use super::{
     Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PendingManeuver, Player,
@@ -42,6 +46,8 @@ use super::{
 const FIRST_BACKGROUND: u64 = 13;
 const FIRST_STATION: u64 = 107;
 const PLAYABLE_TICK: u64 = 237;
+const FIRST_ENEMY_APPROACH: u64 = 238;
+const FIRST_ENEMY_MOVEMENT: u64 = 240;
 const FIRST_WALK_TICK: u64 = 242;
 const LAST_WALK_TICK: u64 = 357;
 const FIRST_PROTECTED_BODY_SAMPLE: u64 = 240;
@@ -179,6 +185,8 @@ pub struct CemeteryRoom {
     depth_offset: i16,
     presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
+    presentation_enemies: Option<[CemeteryEnemyApproach; 2]>,
+    pursuit: Option<PursuitPair>,
     walk_depth: [i16; 4],
 }
 
@@ -188,6 +196,8 @@ impl Default for CemeteryRoom {
             depth_offset: 0,
             presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
+            presentation_enemies: None,
+            pursuit: None,
             walk_depth: [0; 4],
         }
     }
@@ -261,6 +271,23 @@ impl CemeteryRoom {
         true
     }
 
+    // The observed entrance activates two independently staggered actors.
+    fn advance_pursuit(&mut self, tick: u64, slots: &[Slot; 4]) {
+        if tick == FIRST_ENEMY_APPROACH {
+            self.pursuit = Some(PursuitPair::new());
+        }
+        self.presentation_enemies =
+            self.pursuit.map(|pair| pair.sample(self.depth_offset));
+        if tick > LAST_WALK_TICK {
+            self.pursuit = None;
+        } else if tick >= FIRST_ENEMY_MOVEMENT
+            && let Some(pair) = &mut self.pursuit
+            && pair.advance(slots).is_none()
+        {
+            self.pursuit = None;
+        }
+    }
+
     /// Current shared depth offset, in logical units.
     #[must_use]
     pub const fn depth_offset(self) -> i16 {
@@ -279,6 +306,16 @@ impl CemeteryRoom {
     #[must_use]
     pub const fn presentation_depth_offset(self) -> i16 {
         self.presentation_depth_offset
+    }
+
+    /// Previous approach sample with the matching displayed camera offset.
+    ///
+    /// Returns no sample after the first unsupported encounter transition.
+    #[must_use]
+    pub const fn presentation_enemies(
+        self,
+    ) -> Option<[CemeteryEnemyApproach; 2]> {
+        self.presentation_enemies
     }
 
     /// Projected station positions consumed by the displayed actor sample.
@@ -363,6 +400,12 @@ impl CemeteryEntrance {
         let Some(room) = &mut self.room else {
             return false;
         };
+        if !self.card
+            && self.first == Player::Marge
+            && self.tick >= FIRST_ENEMY_APPROACH
+        {
+            room.advance_pursuit(self.tick, slots);
+        }
         if walking {
             return room.advance(slots, pending);
         }
@@ -669,6 +712,118 @@ mod tests {
             _ => 153,
         };
         (offset, depth)
+    }
+
+    // Movement intervals observed independently in two opposed-direction
+    // controls. Both tracks have identical horizontal displacement up
+    // to the first close-range selector change.
+    fn observed_enemy_depth(tick: i16, homer_lisa: bool, first: bool) -> i16 {
+        let mut units = if first {
+            32_768i32
+        } else {
+            45_056i32
+        };
+        for sample in 240..=tick {
+            let stride: i32 = match (first, homer_lisa, sample) {
+                (true, _, 240..=255) | (true, true, 256..=263) => 48,
+                (true, false, 256..=263) => 32,
+                (true, false, 272..=278) | (false, false, 249..=256) => -16,
+                (true, true, 272..=278) | (false, false, 257..=272) => -48,
+                (false, false, 273..=278) => -64,
+                _ => 0,
+            };
+            units = units.saturating_add(stride);
+        }
+        let offset = downward_sample(tick.saturating_sub(241).max(0)).0;
+        i16::try_from(units.div_euclid(256))
+            .unwrap_or_default()
+            .saturating_add(offset)
+    }
+
+    fn observed_enemy_approach(
+        tick: i16,
+        homer_lisa: bool,
+        first: bool,
+    ) -> CemeteryEnemyApproach {
+        let (start, delay): (i16, i16) = if first {
+            (384, 239)
+        } else {
+            (392, 240)
+        };
+        let steps = tick.saturating_sub(delay).max(0);
+        let x = start.saturating_sub(
+            steps
+                .saturating_mul(5)
+                .saturating_add(3)
+                .checked_div(4)
+                .unwrap_or_default(),
+        );
+        let target = if !first || tick < 254 {
+            Player::Marge
+        } else if homer_lisa {
+            Player::Lisa
+        } else {
+            Player::Bart
+        };
+        CemeteryEnemyApproach {
+            position: Point {
+                x,
+                y: observed_enemy_depth(tick, homer_lisa, first),
+            },
+            target,
+        }
+    }
+
+    fn assert_enemy_approach_trace(homer_lisa: bool) {
+        let mut entrance = arrival(Player::Marge).at(237);
+        entrance.enable_room();
+        let mut slots = room_slots();
+        let [marge, homer, bart, lisa] = &mut slots;
+        let down = Control::Down.mask();
+        let left = down | Control::Left.mask();
+        let right = down | Control::Right.mask();
+        if homer_lisa {
+            homer.held = left;
+            lisa.held = right;
+        } else {
+            marge.held = left;
+            homer.held = right;
+            bart.held = right;
+            lisa.held = left;
+        }
+        for tick in 238i16..=280 {
+            entrance.advance(false);
+            let _advanced = entrance
+                .advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            let enemies =
+                entrance.room().and_then(CemeteryRoom::presentation_enemies);
+            if tick == 280 && homer_lisa {
+                assert_eq!(enemies, None);
+                break;
+            }
+            if tick > 279 {
+                break;
+            }
+            let prior = tick.saturating_sub(1);
+            assert_eq!(
+                enemies,
+                Some([
+                    observed_enemy_approach(prior, homer_lisa, true),
+                    observed_enemy_approach(prior, homer_lisa, false),
+                ]),
+                "control {homer_lisa}, source tick {prior}",
+            );
+        }
+    }
+
+    #[test]
+    fn room_enemy_approach_matches_reversed_four_station_control() {
+        assert_enemy_approach_trace(false);
+    }
+
+    #[test]
+    fn room_enemy_approach_matches_opposed_two_station_control() {
+        assert_enemy_approach_trace(true);
     }
 
     #[test]

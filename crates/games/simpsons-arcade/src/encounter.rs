@@ -35,8 +35,9 @@ use super::{
     BASE_WIDTH, Encounter, FAR_STREET_ADMISSION, Facing, LATER_COMBAT_GATE,
     MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT,
     Maneuver, OPENING_ENEMY_COUNT, OPPOSING_ENEMY_COUNT, Player, Point, Slot,
-    StreetLayout, distance, in_range, player_strike, step_toward,
-    strike_grounded_stations, strip_width, view_origin, viewport_width,
+    StreetLayout, in_range, nearest_fighting_station, player_strike,
+    step_toward, strike_grounded_stations, strip_width, view_origin,
+    viewport_width,
 };
 
 const ENEMY_HEALTH: u8 = 1;
@@ -491,11 +492,7 @@ impl Enemy {
         slots: &[Slot; 4],
         (tick, restraint): (u8, bool),
     ) {
-        let Some(target) = slots
-            .iter()
-            .filter(|slot| slot.station.can_fight())
-            .min_by_key(|slot| distance(self.position, slot.station.position))
-            .map(|slot| slot.station.position)
+        let Some((_, target)) = nearest_fighting_station(self.position, slots)
         else {
             return;
         };
