@@ -284,7 +284,7 @@ impl Pursuer {
     }
 
     const fn leap_step(&mut self, age: u8) -> Option<()> {
-        if age >= 21 {
+        if age >= 25 {
             return None;
         }
         if age == 3 {
@@ -613,6 +613,15 @@ impl PursuitPair {
         Some(())
     }
 
+    // The descending leap reaches the observed neutral Bart contact
+    // boundary after movement, not at the preceding displayed position.
+    pub(super) fn leap_contact(self) -> Option<(Point, i16)> {
+        let enemy = *self.enemies.get(1)?;
+        (enemy.target == Player::Bart
+            && matches!(enemy.motion, PursuitMotion::Leap { age: 22 }))
+        .then(|| (enemy.point(), leap_elevation(22)))
+    }
+
     pub(super) const fn new(seed: Option<u16>) -> Self {
         Self {
             choice: match seed {
@@ -730,10 +739,11 @@ fn stations_admitted(slots: &[Slot; 4], contact_preview: bool) -> bool {
         slot.station.can_fight()
             && (slot.station.maneuver == Maneuver::Idle
                 || (contact_preview
-                    && player == Player::Lisa
-                    && matches!(slot.station.maneuver, Maneuver::Hurt {
-                        tick: 0..=13
-                    })))
+                    && matches!(
+                        (player, slot.station.maneuver),
+                        (Player::Lisa, Maneuver::Hurt { tick: 0..=13 })
+                            | (Player::Bart, Maneuver::Hurt { tick: 0..=2 })
+                    )))
     })
 }
 

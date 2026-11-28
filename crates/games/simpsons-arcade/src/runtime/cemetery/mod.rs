@@ -778,7 +778,7 @@ impl CemeteryArt {
                     .record(role.key)
                     .ok_or(RenderError::InvalidSprite)?
                     .digest;
-                if selection.room_walking() && room_source(index) {
+                if room_source(index, selection.count()) {
                     sources.push(shadow::Source::new(art, &pixels)?);
                 }
                 Ok(RoleArt { art, digest })
@@ -832,7 +832,7 @@ impl CemeteryArt {
 
     const fn neutral_strike_terminal(&self) -> u64 {
         match self.roles.len() {
-            REACTION_PREVIEW_ROLE_COUNT.. => 389,
+            REACTION_PREVIEW_ROLE_COUNT.. => 393,
             CONTACT_PREVIEW_ROLE_COUNT.. => 380,
             SHADOW_PREVIEW_ROLE_COUNT.. => 374,
             NEUTRAL_PREVIEW_ROLE_COUNT.. => 371,
@@ -912,8 +912,10 @@ impl CemeteryArt {
                 )
             }
         }));
-        if visible && let Some(lisa) = bodies.get(Player::Lisa.index()) {
-            draws.extend(self.contact_effect(*lisa));
+        if visible {
+            draws.extend([Player::Lisa, Player::Bart].into_iter().filter_map(
+                |player| self.contact_effect(*bodies.get(player.index())?),
+            ));
         }
         // The lower original ordering bytes place persistent markers
         // in front of every body, even when the station bodies are hidden.
@@ -942,9 +944,8 @@ impl CemeteryArt {
         {
             return self.ground_draw(player, body, sample);
         }
-        if player == Player::Lisa
-            && body.facing == Facing::Right
-            && let Some(index) = hurt_body_role(body.maneuver)
+        if body.facing == Facing::Right
+            && let Some(index) = hurt_body_role(player, body.maneuver)
         {
             return self.room_registered_draw(index, body.position, false);
         }
@@ -1631,12 +1632,15 @@ const fn enemy_control_at(
     }
 }
 
-const fn hurt_body_role(maneuver: Maneuver) -> Option<usize> {
+const fn hurt_body_role(player: Player, maneuver: Maneuver) -> Option<usize> {
     match maneuver {
-        Maneuver::Hurt { tick: 0..=5 } => {
+        Maneuver::Hurt { tick: 0..=2 } if matches!(player, Player::Bart) => {
+            Some(player.index().saturating_add(12))
+        },
+        Maneuver::Hurt { tick: 0..=5 } if matches!(player, Player::Lisa) => {
             Some(SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1))
         },
-        Maneuver::Hurt { tick: 6..=13 } => {
+        Maneuver::Hurt { tick: 6..=13 } if matches!(player, Player::Lisa) => {
             Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
         },
         Maneuver::AirAttack(_)
@@ -1820,8 +1824,14 @@ fn room_role(player: Player, body: CemeteryRoomBody) -> Option<(usize, bool)> {
     Some((room_idle_index(player), body.facing == Facing::Left))
 }
 
-fn room_source(index: usize) -> bool {
-    index >= ANIMATED_ROLE_COUNT
+fn room_source(index: usize, count: usize) -> bool {
+    if count < WALKING_ROLE_COUNT {
+        return false;
+    }
+    (count >= REACTION_PREVIEW_ROLE_COUNT
+        && hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 0 })
+            == Some(index))
+        || index >= ANIMATED_ROLE_COUNT
         || Player::ALL
             .into_iter()
             .any(|player| room_idle_index(player) == index)
@@ -2295,18 +2305,39 @@ mod tests {
             Some(NEUTRAL_PREVIEW_ROLE_COUNT.saturating_add(1))
         );
         assert_eq!(
-            hurt_body_role(Maneuver::Hurt { tick: 5 }),
+            hurt_body_role(Player::Lisa, Maneuver::Hurt { tick: 5 }),
             Some(SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1))
         );
         assert_eq!(
-            hurt_body_role(Maneuver::Hurt { tick: 6 }),
+            hurt_body_role(Player::Lisa, Maneuver::Hurt { tick: 6 }),
             Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
         );
         assert_eq!(
-            hurt_body_role(Maneuver::Hurt { tick: 13 }),
+            hurt_body_role(Player::Lisa, Maneuver::Hurt { tick: 13 }),
             Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
         );
-        assert_eq!(hurt_body_role(Maneuver::Hurt { tick: 14 }), None);
+        assert_eq!(
+            hurt_body_role(Player::Lisa, Maneuver::Hurt { tick: 14 }),
+            None
+        );
+    }
+
+    #[test]
+    fn airborne_contact_reuses_registered_reaction_source() {
+        assert_eq!(
+            hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 0 }),
+            Some(14)
+        );
+        assert_eq!(
+            hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 2 }),
+            Some(14)
+        );
+        assert_eq!(
+            hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 3 }),
+            None
+        );
+        assert!(room_source(14, REACTION_PREVIEW_ROLE_COUNT));
+        assert!(!room_source(14, CONTACT_PREVIEW_ROLE_COUNT));
     }
 
     #[test]

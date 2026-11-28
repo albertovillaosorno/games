@@ -65,7 +65,7 @@ const LAST_NEUTRAL_PREVIEW_SAMPLE: u64 = 370;
 const LAST_SHADOW_PREVIEW_SAMPLE: u64 = 373;
 const LAST_CONTACT_PREVIEW_SAMPLE: u64 = 379;
 #[cfg(any(test, feature = "native-preview"))]
-const LAST_REACTION_PREVIEW_SAMPLE: u64 = 388;
+const LAST_REACTION_PREVIEW_SAMPLE: u64 = 392;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -196,7 +196,7 @@ impl CemeteryRoomBody {
 /// terrain sampling or the original camera descriptor scheduler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoom {
-    contact: contact::Preview,
+    contacts: [contact::Preview; 2],
     depth_offset: i16,
     enemy_alignment: bool,
     enemy_choice_seed: Option<u16>,
@@ -211,7 +211,7 @@ pub struct CemeteryRoom {
 impl Default for CemeteryRoom {
     fn default() -> Self {
         Self {
-            contact: contact::Preview::default(),
+            contacts: [contact::Preview::default(); 2],
             depth_offset: 0,
             enemy_alignment: false,
             enemy_choice_seed: None,
@@ -321,9 +321,21 @@ impl CemeteryRoom {
         {
             self.pursuit = None;
         }
-        if contact_preview && self.pursuit.is_some() {
-            let [_, _, _, lisa] = slots;
-            self.contact.advance(lisa, strike);
+        if contact_preview && let Some(pair) = self.pursuit {
+            let [_, _, bart, lisa] = slots;
+            let [ground, airborne] = &mut self.contacts;
+            ground.advance(
+                lisa,
+                Player::Lisa,
+                strike.map(contact::Attack::Strike),
+            );
+            airborne.advance(
+                bart,
+                Player::Bart,
+                pair.leap_contact().map(|(point, elevation)| {
+                    contact::Attack::Leap { point, elevation }
+                }),
+            );
         }
     }
 
@@ -1469,7 +1481,11 @@ mod tests {
             385 => (CemeteryEnemyPose::Leap { phase: 3 }, 212, 33),
             386 => (CemeteryEnemyPose::Leap { phase: 3 }, 210, 32),
             387 => (CemeteryEnemyPose::Leap { phase: 3 }, 208, 31),
-            _ => (CemeteryEnemyPose::Leap { phase: 3 }, 206, 30),
+            388 => (CemeteryEnemyPose::Leap { phase: 3 }, 206, 30),
+            389 => (CemeteryEnemyPose::Leap { phase: 3 }, 204, 28),
+            390 => (CemeteryEnemyPose::Leap { phase: 3 }, 202, 27),
+            391 => (CemeteryEnemyPose::Leap { phase: 3 }, 200, 25),
+            _ => (CemeteryEnemyPose::Leap { phase: 3 }, 198, 22),
         };
         [
             CemeteryEnemyApproach {
@@ -1534,7 +1550,7 @@ mod tests {
     #[test]
     fn contact_preview_debits_before_reaction_and_stops_at_pose_boundary() {
         verify_contact_preview(false, 380);
-        verify_contact_preview(true, 389);
+        verify_contact_preview(true, 393);
     }
 
     fn verify_contact_preview(complete_reaction: bool, terminal: u64) {
@@ -1574,7 +1590,7 @@ mod tests {
 
     fn assert_contact_state(tick: u64, slots: &[Slot; 4]) {
         let [marge, homer, bart, lisa] = slots;
-        for slot in [marge, homer, bart] {
+        for slot in [marge, homer] {
             assert_eq!((slot.station.health, slot.station.hurt_cues), (32, 0));
         }
         assert_eq!(
@@ -1596,28 +1612,53 @@ mod tests {
             "{tick}"
         );
         assert_eq!(lisa.station.hurt_cues, u64::from(tick >= 374), "{tick}");
+        assert_bart_contact_state(tick, bart);
+    }
+
+    fn assert_bart_contact_state(tick: u64, bart: &Slot) {
+        assert_eq!(
+            bart.station.health,
+            if tick < 388 {
+                32
+            } else {
+                24
+            }
+        );
+        assert_eq!(
+            bart.station.display_health,
+            if tick < 389 {
+                32
+            } else {
+                24
+            }
+        );
+        assert_eq!(bart.station.hurt_cues, u64::from(tick >= 389));
     }
 
     fn assert_contact_pose(tick: u64, entrance: &CemeteryEntrance) {
-        let expected = if tick < 375 {
-            Maneuver::Idle
-        } else {
-            Maneuver::Hurt {
-                tick: u8::try_from(tick.saturating_sub(375))
-                    .unwrap_or_default(),
-            }
-        };
-        assert_eq!(
-            entrance
-                .room()
-                .and_then(|room| room
-                    .presentation_bodies()
-                    .get(Player::Lisa.index())
-                    .copied())
-                .map(|body| body.maneuver),
-            Some(expected),
-            "{tick}",
-        );
+        for (player, first, end) in
+            [(Player::Lisa, 375, 389), (Player::Bart, 390, 393)]
+        {
+            let expected = if (first..end).contains(&tick) {
+                Maneuver::Hurt {
+                    tick: u8::try_from(tick.saturating_sub(first))
+                        .unwrap_or_default(),
+                }
+            } else {
+                Maneuver::Idle
+            };
+            assert_eq!(
+                entrance
+                    .room()
+                    .and_then(|room| room
+                        .presentation_bodies()
+                        .get(player.index())
+                        .copied())
+                    .map(|body| body.maneuver),
+                Some(expected),
+                "{player:?} {tick}",
+            );
+        }
     }
 
     fn assert_station_health(slots: &[Slot; 4]) {

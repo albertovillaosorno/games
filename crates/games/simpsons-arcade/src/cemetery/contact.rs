@@ -9,11 +9,11 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded neutral first-room strike contact and delayed reaction.
+//   - Bounded neutral first-room contact and delayed reactions.
 // - Must-Not:
 //   - Enable campaign combat, admit lethal damage or render sprites.
 // - Allows:
-//   - Inputs: Station state and observed strike position.
+//   - Inputs: Station state and observed strike or leap geometry.
 //   - Outputs: One station debit and subsequent reaction.
 //   - Side effects: Deterministic in-memory station updates only.
 // - Split-When:
@@ -33,7 +33,27 @@ use crate::{
     Facing, Maneuver, PendingManeuver, Player, Point, Slot, hurt_slot,
 };
 
-const STRIKE_DAMAGE: u8 = 4;
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Attack {
+    Leap { point: Point, elevation: i16 },
+    Strike(Point),
+}
+
+impl Attack {
+    const fn damage(self) -> u8 {
+        match self {
+            Self::Strike(_) => 4,
+            Self::Leap { .. } => 8,
+        }
+    }
+
+    const fn volume(self) -> Volume {
+        match self {
+            Self::Strike(point) => Volume::strike(point),
+            Self::Leap { point, elevation } => Volume::leap(point, elevation),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct Preview {
@@ -41,19 +61,24 @@ pub(super) struct Preview {
 }
 
 impl Preview {
-    pub(super) fn advance(&mut self, lisa: &mut Slot, strike: Option<Point>) {
+    pub(super) fn advance(
+        &mut self,
+        slot: &mut Slot,
+        player: Player,
+        candidate: Option<Attack>,
+    ) {
         if self.pending {
             self.pending = false;
             // Health was debited on the preceding contact step.
-            hurt_slot(lisa, 0);
-            lisa.station.display_health = lisa.station.health;
-        } else if matches!(lisa.station.maneuver, Maneuver::Hurt { .. }) {
-            lisa.advance_maneuver(Player::Lisa, PendingManeuver::default());
-        } else if let Some(point) = strike
-            && can_debit(lisa, point)
+            hurt_slot(slot, 0);
+            slot.station.display_health = slot.station.health;
+        } else if matches!(slot.station.maneuver, Maneuver::Hurt { .. }) {
+            slot.advance_maneuver(player, PendingManeuver::default());
+        } else if let Some(attack) = candidate
+            && can_debit(slot, attack)
         {
-            lisa.station.health =
-                lisa.station.health.saturating_sub(STRIKE_DAMAGE);
+            slot.station.health =
+                slot.station.health.saturating_sub(attack.damage());
             self.pending = true;
         }
     }
@@ -65,6 +90,17 @@ struct Volume {
 }
 
 impl Volume {
+    const fn leap(point: Point, elevation: i16) -> Self {
+        Self {
+            center: [
+                point.x.saturating_sub(8),
+                point.y,
+                elevation.saturating_add(24),
+            ],
+            radii: [8, 4, 8],
+        }
+    }
+
     fn overlaps(&self, other: &Self) -> bool {
         self.center
             .into_iter()
@@ -95,14 +131,15 @@ impl Volume {
     }
 }
 
-fn can_debit(slot: &Slot, attacker: Point) -> bool {
+fn can_debit(slot: &Slot, attack: Attack) -> bool {
     let station = slot.station;
     station.can_fight()
-        && station.health > STRIKE_DAMAGE
+        && station.health > attack.damage()
         && station.facing == Facing::Right
         && station.maneuver == Maneuver::Idle
         && station.walking.is_none()
-        && Volume::strike(attacker)
+        && attack
+            .volume()
             .overlaps(&Volume::station(station.position, false))
 }
 
@@ -154,5 +191,16 @@ mod tests {
         for center in [[5, 0, 0], [0, 5, 0], [0, 0, 5]] {
             assert!(!origin.overlaps(&Volume { center, radii: [2; 3] }));
         }
+    }
+
+    #[test]
+    fn descending_leap_reaches_inclusive_horizontal_boundary() {
+        let station = Volume::station(Point { x: 172, y: 207 }, false);
+        let before = Volume::leap(Point { x: 206, y: 207 }, 30);
+        let contact = Volume::leap(Point { x: 204, y: 207 }, 28);
+        assert!(!before.overlaps(&station));
+        assert!(contact.overlaps(&station));
+        assert!(!Volume::leap(Point { x: 204, y: 220 }, 28).overlaps(&station));
+        assert!(!Volume::leap(Point { x: 204, y: 207 }, 33).overlaps(&station));
     }
 }
