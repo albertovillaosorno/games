@@ -447,3 +447,24 @@ soundtrack parity, gap-free playback, latency, high-resolution emulator
 audio performance, physical ARM64, controllers, sensors or production
 release signing. No original content, diagnostic recordings, or signing
 keys are distributed. The emulator was shut down.
+
+With the soundtrack admitted, the title's actual Audio settings menu
+also writes an independent music-volume override to slot 4. Starting
+at 100 percent, two native keyboard confirmations select 50 percent;
+two further confirmations select zero and the next wraps to 100.
+Each value is restored on a separate process-cold launch, as confirmed
+by the title's logged source levels and byte-identical slot readback.
+Existing display and input preference slots are unchanged. The
+catalogue keeps music 100, master 100 and effects zero throughout.
+
+At guest media level 5 of 15, each restarted gameplay capture contains
+352,256 stereo frames at 44.1 kHz. Music 50 percent produces a peak of
+-49.40 dBFS and RMS of -64.82 dBFS; music 100 produces -43.42 dBFS
+and -58.78 dBFS respectively. Music zero is digitally silent. The
+observed peak and RMS differences are approximately six decibels,
+consistent with half-amplitude attenuation. These are translated
+emulator PCM observations, not physical audio acceptance. Initial
+navigation attempts were invalidated by Android's full-screen
+confirmation and an incorrect menu-row assumption; the passing run
+verified the private emulator's confirmation state and actual menu
+layout before recording each save. The emulator was shut down.
