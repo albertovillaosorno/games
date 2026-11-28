@@ -246,3 +246,20 @@ Actual title launcher composition, process output and app-private asset
 and settings paths, physical ARM64, sensors, controller feedback and
 production packaging remain open. Interactive adapter selection alone
 is not a claim of playable Android title compatibility.
+
+A further signed ARM64-only diagnostic supplies Java's app-private
+`getDir` and `nativeLibraryDir` locations through typed JNI parameters.
+On translated API 35, the Rust process executable resolves to
+`/system/bin/arm64/app_process64`, not the extracted title library.
+The explicit native library location contains the diagnostic shared
+object; the canonical data and library directories do not overlap.
+The Java directory has mode 0771. The initial direct save attempt
+failed without a retained error string. A dedicated 0700 child then
+passes the existing SaveStore admission without weakening it or
+changing the parent mode. Two cold launches verify atomic slot creation,
+readback, subsequent replacement and successful durability receipts.
+Scoped JNI thread attachment also logs through Java before and after
+shared SDL2 window creation, with a positive final log result. The
+launches return 41 and 42 respectively and the emulator shuts down.
+This is diagnostic storage and logging evidence, not an admitted
+launcher, production asset namespace or physical-device acceptance.
