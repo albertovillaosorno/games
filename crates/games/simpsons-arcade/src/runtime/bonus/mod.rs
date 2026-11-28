@@ -710,6 +710,45 @@ fn plates(
     )
 }
 
+/// Verify a single admitted automatic competitor contributes visible pixels.
+pub(super) fn verify_opponent(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+    player: Player,
+) -> Result<(), RenderError> {
+    let bonus = cabinet.bonus().ok_or(RenderError::InvalidSprite)?;
+    let opponents = art
+        .poses
+        .bonus
+        .as_ref()
+        .and_then(|bonus_art| bonus_art.opponents.as_ref())
+        .ok_or(RenderError::InvalidSprite)?;
+    if !bonus.is_automatic(player) {
+        return Err(failure("opponent readback requires automatic player"));
+    }
+    let mut layers = Vec::new();
+    opponents.queue(bonus, player, &mut layers)?;
+    if layers.is_empty()
+        || layers.iter().any(|layer| !art.draws.contains(layer))
+    {
+        return Err(failure("automatic competitor layers were not queued"));
+    }
+    let view = art.presentation_view(scene, cabinet)?;
+    let actual = scene.readback()?;
+    let baseline_draws: Vec<_> = art
+        .draws
+        .iter()
+        .copied()
+        .filter(|draw| !layers.contains(draw))
+        .collect();
+    let bounds: Vec<_> = layers.iter().map(|draw| draw.destination).collect();
+    let _baseline = scene.present([24, 22, 30], &baseline_draws)?;
+    let baseline = scene.readback()?;
+    let _restored = art.present(scene, cabinet)?;
+    scenery::verify_pixels(&actual, &baseline, view.width, &bounds)
+}
+
 /// Verify the winning Marge departure at independent motion checkpoints.
 pub(super) fn verify_departure(
     scene: &mut SceneSession<'_, '_>,

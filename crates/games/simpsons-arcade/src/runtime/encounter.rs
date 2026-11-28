@@ -55,14 +55,14 @@ use super::{
     failure, fixed, ground_position, linked, live, live_with_scroll, size,
 };
 use crate::{
-    BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase, CONTINUE_TICKS,
-    Cabinet, Control, DiagnosticIntent, ENEMY_CAPACITY, ENEMY_DEFEAT_TICKS,
-    Encounter, Enemy, EnemyAction, FAR_STREET_ADMISSION, Facing,
-    GROUND_ATTACK_RECOVERY_TICKS, LATER_COMBAT_GATE, MID_STREET_ADMISSION,
-    MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT, Maneuver,
-    OPPOSING_ENEMY_COUNT, PLAYER_HEALTH, PLAYER_STOCKS, Participation, Phase,
-    Player, Point, REFILL_TICKS, STOCK_REENTRY_TICKS, Station, TICK_INTERVAL,
-    Wrestler, WrestlerAction,
+    AutomaticDeparture, BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase,
+    CONTINUE_TICKS, Cabinet, Control, DiagnosticIntent, ENEMY_CAPACITY,
+    ENEMY_DEFEAT_TICKS, Encounter, Enemy, EnemyAction, FAR_STREET_ADMISSION,
+    Facing, GROUND_ATTACK_RECOVERY_TICKS, LATER_COMBAT_GATE,
+    MID_STREET_ADMISSION, MID_STREET_COMBAT_GATE, MID_STREET_ENEMY_COUNT,
+    Maneuver, OPPOSING_ENEMY_COUNT, PLAYER_HEALTH, PLAYER_STOCKS,
+    Participation, Phase, Player, Point, REFILL_TICKS, STOCK_REENTRY_TICKS,
+    Station, TICK_INTERVAL, Wrestler, WrestlerAction,
 };
 
 const FILLED: [u8; 4] = [86, 196, 111, 255];
@@ -621,10 +621,8 @@ pub(super) fn smoke_wrestler(
         return Ok(());
     }
     let limit = u16::try_from(crate::LATE_BACKDROP_ORIGIN).map_err(failure)?;
-    let initial = cabinet_with_scroll(true, LocalSession::default(), limit)?
-        .with_late_wrestler(true)
-        .with_bonus(art.poses.bonus.is_some());
-    let mut simulation = fixed(art.poses.configure_stage_two(&initial)?)?;
+    let initial = cabinet_with_scroll(true, LocalSession::default(), limit)?;
+    let mut simulation = fixed(art.poses.configure_cabinet(&initial)?)?;
     let mut controls = Controls::new(touch_enabled)?;
     pulse(&mut controls, &mut simulation, KeyboardKey::ENTER)?;
     advance(&mut simulation, 1)?;
@@ -668,6 +666,7 @@ fn smoke_bonus(
     await_bonus(simulation, BonusPhase::Pumping)?;
     let _pumping = art.present(scene, simulation.state())?;
     let before = scene.readback()?;
+    verify_opponent_pumping(scene, art, controls, simulation)?;
     pump_bonus(controls, simulation, 12)?;
     let _inflated = art.present(scene, simulation.state())?;
     if before == scene.readback()? {
@@ -691,6 +690,113 @@ fn smoke_bonus(
     ))
     .map_err(failure)?;
     smoke_stage_two(scene, art, controls, simulation)
+}
+
+fn verify_opponent_pumping(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    controls: &mut Controls,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    if !art
+        .poses
+        .bonus
+        .as_ref()
+        .is_some_and(super::bonus::BonusArt::has_opponents)
+    {
+        return Ok(());
+    }
+    let players = [Player::Homer, Player::Bart, Player::Lisa];
+    let bonus = simulation
+        .state()
+        .bonus()
+        .ok_or(RenderError::InvalidSprite)?;
+    if bonus.is_automatic(Player::Marge)
+        || players.iter().any(|player| {
+            !bonus.is_automatic(*player)
+                || bonus.inflation(*player) != Some(0)
+                || bonus.automatic_pressed(*player)
+        })
+    {
+        return Err(failure("bonus automatic roster was not admitted"));
+    }
+    for player in players {
+        super::bonus::verify_opponent(scene, art, simulation.state(), player)?;
+    }
+    pump_bonus(controls, simulation, 1)?;
+    let _pressed = art.present(scene, simulation.state())?;
+    let pressed = simulation
+        .state()
+        .bonus()
+        .ok_or(RenderError::InvalidSprite)?;
+    for player in players {
+        if !pressed.automatic_pressed(player) {
+            return Err(failure("automatic pump did not fire"));
+        }
+        super::bonus::verify_opponent(scene, art, simulation.state(), player)?;
+    }
+    Ok(())
+}
+
+fn verify_opponent_departure(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    if !art
+        .poses
+        .bonus
+        .as_ref()
+        .is_some_and(super::bonus::BonusArt::has_opponents)
+    {
+        return Ok(());
+    }
+    let bonus = simulation
+        .state()
+        .bonus()
+        .ok_or(RenderError::InvalidSprite)?;
+    for player in [Player::Homer, Player::Bart, Player::Lisa] {
+        if bonus.inflation(player).is_none_or(|score| score == 0)
+            || bonus.rank(player).is_none()
+        {
+            return Err(failure("automatic competitor did not rank"));
+        }
+    }
+    for landing in [false, true] {
+        await_opponent_motion(simulation, landing)?;
+        let _drawn = art.present(scene, simulation.state())?;
+        super::bonus::verify_opponent(
+            scene,
+            art,
+            simulation.state(),
+            Player::Homer,
+        )?;
+    }
+    write_status(format_args!(
+        "Bonus: routed automatic pumps, rankings and landing verified"
+    ))
+    .map_err(failure)
+}
+
+fn await_opponent_motion(
+    simulation: &mut LiveSimulation<Cabinet>,
+    landing: bool,
+) -> Result<(), RenderError> {
+    for _ in 0..600u16 {
+        let motion = simulation
+            .state()
+            .bonus()
+            .and_then(|bonus| bonus.automatic_departure(Player::Homer));
+        if matches!(
+            (landing, motion),
+            (false, Some(AutomaticDeparture::Falling { .. }))
+                | (true, Some(AutomaticDeparture::Landed { .. }))
+        ) {
+            return Ok(());
+        }
+        advance(simulation, 1)?;
+    }
+    Err(failure("automatic bonus departure was not reached"))
 }
 
 fn verify_bonus_results(
@@ -739,6 +845,7 @@ fn verify_bonus_results(
         return Err(failure("bonus score count did not change readback"));
     }
     verify_bonus_motion(scene, art, simulation)?;
+    verify_opponent_departure(scene, art, simulation)?;
     await_bonus(simulation, BonusPhase::Complete)?;
     let _complete = art.present(scene, simulation.state())?;
     super::bonus::verify_departure(scene, art, simulation.state(), None)?;
