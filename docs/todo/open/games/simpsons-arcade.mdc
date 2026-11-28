@@ -6065,3 +6065,24 @@ the admitted bank-specific or fixed listings. They have no separate
 native callback body: the return is processor control transport.
 Their callers and selector-dependent choices remain ledger
 obligations. The canonical graph and all identities are retained.
+
+### Bonus roster and winner reward leaf verification
+
+The original roster helper copies all four live admission bits at
+instruction and ready entry. Four retained admission controls distinguish
+instruction joins from later ready or pumping joins. The native regression
+covers all sixteen station masks, including an empty roster, and verifies
+that the pumping roster remains independent of later campaign admission.
+
+The original result helper rewards only positive first-place winners,
+including ties. Three retained reward controls contain four award writes,
+including a capped award, and none in the all-zero control. The native
+helper preserves that half-full reward and cap in its 32-unit meter. Its
+new regression covers 660 health, participation and rank combinations;
+existing routed regressions verify one-time delivery. Free-play admission
+and immediate meter synchronization are deliberate native policies.
+
+These two leaf functions now have complete native mappings. The private
+ledger retains 1,672 identities: six implemented, 104 discarded and
+1,562 pending. Overall bonus scheduling, automated absent-station behavior,
+physical payment and the rest of the campaign remain open.

@@ -628,6 +628,53 @@ mod tests {
     }
 
     #[test]
+    fn competition_roster_resamples_then_freezes_all_station_masks() {
+        for mask in 0..16u8 {
+            verify_competition_roster(
+                Player::ALL.map(|player| mask & (1 << player.index()) != 0),
+            );
+        }
+    }
+
+    fn verify_competition_roster(admitted: [bool; 4]) {
+        let other = admitted.map(|active| !active);
+        let mut bonus = Bonus::new([false; 4]);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        bonus.refresh_participants(other);
+        assert_eq!(bonus.phase(), BonusPhase::Instructions);
+        assert_roster(bonus, other);
+        bonus.advance([false; 4], false);
+        bonus.refresh_participants(admitted);
+        assert_roster(bonus, other);
+        advance_quietly(&mut bonus, INSTRUCTION_MAX_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::Ready);
+        bonus.refresh_participants(admitted);
+        assert_roster(bonus, admitted);
+        bonus.advance([false; 4], false);
+        bonus.refresh_participants(other);
+        assert_roster(bonus, admitted);
+        advance_quietly(&mut bonus, READY_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::Pumping);
+        bonus.refresh_participants(other);
+        bonus.advance([true; 4], true);
+        assert_eq!(
+            Player::ALL.map(|player| bonus.inflation(player)),
+            admitted.map(|active| active.then_some(3))
+        );
+        advance_quietly(&mut bonus, PUMP_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::Results);
+        bonus.refresh_participants(other);
+        assert_roster(bonus, admitted);
+    }
+
+    fn assert_roster(bonus: Bonus, expected: [bool; 4]) {
+        assert_eq!(
+            Player::ALL.map(|player| bonus.inflation(player).is_some()),
+            expected
+        );
+    }
+
+    #[test]
     fn pump_clock_matches_decimal_carry_and_timeout() {
         let mut bonus = start_pump([true; 4]);
         let mut seconds = 10u16;

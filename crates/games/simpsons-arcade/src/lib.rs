@@ -3972,6 +3972,47 @@ mod tests {
         assert_eq!(state.bonus().map(Bonus::phase), Some(phase));
     }
 
+    #[test]
+    fn bonus_reward_is_bounded_and_requires_a_live_winner() {
+        for participation in [
+            Participation::Absent,
+            Participation::Continuing { ticks_left: 100 },
+            Participation::Playing,
+            Participation::Recovering { ticks_left: 100 },
+        ] {
+            for health in 0..=PLAYER_HEALTH {
+                verify_bonus_reward(participation, health);
+            }
+        }
+    }
+
+    fn verify_bonus_reward(participation: Participation, health: u8) {
+        for rank in [None, Some(1), Some(2), Some(3), Some(4)] {
+            let mut slot = Slot::new(Point { x: 100, y: 100 });
+            slot.station.participation = participation;
+            slot.station.health = health;
+            slot.station.display_health = 0;
+            slot.station.score = 19;
+            slot.meter_wait = 5;
+            let mut expected = slot.station;
+            let expected_wait = if rank == Some(1)
+                && participation == Participation::Playing
+                && health > 0
+            {
+                expected.health = health
+                    .saturating_add(PLAYER_HEALTH >> 1u32)
+                    .min(PLAYER_HEALTH);
+                expected.display_health = expected.health;
+                0
+            } else {
+                5
+            };
+            slot.award_bonus_health(rank);
+            assert_eq!(slot.station, expected);
+            assert_eq!(slot.meter_wait, expected_wait);
+        }
+    }
+
     fn bonus_health_fixture() -> Cabinet {
         let mut state = cabinet();
         for (tick, player) in [Player::Marge, Player::Homer, Player::Bart]
