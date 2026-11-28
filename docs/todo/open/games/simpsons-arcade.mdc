@@ -6889,3 +6889,36 @@ thirteen milestones, trusted directory selection, and no retained
 canvas or preferences. The ordinary launch selection remains
 unchanged. Unprotected contact, campaign seed provenance and physical
 Android acceptance remain open.
+
+### Optional ranked landing audio preview
+
+The runtime admits a bounded, local 28,000-frame centered stereo
+capture of the isolated original FM effect. Admitted ranks trigger at
+ticks 188, 204, 220 and 236, one tick before their grounded poses.
+Each trigger restarts the same effect voice without interrupting the
+ambient, ranked entrance or soundtrack voices. All roster rotations,
+optional catalogue admission, fixed-step receipt timing and mixer
+exhaustion have regression coverage. The capture is not FM synthesis
+and remains an opt-in diagnostic selection.
+
+Two isolated native OpenGL/X11 SDL dummy-audio runs, with effects
+alone and with music, verify respectively two, three, three and four
+landing receipts for the four previously observed roster masks.
+Each also admits ten ambient receipts and drains its effects.
+
+Three isolated Firefox runs admit four landing, five ranked entrance
+and nine ambient cues in the modern preview phase. The effects-only
+run initially exposed only the last two exact landing starts because
+the earlier two overlap the preceding ranked entrance effect. An
+independent reconstruction of that overlapping PCM contribution
+identifies all four starts. All 67,424 frames from the first landing
+start through final exhaustion match the combined expected waveform
+exactly in both channels. The first three starts truncate the prior
+landing voice; the final start plays the full capture. The fully muted
+control submits digital silence; the mixed control is non-silent.
+Each run submits 2,880,000 cemetery frames at 48 kHz, completes all
+11,266 scheduled buffers, pauses, resumes and closes its audio context.
+All use trusted directory selection and retain no canvas or
+preferences. The ordinary launch selection is unchanged. Physical
+speaker output, original FM synthesis, hardware channel allocation
+and full campaign timing parity remain open.
