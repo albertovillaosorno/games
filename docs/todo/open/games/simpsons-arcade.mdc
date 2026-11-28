@@ -5913,3 +5913,33 @@ with a directional jump by another station. The shared camera reaches
 and the jump's sampled elevations and landing match the portable
 cabinet. Secondary release now leaves the frozen diagnostic maneuver
 unchanged after its final action tick, while updating held input.
+
+Two simultaneous four-station input traces now verify the distinction
+between fresh and preheld directional chords in the room. The fresh
+chord selects an ordinary jump and contributes to the shared camera
+request. The preheld chord selects the stationary special trajectory;
+a different station's reversed attack retains its old depth stride.
+The regressions include camera, elevation, attack recovery and
+horizontal fractional drift samples.
+
+A further saved-state control separates the four stations before the
+interaction boundary, matching all 12 preceding transition samples.
+At the last protected tick, the projected positions are (112, 153),
+(200, 153), (320, 207) and (200, 207). The following records show
+no immediate cooperative pairs, a reaction by the rightmost station,
+and continued horizontal movement by the fourth station. Object DMA
+contains active enemy families before the boundary. This distinguishes
+conditional interactions from an unconditional pair transition;
+enemy behavior, hit resolution and post-boundary movement remain
+unimplemented. No extrapolated encounter was admitted.
+
+The separated neutral control matches 135 station rows before the
+post-boundary movement diverges and all 305 rightmost-station rows.
+Neither separated control forms the recorded pair states. Ten further
+saved-state controls isolate the two leftmost stations at differing
+separations. At equal depth, horizontal separations of 28, 30 and 32
+admit a pair on the first interaction tick, while 34 and 36 do not.
+At horizontal separation 28, depth differences of 8, 12 and 16 admit
+that pair, while 20 and 24 do not. These are sampled thresholds for
+one character ordering; selection priority, combined-axis limits,
+other pairs, action timelines and enemy effects remain unresolved.

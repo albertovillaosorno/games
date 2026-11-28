@@ -4342,6 +4342,82 @@ mod tests {
         assert_room_projection(&state, 31, [153, 153, 207, 207]);
     }
 
+    #[test]
+    fn cemetery_reversed_attack_retains_old_stride_during_special() {
+        let mut state = ready_cemetery_room();
+        state.input_step(0, &[
+            change(Player::Marge, Control::Right, true),
+            change(Player::Homer, Control::Down, true),
+            change(Player::Bart, Control::Right, true),
+            change(Player::Lisa, Control::Down, true),
+        ]);
+        advance_empty(&mut state, 0..5);
+        assert_room_projection(&state, 2, [178, 166, 178, 166]);
+        state.input_step(0, &[
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Homer, Control::Down, false),
+            change(Player::Homer, Control::Up, true),
+            change(Player::Homer, Control::Primary, true),
+            change(Player::Bart, Control::Right, false),
+            change(Player::Bart, Control::Primary, true),
+            change(Player::Lisa, Control::Primary, true),
+            change(Player::Lisa, Control::Secondary, true),
+        ]);
+        assert_room_projection(&state, 2, [178, 164, 178, 166]);
+        assert_eq!(station_for(&state, Player::Lisa).maneuver.elevation(), 5);
+        state.input_step(0, &[
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Homer, Control::Primary, false),
+            change(Player::Bart, Control::Primary, false),
+            change(Player::Lisa, Control::Primary, false),
+            change(Player::Lisa, Control::Secondary, false),
+        ]);
+        advance_empty(&mut state, 0..14);
+        assert_room_projection(&state, 2, [178, 164, 178, 166]);
+        assert_eq!(station_for(&state, Player::Lisa).maneuver.elevation(), 45);
+        advance_empty(&mut state, 0..5);
+        assert_room_projection(&state, 2, [178, 166, 178, 166]);
+        assert_eq!(state.stations().map(|station| station.position.x), [
+            134, 144, 184, 200,
+        ]);
+    }
+
+    #[test]
+    fn cemetery_fresh_direction_chord_moves_an_ordinary_jump() {
+        let mut state = ready_cemetery_room();
+        state.input_step(0, &[
+            change(Player::Marge, Control::Down, true),
+            change(Player::Marge, Control::Primary, true),
+            change(Player::Homer, Control::Right, true),
+            change(Player::Homer, Control::Primary, true),
+            change(Player::Bart, Control::Up, true),
+            change(Player::Bart, Control::Primary, true),
+            change(Player::Lisa, Control::Down, true),
+            change(Player::Lisa, Control::Primary, true),
+            change(Player::Lisa, Control::Secondary, true),
+        ]);
+        assert_room_projection(&state, 0, [176, 176, 176, 174]);
+        assert!(matches!(
+            station_for(&state, Player::Lisa).maneuver,
+            Maneuver::Jump(_)
+        ));
+        state.input_step(0, &[
+            change(Player::Marge, Control::Primary, false),
+            change(Player::Homer, Control::Primary, false),
+            change(Player::Bart, Control::Primary, false),
+            change(Player::Lisa, Control::Primary, false),
+            change(Player::Lisa, Control::Secondary, false),
+        ]);
+        advance_empty(&mut state, 0..4);
+        assert_room_projection(&state, 2, [178, 178, 178, 166]);
+        assert_eq!(station_for(&state, Player::Lisa).maneuver.elevation(), 38);
+        advance_empty(&mut state, 0..14);
+        assert_room_projection(&state, 30, [206, 206, 206, 166]);
+        assert_eq!(state.stations().map(|station| station.position.x), [
+            116, 148, 172, 200,
+        ]);
+    }
+
     fn assert_homer_room_height(state: &Cabinet, expected: i16) {
         let [_, homer, ..] = state.stations();
         assert_eq!(homer.maneuver.elevation(), expected);
