@@ -4121,18 +4121,28 @@ mod tests {
     }
 
     fn assert_late_instruction_gate(state: &mut Cabinet) {
-        advance_empty(state, 2001..2208);
-        state.input_step(2208, &pulse(Player::Homer, Control::Primary));
+        advance_empty(state, 2001..2136);
+        state.input_step(2136, &pulse(Player::Homer, Control::Primary));
         assert_eq!(
             state.bonus().map(Bonus::phase),
             Some(BonusPhase::Instructions)
         );
-        state.input_step(2209, &pulse(Player::Bart, Control::Primary));
+        state.input_step(2137, &pulse(Player::Bart, Control::Primary));
         assert_eq!(
             state.bonus().map(Bonus::phase),
             Some(BonusPhase::Instructions)
         );
-        state.input_step(2210, &pulse(Player::Homer, Control::Secondary));
+        state.input_step(2138, &pulse(Player::Homer, Control::Secondary));
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::Instructions)
+        );
+        state.input_step(2139, &[]);
+        assert_eq!(
+            state.bonus().map(Bonus::phase),
+            Some(BonusPhase::InstructionCleanup)
+        );
+        advance_empty(state, 2140..2144);
         assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Ready));
     }
 

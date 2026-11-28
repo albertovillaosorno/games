@@ -41,12 +41,18 @@ use opposition::Pump;
 use super::{Player, stage_card_departed};
 use crate::advance_choice_word;
 
-// Baseline instruction entry is 953 reference frames after the terminal
-// response, of which 128 are the separate wrestler defeat phase.
+// The instruction cue is 953 reference frames after the terminal response,
+// of which 128 are the separate wrestler defeat phase.
 const VICTORY_TICKS: u16 = 825;
-// The activity gate opens after the counter has exceeded 208.
-const INSTRUCTION_MIN_TICKS: u16 = 210;
-const INSTRUCTION_MAX_TICKS: u16 = 384;
+// The demonstration begins 77 ticks after the cue, with 311 countdown
+// samples remaining. An eligible edge stops it on the following tick.
+const INSTRUCTION_SETUP_TICKS: u16 = 77;
+const INSTRUCTION_MIN_TICKS: u16 = 138;
+const INSTRUCTION_MAX_TICKS: u16 = 311;
+const INSTRUCTION_CLEANUP_TICKS: u16 = 4;
+// Retain the native competition's previous rotation policy: the first
+// eligible edge selected slot two, and neutral timeout selected slot zero.
+const INSTRUCTION_SKIP_ROTATION: u16 = 2;
 const DEMO_PULSE_PHASE: u16 = 3;
 const DEMO_PUMP_TICKS: u16 = 4;
 // The local preview chooses the verified solo instruction baseline.
@@ -85,7 +91,11 @@ pub const BONUS_MAX_INFLATION: u8 = 64;
 pub enum BonusPhase {
     /// Results remain available when no subsequent stage is selected.
     Complete,
-    /// Explain the button-pumping interaction.
+    /// Retire the demonstration before admitting the competition.
+    InstructionCleanup,
+    /// Start the instruction cue before admitting the demonstrator.
+    InstructionSetup,
+    /// Show the active button-pumping demonstration.
     Instructions,
     /// Admit independent pump button edges.
     Pumping,
@@ -99,6 +109,19 @@ pub enum BonusPhase {
     StageSetup,
     /// Hold the cleared street before the bonus.
     Victory,
+}
+
+impl BonusPhase {
+    /// Whether the instruction cue and scene own this phase.
+    #[must_use]
+    pub const fn is_instruction(self) -> bool {
+        matches!(
+            self,
+            Self::InstructionSetup
+                | Self::Instructions
+                | Self::InstructionCleanup
+        )
+    }
 }
 
 /// Read-only motion of a ranked participant during the bonus departure.
@@ -437,6 +460,7 @@ impl Demonstration {
 pub struct Bonus {
     balloons: [Balloon; 4],
     demonstration: Option<Demonstration>,
+    instruction_skip: bool,
     opponents: Option<[Option<Pump>; 4]>,
     participants: [bool; 4],
     phase: BonusPhase,
@@ -460,16 +484,29 @@ impl Bonus {
         self.tick = self.tick.saturating_add(1);
         let next = match self.phase {
             BonusPhase::Victory if self.tick >= VICTORY_TICKS => {
+                BonusPhase::InstructionSetup
+            },
+            BonusPhase::InstructionSetup
+                if self.tick >= INSTRUCTION_SETUP_TICKS =>
+            {
                 self.refresh_demonstration();
                 BonusPhase::Instructions
             },
             BonusPhase::Instructions => self.advance_instructions(active_edge),
+            BonusPhase::InstructionCleanup
+                if self.tick >= INSTRUCTION_CLEANUP_TICKS =>
+            {
+                self.refresh_opponents();
+                BonusPhase::Ready
+            },
             BonusPhase::Ready if self.tick >= READY_TICKS => {
                 BonusPhase::Pumping
             },
             BonusPhase::Pumping => self.pump(presses),
             BonusPhase::Results => self.advance_results(),
             BonusPhase::Complete
+            | BonusPhase::InstructionCleanup
+            | BonusPhase::InstructionSetup
             | BonusPhase::Ready
             | BonusPhase::StageCard
             | BonusPhase::StageSetup
@@ -482,13 +519,17 @@ impl Bonus {
     }
 
     fn advance_instructions(&mut self, active_edge: bool) -> BonusPhase {
-        if self.tick >= INSTRUCTION_MAX_TICKS
-            || (self.tick >= INSTRUCTION_MIN_TICKS && active_edge)
-        {
+        if self.instruction_skip || self.tick >= INSTRUCTION_MAX_TICKS {
             self.demonstration = None;
-            self.scan_start = usize::from(self.tick).rem_euclid(4);
-            self.refresh_opponents();
-            return BonusPhase::Ready;
+            self.instruction_skip = false;
+            return BonusPhase::InstructionCleanup;
+        }
+        if self.tick >= INSTRUCTION_MIN_TICKS && active_edge {
+            self.instruction_skip = true;
+            let offset = self.tick.saturating_sub(INSTRUCTION_MIN_TICKS);
+            self.scan_start =
+                usize::from(offset.saturating_add(INSTRUCTION_SKIP_ROTATION))
+                    .rem_euclid(4);
         }
         if let Some(demonstration) = &mut self.demonstration {
             demonstration.advance(self.tick);
@@ -660,6 +701,7 @@ impl Bonus {
         Self {
             balloons: [Balloon::new(); 4],
             demonstration: None,
+            instruction_skip: false,
             opponents: None,
             participants,
             phase: BonusPhase::Victory,
@@ -765,7 +807,7 @@ impl Bonus {
     }
 
     fn visible_balloon(self, player: Player) -> Option<Balloon> {
-        if self.phase == BonusPhase::Instructions {
+        if self.phase.is_instruction() {
             return self.demonstration.and_then(|demo| {
                 (demo.player == player).then_some(demo.balloon)
             });
@@ -815,13 +857,17 @@ mod tests {
 
     fn start_pump(participants: [bool; 4]) -> Bonus {
         let mut bonus = Bonus::new(participants);
-        for _ in 0..VICTORY_TICKS {
+        for _ in 0..VICTORY_TICKS + INSTRUCTION_SETUP_TICKS {
             bonus.advance([true; 4], true);
         }
         assert_eq!(bonus.phase(), BonusPhase::Instructions);
         for _ in 0..INSTRUCTION_MIN_TICKS {
             bonus.advance([true; 4], true);
         }
+        assert_eq!(bonus.phase(), BonusPhase::Instructions);
+        advance_quietly(&mut bonus, 1);
+        assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+        advance_quietly(&mut bonus, INSTRUCTION_CLEANUP_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         for _ in 0..READY_TICKS {
             bonus.advance([true; 4], true);
@@ -845,9 +891,13 @@ mod tests {
     fn assert_automatic_pulse_schedule(tick: u16, periods: [u16; 4]) {
         let mut bonus =
             Bonus::new([true, false, false, false]).with_opponents(true);
-        advance_quietly(&mut bonus, VICTORY_TICKS);
+        enter_instructions(&mut bonus);
         advance_quietly(&mut bonus, tick.saturating_sub(1));
         bonus.advance([true, false, false, false], true);
+        assert_eq!(bonus.phase(), BonusPhase::Instructions);
+        advance_quietly(&mut bonus, 1);
+        assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+        advance_quietly(&mut bonus, INSTRUCTION_CLEANUP_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         advance_quietly(&mut bonus, READY_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Pumping);
@@ -888,6 +938,39 @@ mod tests {
                 verify_instruction_demonstration(admitted, expected, automatic);
             }
         }
+    }
+
+    #[test]
+    fn instruction_setup_waits_before_admitting_the_demonstrator() {
+        let mut bonus = Bonus::new([true, false, false, false]);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        for tick in 0..77u16 {
+            assert_eq!(bonus.phase(), BonusPhase::InstructionSetup);
+            assert_eq!(bonus.tick(), tick);
+            assert_no_demonstration(bonus);
+            bonus.advance([true, false, false, false], true);
+        }
+        assert_eq!(bonus.phase(), BonusPhase::Instructions);
+        assert_eq!(bonus.tick(), 0);
+        assert_eq!(bonus.instruction_player(), Some(Player::Marge));
+        verify_demonstrator_snapshot(&mut bonus);
+    }
+
+    fn verify_demonstrator_snapshot(bonus: &mut Bonus) {
+        bonus.refresh_participants([false, true, false, false]);
+        assert_eq!(bonus.instruction_player(), Some(Player::Homer));
+        assert_eq!(bonus.visual_axes(Player::Homer), Some((0xb0, 0xb0)));
+        bonus.advance([false; 4], false);
+        bonus.refresh_participants([true, false, false, false]);
+        assert_eq!(bonus.instruction_player(), Some(Player::Homer));
+    }
+
+    fn assert_no_demonstration(bonus: Bonus) {
+        assert_eq!(bonus.instruction_player(), None);
+        assert_eq!(
+            Player::ALL.map(|player| bonus.visual_axes(player)),
+            [None; 4]
+        );
     }
 
     #[test]
@@ -971,7 +1054,7 @@ mod tests {
     fn instruction_preview_uses_the_baseline_without_mutating_scores() {
         let roster = [true, false, false, false];
         let mut bonus = Bonus::new(roster).with_opponents(true);
-        advance_quietly(&mut bonus, VICTORY_TICKS);
+        enter_instructions(&mut bonus);
         let scores = Player::ALL.map(|player| bonus.inflation(player));
         let mut previous_tick = 0u16;
         for (tick, expected) in [
@@ -998,6 +1081,16 @@ mod tests {
             &mut bonus,
             INSTRUCTION_MAX_TICKS.saturating_sub(previous_tick),
         );
+        verify_instruction_retirement(&mut bonus, scores);
+    }
+
+    fn verify_instruction_retirement(
+        bonus: &mut Bonus,
+        scores: [Option<u8>; 4],
+    ) {
+        assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+        assert_no_demonstration(*bonus);
+        advance_quietly(bonus, INSTRUCTION_CLEANUP_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         assert_eq!(bonus.instruction_player(), None);
         assert_eq!(
@@ -1013,7 +1106,7 @@ mod tests {
         automatic: bool,
     ) {
         let mut bonus = Bonus::new([false; 4]).with_opponents(automatic);
-        advance_quietly(&mut bonus, VICTORY_TICKS);
+        enter_instructions(&mut bonus);
         bonus.refresh_participants(admitted);
         assert_eq!(bonus.instruction_player(), expected);
         let axes = Player::ALL
@@ -1023,9 +1116,13 @@ mod tests {
         if expected.is_some() {
             advance_quietly(&mut bonus, INSTRUCTION_MIN_TICKS - 9);
             bonus.advance([true; 4], true);
+            assert_eq!(bonus.phase(), BonusPhase::Instructions);
+            advance_quietly(&mut bonus, 1);
         } else {
             advance_quietly(&mut bonus, INSTRUCTION_MAX_TICKS - 8);
         }
+        assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+        advance_quietly(&mut bonus, INSTRUCTION_CLEANUP_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         assert_eq!(bonus.instruction_player(), None);
         let contenders = if automatic && admitted.contains(&true) {
@@ -1083,13 +1180,15 @@ mod tests {
     fn verify_automatic_roster(admitted: [bool; 4]) {
         let other = admitted.map(|human| !human);
         let mut bonus = Bonus::new([false; 4]).with_opponents(true);
-        advance_quietly(&mut bonus, VICTORY_TICKS);
+        enter_instructions(&mut bonus);
         bonus.refresh_participants(other);
         assert_automatic_roster(bonus, other);
         bonus.advance([false; 4], false);
         bonus.refresh_participants(admitted);
         assert_automatic_roster(bonus, other);
         advance_quietly(&mut bonus, INSTRUCTION_MAX_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+        advance_quietly(&mut bonus, INSTRUCTION_CLEANUP_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         bonus.refresh_participants(admitted);
         assert_automatic_roster(bonus, admitted);
@@ -1156,7 +1255,7 @@ mod tests {
     fn verify_competition_roster(admitted: [bool; 4]) {
         let other = admitted.map(|active| !active);
         let mut bonus = Bonus::new([false; 4]);
-        advance_quietly(&mut bonus, VICTORY_TICKS);
+        enter_instructions(&mut bonus);
         bonus.refresh_participants(other);
         assert_eq!(bonus.phase(), BonusPhase::Instructions);
         assert_roster(bonus, other);
@@ -1164,6 +1263,8 @@ mod tests {
         bonus.refresh_participants(admitted);
         assert_roster(bonus, other);
         advance_quietly(&mut bonus, INSTRUCTION_MAX_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+        advance_quietly(&mut bonus, INSTRUCTION_CLEANUP_TICKS);
         assert_eq!(bonus.phase(), BonusPhase::Ready);
         bonus.refresh_participants(admitted);
         assert_roster(bonus, admitted);
@@ -1365,6 +1466,11 @@ mod tests {
         assert_eq!(bonus.rank(Player::Bart), Some(1));
         assert_eq!(bonus.rank(Player::Lisa), Some(2));
         assert_eq!(bonus.rank(Player::Homer), Some(4));
+    }
+
+    fn enter_instructions(bonus: &mut Bonus) {
+        advance_quietly(bonus, VICTORY_TICKS + INSTRUCTION_SETUP_TICKS);
+        assert_eq!(bonus.phase(), BonusPhase::Instructions);
     }
 
     fn advance_quietly(bonus: &mut Bonus, ticks: u16) {
@@ -1723,14 +1829,18 @@ mod tests {
     #[test]
     fn instruction_timeout_cannot_be_skipped_by_absent_station() {
         let mut bonus = Bonus::new([true, false, false, false]);
-        for _ in 0..VICTORY_TICKS {
-            bonus.advance([false; 4], false);
-        }
+        enter_instructions(&mut bonus);
         for _ in 1..INSTRUCTION_MAX_TICKS {
             bonus.advance([false, true, false, false], false);
             assert_eq!(bonus.phase(), BonusPhase::Instructions);
         }
         bonus.advance([false; 4], false);
+        for tick in 0..INSTRUCTION_CLEANUP_TICKS {
+            assert_eq!(bonus.phase(), BonusPhase::InstructionCleanup);
+            assert_eq!(bonus.tick(), tick);
+            assert_eq!(bonus.instruction_player(), None);
+            bonus.advance([true; 4], true);
+        }
         assert_eq!(bonus.phase(), BonusPhase::Ready);
     }
 }

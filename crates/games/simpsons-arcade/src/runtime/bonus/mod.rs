@@ -567,7 +567,9 @@ impl BonusArt {
     ) -> Result<(), RenderError> {
         let phase = match bonus.phase() {
             BonusPhase::Victory => return Err(RenderError::InvalidSprite),
-            BonusPhase::Instructions => 0,
+            BonusPhase::InstructionSetup
+            | BonusPhase::Instructions
+            | BonusPhase::InstructionCleanup => 0,
             BonusPhase::Ready => 1,
             BonusPhase::Pumping => 2,
             BonusPhase::Results => 3,
@@ -585,7 +587,7 @@ impl BonusArt {
             draws.push(header.draw(phase, 16, 100)?);
             return Ok(());
         }
-        if bonus.phase() == BonusPhase::Instructions
+        if bonus.phase().is_instruction()
             && let Some(instruction) = &self.instruction
         {
             let [frame, heading, prompt] = instruction.draws(language)?;
@@ -595,7 +597,7 @@ impl BonusArt {
             return Ok(());
         }
         draws.push(self.background.draw(self.background.rect, false));
-        if bonus.phase() == BonusPhase::Instructions {
+        if bonus.phase().is_instruction() {
             self.queue_instruction(bonus, draws)?;
         } else {
             for player in Player::ALL {

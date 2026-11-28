@@ -721,6 +721,41 @@ fn smoke_instruction_pump(
     .map_err(failure)
 }
 
+fn smoke_bonus_instructions(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<(), RenderError> {
+    await_bonus(simulation, BonusPhase::InstructionSetup)?;
+    let _setup = art.present(scene, simulation.state())?;
+    let setup = scene.readback()?;
+    await_bonus(simulation, BonusPhase::Instructions)?;
+    let _instructions = art.present(scene, simulation.state())?;
+    super::bonus::verify_instruction(scene, art, simulation.state())?;
+    smoke_instruction_pump(scene, art, simulation.state())?;
+    smoke_instruction_balloon(scene, art, simulation.state())?;
+    let initial = scene.readback()?;
+    if setup == initial {
+        return Err(failure("instruction setup already showed demonstrator"));
+    }
+    advance(simulation, 8)?;
+    let _demonstration = art.present(scene, simulation.state())?;
+    if initial == scene.readback()? {
+        return Err(failure("bonus instruction demonstration did not grow"));
+    }
+    await_bonus(simulation, BonusPhase::InstructionCleanup)?;
+    let _cleanup = art.present(scene, simulation.state())?;
+    if setup != scene.readback()? {
+        return Err(failure("instruction cleanup retained demonstration"));
+    }
+    await_bonus(simulation, BonusPhase::Ready)?;
+    let _ready = art.present(scene, simulation.state())?;
+    if initial == scene.readback()? {
+        return Err(failure("bonus instructions and ready appear identical"));
+    }
+    Ok(())
+}
+
 fn smoke_bonus(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -731,22 +766,7 @@ fn smoke_bonus(
         return Ok(());
     }
     let scores = simulation.state().stations().map(|station| station.score);
-    await_bonus(simulation, BonusPhase::Instructions)?;
-    let _instructions = art.present(scene, simulation.state())?;
-    super::bonus::verify_instruction(scene, art, simulation.state())?;
-    smoke_instruction_pump(scene, art, simulation.state())?;
-    smoke_instruction_balloon(scene, art, simulation.state())?;
-    let initial = scene.readback()?;
-    advance(simulation, 8)?;
-    let _demonstration = art.present(scene, simulation.state())?;
-    if initial == scene.readback()? {
-        return Err(failure("bonus instruction demonstration did not grow"));
-    }
-    await_bonus(simulation, BonusPhase::Ready)?;
-    let _ready = art.present(scene, simulation.state())?;
-    if initial == scene.readback()? {
-        return Err(failure("bonus instructions and ready appear identical"));
-    }
+    smoke_bonus_instructions(scene, art, simulation)?;
     await_bonus(simulation, BonusPhase::Pumping)?;
     let _pumping = art.present(scene, simulation.state())?;
     let before = scene.readback()?;

@@ -7168,3 +7168,26 @@ A separate setup, active demonstration and cleanup lifecycle is needed
 before changing those timings; it must preserve audio alignment, fresh
 action admission, the competition snapshot and opponent rotation. No
 new timing constants or campaign parity are claimed by this evidence.
+
+### Fixed-step instruction lifecycle
+
+The preview now separates the 77-tick cue/setup interval, 311-tick
+active demonstration and four-tick cleanup. The early-edge control
+first admits an action at active tick 138 and clears the actor on
+its following tick. The native gate follows that boundary; absent
+and pre-gate actions do not advance it. The original-backed active
+art still uses a zero-based demonstration tick. The existing ready
+snapshot and native opponent rotation policy are preserved, as are
+competition scoring and one continuous instruction sound cue.
+
+The setup and cleanup use the provisional instruction frame without
+a demonstrator; their original frame-by-frame composition and exact
+competition initialization and Ready-flag offsets remain open. The
+neutral timer, early and absent-player edge cases, snapshot, choice
+cadence and cue continuity are covered by the workspace validator.
+Native X11/OpenGL and isolated Firefox/WebGL software smokes compare
+setup and cleanup readbacks, retain 15 exact pump phase pairs and
+70 exact balloon states and complete the previous routed milestones.
+Firefox records 2,189 readbacks and 2,345 blits, a trusted directory
+selection and no residual canvas or stored preferences. These checks
+do not establish general campaign parity or physical Android acceptance.

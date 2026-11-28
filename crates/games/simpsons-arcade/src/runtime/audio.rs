@@ -427,7 +427,9 @@ impl MusicCue {
             return match bonus.phase() {
                 BonusPhase::Pumping => Self::Pumping,
                 BonusPhase::Results => Self::Results,
-                BonusPhase::Instructions => Self::Instructions,
+                BonusPhase::InstructionSetup
+                | BonusPhase::Instructions
+                | BonusPhase::InstructionCleanup => Self::Instructions,
                 BonusPhase::Victory if bonus.tick() < VICTORY_CUE_TICK => {
                     Self::Defeat
                 },
@@ -2539,12 +2541,13 @@ mod tests {
             health: 0,
             ..Wrestler::new(0)
         });
-        for elapsed in 0..=953u64 {
+        for elapsed in 0..=1345u64 {
             let expected = match elapsed {
                 0..=274 => MusicCue::Defeat,
                 275..=498 => MusicCue::Victory,
                 499..=952 => MusicCue::Transition,
-                _ => MusicCue::Instructions,
+                953..=1344 => MusicCue::Instructions,
+                _ => MusicCue::Quiet,
             };
             if MusicCue::select(&cabinet) != expected
                 || cabinet.bonus().is_some() != (elapsed >= 128)
