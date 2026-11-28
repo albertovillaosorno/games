@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Exact palette shadow resolution for registered cemetery draws.
+//   - Exact palette shadows and admitted foreground occlusion.
 // - Must-Not:
 //   - Advance simulation, decode source media or infer sprite priorities.
 // - Allows:
@@ -23,7 +23,7 @@
 // - Summary:
 //   - Correct alpha rounding and shadow overlap without GPU readback.
 // - Description:
-//   - Resolve only mask pixels against the opaque actors and map layers.
+//   - Resolve mask and blocked actor pixels against registered layers.
 // - Usage:
 //   - Queue after the room actors and before interface artwork.
 // - Defaults:
@@ -42,6 +42,7 @@ const WIDTH: usize = 320;
 
 pub(in crate::runtime) const ATLAS_BYTES: usize = WIDTH * HEIGHT * 4;
 
+type Blocked = [Option<SpriteDraw>; 2];
 type Color = [u8; 4];
 type Point = (i32, i32);
 type DrawSource<'source> = (SpriteDraw, &'source Source);
@@ -131,6 +132,7 @@ pub(super) struct Shadow {
     pixels: Vec<Color>,
     previous: Vec<SpriteDraw>,
     previous_backgrounds: usize,
+    previous_blocked: Blocked,
     sources: Vec<Source>,
 }
 
@@ -158,6 +160,7 @@ impl Shadow {
             pixels,
             previous: Vec::new(),
             previous_backgrounds: 0,
+            previous_blocked: [None; 2],
             sources,
         })
     }
@@ -166,10 +169,11 @@ impl Shadow {
         &mut self,
         scene: &mut SceneSession<'_, '_>,
         draws: &[SpriteDraw],
-        background_count: usize,
+        (background_count, blocked): (usize, Blocked),
     ) -> Result<Option<SpriteDraw>, RenderError> {
         if self.previous != draws
             || self.previous_backgrounds != background_count
+            || self.previous_blocked != blocked
         {
             let sources = draws
                 .iter()
@@ -188,7 +192,14 @@ impl Shadow {
             self.previous_backgrounds = 0;
             self.has_pixels = false;
             self.pixels.fill([0; 4]);
-            let has_pixels = correct(&mut self.pixels, backgrounds, actors)?;
+            let shadows = correct(&mut self.pixels, backgrounds, actors)?;
+            let occlusion = correct_occlusion(
+                &mut self.pixels,
+                backgrounds,
+                actors,
+                blocked,
+            )?;
+            let has_pixels = shadows || occlusion;
             if has_pixels {
                 scene.replace_atlas(
                     self.art.atlas,
@@ -198,6 +209,7 @@ impl Shadow {
             self.has_pixels = has_pixels;
             self.previous.extend_from_slice(draws);
             self.previous_backgrounds = background_count;
+            self.previous_blocked = blocked;
         }
         if self.has_pixels {
             let mut destination = self.art.rect;
@@ -250,6 +262,75 @@ fn correct(
         }
     }
     Ok(any)
+}
+
+// The airborne body is behind the middle and front layers, but not the
+// backdrop or animated map. Those two layers are the last registered
+// background commands; the admitted camera range never wraps them.
+fn correct_occlusion(
+    pixels: &mut [Color],
+    backgrounds: &[DrawSource<'_>],
+    actors: &[DrawSource<'_>],
+    blocked: Blocked,
+) -> Result<bool, RenderError> {
+    let mut any = false;
+    if blocked.iter().all(Option::is_none) {
+        return Ok(any);
+    }
+    let foreground = backgrounds
+        .get(2..)
+        .filter(|layers| layers.len() == 2)
+        .ok_or(RenderError::InvalidSprite)?;
+    for draw in blocked.into_iter().flatten() {
+        any |= occlude_rect(pixels, foreground, actors, (draw, &blocked))?;
+    }
+    Ok(any)
+}
+
+fn occlude_rect(
+    pixels: &mut [Color],
+    foreground: &[DrawSource<'_>],
+    actors: &[DrawSource<'_>],
+    (draw, blocked): (SpriteDraw, &Blocked),
+) -> Result<bool, RenderError> {
+    let rect = draw.destination;
+    let right = rect
+        .x
+        .saturating_add(i32::try_from(rect.width.get()).map_err(failure)?);
+    let bottom = rect
+        .y
+        .saturating_add(i32::try_from(rect.height.get()).map_err(failure)?);
+    let mut any = false;
+    for y in rect.y..bottom {
+        for x in rect.x..right {
+            let point = (x, y);
+            let Some(index) = room_index(point) else {
+                continue;
+            };
+            let candidates = actors.iter().rev().filter_map(|&(item, art)| {
+                art.sample(item, point)
+                    .map(|color| (blocked.contains(&Some(item)), color))
+            });
+            if let Some(color) =
+                occluding_pixel(candidates, samples_at(foreground, point))
+            {
+                *pixels.get_mut(index).ok_or(RenderError::InvalidLength)? =
+                    color;
+                any = true;
+            }
+        }
+    }
+    Ok(any)
+}
+
+fn occluding_pixel(
+    mut actors: impl Iterator<Item = (bool, Color)>,
+    mut foreground: impl Iterator<Item = Color>,
+) -> Option<Color> {
+    let color = foreground.find(|pixel| pixel.last() == Some(&255))?;
+    let (blocked, _) = actors.find(|(_, pixel)| pixel.last() == Some(&255))?;
+    // A blocked winning sprite still suppresses lower-priority sprites.
+    blocked.then_some(color)
 }
 
 // Mask sources are always registered one-to-one, including reflection.
@@ -338,7 +419,29 @@ fn samples_at<'source>(
 
 #[cfg(test)]
 mod tests {
-    use super::{MASK, project_axis, resolve, room_index, sample_axis};
+    use super::{
+        MASK, occluding_pixel, project_axis, resolve, room_index, sample_axis,
+    };
+
+    #[test]
+    fn foreground_blocks_only_the_winning_admitted_body() {
+        let clear = [0; 4];
+        let front = [13, 42, 17, 255];
+        let back = [1, 2, 3, 255];
+        let body = [23, 46, 92, 255];
+        for (actors, layers, expected) in [
+            ([(true, body), (false, back)], [clear, front], Some(front)),
+            ([(false, body), (true, back)], [front, back], None),
+            ([(false, MASK), (true, body)], [front, back], Some(front)),
+            ([(true, clear), (false, body)], [front, back], None),
+            ([(true, body), (false, back)], [clear, clear], None),
+        ] {
+            assert_eq!(
+                occluding_pixel(actors.into_iter(), layers.into_iter()),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn shadow_uses_floor_palette_once_and_never_darkens_an_actor() {

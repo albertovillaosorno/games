@@ -32,6 +32,7 @@
 
 //! Observed third-stage arrival with an explicit fall order.
 
+mod contact;
 mod pursuit;
 
 use games::animation::cycle_tick;
@@ -62,6 +63,7 @@ const LAST_PROTECTED_BODY_SAMPLE: u64 = 358;
 const LAST_NEUTRAL_PREVIEW_SAMPLE: u64 = 370;
 #[cfg(any(test, feature = "native-preview"))]
 const LAST_SHADOW_PREVIEW_SAMPLE: u64 = 373;
+const LAST_CONTACT_PREVIEW_SAMPLE: u64 = 379;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -188,10 +190,11 @@ impl CemeteryRoomBody {
 ///
 /// World depth increases away from the viewer. The projected depth adds
 /// the shared camera offset, so neutral stations retain their world
-/// positions during a pan. This does not model subsequent room combat,
+/// positions during a pan. This does not model general room combat,
 /// terrain sampling or the original camera descriptor scheduler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoom {
+    contact: contact::Preview,
     depth_offset: i16,
     enemy_alignment: bool,
     enemy_choice_seed: Option<u16>,
@@ -206,6 +209,7 @@ pub struct CemeteryRoom {
 impl Default for CemeteryRoom {
     fn default() -> Self {
         Self {
+            contact: contact::Preview::default(),
             depth_offset: 0,
             enemy_alignment: false,
             enemy_choice_seed: None,
@@ -288,12 +292,14 @@ impl CemeteryRoom {
     }
 
     // The observed entrance activates two independently staggered actors.
-    fn advance_pursuit(&mut self, tick: u64, slots: &[Slot; 4]) {
+    fn advance_pursuit(&mut self, tick: u64, slots: &mut [Slot; 4]) {
         if tick == FIRST_ENEMY_APPROACH {
             self.pursuit = Some(PursuitPair::new(self.enemy_choice_seed));
         }
         self.presentation_enemies =
             self.pursuit.map(|pair| pair.sample(self.depth_offset));
+        let contact_preview = self.contact_preview(tick);
+        let strike = self.pursuit.and_then(PursuitPair::strike_contact);
         if tick == FIRST_ENEMY_ANIMATION
             && let Some(pair) = &mut self.pursuit
             && pair.begin_animation().is_none()
@@ -307,10 +313,23 @@ impl CemeteryRoom {
             self.pursuit = None;
         } else if tick >= FIRST_ENEMY_MOVEMENT
             && let Some(pair) = &mut self.pursuit
-            && pair.advance(slots, self.enemy_alignment).is_none()
+            && pair
+                .advance(slots, self.enemy_alignment, contact_preview)
+                .is_none()
         {
             self.pursuit = None;
         }
+        if contact_preview && self.pursuit.is_some() {
+            let [_, _, _, lisa] = slots;
+            self.contact.advance(lisa, strike);
+        }
+    }
+
+    fn contact_preview(&self, tick: u64) -> bool {
+        self.neutral_preview_end == Some(LAST_CONTACT_PREVIEW_SAMPLE)
+            && (LAST_PROTECTED_BODY_SAMPLE.saturating_add(1)
+                ..LAST_CONTACT_PREVIEW_SAMPLE)
+                .contains(&tick)
     }
 
     /// Current shared depth offset, in logical units.
@@ -430,6 +449,9 @@ impl CemeteryEntrance {
             && self.first == Player::Marge
             && self.tick >= FIRST_ENEMY_APPROACH
         {
+            if room.contact_preview(self.tick.saturating_sub(1)) {
+                room.sample_presentation(slots);
+            }
             room.advance_pursuit(self.tick, slots);
         }
         if walking {
@@ -549,6 +571,13 @@ impl CemeteryEntrance {
         if let Some(room) = &mut self.room {
             room.enemy_alignment = true;
             room.enemy_choice_seed = Some(seed);
+        }
+    }
+
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn enable_neutral_contact_preview(&mut self) {
+        if let Some(room) = &mut self.room {
+            room.neutral_preview_end = Some(LAST_CONTACT_PREVIEW_SAMPLE);
         }
     }
 
@@ -1415,7 +1444,13 @@ mod tests {
             370 => (CemeteryEnemyPose::Leap { phase: 0 }, 242, 14),
             371 => (CemeteryEnemyPose::Leap { phase: 1 }, 240, 17),
             372 => (CemeteryEnemyPose::Leap { phase: 1 }, 238, 20),
-            _ => (CemeteryEnemyPose::Leap { phase: 1 }, 236, 22),
+            373 => (CemeteryEnemyPose::Leap { phase: 1 }, 236, 22),
+            374 => (CemeteryEnemyPose::Leap { phase: 1 }, 234, 25),
+            375 => (CemeteryEnemyPose::Leap { phase: 2 }, 232, 27),
+            376 => (CemeteryEnemyPose::Leap { phase: 2 }, 230, 28),
+            377 => (CemeteryEnemyPose::Leap { phase: 2 }, 228, 30),
+            378 => (CemeteryEnemyPose::Leap { phase: 2 }, 226, 31),
+            _ => (CemeteryEnemyPose::Leap { phase: 2 }, 224, 32),
         };
         [
             CemeteryEnemyApproach {
@@ -1475,6 +1510,90 @@ mod tests {
             assert_eq!(enemies, Some(expected_neutral_preview(tick)), "{tick}");
             assert_station_health(&slots);
         }
+    }
+
+    #[test]
+    fn contact_preview_debits_before_reaction_and_stops_at_pose_boundary() {
+        let mut entrance = arrival(Player::Marge).at(237);
+        entrance.enable_room();
+        entrance.enable_enemy_strike(0x1207);
+        entrance.enable_neutral_contact_preview();
+        let mut slots = room_slots();
+        for tick in 238..=380 {
+            for (slot, held) in slots.iter_mut().zip(strike_controls(0, tick)) {
+                slot.held = held;
+            }
+            entrance.advance(false);
+            let _advanced = entrance
+                .advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            if tick < 359 {
+                continue;
+            }
+            let enemies =
+                entrance.room().and_then(CemeteryRoom::presentation_enemies);
+            assert_contact_state(tick, &slots);
+            assert_eq!(
+                (entrance.room_walkable(), entrance.room_markers_visible()),
+                (false, false),
+                "{tick}"
+            );
+            if tick == 380 {
+                assert_eq!(enemies, None);
+                assert_eq!(entrance.room_body_visibility(), None);
+                break;
+            }
+            assert_contact_pose(tick, &entrance);
+            assert_eq!(entrance.room_body_visibility(), Some(true));
+            assert_eq!(enemies, Some(expected_neutral_preview(tick)), "{tick}");
+        }
+    }
+
+    fn assert_contact_state(tick: u64, slots: &[Slot; 4]) {
+        let [marge, homer, bart, lisa] = slots;
+        for slot in [marge, homer, bart] {
+            assert_eq!((slot.station.health, slot.station.hurt_cues), (32, 0));
+        }
+        assert_eq!(
+            lisa.station.health,
+            if tick < 373 {
+                32
+            } else {
+                28
+            },
+            "{tick}"
+        );
+        assert_eq!(
+            lisa.station.display_health,
+            if tick < 374 {
+                32
+            } else {
+                28
+            },
+            "{tick}"
+        );
+        assert_eq!(lisa.station.hurt_cues, u64::from(tick >= 374), "{tick}");
+    }
+
+    fn assert_contact_pose(tick: u64, entrance: &CemeteryEntrance) {
+        let expected = if tick < 375 {
+            Maneuver::Idle
+        } else {
+            Maneuver::Hurt {
+                tick: u8::try_from(tick.saturating_sub(375))
+                    .unwrap_or_default(),
+            }
+        };
+        assert_eq!(
+            entrance
+                .room()
+                .and_then(|room| room
+                    .presentation_bodies()
+                    .get(Player::Lisa.index())
+                    .copied())
+                .map(|body| body.maneuver),
+            Some(expected),
+            "{tick}",
+        );
     }
 
     fn assert_station_health(slots: &[Slot; 4]) {

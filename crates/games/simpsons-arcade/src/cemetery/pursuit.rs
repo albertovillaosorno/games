@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded first-room approach, alignment, strikes and leap precursor.
+//   - Bounded first-room approach, alignment, strikes and leap poses.
 // - Must-Not:
 //   - Admit contact damage, decode source media or render sprites.
 // - Allows:
@@ -76,7 +76,7 @@ pub enum CemeteryEnemyPose {
         /// Zero-based airborne keyframe.
         phase: u8,
     },
-    /// Left-facing strike, with no contact damage admitted.
+    /// Left-facing strike; contact response belongs to the room.
     Strike {
         /// Horizontal orientation at the start of the strike.
         facing: Facing,
@@ -281,11 +281,13 @@ impl Pursuer {
     }
 
     const fn leap_step(&mut self, age: u8) -> Option<()> {
-        if age >= 6 {
+        if age >= 12 {
             return None;
         }
         if age == 3 {
             self.pose = Some(CemeteryEnemyPose::Leap { phase: 1 });
+        } else if age == 7 {
+            self.pose = Some(CemeteryEnemyPose::Leap { phase: 2 });
         }
         self.motion = PursuitMotion::Leap {
             age: age.saturating_add(1),
@@ -544,10 +546,9 @@ impl PursuitPair {
         &mut self,
         slots: &[Slot; 4],
         alignment: bool,
+        contact_preview: bool,
     ) -> Option<()> {
-        if slots.iter().any(|slot| {
-            !slot.station.can_fight() || slot.station.maneuver != Maneuver::Idle
-        }) {
+        if !stations_admitted(slots, contact_preview) {
             return None;
         }
         self.target_timer = self.target_timer.saturating_sub(1);
@@ -658,6 +659,13 @@ impl PursuitPair {
     ) -> [CemeteryEnemyApproach; 2] {
         self.enemies.map(|enemy| enemy.sample(depth_offset))
     }
+
+    // The admitted strike emits one contact volume on its active step.
+    pub(super) fn strike_contact(self) -> Option<Point> {
+        let enemy = *self.enemies.first()?;
+        matches!(enemy.motion, PursuitMotion::Strike { tick: 13 })
+            .then(|| enemy.point())
+    }
 }
 
 // For the verified horizontal band, a six-bit minor/major ratio chooses
@@ -710,6 +718,18 @@ const fn retreat_velocity(ratio: u32) -> Option<(i32, i32)> {
         27 | 28 => Some((-288, 128)),
         _ => None,
     }
+}
+
+fn stations_admitted(slots: &[Slot; 4], contact_preview: bool) -> bool {
+    Player::ALL.into_iter().zip(slots).all(|(player, slot)| {
+        slot.station.can_fight()
+            && (slot.station.maneuver == Maneuver::Idle
+                || (contact_preview
+                    && player == Player::Lisa
+                    && matches!(slot.station.maneuver, Maneuver::Hurt {
+                        tick: 0..=4
+                    })))
+    })
 }
 
 const fn strike_phase(tick: u8) -> Option<u8> {
