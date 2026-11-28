@@ -123,6 +123,7 @@ pub(super) struct Catalogue {
     bonus: Option<ContentHash>,
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
+    bonus_opponents: Option<Box<bonus::opposition::Digests>>,
     cemetery: Option<Box<cemetery::Selection>>,
     cemetery_layers: Option<[ContentHash; cemetery::layers::PHASES]>,
     entries: BTreeMap<Key, ContentHash>,
@@ -205,6 +206,10 @@ impl Catalogue {
                     .saturating_mul(bonus::INFLATED_ATLAS_BYTES),
             )
             .saturating_add(
+                usize::from(self.bonus_opponents.is_some())
+                    .saturating_mul(bonus::opposition::ATLAS_BYTES),
+            )
+            .saturating_add(
                 usize::from(self.stage_two.is_some())
                     .saturating_mul(world::stage_atlas_budget()),
             )
@@ -244,6 +249,12 @@ impl Catalogue {
             .saturating_add(
                 usize::from(self.bonus_inflated.is_some()).saturating_mul(
                     bonus::INFLATED_ATLAS_COUNT.saturating_sub(1),
+                ),
+            )
+            .saturating_add(
+                usize::from(self.bonus_opponents.is_some()).saturating_mul(
+                    bonus::opposition::ATLAS_COUNT
+                        .saturating_sub(bonus::opposition::BUNDLE_COUNT),
                 ),
             )
     }
@@ -329,6 +340,9 @@ impl Catalogue {
             && (self.bonus.is_none() || self.has_wrestler())
             && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.bonus_inflated.is_none() || self.bonus.is_some())
+            && (self.bonus_opponents.is_none()
+                || (self.bonus_departure.is_some()
+                    && self.bonus_inflated.is_some()))
             && (self.stage_two.is_none() || self.bonus.is_some())
             && (self.balloon.is_none()
                 || (self.linked.is_some() && self.backdrop.has_boardwalk()))
@@ -365,6 +379,10 @@ impl Catalogue {
             .saturating_add(usize::from(self.bonus_departure.is_some()))
             .saturating_add(usize::from(self.bonus_inflated.is_some()))
             .saturating_add(
+                usize::from(self.bonus_opponents.is_some())
+                    .saturating_mul(bonus::opposition::BUNDLE_COUNT),
+            )
+            .saturating_add(
                 usize::from(self.stage_two.is_some()).saturating_mul(2),
             )
     }
@@ -386,6 +404,11 @@ impl Catalogue {
             .chain(self.bonus)
             .chain(self.bonus_departure)
             .chain(self.bonus_inflated)
+            .chain(
+                self.bonus_opponents
+                    .iter()
+                    .flat_map(|hashes| hashes.iter().copied()),
+            )
             .chain(self.arrival)
             .chain(self.landing_markers)
             .chain(self.stage_two.into_iter().flatten())
@@ -419,24 +442,10 @@ impl Catalogue {
             Some("stage-two") => {
                 self.stage_two = Some(parse_stage_two(line, self.stage_two)?);
             },
-            Some("bonus") => {
-                self.bonus =
-                    Some(parse_single_bundle("bonus", line, self.bonus)?);
-            },
-            Some("bonus-departure") => {
-                self.bonus_departure = Some(parse_single_bundle(
-                    "bonus-departure",
-                    line,
-                    self.bonus_departure,
-                )?);
-            },
-            Some("bonus-inflated") => {
-                self.bonus_inflated = Some(parse_single_bundle(
-                    "bonus-inflated",
-                    line,
-                    self.bonus_inflated,
-                )?);
-            },
+            Some(
+                "bonus" | "bonus-departure" | "bonus-inflated"
+                | "bonus-opponents",
+            ) => self.insert_bonus(line)?,
             Some("arrival") => {
                 self.arrival =
                     Some(parse_single_bundle("arrival", line, self.arrival)?);
@@ -463,6 +472,38 @@ impl Catalogue {
                     return Err(failure("excess or duplicate poses"));
                 }
             },
+        }
+        Ok(())
+    }
+
+    fn insert_bonus(&mut self, line: &str) -> Result<(), RenderError> {
+        match line.split_whitespace().next() {
+            Some("bonus") => {
+                self.bonus =
+                    Some(parse_single_bundle("bonus", line, self.bonus)?);
+            },
+            Some("bonus-departure") => {
+                self.bonus_departure = Some(parse_single_bundle(
+                    "bonus-departure",
+                    line,
+                    self.bonus_departure,
+                )?);
+            },
+            Some("bonus-inflated") => {
+                self.bonus_inflated = Some(parse_single_bundle(
+                    "bonus-inflated",
+                    line,
+                    self.bonus_inflated,
+                )?);
+            },
+            Some("bonus-opponents") => {
+                self.bonus_opponents =
+                    Some(Box::new(bonus::opposition::parse(
+                        line,
+                        self.bonus_opponents.is_some(),
+                    )?));
+            },
+            _ => return Err(failure("invalid bonus record")),
         }
         Ok(())
     }
@@ -518,16 +559,7 @@ impl Catalogue {
                         .map(Box::new)
                 })
                 .transpose()?,
-            bonus: self
-                .bonus
-                .map(|digest| {
-                    bonus::BonusArt::load(
-                        store,
-                        scene,
-                        (digest, self.bonus_departure, self.bonus_inflated),
-                    )
-                })
-                .transpose()?,
+            bonus: self.load_bonus(store, scene)?,
             cemetery: self
                 .cemetery
                 .as_deref()
@@ -557,6 +589,27 @@ impl Catalogue {
                 .transpose()?,
             wrestler: self.wrestler.load(store, scene)?,
         })
+    }
+
+    fn load_bonus(
+        &self,
+        store: BundleSource<'_>,
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<Option<bonus::BonusArt>, RenderError> {
+        self.bonus
+            .map(|digest| {
+                bonus::BonusArt::load(
+                    store,
+                    scene,
+                    (
+                        digest,
+                        self.bonus_departure,
+                        self.bonus_inflated,
+                        self.bonus_opponents.as_deref(),
+                    ),
+                )
+            })
+            .transpose()
     }
 
     fn load_entries(
@@ -670,7 +723,12 @@ impl PoseArt {
                 .with_cooperative_pairs(self.paired_families())
                 .with_marge_restraint(self.restraint_enabled())
                 .with_late_wrestler(self.wrestler.enabled())
-                .with_bonus(self.bonus.is_some()),
+                .with_bonus(self.bonus.is_some())
+                .with_bonus_opponents(
+                    self.bonus
+                        .as_ref()
+                        .is_some_and(bonus::BonusArt::has_opponents),
+                ),
             |state, pair| state.with_pair_jump(pair, self.pair_jump(pair)),
         );
         self.configure_stage_two(&configured)

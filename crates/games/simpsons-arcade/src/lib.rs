@@ -53,7 +53,9 @@ use std::mem;
 use std::time::Duration;
 
 pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
-pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
+pub use bonus::{
+    AutomaticDeparture, BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase,
+};
 pub use cemetery::{
     CemeteryBody, CemeteryEnemyApproach, CemeteryEnemyDepth, CemeteryEnemyPose,
     CemeteryEntrance, CemeteryGroundAttack, CemeteryPhase, CemeteryPose,
@@ -835,6 +837,7 @@ enum CemeterySelection {
     Entrance(Player),
     Room(Player),
     RoomAlignment(Player),
+    RoomStrike(Player, u16),
 }
 
 impl CemeterySelection {
@@ -842,17 +845,30 @@ impl CemeterySelection {
         let first = match self {
             Self::Entrance(player)
             | Self::Room(player)
-            | Self::RoomAlignment(player) => player,
+            | Self::RoomAlignment(player)
+            | Self::RoomStrike(player, _) => player,
         };
         let mut entrance = CemeteryEntrance::new(admitted, first);
-        if matches!(self, Self::Room(_) | Self::RoomAlignment(_)) {
+        if matches!(
+            self,
+            Self::Room(_) | Self::RoomAlignment(_) | Self::RoomStrike(..)
+        ) {
             entrance.enable_room();
         }
         if matches!(self, Self::RoomAlignment(_)) {
             entrance.enable_enemy_alignment();
         }
+        if let Self::RoomStrike(_, seed) = self {
+            entrance.enable_enemy_strike(seed);
+        }
         entrance
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BonusCompetitors {
+    Automatic,
+    Human,
 }
 
 /// Deterministic arcade title state, independent of the host platform.
@@ -866,6 +882,7 @@ pub struct Cabinet {
     balloon_boss_enabled: bool,
     bonus: Option<Bonus>,
     bonus_enabled: bool,
+    bonus_opponents: BonusCompetitors,
     camera: i16,
     cemetery: Option<CemeteryEntrance>,
     cemetery_selection: Option<CemeterySelection>,
@@ -916,9 +933,13 @@ impl Cabinet {
                 .wrestler
                 .is_some_and(|boss| boss.action == WrestlerAction::Cleared)
         {
-            self.bonus = Some(Bonus::new(
-                self.slots.map(|slot| slot.station.can_fight()),
-            ));
+            self.bonus = Some(
+                Bonus::new(self.slots.map(|slot| slot.station.can_fight()))
+                    .with_opponents(matches!(
+                        self.bonus_opponents,
+                        BonusCompetitors::Automatic
+                    )),
+            );
         }
     }
 
@@ -963,7 +984,7 @@ impl Cabinet {
         bonus.refresh_participants(active);
         if was_results && bonus.phase() == BonusPhase::Complete {
             for (player, slot) in Player::ALL.into_iter().zip(&mut self.slots) {
-                slot.award_bonus_health(bonus.rank(player));
+                slot.award_bonus_health(bonus.human_rank(player));
             }
         }
         true
@@ -1475,6 +1496,7 @@ impl Cabinet {
             balloon_boss_enabled: false,
             bonus: None,
             bonus_enabled: false,
+            bonus_opponents: BonusCompetitors::Human,
             camera: 0,
             cemetery: None,
             cemetery_selection: None,
@@ -1679,9 +1701,22 @@ impl Cabinet {
     pub const fn with_bonus(mut self, enabled: bool) -> Self {
         self.bonus_enabled = enabled && self.wrestler_enabled;
         if !self.bonus_enabled {
+            self.bonus_opponents = BonusCompetitors::Human;
             self.bonus = None;
             self.set_stage_two_limit(None);
         }
+        self
+    }
+
+    /// Select automatic bonus opponents when the complete art is available.
+    /// This option is captured when a new bonus begins.
+    #[must_use]
+    pub const fn with_bonus_opponents(mut self, enabled: bool) -> Self {
+        self.bonus_opponents = if enabled && self.bonus_enabled {
+            BonusCompetitors::Automatic
+        } else {
+            BonusCompetitors::Human
+        };
         self
     }
 
@@ -1716,6 +1751,20 @@ impl Cabinet {
     #[must_use]
     pub const fn with_cemetery_room_alignment(self, first: Player) -> Self {
         self.configure_cemetery(Some(CemeterySelection::RoomAlignment(first)))
+    }
+
+    /// Select the bounded first-strike diagnostic with a checkpoint word.
+    ///
+    /// This is not a campaign seed; later attacks and damage are omitted.
+    #[must_use]
+    pub const fn with_cemetery_room_strike(
+        self,
+        first: Player,
+        word: u16,
+    ) -> Self {
+        self.configure_cemetery(Some(CemeterySelection::RoomStrike(
+            first, word,
+        )))
     }
 
     /// Enable optional pair locomotion in cabinet pair order.
@@ -1758,6 +1807,7 @@ impl Cabinet {
             self.wrestler = None;
             self.bonus = None;
             self.bonus_enabled = false;
+            self.bonus_opponents = BonusCompetitors::Human;
             self.set_stage_two_limit(None);
         }
         self
@@ -2053,6 +2103,7 @@ fn cabinet() -> Cabinet {
         balloon_boss_enabled: false,
         bonus: None,
         bonus_enabled: false,
+        bonus_opponents: BonusCompetitors::Human,
         camera: 0,
         cemetery: None,
         cemetery_selection: None,

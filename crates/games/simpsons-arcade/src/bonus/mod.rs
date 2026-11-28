@@ -31,6 +31,13 @@
 
 //! Experimental balloon pumping bonus.
 
+mod opposition;
+
+use std::array::from_fn;
+
+pub use opposition::AutomaticDeparture;
+use opposition::Pump;
+
 use super::{Player, stage_card_departed};
 
 // Baseline instruction entry is 953 reference frames after the terminal
@@ -227,7 +234,12 @@ struct ResultSequence {
 }
 
 impl ResultSequence {
-    fn advance(&mut self, balloons: &mut [Balloon; 4], tick: u16) -> bool {
+    fn advance(
+        &mut self,
+        balloons: &mut [Balloon; 4],
+        tick: u16,
+        automatic: [bool; 4],
+    ) -> bool {
         match self.stage {
             ResultStage::Reveal => {
                 if tick >= self.countup_end() {
@@ -241,10 +253,11 @@ impl ResultSequence {
             },
             ResultStage::Exit => {
                 self.stage_tick = self.stage_tick.saturating_add(1);
-                self.scores
-                    .into_iter()
-                    .flatten()
-                    .all(|score| self.stage_tick >= self.exit_ticks(score))
+                self.scores.into_iter().zip(automatic).all(
+                    |(score, automated)| {
+                        self.departure_complete(score, automated)
+                    },
+                )
             },
         }
     }
@@ -265,13 +278,17 @@ impl ResultSequence {
             .saturating_add(1)
     }
 
-    fn departure(self, score: u8) -> Option<BonusDeparture> {
+    fn departure_complete(self, score: Option<u8>, automatic: bool) -> bool {
+        score.is_none_or(|points| {
+            self.stage_tick >= self.exit_ticks(points, automatic)
+        })
+    }
+
+    fn departure_elapsed(self, score: u8) -> Option<u16> {
         if self.stage != ResultStage::Exit {
             return None;
         }
-        self.stage_tick
-            .checked_sub(self.exit_start(score))
-            .map(BonusDeparture::at)
+        self.stage_tick.checked_sub(self.exit_start(score))
     }
 
     fn displayed(self, score: u8, tick: u16) -> Option<(u8, u8)> {
@@ -308,8 +325,13 @@ impl ResultSequence {
         u16::from(self.rank(score)).saturating_mul(RESULT_EXIT_STAGGER)
     }
 
-    fn exit_ticks(self, score: u8) -> u16 {
-        self.exit_start(score).saturating_add(RESULT_EXIT_TICKS)
+    fn exit_ticks(self, score: u8, automatic: bool) -> u16 {
+        let duration = if automatic {
+            opposition::EXIT_TICKS
+        } else {
+            RESULT_EXIT_TICKS
+        };
+        self.exit_start(score).saturating_add(duration)
     }
 
     fn group(self, score: u8) -> u8 {
@@ -362,9 +384,9 @@ impl ResultSequence {
         self.scores.get(player.index()).copied().flatten()
     }
 
-    fn visible(self, score: u8) -> bool {
+    fn visible(self, score: u8, automatic: bool) -> bool {
         self.stage != ResultStage::Exit
-            || self.stage_tick < self.exit_ticks(score)
+            || self.stage_tick < self.exit_ticks(score, automatic)
     }
 }
 
@@ -374,9 +396,11 @@ impl ResultSequence {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Bonus {
     balloons: [Balloon; 4],
+    opponents: Option<[Option<Pump>; 4]>,
     participants: [bool; 4],
     phase: BonusPhase,
     result: Option<ResultSequence>,
+    scan_start: usize,
     tick: u16,
 }
 
@@ -401,6 +425,8 @@ impl Bonus {
                 if self.tick >= INSTRUCTION_MAX_TICKS
                     || (self.tick >= INSTRUCTION_MIN_TICKS && active_edge) =>
             {
+                self.scan_start = usize::from(self.tick).rem_euclid(4);
+                self.refresh_opponents();
                 BonusPhase::Ready
             },
             BonusPhase::Ready if self.tick >= READY_TICKS => {
@@ -422,8 +448,9 @@ impl Bonus {
     }
 
     fn advance_results(&mut self) -> BonusPhase {
+        let automatic = self.automatic_mask();
         if let Some(result) = &mut self.result
-            && result.advance(&mut self.balloons, self.tick)
+            && result.advance(&mut self.balloons, self.tick, automatic)
         {
             BonusPhase::Complete
         } else {
@@ -447,6 +474,46 @@ impl Bonus {
             self.tick = 0;
         }
         false
+    }
+
+    /// Motion of a ranked automatic competitor, distinct from a human exit.
+    #[must_use]
+    pub fn automatic_departure(
+        self,
+        player: Player,
+    ) -> Option<AutomaticDeparture> {
+        if !self.is_automatic(player) {
+            return None;
+        }
+        let result = self.result?;
+        result
+            .departure_elapsed(result.score(player)?)
+            .map(AutomaticDeparture::at)
+    }
+
+    fn automatic_mask(self) -> [bool; 4] {
+        self.opponents
+            .map_or([false; 4], |pumps| pumps.map(|pump| pump.is_some()))
+    }
+
+    /// Whether the automatic pump fired on the current playing tick.
+    #[must_use]
+    pub fn automatic_pressed(self, player: Player) -> bool {
+        self.phase == BonusPhase::Pumping
+            && self.tick != 0
+            && self
+                .opponents
+                .and_then(|pumps| pumps.get(player.index()).copied())
+                .flatten()
+                .is_some_and(Pump::pressed)
+    }
+
+    fn contenders(self) -> [bool; 4] {
+        let automatic = self.automatic_mask();
+        from_fn(|index| {
+            self.participants.get(index) == Some(&true)
+                || automatic.get(index) == Some(&true)
+        })
     }
 
     /// The displayed pumping countdown in centiseconds, if pumping.
@@ -475,8 +542,13 @@ impl Bonus {
     /// Departure motion once this admitted station's ranked delay expires.
     #[must_use]
     pub fn departure(self, player: Player) -> Option<BonusDeparture> {
+        if self.is_automatic(player) {
+            return None;
+        }
         let result = self.result?;
-        result.departure(result.score(player)?)
+        result
+            .departure_elapsed(result.score(player)?)
+            .map(BonusDeparture::at)
     }
 
     /// Revealed rank and animated point count during the results sequence.
@@ -484,6 +556,14 @@ impl Bonus {
     pub fn displayed_result(self, player: Player) -> Option<(u8, u8)> {
         let result = self.result?;
         result.displayed(result.score(player)?, self.tick)
+    }
+
+    pub(super) fn human_rank(self, player: Player) -> Option<u8> {
+        let _human = self
+            .participants
+            .get(player.index())
+            .filter(|admitted| **admitted)?;
+        self.rank(player)
     }
 
     /// Inflation for an admitted character, frozen when pumping finishes.
@@ -495,12 +575,23 @@ impl Bonus {
         self.visual_inflation(player)
     }
 
+    /// Whether this seat's competitor is controlled by the bonus itself.
+    #[must_use]
+    pub fn is_automatic(self, player: Player) -> bool {
+        self.opponents
+            .and_then(|pumps| pumps.get(player.index()).copied())
+            .flatten()
+            .is_some()
+    }
+
     pub(super) const fn new(participants: [bool; 4]) -> Self {
         Self {
             balloons: [Balloon::new(); 4],
+            opponents: None,
             participants,
             phase: BonusPhase::Victory,
             result: None,
+            scan_start: 0,
             tick: 0,
         }
     }
@@ -512,14 +603,21 @@ impl Bonus {
     }
 
     fn pump(&mut self, presses: [bool; 4]) -> BonusPhase {
-        for ((admitted, balloon), pressed) in self
+        for (index, ((admitted, balloon), pressed)) in self
             .participants
             .iter()
             .zip(&mut self.balloons)
             .zip(presses)
+            .enumerate()
         {
             if *admitted {
                 balloon.advance(pressed);
+            } else if let Some(Some(pump)) = self
+                .opponents
+                .as_mut()
+                .and_then(|pumps| pumps.get_mut(index))
+            {
+                balloon.advance(pump.advance());
             }
         }
         if self.tick >= PUMP_TICKS
@@ -529,7 +627,7 @@ impl Bonus {
                 .any(|balloon| balloon.size_units() >= BALLOON_SIZE_LIMIT)
         {
             self.result =
-                Some(ResultSequence::new(self.balloons, self.participants));
+                Some(ResultSequence::new(self.balloons, self.contenders()));
             BonusPhase::Results
         } else {
             BonusPhase::Pumping
@@ -546,9 +644,19 @@ impl Bonus {
         Some(result.rank(result.score(player)?))
     }
 
+    fn refresh_opponents(&mut self) {
+        if self.opponents.is_some() {
+            self.opponents = Some(if self.participants.contains(&true) {
+                Pump::roster(self.participants, self.scan_start)
+            } else {
+                [None; 4]
+            });
+        }
+    }
+
     // The instructions and ready setup each sample admitted stations.
     // Once the ready countdown starts, the competition roster is frozen.
-    pub(super) const fn refresh_participants(&mut self, admitted: [bool; 4]) {
+    pub(super) fn refresh_participants(&mut self, admitted: [bool; 4]) {
         if self.tick == 0
             && matches!(
                 self.phase,
@@ -556,6 +664,7 @@ impl Bonus {
             )
         {
             self.participants = admitted;
+            self.refresh_opponents();
         }
     }
 
@@ -572,13 +681,12 @@ impl Bonus {
 
     fn visible_balloon(self, player: Player) -> Option<Balloon> {
         let index = player.index();
-        let _admitted = self
-            .participants
-            .get(index)
-            .copied()
-            .filter(|admitted| *admitted)?;
+        let automatic = self.is_automatic(player);
+        if !automatic && self.participants.get(index) != Some(&true) {
+            return None;
+        }
         if let Some(result) = self.result
-            && !result.visible(result.score(player)?)
+            && !result.visible(result.score(player)?, automatic)
         {
             return None;
         }
@@ -603,12 +711,18 @@ impl Bonus {
     pub fn visual_inflation(self, player: Player) -> Option<u8> {
         self.visible_balloon(player).map(Balloon::inflation)
     }
+
+    pub(super) fn with_opponents(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.opponents = Some([None; 4]);
+            self.refresh_opponents();
+        }
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::array::from_fn;
-
     use super::*;
     #[derive(Clone, Copy)]
     struct ExpectedScore {

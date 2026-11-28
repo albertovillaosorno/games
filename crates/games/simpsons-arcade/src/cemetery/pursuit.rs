@@ -9,19 +9,19 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded first-room enemy approach, alignment and target reservations.
+//   - Bounded first-room approach, alignment, protected strike and targeting.
 // - Must-Not:
-//   - Admit enemy attacks, decode source media or render sprites.
+//   - Admit contact damage, decode source media or render sprites.
 // - Allows:
 //   - Inputs: Fixed-step station state and shared room projection.
 //   - Outputs: Two persistent enemy positions, selected targets and body poses.
 //   - Side effects: Deterministic in-memory progression only.
 // - Split-When:
-//   - Verified enemy attack or terrain policies need separate ownership.
+//   - Unprotected combat or terrain policies need separate ownership.
 // - Merge-When:
 //   - Another encounter implements equivalent target reservation rules.
 // - Summary:
-//   - Model observed approach, lane alignment and animation phases.
+//   - Model observed approach, alignment and protected strike phases.
 // - Description:
 //   - Track fractional motion, staggered steering and periodic target
 //     balancing, stopping at the first unsupported transition.
@@ -59,15 +59,25 @@ pub enum CemeteryEnemyDepth {
     Level,
 }
 
-/// Latched body identity for one approach animation keyframe.
+/// Latched enemy body identity, independent of simulation motion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CemeteryEnemyPose {
-    /// Depth orientation selected when the animation frame advanced.
-    pub depth: CemeteryEnemyDepth,
-    /// Horizontal orientation at the same keyframe boundary.
-    pub facing: Facing,
-    /// One of eight six-tick approach keyframes.
-    pub phase: u8,
+pub enum CemeteryEnemyPose {
+    /// One of eight six-tick pursuit or alignment keyframes.
+    Approach {
+        /// Depth orientation at the keyframe boundary.
+        depth: CemeteryEnemyDepth,
+        /// Horizontal orientation at the same boundary.
+        facing: Facing,
+        /// Zero-based approach frame.
+        phase: u8,
+    },
+    /// Protected first strike, with no contact damage admitted.
+    Strike {
+        /// Horizontal orientation at the start of the strike.
+        facing: Facing,
+        /// Zero-based strike frame.
+        phase: u8,
+    },
 }
 
 impl CemeteryEnemyPose {
@@ -79,7 +89,7 @@ impl CemeteryEnemyPose {
         } else {
             CemeteryEnemyDepth::Increasing
         };
-        Self {
+        Self::Approach {
             depth,
             facing: if dx < 0 {
                 Facing::Left
@@ -93,11 +103,11 @@ impl CemeteryEnemyPose {
 
 /// One enemy's camera-relative position and currently selected station.
 ///
-/// The bounded first-room approach does not include attack, response,
-/// terrain changes or the subsequent encounter.
+/// The bounded first-room approach and protected strike do not include
+/// contact response, terrain changes or the subsequent encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryEnemyApproach {
-    /// Latched approach art identity, absent before both bodies initialize.
+    /// Latched body art identity, absent before both bodies initialize.
     pub pose: Option<CemeteryEnemyPose>,
     /// Floored logical position at the sampled camera offset.
     pub position: Point,
@@ -110,6 +120,53 @@ enum PursuitMotion {
     AlignDepth,
     AlignHorizontal,
     LongRange,
+    Strike { tick: u8 },
+}
+
+// Both actors share the stage choice byte and the once-per-step word.
+// The caller must supply a verified protected-room checkpoint word;
+// this is not a campaign-wide seed or an independent per-actor RNG.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ChoiceStream {
+    choice: u8,
+    word: u16,
+}
+
+impl ChoiceStream {
+    const fn advance(&mut self) {
+        self.word = self.word.wrapping_mul(5).wrapping_add(0x3711);
+    }
+
+    const fn draw(&mut self) -> u8 {
+        let [high, _] = self.word.to_be_bytes();
+        self.choice = self.choice.wrapping_add(high);
+        self.choice
+    }
+
+    // The verified first profile accepts only the near, level,
+    // left-facing strike. Other admitted weighted outcomes terminate
+    // the diagnostic instead of substituting this strike.
+    fn first_strike(&mut self, dx: i32, dy: i32) -> Option<bool> {
+        if dx >= 0i32 || dy.unsigned_abs() > 4 {
+            return Some(false);
+        }
+        let distance = dx.unsigned_abs();
+        let threshold = match distance {
+            1..=31 => 154,
+            32..=40 => 77,
+            48..=56 | 64..=72 => 26,
+            _ => return Some(false),
+        };
+        if self.draw() >= threshold {
+            return Some(false);
+        }
+        let weighted = self.draw();
+        (distance < ATTACK_DISTANCE && weighted < 179).then_some(true)
+    }
+
+    const fn new(word: u16) -> Self {
+        Self { choice: 0, word }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,7 +220,9 @@ impl Pursuer {
                     self.motion = PursuitMotion::AlignDepth;
                 }
             },
-            PursuitMotion::LongRange => return None,
+            PursuitMotion::LongRange | PursuitMotion::Strike { .. } => {
+                return None;
+            },
         }
         Some(())
     }
@@ -185,7 +244,7 @@ impl Pursuer {
         }
         self.motion = PursuitMotion::AlignDepth;
         self.animation_tick = 0;
-        self.pose = Some(CemeteryEnemyPose {
+        self.pose = Some(CemeteryEnemyPose::Approach {
             depth: CemeteryEnemyDepth::Decreasing,
             facing: Facing::Left,
             phase: 0,
@@ -235,7 +294,12 @@ impl Pursuer {
         }
     }
 
-    fn steer(&mut self, slots: &[Slot; 4], alignment: bool) -> Option<()> {
+    fn steer(
+        &mut self,
+        slots: &[Slot; 4],
+        alignment: bool,
+        choice: Option<&mut ChoiceStream>,
+    ) -> Option<()> {
         let current = self.point();
         let target = slots.get(self.target.index())?.station.position;
         let dx = i32::from(target.x).saturating_sub(i32::from(current.x));
@@ -245,11 +309,33 @@ impl Pursuer {
                 if dx.unsigned_abs() < APPROACH_DISTANCE =>
             {
                 self.begin_alignment(dx, dy, alignment)?;
+                if let Some(stream) = choice {
+                    // All weighted outcomes in the admitted first
+                    // profile's medium-range row choose alignment.
+                    let _draw = stream.draw();
+                }
             },
             PursuitMotion::LongRange => self.long_range(dx, dy)?,
             PursuitMotion::AlignDepth | PursuitMotion::AlignHorizontal => {
+                if let Some(stream) = choice
+                    && stream.first_strike(dx, dy)?
+                {
+                    self.advance_pose(dx, dy)?;
+                    self.motion = PursuitMotion::Strike { tick: 0 };
+                    self.velocity = (0i32, 0i32);
+                    return Some(());
+                }
                 self.align(dx, dy)?;
                 self.advance_pose(dx, dy)?;
+            },
+            PursuitMotion::Strike { tick } => {
+                self.pose = Some(CemeteryEnemyPose::Strike {
+                    facing: Facing::Left,
+                    phase: strike_phase(tick)?,
+                });
+                self.motion = PursuitMotion::Strike {
+                    tick: tick.saturating_add(1),
+                };
             },
         }
         let (horizontal, depth) = self.position;
@@ -262,6 +348,7 @@ impl Pursuer {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PursuitPair {
+    choice: Option<ChoiceStream>,
     enemies: [Pursuer; 2],
     reservations: [u8; 4],
     target_timer: u8,
@@ -285,27 +372,52 @@ impl PursuitPair {
         if refresh {
             self.target_timer = TARGET_INTERVAL;
         }
-        for enemy in &mut self.enemies {
-            if refresh {
+        for (index, enemy) in self.enemies.iter_mut().enumerate() {
+            if refresh && !matches!(enemy.motion, PursuitMotion::Strike { .. })
+            {
                 Self::retarget(enemy, &mut self.reservations, slots)?;
             }
-            enemy.steer(slots, alignment)?;
+            // The second profile is admitted only during its verified
+            // long-range approach; its close-range selector differs.
+            let enabled = alignment && (index == 0 || self.choice.is_none());
+            let choice = if index == 0 {
+                self.choice.as_mut()
+            } else {
+                None
+            };
+            enemy.steer(slots, enabled, choice)?;
+        }
+        if let Some(stream) = &mut self.choice {
+            stream.advance();
         }
         Some(())
     }
 
-    pub(super) fn begin_animation(&mut self) {
+    pub(super) fn begin_animation(&mut self) -> Option<()> {
+        if let Some(stream) = &mut self.choice {
+            // At this checkpoint the two initial decisions precede
+            // the next word advance. Both must admit long-range motion.
+            if stream.draw() >= 230 || stream.draw() >= 230 {
+                return None;
+            }
+            stream.advance();
+        }
         for enemy in &mut self.enemies {
-            enemy.pose = Some(CemeteryEnemyPose {
+            enemy.pose = Some(CemeteryEnemyPose::Approach {
                 depth: CemeteryEnemyDepth::Increasing,
                 facing: Facing::Left,
                 phase: 0,
             });
         }
+        Some(())
     }
 
-    pub(super) const fn new() -> Self {
+    pub(super) const fn new(seed: Option<u16>) -> Self {
         Self {
+            choice: match seed {
+                Some(word) => Some(ChoiceStream::new(word)),
+                None => None,
+            },
             enemies: [
                 Pursuer::new((98_304, 32_768), 1),
                 Pursuer::new((100_352, 45_056), 2),
@@ -375,4 +487,64 @@ fn approach_velocity(dx: i32, dy: i32) -> Option<(i32, i32)> {
         APPROACH_SPEED.saturating_mul(dx.signum()),
         depth.saturating_mul(dy.signum()),
     ))
+}
+
+const fn strike_phase(tick: u8) -> Option<u8> {
+    match tick {
+        0..=2 => Some(0),
+        3..=5 => Some(1),
+        6..=8 => Some(2),
+        9..=11 => Some(3),
+        12..=15 => Some(4),
+        16..=20 => Some(5),
+        21..=26 => Some(6),
+        27..=31 => Some(7),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChoiceStream, PursuitPair};
+
+    #[test]
+    fn room_admission_shares_a_word_across_both_choices() {
+        for (word, first, second, next) in
+            [(0x1207, 0x12, 0x24, 0x9134), (0x4a25, 0x4a, 0x94, 0xa9ca)]
+        {
+            let mut stream = ChoiceStream::new(word);
+            assert_eq!(stream.draw(), first);
+            assert_eq!(stream.draw(), second);
+            stream.advance();
+            assert_eq!(stream.word, next);
+            assert_eq!(stream.choice, second);
+        }
+    }
+
+    #[test]
+    fn unsupported_initial_weighted_choice_does_not_admit_pursuit() {
+        let mut pair = PursuitPair::new(Some(0xe600));
+        assert_eq!(pair.begin_animation(), None);
+        let mut second_rejected = PursuitPair::new(Some(0x7300));
+        assert_eq!(second_rejected.begin_animation(), None);
+    }
+
+    #[test]
+    fn near_strike_requires_both_observed_decisions() {
+        for (word, choice, dx, dy, result, final_choice) in [
+            (0x3700, 0xe6, -50i32, -4i32, Some(false), 0x1d),
+            (0x4a00, 0x1d, -48i32, -3i32, Some(false), 0x67),
+            (0x3700, 0x67, -40i32, -1i32, Some(false), 0x9e),
+            (0x4a00, 0x9e, -37i32, -1i32, Some(false), 0xe8),
+            (0xa900, 0xe8, -34i32, -1i32, Some(false), 0x91),
+            (0x8800, 0x91, -31i32, -1i32, Some(true), 0xa1),
+            (0x4000, 0x00, -31i32, 5i32, Some(false), 0x00),
+            (0x4000, 0x00, 31i32, 0i32, Some(false), 0x00),
+            (0x6000, 0x00, -31i32, 0i32, None, 0xc0),
+        ] {
+            let mut stream = ChoiceStream { choice, word };
+            assert_eq!(stream.first_strike(dx, dy), result);
+            assert_eq!(stream.choice, final_choice);
+        }
+    }
 }

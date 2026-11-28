@@ -6588,3 +6588,32 @@ Do not substitute a constant partial-roster exit delay, or silently
 include invisible automated competitors. Original board-dependent
 initialization, automated presentation, input eligibility, and the
 separate retirement state require a coherent playable slice.
+
+### Cold-start protected-room choice provenance
+
+Two isolated cold-start original controls differ only in the late
+stage-two input that shifts the cemetery entrance by fifty frames.
+Each reproduces all 36,400 complete word updates from startup through
+the first room. The first update follows zero initialization; every
+subsequent update is a wrapping 16-bit affine recurrence. The complete
+observed choice-byte updates also match their wrapping high-byte
+addition, 2,161 in the earlier route and 2,239 in the later route.
+Both traces identify six explicit stage-choice resets. The word
+continues across those resets instead of being reset at the cemetery.
+
+The two actor-admission choices share the same preceding word on each
+route, although actor initialization occurs on successive frames. The
+early and late routes provide different checkpoint words and initial
+choice values. This rules out a constant campaign seed at cemetery
+entry and establishes the ordering for a bounded checkpoint replay.
+Whole-campaign scheduling and other selector profiles remain open;
+the reference media, memory traces and extracted art stay local.
+
+Three additional original single-station movement controls confirm
+that the protected first strike retains its world-space origin during
+horizontal and vertical player movement. In the earlier retreat
+control, both enemy projections and idle station projections move
+together by two depth units per frame when the camera pans. This
+distinguishes shared camera projection from an enemy retreat action.
+The eight distinct left-facing strike keyframes are locally extracted;
+native and browser composition acceptance remain open.

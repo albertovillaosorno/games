@@ -31,6 +31,8 @@
 
 //! Optional original-width balloon bonus presentation.
 
+pub(super) mod opposition;
+
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
@@ -264,8 +266,22 @@ impl SpriteSpec {
         (inverse_width, inverse_height): (u8, u8),
         rise: u32,
     ) -> Result<SpriteRect, RenderError> {
-        let width = inverse_extent(self.width, 107, inverse_width)?;
-        let height = inverse_extent(self.height, 51, inverse_height)?;
+        self.inverse_destination_at(
+            (107, 51),
+            (inverse_width, inverse_height),
+            rise,
+        )
+    }
+
+    fn inverse_destination_at(
+        self,
+        (captured_width, captured_height): (u32, u32),
+        (inverse_width, inverse_height): (u8, u8),
+        rise: u32,
+    ) -> Result<SpriteRect, RenderError> {
+        let width = inverse_extent(self.width, captured_width, inverse_width)?;
+        let height =
+            inverse_extent(self.height, captured_height, inverse_height)?;
         let center = self.x.saturating_add_unsigned(self.width >> 1);
         let bottom = self.y.saturating_add_unsigned(self.height);
         let left = center.saturating_sub_unsigned(width >> 1);
@@ -375,8 +391,12 @@ impl DepartureArt {
     }
 }
 
-pub(super) type BonusDigests =
-    (ContentHash, Option<ContentHash>, Option<ContentHash>);
+pub(super) type BonusDigests<'digests> = (
+    ContentHash,
+    Option<ContentHash>,
+    Option<ContentHash>,
+    Option<&'digests opposition::Digests>,
+);
 
 #[derive(Debug)]
 pub(super) struct BonusArt {
@@ -385,6 +405,7 @@ pub(super) struct BonusArt {
     departure: Option<DepartureArt>,
     headers: Vec<TextAtlas>,
     inflated: Option<[Art; 4]>,
+    opponents: Option<Box<opposition::OpponentArt>>,
     pumps: [Art; 4],
     ranks: TextAtlas,
 }
@@ -423,11 +444,17 @@ impl BonusArt {
         self.departure.is_some()
     }
 
+    pub(super) const fn has_opponents(&self) -> bool {
+        self.opponents.is_some()
+    }
+
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
-        (digest, departure_digest, inflated_digest): BonusDigests,
+        digests: BonusDigests<'_>,
     ) -> Result<Self, RenderError> {
+        let (digest, departure_digest, inflated_digest, opponents_digest) =
+            digests;
         let bundle = open_bundle(store, digest)?;
         let mut load = |spec: SpriteSpec| spec.load(scene, &bundle);
         let background = load(BACKGROUND)?;
@@ -440,6 +467,12 @@ impl BonusArt {
             .transpose()?;
         let inflated = inflated_digest
             .map(|address| load_inflated(store, scene, address))
+            .transpose()?;
+        let opponents = opponents_digest
+            .map(|hashes| {
+                opposition::OpponentArt::load(store, scene, hashes)
+                    .map(Box::new)
+            })
             .transpose()?;
         let catalogue = title_messages::catalogue()?;
         let mut headers = Vec::with_capacity(title_messages::LOCALES.len());
@@ -462,6 +495,7 @@ impl BonusArt {
             departure,
             headers,
             inflated,
+            opponents,
             pumps,
             ranks,
         })
@@ -509,17 +543,13 @@ impl BonusArt {
         Ok(())
     }
 
-    fn queue_player(
+    fn queue_human(
         &self,
         bonus: Bonus,
-        (player, digits): (Player, &TextAtlas),
+        player: Player,
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<(), RenderError> {
-        if bonus.inflation(player).is_none() {
-            return Ok(());
-        }
         let index = player.index();
-        let balloon = BALLOONS.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump = PUMPS.get(index).ok_or(RenderError::InvalidSprite)?;
         let pump_art =
             self.pumps.get(index).ok_or(RenderError::InvalidSprite)?;
@@ -535,6 +565,31 @@ impl BonusArt {
         } else if let Some(layer) = self.balloon_layer(bonus, player, 0)? {
             draws.push(layer);
             draws.push(pump_art.draw(pump.destination(0)?, false));
+        }
+
+        Ok(())
+    }
+
+    fn queue_player(
+        &self,
+        bonus: Bonus,
+        (player, digits): (Player, &TextAtlas),
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        if bonus.inflation(player).is_none() {
+            return Ok(());
+        }
+        let index = player.index();
+        let balloon = BALLOONS.get(index).ok_or(RenderError::InvalidSprite)?;
+        if bonus.is_automatic(player) {
+            if bonus.visual_axes(player).is_some() {
+                self.opponents
+                    .as_ref()
+                    .ok_or(RenderError::InvalidSprite)?
+                    .queue(bonus, player, draws)?;
+            }
+        } else {
+            self.queue_human(bonus, player, draws)?;
         }
 
         if let Some((rank, score)) = bonus.displayed_result(player) {

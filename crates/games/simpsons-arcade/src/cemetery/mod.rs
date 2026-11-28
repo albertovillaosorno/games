@@ -187,6 +187,7 @@ impl CemeteryRoomBody {
 pub struct CemeteryRoom {
     depth_offset: i16,
     enemy_alignment: bool,
+    enemy_choice_seed: Option<u16>,
     presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
     presentation_enemies: Option<[CemeteryEnemyApproach; 2]>,
@@ -199,6 +200,7 @@ impl Default for CemeteryRoom {
         Self {
             depth_offset: 0,
             enemy_alignment: false,
+            enemy_choice_seed: None,
             presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
             presentation_enemies: None,
@@ -279,14 +281,15 @@ impl CemeteryRoom {
     // The observed entrance activates two independently staggered actors.
     fn advance_pursuit(&mut self, tick: u64, slots: &[Slot; 4]) {
         if tick == FIRST_ENEMY_APPROACH {
-            self.pursuit = Some(PursuitPair::new());
+            self.pursuit = Some(PursuitPair::new(self.enemy_choice_seed));
         }
         self.presentation_enemies =
             self.pursuit.map(|pair| pair.sample(self.depth_offset));
         if tick == FIRST_ENEMY_ANIMATION
             && let Some(pair) = &mut self.pursuit
+            && pair.begin_animation().is_none()
         {
-            pair.begin_animation();
+            self.pursuit = None;
         }
         if tick > LAST_WALK_TICK {
             self.pursuit = None;
@@ -496,6 +499,15 @@ impl CemeteryEntrance {
     pub(super) const fn enable_enemy_alignment(&mut self) {
         if let Some(room) = &mut self.room {
             room.enemy_alignment = true;
+        }
+    }
+
+    // Only a caller with a verified original checkpoint may choose this
+    // protected-strike diagnostic. The campaign never uses this seed.
+    pub(super) const fn enable_enemy_strike(&mut self, seed: u16) {
+        if let Some(room) = &mut self.room {
+            room.enemy_alignment = true;
+            room.enemy_choice_seed = Some(seed);
         }
     }
 
@@ -860,7 +872,7 @@ mod tests {
             (false, false, 2..=7) => CemeteryEnemyDepth::Decreasing,
             _ => CemeteryEnemyDepth::Level,
         };
-        Some(CemeteryEnemyPose {
+        Some(CemeteryEnemyPose::Approach {
             depth,
             facing: Facing::Left,
             phase,
@@ -959,7 +971,7 @@ mod tests {
         };
         [
             CemeteryEnemyApproach {
-                pose: Some(CemeteryEnemyPose {
+                pose: Some(CemeteryEnemyPose::Approach {
                     depth: first_depth,
                     facing: Facing::Left,
                     phase,
@@ -972,7 +984,7 @@ mod tests {
                 },
             },
             CemeteryEnemyApproach {
-                pose: Some(CemeteryEnemyPose {
+                pose: Some(CemeteryEnemyPose::Approach {
                     depth: second_depth,
                     facing: Facing::Left,
                     phase: second_phase,
@@ -1024,6 +1036,126 @@ mod tests {
                 observed_alignment_sample(homer_lisa, index, coordinates)
             });
             assert_eq!(enemies, expected, "{tick}");
+        }
+    }
+
+    fn strike_controls(route: u8, tick: u64) -> [u8; 4] {
+        if tick < 292 {
+            return alignment_controls(true, tick);
+        }
+        if route == 1 && (299..317).contains(&tick) {
+            return [0, 0, 0, Control::Right.mask()];
+        }
+        if route == 2 && tick >= 299 {
+            let up = Control::Up.mask();
+            return [
+                0,
+                up | Control::Right.mask(),
+                0,
+                up | Control::Left.mask(),
+            ];
+        }
+        [0; 4]
+    }
+
+    fn expected_strike(route: u8, tick: u64) -> [CemeteryEnemyApproach; 2] {
+        let phase = match tick {
+            292 => CemeteryEnemyPose::Approach {
+                depth: CemeteryEnemyDepth::Level,
+                facing: Facing::Left,
+                phase: 2,
+            },
+            _ => CemeteryEnemyPose::Strike {
+                facing: Facing::Left,
+                phase: match tick {
+                    293..=295 => 0,
+                    296..=298 => 1,
+                    299..=301 => 2,
+                    302..=304 => 3,
+                    305..=308 => 4,
+                    309..=313 => 5,
+                    314..=319 => 6,
+                    _ => 7,
+                },
+            },
+        };
+        let pan = if route == 2 {
+            i16::try_from(tick.saturating_sub(319).saturating_mul(2))
+                .unwrap_or_default()
+        } else {
+            0
+        };
+        let second_phase =
+            u8::try_from(tick.saturating_sub(240).div_euclid(6).rem_euclid(8))
+                .unwrap_or_default();
+        let second_x = 392i16.saturating_sub(
+            i16::try_from(
+                tick.saturating_sub(241)
+                    .saturating_mul(5)
+                    .saturating_add(3)
+                    .div_euclid(4),
+            )
+            .unwrap_or_default(),
+        );
+        [
+            CemeteryEnemyApproach {
+                pose: Some(phase),
+                position: Point {
+                    x: 329,
+                    y: 154i16.saturating_sub(pan),
+                },
+                target: Player::Lisa,
+            },
+            CemeteryEnemyApproach {
+                pose: Some(CemeteryEnemyPose::Approach {
+                    depth: CemeteryEnemyDepth::Level,
+                    facing: Facing::Left,
+                    phase: second_phase,
+                }),
+                position: Point {
+                    x: second_x,
+                    y: 207i16.saturating_sub(pan),
+                },
+                target: Player::Marge,
+            },
+        ]
+    }
+
+    #[test]
+    fn room_protected_strike_matches_three_independent_controls() {
+        for route in 0u8..3 {
+            verify_strike_route(route);
+        }
+    }
+
+    fn verify_strike_route(route: u8) {
+        let mut entrance = arrival(Player::Marge).at(237);
+        entrance.enable_room();
+        // Original source word at the actors' shared admission.
+        entrance.enable_enemy_strike(0x1207);
+        let mut slots = room_slots();
+        for tick in 238..=325u64 {
+            let controls = strike_controls(route, tick);
+            for (slot, held) in slots.iter_mut().zip(controls) {
+                slot.held = held;
+            }
+            entrance.advance(false);
+            let _advanced = entrance
+                .advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            let enemies =
+                entrance.room().and_then(CemeteryRoom::presentation_enemies);
+            if tick < 292 {
+                continue;
+            }
+            if tick == 325 {
+                assert_eq!(enemies, None, "{route} {tick}");
+                break;
+            }
+            assert_eq!(
+                enemies,
+                Some(expected_strike(route, tick)),
+                "{route} {tick}"
+            );
         }
     }
 
