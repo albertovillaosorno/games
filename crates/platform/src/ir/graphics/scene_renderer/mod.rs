@@ -75,6 +75,10 @@ pub(crate) trait SceneBackend: Debug {
     fn presentation_mode(&self) -> PresentationMode;
     fn readback(&mut self, layout: FrameLayout)
     -> Result<Vec<u8>, RenderError>;
+    fn replace_atlas(
+        &mut self,
+        upload: AdmittedAtlas<'_>,
+    ) -> Result<(), RenderError>;
     fn resize_target(&mut self, layout: FrameLayout)
     -> Result<(), RenderError>;
     fn surface_dimensions(&self) -> Result<Option<Dimensions>, RenderError>;
@@ -428,6 +432,20 @@ impl<'session, 'backend> SceneSession<'session, 'backend> {
         Ok(pixels)
     }
 
+    /// Replace all RGBA pixels of an existing atlas without changing its
+    /// identity, dimensions or resource reservation.
+    ///
+    /// # Errors
+    /// Rejects an unknown atlas, incorrect byte extent or backend failure.
+    pub fn replace_atlas(
+        &mut self,
+        id: AtlasId,
+        pixels: &[u8],
+    ) -> Result<(), RenderError> {
+        self.admission
+            .replace(id, pixels, |upload| self.backend.replace_atlas(upload))
+    }
+
     /// Project a logical touch point to the actually presented surface.
     /// # Errors
     /// Reports failure to observe drawable geometry.
@@ -507,6 +525,7 @@ mod tests {
         drawable: bool,
         draws: usize,
         events: VecDeque<InputSample>,
+        fail_replacement: Option<RenderError>,
         fail_upload: bool,
         layout: FrameLayout,
         mode: PresentationMode,
@@ -514,6 +533,7 @@ mod tests {
         presentations: VecDeque<PresentationResult>,
         readback_layout: Option<FrameLayout>,
         readbacks: Vec<FrameLayout>,
+        replacements: Vec<RecordedUpload>,
         reported_layout: Rc<Cell<Option<FrameLayout>>>,
         resize_outcome: Result<bool, RenderError>,
         resizes: Vec<FrameLayout>,
@@ -539,6 +559,7 @@ mod tests {
                         )
                     })
                     .collect(),
+                fail_replacement: None,
                 fail_upload: false,
                 layout: FrameLayout::new(
                     NonZeroU32::MIN,
@@ -550,6 +571,7 @@ mod tests {
                 presentations: VecDeque::new(),
                 readback_layout: None,
                 readbacks: Vec::new(),
+                replacements: Vec::new(),
                 reported_layout: Rc::new(Cell::new(None)),
                 resize_outcome: Ok(true),
                 resizes: Vec::new(),
@@ -630,6 +652,22 @@ mod tests {
                 self.layout = changed;
             }
             Ok(Vec::new())
+        }
+
+        fn replace_atlas(
+            &mut self,
+            upload: AdmittedAtlas<'_>,
+        ) -> Result<(), RenderError> {
+            if let Some(error) = self.fail_replacement.take() {
+                return Err(error);
+            }
+            let frame = upload.frame();
+            self.replacements.push((
+                upload.id(),
+                frame.layout(),
+                frame.pixels().to_vec(),
+            ));
+            Ok(())
         }
 
         fn resize_target(
@@ -984,6 +1022,44 @@ mod tests {
         check(&backend.uploads, &[(AtlasId(0), layout, vec![1, 2, 3, 4])])?;
         check(&backend.draws, &1)?;
         Ok(())
+    }
+
+    #[test]
+    fn replacement_preserves_identity_and_admitted_budget()
+    -> Result<(), RenderError> {
+        let mut backend = TestScene::new(0)?;
+        backend.fail_replacement = Some(RenderError::Unsupported);
+        let layout = backend.layout;
+        let mut scene = SceneSession::new(
+            &mut backend,
+            layout,
+            limits(),
+            PresentationMode::AspectFit,
+        )?;
+        let id = scene.load_atlas(layout, &[1, 2, 3, 4])?;
+        check(
+            &scene.replace_atlas(AtlasId(1), &[4, 3, 2, 1]),
+            &Err(RenderError::InvalidSprite),
+        )?;
+        check(
+            &scene.replace_atlas(id, &[0; 3]),
+            &Err(RenderError::InvalidLength),
+        )?;
+        check(
+            &scene.replace_atlas(id, &[4, 3, 2, 1]),
+            &Err(RenderError::Unsupported),
+        )?;
+        scene.replace_atlas(id, &[4, 3, 2, 1])?;
+        scene.replace_atlas(id, &[5, 6, 7, 8])?;
+        check(
+            &scene.load_atlas(layout, &[0; 4]),
+            &Err(RenderError::TooLarge),
+        )?;
+        check(&backend.uploads, &[(id, layout, vec![1, 2, 3, 4])])?;
+        check(&backend.replacements, &[
+            (id, layout, vec![4, 3, 2, 1]),
+            (id, layout, vec![5, 6, 7, 8]),
+        ])
     }
 
     #[test]

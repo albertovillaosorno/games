@@ -156,10 +156,24 @@ impl Target {
             .data()
             .0)
     }
+
+    fn upload(&self, upload: AdmittedAtlas<'_>) -> Result<(), RenderError> {
+        let frame = upload.frame();
+        let size = dimensions(frame.layout());
+        let data = ImageData::new_with_u8_clamped_array_and_sh(
+            Clamped(frame.pixels()),
+            size.width.get(),
+            size.height.get(),
+        )
+        .map_err(dom_error)?;
+        self.context
+            .put_image_data(&data, 0.0, 0.0)
+            .map_err(dom_error)
+    }
 }
 
 pub(super) struct CanvasScene {
-    atlases: Vec<HtmlCanvasElement>,
+    atlases: Vec<Target>,
     layout: FrameLayout,
     logical: Target,
     mode: PresentationMode,
@@ -236,17 +250,8 @@ impl SceneBackend for CanvasScene {
         let frame = upload.frame();
         let size = dimensions(frame.layout());
         let atlas = Target::new(self.surface.document(), size)?;
-        let data = ImageData::new_with_u8_clamped_array_and_sh(
-            Clamped(frame.pixels()),
-            size.width.get(),
-            size.height.get(),
-        )
-        .map_err(dom_error)?;
-        atlas
-            .context
-            .put_image_data(&data, 0.0, 0.0)
-            .map_err(dom_error)?;
-        self.atlases.push(atlas.canvas);
+        atlas.upload(upload)?;
+        self.atlases.push(atlas);
         Ok(())
     }
 
@@ -274,7 +279,7 @@ impl SceneBackend for CanvasScene {
                 .atlases
                 .get(sprite.atlas.0)
                 .ok_or(RenderError::InvalidSprite)?;
-            self.logical.sprite(atlas, sprite)?;
+            self.logical.sprite(&atlas.canvas, sprite)?;
         }
         self.visible.clear([0; 3]);
         for region in layout.regions().into_iter().flatten() {
@@ -297,6 +302,16 @@ impl SceneBackend for CanvasScene {
     ) -> Result<Vec<u8>, RenderError> {
         self.logical
             .read(layout.width().get(), layout.height().get())
+    }
+
+    fn replace_atlas(
+        &mut self,
+        upload: AdmittedAtlas<'_>,
+    ) -> Result<(), RenderError> {
+        self.atlases
+            .get(upload.id().0)
+            .ok_or(RenderError::InvalidSprite)?
+            .upload(upload)
     }
 
     fn resize_target(

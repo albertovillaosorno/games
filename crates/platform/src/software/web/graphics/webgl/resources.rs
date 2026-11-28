@@ -166,6 +166,18 @@ impl Texture {
     pub(super) fn bind(&self) {
         self.gl.bind_texture(Gl::TEXTURE_2D, Some(&self.handle));
     }
+
+    pub(super) fn replace(
+        &self,
+        layout: FrameLayout,
+        pixels: &[u8],
+    ) -> Result<(), RenderError> {
+        checked(&self.gl)?;
+        self.bind();
+        let [width, height] = size(dimensions(layout))?;
+        upload(&self.gl, width, height, pixels)?;
+        checked(&self.gl)
+    }
 }
 
 impl Drop for Texture {

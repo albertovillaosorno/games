@@ -97,6 +97,20 @@ impl<'texture, Context> Atlases<'texture, Context> {
         }
     }
 
+    fn replace(
+        &mut self,
+        upload: AdmittedAtlas<'_>,
+    ) -> Result<(), RenderError> {
+        let frame = upload.frame();
+        let texture = self
+            .entries
+            .get_mut(upload.id().0)
+            .ok_or(RenderError::InvalidSprite)?;
+        texture
+            .update(None, frame.pixels(), frame.layout().pitch())
+            .map_err(|error| RenderError::Backend(error.to_string()))
+    }
+
     fn validate(&self, sprites: &[SpriteDraw]) -> Result<(), RenderError> {
         for sprite in sprites {
             if self.entries.get(sprite.atlas.0).is_none() {
@@ -327,6 +341,13 @@ impl SceneBackend for LinuxScene<'_, '_> {
             return Err(RenderError::InvalidDimensions);
         }
         self.textures.readback(self.canvas)
+    }
+
+    fn replace_atlas(
+        &mut self,
+        upload: AdmittedAtlas<'_>,
+    ) -> Result<(), RenderError> {
+        self.textures.atlases.replace(upload)
     }
 
     fn resize_target(
@@ -655,6 +676,57 @@ mod tests {
             scene.readback(&mut canvas)? == expected_base.as_flattened(),
             "restored target differs",
         )
+    }
+
+    #[test]
+    fn replace_atlas_updates_existing_sprite_pixels() -> Result<(), RenderError>
+    {
+        let mut canvas = canvas()?;
+        let creator = canvas.texture_creator();
+        let mut scene = SceneTextures::new(
+            &creator,
+            layout()?,
+            PresentationMode::AspectFit,
+        )?;
+        let mut admission = SceneAdmission::new(SceneLimits {
+            atlas_bytes: budget(8),
+            atlases: budget(1),
+            sprites: budget(1),
+        });
+        let atlas = upload(
+            &mut admission,
+            &mut scene.atlases,
+            [RED, GREEN].as_flattened(),
+        )?;
+        let sprite = SpriteDraw {
+            atlas,
+            destination: rect(0, 0, 4, 2),
+            flip_horizontal: false,
+            flip_vertical: false,
+            source: rect(0, 0, 2, 1),
+        };
+        let display = ScenePresentation::default();
+        for (replacement, expected) in [
+            ([RED, GREEN], [RED, RED, GREEN, GREEN]),
+            ([BLUE, TRANSPARENT], [BLUE, BLUE, BLACK, BLACK]),
+            ([GREEN, RED], [GREEN, GREEN, RED, RED]),
+        ] {
+            admission.replace(atlas, replacement.as_flattened(), |upload| {
+                scene.atlases.replace(upload)
+            })?;
+            require(
+                scene
+                    .draw(&mut canvas, display, admission.draws(&[sprite])?)?
+                    .is_some(),
+                "replacement scene not presented",
+            )?;
+            require(
+                scene.readback(&mut canvas)?
+                    == [expected, expected].as_flattened().as_flattened(),
+                "replacement pixels differ",
+            )?;
+        }
+        Ok(())
     }
 
     #[test]

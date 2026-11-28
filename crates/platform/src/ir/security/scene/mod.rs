@@ -70,7 +70,7 @@ impl<'pixels> AdmittedAtlas<'pixels> {
         self.frame
     }
 
-    /// The next committed scene-local atlas identity.
+    /// The scene-local identity being loaded or replaced.
     #[must_use]
     pub const fn id(self) -> AtlasId {
         self.id
@@ -129,6 +129,24 @@ impl SceneAdmission {
             limits,
             remaining_bytes: limits.atlas_bytes.get(),
         }
+    }
+
+    /// Admit replacement bytes against an existing atlas's exact layout.
+    pub(crate) fn replace<'pixels, Upload>(
+        &self,
+        id: AtlasId,
+        pixels: &'pixels [u8],
+        upload: Upload,
+    ) -> Result<(), RenderError>
+    where
+        Upload: FnOnce(AdmittedAtlas<'pixels>) -> Result<(), RenderError>,
+    {
+        let layout =
+            *self.layouts.get(id.0).ok_or(RenderError::InvalidSprite)?;
+        upload(AdmittedAtlas {
+            frame: layout.admit(pixels)?,
+            id,
+        })
     }
 }
 

@@ -301,6 +301,17 @@ impl SceneBackend for WebGlScene {
         pixels
     }
 
+    fn replace_atlas(
+        &mut self,
+        upload: AdmittedAtlas<'_>,
+    ) -> Result<(), RenderError> {
+        let frame = upload.frame();
+        self.atlases
+            .get(upload.id().0)
+            .ok_or(RenderError::InvalidSprite)?
+            .replace(frame.layout(), frame.pixels())
+    }
+
     fn resize_target(
         &mut self,
         layout: FrameLayout,
