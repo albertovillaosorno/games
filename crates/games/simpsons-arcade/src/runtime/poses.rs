@@ -58,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(33_547);
+    NonZeroU64::MIN.saturating_add(35_757);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -255,6 +255,34 @@ impl Catalogue {
             .saturating_mul(bonus::DEPARTURE_EXTRA_SPRITES)
     }
 
+    fn cemetery_complete(&self) -> bool {
+        (self.cemetery.is_none() || self.balloon.is_some())
+            && (self.cemetery_layers.is_none()
+                || self
+                    .cemetery
+                    .as_deref()
+                    .is_some_and(cemetery::Selection::animated))
+            && (!self
+                .cemetery
+                .as_deref()
+                .is_some_and(cemetery::Selection::room_walking)
+                || self.cemetery_layers.is_some())
+            && (!self
+                .cemetery
+                .as_deref()
+                .is_some_and(cemetery::Selection::room_specials)
+                || room_special_entries_complete(&self.entries))
+            && (!self
+                .cemetery
+                .as_deref()
+                .is_some_and(cemetery::Selection::room_ground_attacks)
+                || self.entries.contains_key(&station_key(
+                    Player::Bart,
+                    Kind::Jump,
+                    3,
+                )))
+    }
+
     fn complete(&self) -> bool {
         let entries = &self.entries;
         let complete = Player::ALL.into_iter().all(|player| {
@@ -293,22 +321,7 @@ impl Catalogue {
             && (self.stage_two.is_none() || self.bonus.is_some())
             && (self.balloon.is_none()
                 || (self.linked.is_some() && self.backdrop.has_boardwalk()))
-            && (self.cemetery.is_none() || self.balloon.is_some())
-            && (self.cemetery_layers.is_none()
-                || self
-                    .cemetery
-                    .as_deref()
-                    .is_some_and(cemetery::Selection::animated))
-            && (!self
-                .cemetery
-                .as_deref()
-                .is_some_and(cemetery::Selection::room_walking)
-                || self.cemetery_layers.is_some())
-            && (!self
-                .cemetery
-                .as_deref()
-                .is_some_and(cemetery::Selection::room_specials)
-                || room_special_entries_complete(entries))
+            && self.cemetery_complete()
             && (self.linked.is_none() || self.stage_two.is_some())
     }
 
@@ -1646,7 +1659,12 @@ mod tests {
     #[test]
     fn memory_pose_text_has_the_same_byte_budget_as_local_text() {
         let valid = complete();
-        let padded = format!("{valid}\n{}", " ".repeat(33_548));
+        let padded = format!(
+            "{valid}\n{}",
+            " ".repeat(
+                usize::try_from(MAX_CATALOGUE_BYTES.get()).unwrap_or_default()
+            )
+        );
         assert!(Catalogue::parse(&valid).is_ok());
         assert!(Catalogue::parse(&padded).is_err());
     }
@@ -2268,6 +2286,51 @@ mod tests {
                 .is_err()
         );
         assert_cemetery_walking_rejections(with_boss, &full, layers);
+        assert_cemetery_ground_catalogue(with_boss, &full, layers, &reused);
+    }
+
+    fn assert_cemetery_ground_catalogue(
+        with_boss: &str,
+        specials: &str,
+        layers: &str,
+        reused: &str,
+    ) {
+        let descent = format!("bart jump 3 {HASH}\n");
+        let suffix = (600u32..634)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let full = format!("{} {suffix}\n", specials.trim_end());
+        let baseline = Catalogue::parse(&format!(
+            "{with_boss}{specials}{layers}{reused}{descent}"
+        ));
+        let selected = Catalogue::parse(&format!(
+            "{with_boss}{full}{layers}{reused}{descent}"
+        ));
+        assert!(baseline.is_ok() && selected.is_ok());
+        if let (Ok(base), Ok(value)) = (baseline, selected) {
+            assert_eq!(value.count(), base.count().saturating_add(34));
+            assert_eq!(
+                value.atlas_count(),
+                base.atlas_count().saturating_add(34)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                base.atlas_bytes().saturating_add(404_236)
+            );
+            assert_eq!(value.scenic_sprite_count(), base.scenic_sprite_count());
+            assert_eq!(value.digests().count(), value.count());
+        }
+        assert!(
+            Catalogue::parse(&format!("{with_boss}{full}{layers}{reused}"))
+                .is_err()
+        );
+        assert!(
+            Catalogue::parse(&format!("{with_boss}{full}{layers}{descent}"))
+                .is_err()
+        );
+        let base = format!("{with_boss}{reused}{descent}");
+        assert_cemetery_walking_rejections(&base, &full, layers);
     }
 
     fn assert_partial_marker_rejections(

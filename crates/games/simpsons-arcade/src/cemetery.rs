@@ -35,8 +35,8 @@
 use games::animation::cycle_tick;
 
 use super::{
-    Facing, Maneuver, PendingManeuver, Player, Point, Slot, StreetLayout,
-    WalkMotion, stage_card_departed,
+    Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PendingManeuver, Player,
+    Point, Recovery, Slot, StreetLayout, WalkMotion, stage_card_departed,
 };
 
 const FIRST_BACKGROUND: u64 = 13;
@@ -107,11 +107,47 @@ pub struct CemeteryBody {
     pub position: Point,
 }
 
+/// Delayed ground-action art sample, including the recovery latch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CemeteryGroundAttack {
+    /// Whether horizontal input selected the moving attack family.
+    pub moving: bool,
+    /// Relative sample from pre-action idle (0) through terminal art (18).
+    pub tick: u8,
+}
+
+impl CemeteryGroundAttack {
+    fn sample(slot: &Slot, previous: Option<Self>) -> Option<Self> {
+        match slot.station.maneuver {
+            Maneuver::Attack { moving, tick } => Some(Self { moving, tick }),
+            Maneuver::Idle => {
+                let Recovery::Ground(remaining) = slot.action_recovery else {
+                    return None;
+                };
+                let tick =
+                    GROUND_ATTACK_RECOVERY_TICKS.saturating_sub(remaining);
+                previous
+                    .filter(|sample| {
+                        tick <= 18 && sample.tick.saturating_add(1) == tick
+                    })
+                    .map(|sample| Self { tick, ..sample })
+            },
+            Maneuver::AirAttack(_)
+            | Maneuver::Hurt { .. }
+            | Maneuver::Jump(_)
+            | Maneuver::Restrained
+            | Maneuver::Special { .. } => None,
+        }
+    }
+}
+
 /// One projected first-room station from the preceding simulation step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoomBody {
     /// Horizontal facing at the displayed sample.
     pub facing: Facing,
+    /// Ground attack artwork phase, including its terminal recovery.
+    pub ground_attack: Option<CemeteryGroundAttack>,
     /// Exact maneuver and phase at the displayed sample.
     pub maneuver: Maneuver,
     /// Camera-relative station record position.
@@ -124,6 +160,7 @@ impl CemeteryRoomBody {
     const fn idle(position: Point) -> Self {
         Self {
             facing: Facing::Right,
+            ground_attack: None,
             maneuver: Maneuver::Idle,
             position,
             walking: None,
@@ -166,12 +203,7 @@ impl CemeteryRoom {
         if !slots.iter().all(|slot| slot.station.can_fight()) {
             return false;
         }
-        self.presentation_bodies = slots.map(|slot| CemeteryRoomBody {
-            facing: slot.station.facing,
-            maneuver: slot.station.maneuver,
-            position: self.project(slot.station.position),
-            walking: slot.station.walking,
-        });
+        self.sample_presentation(slots);
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut *slots).zip(pending)
         {
@@ -266,6 +298,22 @@ impl CemeteryRoom {
         Point {
             y: point.y.saturating_add(self.depth_offset),
             ..point
+        }
+    }
+
+    fn sample_presentation(&mut self, slots: &[Slot; 4]) {
+        let preceding_room = *self;
+        for (body, slot) in self.presentation_bodies.iter_mut().zip(slots) {
+            *body = CemeteryRoomBody {
+                facing: slot.station.facing,
+                ground_attack: CemeteryGroundAttack::sample(
+                    slot,
+                    body.ground_attack,
+                ),
+                maneuver: slot.station.maneuver,
+                position: preceding_room.project(slot.station.position),
+                walking: slot.station.walking,
+            };
         }
     }
 }

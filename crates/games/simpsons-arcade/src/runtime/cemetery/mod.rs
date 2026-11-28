@@ -31,6 +31,7 @@
 
 //! Optional registered third-stage entrance art.
 
+mod ground;
 pub(super) mod layers;
 mod special;
 
@@ -45,8 +46,9 @@ use games_platform::ir::storage::bundle::BundleSource;
 
 use super::{Art, Scene, failure, open_bundle, scenery, world};
 use crate::{
-    Cabinet, CemeteryEntrance, CemeteryPhase, CemeteryPose, CemeteryRoomBody,
-    Facing, JumpMotion, Maneuver, Player, Point, WalkMotion,
+    Cabinet, CemeteryEntrance, CemeteryGroundAttack, CemeteryPhase,
+    CemeteryPose, CemeteryRoomBody, Facing, JumpMotion, Maneuver, Player,
+    Point, WalkMotion,
 };
 
 pub(super) const ROLE_COUNT: usize = 16;
@@ -56,11 +58,13 @@ const ANIMATED_ROLE_COUNT: usize = ROLE_COUNT + EXTRA_LANDING_COUNT;
 const WALKING_ROLE_COUNT: usize = ANIMATED_ROLE_COUNT + 60;
 const MARKER_ROLE_COUNT: usize = WALKING_ROLE_COUNT + 4;
 const SPECIAL_ROLE_COUNT: usize = MARKER_ROLE_COUNT + 12;
+const GROUND_ROLE_COUNT: usize = SPECIAL_ROLE_COUNT + 34;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
 const MARKER_ATLAS_BYTES: usize = WALKING_ATLAS_BYTES + 15_872;
 const SPECIAL_ATLAS_BYTES: usize = MARKER_ATLAS_BYTES + 122_708;
+const GROUND_ATLAS_BYTES: usize = SPECIAL_ATLAS_BYTES + 404_236;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -70,7 +74,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; SPECIAL_ROLE_COUNT] = [
+const ROLES: [Role; GROUND_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -195,6 +199,41 @@ const ROLES: [Role; SPECIAL_ROLE_COUNT] = [
     Role::new("actor/room-lisa", (48, 55), (-82i32, -31i32)),
     Role::new("actor/room-lisa", (55, 51), (-73i32, -27i32)),
     Role::new("actor/room-lisa", (52, 50), (-73i32, -26i32)),
+    // Registered neutral then moving ground-action families.
+    Role::new("actor/room-marge", (59, 72), (-110i32, -48i32)),
+    Role::new("actor/room-marge", (42, 64), (-90i32, -40i32)),
+    Role::new("actor/room-marge", (37, 62), (-87i32, -38i32)),
+    Role::new("actor/room-marge", (65, 60), (-93i32, -36i32)),
+    Role::new("actor/room-marge", (81, 63), (-103i32, -39i32)),
+    Role::new("actor/room-homer", (40, 63), (-69i32, -40i32)),
+    Role::new("actor/room-homer", (40, 62), (-68i32, -39i32)),
+    Role::new("actor/room-homer", (44, 62), (-68i32, -39i32)),
+    Role::new("actor/room-homer", (52, 63), (-68i32, -40i32)),
+    Role::new("actor/room-homer", (51, 62), (-69i32, -39i32)),
+    Role::new("actor/room-homer", (38, 63), (-68i32, -40i32)),
+    Role::new("actor/room-homer", (37, 63), (-67i32, -40i32)),
+    Role::new("actor/room-homer", (47, 62), (-64i32, -39i32)),
+    Role::new("actor/room-bart", (46, 43), (-74i32, -19i32)),
+    Role::new("actor/room-bart", (45, 41), (-66i32, -17i32)),
+    Role::new("actor/room-bart", (56, 38), (-71i32, -14i32)),
+    Role::new("actor/room-lisa", (39, 47), (-94i32, -23i32)),
+    Role::new("actor/room-lisa", (44, 47), (-88i32, -23i32)),
+    Role::new("actor/room-lisa", (75, 47), (-77i32, -23i32)),
+    Role::new("actor/room-lisa", (62, 47), (-77i32, -23i32)),
+    Role::new("actor/room-marge", (58, 71), (-85i32, -47i32)),
+    Role::new("actor/room-marge", (73, 72), (-86i32, -48i32)),
+    Role::new("actor/room-marge", (78, 72), (-86i32, -48i32)),
+    Role::new("actor/room-homer", (47, 63), (-76i32, -40i32)),
+    Role::new("actor/room-homer", (40, 63), (-69i32, -40i32)),
+    Role::new("actor/room-homer", (44, 63), (-65i32, -40i32)),
+    Role::new("actor/room-homer", (41, 62), (-64i32, -39i32)),
+    Role::new("actor/room-bart", (32, 60), (-76i32, -37i32)),
+    Role::new("actor/room-bart", (68, 57), (-72i32, -34i32)),
+    Role::new("actor/room-bart", (67, 48), (-72i32, -25i32)),
+    Role::new("actor/room-bart", (67, 49), (-72i32, -25i32)),
+    Role::new("actor/room-lisa", (39, 48), (-94i32, -24i32)),
+    Role::new("actor/room-lisa", (37, 58), (-92i32, -34i32)),
+    Role::new("actor/room-lisa", (56, 47), (-70i32, -23i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -313,7 +352,9 @@ impl Selection {
     }
 
     pub(super) const fn atlas_bytes(&self) -> usize {
-        if self.room_specials() {
+        if self.room_ground_attacks() {
+            GROUND_ATLAS_BYTES
+        } else if self.room_specials() {
             SPECIAL_ATLAS_BYTES
         } else if self.count() == MARKER_ROLE_COUNT {
             MARKER_ATLAS_BYTES
@@ -361,7 +402,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(SPECIAL_ROLE_COUNT.saturating_add(1))
+            .take(GROUND_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -371,9 +412,10 @@ impl Selection {
                 | WALKING_ROLE_COUNT
                 | MARKER_ROLE_COUNT
                 | SPECIAL_ROLE_COUNT
+                | GROUND_ROLE_COUNT
         ) {
             return Err(failure(
-                "expected 16, 44, 104, 108 or 120 cemetery roles",
+                "expected 16, 44, 104, 108, 120 or 154 cemetery roles",
             ));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
@@ -386,8 +428,12 @@ impl Selection {
         Ok(selection)
     }
 
+    pub(super) const fn room_ground_attacks(&self) -> bool {
+        self.count() == GROUND_ROLE_COUNT
+    }
+
     pub(super) const fn room_specials(&self) -> bool {
-        self.count() == SPECIAL_ROLE_COUNT
+        self.count() >= SPECIAL_ROLE_COUNT
     }
 
     pub(super) const fn room_walking(&self) -> bool {
@@ -441,6 +487,33 @@ impl CemeteryArt {
 
     pub(super) const fn first(&self) -> Player {
         self.first
+    }
+
+    fn ground_draw(
+        &self,
+        player: Player,
+        body: CemeteryRoomBody,
+        sample: CemeteryGroundAttack,
+    ) -> Option<SpriteDraw> {
+        let (art, role) = match ground::source(player, sample)? {
+            ground::Source::Room(index) => {
+                self.role(SPECIAL_ROLE_COUNT.saturating_add(index))?
+            },
+            ground::Source::Idle => {
+                let idle = CemeteryRoomBody {
+                    maneuver: Maneuver::Idle,
+                    walking: None,
+                    ..body
+                };
+                let (index, _) = room_role(player, idle)?;
+                self.role(index)?
+            },
+            ground::Source::BartDescent => (
+                *self.jumps.get(Player::Bart.index())?.get(2)?.as_ref()?,
+                *JUMP_ROLES.get(Player::Bart.index())?.get(2)?,
+            ),
+        };
+        airborne_draw(art, role, body)
     }
 
     fn jump_draw(
@@ -536,7 +609,7 @@ impl CemeteryArt {
             && let Some(visible) = entrance.room_body_visibility()
             && let Some(room) = entrance.room()
         {
-            self.queue_room(room.presentation_bodies(), visible, draws);
+            self.queue_room(&room.presentation_bodies(), visible, draws);
         } else {
             draws.extend(
                 Player::ALL
@@ -549,7 +622,7 @@ impl CemeteryArt {
 
     fn queue_room(
         &self,
-        bodies: [CemeteryRoomBody; 4],
+        bodies: &[CemeteryRoomBody; 4],
         visible: bool,
         draws: &mut Vec<SpriteDraw>,
     ) {
@@ -577,6 +650,11 @@ impl CemeteryArt {
         player: Player,
         body: CemeteryRoomBody,
     ) -> Option<SpriteDraw> {
+        if self.roles.len() == GROUND_ROLE_COUNT
+            && let Some(sample) = body.ground_attack
+        {
+            return self.ground_draw(player, body, sample);
+        }
         if let Maneuver::Jump(motion) = body.maneuver {
             return self.jump_draw(player, body, motion);
         }
@@ -600,7 +678,7 @@ impl CemeteryArt {
         body: CemeteryRoomBody,
         tick: u8,
     ) -> Option<SpriteDraw> {
-        if self.roles.len() != SPECIAL_ROLE_COUNT {
+        if self.roles.len() < SPECIAL_ROLE_COUNT {
             return None;
         }
         let (art, role) = match special::source(player, tick)? {
@@ -640,28 +718,54 @@ impl CemeteryArt {
         baseline: &[u8],
     ) -> Result<(), RenderError> {
         let (player, walking, maneuver) = sample;
-        let mut body = CemeteryRoomBody {
+        let body = CemeteryRoomBody {
             facing: Facing::Right,
+            ground_attack: None,
             maneuver,
             position: Point { x: 224, y: 176 },
             walking,
         };
-        let right = self
-            .room_draw(player, body)
-            .ok_or(RenderError::InvalidSprite)?;
-        let _presented = scene.present([24, 22, 30], &[right])?;
-        let right_pixels = scene.readback()?;
-        scenery::verify_pixels(&right_pixels, baseline, world::BASE_WIDTH, &[
-            right.destination,
-        ])?;
-        body.facing = Facing::Left;
-        let left = self
-            .room_draw(player, body)
-            .ok_or(RenderError::InvalidSprite)?;
-        let _reflected = scene.present([24, 22, 30], &[left])?;
-        let left_pixels = scene.readback()?;
-        if !reflected_room_pixels(&right_pixels, &left_pixels) {
-            return Err(failure("reflected cemetery body pixels differ"));
+        self.verify_room_sample(scene, (player, body), baseline)
+    }
+
+    fn verify_room_ground_attacks(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        baseline: &[u8],
+    ) -> Result<(), RenderError> {
+        if self.roles.len() != GROUND_ROLE_COUNT {
+            return Ok(());
+        }
+        for player in Player::ALL {
+            self.verify_room_ground_track(scene, (player, false), baseline)?;
+            self.verify_room_ground_track(scene, (player, true), baseline)?;
+        }
+        write_status(format_args!(
+            "Cemetery ground attacks: 152 reflected sample pairs"
+        ))
+        .map_err(failure)
+    }
+
+    fn verify_room_ground_track(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        (player, moving): (Player, bool),
+        baseline: &[u8],
+    ) -> Result<(), RenderError> {
+        let mut maneuver = Maneuver::Attack { moving, tick: 0 };
+        for tick in 0u8..=18 {
+            let body = CemeteryRoomBody {
+                facing: Facing::Right,
+                ground_attack: Some(CemeteryGroundAttack {
+                    moving: moving && tick > 0,
+                    tick,
+                }),
+                maneuver,
+                position: Point { x: 224, y: 176 },
+                walking: None,
+            };
+            self.verify_room_sample(scene, (player, body), baseline)?;
+            maneuver = maneuver.advance(player, false);
         }
         Ok(())
     }
@@ -740,14 +844,15 @@ impl CemeteryArt {
         }
         let bodies = [CemeteryRoomBody {
             facing: Facing::Right,
+            ground_attack: None,
             maneuver: Maneuver::Idle,
             position: point,
             walking: None,
         }; 4];
         let mut hidden = Vec::new();
         let mut visible = Vec::new();
-        self.queue_room(bodies, false, &mut hidden);
-        self.queue_room(bodies, true, &mut visible);
+        self.queue_room(&bodies, false, &mut hidden);
+        self.queue_room(&bodies, true, &mut visible);
         if hidden.len() != 4
             || visible.len() != 8
             || !visible.ends_with(&hidden)
@@ -758,12 +863,38 @@ impl CemeteryArt {
             .map_err(failure)
     }
 
+    fn verify_room_sample(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+        (player, mut body): (Player, CemeteryRoomBody),
+        baseline: &[u8],
+    ) -> Result<(), RenderError> {
+        let right = self
+            .room_draw(player, body)
+            .ok_or(RenderError::InvalidSprite)?;
+        let _presented = scene.present([24, 22, 30], &[right])?;
+        let right_pixels = scene.readback()?;
+        scenery::verify_pixels(&right_pixels, baseline, world::BASE_WIDTH, &[
+            right.destination,
+        ])?;
+        body.facing = Facing::Left;
+        let left = self
+            .room_draw(player, body)
+            .ok_or(RenderError::InvalidSprite)?;
+        let _reflected = scene.present([24, 22, 30], &[left])?;
+        let left_pixels = scene.readback()?;
+        if !reflected_room_pixels(&right_pixels, &left_pixels) {
+            return Err(failure("reflected cemetery body pixels differ"));
+        }
+        Ok(())
+    }
+
     fn verify_room_specials(
         &self,
         scene: &mut SceneSession<'_, '_>,
         baseline: &[u8],
     ) -> Result<(), RenderError> {
-        if self.roles.len() != SPECIAL_ROLE_COUNT {
+        if self.roles.len() < SPECIAL_ROLE_COUNT {
             return Ok(());
         }
         for player in Player::ALL {
@@ -818,7 +949,8 @@ impl CemeteryArt {
             .map_err(failure)?;
         self.verify_room_jumps(scene, &baseline)?;
         self.verify_room_markers(scene)?;
-        self.verify_room_specials(scene, &baseline)
+        self.verify_room_specials(scene, &baseline)?;
+        self.verify_room_ground_attacks(scene, &baseline)
     }
 }
 
@@ -899,9 +1031,9 @@ fn marker_digest(
 }
 
 fn room_order(
-    bodies: [CemeteryRoomBody; 4],
+    bodies: &[CemeteryRoomBody; 4],
 ) -> [(Player, CemeteryRoomBody); 4] {
-    let [marge, homer, bart, lisa] = bodies;
+    let [marge, homer, bart, lisa] = *bodies;
     let mut order = [
         (Player::Marge, marge),
         (Player::Homer, homer),
@@ -1154,11 +1286,12 @@ mod tests {
     fn room_draw_order_reverses_depth_and_cabinet_ties() {
         let body = |y| CemeteryRoomBody {
             facing: Facing::Right,
+            ground_attack: None,
             maneuver: Maneuver::Idle,
             position: Point { x: 224, y },
             walking: None,
         };
-        let order = |bodies| room_order(bodies).map(|(player, _)| player);
+        let order = |bodies| room_order(&bodies).map(|(player, _)| player);
         assert_eq!(order([body(176); 4]), [
             Player::Lisa,
             Player::Bart,
@@ -1206,6 +1339,7 @@ mod tests {
             (WALKING_ROLE_COUNT, WALKING_ATLAS_BYTES),
             (MARKER_ROLE_COUNT, MARKER_ATLAS_BYTES),
             (SPECIAL_ROLE_COUNT, SPECIAL_ATLAS_BYTES),
+            (GROUND_ROLE_COUNT, GROUND_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(
@@ -1285,6 +1419,7 @@ mod tests {
         ]) {
             let mut body = CemeteryRoomBody {
                 facing: Facing::Right,
+                ground_attack: None,
                 maneuver: Maneuver::Idle,
                 position: point,
                 walking: None,
@@ -1315,6 +1450,7 @@ mod tests {
     ) {
         let mut body = CemeteryRoomBody {
             facing: Facing::Right,
+            ground_attack: None,
             maneuver: Maneuver::Idle,
             position: Point { x: 224, y: 176 },
             walking,

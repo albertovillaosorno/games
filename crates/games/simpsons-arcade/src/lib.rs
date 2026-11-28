@@ -55,8 +55,8 @@ use std::time::Duration;
 pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
 pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
 pub use cemetery::{
-    CemeteryBody, CemeteryEntrance, CemeteryPhase, CemeteryPose, CemeteryRoom,
-    CemeteryRoomBody,
+    CemeteryBody, CemeteryEntrance, CemeteryGroundAttack, CemeteryPhase,
+    CemeteryPose, CemeteryRoom, CemeteryRoomBody,
 };
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{
@@ -4305,6 +4305,98 @@ mod tests {
         assert_eq!(state.stations().map(|station| station.attack_cues), [
             2, 0, 1, 1
         ]);
+    }
+
+    #[test]
+    fn cemetery_ground_art_retains_latch_and_recovery_on_both_parities() {
+        for facing in [Facing::Left, Facing::Right] {
+            for moving in [false, true] {
+                assert_ground_art_samples(facing, moving, 0);
+                assert_ground_art_samples(facing, moving, 1);
+            }
+        }
+    }
+
+    fn assert_ground_art_samples(facing: Facing, moving: bool, shift: u64) {
+        let mut state = centered_cemetery_stations(facing);
+        advance_empty(&mut state, 0..shift);
+        let origins = state.stations().map(|station| station.position);
+        let direction = match facing {
+            Facing::Left => Control::Left,
+            Facing::Right => Control::Right,
+        };
+        let mut actions = Vec::new();
+        for player in Player::ALL {
+            if moving {
+                actions.push(change(player, direction, true));
+            }
+            actions.extend(pulse(player, Control::Primary));
+        }
+        state.input_step(0, &actions);
+        for tick in 0u8..20 {
+            let previous = state.stations();
+            state.input_step(0, &[]);
+            assert_delayed_cemetery_actions(&state, &previous);
+            let bodies = state
+                .cemetery_entrance()
+                .and_then(CemeteryEntrance::room)
+                .unwrap_or_default()
+                .presentation_bodies();
+            for (body, origin) in bodies.into_iter().zip(origins) {
+                assert_eq!(body.facing, facing);
+                assert_eq!(body.walking, None);
+                assert_eq!(
+                    body.ground_attack,
+                    (tick < 19).then_some(CemeteryGroundAttack {
+                        moving: moving && tick > 0,
+                        tick
+                    })
+                );
+                assert_eq!(body.position, Point {
+                    x: origin
+                        .x
+                        .saturating_add(ground_art_drift(facing, moving, tick)),
+                    ..origin
+                });
+            }
+        }
+    }
+
+    fn centered_cemetery_stations(facing: Facing) -> Cabinet {
+        let mut state = ready_cemetery_room();
+        let mut actions =
+            Player::ALL.map(|player| change(player, Control::Right, true));
+        state.input_step(0, &actions);
+        advance_empty(&mut state, 0..14);
+        actions =
+            Player::ALL.map(|player| change(player, Control::Right, false));
+        state.input_step(0, &actions);
+        if facing == Facing::Left {
+            actions =
+                Player::ALL.map(|player| change(player, Control::Left, true));
+            state.input_step(0, &actions);
+            actions =
+                Player::ALL.map(|player| change(player, Control::Left, false));
+            state.input_step(0, &actions);
+        }
+        state
+    }
+
+    fn ground_art_drift(facing: Facing, moving: bool, tick: u8) -> i16 {
+        const RIGHT: [i16; 20] =
+            [0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4];
+        const LEFT: [i16; 20] = [
+            0, 0, -1, -1, -1, -1, -2, -2, -2, -2, -3, -3, -3, -3, -4, -4, -4,
+            -4, -5, -5,
+        ];
+        if !moving {
+            return 0;
+        }
+        let track = match facing {
+            Facing::Left => LEFT,
+            Facing::Right => RIGHT,
+        };
+        track.get(usize::from(tick)).copied().unwrap_or_default()
     }
 
     fn assert_delayed_cemetery_actions(
