@@ -6742,9 +6742,9 @@ SDL dummy audio device. Mixer and catalogue tests verify sample
 identity, retriggering, optional absence and rejection of wrong extents.
 
 The separately observed board-phase ambient cue and ranked landing
-command remain unresolved; no exact audio parity is claimed. Physical
-speaker and browser entrance-effect acceptance remain open. The
-reference captures and original assets stay private.
+command remain unimplemented; no exact audio parity is claimed.
+Physical speaker acceptance remains open. The reference captures and
+original assets stay private.
 
 The host-consumed Firefox diagnostic now advances the existing fixed
 simulation clock through the two admitted one-player entrance cues.
@@ -6765,6 +6765,31 @@ and exact 2,880,000 second-stage frames. All four runs use the trusted
 directory picker, retain no canvas or preferences and leave the
 owner's ordinary selection unchanged. This is browser software output,
 not physical speaker, ambient or landing-command parity.
+
+### Ambient and ranked landing audio reference
+
+Three original routes establish a 16-board-tick ambient cadence. Two
+additional bounded producer traces confirm the sound-enabled scenery
+object exists from setup tick 12 through tick 167 and is inactive at
+tick 168. Its periodic gate uses the low nibble of the global board
+counter, not the entrance-relative tick; hardware consumes each
+observed submission on the following frame. All ten submissions in
+each traced route satisfy the gate. The observed centered differential
+PCM sample plays 1,572 of its 1,574 canonical frames at 7,990 Hz.
+Normal campaign board-phase provenance, partial-roster duration and
+shared PCM voice admission still require independent verification.
+
+The ranked landing command is a two-phase FM pitch sweep, not a PCM
+catalogue entry. An isolated original sound-interface test with an
+unmodified ROM admits the command twice; an otherwise identical
+control is silent throughout the measured interval. The two centered
+48 kHz stereo captures span 27,786 and 27,803 nonzero-extent frames
+respectively, so a byte-identical waveform is not claimed. A second
+controlled run submits four commands sixteen original frames apart:
+all four restart the same FM channel, and the final voice keys off
+34 original frames after its final admission. The original routed
+commands retain ticks 188, 204, 220 and 236. Neither effect is admitted
+by the Rust runtime yet; local sound captures are not distributed.
 
 ### Protected repeat strike and second actor wind-up
 
