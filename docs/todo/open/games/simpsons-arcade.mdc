@@ -6282,3 +6282,32 @@ reflected ground sample pairs, 120 special pairs, 12 jump pairs,
 Air attacks, enemy objects and exact shadow composition remain
 open. Normal campaign selection of the moving room remains disabled;
 this is not complete room or physical-device acceptance.
+
+### Protected-room air attack registration
+
+Twelve independent four-station controls cover short, fast and
+longer sub-threshold airborne attacks in both horizontal facings
+and input parities. All 204 selected scenes reconstruct exactly.
+Two additional centered Marge-only controls reconstruct 40 scenes
+and resolve the edge clipping of the initial leftward controls.
+
+The isolated 32-, 21- and 39-tick tracks agree on crop identity
+and projected registration at each overlapping action phase.
+All 156 station-phase pairs have exact reflected geometry and
+payload evidence. Thirteen street air-attack poses and two
+additional Lisa crops cover the tracks, including the recurring
+Lisa sequence at later ticks. The last two crops were checked
+against independently published reflected payloads.
+
+The optional 156-role catalogue requires all thirteen reused
+keys and adds only two distinct roles, 14,700 atlas bytes and
+no extra draw reservation. Earlier catalogues remain valid.
+The routed regression checks 1,472 delayed station samples
+across the three observed trajectories and both input parities,
+with centered starting positions to avoid the room bounds.
+The original-art native offscreen smoke passes all 156 reflected
+air-attack tick pairs and preceding protected-room checks.
+
+Enemy objects, exact ground-shadow composition, horizontal camera
+and normal campaign selection remain open. The bounded protected
+room is not complete campaign or physical-device acceptance.

@@ -4308,6 +4308,131 @@ mod tests {
     }
 
     #[test]
+    fn protected_air_attacks_match_three_observed_trajectories() {
+        for facing in [Facing::Left, Facing::Right] {
+            assert_protected_air_profiles(facing, 0);
+            assert_protected_air_profiles(facing, 1);
+        }
+    }
+
+    fn assert_protected_air_profiles(facing: Facing, shift: u64) {
+        let short = [
+            29, 31, 33, 34, 36, 37, 38, 39, 39, 40, 40, 40, 40, 40, 39, 39, 38,
+            37, 35, 34, 32, 30, 28, 26, 24, 21, 19, 16, 13, 9, 6, 2,
+        ];
+        let long = [
+            63, 65, 67, 68, 70, 71, 72, 73, 73, 74, 74, 74, 74, 73, 73, 72, 71,
+            70, 69, 68, 66, 64, 62, 60, 58, 55, 52, 49, 46, 43, 39, 36, 32, 28,
+            24, 19, 15, 10, 5,
+        ];
+        let fast = [
+            81, 79, 77, 75, 73, 70, 67, 64, 61, 57, 53, 49, 45, 40, 35, 30, 25,
+            19, 13, 7, 1,
+        ];
+        assert_protected_air_profile((facing, shift), 4, false, &short);
+        assert_protected_air_profile((facing, shift), 10, true, &long);
+        assert_protected_air_profile((facing, shift), 15, true, &fast);
+    }
+
+    fn assert_protected_air_profile(
+        (facing, shift): (Facing, u64),
+        offset: u64,
+        held: bool,
+        heights: &[i16],
+    ) {
+        let mut state = air_room_stations(facing);
+        advance_empty(&mut state, 0..shift);
+        let origins = state.stations().map(|station| station.position);
+        let actions =
+            Player::ALL.map(|player| change(player, Control::Secondary, true));
+        state.input_step(0, &actions);
+        if held {
+            advance_empty(&mut state, 1..offset);
+        } else {
+            let release = Player::ALL
+                .map(|player| change(player, Control::Secondary, false));
+            state.input_step(0, &release);
+            advance_empty(&mut state, 2..offset);
+        }
+        let attacks = Player::ALL
+            .into_iter()
+            .flat_map(|player| pulse(player, Control::Primary))
+            .collect::<Vec<_>>();
+        state.input_step(0, &attacks);
+        let step = if offset == 15 {
+            4i16
+        } else {
+            2i16
+        };
+        for (tick, height) in (0u8..).zip(heights.iter().copied()) {
+            let previous = state.stations();
+            state.input_step(0, &[]);
+            assert_delayed_cemetery_actions(&state, &previous);
+            assert_protected_air_stations(
+                &previous,
+                origins,
+                (facing, tick),
+                (height, step),
+            );
+        }
+        assert!(
+            state
+                .stations()
+                .iter()
+                .all(|station| { station.maneuver == Maneuver::Idle })
+        );
+    }
+
+    fn air_room_stations(facing: Facing) -> Cabinet {
+        if facing == Facing::Right {
+            return centered_cemetery_stations(facing);
+        }
+        let mut state = ready_cemetery_room();
+        let right =
+            Player::ALL.map(|player| change(player, Control::Right, true));
+        state.input_step(0, &right);
+        advance_empty(&mut state, 1..43);
+        let turn = Player::ALL
+            .into_iter()
+            .flat_map(|player| {
+                [
+                    change(player, Control::Right, false),
+                    change(player, Control::Left, true),
+                ]
+            })
+            .collect::<Vec<_>>();
+        state.input_step(0, &turn);
+        let release =
+            Player::ALL.map(|player| change(player, Control::Left, false));
+        state.input_step(0, &release);
+        state
+    }
+
+    fn assert_protected_air_stations(
+        stations: &[Station; 4],
+        origins: [Point; 4],
+        (facing, tick): (Facing, u8),
+        (height, step): (i16, i16),
+    ) {
+        let distance = i16::from(tick).saturating_add(1).saturating_mul(step);
+        let dx = if facing == Facing::Left {
+            distance.saturating_neg()
+        } else {
+            distance
+        };
+        for (station, origin) in stations.iter().zip(origins) {
+            assert_eq!(station.facing, facing);
+            assert!(matches!(station.maneuver, Maneuver::AirAttack(motion)
+                if motion.tick() == tick));
+            assert_eq!(station.maneuver.elevation(), height);
+            assert_eq!(station.position, Point {
+                x: origin.x.saturating_add(dx),
+                ..origin
+            });
+        }
+    }
+
+    #[test]
     fn cemetery_ground_art_retains_latch_and_recovery_on_both_parities() {
         for facing in [Facing::Left, Facing::Right] {
             for moving in [false, true] {

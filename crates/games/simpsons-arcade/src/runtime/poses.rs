@@ -58,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(35_757);
+    NonZeroU64::MIN.saturating_add(35_887);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -281,6 +281,11 @@ impl Catalogue {
                     Kind::Jump,
                     3,
                 )))
+            && (!self
+                .cemetery
+                .as_deref()
+                .is_some_and(cemetery::Selection::room_air_attacks)
+                || room_air_entries_complete(&self.entries))
     }
 
     fn complete(&self) -> bool {
@@ -921,6 +926,21 @@ fn room_jump_sprites(entries: &PoseEntries) -> cemetery::AirSprites {
     })
 }
 
+fn room_air_entries_complete(entries: &BTreeMap<Key, ContentHash>) -> bool {
+    Player::ALL.into_iter().all(|player| {
+        cemetery::air_attack_keys(player)
+            .into_iter()
+            .flatten()
+            .all(|tick| {
+                entries.contains_key(&station_key(
+                    player,
+                    Kind::AirAttack,
+                    tick,
+                ))
+            })
+    })
+}
+
 fn room_special_entries_complete(entries: &BTreeMap<Key, ContentHash>) -> bool {
     Player::ALL.into_iter().all(|player| {
         cemetery::special_keys(player).into_iter().all(|tick| {
@@ -931,6 +951,13 @@ fn room_special_entries_complete(entries: &BTreeMap<Key, ContentHash>) -> bool {
 
 fn room_sprites(entries: &PoseEntries) -> cemetery::RoomSprites {
     cemetery::RoomSprites {
+        air_attacks: Player::ALL.map(|player| {
+            cemetery::air_attack_keys(player).map(|tick| {
+                entries
+                    .get(&station_key(player, Kind::AirAttack, tick?))
+                    .copied()
+            })
+        }),
         jumps: room_jump_sprites(entries),
         specials: Player::ALL.map(|player| {
             cemetery::special_keys(player).map(|tick| {
@@ -2331,6 +2358,49 @@ mod tests {
         );
         let base = format!("{with_boss}{reused}{descent}");
         assert_cemetery_walking_rejections(&base, &full, layers);
+        assert_cemetery_air_catalogue(&base, &full, layers);
+    }
+
+    fn assert_cemetery_air_catalogue(base: &str, ground: &str, layers: &str) {
+        let keys = Player::ALL
+            .into_iter()
+            .flat_map(|player| {
+                cemetery::air_attack_keys(player).into_iter().flatten().map(
+                    move |tick| {
+                        format!(
+                            "{} air-attack {tick} {HASH}\n",
+                            ["marge", "homer", "bart", "lisa"]
+                                .get(player.index())
+                                .copied()
+                                .unwrap_or_default()
+                        )
+                    },
+                )
+            })
+            .collect::<String>();
+        let air =
+            format!("{} {:064x} {:064x}\n", ground.trim_end(), 634u32, 635u32);
+        let selected = Catalogue::parse(&format!("{base}{keys}{air}{layers}"));
+        let baseline =
+            Catalogue::parse(&format!("{base}{keys}{ground}{layers}"));
+        assert!(selected.is_ok() && baseline.is_ok());
+        if let (Ok(value), Ok(previous)) = (selected, baseline) {
+            assert_eq!(value.count(), previous.count().saturating_add(2));
+            assert_eq!(
+                value.atlas_bytes(),
+                previous.atlas_bytes().saturating_add(14_700)
+            );
+            assert_eq!(
+                value.scenic_sprite_count(),
+                previous.scenic_sprite_count()
+            );
+        }
+        assert!(Catalogue::parse(&format!("{base}{air}{layers}")).is_err());
+        let partial = format!("{} {:064x}\n", ground.trim_end(), 634u32);
+        assert!(
+            Catalogue::parse(&format!("{base}{keys}{partial}{layers}"))
+                .is_err()
+        );
     }
 
     fn assert_partial_marker_rejections(
