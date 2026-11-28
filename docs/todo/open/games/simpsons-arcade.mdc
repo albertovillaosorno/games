@@ -6970,3 +6970,18 @@ Native OpenGL/X11 and Firefox both match 369 original scene samples
 exactly (12 additional), with zero missing or mismatching samples.
 The optional asset selection is local; contact, damage, subsequent
 airborne poses and landing remain unsupported.
+
+### Neutral airborne ground shadow
+
+The optional 190-role cemetery diagnostic reaches presentation tick 373.
+The second airborne pose and its independently registered ground shadow
+add 10,368 atlas bytes and preserve the previous draw capacity. The
+shadow uses the existing shared mask compositor, with separate ground
+and airborne offsets. The 188-role selection retains its earlier stop.
+Tests cover the complete catalogue boundary, invalid mask pixels, fixed
+step elevation and the absence of station damage in this interval.
+Native OpenGL/X11 and isolated Firefox both match all 372 original
+scene samples exactly, including the three additional samples. The
+ordinary launch selection is unchanged. The next meter debit, contact
+policy, station reaction and later airborne and landing poses remain
+outside this diagnostic; physical Android acceptance remains open.

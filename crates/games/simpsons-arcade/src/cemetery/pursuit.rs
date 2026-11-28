@@ -71,8 +71,11 @@ pub enum CemeteryEnemyPose {
         /// Zero-based approach frame.
         phase: u8,
     },
-    /// Left-facing first airborne body.
-    Leap,
+    /// Left-facing airborne body, latched independently of elevation.
+    Leap {
+        /// Zero-based airborne keyframe.
+        phase: u8,
+    },
     /// Left-facing strike, with no contact damage admitted.
     Strike {
         /// Horizontal orientation at the start of the strike.
@@ -277,6 +280,19 @@ impl Pursuer {
         Some(())
     }
 
+    const fn leap_step(&mut self, age: u8) -> Option<()> {
+        if age >= 6 {
+            return None;
+        }
+        if age == 3 {
+            self.pose = Some(CemeteryEnemyPose::Leap { phase: 1 });
+        }
+        self.motion = PursuitMotion::Leap {
+            age: age.saturating_add(1),
+        };
+        Some(())
+    }
+
     fn long_range(&mut self, dx: i32, dy: i32) -> Option<()> {
         self.advance_pose(dx, dy)?;
         self.steering = self.steering.saturating_sub(1);
@@ -423,14 +439,7 @@ impl Pursuer {
                 self.strike_step(tick, (dx, dy), choice)?;
             },
             PursuitMotion::Windup { tick } => self.windup_step(tick),
-            PursuitMotion::Leap { age } => {
-                if age >= 3 {
-                    return None;
-                }
-                self.motion = PursuitMotion::Leap {
-                    age: age.saturating_add(1),
-                };
-            },
+            PursuitMotion::Leap { age } => self.leap_step(age)?,
         }
         let (horizontal, depth) = self.position;
         let (vx, vy) = self.velocity;
@@ -501,7 +510,7 @@ impl Pursuer {
 
     const fn windup_step(&mut self, tick: u8) {
         if tick >= 11 {
-            self.pose = Some(CemeteryEnemyPose::Leap);
+            self.pose = Some(CemeteryEnemyPose::Leap { phase: 0 });
             self.velocity = (-512i32, 0i32);
             self.motion = PursuitMotion::Leap { age: 0 };
         } else {

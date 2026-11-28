@@ -58,7 +58,10 @@ const FIRST_WALK_TICK: u64 = 242;
 const LAST_WALK_TICK: u64 = 357;
 const FIRST_PROTECTED_BODY_SAMPLE: u64 = 240;
 const LAST_PROTECTED_BODY_SAMPLE: u64 = 358;
+#[cfg(any(test, feature = "native-preview"))]
 const LAST_NEUTRAL_PREVIEW_SAMPLE: u64 = 370;
+#[cfg(any(test, feature = "native-preview"))]
+const LAST_SHADOW_PREVIEW_SAMPLE: u64 = 373;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -192,7 +195,7 @@ pub struct CemeteryRoom {
     depth_offset: i16,
     enemy_alignment: bool,
     enemy_choice_seed: Option<u16>,
-    neutral_enemy_preview: bool,
+    neutral_preview_end: Option<u64>,
     presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
     presentation_enemies: Option<[CemeteryEnemyApproach; 2]>,
@@ -206,7 +209,7 @@ impl Default for CemeteryRoom {
             depth_offset: 0,
             enemy_alignment: false,
             enemy_choice_seed: None,
-            neutral_enemy_preview: false,
+            neutral_preview_end: None,
             presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
             presentation_enemies: None,
@@ -297,11 +300,9 @@ impl CemeteryRoom {
         {
             self.pursuit = None;
         }
-        let last_step = if self.neutral_enemy_preview {
-            LAST_NEUTRAL_PREVIEW_SAMPLE.saturating_sub(1)
-        } else {
-            LAST_WALK_TICK
-        };
+        let last_step = self
+            .neutral_preview_end
+            .map_or(LAST_WALK_TICK, |end| end.saturating_sub(1));
         if tick > last_step {
             self.pursuit = None;
         } else if tick >= FIRST_ENEMY_MOVEMENT
@@ -554,9 +555,13 @@ impl CemeteryEntrance {
     // Neutral source-scene diagnostic only. The unprotected contact
     // and damage policy remains outside the admitted playable room.
     #[cfg(any(test, feature = "native-preview"))]
-    pub(super) const fn enable_neutral_enemy_preview(&mut self) {
+    pub(super) const fn enable_neutral_enemy_preview(&mut self, shadow: bool) {
         if let Some(room) = &mut self.room {
-            room.neutral_enemy_preview = true;
+            room.neutral_preview_end = Some(if shadow {
+                LAST_SHADOW_PREVIEW_SAMPLE
+            } else {
+                LAST_NEUTRAL_PREVIEW_SAMPLE
+            });
         }
     }
 
@@ -729,10 +734,13 @@ impl CemeteryEntrance {
     #[must_use]
     pub fn room_body_visibility(self) -> Option<bool> {
         if self.first == Player::Marge
-            && self.room().is_some_and(|room| room.neutral_enemy_preview)
-            && (LAST_PROTECTED_BODY_SAMPLE.saturating_add(1)
-                ..=LAST_NEUTRAL_PREVIEW_SAMPLE)
-                .contains(&self.tick)
+            && self
+                .room()
+                .and_then(|room| room.neutral_preview_end)
+                .is_some_and(|end| {
+                    (LAST_PROTECTED_BODY_SAMPLE.saturating_add(1)..=end)
+                        .contains(&self.tick)
+                })
         {
             return Some(true);
         }
@@ -1401,10 +1409,13 @@ mod tests {
                 0,
             ),
             360..=366 => (CemeteryEnemyPose::Windup, 250, 0),
-            367 => (CemeteryEnemyPose::Leap, 248, 4),
-            368 => (CemeteryEnemyPose::Leap, 246, 7),
-            369 => (CemeteryEnemyPose::Leap, 244, 11),
-            _ => (CemeteryEnemyPose::Leap, 242, 14),
+            367 => (CemeteryEnemyPose::Leap { phase: 0 }, 248, 4),
+            368 => (CemeteryEnemyPose::Leap { phase: 0 }, 246, 7),
+            369 => (CemeteryEnemyPose::Leap { phase: 0 }, 244, 11),
+            370 => (CemeteryEnemyPose::Leap { phase: 0 }, 242, 14),
+            371 => (CemeteryEnemyPose::Leap { phase: 1 }, 240, 17),
+            372 => (CemeteryEnemyPose::Leap { phase: 1 }, 238, 20),
+            _ => (CemeteryEnemyPose::Leap { phase: 1 }, 236, 22),
         };
         [
             CemeteryEnemyApproach {
@@ -1423,13 +1434,22 @@ mod tests {
     }
 
     #[test]
-    fn neutral_enemy_preview_stops_before_unverified_effect() {
+    fn neutral_enemy_preview_stops_before_unregistered_shadow() {
+        verify_neutral_preview(false, 371);
+    }
+
+    #[test]
+    fn shadow_enemy_preview_stops_before_station_meter_debit() {
+        verify_neutral_preview(true, 374);
+    }
+
+    fn verify_neutral_preview(shadow: bool, terminal: u64) {
         let mut entrance = arrival(Player::Marge).at(237);
         entrance.enable_room();
         entrance.enable_enemy_strike(0x1207);
-        entrance.enable_neutral_enemy_preview();
+        entrance.enable_neutral_enemy_preview(shadow);
         let mut slots = room_slots();
-        for tick in 238..=371 {
+        for tick in 238..=terminal {
             for (slot, held) in slots.iter_mut().zip(strike_controls(0, tick)) {
                 slot.held = held;
             }
@@ -1446,14 +1466,24 @@ mod tests {
                 (false, false),
                 "{tick}"
             );
-            if tick == 371 {
+            if tick == terminal {
                 assert_eq!(enemies, None);
                 assert_eq!(entrance.room_body_visibility(), None);
                 break;
             }
             assert_eq!(entrance.room_body_visibility(), Some(true));
             assert_eq!(enemies, Some(expected_neutral_preview(tick)), "{tick}");
+            assert_station_health(&slots);
         }
+    }
+
+    fn assert_station_health(slots: &[Slot; 4]) {
+        assert!(
+            slots
+                .iter()
+                .all(|slot| slot.station.health == crate::PLAYER_HEALTH
+                    && slot.station.hurt_cues == 0)
+        );
     }
 
     #[test]

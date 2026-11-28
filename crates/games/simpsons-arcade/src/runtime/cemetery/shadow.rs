@@ -36,7 +36,7 @@ use games_platform::ir::scene::SpriteDraw;
 use super::super::{Art, dimension, failure};
 
 const HEIGHT: usize = 196;
-const MASK: [u8; 4] = [0, 0, 0, 102];
+pub(super) const MASK: [u8; 4] = [0, 0, 0, 102];
 const TOP: i32 = 28;
 const WIDTH: usize = 320;
 
