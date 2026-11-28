@@ -5886,6 +5886,18 @@ single-coverage sampling, including horizontal and vertical seams.
 These offscreen OpenGL readbacks verify sprite-free composition;
 they do not establish a moving-room renderer or physical acceptance.
 
+The scene-layer publisher now validates complete observations before
+staging three independent RGBA maps and the backdrop. The layer
+registration and camera offset remain separate from map content.
+A synthetic round trip checks canonical records and payload deduplication.
+No original assets have been published by this diagnostic.
+
+The bounded room simulation retains the preceding fixed-step camera
+offset separately from the current movement projection. Its presentation
+regression checks all 119 observed offset and animation-phase pairs,
+including the downward and upward transitions and stationary hold.
+This does not yet connect the layer assets to the runtime.
+
 A read-only actor crop diagnostic admits all 59 visible-body samples
 and 236 explicitly selected object groups. Incorrect DMA-phase
 pairings reject inactive objects; an invalid later group produces no
@@ -5893,6 +5905,12 @@ partial crop report. The stationary Homer and Lisa each retain one
 crop identity, and their vertical origins compensate exactly for the
 preceding object DMA camera offset across all samples. The moving
 Marge and Bart have 18 and 14 distinct crop identities respectively.
+All 34 distinct crop identities have invariant registration offsets
+relative to their preceding projected station coordinates across the
+236 observations. Four match existing final landing-role payloads
+exactly, with their stored content hashes verified. The remaining 30
+have no exact payload match in the inspected entrance and walking
+catalogue; padded atlases may still contain equivalent pixels.
 These are sampled crops, not complete movement or action animation
 tables. General actor registration, occlusion and runtime composition
 remain open; no additional art or campaign progression is admitted.
