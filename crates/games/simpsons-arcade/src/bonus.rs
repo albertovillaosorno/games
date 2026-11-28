@@ -961,6 +961,107 @@ mod tests {
     }
 
     #[test]
+    fn departures_match_every_ranked_motion_tick() {
+        let motion = expected_departure_motion();
+        // All station subsets, tied scores, four distinct ranks and
+        // zero-score ties exercise the independent ranked delays.
+        for points in [[64, 0, 32, 32], [64, 32, 16, 8], [0; 4], [1; 4]] {
+            for mask in 0u8..16 {
+                assert_departure_timeline(masked_scores(points, mask), &motion);
+            }
+        }
+    }
+
+    fn masked_scores(points: [u8; 4], mut mask: u8) -> [Option<u8>; 4] {
+        points.map(|score| {
+            let admitted = mask & 1 != 0;
+            mask >>= 1u32;
+            admitted.then_some(score)
+        })
+    }
+
+    fn expected_departure_motion() -> [BonusDeparture; 159] {
+        // Integrate the observed velocities one tick at a time rather
+        // than reuse the closed-form displacement calculation.
+        let mut balloon = 0u32;
+        let mut character = 0u32;
+        let mut velocity = 160u32;
+        from_fn(|elapsed| {
+            if elapsed >= 34 {
+                velocity = velocity.saturating_add(8);
+            }
+            if elapsed >= 2 {
+                balloon = balloon.saturating_add(velocity);
+            }
+            if elapsed >= 33 {
+                character = character.saturating_add(velocity);
+            }
+            BonusDeparture::Rising { balloon, character }
+        })
+    }
+
+    fn expected_departure(
+        group: Option<ExpectedScore>,
+        tick: u16,
+        motion: &[BonusDeparture; 159],
+    ) -> Option<BonusDeparture> {
+        let elapsed =
+            tick.checked_sub(u16::from(group?.rank).saturating_mul(15))?;
+        Some(
+            motion
+                .get(usize::from(elapsed))
+                .copied()
+                .unwrap_or(BonusDeparture::Departed),
+        )
+    }
+
+    fn assert_departure_timeline(
+        scores: [Option<u8>; 4],
+        motion: &[BonusDeparture; 159],
+    ) {
+        let mut ordered: Vec<_> = scores.into_iter().flatten().collect();
+        ordered.sort_unstable_by(|left, right| right.cmp(left));
+        ordered.dedup();
+        let groups = expected_result_groups(scores, &ordered);
+        let mut bonus = Bonus::new(scores.map(|score| score.is_some()));
+        bonus.phase = BonusPhase::Results;
+        bonus.result = Some(ResultSequence {
+            scores,
+            stage: ResultStage::Exit,
+            stage_tick: 0,
+        });
+        let end = groups
+            .into_iter()
+            .flatten()
+            .map(|group| {
+                160u16.saturating_add(u16::from(group.rank).saturating_mul(15))
+            })
+            .max()
+            .unwrap_or(1);
+        for tick in 0..=end {
+            for (player, group) in Player::ALL.into_iter().zip(groups) {
+                assert_eq!(
+                    bonus.departure(player),
+                    expected_departure(group, tick, motion),
+                );
+                assert_eq!(
+                    bonus.inflation(player),
+                    group.map(|sample| sample.points),
+                );
+            }
+            assert_eq!(
+                bonus.phase(),
+                if tick == end {
+                    BonusPhase::Complete
+                } else {
+                    BonusPhase::Results
+                },
+            );
+            bonus.advance([true; 4], true);
+        }
+    }
+
+    #[test]
     fn results_reveal_then_count_without_changing_scores() {
         let mut bonus = winning_results();
         assert_eq!(bonus.displayed_result(Player::Marge), None);
