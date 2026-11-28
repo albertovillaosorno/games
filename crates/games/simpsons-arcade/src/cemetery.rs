@@ -114,6 +114,7 @@ pub struct CemeteryBody {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CemeteryRoom {
     depth_offset: i16,
+    presentation_depth_offset: i16,
     walk_depth: [i16; 4],
 }
 
@@ -153,6 +154,8 @@ impl CemeteryRoom {
                 }
             },
         );
+        // Displayed tile state observes the preceding simulation sample.
+        self.presentation_depth_offset = self.depth_offset;
         // A party of four can request a pan, not four times its speed.
         self.depth_offset = self
             .depth_offset
@@ -186,6 +189,14 @@ impl CemeteryRoom {
     #[must_use]
     pub const fn depth_offset(self) -> i16 {
         self.depth_offset
+    }
+
+    /// Camera offset consumed by the displayed tile layers.
+    ///
+    /// Original tile-state sampling precedes the current room step.
+    #[must_use]
+    pub const fn presentation_depth_offset(self) -> i16 {
+        self.presentation_depth_offset
     }
 
     /// Project a room world position into camera-relative record space.
@@ -476,6 +487,24 @@ mod tests {
     use super::super::Control;
     use super::*;
 
+    // Phase starts from the independent 119-frame moving-room observation.
+    const BACKDROP_PHASE_STARTS: [(u64, u8); 14] = [
+        (239, 3),
+        (242, 2),
+        (249, 1),
+        (256, 0),
+        (270, 1),
+        (277, 2),
+        (284, 3),
+        (298, 2),
+        (305, 1),
+        (312, 0),
+        (326, 1),
+        (333, 2),
+        (340, 3),
+        (354, 2),
+    ];
+
     fn arrival(first: Player) -> CemeteryEntrance {
         let mut state = CemeteryEntrance::new([true; 4], first);
         for _ in 0u64..192 {
@@ -561,6 +590,10 @@ mod tests {
             let (offset, depth) = downward_sample(tick);
             let idle = 176i16.saturating_add(offset);
             assert_eq!(room.depth_offset(), offset);
+            assert_eq!(
+                room.presentation_depth_offset(),
+                downward_sample(tick.saturating_sub(1)).0,
+            );
             assert_eq!(room_positions(room, &slots), [
                 Point {
                     x: 116i16.saturating_add(tick.saturating_mul(2)),
@@ -603,6 +636,10 @@ mod tests {
             assert!(room.advance(&mut slots, [PendingManeuver::default(); 4]));
             let (offset, depth) = upward_sample(tick);
             assert_eq!(room.depth_offset(), offset);
+            assert_eq!(
+                room.presentation_depth_offset(),
+                upward_sample(tick.saturating_sub(1)).0,
+            );
             assert_eq!(room_positions(room, &slots), [
                 Point {
                     x: 196i16.saturating_sub(tick.saturating_mul(2)),
@@ -685,6 +722,56 @@ mod tests {
     #[test]
     fn room_party_camera_does_not_multiply_scroll_speed() {
         assert_reversal(true);
+    }
+
+    fn observed_backdrop_offset(tick: u64) -> i16 {
+        let prior = i16::try_from(tick.saturating_sub(1)).unwrap_or_default();
+        match prior {
+            ..=241 => 0,
+            242..=281 => downward_sample(prior.saturating_sub(241)).0,
+            282..=289 => 31,
+            290..=329 => upward_sample(prior.saturating_sub(289)).0,
+            _ => 15,
+        }
+    }
+
+    fn apply_diagonal_schedule(slots: &mut [Slot; 4], tick: u64) {
+        let [marge, _, bart, _] = slots;
+        (marge.held, bart.held) = match tick {
+            242..=281 => (
+                Control::Down.mask() | Control::Right.mask(),
+                Control::Down.mask() | Control::Left.mask(),
+            ),
+            290..=329 => (
+                Control::Up.mask() | Control::Left.mask(),
+                Control::Up.mask() | Control::Right.mask(),
+            ),
+            _ => (0, 0),
+        };
+    }
+
+    #[test]
+    fn moving_backdrop_matches_all_aligned_phase_and_offset_samples() {
+        let mut state = arrival(Player::Marge).at(238);
+        state.enable_room();
+        let mut slots = room_slots();
+        for tick in 239..=357 {
+            apply_diagonal_schedule(&mut slots, tick);
+            state.advance(false);
+            let advanced =
+                state.advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            assert_eq!(advanced, tick >= FIRST_WALK_TICK);
+            let expected_phase = BACKDROP_PHASE_STARTS
+                .into_iter()
+                .rev()
+                .find_map(|(start, phase)| (tick >= start).then_some(phase));
+            assert_eq!(state.background_phase(), expected_phase, "tick {tick}");
+            assert_eq!(
+                state.room().map(CemeteryRoom::presentation_depth_offset),
+                Some(observed_backdrop_offset(tick)),
+                "tick {tick}",
+            );
+        }
     }
 
     #[test]
