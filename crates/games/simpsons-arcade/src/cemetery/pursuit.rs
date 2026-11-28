@@ -281,13 +281,15 @@ impl Pursuer {
     }
 
     const fn leap_step(&mut self, age: u8) -> Option<()> {
-        if age >= 12 {
+        if age >= 21 {
             return None;
         }
         if age == 3 {
             self.pose = Some(CemeteryEnemyPose::Leap { phase: 1 });
         } else if age == 7 {
             self.pose = Some(CemeteryEnemyPose::Leap { phase: 2 });
+        } else if age == 12 {
+            self.pose = Some(CemeteryEnemyPose::Leap { phase: 3 });
         }
         self.motion = PursuitMotion::Leap {
             age: age.saturating_add(1),
@@ -727,7 +729,7 @@ fn stations_admitted(slots: &[Slot; 4], contact_preview: bool) -> bool {
                 || (contact_preview
                     && player == Player::Lisa
                     && matches!(slot.station.maneuver, Maneuver::Hurt {
-                        tick: 0..=4
+                        tick: 0..=13
                     })))
     })
 }

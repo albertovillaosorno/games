@@ -69,6 +69,7 @@ const RETREAT_ROLE_COUNT: usize = STRIKE_ROLE_COUNT + 3;
 const NEUTRAL_PREVIEW_ROLE_COUNT: usize = RETREAT_ROLE_COUNT + 2;
 const SHADOW_PREVIEW_ROLE_COUNT: usize = NEUTRAL_PREVIEW_ROLE_COUNT + 2;
 const CONTACT_PREVIEW_ROLE_COUNT: usize = SHADOW_PREVIEW_ROLE_COUNT + 4;
+const REACTION_PREVIEW_ROLE_COUNT: usize = CONTACT_PREVIEW_ROLE_COUNT + 2;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
@@ -83,6 +84,8 @@ const RETREAT_ATLAS_BYTES: usize = STRIKE_ATLAS_BYTES + 21_444;
 const NEUTRAL_PREVIEW_ATLAS_BYTES: usize = RETREAT_ATLAS_BYTES + 16_736;
 const SHADOW_PREVIEW_ATLAS_BYTES: usize = NEUTRAL_PREVIEW_ATLAS_BYTES + 10_368;
 const CONTACT_PREVIEW_ATLAS_BYTES: usize = SHADOW_PREVIEW_ATLAS_BYTES + 19_860;
+const REACTION_PREVIEW_ATLAS_BYTES: usize =
+    CONTACT_PREVIEW_ATLAS_BYTES + 18_248;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -92,7 +95,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; CONTACT_PREVIEW_ROLE_COUNT] = [
+const ROLES: [Role; REACTION_PREVIEW_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -299,6 +302,9 @@ const ROLES: [Role; CONTACT_PREVIEW_ROLE_COUNT] = [
     Role::new("actor/room-lisa", (35, 47), (-89i32, -23i32)),
     Role::new("actor/room-contact", (32, 32), (-64i32, -16i32)),
     Role::new("actor/room-contact", (16, 16), (-56i32, -8i32)),
+    // Fourth airborne body and remaining station reaction.
+    Role::new("actor/room-enemy", (57, 52), (-88i32, -40i32)),
+    Role::new("actor/room-lisa", (34, 47), (-90i32, -23i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -436,6 +442,7 @@ impl Selection {
 
     pub(super) const fn atlas_bytes(&self) -> usize {
         let registered = match self.count() {
+            REACTION_PREVIEW_ROLE_COUNT => REACTION_PREVIEW_ATLAS_BYTES,
             CONTACT_PREVIEW_ROLE_COUNT => CONTACT_PREVIEW_ATLAS_BYTES,
             SHADOW_PREVIEW_ROLE_COUNT => SHADOW_PREVIEW_ATLAS_BYTES,
             NEUTRAL_PREVIEW_ROLE_COUNT => NEUTRAL_PREVIEW_ATLAS_BYTES,
@@ -493,7 +500,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
+            .take(REACTION_PREVIEW_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -512,10 +519,11 @@ impl Selection {
                 | NEUTRAL_PREVIEW_ROLE_COUNT
                 | SHADOW_PREVIEW_ROLE_COUNT
                 | CONTACT_PREVIEW_ROLE_COUNT
+                | REACTION_PREVIEW_ROLE_COUNT
         ) {
             return Err(failure(concat!(
                 "invalid count (16/44/104/108/120/154/156/172/",
-                "175/183/186/188/190/194)"
+                "175/183/186/188/190/194/196)"
             )));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
@@ -631,7 +639,9 @@ impl CemeteryArt {
 
     const fn enable_neutral_preview(&self, entrance: &mut CemeteryEntrance) {
         if self.roles.len() >= CONTACT_PREVIEW_ROLE_COUNT {
-            entrance.enable_neutral_contact_preview();
+            entrance.enable_neutral_contact_preview(
+                self.roles.len() >= REACTION_PREVIEW_ROLE_COUNT,
+            );
         } else if self.roles.len() >= NEUTRAL_PREVIEW_ROLE_COUNT {
             entrance.enable_neutral_enemy_preview(
                 self.roles.len() >= SHADOW_PREVIEW_ROLE_COUNT,
@@ -822,6 +832,7 @@ impl CemeteryArt {
 
     const fn neutral_strike_terminal(&self) -> u64 {
         match self.roles.len() {
+            REACTION_PREVIEW_ROLE_COUNT.. => 389,
             CONTACT_PREVIEW_ROLE_COUNT.. => 380,
             SHADOW_PREVIEW_ROLE_COUNT.. => 374,
             NEUTRAL_PREVIEW_ROLE_COUNT.. => 371,
@@ -933,13 +944,9 @@ impl CemeteryArt {
         }
         if player == Player::Lisa
             && body.facing == Facing::Right
-            && matches!(body.maneuver, Maneuver::Hurt { tick: 0..=4 })
+            && let Some(index) = hurt_body_role(body.maneuver)
         {
-            return self.room_registered_draw(
-                SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1),
-                body.position,
-                false,
-            );
+            return self.room_registered_draw(index, body.position, false);
         }
         if let Maneuver::AirAttack(motion) = body.maneuver {
             return self.air_attack_draw(player, body, motion.tick());
@@ -1664,10 +1671,31 @@ const fn enemy_control_at(
     }
 }
 
+const fn hurt_body_role(maneuver: Maneuver) -> Option<usize> {
+    match maneuver {
+        Maneuver::Hurt { tick: 0..=5 } => {
+            Some(SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1))
+        },
+        Maneuver::Hurt { tick: 6..=13 } => {
+            Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
+        },
+        Maneuver::AirAttack(_)
+        | Maneuver::Attack { .. }
+        | Maneuver::Hurt { .. }
+        | Maneuver::Idle
+        | Maneuver::Jump(_)
+        | Maneuver::Restrained
+        | Maneuver::Special { .. } => None,
+    }
+}
+
 fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
     use CemeteryEnemyDepth::{Decreasing, Increasing, Level};
     let (phase, depth) = match pose {
         CemeteryEnemyPose::Windup => return Some(RETREAT_ROLE_COUNT),
+        CemeteryEnemyPose::Leap { phase: 3 } => {
+            return Some(CONTACT_PREVIEW_ROLE_COUNT);
+        },
         CemeteryEnemyPose::Leap { phase: 2 } => {
             return Some(SHADOW_PREVIEW_ROLE_COUNT);
         },
@@ -1723,7 +1751,7 @@ fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
 }
 
 const fn enemy_shadow_role(pose: CemeteryEnemyPose) -> Option<usize> {
-    if matches!(pose, CemeteryEnemyPose::Leap { phase: 1..=2 }) {
+    if matches!(pose, CemeteryEnemyPose::Leap { phase: 1..=3 }) {
         Some(NEUTRAL_PREVIEW_ROLE_COUNT.saturating_add(1))
     } else {
         None
@@ -2232,7 +2260,7 @@ mod tests {
     fn airborne_shadow_requires_both_new_roles() {
         let first = CemeteryEnemyPose::Leap { phase: 0 };
         let second = CemeteryEnemyPose::Leap { phase: 1 };
-        let unsupported = CemeteryEnemyPose::Leap { phase: 3 };
+        let unsupported = CemeteryEnemyPose::Leap { phase: 4 };
         assert_eq!(enemy_shadow_role(first), None);
         assert_eq!(enemy_role(second), Some(NEUTRAL_PREVIEW_ROLE_COUNT));
         assert_eq!(
@@ -2283,6 +2311,45 @@ mod tests {
     }
 
     #[test]
+    fn reaction_preview_requires_both_new_roles() {
+        let previous = parse_enemy_catalogue(CONTACT_PREVIEW_ROLE_COUNT);
+        let extended = parse_enemy_catalogue(REACTION_PREVIEW_ROLE_COUNT);
+        assert!(previous.is_ok() && extended.is_ok());
+        if let (Ok(old), Ok(new)) = (previous, extended) {
+            assert_eq!(
+                new.atlas_bytes(),
+                old.atlas_bytes().saturating_add(18_248)
+            );
+            assert_eq!(new.sprite_count(), old.sprite_count());
+        }
+        assert!(parse_enemy_catalogue(195).is_err());
+        assert!(parse_enemy_catalogue(197).is_err());
+    }
+
+    #[test]
+    fn reaction_preview_registers_observed_body_phases() {
+        let fourth = CemeteryEnemyPose::Leap { phase: 3 };
+        assert_eq!(enemy_role(fourth), Some(CONTACT_PREVIEW_ROLE_COUNT));
+        assert_eq!(
+            enemy_shadow_role(fourth),
+            Some(NEUTRAL_PREVIEW_ROLE_COUNT.saturating_add(1))
+        );
+        assert_eq!(
+            hurt_body_role(Maneuver::Hurt { tick: 5 }),
+            Some(SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1))
+        );
+        assert_eq!(
+            hurt_body_role(Maneuver::Hurt { tick: 6 }),
+            Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
+        );
+        assert_eq!(
+            hurt_body_role(Maneuver::Hurt { tick: 13 }),
+            Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
+        );
+        assert_eq!(hurt_body_role(Maneuver::Hurt { tick: 14 }), None);
+    }
+
+    #[test]
     fn airborne_shadow_role_requires_pure_shadow_pixels() {
         let role = Role::new("actor/room-enemy-shadow", (2, 1), (0i32, 0i32));
         assert!(role.valid_pixels(&[0, 0, 0, 0, 0, 0, 0, 102]));
@@ -2327,6 +2394,7 @@ mod tests {
             (NEUTRAL_PREVIEW_ROLE_COUNT, NEUTRAL_PREVIEW_ATLAS_BYTES),
             (SHADOW_PREVIEW_ROLE_COUNT, SHADOW_PREVIEW_ATLAS_BYTES),
             (CONTACT_PREVIEW_ROLE_COUNT, CONTACT_PREVIEW_ATLAS_BYTES),
+            (REACTION_PREVIEW_ROLE_COUNT, REACTION_PREVIEW_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(

@@ -7056,3 +7056,21 @@ The older 190-role selection retains its earlier stop; the ordinary
 launch selection and protected walkable interval are unchanged.
 General moving and lethal contact, remaining reactions, later airborne
 poses, landing, full campaign and physical Android acceptance remain open.
+
+### Optional late neutral reaction diagnostic
+
+The 196-role selection extends the neutral contact presentation through
+tick 388. The fourth airborne pose reuses its registered ground shadow
+and the second Lisa hurt body completes the observed reaction interval.
+The two roles add 18,248 atlas bytes without increasing draw capacity.
+Regression covers both catalogue boundaries, the reaction phases, the
+verified positions and elevations, and the stop at tick 389. The second
+station's contact at simulation tick 388 is not admitted.
+
+Native OpenGL/X11 and isolated Firefox/WebGL each match all 387
+original scene samples exactly (nine additional). Firefox completes
+thirteen routed milestones with 1,815 readbacks and 1,884 blits;
+directory selection is trusted and no canvas or preferences remain.
+The older contact selection retains its earlier stop. The protected
+walkable interval and ordinary launch are unchanged. Second-station
+damage, landing, general moving contact and campaign parity remain open.

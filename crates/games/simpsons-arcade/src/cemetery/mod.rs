@@ -64,6 +64,8 @@ const LAST_NEUTRAL_PREVIEW_SAMPLE: u64 = 370;
 #[cfg(any(test, feature = "native-preview"))]
 const LAST_SHADOW_PREVIEW_SAMPLE: u64 = 373;
 const LAST_CONTACT_PREVIEW_SAMPLE: u64 = 379;
+#[cfg(any(test, feature = "native-preview"))]
+const LAST_REACTION_PREVIEW_SAMPLE: u64 = 388;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -326,10 +328,11 @@ impl CemeteryRoom {
     }
 
     fn contact_preview(&self, tick: u64) -> bool {
-        self.neutral_preview_end == Some(LAST_CONTACT_PREVIEW_SAMPLE)
-            && (LAST_PROTECTED_BODY_SAMPLE.saturating_add(1)
-                ..LAST_CONTACT_PREVIEW_SAMPLE)
-                .contains(&tick)
+        self.neutral_preview_end.is_some_and(|end| {
+            end >= LAST_CONTACT_PREVIEW_SAMPLE
+                && (LAST_PROTECTED_BODY_SAMPLE.saturating_add(1)..end)
+                    .contains(&tick)
+        })
     }
 
     /// Current shared depth offset, in logical units.
@@ -575,9 +578,16 @@ impl CemeteryEntrance {
     }
 
     #[cfg(any(test, feature = "native-preview"))]
-    pub(super) const fn enable_neutral_contact_preview(&mut self) {
+    pub(super) const fn enable_neutral_contact_preview(
+        &mut self,
+        complete_reaction: bool,
+    ) {
         if let Some(room) = &mut self.room {
-            room.neutral_preview_end = Some(LAST_CONTACT_PREVIEW_SAMPLE);
+            room.neutral_preview_end = Some(if complete_reaction {
+                LAST_REACTION_PREVIEW_SAMPLE
+            } else {
+                LAST_CONTACT_PREVIEW_SAMPLE
+            });
         }
     }
 
@@ -1450,7 +1460,16 @@ mod tests {
             376 => (CemeteryEnemyPose::Leap { phase: 2 }, 230, 28),
             377 => (CemeteryEnemyPose::Leap { phase: 2 }, 228, 30),
             378 => (CemeteryEnemyPose::Leap { phase: 2 }, 226, 31),
-            _ => (CemeteryEnemyPose::Leap { phase: 2 }, 224, 32),
+            379 => (CemeteryEnemyPose::Leap { phase: 2 }, 224, 32),
+            380 => (CemeteryEnemyPose::Leap { phase: 3 }, 222, 33),
+            381 => (CemeteryEnemyPose::Leap { phase: 3 }, 220, 33),
+            382 => (CemeteryEnemyPose::Leap { phase: 3 }, 218, 34),
+            383 => (CemeteryEnemyPose::Leap { phase: 3 }, 216, 34),
+            384 => (CemeteryEnemyPose::Leap { phase: 3 }, 214, 33),
+            385 => (CemeteryEnemyPose::Leap { phase: 3 }, 212, 33),
+            386 => (CemeteryEnemyPose::Leap { phase: 3 }, 210, 32),
+            387 => (CemeteryEnemyPose::Leap { phase: 3 }, 208, 31),
+            _ => (CemeteryEnemyPose::Leap { phase: 3 }, 206, 30),
         };
         [
             CemeteryEnemyApproach {
@@ -1514,12 +1533,17 @@ mod tests {
 
     #[test]
     fn contact_preview_debits_before_reaction_and_stops_at_pose_boundary() {
+        verify_contact_preview(false, 380);
+        verify_contact_preview(true, 389);
+    }
+
+    fn verify_contact_preview(complete_reaction: bool, terminal: u64) {
         let mut entrance = arrival(Player::Marge).at(237);
         entrance.enable_room();
         entrance.enable_enemy_strike(0x1207);
-        entrance.enable_neutral_contact_preview();
+        entrance.enable_neutral_contact_preview(complete_reaction);
         let mut slots = room_slots();
-        for tick in 238..=380 {
+        for tick in 238..=terminal {
             for (slot, held) in slots.iter_mut().zip(strike_controls(0, tick)) {
                 slot.held = held;
             }
@@ -1537,7 +1561,7 @@ mod tests {
                 (false, false),
                 "{tick}"
             );
-            if tick == 380 {
+            if tick == terminal {
                 assert_eq!(enemies, None);
                 assert_eq!(entrance.room_body_visibility(), None);
                 break;
