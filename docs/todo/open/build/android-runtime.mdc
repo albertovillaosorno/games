@@ -326,3 +326,16 @@ including dependency licence documents; the APK is 11,637,997 bytes.
 AAPT2 identifies API 24 minimum, API 35 target and ARM64-only native
 code. SDK zipalign independently verifies 16 KiB alignment. This is
 unsigned development packaging, not a signed or portable release.
+
+A separate copy of the command-produced APK was signed with a disposable
+local key; SDK v2/v3 signature verification and 16 KiB alignment passed.
+A fresh translated API 35 emulator installation succeeded. The empty
+installation reported the missing catalogue and created the private
+application data directory. After byte-counted local provisioning, the
+next launch entered the title, selected OpenSL ES and displayed the
+touch panel. Two Start taps and a held directional touch produced
+viewport pixel changes. Home and foreground restoration reproduced the
+expected panel color with native pause/resume and surface recreation.
+The settings directory remained empty. The emulator was shut down.
+These checks do not establish audible output, physical ARM64 support,
+persistent writes, gameplay parity or repeatable cold-restart behavior.
