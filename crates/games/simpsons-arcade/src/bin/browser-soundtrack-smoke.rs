@@ -13,7 +13,7 @@
 // - Must-Not:
 //   - Interpret source media or duplicate title presentation.
 // - Allows:
-//   - Inputs: A selected local canonical directory with second-stage music.
+//   - Inputs: A selected local canonical directory with finite scene music.
 //   - Outputs: A bounded playback verification result.
 //   - Side effects: Delegated directory selection and audio playback.
 // - Split-When:
@@ -24,7 +24,7 @@
 //   - Verify the admitted finite soundtrack through the browser host.
 // - Description:
 //   - Reuse the browser catalogue and title soundtrack playback to verify the
-//     second-stage handoff, pause, resume and finite exhaustion.
+//     second-stage handoff, optional cemetery card, pause, resume and end.
 // - Usage:
 //   - Load with the matching WebAssembly browser binding.
 // - Defaults:

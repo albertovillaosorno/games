@@ -6652,3 +6652,20 @@ cue does not restart upon exhaustion. With the track omitted, cemetery
 silence is retained rather than leaking the second-stage soundtrack.
 Physical-device sound, complete looping audio and later combat remain
 open; the source captures and extracted PCM stay private.
+
+The Linux OpenGL/X11 smoke with the local cemetery PCM and the complete
+protected-strike catalogue passes using the SDL dummy audio device.
+All 255 native protected-strike readbacks match the three original
+controls and the earlier Firefox readbacks exactly. The native music
+fixture verifies card silence, setup admission, pause, continuation and
+finite exhaustion. This is not physical speaker or controller evidence.
+
+The host-consumed Firefox soundtrack diagnostic also passes with the
+local excerpt. It reports seven ordered milestones from street queue
+through the cemetery card, pause, resume and finite exhaustion. The
+browser submits exactly 2,880,000 cemetery sample frames, with no
+accelerated diagnostic drain, and closes its audio context. All 11,266
+scheduled source nodes finish, including the preceding cue submissions.
+The trusted directory picker admits the local assets without retained
+canvas or preferences. This verifies the browser software audio path,
+not physical speakers or an original repeating soundtrack seam.

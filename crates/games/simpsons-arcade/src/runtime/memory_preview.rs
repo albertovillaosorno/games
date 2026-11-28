@@ -308,7 +308,7 @@ where
         options.volume,
     )?
     .ok_or_else(|| failure("soundtrack smoke requires audio"))?
-    .stage_two_smoke()?;
+    .soundtrack_smoke()?;
     frame_loop::start(move |timestamp| smoke.step(timestamp), complete)
 }
 
