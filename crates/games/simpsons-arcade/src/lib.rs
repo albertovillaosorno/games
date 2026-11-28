@@ -880,6 +880,9 @@ enum BonusCompetitors {
 pub struct Cabinet {
     balloon_boss: Option<BalloonBoss>,
     balloon_boss_enabled: bool,
+    // Preview board phase: active simulation ticks, including title cards
+    // and interludes, but excluding the modern pause and menu states.
+    board_phase: u8,
     bonus: Option<Bonus>,
     bonus_enabled: bool,
     bonus_opponents: BonusCompetitors,
@@ -955,6 +958,12 @@ impl Cabinet {
             );
             self.cooperation.reset();
         }
+    }
+
+    const fn advance_board_phase(&mut self) -> u8 {
+        let previous = self.board_phase;
+        self.board_phase = previous.wrapping_add(1) & 15;
+        previous
     }
 
     fn advance_bonus(&mut self, presses: [bool; 4]) -> bool {
@@ -1050,7 +1059,11 @@ impl Cabinet {
             self.camera.max(target.min(self.camera.saturating_add(2)));
     }
 
-    fn advance_cemetery(&mut self, pending: [PendingManeuver; 4]) -> bool {
+    fn advance_cemetery(
+        &mut self,
+        pending: [PendingManeuver; 4],
+        previous_phase: u8,
+    ) -> bool {
         let Some(mut entrance) = self.cemetery else {
             return false;
         };
@@ -1060,9 +1073,9 @@ impl Cabinet {
             .into_iter()
             .zip(pending)
             .any(|(active, queued)| active && queued.button_edges != 0);
-        let previous_phase = entrance.phase();
-        entrance.advance(active_edge);
-        if previous_phase == CemeteryPhase::Setup
+        let previous_scene = entrance.phase();
+        entrance.advance_with_board_phase(active_edge, previous_phase);
+        if previous_scene == CemeteryPhase::Setup
             && entrance.phase() == CemeteryPhase::Descent
         {
             self.move_cemetery_stations(&entrance);
@@ -1356,8 +1369,9 @@ impl Cabinet {
         if self.phase() != Phase::Playing {
             return;
         }
+        let previous_phase = self.advance_board_phase();
         let presses = pending.map(|queued| queued.button_edges != 0);
-        if self.advance_cemetery(pending)
+        if self.advance_cemetery(pending, previous_phase)
             || self.advance_bonus(presses)
             || self.advance_stage_entrance()
         {
@@ -1494,6 +1508,7 @@ impl Cabinet {
         Ok(Self {
             balloon_boss: None,
             balloon_boss_enabled: false,
+            board_phase: 0,
             bonus: None,
             bonus_enabled: false,
             bonus_opponents: BonusCompetitors::Human,
@@ -1543,6 +1558,7 @@ impl Cabinet {
 
     fn reset_world(&mut self) {
         self.balloon_boss = None;
+        self.board_phase = 0;
         self.cemetery = None;
         self.bonus = None;
         self.cooperation.reset();
@@ -2101,6 +2117,7 @@ fn cabinet() -> Cabinet {
     result.unwrap_or_else(|_error| Cabinet {
         balloon_boss: None,
         balloon_boss_enabled: false,
+        board_phase: 0,
         bonus: None,
         bonus_enabled: false,
         bonus_opponents: BonusCompetitors::Human,
@@ -4336,6 +4353,37 @@ mod tests {
         state.input_step(0, &[]);
         assert!(state.cemetery_entrance().is_some());
         state
+    }
+
+    #[test]
+    fn cemetery_ambient_clock_survives_card_skip_and_pause() {
+        let mut state = room_cabinet([true; 4]);
+        let admitted_phase = state.board_phase;
+        advance_empty(&mut state, 0..65);
+        state.input_step(65, &pulse(Player::Marge, Control::Primary));
+        assert_eq!(state.board_phase, admitted_phase.wrapping_add(66) & 15);
+        assert_eq!(
+            state.cemetery_entrance().map(CemeteryEntrance::tick),
+            Some(0)
+        );
+        let mut continuous = state;
+        advance_empty(&mut state, 66..85);
+        state.input_step(85, &pulse(Player::Marge, Control::Pause));
+        let paused = state;
+        advance_empty(&mut state, 86..180);
+        assert_eq!(state.board_phase, paused.board_phase);
+        assert_eq!(state.cemetery_entrance(), paused.cemetery_entrance());
+        state.input_step(180, &pulse(Player::Marge, Control::Pause));
+        advance_empty(&mut state, 181..341);
+        advance_empty(&mut continuous, 66..246);
+        assert_eq!(state.board_phase, continuous.board_phase);
+        assert_eq!(state.cemetery_entrance(), continuous.cemetery_entrance());
+        assert!(state.cemetery_entrance().is_some_and(|entrance| {
+            (9..=10).contains(&entrance.ambient_effect_cues())
+        }));
+        state.reset_world();
+        assert_eq!(state.board_phase, 0);
+        assert_eq!(state.cemetery_entrance(), None);
     }
 
     #[test]

@@ -46,6 +46,9 @@ use super::{
 };
 
 const FIRST_BACKGROUND: u64 = 13;
+// Hardware consumes the periodic scenery cue one tick after submission.
+const FIRST_AMBIENT_RECEIPT: u64 = 13;
+const LAST_AMBIENT_RECEIPT: u64 = 168;
 const FIRST_STATION: u64 = 107;
 const PLAYABLE_TICK: u64 = 237;
 const FIRST_ENEMY_APPROACH: u64 = 238;
@@ -376,6 +379,7 @@ impl CemeteryRoom {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryEntrance {
     admitted: [bool; 4],
+    ambient_cues: u8,
     card: bool,
     first: Player,
     room: Option<CemeteryRoom>,
@@ -428,6 +432,34 @@ impl CemeteryEntrance {
             }
         }
         false
+    }
+
+    // Only the full roster has reference evidence for the active window.
+    // The cabinet supplies its preceding unpaused play phase, not a
+    // phase derived from the card or the number of rendered frames.
+    pub(super) fn advance_with_board_phase(
+        &mut self,
+        active_edge: bool,
+        previous_phase: u8,
+    ) {
+        self.advance(active_edge);
+        if !self.card
+            && self.admitted == [true; 4]
+            && (FIRST_AMBIENT_RECEIPT..=LAST_AMBIENT_RECEIPT)
+                .contains(&self.tick)
+            && previous_phase == 0
+        {
+            self.ambient_cues = self.ambient_cues.saturating_add(1);
+        }
+    }
+
+    /// Cumulative periodic scenery sound admissions in the full roster.
+    ///
+    /// The active play phase is a preview clock, not an assertion of
+    /// original board counter equivalence. Partial rosters remain silent.
+    #[must_use]
+    pub const fn ambient_effect_cues(self) -> u8 {
+        self.ambient_cues
     }
 
     const fn at(self, tick: u64) -> Self {
@@ -591,6 +623,7 @@ impl CemeteryEntrance {
     pub const fn new(admitted: [bool; 4], first: Player) -> Self {
         Self {
             admitted,
+            ambient_cues: 0,
             card: true,
             first,
             room: None,
@@ -1626,6 +1659,42 @@ mod tests {
             for bits in 0u8..16 {
                 let admitted = [1, 2, 4, 8].map(|bit| bits & bit != 0);
                 assert_entrance_effect_cues(admitted, first);
+            }
+        }
+    }
+
+    fn assert_ambient_window(admitted: [bool; 4], initial_phase: u8) {
+        let mut entrance = CemeteryEntrance::new(admitted, Player::Marge);
+        let mut phase = initial_phase;
+        for _ in 0u16..192 {
+            entrance.advance_with_board_phase(false, phase);
+            phase = phase.wrapping_add(1) & 15;
+            assert_eq!(entrance.ambient_effect_cues(), 0);
+        }
+        let mut expected = 0u8;
+        for tick in 1..=260 {
+            if admitted == [true; 4] && (13..=168).contains(&tick) && phase == 0
+            {
+                expected = expected.saturating_add(1);
+            }
+            entrance.advance_with_board_phase(false, phase);
+            phase = phase.wrapping_add(1) & 15;
+            assert_eq!(entrance.tick(), tick);
+            assert_eq!(entrance.ambient_effect_cues(), expected);
+        }
+        if admitted == [true; 4] {
+            assert!((9..=10).contains(&expected));
+        } else {
+            assert_eq!(expected, 0);
+        }
+    }
+
+    #[test]
+    fn ambient_receipts_use_board_phase_only_in_verified_roster_window() {
+        for phase in 0..16 {
+            for bits in 0u8..16 {
+                let admitted = [1, 2, 4, 8].map(|bit| bits & bit != 0);
+                assert_ambient_window(admitted, phase);
             }
         }
     }
