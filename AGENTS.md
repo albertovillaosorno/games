@@ -277,11 +277,12 @@
   address, original symbol, semantic name, inputs, outputs, state
   mutations, callers, callees, data dependencies, evidence, behaviour,
   confidence, disposition, Rust owner and test evidence.
-  Account for every discovered function: implemented behaviour, shared
-  equivalent, platform or library replacement, deliberate omission,
-  unreachable or unresolved. Do not equate automatic discovery with
-  complete coverage; inspect indirect calls, dispatch tables and
-  additional executable regions as appropriate.
+  Use exactly three dispositions: pending, implemented or discarded.
+  Count implementation as 1 only for verified independent Rust, including
+  shared equivalents; pending and discarded both score 0. No partial
+  mappings or additional implementation states. Keep research notes apart
+  from final Rust owner and symbol fields. Justify each discard.
+  Inspect indirect calls, dispatch tables and all executable regions.
 - Inspect the private decompiler output, listings and cross-references
   directly. Derive behavioural specifications from static evidence and
   implement independent Rust using the existing engine, importer and IR.
@@ -301,10 +302,14 @@
      deliberately improved behaviour, reuse a shared mechanism, or
      document and verify why it is intentionally replaced or non-runtime.
      Work in dependency groups; record owners, symbols and tests.
-     Partial mappings remain unresolved. Review and reuse existing code.
-  1. Finish the ledger: no unresolved or discovered dispositions, pending
-     semantic or dependency reviews, or unexplained control flow.
-     Run the ledger checker and `cargo validate`; record results.
+     A listing review is not semantic completion. Review and reuse existing
+     code; group related original functions by shared behaviour and test
+     them together. Prioritise high-fan-in graph-ready mechanisms;
+     map existing Rust in reverse before writing new code.
+  1. Finish the ledger with no pending dispositions, incomplete semantics
+     or dependencies, or unresolved flow observations. A discard still
+     scores zero and must have evidence. Require the ledger checker
+     with `--complete` and `cargo validate`; record results.
   1. Manually exercise the complete game on supported targets. Fix bugs
      and requested improvements, add regression tests for each correction,
      and run `cargo validate` after changes.

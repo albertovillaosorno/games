@@ -21,7 +21,7 @@
 // - Merge-When:
 //   - Another contributor tool duplicates the ledger consistency check.
 // - Summary:
-//   - Distinguish discovered, unresolved and resolved function records.
+//   - Score only verified implementations; distinguish pending and discarded.
 // - Description:
 //   - Check stable function identities and reciprocal graph references.
 // - Usage:
@@ -52,6 +52,7 @@ pub(crate) struct Arguments {
     byte_limit: NonZeroU64,
     group_limit: Option<NonZeroUsize>,
     path: OsString,
+    require_complete: bool,
     row_limit: NonZeroUsize,
 }
 
@@ -61,21 +62,25 @@ impl Arguments {
         let path = arguments.next().ok_or(USAGE)?;
         let bytes = arguments.next().ok_or(USAGE)?;
         let rows = arguments.next().ok_or(USAGE)?;
-        let group_limit = arguments
-            .next()
-            .map(|value| {
-                text(&value)?.parse::<NonZeroUsize>().map_err(|_error| {
-                    String::from("invalid ledger group limit")
-                })
-            })
-            .transpose()?;
-        if arguments.next().is_some() {
-            return Err(String::from(USAGE));
+        let mut require_complete = false;
+        let mut group_limit = None;
+        for value in arguments {
+            if value == "--complete" && !require_complete {
+                require_complete = true;
+            } else if group_limit.is_none() && !require_complete {
+                group_limit =
+                    Some(text(&value)?.parse::<NonZeroUsize>().map_err(
+                        |_error| String::from("invalid ledger group limit"),
+                    )?);
+            } else {
+                return Err(String::from(USAGE));
+            }
         }
         Ok(Self {
             byte_limit: parse_limit(&bytes)?,
             group_limit,
             path,
+            require_complete,
             row_limit: text(&rows)?
                 .parse()
                 .map_err(|_error| String::from("invalid ledger row limit"))?,
@@ -99,7 +104,7 @@ impl Arguments {
         ))
         .map_err(|error| error.to_string())?;
         write_line(&format!(
-            "Semantic reviews: {}; reviewed dependencies: {}; pending: {}",
+            "Listing reviews: {}; reviewed dependencies: {}; pending: {}",
             report.semantic_reviews,
             report.reviewed_dependencies,
             report
@@ -108,13 +113,23 @@ impl Arguments {
         ))
         .map_err(|error| error.to_string())?;
         write_line(&format!(
-            "Partial Rust mappings: {}; resolved runtime mappings: {}",
-            report.partial_mappings, report.resolved_mappings,
+            "Implementation 1: {}; implementation 0: {}",
+            report.implemented,
+            report.functions.saturating_sub(report.implemented),
         ))
         .map_err(|error| error.to_string())?;
-        for (status, count) in report.statuses {
+        write_line(&format!(
+            "Semantic complete: {}; ledger closed: {}",
+            report.semantic_complete,
+            report.closed(),
+        ))
+        .map_err(|error| error.to_string())?;
+        for (status, count) in &report.statuses {
             write_line(&format!("{status}: {count}"))
                 .map_err(|error| error.to_string())?;
+        }
+        if self.require_complete && !report.closed() {
+            return Err(String::from("ledger acceptance incomplete"));
         }
         if let Some(groups) = report.groups {
             groups.write()?;
@@ -297,15 +312,15 @@ impl Function {
 
     fn validate_disposition(&self) -> Result<(), &'static str> {
         match self.status.as_str() {
-            "discovered" | "unresolved" => return Ok(()),
-            "implemented"
-            | "shared-mechanism"
-            | "intentional-replacement"
-            | "non-runtime" => {},
+            "pending" => return Ok(()),
+            "implemented" | "discarded" => {},
             _ => return Err("unrecognized function disposition"),
         }
-        if self.analysis_state.as_deref() != Some("semantic-reviewed") {
-            return Err("resolved function lacks semantic review");
+        if self.analysis_state.as_deref() != Some("semantic-complete") {
+            return Err("resolved function lacks complete semantics");
+        }
+        if !self.unresolved_flows.is_empty() {
+            return Err("resolved function has unresolved control flow");
         }
         if !review_list(self.data_dependencies.as_deref()) {
             return Err("resolved function lacks reviewed data dependencies");
@@ -317,16 +332,11 @@ impl Function {
     }
 
     fn validate_mapping(&self) -> Result<(), &'static str> {
-        let required = matches!(
-            self.status.as_str(),
-            "implemented" | "shared-mechanism" | "intentional-replacement"
-        );
-        if !required && self.rust_owner.is_none() && self.rust_symbol.is_none()
-        {
+        if self.status != "implemented" {
+            if self.rust_owner.is_some() || self.rust_symbol.is_some() {
+                return Err("only implemented functions may have mappings");
+            }
             return Ok(());
-        }
-        if matches!(self.status.as_str(), "discovered" | "non-runtime") {
-            return Err("mapping contradicts function disposition");
         }
         if !nonempty(self.rust_owner.as_deref())
             || !nonempty(self.rust_symbol.as_deref())
@@ -334,23 +344,22 @@ impl Function {
         {
             return Err("Rust mapping lacks owner, symbol or test evidence");
         }
-        if self.status == "unresolved"
-            && self.analysis_state.as_deref() != Some("semantic-reviewed")
-        {
-            return Err("partial Rust mapping lacks semantic review");
-        }
-        if !review_list(self.data_dependencies.as_deref()) {
-            return Err("Rust mapping lacks reviewed data dependencies");
-        }
         Ok(())
     }
 
     fn validate_semantic_review(&self) -> Result<(), &'static str> {
-        if self.analysis_state.as_deref() != Some("semantic-reviewed") {
+        if !matches!(
+            self.analysis_state.as_deref(),
+            Some("listing-reviewed" | "semantic-complete")
+        ) {
             return Ok(());
         }
-        if self.status == "discovered"
-            || !nonempty(self.semantic_name.as_deref())
+        if self.analysis_state.as_deref() == Some("semantic-complete")
+            && !review_list(self.data_dependencies.as_deref())
+        {
+            return Err("complete semantics lack reviewed dependencies");
+        }
+        if !nonempty(self.semantic_name.as_deref())
             || !nonempty(self.behavior.as_deref())
             || !nonempty(self.semantic_evidence.as_deref())
             || !review_list(self.inputs.as_deref())
@@ -374,17 +383,24 @@ struct Report {
     flows: usize,
     functions: usize,
     groups: Option<GroupReport>,
+    implemented: usize,
     interior: usize,
     pairs: usize,
-    partial_mappings: usize,
-    resolved_mappings: usize,
     reviewed_dependencies: usize,
+    semantic_complete: usize,
     semantic_reviews: usize,
     statuses: BTreeMap<String, usize>,
     unresolved: usize,
 }
 
 impl Report {
+    fn closed(&self) -> bool {
+        self.functions == self.semantic_complete
+            && self.functions == self.reviewed_dependencies
+            && self.statuses.get("pending").copied().unwrap_or_default() == 0
+            && self.unresolved == 0
+    }
+
     fn record_function(
         &mut self,
         function: &Function,
@@ -393,20 +409,21 @@ impl Report {
             .bytes
             .checked_add(function.body_bytes.get())
             .ok_or("owned byte count overflow")?;
-        if function.analysis_state.as_deref() == Some("semantic-reviewed") {
+        if matches!(
+            function.analysis_state.as_deref(),
+            Some("listing-reviewed" | "semantic-complete")
+        ) {
             self.semantic_reviews = self.semantic_reviews.saturating_add(1);
             if function.data_dependencies.is_some() {
                 self.reviewed_dependencies =
                     self.reviewed_dependencies.saturating_add(1);
             }
         }
-        if function.rust_owner.is_some() {
-            if function.status == "unresolved" {
-                self.partial_mappings = self.partial_mappings.saturating_add(1);
-            } else {
-                self.resolved_mappings =
-                    self.resolved_mappings.saturating_add(1);
-            }
+        if function.analysis_state.as_deref() == Some("semantic-complete") {
+            self.semantic_complete = self.semantic_complete.saturating_add(1);
+        }
+        if function.status == "implemented" {
+            self.implemented = self.implemented.saturating_add(1);
         }
         let count = self.statuses.entry(function.status.clone()).or_default();
         *count = count.saturating_add(1);
@@ -419,7 +436,7 @@ struct Group {
     callers: BTreeSet<usize>,
     dependencies: BTreeSet<usize>,
     members: Vec<String>,
-    partial: usize,
+
     unknown_flows: usize,
 }
 
@@ -443,12 +460,11 @@ impl GroupReport {
             write_line(&format!(
                 concat!(
                     "Group: members={}; dependencies={}; callers={}; ",
-                    "partial={}; unknown-flows={}; ids={}"
+                    "unknown-flows={}; ids={}"
                 ),
                 group.members.len(),
                 group.dependencies.len(),
                 group.callers.len(),
-                group.partial,
                 group.unknown_flows,
                 group.members.join(","),
             ))
@@ -520,7 +536,7 @@ fn audit(
 }
 
 fn pending(function: &Function) -> bool {
-    matches!(function.status.as_str(), "discovered" | "unresolved")
+    function.status == "pending"
 }
 
 // Iterative postorder avoids stack overflow on deep private call graphs.
@@ -582,13 +598,10 @@ fn dependency_groups(
             callers: BTreeSet::new(),
             dependencies: BTreeSet::new(),
             members: Vec::new(),
-            partial: 0,
+
             unknown_flows: 0,
         });
         group.members.push((*id).to_owned());
-        group.partial = group
-            .partial
-            .saturating_add(usize::from(function.rust_owner.is_some()));
         group.unknown_flows = group
             .unknown_flows
             .saturating_add(function.unresolved_flows.len());
@@ -618,13 +631,15 @@ fn dependency_groups(
     selected.sort_by(|left, right| {
         (
             left.dependencies.len(),
-            Reverse(left.partial),
+            left.unknown_flows,
+            Reverse(left.members.len()),
             Reverse(left.callers.len()),
             &left.members,
         )
             .cmp(&(
                 right.dependencies.len(),
-                Reverse(right.partial),
+                right.unknown_flows,
+                Reverse(right.members.len()),
                 Reverse(right.callers.len()),
                 &right.members,
             ))
@@ -773,7 +788,7 @@ mod tests {
             "id": format!("audio:z80:program:fixed:{address}"),
             "module": "audio",
             "original_name": "synthetic",
-            "status": "discovered",
+            "status": "pending",
         })
     }
 
@@ -811,7 +826,7 @@ mod tests {
             || report.auxiliary != 1
             || report.semantic_reviews != 0
             || report.reviewed_dependencies != 0
-            || report.statuses.get("discovered") != Some(&2)
+            || report.statuses.get("pending") != Some(&2)
             || audit(&input, NonZeroUsize::MIN).is_ok()
         {
             return Err(String::from("ledger counts or row budget differ"));
@@ -1050,8 +1065,8 @@ mod tests {
     fn checks_explicit_semantic_review_fields() -> Result<(), String> {
         let mut reviewed = record("0001", &[], &[]);
         for (field, value) in [
-            ("analysis_state", Value::from("semantic-reviewed")),
-            ("status", Value::from("unresolved")),
+            ("analysis_state", Value::from("listing-reviewed")),
+            ("status", Value::from("pending")),
             ("semantic_name", Value::from("fixture")),
             ("behavior", Value::from("fixture")),
             ("semantic_evidence", Value::from("fixture")),
@@ -1063,7 +1078,7 @@ mod tests {
             set_field(&mut reviewed, field, value)?;
         }
         let report = audit(&reviewed.to_string(), NonZeroUsize::MIN)?;
-        if report.statuses.get("unresolved") != Some(&1)
+        if report.statuses.get("pending") != Some(&1)
             || report.semantic_reviews != 1
             || report.reviewed_dependencies != 0
         {
@@ -1106,56 +1121,42 @@ mod tests {
     }
 
     #[test]
-    fn checks_partial_mapping_evidence_without_claiming_completion()
+    fn rejects_partial_mapping_and_requires_binary_completion()
     -> Result<(), String> {
         let mut fixture = record("0001", &[], &[]);
         for (field, value) in [
-            ("status", Value::from("unresolved")),
-            ("analysis_state", Value::from("semantic-reviewed")),
+            ("status", Value::from("pending")),
+            ("analysis_state", Value::from("listing-reviewed")),
             ("semantic_name", Value::from("fixture")),
-            ("behavior", Value::from("partial behavior")),
+            ("behavior", Value::from("fixture behavior")),
             ("semantic_evidence", Value::from("fixture")),
             ("inputs", serde_json::json!([])),
             ("outputs", serde_json::json!([])),
             ("state_mutations", serde_json::json!([])),
             ("data_dependencies", serde_json::json!([])),
-            ("rust_owner", Value::from("fixture.rs")),
-            ("rust_symbol", Value::from("fixture")),
-            ("test_evidence", serde_json::json!(["partial fixture"])),
+            ("test_evidence", serde_json::json!(["fixture"])),
         ] {
             set_field(&mut fixture, field, value)?;
         }
         let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
-        if report.partial_mappings != 1
-            || report.resolved_mappings != 0
-            || report.statuses.get("unresolved") != Some(&1)
+        if report.implemented != 0
+            || report.closed()
+            || report.semantic_complete != 0
         {
-            return Err(String::from("partial mapping counted as completion"));
+            return Err(String::from("pending counted as complete"));
         }
         for (field, value) in [
-            ("rust_owner", Value::Null),
-            ("rust_symbol", Value::from(" ")),
-            ("test_evidence", Value::Null),
-            ("test_evidence", serde_json::json!([""])),
-            ("analysis_state", Value::Null),
-            ("data_dependencies", Value::Null),
-            ("status", Value::from("discovered")),
-            ("status", Value::from("non-runtime")),
+            ("rust_owner", Value::from("fixture.rs")),
+            ("rust_symbol", Value::from("fixture")),
+            ("status", Value::from("partial")),
+            ("status", Value::from("implemented")),
+            ("status", Value::from("discarded")),
         ] {
             let mut invalid = fixture.clone();
             set_field(&mut invalid, field, value)?;
             if audit(&invalid.to_string(), NonZeroUsize::MIN).is_ok() {
-                return Err(format!(
-                    "accepted invalid partial mapping {field}"
-                ));
+                return Err(format!("accepted invalid pending {field}"));
             }
-        }
-        for field in ["rust_owner", "rust_symbol"] {
-            set_field(&mut fixture, field, Value::Null)?;
-        }
-        let unmapped = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
-        if unmapped.partial_mappings != 0 || unmapped.resolved_mappings != 0 {
-            return Err(String::from("unmapped review counted as mapping"));
         }
         Ok(())
     }
@@ -1165,7 +1166,7 @@ mod tests {
         let mut fixture = record("0001", &[], &[]);
         for (field, value) in [
             ("status", Value::from("implemented")),
-            ("analysis_state", Value::from("semantic-reviewed")),
+            ("analysis_state", Value::from("semantic-complete")),
             ("semantic_name", Value::from("fixture")),
             ("behavior", Value::from("fixture")),
             ("semantic_evidence", Value::from("fixture")),
@@ -1182,8 +1183,7 @@ mod tests {
         }
         set_field(&mut fixture, "rust_owner", Value::from("fixture.rs"))?;
         set_field(&mut fixture, "rust_symbol", Value::from("fixture"))?;
-        for status in
-            ["implemented", "shared-mechanism", "intentional-replacement"]
+        let status = "implemented";
         {
             set_field(&mut fixture, "status", Value::from(status))?;
             let mut unreviewed = fixture.clone();
@@ -1200,12 +1200,13 @@ mod tests {
             }
             let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
             if report.statuses.get(status) != Some(&1)
-                || report.partial_mappings != 0
-                || report.resolved_mappings != 1
+                || report.implemented != 1
+                || !report.closed()
             {
                 return Err(format!("missing resolved {status} count"));
             }
         }
+        reject_unknown_flow(fixture.clone())?;
         let duplicate = fixture.to_string().replacen(
             "\"status\":",
             "\"status\":\"discovered\",\"status\":",
@@ -1218,14 +1219,29 @@ mod tests {
         check_non_runtime(fixture)
     }
 
+    fn reject_unknown_flow(mut fixture: Value) -> Result<(), String> {
+        set_field(
+            &mut fixture,
+            "unresolved_flows",
+            serde_json::json!([{
+                "kind": "computed", "site": "0x0001", "target": null
+            }]),
+        )?;
+        if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {
+            return Err(String::from("accepted final unknown flow"));
+        }
+        Ok(())
+    }
+
     fn check_non_runtime(mut fixture: Value) -> Result<(), String> {
-        set_field(&mut fixture, "status", Value::from("non-runtime"))?;
+        set_field(&mut fixture, "status", Value::from("discarded"))?;
         set_field(&mut fixture, "rust_owner", Value::Null)?;
         set_field(&mut fixture, "rust_symbol", Value::Null)?;
+        reject_unknown_flow(fixture.clone())?;
         let report = audit(&fixture.to_string(), NonZeroUsize::MIN)?;
-        if report.statuses.get("non-runtime") != Some(&1)
-            || report.partial_mappings != 0
-            || report.resolved_mappings != 0
+        if report.statuses.get("discarded") != Some(&1)
+            || report.implemented != 0
+            || !report.closed()
         {
             return Err(String::from("incorrect non-runtime count"));
         }
@@ -1236,7 +1252,7 @@ mod tests {
         set_field(
             &mut fixture,
             "analysis_state",
-            Value::from("semantic-reviewed"),
+            Value::from("semantic-complete"),
         )?;
         set_field(&mut fixture, "data_dependencies", Value::Null)?;
         if audit(&fixture.to_string(), NonZeroUsize::MIN).is_ok() {

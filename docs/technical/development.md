@@ -96,17 +96,32 @@ The ledger checker accepts an optional positive group-output limit:
 cargo run --locked -p games-build -- ledger check PATH BYTES ROWS 10
 ```
 
-After reciprocal graph validation, it groups discovered and unresolved
-functions into strongly connected components. It reports pending
-external dependency groups, dependent groups, partial Rust mappings
-and unknown flow observations. Groups with fewer pending dependencies
-come first, then partial mappings and dependent groups in descending
-order, then stable function identities. The original byte and row
-limits still apply; the extra limit bounds the number of emitted groups.
-Graph-ready means only that no known pending external callee remains.
-Unknown flows and semantic gaps may still block implementation. The
-report is read-only and neither creates a second inventory nor changes
-any disposition.
+The checker reports exactly three dispositions: pending, implemented and
+discarded. Implementation score is 1 only for implemented functions;
+pending and discarded score 0. Pending or discarded rows cannot contain
+a final Rust mapping. Retain intermediate evidence in research notes.
+A listing review does not certify semantics; implemented and discarded
+rows require explicit semantic completion, reviewed dependencies,
+evidence and zero unresolved flow observations.
+
+For final ledger acceptance use:
+
+```sh
+cargo run --locked -p games-build -- ledger check PATH BYTES ROWS --complete
+```
+
+The command fails if any function is pending, semantics or dependencies
+are incomplete, or any control flow remains unresolved. Discards require
+evidence and remain zero in the implementation score.
+
+After reciprocal graph validation, the optional group limit reports
+strongly connected pending components, external dependencies, callers
+and unresolved flow counts. It prioritises fewer pending dependencies
+and unknown flows, then larger groups and higher fan-in, with stable
+identity tie-breaking. Close related behaviour as a batch through
+existing shared Rust mechanisms and regression tests. Graph-ready means
+only that no known pending external callee remains; semantic gaps may
+still block implementation. The report is read-only.
 
 ## Bounded private research retention
 
