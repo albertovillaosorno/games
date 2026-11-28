@@ -211,3 +211,38 @@ nonempty SDL audio driver name and an app-private preference path.
 The emulator shuts down. The isolated probe does not exercise
 shared IR rendering, the audio queue or a playable title. It uses
 no original media or production signing credentials.
+
+The existing shared SDL2 graphics, input and PCM implementations now
+select on Android with the interactive feature. Linux alone enables
+host pkg-config discovery. The mandatory validation gate includes
+strict Clippy of the interactive Android ARM64 platform library in
+addition to the portable check. The fresh gate and pre-commit hook
+passed for the shared adapter change.
+
+An ARM64-only diagnostic linked the actual shared platform IR and
+passed APK alignment and v2/v3 verification. On the translated API 35
+emulator it opened an accelerated scene, uploaded a bounded one-pixel
+atlas and checked the complete 320 by 240 RGBA readback after admitting
+a touch against presented geometry. It observed focus loss or suspension
+and retained the rendered scene after foreground restoration. Shared
+NativeAudio accepted a 48 kHz signed-16 stereo queue, retained 1024
+paused frames, resumed and drained to zero, then paused and cleared.
+All checks were required for return value 42. The host emulator ran
+with audio disabled, so this is not audible playback acceptance.
+No game was packaged and no original media was used.
+
+A disposable split-crate entry probe also retains a platform-owned JNI
+export in a title shared library under thin LTO, one codegen unit and
+stripped debug information. Only its platform crate depends on JNI
+0.22.4 and inventory 0.3.25; the title registers a typed Rust callback.
+Both crates forbid unsafe Rust and deny warnings. The isolated lock
+uses thiserror 2.0.18 to retain one syn major in the Android graph.
+Two signed ARM64-only diagnostic APKs launched on the translated API 35
+emulator: exactly one registered callback returned 42; two registered
+callbacks returned -1 without invoking the callback. No dependency
+or launcher from this probe has been admitted to the workspace.
+
+Actual title launcher composition, process output and app-private asset
+and settings paths, physical ARM64, sensors, controller feedback and
+production packaging remain open. Interactive adapter selection alone
+is not a claim of playable Android title compatibility.
