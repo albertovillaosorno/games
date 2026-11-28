@@ -25,7 +25,8 @@ Completed. See `docs/todo/completed/assets/`.
 
 Native Linux, browser and distribution delivery completed. See
 `docs/todo/completed/build/`. Android runtime remains independently open.
-Shared localisation is complete for the first title's declared locales.
+Shared localisation and reference tooling are complete within their shared
+scope. Each title owns its ledger and campaign acceptance.
 
 ### TODO - Android ARM64 runtime and packaging
 
@@ -35,21 +36,14 @@ exist. Do not block supported-target title implementation.
 <!-- MarkdownLint-disable-next-line MD013 MD044 -->
 [TODO - Android ARM64 runtime and packaging](docs/todo/open/build/android-runtime.mdc)
 
-### TODO - Static reference ledger and research retention
-
-Use static function inventories and a safe investigation retention guard
-without blocking independent title implementation.
-
-<!-- MarkdownLint-disable-next-line MD013 MD044 -->
-[TODO - Static reference ledger and research retention](docs/todo/open/build/reference-ledger.mdc)
-
 ## P4 - Title implementation
 
 Implement the following titles in catalogue order after the shared
 delivery gates. An unavailable independent target does not block
 implementation for supported targets.
-Each record owns title-specific acceptance. Shared rules remain in
-AGENTS.md and the foundation contracts.
+Each record owns title acceptance, including its completed private ledger,
+manual gameplay corrections and regression tests. Explicit owner approval
+is required for closure. Shared rules remain in AGENTS.md.
 
 ### TODO - The Simpsons Arcade Game
 

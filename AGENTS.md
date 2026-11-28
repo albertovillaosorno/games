@@ -290,13 +290,29 @@
   implementations into distributed source, or bypass access controls.
   Preserve original semantics where required and record deliberate modern
   deviations such as free play, adaptive display and offline operation.
-- Prioritise complete playable progression. Analyse function groups and
-  their dependencies, reuse existing mechanisms and implement vertical
-  gameplay slices; do not wait for an entire ledger to start integration.
-  Review already authored behaviour against the ledger before rewriting
-  it. Close the title only when all relevant discovered functions are
-  accounted for and gameplay acceptance passes. Report unresolved
-  discovery limits honestly.
+- For every game, complete the following lifecycle in its canonical title
+  task, not in the shared reference-ledger task:
+  1. Admit the selected original and create its private function ledger.
+     Reconcile executable regions, code, data and indirect dispatch.
+  1. Complete semantic review of every function, including private
+     pseudocode, inputs, outputs, effects and dependencies. Record
+     verified independent behavioural specifications.
+  1. Implement each reviewed function in Rust with equivalent or
+     deliberately improved behaviour, reuse a shared mechanism, or
+     document and verify why it is intentionally replaced or non-runtime.
+     Work in dependency groups; record owners, symbols and tests.
+     Partial mappings remain unresolved. Review and reuse existing code.
+  1. Finish the ledger: no unresolved or discovered dispositions, pending
+     semantic or dependency reviews, or unexplained control flow.
+     Run the ledger checker and `cargo validate`; record results.
+  1. Manually exercise the complete game on supported targets. Fix bugs
+     and requested improvements, add regression tests for each correction,
+     and run `cargo validate` after changes.
+  1. Keep the title TODO open until all acceptance criteria pass and the
+     owner explicitly confirms no further bugs or improvements remain.
+     Passing tests or a complete ledger never imply owner approval.
+  Shared tooling acceptance is independent of title ledger completion.
+  Keep incomplete tooling semantics in the applicable title task.
 - Use lawful local reference emulators (MAME and other appropriate
   systems) to verify static findings, resolve hardware/timing ambiguities,
   inspect media layouts and compare end-to-end behaviour. Pin revisions
@@ -319,16 +335,18 @@
   merely to introduce a dependency. Verify licences and record notices.
   Study the official Craft Anything source for applicable analysis tools
   and workflows; it is a reference, not a mandatory runtime dependency.
-- When Ghidra lacks the required CPU or binary loader, first search for
-  compatible maintained upstream extensions. Where feasible, implement
-  a reusable contributor-only processor or loader extension with tests
-  against authoritative instruction and memory-map evidence. Verify
-  decoding, bank identity, control flow and semantic correctness before
-  trusting decompilation. Keep extension code separate from runtime.
-  Do not block playable campaign progress on missing analysis tooling:
-  use verified static alternatives and targeted reference emulation
-  when an extension is unavailable or disproportionate to the task.
-  Record the analysis limitation and revisit unresolved ledger entries.
+- When Ghidra lacks a correct CPU, loader or analysis capability, first
+  search for compatible maintained upstream extensions. If absent or
+  inadequate, create the required reusable contributor tooling in
+  tools/; prefer Rust generators and use Java only for required Ghidra
+  API glue. Reuse or extend existing processor and board tooling rather
+  than duplicate title pipelines. Validate decoding, addressing modes,
+  bank identity, control flow and semantics against pinned authoritative
+  CPU and board evidence, with reproducible tests. Do not trust partial
+  or incorrect decompilation as complete. If an extension is infeasible,
+  use verified static alternatives, record limitations and resolve
+  affected ledger entries before title closure. Keep tools separate
+  from runtime; run `cargo validate`.
 - Configure persistent publication roots and the requested target in local
   `.env` using `GAMES_ASSET_ROOT`, `GAMES_OUTPUT_ROOT` and `GAMES_TARGET`.
   Use explicit absolute roots; do not expand shell expressions. Track only

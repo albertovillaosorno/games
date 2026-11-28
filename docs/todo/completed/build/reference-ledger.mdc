@@ -1,6 +1,6 @@
 ---
 id: "reference-ledger"
-status: "open"
+status: "completed"
 lane: "3"
 priority: "p3"
 area: "build"
@@ -14,48 +14,30 @@ validation:
 
 ## Objective
 
-Use a function-first static analysis workflow and bounded investigation
-retention for all selected titles; keep original software and its
-decompiler output private.
+Deliver reusable static analysis and mandatory function-first workflow
+for all games, including bounded private investigation retention.
+Individual ledger completion, implementation, manual QA and owner
+approval belong to each canonical title task.
 
 ## Acceptance
 
-- Prefer a verified Ghidra processor and loader for each selected lawful
-  binary. Record the exact edition, tool revision, CPU, address spaces,
-  bank mapping, executable regions and analysis limitations. Use other
-  appropriate static tools when the required processor is unavailable;
-  never interpret one instruction set as another.
-- Keep one durable private per-title JSON Lines function inventory in
-  `.reference/games/<title>/ledger.jsonl`. Give each function a stable
-  identity comprising module, CPU, address space or bank, and entry
-  address; preserve the original FUN identifier or symbol.
-- Record semantic name, inputs, outputs, state mutations, callers,
-  callees, data dependencies, confidence, Rust owner and symbol,
-  test evidence and status. Reconcile function discovery, indirect
-  calls and unexplained executable regions; separate data from code.
-- Resolve every discovered function as implemented, shared mechanism,
-  intentional documented replacement, non-runtime or unresolved.
-  Do not treat an unclassified address or guessed behavior as complete.
-  Use verified semantic specifications for independent Rust
-  implementation; do not publish original pseudocode or proprietary
-  code. Preserve existing importer, IR, safety and licensing boundaries.
-- Use targeted emulator observations for ambiguities, assets and
-  regression tests. Do not repeat broad visual experiments in place
-  of static analysis. Measure progress by resolved functions and
-  playable campaign milestones, not capture counts or commits.
-- Provide a bounded research retention guard through contributor
-  tooling. Keep disposable captures in a dedicated scratch namespace.
-  Record the retained evidence, reproduction inputs and completion
-  status before making a run eligible for removal.
-- Default to read-only inventory and cleanup preview; require explicit
-  application of a bounded plan. Apply age and size retention only to
-  positively identified completed, archived and regenerable runs.
-  Reject unsafe paths, links, active or unclassified investigations.
-  Protect originals, tool installations, private analysis projects,
-  durable ledgers and canonical assets. Test with tiny scratch fixtures.
-- Keep unclassified historical captures until individually reviewed.
-  Document reclaimed bytes and retained evidence; never delete an
-  investigation merely because it is old.
+- Establish reusable Ghidra processor, loader and analysis tooling with
+  reproducible tests; require custom tooling when existing support is
+  inadequate. Document verified alternatives and limitations.
+- Establish the private per-game ledger schema, stable identities,
+  semantic reviews, dependencies, dispositions, Rust mappings and
+  test evidence. Provide a bounded checker and dependency work queue.
+- Require the per-game lifecycle in AGENTS.md: complete inventory,
+  semantic review, independent Rust implementation or verified
+  deliberate disposition, ledger closure, manual corrections and
+  regression tests, and explicit final owner acceptance.
+- Provide bounded research retention with a fixed disposable namespace,
+  owner-reviewed archived evidence, explicit age and quota, read-only
+  preview and reviewed-plan apply. Reject unsafe paths, links, active
+  or unclassified investigations; protect media, projects, assets and
+  canonical ledgers. Test with small disposable fixtures.
+- Validate shared tooling and policy independently of title completion.
+  Preserve unresolved title and tool-specific limitations.
 
 ## Evidence
 
@@ -1222,3 +1204,24 @@ unresolved flows, 69 partial mappings and three resolved runtime
 mappings. No semantic disposition changed. Original-backed isolated
 and mixed action regressions and the final release boundary passed
 fresh workspace validation with 2,433 successful test executions.
+
+### Shared acceptance review
+
+On 2026-11-27 the owner clarified that shared P3 acceptance concerns
+the analysis infrastructure and mandatory per-game workflow, not the
+completion of the Simpsons ledger or campaign. The previous evidence
+is retained as historical implementation and limitation evidence.
+
+AGENTS.md now requires custom Ghidra tooling when needed, one private
+ledger per game, complete semantic review, verified Rust mappings or
+deliberate dispositions, ledger closure, manual gameplay corrections
+and regression tests, and explicit owner approval for title closure.
+
+The shared ledger checker, dependency queue, Ghidra processor and
+board tooling, fixtures and retention guard are implemented and tested.
+The Simpsons ledger currently contains 1,672 inventoried and reviewed
+functions, 69 partial mappings, three intentional replacements, 25
+non-runtime functions, 1,644 unresolved dispositions and 190 unresolved
+flow observations. These and incomplete processor or loader semantics
+remain title acceptance work. This closure does not certify them.
+Android remains an independent open task.

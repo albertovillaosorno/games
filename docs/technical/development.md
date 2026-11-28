@@ -82,6 +82,12 @@ reference records also remain protected.
 `.cache/` and `.temp/` are regenerable scratch space, never the only
 copy of durable records. Do not remove reference storage during cleanup.
 
+The mandatory per-game analysis and acceptance lifecycle is defined in
+[AGENTS.md](../../AGENTS.md). The shared tooling acceptance record is
+[reference-ledger](../todo/completed/build/reference-ledger.mdc).
+Keep game-specific semantic, implementation, manual regression and
+final owner acceptance evidence in the existing title task.
+
 ## Reference dependency work queue
 
 The ledger checker accepts an optional positive group-output limit:
