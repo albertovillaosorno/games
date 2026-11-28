@@ -6311,3 +6311,30 @@ air-attack tick pairs and preceding protected-room checks.
 Enemy objects, exact ground-shadow composition, horizontal camera
 and normal campaign selection remain open. The bounded protected
 room is not complete campaign or physical-device acceptance.
+
+### Protected-room palette shadow composition
+
+The admitted scene renderer can replace the pixels of a resident
+atlas without changing its identifier or admitting another texture.
+Unknown identifiers and incorrect byte lengths are rejected before
+backend upload. Native, Canvas 2D and WebGL paths share this contract.
+
+The protected room retains its registered layer and body pixels,
+resolves only covered shadow pixels and uploads one sparse opaque
+correction overlay when the ordered sample changes. Channels use
+integer three-fifths attenuation of the underlying palette color;
+opaque actors take priority and overlapping masks attenuate only
+once. The overlay reserves one draw and 250,880 atlas bytes without
+altering simulation, catalogue hashes or the entrance-only default.
+
+The first protected body-visible 320-by-196 frame now matches the
+original exactly, eliminating the 103 previously observed shadow
+differences. The original-art native smoke repeats the same sample
+before and after hiding the bodies, with identical readback. Two
+independent moving controls each match all 58,800 pixels in the
+300-by-196 player and shadow region. Both still differ at the same
+ten pixels in columns 302 and 303, outside that region. The rest of
+the original room, including enemy objects and further dynamic
+overlaps, requires separate verification. All prior reflected pose,
+marker and layer readbacks pass in the offscreen Linux smoke.
+Browser and physical-device acceptance remain open.

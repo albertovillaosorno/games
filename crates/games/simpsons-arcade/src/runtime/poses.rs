@@ -105,6 +105,7 @@ impl Kind {
 
 type Entry = (Key, ContentHash);
 type Key = (Subject, Kind, u8);
+type LoadedPoses = (PoseEntries, Vec<cemetery::shadow::Source>);
 type PoseEntries = BTreeMap<Key, Art>;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -211,6 +212,11 @@ impl Catalogue {
 
     pub(super) fn atlas_count(&self) -> usize {
         self.count()
+            .saturating_add(usize::from(
+                self.cemetery
+                    .as_deref()
+                    .is_some_and(cemetery::Selection::room_walking),
+            ))
             .saturating_add(
                 usize::from(self.cemetery_layers.is_some()).saturating_mul(
                     cemetery::layers::ATLAS_COUNT
@@ -492,7 +498,7 @@ impl Catalogue {
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<PoseArt, RenderError> {
-        let entries = self.load_entries(store, scene)?;
+        let (entries, sources) = self.load_entries(store, scene)?;
         Ok(PoseArt {
             arrival: self
                 .arrival
@@ -532,7 +538,7 @@ impl Catalogue {
                         selection,
                         (
                             self.cemetery_layers.as_ref(),
-                            &room_sprites(&entries),
+                            room_sprites(&entries, sources),
                         ),
                     )
                     .map(Box::new)
@@ -557,8 +563,13 @@ impl Catalogue {
         &self,
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
-    ) -> Result<PoseEntries, RenderError> {
+    ) -> Result<LoadedPoses, RenderError> {
         let mut entries = BTreeMap::new();
+        let mut sources = Vec::new();
+        let room = self
+            .cemetery
+            .as_deref()
+            .is_some_and(cemetery::Selection::room_walking);
         for (&key, digest) in &self.entries {
             let bundle = open_bundle(store, *digest)?;
             let name = match (key.0, key.1) {
@@ -573,13 +584,16 @@ impl Catalogue {
                 (Subject::Pair(Pair::MargeHomer), _) => &"actor/duo",
                 (Subject::Pair(Pair::BartLisa), _) => &"actor/bart-lisa",
             };
-            let art = Art::load(scene, &bundle, name)?;
+            let (art, pixels) = Art::load_with_pixels(scene, &bundle, name)?;
             if art.rect.width.get() > 128 || art.rect.height.get() > 128 {
                 return Err(failure("unexpected pose extent"));
             }
+            if room && room_source(key) {
+                sources.push(cemetery::shadow::Source::new(art, &pixels)?);
+            }
             let _prior = entries.insert(key, art);
         }
-        Ok(entries)
+        Ok((entries, sources))
     }
 
     pub(super) fn open(path: &OsStr) -> Result<Self, RenderError> {
@@ -911,18 +925,20 @@ const fn repelled_phase(tick: u8) -> u8 {
     }
 }
 
+fn room_jump_keys(player: Player) -> [(Kind, u8); 3] {
+    let descent = if player == Player::Bart {
+        3
+    } else {
+        4
+    };
+    [(Kind::Jump, 0), (Kind::Lift, 0), (Kind::Jump, descent)]
+}
+
 fn room_jump_sprites(entries: &PoseEntries) -> cemetery::AirSprites {
     Player::ALL.map(|player| {
-        let descent = if player == Player::Bart {
-            3
-        } else {
-            4
-        };
-        [(Kind::Jump, 0), (Kind::Lift, 0), (Kind::Jump, descent)].map(
-            |(kind, tick)| {
-                entries.get(&station_key(player, kind, tick)).copied()
-            },
-        )
+        room_jump_keys(player).map(|(kind, tick)| {
+            entries.get(&station_key(player, kind, tick)).copied()
+        })
     })
 }
 
@@ -949,7 +965,34 @@ fn room_special_entries_complete(entries: &BTreeMap<Key, ContentHash>) -> bool {
     })
 }
 
-fn room_sprites(entries: &PoseEntries) -> cemetery::RoomSprites {
+fn room_source((subject, kind, tick): Key) -> bool {
+    let Subject::Station(player) = subject else {
+        return false;
+    };
+    match kind {
+        Kind::AirAttack => {
+            cemetery::air_attack_keys(player).contains(&Some(tick))
+        },
+        Kind::Jump | Kind::Lift => {
+            room_jump_keys(player).contains(&(kind, tick))
+        },
+        Kind::Special => cemetery::special_keys(player).contains(&tick),
+        Kind::Attack
+        | Kind::AttackMoving
+        | Kind::Defeat
+        | Kind::Hurt
+        | Kind::Idle
+        | Kind::Repelled
+        | Kind::Restraint
+        | Kind::Walk
+        | Kind::WalkUp => false,
+    }
+}
+
+fn room_sprites(
+    entries: &PoseEntries,
+    sources: Vec<cemetery::shadow::Source>,
+) -> cemetery::RoomSprites {
     cemetery::RoomSprites {
         air_attacks: Player::ALL.map(|player| {
             cemetery::air_attack_keys(player).map(|tick| {
@@ -959,6 +1002,7 @@ fn room_sprites(entries: &PoseEntries) -> cemetery::RoomSprites {
             })
         }),
         jumps: room_jump_sprites(entries),
+        sources,
         specials: Player::ALL.map(|player| {
             cemetery::special_keys(player).map(|tick| {
                 entries
@@ -2212,13 +2256,18 @@ mod tests {
             assert_eq!(value.count(), base.count().saturating_add(60));
             assert_eq!(
                 value.atlas_count(),
-                base.atlas_count().saturating_add(60)
+                base.atlas_count().saturating_add(61)
             );
             assert_eq!(
                 value.atlas_bytes(),
-                base.atlas_bytes().saturating_add(452_452)
+                base.atlas_bytes()
+                    .saturating_add(452_452)
+                    .saturating_add(cemetery::shadow::ATLAS_BYTES)
             );
-            assert_eq!(value.scenic_sprite_count(), base.scenic_sprite_count());
+            assert_eq!(
+                value.scenic_sprite_count(),
+                base.scenic_sprite_count().saturating_add(1)
+            );
             assert_eq!(value.digests().count(), value.count());
         }
         assert_cemetery_walking_rejections(with_boss, &full, layers);

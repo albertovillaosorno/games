@@ -39,6 +39,7 @@ use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
 
 use super::super::{Art, failure, open_bundles};
+use super::shadow;
 
 pub(in crate::runtime) const ATLAS_BYTES: usize = 6 * 512 * 256 * 4 + 4;
 pub(in crate::runtime) const ATLAS_COUNT: usize = PHASES + 3;
@@ -63,6 +64,7 @@ impl Layers {
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
         hashes: [ContentHash; PHASES],
+        mut sources: Option<&mut Vec<shadow::Source>>,
     ) -> Result<Self, RenderError> {
         let bundles = open_bundles(store, hashes)?;
         let [first, ..] = &bundles;
@@ -82,15 +84,17 @@ impl Layers {
         }
         let animated = bundles
             .iter()
-            .map(|bundle| Art::load(scene, bundle, ANIMATED_KEY))
+            .map(|bundle| {
+                load_map(scene, bundle, ANIMATED_KEY, sources.as_deref_mut())
+            })
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_error| RenderError::InvalidSprite)?;
         Ok(Self {
             animated,
-            backdrop: Art::load(scene, first, backdrop)?,
-            front: Art::load(scene, first, front)?,
-            middle: Art::load(scene, first, middle)?,
+            backdrop: load_map(scene, first, backdrop, sources.as_deref_mut())?,
+            front: load_map(scene, first, front, sources.as_deref_mut())?,
+            middle: load_map(scene, first, middle, sources)?,
         })
     }
 
@@ -171,6 +175,19 @@ fn distinct(items: &[ContentHash]) -> bool {
             .skip(index.saturating_add(1))
             .all(|other| item != other)
     })
+}
+
+fn load_map(
+    scene: &mut SceneSession<'_, '_>,
+    bundle: &CanonicalBundle,
+    key: &str,
+    sources: Option<&mut Vec<shadow::Source>>,
+) -> Result<Art, RenderError> {
+    let (art, pixels) = Art::load_with_pixels(scene, bundle, key)?;
+    if let Some(retained) = sources {
+        retained.push(shadow::Source::new(art, &pixels)?);
+    }
+    Ok(art)
 }
 
 fn validate(bundle: &CanonicalBundle, key: &str) -> Result<(), RenderError> {

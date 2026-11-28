@@ -702,7 +702,7 @@ impl Scene {
         let panel_draw = locale.panel.or(self.panel);
         let blank = cabinet.stage_scene_hidden();
         if !blank {
-            self.queue_stage(cabinet, view, hud)?;
+            self.queue_stage(scene, cabinet, (view, hud))?;
         }
         self.queue_menu(cabinet, center, editor)?;
         if matches!(cabinet.phase(), Phase::MainMenu | Phase::Paused)
@@ -860,16 +860,19 @@ impl Scene {
 
     fn queue_cemetery(
         &mut self,
+        scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
-        entrance: &crate::CemeteryEntrance,
         (view, hud): (world::View, station_hud::StationHud),
     ) -> Result<(), RenderError> {
+        let entrance = cabinet
+            .cemetery_entrance()
+            .ok_or(RenderError::InvalidSprite)?;
         let art = self
             .poses
             .cemetery
-            .as_deref()
+            .as_deref_mut()
             .ok_or(RenderError::InvalidSprite)?;
-        let _backgrounds = art.queue(entrance, &mut self.draws)?;
+        let _backgrounds = art.queue(scene, &entrance, &mut self.draws)?;
         if entrance.background_phase().is_none()
             || !cabinet.session().world_visible()
         {
@@ -1044,12 +1047,12 @@ impl Scene {
 
     fn queue_stage(
         &mut self,
+        scene: &mut SceneSession<'_, '_>,
         cabinet: &Cabinet,
-        view: world::View,
-        hud: station_hud::StationHud,
+        (view, hud): (world::View, station_hud::StationHud),
     ) -> Result<(), RenderError> {
-        if let Some(entrance) = cabinet.cemetery_entrance() {
-            return self.queue_cemetery(cabinet, &entrance, (view, hud));
+        if cabinet.cemetery_entrance().is_some() {
+            return self.queue_cemetery(scene, cabinet, (view, hud));
         }
         if let Some(bonus) = cabinet.bonus().filter(|bonus| {
             bonus.phase() != crate::BonusPhase::Victory

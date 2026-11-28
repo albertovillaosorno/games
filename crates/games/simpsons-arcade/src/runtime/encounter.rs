@@ -980,7 +980,7 @@ fn smoke_cemetery(
     {
         return Err(failure("cemetery landing not reached"));
     }
-    if let Some(registered) = art.poses.cemetery.as_deref() {
+    if let Some(registered) = art.poses.cemetery.as_deref_mut() {
         registered.verify_layer_phases(scene)?;
     }
     let _restored = art.present(scene, simulation.state())?;

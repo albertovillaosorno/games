@@ -34,6 +34,7 @@
 mod air;
 mod ground;
 pub(super) mod layers;
+pub(super) mod shadow;
 mod special;
 
 use std::cmp::Reverse;
@@ -271,11 +272,12 @@ pub(super) type AirSprites = [[Option<Art>; 3]; 4];
 pub(super) struct RoomSprites {
     pub(super) air_attacks: [[Option<Art>; 5]; 4],
     pub(super) jumps: AirSprites,
+    pub(super) sources: Vec<shadow::Source>,
     pub(super) specials: AirSprites,
 }
 type RoomSupplement<'supplement> = (
     Option<&'supplement [ContentHash; layers::PHASES]>,
-    &'supplement RoomSprites,
+    RoomSprites,
 );
 type BodySample = (usize, Point, i16);
 
@@ -358,7 +360,7 @@ impl Selection {
     }
 
     pub(super) const fn atlas_bytes(&self) -> usize {
-        if self.room_air_attacks() {
+        let registered = if self.room_air_attacks() {
             AIR_ATLAS_BYTES
         } else if self.room_ground_attacks() {
             GROUND_ATLAS_BYTES
@@ -372,6 +374,11 @@ impl Selection {
             ANIMATED_ATLAS_BYTES
         } else {
             ATLAS_BYTES
+        };
+        if self.room_walking() {
+            registered.saturating_add(shadow::ATLAS_BYTES)
+        } else {
+            registered
         }
     }
 
@@ -455,7 +462,9 @@ impl Selection {
 
     pub(super) const fn sprite_count(&self) -> usize {
         if self.count() >= MARKER_ROLE_COUNT {
-            EXTRA_SPRITES + 4
+            EXTRA_SPRITES + 5
+        } else if self.room_walking() {
+            EXTRA_SPRITES + 1
         } else {
             EXTRA_SPRITES
         }
@@ -469,6 +478,7 @@ pub(super) struct CemeteryArt {
     jumps: AirSprites,
     layers: Option<layers::Layers>,
     roles: Vec<RoleArt>,
+    shadow: Option<shadow::Shadow>,
     specials: AirSprites,
 }
 
@@ -569,10 +579,12 @@ impl CemeteryArt {
         selection: &Selection,
         (layer_hashes, sprites): RoomSupplement<'_>,
     ) -> Result<Self, RenderError> {
+        let mut sources = sprites.sources;
         let roles = selection
             .digests()
             .zip(ROLES)
-            .map(|(hash, role)| {
+            .enumerate()
+            .map(|(index, (hash, role))| {
                 let bundle = open_bundle(store, hash)?;
                 let (art, pixels) =
                     Art::load_with_pixels(scene, &bundle, role.key)?;
@@ -588,9 +600,27 @@ impl CemeteryArt {
                     .record(role.key)
                     .ok_or(RenderError::InvalidSprite)?
                     .digest;
+                if selection.room_walking() && room_source(index) {
+                    sources.push(shadow::Source::new(art, &pixels)?);
+                }
                 Ok(RoleArt { art, digest })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let layers = layer_hashes
+            .map(|hashes| {
+                layers::Layers::load(
+                    store,
+                    scene,
+                    *hashes,
+                    selection.room_walking().then_some(&mut sources),
+                )
+            })
+            .transpose()?;
+        let shadow = if selection.room_walking() {
+            Some(shadow::Shadow::new(scene, sources)?)
+        } else {
+            None
+        };
         Ok(Self {
             air_attacks: sprites.air_attacks,
             first: selection.first,
@@ -599,10 +629,9 @@ impl CemeteryArt {
             } else {
                 [[None; 3]; 4]
             },
-            layers: layer_hashes
-                .map(|hashes| layers::Layers::load(store, scene, *hashes))
-                .transpose()?,
+            layers,
             roles,
+            shadow,
             specials: if selection.room_specials() {
                 sprites.specials
             } else {
@@ -624,7 +653,8 @@ impl CemeteryArt {
     }
 
     pub(super) fn queue(
-        &self,
+        &mut self,
+        scene: &mut SceneSession<'_, '_>,
         entrance: &CemeteryEntrance,
         draws: &mut Vec<SpriteDraw>,
     ) -> Result<usize, RenderError> {
@@ -646,6 +676,14 @@ impl CemeteryArt {
             && let Some(room) = entrance.room()
         {
             self.queue_room(&room.presentation_bodies(), visible, draws);
+            if let Some(shadow) = &mut self.shadow {
+                let correction = shadow.queue(
+                    scene,
+                    draws.get(start..).ok_or(RenderError::InvalidSprite)?,
+                    background_count,
+                )?;
+                draws.extend(correction);
+            }
         } else {
             draws.extend(
                 Player::ALL
@@ -733,7 +771,7 @@ impl CemeteryArt {
     }
 
     pub(super) fn verify_layer_phases(
-        &self,
+        &mut self,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<(), RenderError> {
         let Some(layers) = &self.layers else {
@@ -747,7 +785,8 @@ impl CemeteryArt {
                 .digest;
             verify_layer_offsets(scene, layers, phase, expected)?;
         }
-        self.verify_room_walk(scene)
+        self.verify_room_walk(scene)?;
+        self.verify_room_shadows(scene)
     }
 
     fn verify_room_air_attacks(
@@ -959,6 +998,60 @@ impl CemeteryArt {
         Ok(())
     }
 
+    fn verify_room_shadows(
+        &mut self,
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<(), RenderError> {
+        if self.layers.is_none() || self.shadow.is_none() {
+            return Ok(());
+        }
+        let bodies = crate::CemeteryRoom::default().presentation_bodies();
+        let mut previous = None;
+        for visible in [true, true, false, true] {
+            let digest =
+                self.verify_shadow_sample(scene, (3, bodies, visible))?;
+            if visible && previous.is_some_and(|expected| expected != digest) {
+                return Err(failure("repeated cemetery shadow sample differs"));
+            }
+            if visible {
+                previous = Some(digest);
+            }
+            write_status(format_args!(
+                "Cemetery room shadow: {visible} {digest}"
+            ))
+            .map_err(failure)?;
+        }
+        for (label, records) in [
+            ("reversed", [
+                (114i16, 174i16, Facing::Left, true),
+                (146, 174, Facing::Right, true),
+                (174, 174, Facing::Right, true),
+                (198, 174, Facing::Left, true),
+            ]),
+            ("homer-lisa", [
+                (116, 176, Facing::Right, false),
+                (142, 174, Facing::Left, true),
+                (172, 176, Facing::Right, false),
+                (202, 174, Facing::Right, true),
+            ]),
+        ] {
+            let mut moving = bodies;
+            for (body, (x, y, facing, walks)) in moving.iter_mut().zip(records)
+            {
+                body.position = Point { x, y };
+                body.facing = facing;
+                body.walking =
+                    walks.then_some(WalkMotion { away: false, tick: 0 });
+            }
+            let digest = self.verify_shadow_sample(scene, (2, moving, true))?;
+            write_status(format_args!(
+                "Cemetery moving shadow: {label} {digest}"
+            ))
+            .map_err(failure)?;
+        }
+        Ok(())
+    }
+
     fn verify_room_specials(
         &self,
         scene: &mut SceneSession<'_, '_>,
@@ -1022,6 +1115,28 @@ impl CemeteryArt {
         self.verify_room_specials(scene, &baseline)?;
         self.verify_room_ground_attacks(scene, &baseline)?;
         self.verify_room_air_attacks(scene, &baseline)
+    }
+
+    fn verify_shadow_sample(
+        &mut self,
+        scene: &mut SceneSession<'_, '_>,
+        (phase, bodies, visible): (u8, [CemeteryRoomBody; 4], bool),
+    ) -> Result<ContentHash, RenderError> {
+        let mut draws = Vec::new();
+        self.layers
+            .as_ref()
+            .ok_or(RenderError::InvalidSprite)?
+            .queue(phase, 0, &mut draws)?;
+        let background_count = draws.len();
+        self.queue_room(&bodies, visible, &mut draws);
+        let shadow = self.shadow.as_mut().ok_or(RenderError::InvalidSprite)?;
+        let correction = shadow.queue(scene, &draws, background_count)?;
+        if correction.is_some() != visible {
+            return Err(failure("cemetery room shadow visibility differs"));
+        }
+        draws.extend(correction);
+        let first = *draws.first().ok_or(RenderError::InvalidSprite)?;
+        background_digest(scene, &draws, first)
     }
 }
 
@@ -1099,6 +1214,13 @@ fn marker_digest(
         return Err(RenderError::InvalidLength);
     }
     Ok(ContentHash::calculate(pixels.as_flattened()))
+}
+
+const fn room_idle_index(player: Player) -> usize {
+    ANIMATED_ROLE_COUNT.saturating_sub(1).saturating_sub(
+        (3usize.saturating_sub(player.index()))
+            .saturating_mul(LANDING_POSE_COUNT.saturating_sub(1)),
+    )
 }
 
 fn room_order(
@@ -1218,11 +1340,14 @@ fn room_role(player: Player, body: CemeteryRoomBody) -> Option<(usize, bool)> {
             canonical_right != (body.facing == Facing::Right),
         ));
     }
-    let index = ANIMATED_ROLE_COUNT.saturating_sub(1).saturating_sub(
-        (3usize.saturating_sub(player.index()))
-            .saturating_mul(LANDING_POSE_COUNT.saturating_sub(1)),
-    );
-    Some((index, body.facing == Facing::Left))
+    Some((room_idle_index(player), body.facing == Facing::Left))
+}
+
+fn room_source(index: usize) -> bool {
+    index >= ANIMATED_ROLE_COUNT
+        || Player::ALL
+            .into_iter()
+            .any(|player| room_idle_index(player) == index)
 }
 
 pub(super) fn verify(
@@ -1236,13 +1361,24 @@ pub(super) fn verify(
     let cemetery = art
         .poses
         .cemetery
-        .as_deref()
+        .as_deref_mut()
         .ok_or(RenderError::InvalidSprite)?;
     let mut expected = Vec::new();
-    let background_count = cemetery.queue(&entrance, &mut expected)?;
+    let background_count = cemetery.queue(scene, &entrance, &mut expected)?;
     let background = background_index(&entrance)
         .and_then(|index| cemetery.roles.get(index))
         .map(|role| role.digest);
+    let bounds: Vec<_> = expected
+        .iter()
+        .skip(background_count)
+        .filter(|draw| {
+            !cemetery
+                .shadow
+                .as_ref()
+                .is_some_and(|shadow| shadow.is_overlay(**draw))
+        })
+        .map(|draw| draw.destination)
+        .collect();
     let _presented = art.present(scene, cabinet)?;
     if scene.layout().width().get() != world::BASE_WIDTH
         || !art.draws.starts_with(&expected)
@@ -1258,11 +1394,6 @@ pub(super) fn verify(
         if expected.len() > background_count {
             let baseline = scene.readback()?;
             let _composed = scene.present([24, 22, 30], &expected)?;
-            let bounds: Vec<_> = expected
-                .iter()
-                .skip(background_count)
-                .map(|body_draw| body_draw.destination)
-                .collect();
             scenery::verify_pixels(
                 &scene.readback()?,
                 &baseline,
