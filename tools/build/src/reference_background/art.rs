@@ -280,9 +280,54 @@ impl BackgroundPublication {
         publish_image(
             &self.output,
             &bundle,
-            image,
+            &image,
             ("scene/background", limits()?),
         )
+    }
+}
+
+/// Publish independent registered maps from one exact scene observation.
+#[derive(Debug)]
+pub struct LayerPublication {
+    output: OsString,
+    scene: Arguments,
+}
+
+impl LayerPublication {
+    /// Parse an explicit output parent and one complete observation.
+    ///
+    /// # Errors
+    /// Rejects incomplete or excessive scene arguments.
+    pub fn parse(mut args: Vec<OsString>) -> Result<Self, String> {
+        if args.len() != 10 {
+            return Err(String::from(USAGE));
+        }
+        let output = args.remove(0);
+        Ok(Self {
+            output,
+            scene: Arguments::parse_scene(args)?,
+        })
+    }
+
+    /// Publish only after full-scene and isolated composition verification.
+    ///
+    /// # Errors
+    /// Rejects misaligned observations, unsupported layers and unsafe output.
+    pub fn run(&self, machine: Machine) -> Result<(), String> {
+        publication::require_asset_parent(
+            &self.output,
+            &machine.identity().title,
+        )?;
+        let bundle = graphics_bundle(&self.scene, machine)?;
+        let payloads = GraphicsPayloads::load(&bundle, true)?;
+        let assets = payloads.bind(&bundle)?;
+        let mut pens =
+            vec![Pixel::default(); machine.background_raster().pixels()];
+        let mut observation =
+            verified_scene(&self.scene, machine, &assets, &mut pens)?;
+        let layers =
+            registered_layers((machine, &assets), &mut observation, &mut pens)?;
+        layers.publish(&self.output, &bundle, &observation.colors)
     }
 }
 
@@ -385,7 +430,7 @@ impl Strip {
         publish_image(
             &self.output,
             &bundle,
-            completed,
+            &completed,
             ("scene/world-background", strip_limits()?),
         )
     }
@@ -521,7 +566,7 @@ impl Image {
     }
 
     fn stage(
-        self,
+        &self,
         key: &str,
         records: &mut Vec<AssetRecord>,
         stage: &mut CanonicalStaging,
@@ -607,6 +652,12 @@ pub(super) struct RegisteredLayers {
 }
 
 impl RegisteredLayers {
+    fn backdrop_rgba(&self, colors: &[[u8; 4]]) -> Result<[u8; 4], String> {
+        Pixel::from_pen(self.backdrop)
+            .rgba(colors)
+            .ok_or_else(|| String::from("backdrop pen outside palette"))
+    }
+
     #[cfg(feature = "native-preview")]
     pub(super) fn native_check(
         &self,
@@ -618,9 +669,7 @@ impl RegisteredLayers {
         let layout =
             super::native_layout(raster, expected.pixels.as_flattened().len())?;
         let limits = self.native_limits()?;
-        let [red, green, blue, _alpha] = Pixel::from_pen(self.backdrop)
-            .rgba(colors)
-            .ok_or_else(|| String::from("backdrop pen outside palette"))?;
+        let [red, green, blue, _alpha] = self.backdrop_rgba(colors)?;
         let mut window = NativeWindow::open(
             "Independent layer verification",
             layout.width(),
@@ -667,6 +716,27 @@ impl RegisteredLayers {
         })
     }
 
+    fn publish(
+        &self,
+        output: &OsStr,
+        bundle: &CanonicalBundle,
+        colors: &[[u8; 4]],
+    ) -> Result<(), String> {
+        let limits = layer_limits()?;
+        let mut stage =
+            CanonicalStaging::new(output, publication::staging_budget(limits)?)
+                .map_err(|error| format!("stage: {error:?}"))?;
+        let records = self.stage(colors, &mut stage)?;
+        let manifest = AssetManifest::new(
+            bundle.manifest().source().clone(),
+            records,
+            limits,
+        )
+        .map_err(|error| format!("manifest: {error:?}"))?;
+        publication::finish(stage, &manifest, limits)?;
+        self.report()
+    }
+
     pub(super) fn report(&self) -> Result<(), String> {
         toolchain::write_line(&format!(
             "Backdrop: palette pen {}",
@@ -684,6 +754,25 @@ impl RegisteredLayers {
             .map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    fn stage(
+        &self,
+        colors: &[[u8; 4]],
+        stage: &mut CanonicalStaging,
+    ) -> Result<Vec<AssetRecord>, String> {
+        let backdrop = Image {
+            height: 1,
+            pixels: vec![self.backdrop_rgba(colors)?],
+            width: 1,
+        };
+        let mut records = Vec::with_capacity(4);
+        backdrop.stage("scene/backdrop", &mut records, stage)?;
+        for layer in &self.layers {
+            let key = format!("scene/layer-{}", layer.index);
+            layer.image.stage(&key, &mut records, stage)?;
+        }
+        Ok(records)
     }
 }
 
@@ -884,6 +973,22 @@ fn isolate(
         .crop()
 }
 
+fn layer_limits() -> Result<ManifestLimits, String> {
+    let (width, height) = Raster::LAYER_EXTENT;
+    let invalid = || String::from("invalid layer budget");
+    let size = u64::try_from(width.saturating_mul(height).saturating_mul(4))
+        .map_err(|_error| invalid())?;
+    let bytes = NonZeroU64::new(size).ok_or_else(invalid)?;
+    let total = NonZeroU64::new(size.saturating_mul(3).saturating_add(4))
+        .ok_or_else(invalid)?;
+    Ok(ManifestLimits {
+        payload_bytes: bytes,
+        records: NonZeroUsize::MIN.saturating_add(3),
+        total_bytes: total,
+        ..limits()?
+    })
+}
+
 fn limits() -> Result<ManifestLimits, String> {
     let size = |value| {
         NonZeroUsize::new(value).ok_or_else(|| String::from("zero limit"))
@@ -951,7 +1056,7 @@ fn parse_indices(
 fn publish_image(
     output: &OsStr,
     bundle: &CanonicalBundle,
-    image: Image,
+    image: &Image,
     (key, limits): (&str, ManifestLimits),
 ) -> Result<(), String> {
     let mut stage =
@@ -1002,6 +1107,9 @@ fn verified_scene(
 
 #[cfg(test)]
 mod tests {
+    use games_assets::SourceIdentity;
+    use games_platform::ir::storage::fixtures::TestRoot;
+
     use super::*;
 
     #[test]
@@ -1040,6 +1148,115 @@ mod tests {
         ] {
             assert!(parse(invalid).is_err(), "{invalid:?}");
         }
+    }
+
+    #[test]
+    fn layer_publication_requires_one_complete_scene() {
+        let digest = "0".repeat(64);
+        let args: Vec<_> = [
+            "output",
+            "parent",
+            &digest,
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+            "controls",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(LayerPublication::parse(args.clone()).is_ok());
+        let mut extra = args;
+        extra.push(OsString::from("unexpected"));
+        assert!(LayerPublication::parse(extra.clone()).is_err());
+        extra.truncate(9);
+        assert!(LayerPublication::parse(extra).is_err());
+    }
+
+    fn synthetic_layers() -> RegisteredLayers {
+        let (width, height) = Raster::LAYER_EXTENT;
+        let layer = |index, origin, pixel| RegisteredLayer {
+            image: Image {
+                height,
+                pixels: vec![pixel; width.saturating_mul(height)],
+                width,
+            },
+            index,
+            origin,
+        };
+        RegisteredLayers {
+            backdrop: 1,
+            layers: vec![
+                layer(1, (0, 31), [0; 4]),
+                layer(2, (0, 31), [0; 4]),
+                layer(0, (96, 16), [11, 22, 33, 255]),
+            ],
+        }
+    }
+
+    #[test]
+    fn layer_publication_preserves_maps_and_deduplicates_payloads()
+    -> Result<(), String> {
+        let failure = |error| format!("layer staging: {error:?}");
+        let root = TestRoot::new().map_err(|error| format!("{error:?}"))?;
+        let parent = root.location();
+        let layers = synthetic_layers();
+        let backdrop = [12, 34, 56, 255];
+        let colors = [[0; 4], backdrop];
+        let limits = layer_limits()?;
+        let mut stage =
+            CanonicalStaging::new(parent, publication::staging_budget(limits)?)
+                .map_err(failure)?;
+        let records = layers.stage(&colors, &mut stage)?;
+        let source = SourceIdentity {
+            revision: String::from("fixture"),
+            title: String::from("synthetic"),
+        };
+        let manifest = AssetManifest::new(source, records, limits)
+            .map_err(|error| format!("layer manifest: {error:?}"))?;
+        let staged = stage.finish(&manifest, limits).map_err(failure)?;
+        let digest = staged.digest();
+        staged
+            .publish()
+            .map_err(failure)?
+            .durability
+            .map_err(|error| format!("{error:?}"))?;
+        let bundle = CanonicalBundle::open(parent, digest, limits)
+            .map_err(|error| format!("{error:?}"))?;
+        verify_published_layers(&bundle, &layers, backdrop)
+    }
+
+    fn verify_published_layers(
+        bundle: &CanonicalBundle,
+        layers: &RegisteredLayers,
+        backdrop: [u8; 4],
+    ) -> Result<(), String> {
+        let read = |key: &str| {
+            bundle
+                .read_payload(key)
+                .map_err(|error| format!("{error:?}"))
+        };
+        if read("scene/backdrop")? != backdrop {
+            return Err(String::from("backdrop payload differs"));
+        }
+        for layer in &layers.layers {
+            let key = format!("scene/layer-{}", layer.index);
+            if read(&key)? != layer.image.pixels.as_flattened() {
+                return Err(String::from("map payload differs"));
+            }
+        }
+        let first = bundle.manifest().record("scene/layer-1");
+        let second = bundle.manifest().record("scene/layer-2");
+        if first
+            .zip(second)
+            .is_none_or(|(left, right)| left.digest != right.digest)
+        {
+            return Err(String::from("equal maps did not share a digest"));
+        }
+        Ok(())
     }
 
     #[test]

@@ -149,6 +149,8 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame scene-actor-digests MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS KEY:INDEX,...\n",
+    "mame scene-layer-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame scene-layer-digests MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame scene-background-digest MACHINE REV PARENT SHA256 ",
@@ -254,6 +256,7 @@ enum Command {
     Ghidra(ghidra::Component),
     GhidraBoard(ghidra_board::Board),
     Import(ImportProfile, Arguments),
+    LayerPublish(Machine, reference_background::art::LayerPublication),
     LedgerCheck(reference_ledger::Arguments),
     MigrationAudit(store_migration::Audit),
     MigrationCatalogue(Box<store_migration::Catalogue>),
@@ -354,6 +357,14 @@ impl Command {
             "scene-actor-digests" => Ok(Self::ActorDigests(
                 machine,
                 reference_background::art::ActorDigests::parse(args)?,
+            )),
+            "scene-background-publish" => Ok(Self::BackgroundPublish(
+                machine,
+                reference_background::art::BackgroundPublication::parse(args)?,
+            )),
+            "scene-layer-publish" => Ok(Self::LayerPublish(
+                machine,
+                reference_background::art::LayerPublication::parse(args)?,
             )),
             "art-publish" => Ok(Self::ArtPublish(
                 machine,
@@ -485,15 +496,13 @@ impl Command {
             );
         }
         match action {
-            "art-publish" | "strip-publish" | "scene-actor-digests" => {
+            "art-publish"
+            | "strip-publish"
+            | "scene-actor-digests"
+            | "scene-layer-publish"
+            | "scene-background-publish" => {
                 Self::parse_art(action, selected, args.collect())
             },
-            "scene-background-publish" => Ok(Self::BackgroundPublish(
-                selected,
-                reference_background::art::BackgroundPublication::parse(
-                    args.collect(),
-                )?,
-            )),
             "background-check"
             | "scene-check"
             | "scene-render-check"
@@ -726,6 +735,7 @@ impl Command {
             Self::PackageTitle(title) => title_package::configured(title),
             Self::ActorDigests(machine, args) => args.run(machine),
             Self::ArtPublish(machine, args) => args.run(machine),
+            Self::LayerPublish(machine, args) => args.run(machine),
             Self::StripPublish(machine, args) => args.run(machine),
             #[cfg(feature = "native-preview")]
             Self::AudioCheck(machine, args) => args.run(machine),
@@ -795,6 +805,7 @@ impl Command {
             | Self::BackgroundCheck(..)
             | Self::BackgroundPublish(..)
             | Self::BuildTitle(..)
+            | Self::LayerPublish(..)
             | Self::LedgerCheck(..)
             | Self::ObjectCheck(..)
             | Self::PackageCheck(..)
