@@ -645,6 +645,40 @@ pub(super) fn smoke_wrestler(
     Err(failure("wrestler was not cleared through play"))
 }
 
+fn smoke_instruction_pump(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    if !art
+        .poses
+        .bonus
+        .as_ref()
+        .is_some_and(super::bonus::BonusArt::has_instruction_pump)
+    {
+        return Ok(());
+    }
+    let mut route = fixed(*cabinet)?;
+    let mut previous = 0u16;
+    let samples = [0u16, 3, 4, 5, 9, 10, 12, 13, 14, 15, 21, 22, 30, 31, 310];
+    for tick in samples {
+        advance(&mut route, tick.saturating_sub(previous))?;
+        let current = route.state();
+        if current.bonus().map(Bonus::tick) != Some(tick) {
+            return Err(failure("instruction pump phase tick differs"));
+        }
+        let _drawn = art.present(scene, current)?;
+        super::bonus::instruction_pump::verify(scene, art, current)?;
+        previous = tick;
+    }
+    let _restored = art.present(scene, cabinet)?;
+    write_status(format_args!(
+        "Instruction pump: {} exact visible phase pairs",
+        samples.len()
+    ))
+    .map_err(failure)
+}
+
 fn smoke_bonus(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -658,6 +692,7 @@ fn smoke_bonus(
     await_bonus(simulation, BonusPhase::Instructions)?;
     let _instructions = art.present(scene, simulation.state())?;
     super::bonus::verify_instruction(scene, art, simulation.state())?;
+    smoke_instruction_pump(scene, art, simulation.state())?;
     let initial = scene.readback()?;
     advance(simulation, 8)?;
     let _demonstration = art.present(scene, simulation.state())?;

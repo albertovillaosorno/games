@@ -58,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(38_438);
+    NonZeroU64::MIN.saturating_add(38_721);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -124,6 +124,7 @@ pub(super) struct Catalogue {
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
     bonus_instruction: Option<ContentHash>,
+    bonus_instruction_pump: Option<Box<bonus::instruction_pump::Digests>>,
     bonus_opponents: Option<Box<bonus::opposition::Digests>>,
     cemetery: Option<Box<cemetery::Selection>>,
     cemetery_layers: Option<[ContentHash; cemetery::layers::PHASES]>,
@@ -194,26 +195,7 @@ impl Catalogue {
             .saturating_add(
                 self.backdrop_count().saturating_mul(backdrop::ATLAS_BYTES),
             )
-            .saturating_add(
-                usize::from(self.bonus.is_some())
-                    .saturating_mul(bonus::ATLAS_BYTES),
-            )
-            .saturating_add(
-                usize::from(self.bonus_departure.is_some())
-                    .saturating_mul(bonus::DEPARTURE_ATLAS_BYTES),
-            )
-            .saturating_add(
-                usize::from(self.bonus_inflated.is_some())
-                    .saturating_mul(bonus::INFLATED_ATLAS_BYTES),
-            )
-            .saturating_add(
-                usize::from(self.bonus_instruction.is_some())
-                    .saturating_mul(bonus::INSTRUCTION_ATLAS_BYTES),
-            )
-            .saturating_add(
-                usize::from(self.bonus_opponents.is_some())
-                    .saturating_mul(bonus::opposition::ATLAS_BYTES),
-            )
+            .saturating_add(self.bonus_atlas_bytes())
             .saturating_add(
                 usize::from(self.stage_two.is_some())
                     .saturating_mul(world::stage_atlas_budget()),
@@ -262,6 +244,14 @@ impl Catalogue {
                 ),
             )
             .saturating_add(
+                usize::from(self.bonus_instruction_pump.is_some())
+                    .saturating_mul(
+                        bonus::instruction_pump::ATLAS_COUNT.saturating_sub(
+                            bonus::instruction_pump::BUNDLE_COUNT,
+                        ),
+                    ),
+            )
+            .saturating_add(
                 usize::from(self.bonus_opponents.is_some()).saturating_mul(
                     bonus::opposition::ATLAS_COUNT
                         .saturating_sub(bonus::opposition::BUNDLE_COUNT),
@@ -275,6 +265,29 @@ impl Catalogue {
 
     pub(super) fn balloon_sprite_count(&self) -> usize {
         usize::from(self.balloon.is_some())
+    }
+
+    fn bonus_atlas_bytes(&self) -> usize {
+        [
+            (self.bonus.is_some(), bonus::ATLAS_BYTES),
+            (self.bonus_departure.is_some(), bonus::DEPARTURE_ATLAS_BYTES),
+            (self.bonus_inflated.is_some(), bonus::INFLATED_ATLAS_BYTES),
+            (
+                self.bonus_instruction.is_some(),
+                bonus::INSTRUCTION_ATLAS_BYTES,
+            ),
+            (
+                self.bonus_instruction_pump.is_some(),
+                bonus::instruction_pump::ATLAS_BYTES,
+            ),
+            (
+                self.bonus_opponents.is_some(),
+                bonus::opposition::ATLAS_BYTES,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(selected, bytes)| selected.then_some(bytes))
+        .fold(0usize, usize::saturating_add)
     }
 
     pub(super) fn bonus_departure_sprite_count(&self) -> usize {
@@ -351,6 +364,8 @@ impl Catalogue {
             && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.bonus_inflated.is_none() || self.bonus.is_some())
             && (self.bonus_instruction.is_none() || self.bonus.is_some())
+            && (self.bonus_instruction_pump.is_none()
+                || self.bonus_instruction.is_some())
             && (self.bonus_opponents.is_none()
                 || (self.bonus_departure.is_some()
                     && self.bonus_inflated.is_some()))
@@ -391,6 +406,10 @@ impl Catalogue {
             .saturating_add(usize::from(self.bonus_inflated.is_some()))
             .saturating_add(usize::from(self.bonus_instruction.is_some()))
             .saturating_add(
+                usize::from(self.bonus_instruction_pump.is_some())
+                    .saturating_mul(bonus::instruction_pump::BUNDLE_COUNT),
+            )
+            .saturating_add(
                 usize::from(self.bonus_opponents.is_some())
                     .saturating_mul(bonus::opposition::BUNDLE_COUNT),
             )
@@ -417,6 +436,11 @@ impl Catalogue {
             .chain(self.bonus_departure)
             .chain(self.bonus_inflated)
             .chain(self.bonus_instruction)
+            .chain(
+                self.bonus_instruction_pump
+                    .iter()
+                    .flat_map(|hashes| hashes.iter().copied()),
+            )
             .chain(
                 self.bonus_opponents
                     .iter()
@@ -460,8 +484,12 @@ impl Catalogue {
                 self.stage_two = Some(parse_stage_two(line, self.stage_two)?);
             },
             Some(
-                "bonus" | "bonus-departure" | "bonus-inflated"
-                | "bonus-instruction" | "bonus-opponents",
+                "bonus"
+                | "bonus-departure"
+                | "bonus-inflated"
+                | "bonus-instruction"
+                | "bonus-instruction-pump"
+                | "bonus-opponents",
             ) => self.insert_bonus(line)?,
             Some("arrival") => {
                 self.arrival =
@@ -519,6 +547,13 @@ impl Catalogue {
                     line,
                     self.bonus_instruction,
                 )?);
+            },
+            Some("bonus-instruction-pump") => {
+                self.bonus_instruction_pump =
+                    Some(Box::new(bonus::instruction_pump::parse(
+                        line,
+                        self.bonus_instruction_pump.is_some(),
+                    )?));
             },
             Some("bonus-opponents") => {
                 self.bonus_opponents =
@@ -627,6 +662,7 @@ impl Catalogue {
                     departure: self.bonus_departure,
                     inflated: self.bonus_inflated,
                     instruction: self.bonus_instruction,
+                    instruction_pump: self.bonus_instruction_pump.as_deref(),
                     opponents: self.bonus_opponents.as_deref(),
                 })
             })
@@ -1972,6 +2008,7 @@ mod tests {
         assert_departure_catalogue(&fighter, &record, &selected);
         assert_inflated_catalogue(&fighter, &record, &selected);
         assert_instruction_catalogue(&fighter, &record, &selected);
+        assert_instruction_pump_catalogue(&fighter, &record);
         assert_opposition_catalogue(&fighter, &record);
 
         assert_stage_two_catalogue(&fighter, &record, &selected);
@@ -2068,6 +2105,45 @@ mod tests {
                 selected
                     .atlas_bytes()
                     .saturating_add(bonus::INSTRUCTION_ATLAS_BYTES)
+            );
+        }
+    }
+
+    fn assert_instruction_pump_catalogue(fighter: &str, bonus_record: &str) {
+        let instruction = format!("bonus-instruction {HASH}\n");
+        let base = format!("{fighter}{bonus_record}{instruction}");
+        let hashes = [HASH; bonus::instruction_pump::BUNDLE_COUNT].join(" ");
+        let record = format!("bonus-instruction-pump {hashes}\n");
+        for invalid in [
+            format!("{fighter}{bonus_record}{record}"),
+            format!("{base}{record}{record}"),
+            format!("{base}bonus-instruction-pump {HASH}\n"),
+        ] {
+            assert!(Catalogue::parse(&invalid).is_err());
+        }
+        let baseline = Catalogue::parse(&base);
+        let parsed = Catalogue::parse(&format!("{base}{record}"));
+        assert!(baseline.is_ok());
+        assert!(parsed.is_ok());
+        if let (Ok(plain), Ok(value)) = (baseline, parsed) {
+            assert_eq!(
+                value.count(),
+                plain
+                    .count()
+                    .saturating_add(bonus::instruction_pump::BUNDLE_COUNT)
+            );
+            assert_eq!(value.digests().count(), value.count());
+            assert_eq!(
+                value.atlas_count(),
+                plain
+                    .atlas_count()
+                    .saturating_add(bonus::instruction_pump::ATLAS_COUNT)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                plain
+                    .atlas_bytes()
+                    .saturating_add(bonus::instruction_pump::ATLAS_BYTES)
             );
         }
     }

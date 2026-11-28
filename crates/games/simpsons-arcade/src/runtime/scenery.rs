@@ -549,6 +549,51 @@ pub(super) fn verify_pixels(
     Ok(())
 }
 
+// Opaque sprite crops are recovered exactly using two distinct clears.
+// Fractional alpha is deliberately rejected.
+pub(super) fn opaque_sprite_digest(
+    dark: &[u8],
+    light: &[u8],
+    rect: SpriteRect,
+    width: u32,
+) -> Result<ContentHash, RenderError> {
+    let (dark_pixels, dark_tail) = dark.as_chunks::<4>();
+    let (light_pixels, light_tail) = light.as_chunks::<4>();
+    if !dark_tail.is_empty()
+        || !light_tail.is_empty()
+        || dark_pixels.len() != light_pixels.len()
+    {
+        return Err(RenderError::InvalidLength);
+    }
+    let mut pixels = Vec::new();
+    for (index, (&dark_pixel, &light_pixel)) in
+        dark_pixels.iter().zip(light_pixels).enumerate()
+    {
+        let pixel_index = u32::try_from(index).map_err(failure)?;
+        let horizontal = pixel_index
+            .checked_rem(width)
+            .ok_or(RenderError::InvalidLength)?;
+        let vertical = pixel_index
+            .checked_div(width)
+            .ok_or(RenderError::InvalidLength)?;
+        if !rect.contains_pixel(horizontal, vertical) {
+            continue;
+        }
+        if dark_pixel == light_pixel && dark_pixel.last() == Some(&255) {
+            pixels.push(dark_pixel);
+        } else if dark_pixel == [0, 0, 0, 255] && light_pixel == [255; 4] {
+            pixels.push([0; 4]);
+        } else {
+            return Err(failure("opaque sprite has blended pixels"));
+        }
+    }
+    let expected = rect.width.get().saturating_mul(rect.height.get());
+    if pixels.len() != usize::try_from(expected).map_err(failure)? {
+        return Err(RenderError::InvalidLength);
+    }
+    Ok(ContentHash::calculate(pixels.as_flattened()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter::once;
@@ -557,6 +602,25 @@ mod tests {
 
     const HASH: &str =
         "0000000000000000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn opaque_sprite_readback_recovers_the_exact_transparent_crop() {
+        use std::num::NonZeroU32;
+
+        let rect = SpriteRect {
+            x: 0,
+            y: 0,
+            width: NonZeroU32::MIN.saturating_add(1),
+            height: NonZeroU32::MIN,
+        };
+        let dark = [12, 34, 56, 255, 0, 0, 0, 255];
+        let light = [12, 34, 56, 255, 255, 255, 255, 255];
+        let expected = ContentHash::calculate(&[12, 34, 56, 255, 0, 0, 0, 0]);
+        assert_eq!(opaque_sprite_digest(&dark, &light, rect, 2), Ok(expected));
+        let blended = [12, 34, 56, 255, 153, 153, 153, 255];
+        assert!(opaque_sprite_digest(&dark, &blended, rect, 2).is_err());
+        assert!(opaque_sprite_digest(&dark, &light[..4], rect, 2).is_err());
+    }
 
     fn complete_entrance_track() -> Catalogue {
         let mut track = Catalogue::default();

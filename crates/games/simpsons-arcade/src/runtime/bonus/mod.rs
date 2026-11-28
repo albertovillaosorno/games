@@ -32,6 +32,7 @@
 //! Optional original-width balloon bonus presentation.
 
 mod instruction;
+pub(super) mod instruction_pump;
 pub(super) mod opposition;
 
 use games::presentation::TranslationCatalog;
@@ -403,6 +404,7 @@ pub(super) struct BonusDigests<'digests> {
     pub(super) departure: Option<ContentHash>,
     pub(super) inflated: Option<ContentHash>,
     pub(super) instruction: Option<ContentHash>,
+    pub(super) instruction_pump: Option<&'digests instruction_pump::Digests>,
     pub(super) opponents: Option<&'digests opposition::Digests>,
 }
 
@@ -414,6 +416,7 @@ pub(super) struct BonusArt {
     headers: Vec<TextAtlas>,
     inflated: Option<[Art; 4]>,
     instruction: Option<instruction::InstructionArt>,
+    instruction_pump: Option<Box<instruction_pump::PumpArt>>,
     opponents: Option<Box<opposition::OpponentArt>>,
     pumps: [Art; 4],
     ranks: TextAtlas,
@@ -453,6 +456,10 @@ impl BonusArt {
         self.departure.is_some()
     }
 
+    pub(super) const fn has_instruction_pump(&self) -> bool {
+        self.instruction_pump.is_some()
+    }
+
     pub(super) const fn has_opponents(&self) -> bool {
         self.opponents.is_some()
     }
@@ -486,6 +493,13 @@ impl BonusArt {
                 )
             })
             .transpose()?;
+        let instruction_pump = digests
+            .instruction_pump
+            .map(|hashes| {
+                instruction_pump::PumpArt::load(store, scene, hashes)
+                    .map(Box::new)
+            })
+            .transpose()?;
         let opponents = digests
             .opponents
             .map(|hashes| {
@@ -502,6 +516,7 @@ impl BonusArt {
             headers,
             inflated,
             instruction,
+            instruction_pump,
             opponents,
             pumps,
             ranks,
@@ -607,6 +622,11 @@ impl BonusArt {
             INSTRUCTION_BALLOON_ANCHOR,
         );
         draws.push(balloon);
+        if player == Player::Marge
+            && let Some(pump) = &self.instruction_pump
+        {
+            return pump.queue(bonus.tick(), draws);
+        }
         let pump = PUMPS.get(index).ok_or(RenderError::InvalidSprite)?;
         let art = self.pumps.get(index).ok_or(RenderError::InvalidSprite)?;
         let destination = instruction_destination(
