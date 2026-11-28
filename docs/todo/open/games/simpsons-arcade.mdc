@@ -6346,3 +6346,16 @@ Isolated Firefox Canvas 2D and WebGL runs independently observe one
 exact replacement and one restored logical readback, with four total
 logical readbacks per diagnostic and no attached canvas on exit.
 These are synthetic renderer checks, not original-art browser parity.
+
+An isolated Firefox software-WebGL run selects the same private
+156-role original-art catalogue through the trusted directory picker.
+All 13 routed milestones pass; the observer counts 1,301 logical
+readbacks and 1,370 blits. All 142 cemetery checkpoint reports match
+native output byte-for-byte, including 128 layer digests, 64 walking,
+12 jump, 120 special, 152 ground and 156 air reflected sample pairs,
+four marker crops and six shadow samples. The initial visible shadow
+frame retains the original digest, and the moving samples retain the
+same ten unresolved edge pixels as the native comparison. Normal
+termination removes the canvas without writing origin-local settings.
+This is finite original-art browser diagnostic acceptance, not complete
+moving-room campaign, enemy interaction or physical-device acceptance.
