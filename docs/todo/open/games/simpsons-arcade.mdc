@@ -5915,6 +5915,30 @@ These are sampled crops, not complete movement or action animation
 tables. General actor registration, occlusion and runtime composition
 remain open; no additional art or campaign progression is admitted.
 
+The optional runtime catalogue now admits four independently published
+layer bundles only alongside a complete animated entrance selection.
+It uploads the four animated maps, two shared static maps and one
+backdrop once, retaining the default stationary entrance fallback.
+Native offscreen OpenGL smoke exercises all 128 phase/offset combinations;
+all 119 original-backed samples match the corresponding runtime readback
+exactly. The four zero-offset combinations also match the existing
+entrance payloads. The owner launch selection remains unchanged.
+
+The room simulation retains the preceding projected actor coordinates
+with the preceding camera offset. The aligned diagonal regression
+compares all 476 station positions across the 119 display samples;
+the expected piecewise coordinates match the independent original
+station records. This is record-space projection, not final placement.
+
+The remaining 30 observed actor crops are now published privately in
+26 canonical bundles. Their manifest records, object payload hashes
+and independent crop identities all match. Registration anchors remain
+separate from the image data. In the later alternating object samples,
+59 visible-body samples and 59 body-free samples are observed; the
+initial transition sample is distinct. This does not establish the
+general visibility, animation, occlusion or action policy. Moving-room
+actor rendering and encounter progression remain disabled.
+
 ### Bounded cemetery station actions
 
 An independent original replay preserves all 1,258 transition samples

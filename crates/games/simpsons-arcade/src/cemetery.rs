@@ -111,11 +111,23 @@ pub struct CemeteryBody {
 /// the shared camera offset, so neutral stations retain their world
 /// positions during a pan. This does not model subsequent room combat,
 /// terrain sampling or the original camera descriptor scheduler.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoom {
     depth_offset: i16,
     presentation_depth_offset: i16,
+    presentation_positions: [Point; 4],
     walk_depth: [i16; 4],
+}
+
+impl Default for CemeteryRoom {
+    fn default() -> Self {
+        Self {
+            depth_offset: 0,
+            presentation_depth_offset: 0,
+            presentation_positions: ROOM_LAYOUT.spawn,
+            walk_depth: [0; 4],
+        }
+    }
 }
 
 impl CemeteryRoom {
@@ -128,6 +140,8 @@ impl CemeteryRoom {
         if !slots.iter().all(|slot| slot.station.can_fight()) {
             return false;
         }
+        self.presentation_positions =
+            slots.map(|slot| self.project(slot.station.position));
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut *slots).zip(pending)
         {
@@ -197,6 +211,15 @@ impl CemeteryRoom {
     #[must_use]
     pub const fn presentation_depth_offset(self) -> i16 {
         self.presentation_depth_offset
+    }
+
+    /// Projected station positions consumed by the displayed actor sample.
+    ///
+    /// The preceding simulation sample shares the displayed camera offset.
+    /// Stations remain in cabinet order, even when movement is blocked.
+    #[must_use]
+    pub const fn presentation_positions(self) -> [Point; 4] {
+        self.presentation_positions
     }
 
     /// Project a room world position into camera-relative record space.
@@ -735,6 +758,41 @@ mod tests {
         }
     }
 
+    // The independently aligned actor records precede display by one tick.
+    fn observed_actor_positions(tick: u64) -> [Point; 4] {
+        let prior = i16::try_from(tick.saturating_sub(1)).unwrap_or_default();
+        let (marge, bart, depth) = match prior {
+            ..=241 => (116, 172, 176),
+            242..=281 => {
+                let step = prior.saturating_sub(241);
+                let stride = step.saturating_mul(2);
+                (
+                    116i16.saturating_add(stride),
+                    172i16.saturating_sub(stride).max(112),
+                    downward_sample(step).1,
+                )
+            },
+            282..=289 => (196, 112, 153),
+            290..=329 => {
+                let step = prior.saturating_sub(289);
+                let stride = step.saturating_mul(2);
+                (
+                    196i16.saturating_sub(stride),
+                    112i16.saturating_add(stride),
+                    upward_sample(step).1,
+                )
+            },
+            _ => (116, 192, 191),
+        };
+        let idle = 176i16.saturating_add(observed_backdrop_offset(tick));
+        [
+            Point { x: marge, y: depth },
+            Point { x: 144, y: idle },
+            Point { x: bart, y: depth },
+            Point { x: 200, y: idle },
+        ]
+    }
+
     fn apply_diagonal_schedule(slots: &mut [Slot; 4], tick: u64) {
         let [marge, _, bart, _] = slots;
         (marge.held, bart.held) = match tick {
@@ -751,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_backdrop_matches_all_aligned_phase_and_offset_samples() {
+    fn moving_room_matches_all_aligned_presentation_samples() {
         let mut state = arrival(Player::Marge).at(238);
         state.enable_room();
         let mut slots = room_slots();
@@ -769,6 +827,11 @@ mod tests {
             assert_eq!(
                 state.room().map(CemeteryRoom::presentation_depth_offset),
                 Some(observed_backdrop_offset(tick)),
+                "tick {tick}",
+            );
+            assert_eq!(
+                state.room().map(CemeteryRoom::presentation_positions),
+                Some(observed_actor_positions(tick)),
                 "tick {tick}",
             );
         }
