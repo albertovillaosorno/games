@@ -591,13 +591,19 @@ impl BonusArt {
             && let Some(instruction) = &self.instruction
         {
             let [frame, heading, prompt] = instruction.draws(language)?;
-            draws.extend([frame, heading]);
-            self.queue_instruction(bonus, draws)?;
-            draws.push(prompt);
+            draws.push(frame);
+            if bonus.instruction_labels_visible() {
+                draws.push(heading);
+                self.queue_instruction(bonus, draws)?;
+                draws.push(prompt);
+            }
             return Ok(());
         }
         draws.push(self.background.draw(self.background.rect, false));
         if bonus.phase().is_instruction() {
+            if !bonus.instruction_labels_visible() {
+                return Ok(());
+            }
             self.queue_instruction(bonus, draws)?;
         } else {
             for player in Player::ALL {
@@ -870,6 +876,41 @@ fn verify_registered_sprite(
     scenery::verify_pixels(actual, &scene.readback()?, width, &[
         draw.destination
     ])
+}
+
+/// Compare the actor-free instruction backdrop to its canonical payload.
+pub(super) fn verify_instruction_backdrop(
+    scene: &SceneSession<'_, '_>,
+    art: &Scene,
+    cabinet: &Cabinet,
+    pixels: &[u8],
+) -> Result<(), RenderError> {
+    let Some(instruction) = art
+        .poses
+        .bonus
+        .as_ref()
+        .and_then(|bonus_art| bonus_art.instruction.as_ref())
+    else {
+        return Ok(());
+    };
+    let [frame, heading, prompt] =
+        instruction.draws(cabinet.session().language_index())?;
+    if !art.draws.contains(&frame)
+        || art.draws.contains(&heading)
+        || art.draws.contains(&prompt)
+    {
+        return Err(failure("instruction backdrop layers differ"));
+    }
+    let digest = scenery::opaque_sprite_digest(
+        pixels,
+        pixels,
+        frame.destination,
+        scene.layout().width().get(),
+    )?;
+    if digest != instruction.frame_digest() {
+        return Err(failure("instruction backdrop differs from payload"));
+    }
+    Ok(())
 }
 
 /// Verify localized instruction plates change only their registered bounds.

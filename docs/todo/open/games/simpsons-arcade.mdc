@@ -7213,3 +7213,22 @@ compositor now retains the reused reaction source pixels for the
 196-role selection only. Firefox completed all thirteen milestones
 with 1,850 readbacks and 1,919 blits; trusted directory selection
 left no canvas or preferences. Ordinary launch remains unchanged.
+
+### Instruction transition visibility
+
+Solo, shifted-solo and earliest-edge original replays recover six
+black frames and 19 exact neutral backdrop frames before lettering.
+The solo cue alignment is reproduced; the four-player route has a
+one-frame cue-to-render offset. Three closing black frames cover the
+last two cleanup ticks and Ready entry. The preview follows the solo
+visibility boundaries, retaining phase and sound timing.
+
+The optional neutral background now renders before the authored
+localized labels. Native and browser acceptance checks all blank
+frames and the canonical neutral backdrop readbacks; the existing
+15 pump phase pairs and 70 grown balloon states remain verified.
+The isolated Firefox route completes with 2,218 readbacks and
+2,374 blits, trusted directory selection and no residual canvas
+or stored preferences. The original moving lettering, cleanup
+pipeline lag, Ready foreground entry and full campaign parity
+remain open, as does physical Android acceptance.

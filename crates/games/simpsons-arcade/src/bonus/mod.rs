@@ -47,9 +47,16 @@ const VICTORY_TICKS: u16 = 825;
 // The demonstration begins 77 ticks after the cue, with 311 countdown
 // samples remaining. An eligible edge stops it on the following tick.
 const INSTRUCTION_SETUP_TICKS: u16 = 77;
+// Rendered solo and shifted controls share six blank cue frames, then
+// nineteen neutral backdrop frames before the original lettering arrives.
+const INSTRUCTION_SETUP_BLANK: u16 = 6;
+#[cfg(any(test, feature = "native-preview"))]
+const INSTRUCTION_LABEL_ENTRY: u16 = 25;
 const INSTRUCTION_MIN_TICKS: u16 = 138;
 const INSTRUCTION_MAX_TICKS: u16 = 311;
 const INSTRUCTION_CLEANUP_TICKS: u16 = 4;
+// The last two cleanup frames and the ready-entry frame are black.
+const INSTRUCTION_CLEANUP_BLANK: u16 = 2;
 // Retain the native competition's previous rotation policy: the first
 // eligible edge selected slot two, and neutral timeout selected slot zero.
 const INSTRUCTION_SKIP_ROTATION: u16 = 2;
@@ -679,6 +686,27 @@ impl Bonus {
         self.competition_balloon(player).map(Balloon::inflation)
     }
 
+    // The authored localized plates follow original lettering admission,
+    // but do not reproduce its original movement.
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn instruction_labels_visible(self) -> bool {
+        match self.phase {
+            BonusPhase::InstructionSetup => {
+                self.tick >= INSTRUCTION_LABEL_ENTRY
+            },
+            BonusPhase::Instructions | BonusPhase::InstructionCleanup => {
+                !self.scene_hidden()
+            },
+            BonusPhase::Complete
+            | BonusPhase::Pumping
+            | BonusPhase::Ready
+            | BonusPhase::Results
+            | BonusPhase::StageCard
+            | BonusPhase::StageSetup
+            | BonusPhase::Victory => false,
+        }
+    }
+
     /// The single admitted station demonstrating the pump in instructions.
     #[must_use]
     pub const fn instruction_player(self) -> Option<Player> {
@@ -795,9 +823,21 @@ impl Bonus {
         }
     }
 
-    pub(super) const fn stage_setup_blank(self) -> bool {
-        matches!(self.phase, BonusPhase::StageSetup)
-            && self.tick >= STAGE_SETUP_BLANK
+    pub(super) const fn scene_hidden(self) -> bool {
+        match self.phase {
+            BonusPhase::InstructionSetup => self.tick < INSTRUCTION_SETUP_BLANK,
+            BonusPhase::InstructionCleanup => {
+                self.tick >= INSTRUCTION_CLEANUP_BLANK
+            },
+            BonusPhase::Ready => self.tick == 0,
+            BonusPhase::StageSetup => self.tick >= STAGE_SETUP_BLANK,
+            BonusPhase::Complete
+            | BonusPhase::Instructions
+            | BonusPhase::Pumping
+            | BonusPhase::Results
+            | BonusPhase::StageCard
+            | BonusPhase::Victory => false,
+        }
     }
 
     /// Fixed playing ticks in the current phase.
@@ -954,6 +994,36 @@ mod tests {
         assert_eq!(bonus.tick(), 0);
         assert_eq!(bonus.instruction_player(), Some(Player::Marge));
         verify_demonstrator_snapshot(&mut bonus);
+    }
+
+    #[test]
+    fn instruction_setup_visibility_matches_reference_boundaries() {
+        let mut bonus = Bonus::new([true, false, false, false]);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        for elapsed in 0..77u16 {
+            assert_eq!(bonus.scene_hidden(), elapsed < 6);
+            assert_eq!(bonus.instruction_labels_visible(), elapsed >= 25);
+            bonus.advance([false; 4], false);
+        }
+        assert!(!bonus.scene_hidden());
+        assert!(bonus.instruction_labels_visible());
+    }
+
+    #[test]
+    fn instruction_cleanup_and_ready_visibility_match_reference() {
+        let mut bonus = Bonus::new([true, false, false, false]);
+        enter_instructions(&mut bonus);
+        advance_quietly(&mut bonus, 311);
+        for elapsed in 0..4u16 {
+            assert_eq!(bonus.scene_hidden(), elapsed >= 2);
+            assert_eq!(bonus.instruction_labels_visible(), elapsed < 2);
+            bonus.advance([false; 4], false);
+        }
+        assert_eq!(bonus.phase(), BonusPhase::Ready);
+        assert!(bonus.scene_hidden());
+        assert!(!bonus.instruction_labels_visible());
+        bonus.advance([false; 4], false);
+        assert!(!bonus.scene_hidden());
     }
 
     fn verify_demonstrator_snapshot(bonus: &mut Bonus) {

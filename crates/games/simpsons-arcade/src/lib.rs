@@ -1632,7 +1632,7 @@ impl Cabinet {
         self.cemetery.is_some_and(|entrance| {
             entrance.phase() == CemeteryPhase::Setup
                 && entrance.background_phase().is_none()
-        }) || self.bonus.is_some_and(Bonus::stage_setup_blank)
+        }) || self.bonus.is_some_and(Bonus::scene_hidden)
             || self
                 .stage_entrance
                 .is_some_and(|entrance| entrance.tick() == 0)

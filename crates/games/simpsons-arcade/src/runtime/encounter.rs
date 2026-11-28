@@ -726,9 +726,7 @@ fn smoke_bonus_instructions(
     art: &mut Scene,
     simulation: &mut LiveSimulation<Cabinet>,
 ) -> Result<(), RenderError> {
-    await_bonus(simulation, BonusPhase::InstructionSetup)?;
-    let _setup = art.present(scene, simulation.state())?;
-    let setup = scene.readback()?;
+    let setup = smoke_instruction_setup(scene, art, simulation)?;
     await_bonus(simulation, BonusPhase::Instructions)?;
     let _instructions = art.present(scene, simulation.state())?;
     super::bonus::verify_instruction(scene, art, simulation.state())?;
@@ -748,10 +746,66 @@ fn smoke_bonus_instructions(
     if setup != scene.readback()? {
         return Err(failure("instruction cleanup retained demonstration"));
     }
-    await_bonus(simulation, BonusPhase::Ready)?;
+    advance(simulation, 1)?;
+    let _cleanup_hold = art.present(scene, simulation.state())?;
+    if setup != scene.readback()? {
+        return Err(failure("instruction cleanup changed before blank"));
+    }
+    advance(simulation, 1)?;
+    smoke_instruction_blank(scene, art, simulation, 3)?;
+    if simulation.state().bonus().map(Bonus::phase) != Some(BonusPhase::Ready) {
+        return Err(failure("instruction cleanup changed ready entry"));
+    }
     let _ready = art.present(scene, simulation.state())?;
     if initial == scene.readback()? {
         return Err(failure("bonus instructions and ready appear identical"));
+    }
+    Ok(())
+}
+
+fn smoke_instruction_setup(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+) -> Result<Vec<u8>, RenderError> {
+    await_bonus(simulation, BonusPhase::InstructionSetup)?;
+    smoke_instruction_blank(scene, art, simulation, 6)?;
+    let _backdrop = art.present(scene, simulation.state())?;
+    let backdrop = scene.readback()?;
+    super::bonus::verify_instruction_backdrop(
+        scene,
+        art,
+        simulation.state(),
+        &backdrop,
+    )?;
+    for _ in 1..19u16 {
+        advance(simulation, 1)?;
+        let _backdrop_hold = art.present(scene, simulation.state())?;
+        if backdrop != scene.readback()? {
+            return Err(failure("instruction backdrop changed before labels"));
+        }
+    }
+    advance(simulation, 1)?;
+    let _setup = art.present(scene, simulation.state())?;
+    let setup = scene.readback()?;
+    if setup == backdrop {
+        return Err(failure("instruction labels did not appear"));
+    }
+    Ok(setup)
+}
+
+fn smoke_instruction_blank(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    simulation: &mut LiveSimulation<Cabinet>,
+    ticks: u16,
+) -> Result<(), RenderError> {
+    for _ in 0..ticks {
+        let _drawn = art.present(scene, simulation.state())?;
+        if !game_scene_black(scene)? {
+            return Err(failure("instruction blank frame differs"));
+        }
+        advance(simulation, 1)?;
     }
     Ok(())
 }

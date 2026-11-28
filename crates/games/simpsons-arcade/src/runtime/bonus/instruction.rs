@@ -52,6 +52,7 @@ pub(super) const ATLAS_COUNT: usize = 1 + LOCALES;
 #[derive(Debug)]
 pub(super) struct InstructionArt {
     frame: Art,
+    frame_digest: ContentHash,
     text: Vec<TextAtlas>,
 }
 
@@ -68,6 +69,10 @@ impl InstructionArt {
         ])
     }
 
+    pub(super) const fn frame_digest(&self) -> ContentHash {
+        self.frame_digest
+    }
+
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
@@ -76,6 +81,11 @@ impl InstructionArt {
     ) -> Result<Self, RenderError> {
         let bundle = open_bundle(store, digest)?;
         let frame = BACKGROUND.load(scene, &bundle)?;
+        let frame_digest = bundle
+            .manifest()
+            .record(BACKGROUND.key)
+            .ok_or(RenderError::InvalidSprite)?
+            .digest;
         let mut text = Vec::with_capacity(LOCALES);
         for index in 0..LOCALES {
             let locale = title_messages::locale_tag(index)?;
@@ -94,7 +104,11 @@ impl InstructionArt {
                 &lines(labels)?,
             )?);
         }
-        Ok(Self { frame, text })
+        Ok(Self {
+            frame,
+            frame_digest,
+            text,
+        })
     }
 }
 
