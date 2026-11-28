@@ -6016,3 +6016,28 @@ axis transitions, in both directions, and the existing isolated
 pump-and-leak regression covers the neutral grace interval. This
 maps only the arithmetic helpers; the board-dependent choice of axis,
 record flags, art selection, and overall bonus timing remain open.
+
+### Bonus terminal size, clock and return-only callbacks
+
+Five retained pumping traces contain 8,520 in-domain station-size
+observations. Every raw size matches the sum of the inverse-axis
+high-byte complements. The rapid trace reaches raw size 416 at the
+transition into Results; its preceding pumping sample is still below
+the limit. The native terminal gate now tests the raw size directly,
+before conversion to the displayed score. Its regression checks the
+exact boundary and adjacent sizes in all four station positions.
+
+The sparse trace records 491 successive pumping samples, from 10.00
+through 0.02, following the logical decimal recurrence without a
+repeated or skipped value. The next sample is Results with zero
+remaining. Other traces show frame-sampling variation; the neutral
+case exposes a zero clock while still pumping. The expanded native
+test checks every value of the logical clock and the separate neutral
+phase transition. The deterministic one-tick transition allowance
+does not reproduce the original board scheduling.
+
+Fourteen additional functions have exact one-byte return bodies in
+the admitted bank-specific or fixed listings. They have no separate
+native callback body: the return is processor control transport.
+Their callers and selector-dependent choices remain ledger
+obligations. The canonical graph and all identities are retained.

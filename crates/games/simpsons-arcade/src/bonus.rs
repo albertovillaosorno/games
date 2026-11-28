@@ -42,7 +42,10 @@ const INSTRUCTION_MAX_TICKS: u16 = 384;
 // A 96-tick countdown bracketed by phase setup and pump entry.
 const READY_TICKS: u16 = 98;
 // Neutral timeout includes the packed-decimal countdown and entry.
-const PUMP_TICKS: u16 = 492;
+const PUMP_CLOCK_TICKS: u16 = 491;
+const PUMP_TICKS: u16 = PUMP_CLOCK_TICKS + 1;
+const BALLOON_SIZE_LIMIT: u16 = 416;
+const BALLOON_NEUTRAL_SIZE: u16 = 160;
 const RESULT_GROUP_TICKS: u16 = 14;
 const RESULT_REVEAL_HOLD: u16 = 60;
 const RESULT_COUNT_TICKS: u16 = 4;
@@ -187,11 +190,7 @@ impl Balloon {
     }
 
     fn inflation_units(self) -> u16 {
-        let [width, _] = self.width.to_be_bytes();
-        let [height, _] = self.height.to_be_bytes();
-        let total = u16::from(0u8.wrapping_sub(width))
-            .saturating_add(u16::from(0u8.wrapping_sub(height)));
-        total.saturating_sub(160)
+        self.size_units().saturating_sub(BALLOON_NEUTRAL_SIZE)
     }
 
     const fn new() -> Self {
@@ -201,6 +200,13 @@ impl Balloon {
             turn: 0,
             width: INVERSE_BASE,
         }
+    }
+
+    fn size_units(self) -> u16 {
+        let [width, _] = self.width.to_be_bytes();
+        let [height, _] = self.height.to_be_bytes();
+        u16::from(0u8.wrapping_sub(width))
+            .saturating_add(u16::from(0u8.wrapping_sub(height)))
     }
 }
 
@@ -459,7 +465,7 @@ impl Bonus {
         let seconds = 9u16.saturating_sub(elapsed.checked_div(49)?);
         let hundredths =
             98u16.saturating_sub(elapsed.checked_rem(49)?.saturating_mul(2));
-        Some(if self.tick >= 491 {
+        Some(if self.tick >= PUMP_CLOCK_TICKS {
             0
         } else {
             seconds.saturating_mul(100).saturating_add(hundredths)
@@ -520,7 +526,7 @@ impl Bonus {
             || self
                 .balloons
                 .iter()
-                .any(|balloon| balloon.inflation() == BONUS_MAX_INFLATION)
+                .any(|balloon| balloon.size_units() >= BALLOON_SIZE_LIMIT)
         {
             self.result =
                 Some(ResultSequence::new(self.balloons, self.participants));
@@ -624,22 +630,25 @@ mod tests {
     #[test]
     fn pump_clock_matches_decimal_carry_and_timeout() {
         let mut bonus = start_pump([true; 4]);
-        for tick in 0..PUMP_TICKS {
-            let expected = match tick {
-                0 => Some(1000),
-                1 => Some(998),
-                49 => Some(902),
-                50 => Some(898),
-                489 => Some(4),
-                490 => Some(2),
-                491 => Some(0),
-                _ => None,
-            };
-            if let Some(value) = expected {
-                assert_eq!(bonus.countdown(), Some(value));
+        let mut seconds = 10u16;
+        let mut hundredths = 0u16;
+        for _ in 0..PUMP_TICKS {
+            assert_eq!(
+                bonus.countdown(),
+                Some(seconds.saturating_mul(100).saturating_add(hundredths))
+            );
+            if hundredths > 2 {
+                hundredths = hundredths.saturating_sub(2);
+            } else if seconds > 0 {
+                seconds = seconds.saturating_sub(1);
+                hundredths = 98;
+            } else {
+                hundredths = 0;
             }
             bonus.advance([false; 4], false);
         }
+        assert_eq!(seconds, 0);
+        assert_eq!(hundredths, 0);
         assert_eq!(bonus.countdown(), None);
         assert_eq!(bonus.phase(), BonusPhase::Results);
     }
@@ -725,6 +734,35 @@ mod tests {
             assert_eq!(u64::from(actual), expected);
             assert_eq!(within, candidate == expected);
         }
+    }
+
+    #[test]
+    fn size_limit_checks_every_station_without_score_rounding()
+    -> Result<(), &'static str> {
+        let initial = start_pump([true; 4]);
+        for station in 0..4 {
+            for (width, height, expected) in [
+                (0x4000, 0x2000, BonusPhase::Results),
+                (0x40ff, 0x20ff, BonusPhase::Results),
+                (0x4100, 0x2000, BonusPhase::Pumping),
+                (0x4000, 0x2100, BonusPhase::Pumping),
+                (0x4100, 0x2100, BonusPhase::Pumping),
+                (0xb000, 0xb000, BonusPhase::Pumping),
+            ] {
+                let mut bonus = initial;
+                let balloon =
+                    bonus.balloons.get_mut(station).ok_or("station")?;
+                // Hold the sampled size through the next update.
+                balloon.width = width;
+                balloon.height = height;
+                balloon.rest = 1;
+                bonus.advance([false; 4], false);
+                (bonus.phase() == expected)
+                    .then_some(())
+                    .ok_or("unexpected size-limit outcome")?;
+            }
+        }
+        Ok(())
     }
 
     #[test]
