@@ -46,6 +46,7 @@ const VICTORY_TICKS: u16 = 825;
 // The activity gate opens after the counter has exceeded 208.
 const INSTRUCTION_MIN_TICKS: u16 = 210;
 const INSTRUCTION_MAX_TICKS: u16 = 384;
+const DEMO_PUMP_TICKS: u16 = 4;
 // A 96-tick countdown bracketed by phase setup and pump entry.
 const READY_TICKS: u16 = 98;
 // Neutral timeout includes the packed-decimal countdown and entry.
@@ -396,6 +397,7 @@ impl ResultSequence {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Bonus {
     balloons: [Balloon; 4],
+    demonstration: Option<(Player, Balloon)>,
     opponents: Option<[Option<Pump>; 4]>,
     participants: [bool; 4],
     phase: BonusPhase,
@@ -419,23 +421,16 @@ impl Bonus {
         self.tick = self.tick.saturating_add(1);
         let next = match self.phase {
             BonusPhase::Victory if self.tick >= VICTORY_TICKS => {
+                self.refresh_demonstration();
                 BonusPhase::Instructions
             },
-            BonusPhase::Instructions
-                if self.tick >= INSTRUCTION_MAX_TICKS
-                    || (self.tick >= INSTRUCTION_MIN_TICKS && active_edge) =>
-            {
-                self.scan_start = usize::from(self.tick).rem_euclid(4);
-                self.refresh_opponents();
-                BonusPhase::Ready
-            },
+            BonusPhase::Instructions => self.advance_instructions(active_edge),
             BonusPhase::Ready if self.tick >= READY_TICKS => {
                 BonusPhase::Pumping
             },
             BonusPhase::Pumping => self.pump(presses),
             BonusPhase::Results => self.advance_results(),
             BonusPhase::Complete
-            | BonusPhase::Instructions
             | BonusPhase::Ready
             | BonusPhase::StageCard
             | BonusPhase::StageSetup
@@ -445,6 +440,21 @@ impl Bonus {
             self.phase = next;
             self.tick = 0;
         }
+    }
+
+    fn advance_instructions(&mut self, active_edge: bool) -> BonusPhase {
+        if self.tick >= INSTRUCTION_MAX_TICKS
+            || (self.tick >= INSTRUCTION_MIN_TICKS && active_edge)
+        {
+            self.demonstration = None;
+            self.scan_start = usize::from(self.tick).rem_euclid(4);
+            self.refresh_opponents();
+            return BonusPhase::Ready;
+        }
+        if let Some((_, balloon)) = &mut self.demonstration {
+            balloon.advance(self.tick.is_multiple_of(DEMO_PUMP_TICKS));
+        }
+        BonusPhase::Instructions
     }
 
     fn advance_results(&mut self) -> BonusPhase {
@@ -506,6 +516,20 @@ impl Bonus {
                 .and_then(|pumps| pumps.get(player.index()).copied())
                 .flatten()
                 .is_some_and(Pump::pressed)
+    }
+
+    fn competition_balloon(self, player: Player) -> Option<Balloon> {
+        let index = player.index();
+        let automatic = self.is_automatic(player);
+        if !automatic && self.participants.get(index) != Some(&true) {
+            return None;
+        }
+        if let Some(result) = self.result
+            && !result.visible(result.score(player)?, automatic)
+        {
+            return None;
+        }
+        self.balloons.get(index).copied()
     }
 
     fn contenders(self) -> [bool; 4] {
@@ -572,7 +596,16 @@ impl Bonus {
         if let Some(result) = self.result {
             return result.score(player);
         }
-        self.visual_inflation(player)
+        self.competition_balloon(player).map(Balloon::inflation)
+    }
+
+    /// The single admitted station demonstrating the pump in instructions.
+    #[must_use]
+    pub const fn instruction_player(self) -> Option<Player> {
+        match self.demonstration {
+            Some((player, _)) => Some(player),
+            None => None,
+        }
     }
 
     /// Whether this seat's competitor is controlled by the bonus itself.
@@ -587,6 +620,7 @@ impl Bonus {
     pub(super) const fn new(participants: [bool; 4]) -> Self {
         Self {
             balloons: [Balloon::new(); 4],
+            demonstration: None,
             opponents: None,
             participants,
             phase: BonusPhase::Victory,
@@ -644,6 +678,13 @@ impl Bonus {
         Some(result.rank(result.score(player)?))
     }
 
+    fn refresh_demonstration(&mut self) {
+        self.demonstration = Player::ALL
+            .into_iter()
+            .find(|player| self.participants.get(player.index()) == Some(&true))
+            .map(|player| (player, Balloon::new()));
+    }
+
     fn refresh_opponents(&mut self) {
         if self.opponents.is_some() {
             self.opponents = Some(if self.participants.contains(&true) {
@@ -665,6 +706,9 @@ impl Bonus {
         {
             self.participants = admitted;
             self.refresh_opponents();
+            if self.phase == BonusPhase::Instructions {
+                self.refresh_demonstration();
+            }
         }
     }
 
@@ -680,21 +724,17 @@ impl Bonus {
     }
 
     fn visible_balloon(self, player: Player) -> Option<Balloon> {
-        let index = player.index();
-        let automatic = self.is_automatic(player);
-        if !automatic && self.participants.get(index) != Some(&true) {
-            return None;
+        if self.phase == BonusPhase::Instructions {
+            return self.demonstration.and_then(|(demo, balloon)| {
+                (demo == player).then_some(balloon)
+            });
         }
-        if let Some(result) = self.result
-            && !result.visible(result.score(player)?, automatic)
-        {
-            return None;
-        }
-        self.balloons.get(index).copied()
+        self.competition_balloon(player)
     }
 
     /// Visible inverse width and height high bytes, independently of score.
     ///
+    /// During instructions only the selected demonstrator is visible.
     /// Absent stations and retired balloons return no visual axes.
     #[must_use]
     pub fn visual_axes(self, player: Player) -> Option<(u8, u8)> {
@@ -792,6 +832,81 @@ mod tests {
         for mask in 0..16u8 {
             let admitted = from_fn(|index| mask & (1 << index) != 0);
             verify_automatic_roster(admitted);
+        }
+    }
+
+    #[test]
+    fn instructions_demonstrate_only_the_first_admitted_human() {
+        for mask in 0..16u8 {
+            let admitted = from_fn(|index| mask & (1 << index) != 0);
+            let expected = Player::ALL
+                .into_iter()
+                .find(|player| mask & (1 << player.index()) != 0);
+            for automatic in [false, true] {
+                verify_instruction_demonstration(admitted, expected, automatic);
+            }
+        }
+    }
+
+    fn verify_instruction_demonstration(
+        admitted: [bool; 4],
+        expected: Option<Player>,
+        automatic: bool,
+    ) {
+        let mut bonus = Bonus::new([false; 4]).with_opponents(automatic);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        bonus.refresh_participants(admitted);
+        assert_eq!(bonus.instruction_player(), expected);
+        let axes = Player::ALL
+            .map(|player| (Some(player) == expected).then_some((0xb0, 0xb0)));
+        assert_eq!(Player::ALL.map(|player| bonus.visual_axes(player)), axes);
+        verify_demonstration_cadence(&mut bonus, admitted, expected);
+        if expected.is_some() {
+            advance_quietly(&mut bonus, INSTRUCTION_MIN_TICKS - 9);
+            bonus.advance([true; 4], true);
+        } else {
+            advance_quietly(&mut bonus, INSTRUCTION_MAX_TICKS - 8);
+        }
+        assert_eq!(bonus.phase(), BonusPhase::Ready);
+        assert_eq!(bonus.instruction_player(), None);
+        let contenders = if automatic && admitted.contains(&true) {
+            [true; 4]
+        } else {
+            admitted
+        };
+        assert_eq!(
+            Player::ALL.map(|player| bonus.visual_axes(player)),
+            contenders.map(|active| active.then_some((0xb0, 0xb0)))
+        );
+    }
+
+    fn verify_demonstration_cadence(
+        bonus: &mut Bonus,
+        admitted: [bool; 4],
+        expected: Option<Player>,
+    ) {
+        let scores = Player::ALL.map(|player| bonus.inflation(player));
+        let mut with_input = *bonus;
+        let mut previous =
+            expected.and_then(|player| bonus.visual_inflation(player));
+        for tick in 1..=8u16 {
+            bonus.advance([false; 4], false);
+            with_input.advance([true; 4], true);
+            assert_eq!(*bonus, with_input);
+            bonus.refresh_participants(admitted.map(|active| !active));
+            assert_eq!(*bonus, with_input);
+            let inflation =
+                expected.and_then(|player| bonus.visual_inflation(player));
+            if expected.is_some() && tick.is_multiple_of(4) {
+                assert!(inflation > previous);
+            } else {
+                assert_eq!(inflation, previous);
+            }
+            previous = inflation;
+            assert_eq!(
+                Player::ALL.map(|player| bonus.inflation(player)),
+                scores
+            );
         }
     }
 

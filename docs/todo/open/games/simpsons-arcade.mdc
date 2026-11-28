@@ -6985,3 +6985,23 @@ scene samples exactly, including the three additional samples. The
 ordinary launch selection is unchanged. The next meter debit, contact
 policy, station reaction and later airborne and landing poses remain
 outside this diagnostic; physical Android acceptance remains open.
+
+### Single-station instruction demonstration
+
+The original instruction setup retains only the first admitted station
+in cabinet order and clears the other demonstration records. Six retained
+solo routes contain 1,866 consecutive instruction observations with 465
+balloon axis changes and scripted pump pulses. Every successive growth
+change in each route is four ticks apart. The competition is initialized
+separately at ready entry.
+
+The portable bonus now uses an isolated demonstration balloon for the
+selected human station, with one scripted pump every four logical ticks.
+The competition scores stay neutral, and the ready-entry snapshot is
+unchanged. Regressions exercise all sixteen admission masks with and
+without automated opponents, early action edges, mid-instruction roster
+changes, and the neutral ready transition. The renderer reuses the
+existing selected balloon and pump art around the demonstration anchor;
+the native routed smoke also requires visible growth without input.
+The instruction background, original pump animation, exact phase offset
+and board-selected axis scheduling remain provisional or unimplemented.

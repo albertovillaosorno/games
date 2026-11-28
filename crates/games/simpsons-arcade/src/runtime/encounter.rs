@@ -658,6 +658,11 @@ fn smoke_bonus(
     await_bonus(simulation, BonusPhase::Instructions)?;
     let _instructions = art.present(scene, simulation.state())?;
     let initial = scene.readback()?;
+    advance(simulation, 8)?;
+    let _demonstration = art.present(scene, simulation.state())?;
+    if initial == scene.readback()? {
+        return Err(failure("bonus instruction demonstration did not grow"));
+    }
     await_bonus(simulation, BonusPhase::Ready)?;
     let _ready = art.present(scene, simulation.state())?;
     if initial == scene.readback()? {

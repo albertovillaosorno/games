@@ -528,8 +528,12 @@ impl BonusArt {
             return Ok(());
         }
         draws.push(self.background.draw(self.background.rect, false));
-        for player in Player::ALL {
-            self.queue_player(bonus, (player, digits), draws)?;
+        if bonus.phase() == BonusPhase::Instructions {
+            self.queue_instruction(bonus, draws)?;
+        } else {
+            for player in Player::ALL {
+                self.queue_player(bonus, (player, digits), draws)?;
+            }
         }
         draws.push(header.draw(phase, 16, 12)?);
         if let Some(countdown) = bonus.countdown() {
@@ -567,6 +571,23 @@ impl BonusArt {
             draws.push(pump_art.draw(pump.destination(0)?, false));
         }
 
+        Ok(())
+    }
+
+    fn queue_instruction(
+        &self,
+        bonus: Bonus,
+        draws: &mut Vec<SpriteDraw>,
+    ) -> Result<(), RenderError> {
+        let Some(player) = bonus.instruction_player() else {
+            return Ok(());
+        };
+        let first = draws.len();
+        self.queue_human(bonus, player, draws)?;
+        let offset = instruction_offset(player)?;
+        for draw in draws.get_mut(first..).ok_or(RenderError::InvalidSprite)? {
+            draw.destination.x = draw.destination.x.saturating_add(offset);
+        }
         Ok(())
     }
 
@@ -648,6 +669,14 @@ fn departure_checkpoint(
         return Err(failure("bonus departure layer registration differs"));
     }
     Ok(layers)
+}
+
+fn instruction_offset(player: Player) -> Result<i32, RenderError> {
+    let spec = BALLOONS
+        .get(player.index())
+        .ok_or(RenderError::InvalidSprite)?;
+    let center = spec.x.saturating_add_unsigned(spec.width >> 1);
+    Ok(156i32.saturating_sub(center))
 }
 
 fn inverse_extent(
