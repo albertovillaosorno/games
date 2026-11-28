@@ -1078,8 +1078,13 @@ mod tests {
         [0; 4]
     }
 
-    fn expected_strike(route: u8, tick: u64) -> [CemeteryEnemyApproach; 2] {
-        let phase = match tick {
+    fn expected_first_strike_pose(tick: u64) -> CemeteryEnemyPose {
+        match tick {
+            325..=326 => CemeteryEnemyPose::Approach {
+                depth: CemeteryEnemyDepth::Decreasing,
+                facing: Facing::Left,
+                phase: 0,
+            },
             292 => CemeteryEnemyPose::Approach {
                 depth: CemeteryEnemyDepth::Level,
                 facing: Facing::Left,
@@ -1087,7 +1092,11 @@ mod tests {
             },
             _ => CemeteryEnemyPose::Strike {
                 facing: Facing::Left,
-                phase: match tick {
+                phase: match if tick >= 327 {
+                    tick.saturating_sub(34)
+                } else {
+                    tick
+                } {
                     293..=295 => 0,
                     296..=298 => 1,
                     299..=301 => 2,
@@ -1098,7 +1107,10 @@ mod tests {
                     _ => 7,
                 },
             },
-        };
+        }
+    }
+
+    fn expected_strike(route: u8, tick: u64) -> [CemeteryEnemyApproach; 2] {
         let pan = if route == 2 {
             i16::try_from(tick.saturating_sub(319).saturating_mul(2))
                 .unwrap_or_default()
@@ -1110,7 +1122,8 @@ mod tests {
                 .unwrap_or_default();
         let second_x = 392i16.saturating_sub(
             i16::try_from(
-                tick.saturating_sub(241)
+                tick.min(354)
+                    .saturating_sub(241)
                     .saturating_mul(5)
                     .saturating_add(3)
                     .div_euclid(4),
@@ -1119,7 +1132,7 @@ mod tests {
         );
         [
             CemeteryEnemyApproach {
-                pose: Some(phase),
+                pose: Some(expected_first_strike_pose(tick)),
                 position: Point {
                     x: 329,
                     y: 154i16.saturating_sub(pan),
@@ -1127,16 +1140,27 @@ mod tests {
                 target: Player::Lisa,
             },
             CemeteryEnemyApproach {
-                pose: Some(CemeteryEnemyPose::Approach {
-                    depth: CemeteryEnemyDepth::Level,
-                    facing: Facing::Left,
-                    phase: second_phase,
+                pose: Some(if tick >= 356 {
+                    CemeteryEnemyPose::Strike {
+                        facing: Facing::Left,
+                        phase: 7,
+                    }
+                } else {
+                    CemeteryEnemyPose::Approach {
+                        depth: CemeteryEnemyDepth::Level,
+                        facing: Facing::Left,
+                        phase: second_phase,
+                    }
                 }),
                 position: Point {
                     x: second_x,
                     y: 207i16.saturating_sub(pan),
                 },
-                target: Player::Marge,
+                target: if tick >= 351 {
+                    Player::Bart
+                } else {
+                    Player::Marge
+                },
             },
         ]
     }
@@ -1154,7 +1178,12 @@ mod tests {
         // Original source word at the actors' shared admission.
         entrance.enable_enemy_strike(0x1207);
         let mut slots = room_slots();
-        for tick in 238..=325u64 {
+        let terminal = if route == 2 {
+            325
+        } else {
+            359
+        };
+        for tick in 238..=terminal {
             let controls = strike_controls(route, tick);
             for (slot, held) in slots.iter_mut().zip(controls) {
                 slot.held = held;
@@ -1167,7 +1196,7 @@ mod tests {
             if tick < 292 {
                 continue;
             }
-            if tick == 325 {
+            if tick == terminal {
                 assert_eq!(enemies, None, "{route} {tick}");
                 break;
             }

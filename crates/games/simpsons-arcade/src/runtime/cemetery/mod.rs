@@ -1030,14 +1030,14 @@ impl CemeteryArt {
             ),
         )?;
         if self.roles.len() >= STRIKE_ROLE_COUNT {
-            for (label, kind) in [
-                ("neutral-strike", EnemyControlKind::NeutralStrike),
-                ("toward-strike", EnemyControlKind::TowardStrike),
-                ("away-strike", EnemyControlKind::AwayStrike),
+            for (label, kind, terminal) in [
+                ("neutral-strike", EnemyControlKind::NeutralStrike, 359),
+                ("toward-strike", EnemyControlKind::TowardStrike, 359),
+                ("away-strike", EnemyControlKind::AwayStrike, 325),
             ] {
                 self.verify_enemy_control(
                     scene,
-                    (label, [0, left, 0, right], 325, kind),
+                    (label, [0, left, 0, right], terminal, kind),
                 )?;
             }
         }

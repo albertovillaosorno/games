@@ -71,7 +71,7 @@ pub enum CemeteryEnemyPose {
         /// Zero-based approach frame.
         phase: u8,
     },
-    /// Protected first strike, with no contact damage admitted.
+    /// Protected strike, with no contact damage admitted.
     Strike {
         /// Horizontal orientation at the start of the strike.
         facing: Facing,
@@ -121,6 +121,7 @@ enum PursuitMotion {
     AlignHorizontal,
     LongRange,
     Strike { tick: u8 },
+    Windup { tick: u8 },
 }
 
 // Both actors share the stage choice byte and the once-per-step word.
@@ -220,7 +221,9 @@ impl Pursuer {
                     self.motion = PursuitMotion::AlignDepth;
                 }
             },
-            PursuitMotion::LongRange | PursuitMotion::Strike { .. } => {
+            PursuitMotion::LongRange
+            | PursuitMotion::Strike { .. }
+            | PursuitMotion::Windup { .. } => {
                 return None;
             },
         }
@@ -249,6 +252,18 @@ impl Pursuer {
             facing: Facing::Left,
             phase: 0,
         });
+        Some(())
+    }
+
+    fn begin_strike(
+        &mut self,
+        dx: i32,
+        dy: i32,
+        motion: PursuitMotion,
+    ) -> Option<()> {
+        self.advance_pose(dx, dy)?;
+        self.motion = motion;
+        self.velocity = (0i32, 0i32);
         Some(())
     }
 
@@ -282,6 +297,24 @@ impl Pursuer {
         }
     }
 
+    // After the strike, only the observed near, leftward alignment
+    // decision has an admitted follow-up. Retain the stopped velocity.
+    fn recover_strike(
+        &mut self,
+        dx: i32,
+        dy: i32,
+        stream: &mut ChoiceStream,
+    ) -> Option<()> {
+        if dx >= 0i32
+            || dx.unsigned_abs() >= ATTACK_DISTANCE
+            || !(-4i32..0i32).contains(&dy)
+            || stream.draw() == u8::MAX
+        {
+            return None;
+        }
+        self.begin_alignment(dx, dy, true)
+    }
+
     fn sample(self, depth_offset: i16) -> CemeteryEnemyApproach {
         let point = self.point();
         CemeteryEnemyApproach {
@@ -300,10 +333,7 @@ impl Pursuer {
         alignment: bool,
         choice: Option<&mut ChoiceStream>,
     ) -> Option<()> {
-        let current = self.point();
-        let target = slots.get(self.target.index())?.station.position;
-        let dx = i32::from(target.x).saturating_sub(i32::from(current.x));
-        let dy = i32::from(target.y).saturating_sub(i32::from(current.y));
+        let (dx, dy) = self.target_delta(slots)?;
         match self.motion {
             PursuitMotion::LongRange
                 if dx.unsigned_abs() < APPROACH_DISTANCE =>
@@ -320,20 +350,27 @@ impl Pursuer {
                 if let Some(stream) = choice
                     && stream.first_strike(dx, dy)?
                 {
-                    self.advance_pose(dx, dy)?;
-                    self.motion = PursuitMotion::Strike { tick: 0 };
-                    self.velocity = (0i32, 0i32);
-                    return Some(());
+                    return self.begin_strike(dx, dy, PursuitMotion::Strike {
+                        tick: 0,
+                    });
                 }
                 self.align(dx, dy)?;
                 self.advance_pose(dx, dy)?;
             },
             PursuitMotion::Strike { tick } => {
+                self.strike_step(tick, (dx, dy), choice)?;
+            },
+            PursuitMotion::Windup { tick } => {
+                // The wind-up holds the same body as the final strike
+                // frame. The following family is not yet registered.
+                if tick >= 4 {
+                    return None;
+                }
                 self.pose = Some(CemeteryEnemyPose::Strike {
                     facing: Facing::Left,
-                    phase: strike_phase(tick)?,
+                    phase: 7,
                 });
-                self.motion = PursuitMotion::Strike {
+                self.motion = PursuitMotion::Windup {
                     tick: tick.saturating_add(1),
                 };
             },
@@ -343,6 +380,66 @@ impl Pursuer {
         self.position =
             (horizontal.saturating_add(vx), depth.saturating_add(vy));
         Some(())
+    }
+
+    fn strike_step(
+        &mut self,
+        tick: u8,
+        (dx, dy): (i32, i32),
+        choice: Option<&mut ChoiceStream>,
+    ) -> Option<()> {
+        if let Some(phase) = strike_phase(tick) {
+            self.pose = Some(CemeteryEnemyPose::Strike {
+                facing: Facing::Left,
+                phase,
+            });
+            self.motion = PursuitMotion::Strike {
+                tick: tick.saturating_add(1),
+            };
+            Some(())
+        } else {
+            self.recover_strike(dx, dy, choice?)
+        }
+    }
+
+    fn target_delta(self, slots: &[Slot; 4]) -> Option<(i32, i32)> {
+        let current = self.point();
+        let target = slots.get(self.target.index())?.station.position;
+        Some((
+            i32::from(target.x).saturating_sub(i32::from(current.x)),
+            i32::from(target.y).saturating_sub(i32::from(current.y)),
+        ))
+    }
+
+    // The distant left-facing profile evaluates its previous target
+    // before the periodic target refresh. The verified weighted row
+    // selects a wind-up; other accepted outcomes remain unsupported.
+    fn try_windup(
+        &mut self,
+        slots: &[Slot; 4],
+        stream: &mut ChoiceStream,
+    ) -> Option<bool> {
+        if self.motion != PursuitMotion::LongRange {
+            return Some(false);
+        }
+        let (dx, dy) = self.target_delta(slots)?;
+        if dx >= 0i32 || dy.unsigned_abs() > 4 {
+            return Some(false);
+        }
+        match dx.unsigned_abs() {
+            78..=100 => {
+                if stream.draw() >= 26 {
+                    return Some(false);
+                }
+                if !(77..179).contains(&stream.draw()) {
+                    return None;
+                }
+                self.begin_strike(dx, dy, PursuitMotion::Windup { tick: 0 })?;
+                Some(true)
+            },
+            0..=77 => None,
+            _ => Some(false),
+        }
     }
 }
 
@@ -373,12 +470,22 @@ impl PursuitPair {
             self.target_timer = TARGET_INTERVAL;
         }
         for (index, enemy) in self.enemies.iter_mut().enumerate() {
-            if refresh && !matches!(enemy.motion, PursuitMotion::Strike { .. })
+            if index == 1
+                && let Some(stream) = &mut self.choice
+                && enemy.try_windup(slots, stream)?
+            {
+                continue;
+            }
+            if refresh
+                && !matches!(
+                    enemy.motion,
+                    PursuitMotion::Strike { .. } | PursuitMotion::Windup { .. }
+                )
             {
                 Self::retarget(enemy, &mut self.reservations, slots)?;
             }
-            // The second profile is admitted only during its verified
-            // long-range approach; its close-range selector differs.
+            // The second profile has its own distant selector and
+            // does not share the first profile's close-range rules.
             let enabled = alignment && (index == 0 || self.choice.is_none());
             let choice = if index == 0 {
                 self.choice.as_mut()
