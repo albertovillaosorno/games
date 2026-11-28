@@ -771,6 +771,44 @@ mod tests {
         [330, 154, 330, 207],
         [329, 154, 329, 207],
     ];
+    // Independent source snapshots, including the final protected sample.
+    const RETREAT_POSITIONS: [[i16; 4]; 34] = [
+        [329, 142, 287, 195],
+        [329, 140, 285, 193],
+        [328, 139, 284, 191],
+        [327, 139, 283, 191],
+        [326, 140, 282, 191],
+        [325, 141, 280, 191],
+        [324, 141, 279, 191],
+        [323, 142, 278, 191],
+        [322, 143, 277, 191],
+        [321, 143, 275, 191],
+        [320, 144, 274, 191],
+        [318, 144, 273, 191],
+        [317, 145, 272, 191],
+        [316, 146, 270, 191],
+        [315, 146, 269, 191],
+        [314, 147, 268, 191],
+        [313, 147, 267, 191],
+        [312, 148, 265, 191],
+        [311, 148, 264, 191],
+        [309, 149, 263, 191],
+        [308, 149, 262, 191],
+        [307, 150, 260, 191],
+        [306, 150, 259, 191],
+        [305, 151, 258, 191],
+        [304, 151, 257, 191],
+        [303, 152, 255, 191],
+        [302, 152, 254, 191],
+        [300, 153, 253, 191],
+        [299, 153, 252, 191],
+        [298, 154, 250, 191],
+        [297, 154, 249, 191],
+        [296, 155, 248, 191],
+        [295, 155, 247, 191],
+        [294, 156, 245, 191],
+    ];
+
     const REVERSED_ALIGNMENT: [[i16; 4]; 26] = [
         [324, 161, 333, 199],
         [324, 160, 332, 199],
@@ -1205,17 +1243,46 @@ mod tests {
         }
     }
 
+    fn expected_retreat(tick: u64) -> Option<[CemeteryEnemyApproach; 2]> {
+        let index = usize::try_from(tick.checked_sub(325)?).ok()?;
+        let &[x1, y1, x2, y2] = RETREAT_POSITIONS.get(index)?;
+        Some([
+            CemeteryEnemyApproach {
+                pose: Some(CemeteryEnemyPose::Approach {
+                    depth: CemeteryEnemyDepth::Increasing,
+                    facing: Facing::Left,
+                    phase: u8::try_from(tick.saturating_sub(326).div_euclid(6))
+                        .ok()?,
+                }),
+                position: Point { x: x1, y: y1 },
+                target: if tick >= 351 {
+                    Player::Homer
+                } else {
+                    Player::Lisa
+                },
+            },
+            CemeteryEnemyApproach {
+                pose: Some(CemeteryEnemyPose::Approach {
+                    depth: CemeteryEnemyDepth::Level,
+                    facing: Facing::Left,
+                    phase: u8::try_from(
+                        tick.saturating_sub(240).div_euclid(6).rem_euclid(8),
+                    )
+                    .ok()?,
+                }),
+                position: Point { x: x2, y: y2 },
+                target: Player::Marge,
+            },
+        ])
+    }
+
     fn verify_strike_route(route: u8) {
         let mut entrance = arrival(Player::Marge).at(237);
         entrance.enable_room();
         // Original source word at the actors' shared admission.
         entrance.enable_enemy_strike(0x1207);
         let mut slots = room_slots();
-        let terminal = if route == 2 {
-            325
-        } else {
-            359
-        };
+        let terminal = 359;
         for tick in 238..=terminal {
             let controls = strike_controls(route, tick);
             for (slot, held) in slots.iter_mut().zip(controls) {
@@ -1235,7 +1302,11 @@ mod tests {
             }
             assert_eq!(
                 enemies,
-                Some(expected_strike(route, tick)),
+                if route == 2 && tick >= 325 {
+                    expected_retreat(tick)
+                } else {
+                    Some(expected_strike(route, tick))
+                },
                 "{route} {tick}"
             );
         }

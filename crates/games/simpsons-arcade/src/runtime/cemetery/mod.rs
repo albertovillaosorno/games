@@ -65,6 +65,7 @@ const AIR_ROLE_COUNT: usize = GROUND_ROLE_COUNT + 2;
 const ENEMY_ROLE_COUNT: usize = AIR_ROLE_COUNT + 16;
 const ALIGNMENT_ROLE_COUNT: usize = ENEMY_ROLE_COUNT + 3;
 const STRIKE_ROLE_COUNT: usize = ALIGNMENT_ROLE_COUNT + 8;
+const RETREAT_ROLE_COUNT: usize = STRIKE_ROLE_COUNT + 3;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
@@ -75,6 +76,7 @@ const AIR_ATLAS_BYTES: usize = GROUND_ATLAS_BYTES + 14_700;
 const ENEMY_ATLAS_BYTES: usize = AIR_ATLAS_BYTES + 101_680;
 const ALIGNMENT_ATLAS_BYTES: usize = ENEMY_ATLAS_BYTES + 24_812;
 const STRIKE_ATLAS_BYTES: usize = ALIGNMENT_ATLAS_BYTES + 92_004;
+const RETREAT_ATLAS_BYTES: usize = STRIKE_ATLAS_BYTES + 21_444;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -84,7 +86,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; STRIKE_ROLE_COUNT] = [
+const ROLES: [Role; RETREAT_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -276,6 +278,10 @@ const ROLES: [Role; STRIKE_ROLE_COUNT] = [
     Role::new("actor/room-enemy", (45, 68), (-94i32, -44i32)),
     Role::new("actor/room-enemy", (35, 73), (-85i32, -49i32)),
     Role::new("actor/room-enemy", (37, 60), (-80i32, -36i32)),
+    // Increasing-depth approach phases not already in the catalogue.
+    Role::new("actor/room-enemy", (29, 63), (-78i32, -39i32)),
+    Role::new("actor/room-enemy", (31, 62), (-82i32, -38i32)),
+    Role::new("actor/room-enemy", (26, 62), (-78i32, -39i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -408,6 +414,7 @@ impl Selection {
 
     pub(super) const fn atlas_bytes(&self) -> usize {
         let registered = match self.count() {
+            RETREAT_ROLE_COUNT => RETREAT_ATLAS_BYTES,
             STRIKE_ROLE_COUNT => STRIKE_ATLAS_BYTES,
             ALIGNMENT_ROLE_COUNT => ALIGNMENT_ATLAS_BYTES,
             ENEMY_ROLE_COUNT => ENEMY_ATLAS_BYTES,
@@ -461,7 +468,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(STRIKE_ROLE_COUNT.saturating_add(1))
+            .take(RETREAT_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -476,9 +483,10 @@ impl Selection {
                 | ENEMY_ROLE_COUNT
                 | ALIGNMENT_ROLE_COUNT
                 | STRIKE_ROLE_COUNT
+                | RETREAT_ROLE_COUNT
         ) {
             return Err(failure(
-                "invalid role count (16/44/104/108/120/154/156/172/175/183)",
+                "invalid count (16/44/104/108/120/154/156/172/175/183/186)",
             ));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
@@ -1033,7 +1041,15 @@ impl CemeteryArt {
             for (label, kind, terminal) in [
                 ("neutral-strike", EnemyControlKind::NeutralStrike, 359),
                 ("toward-strike", EnemyControlKind::TowardStrike, 359),
-                ("away-strike", EnemyControlKind::AwayStrike, 325),
+                (
+                    "away-strike",
+                    EnemyControlKind::AwayStrike,
+                    if self.roles.len() >= RETREAT_ROLE_COUNT {
+                        359
+                    } else {
+                        325
+                    },
+                ),
             ] {
                 self.verify_enemy_control(
                     scene,
@@ -1520,6 +1536,12 @@ fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
         }
         | CemeteryEnemyPose::Strike { .. } => return None,
     };
+    if depth == Increasing && (3..=5).contains(&phase) {
+        return Some(
+            STRIKE_ROLE_COUNT
+                .saturating_add(usize::from(phase.saturating_sub(3))),
+        );
+    }
     let ordinal = match (phase, depth) {
         (0, Increasing) => 0usize,
         (1, Increasing) => 1,
@@ -1877,6 +1899,7 @@ mod tests {
             (0, Level),
             (1, Decreasing),
         ];
+        let retreat = [(3, Increasing), (4, Increasing), (5, Increasing)];
         for phase in 0u8..=8 {
             for depth in [Decreasing, Increasing, Level] {
                 let pose = CemeteryEnemyPose::Approach {
@@ -1888,7 +1911,11 @@ mod tests {
                     .iter()
                     .position(|&pair| pair == (phase, depth))
                     .map(|ordinal| AIR_ROLE_COUNT.saturating_add(ordinal));
-                assert_eq!(enemy_role(pose), index);
+                let retreat_index = retreat
+                    .iter()
+                    .position(|&pair| pair == (phase, depth))
+                    .map(|ordinal| STRIKE_ROLE_COUNT.saturating_add(ordinal));
+                assert_eq!(enemy_role(pose), index.or(retreat_index));
                 assert_eq!(
                     enemy_role(CemeteryEnemyPose::Approach {
                         depth,
@@ -1987,7 +2014,24 @@ mod tests {
         for count in 176..183 {
             assert!(parse_enemy_catalogue(count).is_err());
         }
-        assert!(parse_enemy_catalogue(184).is_err());
+    }
+
+    #[test]
+    fn retreat_catalogue_reuses_existing_art_and_draw_budget() {
+        let previous = parse_enemy_catalogue(STRIKE_ROLE_COUNT);
+        let extended = parse_enemy_catalogue(RETREAT_ROLE_COUNT);
+        assert!(previous.is_ok() && extended.is_ok());
+        if let (Ok(old), Ok(new)) = (previous, extended) {
+            assert_eq!(
+                new.atlas_bytes(),
+                old.atlas_bytes().saturating_add(21_444)
+            );
+            assert_eq!(new.sprite_count(), old.sprite_count());
+        }
+        for count in 184..186 {
+            assert!(parse_enemy_catalogue(count).is_err());
+        }
+        assert!(parse_enemy_catalogue(187).is_err());
     }
 
     #[test]
@@ -2022,6 +2066,7 @@ mod tests {
             (ENEMY_ROLE_COUNT, ENEMY_ATLAS_BYTES),
             (ALIGNMENT_ROLE_COUNT, ALIGNMENT_ATLAS_BYTES),
             (STRIKE_ROLE_COUNT, STRIKE_ATLAS_BYTES),
+            (RETREAT_ROLE_COUNT, RETREAT_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(

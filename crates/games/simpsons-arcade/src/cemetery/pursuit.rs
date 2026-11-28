@@ -120,6 +120,7 @@ enum PursuitMotion {
     AlignDepth,
     AlignHorizontal,
     LongRange,
+    Retreat { primed: bool },
     Strike { tick: u8 },
     Windup { tick: u8 },
 }
@@ -222,6 +223,7 @@ impl Pursuer {
                 }
             },
             PursuitMotion::LongRange
+            | PursuitMotion::Retreat { .. }
             | PursuitMotion::Strike { .. }
             | PursuitMotion::Windup { .. } => {
                 return None;
@@ -271,7 +273,11 @@ impl Pursuer {
         self.advance_pose(dx, dy)?;
         self.steering = self.steering.saturating_sub(1);
         if self.steering == 0 {
-            self.velocity = approach_velocity(dx, dy)?;
+            self.velocity = approach_velocity(
+                dx,
+                dy,
+                matches!(self.motion, PursuitMotion::Retreat { .. }),
+            )?;
             self.steering = STEERING_INTERVAL;
         }
         Some(())
@@ -305,6 +311,20 @@ impl Pursuer {
         dy: i32,
         stream: &mut ChoiceStream,
     ) -> Option<()> {
+        if dx < 0i32
+            && dx.unsigned_abs() >= APPROACH_DISTANCE
+            && dy.unsigned_abs() >= LEVEL_FACING_DISTANCE
+            && dy.is_positive()
+        {
+            if stream.draw() == u8::MAX {
+                return None;
+            }
+            self.motion = PursuitMotion::Retreat { primed: false };
+            self.animation_tick = 0;
+            self.steering = 1;
+            self.pose = Some(CemeteryEnemyPose::directed(dx, dy, 0));
+            return Some(());
+        }
         if dx >= 0i32
             || dx.unsigned_abs() >= ATTACK_DISTANCE
             || !(-4i32..0i32).contains(&dy)
@@ -313,6 +333,28 @@ impl Pursuer {
             return None;
         }
         self.begin_alignment(dx, dy, true)
+    }
+
+    fn retreat_step(
+        &mut self,
+        (dx, dy): (i32, i32),
+        primed: bool,
+        choice: Option<&mut ChoiceStream>,
+    ) -> Option<()> {
+        if !primed {
+            if choice?.draw() >= 230 {
+                return None;
+            }
+            self.motion = PursuitMotion::Retreat { primed: true };
+            return Some(());
+        }
+        if dx >= 0i32
+            || !dy.is_positive()
+            || dy.unsigned_abs() < LEVEL_FACING_DISTANCE
+        {
+            return None;
+        }
+        self.long_range(dx, dy)
     }
 
     fn sample(self, depth_offset: i16) -> CemeteryEnemyApproach {
@@ -356,6 +398,9 @@ impl Pursuer {
                 }
                 self.align(dx, dy)?;
                 self.advance_pose(dx, dy)?;
+            },
+            PursuitMotion::Retreat { primed } => {
+                self.retreat_step((dx, dy), primed, choice)?;
             },
             PursuitMotion::Strike { tick } => {
                 self.strike_step(tick, (dx, dy), choice)?;
@@ -552,8 +597,10 @@ impl PursuitPair {
                 .min_by_key(|&(_, count)| count)?
                 .0
         };
-        if enemy.motion != PursuitMotion::LongRange
-            && enemy.target != previous_target
+        if !matches!(
+            enemy.motion,
+            PursuitMotion::LongRange | PursuitMotion::Retreat { .. }
+        ) && enemy.target != previous_target
         {
             return None;
         }
@@ -574,7 +621,7 @@ impl PursuitPair {
 // a quantized depth component. The main axis remains at full speed.
 // Reduce a wide denominator before computing the ratio to retain the
 // observed truncation near bin boundaries.
-fn approach_velocity(dx: i32, dy: i32) -> Option<(i32, i32)> {
+fn approach_velocity(dx: i32, dy: i32, retreat: bool) -> Option<(i32, i32)> {
     let mut major = dx.unsigned_abs();
     let mut minor = dy.unsigned_abs().saturating_mul(64);
     while major > 255 {
@@ -582,6 +629,9 @@ fn approach_velocity(dx: i32, dy: i32) -> Option<(i32, i32)> {
         minor >>= 1u32;
     }
     let ratio = minor.checked_div(major)?;
+    if retreat {
+        return retreat_velocity(ratio);
+    }
     let depth: i32 = match ratio {
         0 => 0,
         1..=5 => 16,
@@ -594,6 +644,17 @@ fn approach_velocity(dx: i32, dy: i32) -> Option<(i32, i32)> {
         APPROACH_SPEED.saturating_mul(dx.signum()),
         depth.saturating_mul(dy.signum()),
     ))
+}
+
+// Diagonal bins independently observed at the four steering updates.
+// Other bins remain unsupported rather than extrapolating a speed table.
+const fn retreat_velocity(ratio: u32) -> Option<(i32, i32)> {
+    match ratio {
+        40 => Some((-272, 176)),
+        33 => Some((-288, 144)),
+        27 | 28 => Some((-288, 128)),
+        _ => None,
+    }
 }
 
 const fn strike_phase(tick: u8) -> Option<u8> {
