@@ -7145,3 +7145,26 @@ record retain the earlier presentation. Competition is unchanged.
 Full original instruction lettering and scene composition, all other
 routes and later instruction ticks, campaign parity, and physical
 Android acceptance remain open.
+
+### Instruction countdown and presentation boundaries
+
+Two fresh neutral solo replays reproduce their entire retained choice
+and station traces byte for byte. The instruction sound cue precedes
+active demonstration entry by 77 frames in both. The 383 positive
+countdown samples decrement exactly once per frame; the first active
+sample has 311 ticks remaining. Both clear the demonstration when the
+counter reaches zero, retain four cleanup frames before clearing the
+instruction phase, initialize the competition one frame later and
+enter Ready one further frame later. The retained four-player neutral
+control independently exhibits the same countdown, cue-to-active
+interval and 311 active primed observations; its initial station
+admission and Ready flag differ by one frame. Its early-edge control
+clears the demonstration well before the current native visible
+210-tick gate would allow.
+
+The native preview still starts its demonstration at the instruction
+sound cue and applies the full logical countdown to that presentation.
+A separate setup, active demonstration and cleanup lifecycle is needed
+before changing those timings; it must preserve audio alignment, fresh
+action admission, the competition snapshot and opponent rotation. No
+new timing constants or campaign parity are claimed by this evidence.
