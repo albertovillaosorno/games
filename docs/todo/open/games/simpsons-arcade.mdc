@@ -6849,3 +6849,43 @@ masks are covered by fixed-step regression tests. The card, pause,
 session reset and distinct voice retrigger behavior are also tested.
 No original campaign, unverified roster or FM landing parity is
 claimed. The ordinary launch selection remains unchanged.
+
+Native effects-only and mixed SDL dummy-audio smokes also admit and
+exhaust all ten ambient cues for each of the four verified masks.
+The browser diagnostic drives the four-station entrance using its
+host-consumed fixed-step clock and checks successful mixer admissions
+separately from observed cue counts, including voice exhaustion.
+
+Three isolated Firefox runs (effects-only, fully muted and mixed)
+all admit nine ambient and five ranked setup/descent cues. The nine
+ambient admissions reflect the selected preview-clock phase, not the
+original ten-command trace. Two isolated ambient waveforms are
+identical, centered and span 9,431 frames, with 9,310 nonzero samples
+per channel. The muted control submits only silence. Each run submits
+2,880,000 cemetery frames at 48 kHz, completes all 11,266 scheduled
+buffers, closes its context, retains no canvas or preferences and uses
+the trusted directory picker. The legacy second-stage-only selection
+retains five milestones and 2,880,000 second-stage frames. Fresh
+workspace validation passes. Physical speaker acceptance remains open.
+
+### Protected retreat continuation
+
+The checkpoint-seeded retreat diagnostic now retains both actors
+through tick 358. The first actor reuses three registered approach
+poses, admits three additional increasing-depth poses and changes
+its target at the observed periodic refresh. The second continues
+its independently staggered approach. The optional 186-role selection
+adds 21,444 atlas bytes without increasing the sprite budget. The
+183-role diagnostic remains supported.
+
+The corrected 50-step retreat control releases before the stationary
+station samples; the regression checks both actors and the station
+positions and walking state. Fresh workspace validation passed.
+Native OpenGL/X11 and isolated Firefox WebGL each match all 357
+original protected-strike readbacks exactly (119 per route), including
+the final 34 retreat samples. Firefox reports 1,784 readbacks and
+1,853 framebuffer blits across the routed diagnostic, with all
+thirteen milestones, trusted directory selection, and no retained
+canvas or preferences. The ordinary launch selection remains
+unchanged. Unprotected contact, campaign seed provenance and physical
+Android acceptance remain open.
