@@ -1268,6 +1268,14 @@ impl<'source> Sources<'source> {
         {
             return Err(failure("stage-two music requires second-stage art"));
         }
+        if options
+            .audio
+            .as_ref()
+            .is_some_and(|audio| audio.cemetery_music.is_some())
+            && !options.poses.has_cemetery()
+        {
+            return Err(failure("cemetery music requires cemetery art"));
+        }
         if options.poses.has_arrival() && options.shadow.is_none() {
             return Err(failure("arrival art requires the verified shadow"));
         }

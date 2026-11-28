@@ -380,6 +380,12 @@ fn append_audio_requests(
             limits: audio::stage_two_music_limits()?,
         });
     }
+    if let Some(digest) = audio.cemetery_music {
+        requests.push(ManifestRequest {
+            digest,
+            limits: audio::cemetery_music_limits()?,
+        });
+    }
     if let Some(digest) = audio.replacement {
         requests.push(ManifestRequest {
             digest,
@@ -818,16 +824,17 @@ mod tests {
         let music = ContentHash::calculate(b"music");
         let pump = ContentHash::calculate(b"pump");
         let results = ContentHash::calculate(b"results");
-        let handoff = handoff_fixture();
         let stage_two_music = ContentHash::calculate(b"stage two music");
+        let cemetery_music = ContentHash::calculate(b"cemetery music");
         let poses = pose_fixture(pose, scenic, background);
         let selection = Selection {
             actors: [actor; 4],
             audio: Some(AudioSelection {
                 base,
                 bonus_music: Some([pump, results]),
+                cemetery_music: Some(cemetery_music),
                 effects_volume: MasterVolume::Full,
-                handoff_music: Some(handoff),
+                handoff_music: Some(handoff_fixture()),
                 music: Some(music),
                 music_volume: MasterVolume::Full,
                 replacement: Some(replacement),
@@ -855,6 +862,7 @@ mod tests {
             (results, 1, audio::bonus_music_limits()?),
             (replacement, 1, audio::replacement_limits()?),
             (stage_two_music, 1, audio::stage_two_music_limits()?),
+            (cemetery_music, 1, audio::cemetery_music_limits()?),
         ] {
             if !has_manifest_requests(&requests, digest, count, limit) {
                 return Err(failure(
@@ -862,7 +870,7 @@ mod tests {
                 ));
             }
         }
-        verify_handoff_requests(&requests, handoff)?;
+        verify_handoff_requests(&requests, handoff_fixture())?;
         verify_invalid_pose(&selection)
     }
 

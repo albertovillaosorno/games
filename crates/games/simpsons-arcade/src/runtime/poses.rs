@@ -419,6 +419,10 @@ impl Catalogue {
         self.arrival.is_some()
     }
 
+    pub(super) const fn has_cemetery(&self) -> bool {
+        self.cemetery.is_some()
+    }
+
     pub(super) fn has_scenery(&self) -> bool {
         self.scenery.count() != 0
     }

@@ -71,7 +71,7 @@ const USAGE: &str = concat!(
     "[--audio SHA [--audio-mod SHA] [--music SHA] ",
     "[--bonus-music PUMP_SHA RESULT_SHA] ",
     "[--handoff-music DEFEAT_SHA VICTORY_SHA TRANSITION_SHA INSTRUCTIONS_SHA] ",
-    "[--stage-two-music SHA] ",
+    "[--stage-two-music SHA] [--cemetery-music SHA] ",
     "[--effects-volume PERCENT] [--music-volume PERCENT]] ",
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -96,6 +96,7 @@ type MusicHashes = (
     BonusMusicHashes,
     HandoffMusicHashes,
     Option<OsString>,
+    Option<OsString>,
 );
 type OptionalHashes<const COUNT: usize> = Option<[OsString; COUNT]>;
 type VolumePreferences = (Option<VolumeStore>, MasterVolume);
@@ -112,6 +113,7 @@ struct LocalPaths {
 pub(super) struct AudioSelection {
     pub(super) base: OsString,
     pub(super) bonus_music: BonusMusicHashes,
+    pub(super) cemetery_music: Option<OsString>,
     pub(super) effects_volume: MasterVolume,
     pub(super) handoff_music: HandoffMusicHashes,
     pub(super) music: Option<OsString>,
@@ -142,6 +144,9 @@ impl AudioSelection {
         let stage_two_music = flag(args, "--stage-two-music")
             .then(|| next(args))
             .transpose()?;
+        let cemetery_music = flag(args, "--cemetery-music")
+            .then(|| next(args))
+            .transpose()?;
         let effects = flag(args, "--effects-volume")
             .then(|| next(args))
             .transpose()?;
@@ -155,7 +160,13 @@ impl AudioSelection {
         Self::new(
             base,
             replacement,
-            (music, bonus_music, handoff_music, stage_two_music),
+            (
+                music,
+                bonus_music,
+                handoff_music,
+                stage_two_music,
+                cemetery_music,
+            ),
             (
                 effects.map(parse).transpose()?,
                 soundtrack.map(parse).transpose()?,
@@ -175,6 +186,7 @@ impl AudioSelection {
                 music_hashes(values.remove("bonus_music"))?,
                 music_hashes(values.remove("handoff_music"))?,
                 values.remove("stage_two_music").map(hash).transpose()?,
+                values.remove("cemetery_music").map(hash).transpose()?,
             ),
             (
                 values.remove("effects_volume").map(volume).transpose()?,
@@ -186,10 +198,22 @@ impl AudioSelection {
     fn new(
         base: Option<OsString>,
         replacement: Option<OsString>,
-        (music, bonus_music, handoff_music, stage_two_music): MusicHashes,
+        music_hashes: MusicHashes,
         volumes: AudioVolumes,
     ) -> Result<Option<Self>, String> {
         let (effects_volume, music_volume) = volumes;
+        let (
+            music,
+            bonus_music,
+            handoff_music,
+            stage_two_music,
+            cemetery_music,
+        ) = music_hashes;
+        if cemetery_music.is_some() && stage_two_music.is_none() {
+            return Err(String::from(
+                "cemetery music requires second-stage music",
+            ));
+        }
         if stage_two_music.is_some() && bonus_music.is_none() {
             return Err(String::from("stage-two music requires bonus music"));
         }
@@ -206,6 +230,7 @@ impl AudioSelection {
             (Some(digest), changes, track) => Ok(Some(Self {
                 base: digest,
                 bonus_music,
+                cemetery_music,
                 effects_volume: effects_volume.unwrap_or_default(),
                 handoff_music,
                 music: track,
@@ -1300,6 +1325,7 @@ mod tests {
             audio: Some(AudioSelection {
                 base: DIGEST.into(),
                 bonus_music: None,
+                cemetery_music: None,
                 effects_volume: MasterVolume::Full,
                 handoff_music: None,
                 music: None,
@@ -1529,6 +1555,7 @@ mod tests {
             audio: Some(AudioSelection {
                 base: "audio".into(),
                 bonus_music: None,
+                cemetery_music: None,
                 effects_volume: MasterVolume::Full,
                 handoff_music: None,
                 music: None,
@@ -1619,6 +1646,35 @@ mod tests {
     }
 
     #[test]
+    fn cemetery_music_catalogue_requires_second_stage_music()
+    -> Result<(), String> {
+        let path = OsStr::new("local");
+        let base = catalogue();
+        let street = format!("audio={DIGEST}\nmusic={DIGEST}\n");
+        let bonus = format!("bonus_music={DIGEST},{DIGEST}\n");
+        let stage = format!("stage_two_music={DIGEST}\n");
+        let cemetery = format!("cemetery_music={DIGEST}\n");
+        let (configured, _, _) = Assets::catalogue(
+            path,
+            &format!("{base}{street}{bonus}{stage}{cemetery}"),
+        )?;
+        if configured.audio.and_then(|audio| audio.cemetery_music)
+            != Some(DIGEST.into())
+        {
+            return Err(String::from("cemetery music lost"));
+        }
+        for invalid in [
+            format!("{base}{street}{bonus}{cemetery}"),
+            format!("{base}{street}{bonus}{stage}cemetery_music=invalid"),
+        ] {
+            if Assets::catalogue(path, &invalid).is_ok() {
+                return Err(String::from("invalid cemetery music admitted"));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn source_volume_catalogue_requires_matching_assets() -> Result<(), String>
     {
         let path = OsStr::new("local");
@@ -1700,6 +1756,8 @@ mod tests {
             "instructions",
             "--stage-two-music",
             "second",
+            "--cemetery-music",
+            "third",
             "--effects-volume",
             "25",
             "--music-volume",
@@ -1715,6 +1773,7 @@ mod tests {
             != Some(AudioSelection {
                 base: "base".into(),
                 bonus_music: Some(["pump".into(), "results".into()]),
+                cemetery_music: Some("third".into()),
                 effects_volume: MasterVolume::Quarter,
                 handoff_music: Some(
                     ["defeat", "victory", "transition", "instructions"]

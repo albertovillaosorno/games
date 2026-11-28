@@ -59,8 +59,8 @@ use super::{
     parse_hash, parse_hashes, size, smoke_press,
 };
 use crate::{
-    Action, BonusPhase, Cabinet, Control, ENEMY_CAPACITY, Phase, Player, Point,
-    StreetLayout, TICK_INTERVAL, Wrestler, WrestlerAction,
+    Action, BonusPhase, Cabinet, CemeteryPhase, Control, ENEMY_CAPACITY, Phase,
+    Player, Point, StreetLayout, TICK_INTERVAL, Wrestler, WrestlerAction,
 };
 
 const CHUNK: usize = 256;
@@ -74,6 +74,8 @@ const MUSIC_FRAMES: usize = 2_607_286;
 const MUSIC_LOOP_START: usize = 175_680;
 // Finite original service excerpt; no verified recurring seam yet.
 const STAGE_TWO_TRACK: (&str, usize) = ("audio/stage-two-music", 2_880_000);
+// Finite cemetery service excerpt; no verified recurring seam yet.
+const CEMETERY_TRACK: (&str, usize) = ("audio/cemetery-music", 2_880_000);
 // Bounded service captures: ten seconds of pumping music and the
 // five-second results cue including its verified silent tail.
 const BONUS_TRACKS: [(&str, usize); 2] = [
@@ -166,6 +168,8 @@ pub struct AudioSelection {
     pub base: ContentHash,
     /// Optional pumping and results music manifests, in that order.
     pub bonus_music: Option<[ContentHash; 2]>,
+    /// Optional finite cemetery music manifest.
+    pub cemetery_music: Option<ContentHash>,
     /// Independent effects attenuation before the master level.
     pub effects_volume: MasterVolume,
     /// Optional defeat, victory, transition and instructions manifests.
@@ -191,6 +195,11 @@ impl AudioSelection {
                 .as_ref()
                 .map(parse_hashes)
                 .transpose()?,
+            cemetery_music: selection
+                .cemetery_music
+                .as_deref()
+                .map(parse_hash)
+                .transpose()?,
             effects_volume: selection.effects_volume,
             handoff_music: selection
                 .handoff_music
@@ -213,6 +222,9 @@ impl AudioSelection {
     }
 
     fn validate_music(&self) -> Result<(), RenderError> {
+        if self.cemetery_music.is_some() && self.stage_two_music.is_none() {
+            return Err(failure("cemetery music requires second-stage music"));
+        }
         if self.stage_two_music.is_some() && self.bonus_music.is_none() {
             return Err(failure("stage-two music requires bonus music"));
         }
@@ -228,6 +240,7 @@ impl AudioSelection {
 
 pub(super) struct Samples {
     bonus_music: Option<[OwnedClip; 2]>,
+    cemetery_music: Option<OwnedClip>,
     clips: [Rc<[i16]>; 4],
     effects_volume: MasterVolume,
     handoff_music: Option<[OwnedClip; 4]>,
@@ -261,23 +274,7 @@ impl Samples {
                 open_selected_bundle(store, hash, replacement_limits()?)
             })
             .transpose()?;
-        let allowed = CLIPS.map(|(key, _frames)| key);
-        let overlay = replacement
-            .as_ref()
-            .map(|changes| MediaOverlay::new(&bundle, changes, &allowed))
-            .transpose()
-            .map_err(failure)?;
-        let mut clips = Vec::with_capacity(CLIPS.len());
-        for (key, frames) in CLIPS {
-            let (descriptor, payload) = overlay.as_ref().map_or_else(
-                || (bundle.manifest().record(key), bundle.view_payload(key)),
-                |changes| (changes.record(key), changes.view_payload(key)),
-            );
-            let record =
-                descriptor.ok_or_else(|| failure("missing attack PCM"))?;
-            let bytes = payload.map_err(failure)?;
-            clips.push(mono_samples(record, &bytes, SOURCE_RATE, frames)?);
-        }
+        let clips = load_attack_clips(&bundle, replacement.as_ref())?;
         let [marge, homer, bart, lisa] = HURT_CLIPS.map(|(key, frames)| {
             load_optional_effect(&bundle, key, HURT_RATE, frames)
         });
@@ -286,7 +283,18 @@ impl Samples {
                 .bonus_music
                 .map(|hashes| load_tracks(store, hashes, BONUS_TRACKS))
                 .transpose()?,
-            clips: clips.try_into().map_err(|_error| failure("clip count"))?,
+            cemetery_music: selection
+                .cemetery_music
+                .map(|hash| {
+                    load_music(
+                        store,
+                        hash,
+                        CEMETERY_TRACK,
+                        cemetery_music_limits()?,
+                    )
+                })
+                .transpose()?,
+            clips,
             effects_volume: selection.effects_volume,
             handoff_music: selection
                 .handoff_music
@@ -321,6 +329,7 @@ impl Samples {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MusicCue {
+    Cemetery,
     Defeat,
     Instructions,
     Pumping,
@@ -334,6 +343,15 @@ enum MusicCue {
 
 impl MusicCue {
     fn select(cabinet: &Cabinet) -> Self {
+        if let Some(entrance) = cabinet.cemetery_entrance() {
+            return if entrance.phase() == CemeteryPhase::Card
+                || entrance.tick() == 0
+            {
+                Self::Quiet
+            } else {
+                Self::Cemetery
+            };
+        }
         if cabinet.stage_two() {
             return Self::StageTwo;
         }
@@ -371,6 +389,7 @@ impl MusicCue {
 
 struct Soundtrack {
     bonus: Option<[OwnedClip; 2]>,
+    cemetery: Option<OwnedClip>,
     cue: MusicCue,
     handoff: Option<[OwnedClip; 4]>,
     stage_two: Option<OwnedClip>,
@@ -380,6 +399,7 @@ struct Soundtrack {
 impl Soundtrack {
     fn clip(&self, cue: MusicCue) -> Option<&OwnedClip> {
         match cue {
+            MusicCue::Cemetery => self.cemetery.as_ref(),
             MusicCue::Defeat => {
                 self.handoff.as_ref().map(|[defeat, ..]| defeat)
             },
@@ -530,6 +550,7 @@ impl Playback {
             mixer,
             music: Soundtrack {
                 bonus: samples.bonus_music.clone(),
+                cemetery: samples.cemetery_music.clone(),
                 cue: MusicCue::Quiet,
                 handoff: samples.handoff_music.clone(),
                 stage_two: samples.stage_two_music.clone(),
@@ -663,7 +684,8 @@ impl Playback {
             "Bonus music PCM: street, pumping, results and silence verified"
         ))
         .map_err(failure)?;
-        self.smoke_stage_two_music(&mut cabinet)
+        self.smoke_stage_two_music(&mut cabinet)?;
+        self.smoke_cemetery_music()
     }
 
     fn smoke_bonus_pause(
@@ -723,6 +745,61 @@ impl Playback {
             return Err(failure("finished results music restarted"));
         }
         Ok(())
+    }
+
+    fn smoke_cemetery_music(&mut self) -> Result<(), RenderError> {
+        if self.music.cemetery.is_none() {
+            return Ok(());
+        }
+        let mut cabinet = smoke_campaign(self.smoke_session(), true)?;
+        self.update(&cabinet)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        cabinet.enter_stage_two(270);
+        self.update(&cabinet)?;
+        self.verify_submission(0)?;
+        cabinet.cemetery = Some(crate::CemeteryEntrance::new(
+            [true, false, false, false],
+            Player::Marge,
+        ));
+        self.update(&cabinet)?;
+        for tick in 1..=192u64 {
+            cabinet.input_step(tick, &[]);
+            self.update(&cabinet)?;
+            if self.music.cue != MusicCue::Quiet
+                || self.music_voices() != 0
+                || self.queued_frames()? != 0
+            {
+                return Err(failure("cemetery card retained music"));
+            }
+        }
+        cabinet.input_step(193, &[]);
+        self.update(&cabinet)?;
+        if self.music.cue != MusicCue::Cemetery || self.music_voices() != 1 {
+            return Err(failure("cemetery soundtrack did not start"));
+        }
+        self.verify_submission(0)?;
+        self.smoke_bonus_pause(&mut cabinet)?;
+        for tick in 194..430 {
+            cabinet.input_step(tick, &[]);
+            self.update(&cabinet)?;
+            if self.music.cue != MusicCue::Cemetery || self.music_voices() != 1
+            {
+                return Err(failure(
+                    "cemetery soundtrack stopped before landing",
+                ));
+            }
+        }
+        for _ in 0..1500u16 {
+            self.device.clear().map_err(failure)?;
+            self.update(&cabinet)?;
+        }
+        if self.music_voices() != 0 || self.queued_frames()? != 0 {
+            return Err(failure("finished cemetery music restarted"));
+        }
+        write_status(format_args!(
+            "Cemetery music PCM: card, setup, pause and finite end verified"
+        ))
+        .map_err(failure)
     }
 
     fn smoke_drain(
@@ -1462,6 +1539,10 @@ pub(super) fn stage_two_music_limits() -> Result<ManifestLimits, RenderError> {
     stereo_limits(STAGE_TWO_TRACK.1)
 }
 
+pub(super) fn cemetery_music_limits() -> Result<ManifestLimits, RenderError> {
+    stereo_limits(CEMETERY_TRACK.1)
+}
+
 fn track_limits<const COUNT: usize>(
     tracks: [(&str, usize); COUNT],
 ) -> Result<ManifestLimits, RenderError> {
@@ -1511,6 +1592,28 @@ fn mono_samples(
         return Err(failure("unexpected effects PCM format"));
     }
     copy_samples(pcm)
+}
+
+fn load_attack_clips(
+    bundle: &CanonicalBundle,
+    replacement: Option<&CanonicalBundle>,
+) -> Result<[SharedSamples; 4], RenderError> {
+    let allowed = CLIPS.map(|(key, _frames)| key);
+    let overlay = replacement
+        .map(|changes| MediaOverlay::new(bundle, changes, &allowed))
+        .transpose()
+        .map_err(failure)?;
+    let mut clips = Vec::with_capacity(CLIPS.len());
+    for (key, frames) in CLIPS {
+        let (descriptor, payload) = overlay.as_ref().map_or_else(
+            || (bundle.manifest().record(key), bundle.view_payload(key)),
+            |changes| (changes.record(key), changes.view_payload(key)),
+        );
+        let record = descriptor.ok_or_else(|| failure("missing attack PCM"))?;
+        let bytes = payload.map_err(failure)?;
+        clips.push(mono_samples(record, &bytes, SOURCE_RATE, frames)?);
+    }
+    clips.try_into().map_err(|_error| failure("clip count"))
 }
 
 fn load_optional_effect(
@@ -1808,6 +1911,7 @@ mod tests {
         .map_err(failure)?;
         let mut soundtrack = Soundtrack {
             bonus: None,
+            cemetery: None,
             cue: MusicCue::Quiet,
             handoff: None,
             stage_two: Some(clip),
@@ -1830,6 +1934,106 @@ mod tests {
             {
                 return Err(failure("setup cue shifted or restarted"));
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cemetery_music_starts_once_after_the_card_and_survives_landing()
+    -> Result<(), RenderError> {
+        let mut cabinet = smoke_campaign(LocalSession::default(), true)?;
+        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        cabinet.enter_stage_two(270);
+        let cemetery = OwnedClip::new(
+            Rc::from((1..=480i16).collect::<Vec<_>>()),
+            Channels::Stereo,
+            RATE,
+        )
+        .map_err(failure)?;
+        let stage_two =
+            OwnedClip::new(Rc::from([500; 4]), Channels::Stereo, RATE)
+                .map_err(failure)?;
+        let mut soundtrack = Soundtrack {
+            bonus: None,
+            cemetery: Some(cemetery),
+            cue: MusicCue::Quiet,
+            handoff: None,
+            stage_two: Some(stage_two),
+            street: None,
+        };
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        verify_cemetery_card(&mut cabinet, &mut soundtrack, &mut mixer)?;
+        verify_cemetery_landing(&mut cabinet, &mut soundtrack, &mut mixer)
+    }
+
+    fn verify_cemetery_card(
+        cabinet: &mut Cabinet,
+        soundtrack: &mut Soundtrack,
+        mixer: &mut OwnedMixer,
+    ) -> Result<(), RenderError> {
+        let started = soundtrack.select(mixer, MusicCue::select(cabinet))?;
+        let mut frame = [[0; 2]];
+        mixer.render(&mut frame);
+        if !started || frame != [[500; 2]] {
+            return Err(failure("stage-two fixture did not play"));
+        }
+        cabinet.cemetery = Some(crate::CemeteryEntrance::new(
+            [true, false, false, false],
+            Player::Marge,
+        ));
+        if !soundtrack.select(mixer, MusicCue::select(cabinet))? {
+            return Err(failure("stage-two cue did not stop at card"));
+        }
+        for tick in 1..=192u64 {
+            cabinet.input_step(tick, &[]);
+            let cue = MusicCue::select(cabinet);
+            let changed = soundtrack.select(mixer, cue)?;
+            mixer.render(&mut frame);
+            if cue != MusicCue::Quiet || changed || frame != [[0; 2]] {
+                return Err(failure("card did not retain silence"));
+            }
+        }
+        if cabinet
+            .cemetery_entrance()
+            .map(crate::CemeteryEntrance::tick)
+            != Some(0)
+        {
+            return Err(failure("cemetery setup fixture did not start"));
+        }
+        Ok(())
+    }
+
+    fn verify_cemetery_landing(
+        cabinet: &mut Cabinet,
+        soundtrack: &mut Soundtrack,
+        mixer: &mut OwnedMixer,
+    ) -> Result<(), RenderError> {
+        let mut frame = [[0; 2]];
+        for elapsed in 1..=240u64 {
+            cabinet.input_step(192u64.saturating_add(elapsed), &[]);
+            let cue = MusicCue::select(cabinet);
+            let changed = soundtrack.select(mixer, cue)?;
+            mixer.render(&mut frame);
+            let sample =
+                i16::try_from(elapsed.saturating_mul(2)).map_err(failure)?;
+            if cue != MusicCue::Cemetery
+                || changed != (elapsed == 1)
+                || frame != [[sample.saturating_sub(1), sample]]
+            {
+                return Err(failure("cemetery cue shifted or restarted"));
+            }
+        }
+        let changed = soundtrack.select(mixer, MusicCue::select(cabinet))?;
+        mixer.render(&mut frame);
+        if cabinet
+            .cemetery_entrance()
+            .map(crate::CemeteryEntrance::phase)
+            != Some(CemeteryPhase::Landed)
+            || changed
+            || frame != [[0; 2]]
+        {
+            return Err(failure("finished cemetery cue did not stay silent"));
         }
         Ok(())
     }
@@ -1916,6 +2120,7 @@ mod tests {
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &base)?,
             bonus_music: None,
+            cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
             music: None,
@@ -1975,6 +2180,7 @@ mod tests {
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
             bonus_music: None,
+            cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
             music: None,
@@ -2020,6 +2226,7 @@ mod tests {
         let selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
             bonus_music: None,
+            cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
             music: None,
@@ -2064,6 +2271,7 @@ mod tests {
         };
         let mut soundtrack = Soundtrack {
             bonus: Some([stereo([1, 2, 3, 4])?, stereo([5, 6, 7, 8])?]),
+            cemetery: Some(stereo([13, 14, 15, 16])?),
             cue: MusicCue::Quiet,
             handoff: None,
             stage_two: Some(stereo([9, 10, 11, 12])?),
@@ -2086,6 +2294,7 @@ mod tests {
             (MusicCue::Pumping, [[1, 2], [3, 4]]),
             (MusicCue::Results, [[5, 6], [7, 8]]),
             (MusicCue::StageTwo, [[9, 10], [11, 12]]),
+            (MusicCue::Cemetery, [[13, 14], [15, 16]]),
         ] {
             let admitted = soundtrack.select(&mut mixer, cue)?;
             let mut output = [[0; 2]; 2];
@@ -2107,6 +2316,7 @@ mod tests {
     -> Result<(), RenderError> {
         let samples = Samples {
             bonus_music: None,
+            cemetery_music: None,
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
             effects_volume: MasterVolume::Full,
             handoff_music: None,

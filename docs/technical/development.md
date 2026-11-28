@@ -359,6 +359,11 @@ With the bonus music pair and second-stage art admitted, set
 Native explicit launch accepts `--stage-two-music SHA` after the
 optional handoff selection. The excerpt plays once upon stage entry;
 no exact repeating loop is claimed.
+With the second-stage music and cemetery entrance art admitted, set
+`cemetery_music=SHA` for the finite third-stage stereo excerpt. Native
+explicit launch accepts `--cemetery-music SHA` after `--stage-two-music`.
+The previous cue stops at the title card, and the excerpt begins on
+setup tick one without restarting at landing. No repeating loop is claimed.
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`
 to distinguish the filename from a misplaced option.
