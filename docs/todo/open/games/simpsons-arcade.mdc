@@ -7005,3 +7005,17 @@ existing selected balloon and pump art around the demonstration anchor;
 the native routed smoke also requires visible growth without input.
 The instruction background, original pump animation, exact phase offset
 and board-selected axis scheduling remain provisional or unimplemented.
+
+A fresh solo replay reproduces the retained input and phase trace.
+All 41 inspected frames reconstruct exactly given either the current
+or immediately preceding graphics state (21 and 20 respectively).
+The neutral Marge balloon crop is 24 by 48 at (80, 56); its combined
+character and pump crop is 34 by 75 at (89, 69). Both asset digests
+match the existing selected sprites. The instruction renderer uses
+separate logical center and bottom anchors derived from these crops,
+rather than raw object coordinates or competition anchors. The layout
+regression preserves both anchors for all existing character extents.
+The other three original character registrations and animated overlay
+remain unverified. The earlier demonstration passed the routed native
+OpenGL/X11 and Firefox/WebGL software smoke, with visible growth
+before input. The browser completed all thirteen routed milestones.

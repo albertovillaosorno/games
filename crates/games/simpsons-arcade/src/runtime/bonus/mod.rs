@@ -51,6 +51,8 @@ use crate::{
 const HEADER_WIDTH: u16 = 288;
 const PLATE_HEIGHT: u16 = 12;
 const RANK_WIDTH: u16 = 48;
+const INSTRUCTION_BALLOON_ANCHOR: (i32, i32) = (92, 104);
+const INSTRUCTION_PUMP_ANCHOR: (i32, i32) = (106, 144);
 const PHASE_KEYS: [&str; 6] = [
     "title.bonus.instructions",
     "title.bonus.ready",
@@ -582,12 +584,22 @@ impl BonusArt {
         let Some(player) = bonus.instruction_player() else {
             return Ok(());
         };
-        let first = draws.len();
-        self.queue_human(bonus, player, draws)?;
-        let offset = instruction_offset(player)?;
-        for draw in draws.get_mut(first..).ok_or(RenderError::InvalidSprite)? {
-            draw.destination.x = draw.destination.x.saturating_add(offset);
-        }
+        let index = player.index();
+        let Some(mut balloon) = self.balloon_layer(bonus, player, 0)? else {
+            return Ok(());
+        };
+        balloon.destination = instruction_destination(
+            balloon.destination,
+            INSTRUCTION_BALLOON_ANCHOR,
+        );
+        draws.push(balloon);
+        let pump = PUMPS.get(index).ok_or(RenderError::InvalidSprite)?;
+        let art = self.pumps.get(index).ok_or(RenderError::InvalidSprite)?;
+        let destination = instruction_destination(
+            pump.destination(0)?,
+            INSTRUCTION_PUMP_ANCHOR,
+        );
+        draws.push(art.draw(destination, false));
         Ok(())
     }
 
@@ -671,12 +683,14 @@ fn departure_checkpoint(
     Ok(layers)
 }
 
-fn instruction_offset(player: Player) -> Result<i32, RenderError> {
-    let spec = BALLOONS
-        .get(player.index())
-        .ok_or(RenderError::InvalidSprite)?;
-    let center = spec.x.saturating_add_unsigned(spec.width >> 1);
-    Ok(156i32.saturating_sub(center))
+const fn instruction_destination(
+    mut destination: SpriteRect,
+    (center, bottom): (i32, i32),
+) -> SpriteRect {
+    destination.x =
+        center.saturating_sub_unsigned(destination.width.get() >> 1);
+    destination.y = bottom.saturating_sub_unsigned(destination.height.get());
+    destination
 }
 
 fn inverse_extent(
@@ -830,6 +844,35 @@ mod tests {
             assert_eq!(rising.y, initial.y.saturating_sub(20));
             assert_eq!(rising.width, initial.width);
             assert_eq!(rising.height, initial.height);
+        }
+    }
+
+    #[test]
+    fn instruction_layout_anchors_selected_balloon_and_pump() {
+        for (balloon, pump) in BALLOONS.into_iter().zip(PUMPS) {
+            assert_instruction_anchor(balloon, INSTRUCTION_BALLOON_ANCHOR);
+            assert_instruction_anchor(pump, INSTRUCTION_PUMP_ANCHOR);
+        }
+    }
+
+    fn assert_instruction_anchor(spec: SpriteSpec, anchor: (i32, i32)) {
+        for inflation in [0, 16, BONUS_MAX_INFLATION] {
+            let result = spec.destination(inflation);
+            assert!(result.is_ok());
+            let Ok(original) = result else {
+                return;
+            };
+            let actual = instruction_destination(original, anchor);
+            assert_eq!(actual.width, original.width);
+            assert_eq!(actual.height, original.height);
+            assert_eq!(
+                actual.x.saturating_add_unsigned(actual.width.get() >> 1),
+                anchor.0
+            );
+            assert_eq!(
+                actual.y.saturating_add_unsigned(actual.height.get()),
+                anchor.1
+            );
         }
     }
 
