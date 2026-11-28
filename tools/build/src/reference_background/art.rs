@@ -71,6 +71,65 @@ struct Group {
     key: String,
 }
 
+/// Report registered actor crops without publishing any original art.
+#[derive(Debug)]
+pub struct ActorDigests {
+    groups: Vec<Group>,
+    scene: Arguments,
+}
+
+impl ActorDigests {
+    /// Parse complete scene paths and named object groups.
+    ///
+    /// # Errors
+    /// Rejects incomplete observations and invalid or overlapping selections.
+    pub fn parse(mut args: Vec<OsString>) -> Result<Self, String> {
+        if !(10..=41).contains(&args.len()) {
+            return Err(String::from(USAGE));
+        }
+        let groups = parse_groups(args.split_off(9))?;
+        Ok(Self {
+            groups,
+            scene: Arguments::parse_scene(args)?,
+        })
+    }
+
+    /// Verify the observed scene and report selected actor crop identities.
+    ///
+    /// # Errors
+    /// Rejects misaligned observations and invalid or invisible selections.
+    pub fn run(&self, machine: Machine) -> Result<(), String> {
+        let bundle = graphics_bundle(&self.scene, machine)?;
+        let payloads = GraphicsPayloads::load(&bundle, true)?;
+        let assets = payloads.bind(&bundle)?;
+        let mut pens =
+            vec![Pixel::default(); machine.background_raster().pixels()];
+        let observation =
+            verified_scene(&self.scene, machine, &assets, &mut pens)?;
+        let sprites = observation
+            .sprites
+            .as_ref()
+            .ok_or_else(|| String::from("missing object observation"))?;
+        let mut lines = Vec::with_capacity(self.groups.len());
+        for group in &self.groups {
+            let crop =
+                isolate((machine, &assets), &observation, sprites, group)?;
+            let digest =
+                ContentHash::calculate(crop.image.pixels.as_flattened());
+            let (left, top) = crop.origin;
+            let (width, height) = (crop.image.width, crop.image.height);
+            lines.push(format!(
+                "{}: {width}x{height} at {left},{top} RGBA8 {digest}",
+                group.key
+            ));
+        }
+        for line in lines {
+            toolchain::write_line(&line).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+}
+
 /// Scene publication arguments; groups must be disjoint active objects.
 #[derive(Debug)]
 pub struct Art {
@@ -88,22 +147,10 @@ impl Art {
         if !(11..=42).contains(&args.len()) {
             return Err(String::from(USAGE));
         }
-        let groups = args.split_off(10);
+        let groups = parse_groups(args.split_off(10))?;
         let output = args.remove(0);
-        let mut used = BTreeSet::new();
-        let mut parsed = Vec::new();
-        for value in groups {
-            let (key, raw_indices) = text(&value)?
-                .split_once(':')
-                .ok_or_else(|| String::from("expected KEY:INDEX,INDEX"))?;
-            let indices = parse_indices(raw_indices, &mut used)?;
-            parsed.push(Group {
-                indices,
-                key: key.to_owned(),
-            });
-        }
         Ok(Self {
-            groups: parsed,
+            groups,
             output,
             scene: Arguments::parse_scene(args)?,
         })
@@ -863,6 +910,28 @@ fn strip_limits() -> Result<ManifestLimits, String> {
     })
 }
 
+fn parse_groups(values: Vec<OsString>) -> Result<Vec<Group>, String> {
+    let mut used = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    let mut parsed = Vec::new();
+    for value in values {
+        let (key, raw_indices) = text(&value)?
+            .split_once(':')
+            .ok_or_else(|| String::from("expected KEY:INDEX,INDEX"))?;
+        AssetRecord::validate_descriptor(key, AssetFormat::Data, 1)
+            .map_err(|error| format!("actor group key: {error:?}"))?;
+        if key == "scene/background" || !keys.insert(key.to_owned()) {
+            return Err(String::from("reserved or duplicate actor group key"));
+        }
+        let indices = parse_indices(raw_indices, &mut used)?;
+        parsed.push(Group {
+            indices,
+            key: key.to_owned(),
+        });
+    }
+    Ok(parsed)
+}
+
 fn parse_indices(
     value: &str,
     used: &mut BTreeSet<usize>,
@@ -934,6 +1003,44 @@ fn verified_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actor_digests_require_disjoint_named_groups_and_complete_scene() {
+        let digest = "0".repeat(64);
+        let base = [
+            "parent",
+            &digest,
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+            "controls",
+        ];
+        let parse = |groups: &[&str]| {
+            ActorDigests::parse(
+                base.into_iter()
+                    .chain(groups.iter().copied())
+                    .map(OsString::from)
+                    .collect(),
+            )
+        };
+        assert!(parse(&["homer:2,3", "marge:4"]).is_ok());
+        for invalid in [
+            &[][..],
+            &["homer:2", "marge:2"],
+            &["homer:2", "homer:3"],
+            &[":2"],
+            &["scene/background:2"],
+            &["Homer:2"],
+            &["../homer:2"],
+            &["homer:256"],
+            &["homer:"],
+        ] {
+            assert!(parse(invalid).is_err(), "{invalid:?}");
+        }
+    }
 
     #[test]
     fn strip_scene_count_respects_explicit_budget() {

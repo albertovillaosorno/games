@@ -5877,6 +5877,26 @@ independent layer registration, walk-body isolation and general
 composition remain unresolved. No moving-room presentation assets
 or additional native gameplay are admitted from these captures.
 
+The independently registered tile maps now pass the native exact
+composition diagnostic on all 119 aligned observations. Its 357 layer
+identities, origins and 119 backdrop reports agree with the CPU
+results. A wrong tile-state pairing fails before reporting a match.
+The shared wrapped viewport and sprite-command contracts verify
+single-coverage sampling, including horizontal and vertical seams.
+These offscreen OpenGL readbacks verify sprite-free composition;
+they do not establish a moving-room renderer or physical acceptance.
+
+A read-only actor crop diagnostic admits all 59 visible-body samples
+and 236 explicitly selected object groups. Incorrect DMA-phase
+pairings reject inactive objects; an invalid later group produces no
+partial crop report. The stationary Homer and Lisa each retain one
+crop identity, and their vertical origins compensate exactly for the
+preceding object DMA camera offset across all samples. The moving
+Marge and Bart have 18 and 14 distinct crop identities respectively.
+These are sampled crops, not complete movement or action animation
+tables. General actor registration, occlusion and runtime composition
+remain open; no additional art or campaign progression is admitted.
+
 ### Bounded cemetery station actions
 
 An independent original replay preserves all 1,258 transition samples

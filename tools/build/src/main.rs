@@ -147,6 +147,8 @@ const USAGE: &str = concat!(
     "RAM REGISTERS SCROLL PALETTE RGB32\n",
     "mame scene-check MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
+    "mame scene-actor-digests MACHINE REV PARENT SHA256 ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS KEY:INDEX,...\n",
     "mame scene-layer-digests MACHINE REV PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS\n",
     "mame scene-background-digest MACHINE REV PARENT SHA256 ",
@@ -238,6 +240,7 @@ impl Arguments {
 
 #[derive(Debug)]
 enum Command {
+    ActorDigests(Machine, reference_background::art::ActorDigests),
     ArtPublish(Machine, reference_background::art::Art),
     #[cfg(feature = "native-preview")]
     AudioCheck(Machine, audio_check::Arguments),
@@ -343,16 +346,20 @@ impl Command {
         machine: Machine,
         args: Vec<OsString>,
     ) -> Result<Self, String> {
-        if action == "strip-publish" {
-            Ok(Self::StripPublish(
+        match action {
+            "strip-publish" => Ok(Self::StripPublish(
                 machine,
                 reference_background::art::Strip::parse(&args)?,
-            ))
-        } else {
-            Ok(Self::ArtPublish(
+            )),
+            "scene-actor-digests" => Ok(Self::ActorDigests(
+                machine,
+                reference_background::art::ActorDigests::parse(args)?,
+            )),
+            "art-publish" => Ok(Self::ArtPublish(
                 machine,
                 reference_background::art::Art::parse(args)?,
-            ))
+            )),
+            _ => Err(String::from(USAGE)),
         }
     }
 
@@ -478,7 +485,7 @@ impl Command {
             );
         }
         match action {
-            "art-publish" | "strip-publish" => {
+            "art-publish" | "strip-publish" | "scene-actor-digests" => {
                 Self::parse_art(action, selected, args.collect())
             },
             "scene-background-publish" => Ok(Self::BackgroundPublish(
@@ -717,6 +724,7 @@ impl Command {
                 title_package::run(title, &output)
             },
             Self::PackageTitle(title) => title_package::configured(title),
+            Self::ActorDigests(machine, args) => args.run(machine),
             Self::ArtPublish(machine, args) => args.run(machine),
             Self::StripPublish(machine, args) => args.run(machine),
             #[cfg(feature = "native-preview")]
@@ -782,7 +790,8 @@ impl Command {
             Self::AudioCheck(..)
             | Self::RenderCheck(..)
             | Self::SceneSequence(..) => Err(String::from(USAGE)),
-            Self::ArtPublish(..)
+            Self::ActorDigests(..)
+            | Self::ArtPublish(..)
             | Self::BackgroundCheck(..)
             | Self::BackgroundPublish(..)
             | Self::BuildTitle(..)
