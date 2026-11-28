@@ -124,6 +124,7 @@ pub(super) struct Catalogue {
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
     bonus_instruction: Option<ContentHash>,
+    bonus_instruction_balloon: Option<bonus::instruction_balloon::Digests>,
     bonus_instruction_pump: Option<Box<bonus::instruction_pump::Digests>>,
     bonus_opponents: Option<Box<bonus::opposition::Digests>>,
     cemetery: Option<Box<cemetery::Selection>>,
@@ -277,6 +278,10 @@ impl Catalogue {
                 bonus::INSTRUCTION_ATLAS_BYTES,
             ),
             (
+                self.bonus_instruction_balloon.is_some(),
+                bonus::instruction_balloon::ATLAS_BYTES,
+            ),
+            (
                 self.bonus_instruction_pump.is_some(),
                 bonus::instruction_pump::ATLAS_BYTES,
             ),
@@ -364,6 +369,8 @@ impl Catalogue {
             && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.bonus_inflated.is_none() || self.bonus.is_some())
             && (self.bonus_instruction.is_none() || self.bonus.is_some())
+            && (self.bonus_instruction_balloon.is_none()
+                || self.bonus_instruction.is_some())
             && (self.bonus_instruction_pump.is_none()
                 || self.bonus_instruction.is_some())
             && (self.bonus_opponents.is_none()
@@ -406,6 +413,10 @@ impl Catalogue {
             .saturating_add(usize::from(self.bonus_inflated.is_some()))
             .saturating_add(usize::from(self.bonus_instruction.is_some()))
             .saturating_add(
+                usize::from(self.bonus_instruction_balloon.is_some())
+                    .saturating_mul(bonus::instruction_balloon::BUNDLE_COUNT),
+            )
+            .saturating_add(
                 usize::from(self.bonus_instruction_pump.is_some())
                     .saturating_mul(bonus::instruction_pump::BUNDLE_COUNT),
             )
@@ -436,6 +447,7 @@ impl Catalogue {
             .chain(self.bonus_departure)
             .chain(self.bonus_inflated)
             .chain(self.bonus_instruction)
+            .chain(self.bonus_instruction_balloon.into_iter().flatten())
             .chain(
                 self.bonus_instruction_pump
                     .iter()
@@ -481,13 +493,18 @@ impl Catalogue {
                 self.linked = Some(linked::parse(line, self.linked.is_some())?);
             },
             Some("stage-two") => {
-                self.stage_two = Some(parse_stage_two(line, self.stage_two)?);
+                self.stage_two = Some(parse_pair_bundles(
+                    "stage-two",
+                    line,
+                    self.stage_two,
+                )?);
             },
             Some(
                 "bonus"
                 | "bonus-departure"
                 | "bonus-inflated"
                 | "bonus-instruction"
+                | "bonus-instruction-balloon"
                 | "bonus-instruction-pump"
                 | "bonus-opponents",
             ) => self.insert_bonus(line)?,
@@ -546,6 +563,13 @@ impl Catalogue {
                     "bonus-instruction",
                     line,
                     self.bonus_instruction,
+                )?);
+            },
+            Some("bonus-instruction-balloon") => {
+                self.bonus_instruction_balloon = Some(parse_pair_bundles(
+                    "bonus-instruction-balloon",
+                    line,
+                    self.bonus_instruction_balloon,
                 )?);
             },
             Some("bonus-instruction-pump") => {
@@ -662,6 +686,7 @@ impl Catalogue {
                     departure: self.bonus_departure,
                     inflated: self.bonus_inflated,
                     instruction: self.bonus_instruction,
+                    instruction_balloon: self.bonus_instruction_balloon,
                     instruction_pump: self.bonus_instruction_pump.as_deref(),
                     opponents: self.bonus_opponents.as_deref(),
                 })
@@ -1161,18 +1186,21 @@ fn pair_complete<Value>(entries: &BTreeMap<Key, Value>) -> bool {
     })
 }
 
-fn parse_stage_two(
+fn parse_pair_bundles(
+    role: &str,
     line: &str,
     selected: Option<[ContentHash; 2]>,
 ) -> Result<[ContentHash; 2], RenderError> {
     let mut fields = line.split_whitespace();
-    let (Some("stage-two"), Some(base), Some(strip), None) =
+    let (Some(kind), Some(base), Some(strip), None) =
         (fields.next(), fields.next(), fields.next(), fields.next())
     else {
-        return Err(failure("invalid stage-two record"));
+        return Err(failure("invalid two-bundle record"));
     };
-    if selected.is_some() || base == strip {
-        return Err(failure("duplicate stage-two record or role"));
+    if kind != role || selected.is_some() || base == strip {
+        return Err(failure(
+            "unexpected or duplicate two-bundle record or role",
+        ));
     }
     Ok([
         base.parse().map_err(failure)?,
@@ -2008,6 +2036,7 @@ mod tests {
         assert_departure_catalogue(&fighter, &record, &selected);
         assert_inflated_catalogue(&fighter, &record, &selected);
         assert_instruction_catalogue(&fighter, &record, &selected);
+        assert_instruction_balloon_catalogue(&fighter, &record);
         assert_instruction_pump_catalogue(&fighter, &record);
         assert_opposition_catalogue(&fighter, &record);
 
@@ -2105,6 +2134,46 @@ mod tests {
                 selected
                     .atlas_bytes()
                     .saturating_add(bonus::INSTRUCTION_ATLAS_BYTES)
+            );
+        }
+    }
+
+    fn assert_instruction_balloon_catalogue(fighter: &str, bonus_record: &str) {
+        let instruction = format!("bonus-instruction {HASH}\n");
+        let base = format!("{fighter}{bonus_record}{instruction}");
+        let other = "c".repeat(64);
+        let record = format!("bonus-instruction-balloon {HASH} {other}\n");
+        for invalid in [
+            format!("{fighter}{bonus_record}{record}"),
+            format!("{base}{record}{record}"),
+            format!("{base}bonus-instruction-balloon {HASH}\n"),
+            format!("{base}bonus-instruction-balloon {HASH} {HASH}\n"),
+        ] {
+            assert!(Catalogue::parse(&invalid).is_err());
+        }
+        let baseline = Catalogue::parse(&base);
+        let parsed = Catalogue::parse(&format!("{base}{record}"));
+        assert!(baseline.is_ok());
+        assert!(parsed.is_ok());
+        if let (Ok(plain), Ok(value)) = (baseline, parsed) {
+            assert_eq!(
+                value.count(),
+                plain
+                    .count()
+                    .saturating_add(bonus::instruction_balloon::BUNDLE_COUNT)
+            );
+            assert_eq!(value.digests().count(), value.count());
+            assert_eq!(
+                value.atlas_count(),
+                plain
+                    .atlas_count()
+                    .saturating_add(bonus::instruction_balloon::BUNDLE_COUNT)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                plain
+                    .atlas_bytes()
+                    .saturating_add(bonus::instruction_balloon::ATLAS_BYTES)
             );
         }
     }
@@ -2261,9 +2330,17 @@ mod tests {
         }
         assert!(Catalogue::parse(&format!("{text}{stage}")).is_err());
         assert!(
-            parse_stage_two(&format!("stage-two {HASH} {HASH}"), None).is_err()
+            parse_pair_bundles(
+                "stage-two",
+                &format!("stage-two {HASH} {HASH}"),
+                None
+            )
+            .is_err()
         );
-        assert!(parse_stage_two(&format!("stage-two {HASH}"), None).is_err());
+        assert!(
+            parse_pair_bundles("stage-two", &format!("stage-two {HASH}"), None)
+                .is_err()
+        );
     }
 
     fn assert_linked_catalogue(

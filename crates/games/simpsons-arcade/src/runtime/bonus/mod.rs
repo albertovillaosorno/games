@@ -32,6 +32,7 @@
 //! Optional original-width balloon bonus presentation.
 
 mod instruction;
+pub(super) mod instruction_balloon;
 pub(super) mod instruction_pump;
 pub(super) mod opposition;
 
@@ -404,6 +405,7 @@ pub(super) struct BonusDigests<'digests> {
     pub(super) departure: Option<ContentHash>,
     pub(super) inflated: Option<ContentHash>,
     pub(super) instruction: Option<ContentHash>,
+    pub(super) instruction_balloon: Option<instruction_balloon::Digests>,
     pub(super) instruction_pump: Option<&'digests instruction_pump::Digests>,
     pub(super) opponents: Option<&'digests opposition::Digests>,
 }
@@ -416,6 +418,7 @@ pub(super) struct BonusArt {
     headers: Vec<TextAtlas>,
     inflated: Option<[Art; 4]>,
     instruction: Option<instruction::InstructionArt>,
+    instruction_balloon: Option<Box<instruction_balloon::BalloonArt>>,
     instruction_pump: Option<Box<instruction_pump::PumpArt>>,
     opponents: Option<Box<opposition::OpponentArt>>,
     pumps: [Art; 4],
@@ -456,12 +459,37 @@ impl BonusArt {
         self.departure.is_some()
     }
 
+    pub(super) const fn has_instruction_balloon(&self) -> bool {
+        self.instruction_balloon.is_some()
+    }
+
     pub(super) const fn has_instruction_pump(&self) -> bool {
         self.instruction_pump.is_some()
     }
 
     pub(super) const fn has_opponents(&self) -> bool {
         self.opponents.is_some()
+    }
+
+    fn instruction_balloon_layer(
+        &self,
+        bonus: Bonus,
+        player: Player,
+    ) -> Result<Option<SpriteDraw>, RenderError> {
+        if player == Player::Marge
+            && let Some(art) = &self.instruction_balloon
+            && let Some(axes) = bonus.visual_axes(player)
+            && let Some((_, draw)) = art.selection(axes)?
+        {
+            return Ok(Some(draw));
+        }
+        Ok(self.balloon_layer(bonus, player, 0)?.map(|mut draw| {
+            draw.destination = instruction_destination(
+                draw.destination,
+                INSTRUCTION_BALLOON_ANCHOR,
+            );
+            draw
+        }))
     }
 
     pub(super) fn load(
@@ -493,6 +521,13 @@ impl BonusArt {
                 )
             })
             .transpose()?;
+        let instruction_balloon = digests
+            .instruction_balloon
+            .map(|hashes| {
+                instruction_balloon::BalloonArt::load(store, scene, hashes)
+                    .map(Box::new)
+            })
+            .transpose()?;
         let instruction_pump = digests
             .instruction_pump
             .map(|hashes| {
@@ -516,6 +551,7 @@ impl BonusArt {
             headers,
             inflated,
             instruction,
+            instruction_balloon,
             instruction_pump,
             opponents,
             pumps,
@@ -614,13 +650,10 @@ impl BonusArt {
             return Ok(());
         };
         let index = player.index();
-        let Some(mut balloon) = self.balloon_layer(bonus, player, 0)? else {
+        let Some(balloon) = self.instruction_balloon_layer(bonus, player)?
+        else {
             return Ok(());
         };
-        balloon.destination = instruction_destination(
-            balloon.destination,
-            INSTRUCTION_BALLOON_ANCHOR,
-        );
         draws.push(balloon);
         if player == Player::Marge
             && let Some(pump) = &self.instruction_pump
@@ -805,6 +838,36 @@ fn plates(
         },
         &lines,
     )
+}
+
+fn verify_registered_sprite(
+    scene: &mut SceneSession<'_, '_>,
+    draws: &[SpriteDraw],
+    actual: &[u8],
+    (expected, draw): (ContentHash, SpriteDraw),
+) -> Result<(), RenderError> {
+    if !draws.contains(&draw) {
+        return Err(failure("registered instruction sprite was not queued"));
+    }
+    let width = scene.layout().width().get();
+    let _dark = scene.present([0; 3], &[draw])?;
+    let dark = scene.readback()?;
+    let _light = scene.present([255; 3], &[draw])?;
+    let light = scene.readback()?;
+    let digest =
+        scenery::opaque_sprite_digest(&dark, &light, draw.destination, width)?;
+    if digest != expected {
+        return Err(failure("registered instruction sprite differs"));
+    }
+    let baseline: Vec<_> = draws
+        .iter()
+        .copied()
+        .filter(|candidate| *candidate != draw)
+        .collect();
+    let _baseline = scene.present([24, 22, 30], &baseline)?;
+    scenery::verify_pixels(actual, &scene.readback()?, width, &[
+        draw.destination
+    ])
 }
 
 /// Verify localized instruction plates change only their registered bounds.

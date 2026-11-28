@@ -38,7 +38,9 @@ use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::storage::bundle::{BundleSource, CanonicalBundle};
 
-use super::{Art, Scene, SpriteSpec, failure, open_bundle, scenery};
+use super::{
+    Art, Scene, SpriteSpec, failure, open_bundle, verify_registered_sprite,
+};
 use crate::{BonusPhase, Cabinet, Player};
 
 pub(in crate::runtime) const ATLAS_BYTES: usize = 28_328;
@@ -181,33 +183,8 @@ impl PumpArt {
         tick: u16,
     ) -> Result<(), RenderError> {
         let actual = scene.readback()?;
-        let width = scene.layout().width().get();
-        for (expected, draw) in self.selection(tick)? {
-            if !draws.contains(&draw) {
-                return Err(failure("instruction pump pose was not queued"));
-            }
-            let _dark = scene.present([0; 3], &[draw])?;
-            let dark = scene.readback()?;
-            let _light = scene.present([255; 3], &[draw])?;
-            let light = scene.readback()?;
-            let digest = scenery::opaque_sprite_digest(
-                &dark,
-                &light,
-                draw.destination,
-                width,
-            )?;
-            if digest != expected {
-                return Err(failure("instruction pump crop differs"));
-            }
-            let baseline: Vec<_> = draws
-                .iter()
-                .copied()
-                .filter(|candidate| *candidate != draw)
-                .collect();
-            let _baseline = scene.present([24, 22, 30], &baseline)?;
-            scenery::verify_pixels(&actual, &scene.readback()?, width, &[
-                draw.destination,
-            ])?;
+        for selection in self.selection(tick)? {
+            verify_registered_sprite(scene, draws, &actual, selection)?;
         }
         Ok(())
     }

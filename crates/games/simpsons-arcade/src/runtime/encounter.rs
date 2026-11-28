@@ -645,6 +645,48 @@ pub(super) fn smoke_wrestler(
     Err(failure("wrestler was not cleared through play"))
 }
 
+fn smoke_instruction_balloon(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    use super::bonus::instruction_balloon;
+
+    if !art
+        .poses
+        .bonus
+        .as_ref()
+        .is_some_and(super::bonus::BonusArt::has_instruction_balloon)
+    {
+        return Ok(());
+    }
+    let mut route = fixed(*cabinet)?;
+    let mut previous = (0xb0, 0xb0);
+    let mut count = 0usize;
+    for _ in 0..310u16 {
+        advance(&mut route, 1)?;
+        let current = route.state();
+        let axes = current
+            .bonus()
+            .and_then(|bonus| bonus.visual_axes(Player::Marge))
+            .ok_or(RenderError::InvalidSprite)?;
+        if axes != previous {
+            let _drawn = art.present(scene, current)?;
+            instruction_balloon::verify(scene, art, current)?;
+            count = count.saturating_add(1);
+            previous = axes;
+        }
+    }
+    if count != instruction_balloon::STATE_COUNT {
+        return Err(failure("instruction balloon state count differs"));
+    }
+    let _restored = art.present(scene, cabinet)?;
+    write_status(format_args!(
+        "Instruction balloon: {count} exact visible grown states"
+    ))
+    .map_err(failure)
+}
+
 fn smoke_instruction_pump(
     scene: &mut SceneSession<'_, '_>,
     art: &mut Scene,
@@ -693,6 +735,7 @@ fn smoke_bonus(
     let _instructions = art.present(scene, simulation.state())?;
     super::bonus::verify_instruction(scene, art, simulation.state())?;
     smoke_instruction_pump(scene, art, simulation.state())?;
+    smoke_instruction_balloon(scene, art, simulation.state())?;
     let initial = scene.readback()?;
     advance(simulation, 8)?;
     let _demonstration = art.present(scene, simulation.state())?;
