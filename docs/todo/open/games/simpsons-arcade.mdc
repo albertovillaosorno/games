@@ -6086,3 +6086,25 @@ These two leaf functions now have complete native mappings. The private
 ledger retains 1,672 identities: six implemented, 104 discarded and
 1,562 pending. Overall bonus scheduling, automated absent-station behavior,
 physical payment and the rest of the campaign remain open.
+
+### Shared horizontal facing and result digits
+
+The fixed horizontal-facing helper preserves the current direction for a
+zero motion word and uses its sign for nonzero motion. Solo and paired
+movement now share the typed direction helper without changing their
+motion admission or direction-lock conditions. A portable regression
+compares 131,072 direction and motion combinations against an independent
+byte-sign oracle. Original actor dispatch and motion admission remain
+separate obligations.
+
+The original result-digit leaf converts each unsigned byte into one to
+three decimal glyphs without leading zeros. The existing native result
+queue uses its own right-aligned atlas rather than board tile addresses.
+The native HUD smoke checks all 256 byte values against an independent
+formatting oracle, including glyph identity, count and placement. It
+also retains the existing score and bonus readback checks. The fresh
+workspace gate with offscreen native-render smoke passed.
+
+Both leaf mappings are complete within their stated native policies.
+The canonical private ledger now contains eight implemented functions,
+104 discarded and 1,560 pending, with all identities and edges retained.

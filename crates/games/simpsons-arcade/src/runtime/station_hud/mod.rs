@@ -881,9 +881,42 @@ pub(super) mod tests {
                 let digits = load_digits(scene)?;
                 check_scores(scene, &digits)?;
                 check_bonus_numbers(scene, &digits)?;
+                check_decimal_domain(&digits)?;
                 check_localised_stations(scene, &profiles, reserved)
             },
         )
+    }
+
+    fn check_decimal_domain(digits: &TextAtlas) -> Result<(), RenderError> {
+        let mut draws = Vec::with_capacity(3);
+        for value in u8::MIN..=u8::MAX {
+            draws.clear();
+            queue_decimal(
+                digits,
+                u16::from(value),
+                (72i32, 52i32),
+                &mut draws,
+            )?;
+            let expected = value.to_string();
+            if draws.len() != expected.len() {
+                return Err(failure("incorrect decimal digit count"));
+            }
+            let mut right = 72i32;
+            let valid = draws.iter().zip(expected.bytes().rev()).all(
+                |(draw, glyph)| {
+                    right = right.saturating_sub(i32::from(DIGIT_WIDTH));
+                    let source_top = i32::from(glyph.saturating_sub(b'0'))
+                        .saturating_mul(i32::from(DIGIT_HEIGHT));
+                    draw.source.y == source_top
+                        && draw.destination.x == right
+                        && draw.destination.y == 52i32
+                },
+            );
+            if !valid {
+                return Err(failure("incorrect decimal digit placement"));
+            }
+        }
+        Ok(())
     }
 
     fn check_bonus_numbers(
