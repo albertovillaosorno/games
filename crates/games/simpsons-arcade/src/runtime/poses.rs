@@ -587,8 +587,9 @@ impl Catalogue {
                     .saturating_mul(cemetery::layers::EXTRA_DRAWS),
             )
             .saturating_add(
-                usize::from(self.cemetery.is_some())
-                    .saturating_mul(cemetery::EXTRA_SPRITES),
+                self.cemetery
+                    .as_deref()
+                    .map_or(0, cemetery::Selection::sprite_count),
             )
             .saturating_add(
                 usize::from(self.arrival.is_some())
@@ -2132,6 +2133,60 @@ mod tests {
             assert_eq!(value.digests().count(), value.count());
         }
         assert_cemetery_walking_rejections(with_boss, &full, layers);
+        assert_cemetery_marker_catalogue(with_boss, &full, layers);
+    }
+
+    fn assert_cemetery_marker_catalogue(
+        with_boss: &str,
+        walking: &str,
+        layers: &str,
+    ) {
+        // Four keys can refer to a single canonical marker bundle.
+        let hash = format!("{:064x}", 400u32);
+        let markers = format!(" {hash}").repeat(4);
+        let full = format!("{}{markers}\n", walking.trim_end());
+        let baseline =
+            Catalogue::parse(&format!("{with_boss}{walking}{layers}"));
+        let selected = Catalogue::parse(&format!("{with_boss}{full}{layers}"));
+        assert!(baseline.is_ok() && selected.is_ok());
+        if let (Ok(base), Ok(value)) = (baseline, selected) {
+            assert_eq!(value.count(), base.count().saturating_add(4));
+            assert_eq!(
+                value.atlas_count(),
+                base.atlas_count().saturating_add(4)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                base.atlas_bytes().saturating_add(15_872)
+            );
+            assert_eq!(
+                value.scenic_sprite_count(),
+                base.scenic_sprite_count().saturating_add(4)
+            );
+            assert_eq!(value.digests().count(), value.count());
+        }
+        assert!(Catalogue::parse(&format!("{with_boss}{full}")).is_err());
+        assert_cemetery_walking_rejections(with_boss, &full, layers);
+        assert_partial_marker_rejections(with_boss, walking, layers, &hash);
+    }
+
+    fn assert_partial_marker_rejections(
+        with_boss: &str,
+        walking: &str,
+        layers: &str,
+        hash: &str,
+    ) {
+        for count in 1..4 {
+            let partial = format!(
+                "{}{}\n",
+                walking.trim_end(),
+                format!(" {hash}").repeat(count)
+            );
+            assert!(
+                Catalogue::parse(&format!("{with_boss}{partial}{layers}"))
+                    .is_err()
+            );
+        }
     }
 
     fn assert_cemetery_walking_rejections(

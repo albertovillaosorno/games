@@ -33,11 +33,13 @@
 
 pub(super) mod layers;
 
+use std::cmp::Reverse;
+
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::process::write_status;
-use games_platform::ir::scene::SpriteDraw;
+use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::BundleSource;
 
 use super::{Art, Scene, failure, open_bundle, scenery, world};
@@ -51,9 +53,11 @@ const LANDING_POSE_COUNT: usize = CemeteryEntrance::LANDING_POSE_COUNT;
 const EXTRA_LANDING_COUNT: usize = 4 * (LANDING_POSE_COUNT - 1);
 const ANIMATED_ROLE_COUNT: usize = ROLE_COUNT + EXTRA_LANDING_COUNT;
 const WALKING_ROLE_COUNT: usize = ANIMATED_ROLE_COUNT + 60;
+const MARKER_ROLE_COUNT: usize = WALKING_ROLE_COUNT + 4;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
+const MARKER_ATLAS_BYTES: usize = WALKING_ATLAS_BYTES + 15_872;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -63,7 +67,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; WALKING_ROLE_COUNT] = [
+const ROLES: [Role; MARKER_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -170,6 +174,11 @@ const ROLES: [Role; WALKING_ROLE_COUNT] = [
     Role::new("actor/room-lisa", (30, 50), (-77i32, -23i32)),
     Role::new("actor/room-lisa", (30, 50), (-77i32, -23i32)),
     Role::new("actor/room-lisa", (30, 49), (-77i32, -22i32)),
+    // Persistent opaque room objects, in cabinet order.
+    Role::new("actor/shadow-marge", (32, 31), (-80i32, -87i32)),
+    Role::new("actor/shadow-homer", (32, 31), (-80i32, -71i32)),
+    Role::new("actor/shadow-bart", (32, 31), (-80i32, -55i32)),
+    Role::new("actor/shadow-lisa", (32, 31), (-80i32, -55i32)),
 ];
 
 type BodySample = (usize, Point, i16);
@@ -230,6 +239,11 @@ impl Role {
         }
         if self.key == "scene/background" {
             pixels.iter().all(|pixel| pixel.last() == Some(&255))
+        } else if self.key.starts_with("actor/shadow-") {
+            pixels
+                .iter()
+                .all(|pixel| matches!(pixel, [0, 0, 0, 0] | [_, _, _, 255]))
+                && pixels.iter().any(|pixel| pixel.last() == Some(&255))
         } else {
             pixels.iter().any(|pixel| pixel.last() != Some(&0))
         }
@@ -248,7 +262,9 @@ impl Selection {
     }
 
     pub(super) const fn atlas_bytes(&self) -> usize {
-        if self.count() == WALKING_ROLE_COUNT {
+        if self.count() == MARKER_ROLE_COUNT {
+            MARKER_ATLAS_BYTES
+        } else if self.room_walking() {
             WALKING_ATLAS_BYTES
         } else if self.count() >= ANIMATED_ROLE_COUNT {
             ANIMATED_ATLAS_BYTES
@@ -292,18 +308,19 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(WALKING_ROLE_COUNT.saturating_add(1))
+            .take(MARKER_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
             hashes.len(),
-            ROLE_COUNT | ANIMATED_ROLE_COUNT | WALKING_ROLE_COUNT
+            ROLE_COUNT
+                | ANIMATED_ROLE_COUNT
+                | WALKING_ROLE_COUNT
+                | MARKER_ROLE_COUNT
         ) {
-            return Err(failure(
-                "expected sixteen, forty-four or 104 cemetery roles",
-            ));
+            return Err(failure("expected 16, 44, 104 or 108 cemetery roles"));
         }
-        if hashes.len() == WALKING_ROLE_COUNT && first != Player::Marge {
+        if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
             return Err(failure("room walking requires the Marge-first rank"));
         }
         let selection = Self { first, hashes };
@@ -314,7 +331,15 @@ impl Selection {
     }
 
     pub(super) const fn room_walking(&self) -> bool {
-        self.count() == WALKING_ROLE_COUNT
+        self.count() >= WALKING_ROLE_COUNT
+    }
+
+    pub(super) const fn sprite_count(&self) -> usize {
+        if self.count() == MARKER_ROLE_COUNT {
+            EXTRA_SPRITES + 4
+        } else {
+            EXTRA_SPRITES
+        }
     }
 }
 
@@ -343,15 +368,6 @@ impl CemeteryArt {
         entrance: CemeteryEntrance,
         player: Player,
     ) -> Option<SpriteDraw> {
-        if self.room_walking()
-            && let Some(visible) = entrance.room_body_visibility()
-        {
-            if !visible {
-                return None;
-            }
-            let body = entrance.room()?.presentation_bodies();
-            return self.room_draw(player, *body.get(player.index())?);
-        }
         let animated = self.animated();
         let (index, point, elevation) =
             body_sample(entrance, player, animated)?;
@@ -402,6 +418,18 @@ impl CemeteryArt {
         })
     }
 
+    fn marker_draw(
+        &self,
+        player: Player,
+        position: Point,
+    ) -> Option<SpriteDraw> {
+        let index = WALKING_ROLE_COUNT.saturating_add(player.index());
+        let (art, role) = self.role(index)?;
+        let mut destination = art.rect;
+        (destination.x, destination.y) = role.room_offset(position, false);
+        Some(art.draw(destination, false))
+    }
+
     pub(super) fn queue(
         &self,
         entrance: CemeteryEntrance,
@@ -420,12 +448,40 @@ impl CemeteryArt {
             draws.extend(self.background(entrance));
         }
         let background_count = draws.len().saturating_sub(start);
-        draws.extend(
-            Player::ALL
-                .into_iter()
-                .filter_map(|player| self.body(entrance, player)),
-        );
+        if self.room_walking()
+            && let Some(visible) = entrance.room_body_visibility()
+            && let Some(room) = entrance.room()
+        {
+            self.queue_room(room.presentation_bodies(), visible, draws);
+        } else {
+            draws.extend(
+                Player::ALL
+                    .into_iter()
+                    .filter_map(|player| self.body(entrance, player)),
+            );
+        }
         Ok(background_count)
+    }
+
+    fn queue_room(
+        &self,
+        bodies: [CemeteryRoomBody; 4],
+        visible: bool,
+        draws: &mut Vec<SpriteDraw>,
+    ) {
+        let order = room_order(bodies);
+        if visible {
+            draws.extend(
+                order
+                    .into_iter()
+                    .filter_map(|(player, body)| self.room_draw(player, body)),
+            );
+        }
+        // The lower original ordering bytes place persistent markers
+        // in front of every body, even when the latter are hidden.
+        draws.extend(order.into_iter().filter_map(|(player, body)| {
+            self.marker_draw(player, body.position)
+        }));
     }
 
     fn role(&self, index: usize) -> Option<(Art, Role)> {
@@ -445,7 +501,7 @@ impl CemeteryArt {
     }
 
     const fn room_walking(&self) -> bool {
-        self.roles.len() == WALKING_ROLE_COUNT
+        self.roles.len() >= WALKING_ROLE_COUNT
     }
 
     pub(super) fn verify_layer_phases(
@@ -499,6 +555,52 @@ impl CemeteryArt {
         Ok(())
     }
 
+    fn verify_room_markers(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<(), RenderError> {
+        if self.roles.len() != MARKER_ROLE_COUNT {
+            return Ok(());
+        }
+        let point = Point { x: 224, y: 176 };
+        for player in Player::ALL {
+            let draw = self
+                .marker_draw(player, point)
+                .ok_or(RenderError::InvalidSprite)?;
+            let expected = self
+                .roles
+                .get(WALKING_ROLE_COUNT.saturating_add(player.index()))
+                .ok_or(RenderError::InvalidSprite)?
+                .digest;
+            let _dark = scene.present([0, 0, 0], &[draw])?;
+            let dark = scene.readback()?;
+            let _light = scene.present([255, 255, 255], &[draw])?;
+            if marker_digest(&dark, &scene.readback()?, draw.destination)?
+                != expected
+            {
+                return Err(failure("cemetery marker pixels differ"));
+            }
+        }
+        let bodies = [CemeteryRoomBody {
+            action: false,
+            facing: Facing::Right,
+            position: point,
+            walking: None,
+        }; 4];
+        let mut hidden = Vec::new();
+        let mut visible = Vec::new();
+        self.queue_room(bodies, false, &mut hidden);
+        self.queue_room(bodies, true, &mut visible);
+        if hidden.len() != 4
+            || visible.len() != 8
+            || !visible.ends_with(&hidden)
+        {
+            return Err(failure("cemetery marker order differs"));
+        }
+        write_status(format_args!("Cemetery markers: four exact crops"))
+            .map_err(failure)
+    }
+
     fn verify_room_walk(
         &self,
         scene: &mut SceneSession<'_, '_>,
@@ -527,8 +629,71 @@ impl CemeteryArt {
             }
         }
         write_status(format_args!("Cemetery walking: 64 reflected body pairs"))
-            .map_err(failure)
+            .map_err(failure)?;
+        self.verify_room_markers(scene)
     }
+}
+
+// Opaque marker crops are recovered exactly using two distinct clears.
+// Unlike body shadow pixels, no fractional alpha is admitted here.
+fn marker_digest(
+    dark: &[u8],
+    light: &[u8],
+    rect: SpriteRect,
+) -> Result<ContentHash, RenderError> {
+    let (dark_pixels, dark_tail) = dark.as_chunks::<4>();
+    let (light_pixels, light_tail) = light.as_chunks::<4>();
+    if !dark_tail.is_empty()
+        || !light_tail.is_empty()
+        || dark_pixels.len() != light_pixels.len()
+    {
+        return Err(RenderError::InvalidLength);
+    }
+    let mut pixels = Vec::new();
+    for (index, (&dark_pixel, &light_pixel)) in
+        dark_pixels.iter().zip(light_pixels).enumerate()
+    {
+        let pixel_index = u32::try_from(index).map_err(failure)?;
+        let horizontal = pixel_index
+            .checked_rem(world::BASE_WIDTH)
+            .ok_or(RenderError::InvalidLength)?;
+        let vertical = pixel_index
+            .checked_div(world::BASE_WIDTH)
+            .ok_or(RenderError::InvalidLength)?;
+        if !rect.contains_pixel(horizontal, vertical) {
+            continue;
+        }
+        if dark_pixel == light_pixel && dark_pixel.last() == Some(&255) {
+            pixels.push(dark_pixel);
+        } else if dark_pixel == [0, 0, 0, 255] && light_pixel == [255; 4] {
+            pixels.push([0; 4]);
+        } else {
+            return Err(failure("cemetery marker has blended pixels"));
+        }
+    }
+    let expected = rect.width.get().saturating_mul(rect.height.get());
+    if pixels.len() != usize::try_from(expected).map_err(failure)? {
+        return Err(RenderError::InvalidLength);
+    }
+    Ok(ContentHash::calculate(pixels.as_flattened()))
+}
+
+fn room_order(
+    bodies: [CemeteryRoomBody; 4],
+) -> [(Player, CemeteryRoomBody); 4] {
+    let [marge, homer, bart, lisa] = bodies;
+    let mut order = [
+        (Player::Marge, marge),
+        (Player::Homer, homer),
+        (Player::Bart, bart),
+        (Player::Lisa, lisa),
+    ];
+    // Original object order is front to back; native alpha composition
+    // queues the opposite order. Cabinet order resolves depth ties.
+    order.sort_unstable_by_key(|(player, body)| {
+        Reverse((body.position.y, player.index()))
+    });
+    order
 }
 
 fn background_index(entrance: CemeteryEntrance) -> Option<usize> {
@@ -735,6 +900,79 @@ fn verify_layer_offsets(
 mod tests {
     use super::*;
     type LandingOrigins = [(i32, i32); LANDING_POSE_COUNT];
+    #[test]
+    fn room_markers_follow_projected_depth_and_remain_opaque() {
+        let point = Point { x: 224, y: 176 };
+        let moved = Point { x: 212, y: 157 };
+        for (player, y) in
+            Player::ALL.into_iter().zip([89i32, 105i32, 121i32, 121i32])
+        {
+            let candidate =
+                ROLES.get(WALKING_ROLE_COUNT.saturating_add(player.index()));
+            assert_eq!(
+                candidate.map(|role| role.room_offset(point, false)),
+                Some((144i32, y))
+            );
+            assert_eq!(
+                candidate.map(|role| role.room_offset(moved, false)),
+                Some((132i32, y.saturating_add(19)))
+            );
+            if let Some(role) = candidate {
+                assert!(role.valid_pixels(&[0, 0, 0, 0, 1, 2, 3, 255]));
+                assert!(!role.valid_pixels(&[0, 0, 0, 0]));
+                assert!(!role.valid_pixels(&[1, 2, 3, 0, 1, 2, 3, 255]));
+                assert!(!role.valid_pixels(&[0, 0, 0, 102, 1, 2, 3, 255]));
+            }
+        }
+    }
+
+    #[test]
+    fn room_draw_order_reverses_depth_and_cabinet_ties() {
+        let body = |y| CemeteryRoomBody {
+            action: false,
+            facing: Facing::Right,
+            position: Point { x: 224, y },
+            walking: None,
+        };
+        let order = |bodies| room_order(bodies).map(|(player, _)| player);
+        assert_eq!(order([body(176); 4]), [
+            Player::Lisa,
+            Player::Bart,
+            Player::Homer,
+            Player::Marge,
+        ]);
+        assert_eq!(order([body(150), body(170), body(160), body(170)]), [
+            Player::Lisa,
+            Player::Homer,
+            Player::Bart,
+            Player::Marge,
+        ]);
+        assert_eq!(order([body(170), body(150), body(150), body(160)]), [
+            Player::Marge,
+            Player::Lisa,
+            Player::Bart,
+            Player::Homer,
+        ]);
+    }
+
+    #[test]
+    fn opaque_marker_readback_recovers_the_exact_transparent_crop() {
+        use std::num::NonZeroU32;
+
+        let rect = SpriteRect {
+            x: 0,
+            y: 0,
+            width: NonZeroU32::MIN.saturating_add(1),
+            height: NonZeroU32::MIN,
+        };
+        let dark = [12, 34, 56, 255, 0, 0, 0, 255];
+        let light = [12, 34, 56, 255, 255, 255, 255, 255];
+        let expected = ContentHash::calculate(&[12, 34, 56, 255, 0, 0, 0, 0]);
+        assert_eq!(marker_digest(&dark, &light, rect), Ok(expected));
+        let blended = [12, 34, 56, 255, 153, 153, 153, 255];
+        assert!(marker_digest(&dark, &blended, rect).is_err());
+        assert!(marker_digest(&dark, &light[..4], rect).is_err());
+    }
 
     #[test]
     fn atlas_budget_matches_the_exact_roles() {
@@ -742,6 +980,7 @@ mod tests {
             (ROLE_COUNT, ATLAS_BYTES),
             (ANIMATED_ROLE_COUNT, ANIMATED_ATLAS_BYTES),
             (WALKING_ROLE_COUNT, WALKING_ATLAS_BYTES),
+            (MARKER_ROLE_COUNT, MARKER_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(

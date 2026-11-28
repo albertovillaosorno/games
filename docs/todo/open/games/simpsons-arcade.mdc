@@ -6152,3 +6152,28 @@ contain only opaque or transparent pixels. Their full composition and
 ordering with the remaining objects are not established. Action poses,
 post-protection interactions and complete moving-room presentation
 remain open; the normal entrance does not select the moving room.
+
+### Registered protected-room persistent markers and depth order
+
+Both independent walking controls now match all 236 available captured
+scenes and all 944 isolated persistent marker crops. Each crop retains
+its exact identity, 32-by-31 extent and projected station registration
+on both body visibility parities. The optional 108-role catalogue adds
+four opaque marker roles to the 104 walking roles, using 15,872 more
+atlas bytes and reserving four more draws. The same manifest may serve
+all four distinct marker keys. Earlier catalogue sizes remain valid.
+
+The admitted room sorts body and marker groups separately by reversed
+projected depth and cabinet-order ties for native back-to-front draws.
+Markers follow every body and persist when the bodies are hidden.
+The original-art offscreen native smoke passes the four exact marker
+payload readbacks, both visibility queues, 64 reflected walking pairs,
+and all 128 layer phase and offset readbacks. The protected body
+ordering is independently exercised by portable tests.
+
+A whole-scene comparison of the first visible protected frame still
+differs at 103 ground-shadow pixels: the original palette shadow
+operation and native fractional alpha are not equivalent when body
+regions overlap. Remaining enemy objects and action poses are not
+admitted, and the normal entrance still does not select the moving
+room. This is not full moving-room composition or device acceptance.
