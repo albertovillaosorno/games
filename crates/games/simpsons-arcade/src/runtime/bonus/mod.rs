@@ -31,8 +31,10 @@
 
 //! Optional original-width balloon bonus presentation.
 
+mod instruction;
 pub(super) mod opposition;
 
+use games::presentation::TranslationCatalog;
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
@@ -73,6 +75,8 @@ pub(super) const DEPARTURE_ATLAS_COUNT: usize = 5;
 pub(super) const DEPARTURE_EXTRA_SPRITES: usize = 4;
 pub(super) const INFLATED_ATLAS_BYTES: usize = 83_536;
 pub(super) const INFLATED_ATLAS_COUNT: usize = 4;
+pub(super) const INSTRUCTION_ATLAS_BYTES: usize = instruction::ATLAS_BYTES;
+pub(super) const INSTRUCTION_ATLAS_COUNT: usize = instruction::ATLAS_COUNT;
 
 const BACKGROUND: SpriteSpec = SpriteSpec {
     height: 224,
@@ -393,12 +397,14 @@ impl DepartureArt {
     }
 }
 
-pub(super) type BonusDigests<'digests> = (
-    ContentHash,
-    Option<ContentHash>,
-    Option<ContentHash>,
-    Option<&'digests opposition::Digests>,
-);
+#[derive(Debug)]
+pub(super) struct BonusDigests<'digests> {
+    pub(super) base: ContentHash,
+    pub(super) departure: Option<ContentHash>,
+    pub(super) inflated: Option<ContentHash>,
+    pub(super) instruction: Option<ContentHash>,
+    pub(super) opponents: Option<&'digests opposition::Digests>,
+}
 
 #[derive(Debug)]
 pub(super) struct BonusArt {
@@ -407,6 +413,7 @@ pub(super) struct BonusArt {
     departure: Option<DepartureArt>,
     headers: Vec<TextAtlas>,
     inflated: Option<[Art; 4]>,
+    instruction: Option<instruction::InstructionArt>,
     opponents: Option<Box<opposition::OpponentArt>>,
     pumps: [Art; 4],
     ranks: TextAtlas,
@@ -453,43 +460,40 @@ impl BonusArt {
     pub(super) fn load(
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
-        digests: BonusDigests<'_>,
+        digests: &BonusDigests<'_>,
     ) -> Result<Self, RenderError> {
-        let (digest, departure_digest, inflated_digest, opponents_digest) =
-            digests;
-        let bundle = open_bundle(store, digest)?;
+        let bundle = open_bundle(store, digests.base)?;
         let mut load = |spec: SpriteSpec| spec.load(scene, &bundle);
         let background = load(BACKGROUND)?;
         let [marge, homer, bart, lisa] = BALLOONS;
         let balloons = [load(marge)?, load(homer)?, load(bart)?, load(lisa)?];
         let [first, second, third, fourth] = PUMPS;
         let pumps = [load(first)?, load(second)?, load(third)?, load(fourth)?];
-        let departure = departure_digest
+        let departure = digests
+            .departure
             .map(|address| DepartureArt::load(store, scene, address))
             .transpose()?;
-        let inflated = inflated_digest
+        let inflated = digests
+            .inflated
             .map(|address| load_inflated(store, scene, address))
             .transpose()?;
-        let opponents = opponents_digest
+        let catalogue = title_messages::catalogue()?;
+        let instruction = digests
+            .instruction
+            .map(|address| {
+                instruction::InstructionArt::load(
+                    store, scene, address, &catalogue,
+                )
+            })
+            .transpose()?;
+        let opponents = digests
+            .opponents
             .map(|hashes| {
                 opposition::OpponentArt::load(store, scene, hashes)
                     .map(Box::new)
             })
             .transpose()?;
-        let catalogue = title_messages::catalogue()?;
-        let mut headers = Vec::with_capacity(title_messages::LOCALES.len());
-        for index in 0..title_messages::LOCALES.len() {
-            let locale = title_messages::locale_tag(index)?;
-            let text = title_messages::TitleText {
-                catalog: &catalogue,
-                locale: &locale,
-            };
-            let mut labels = Vec::with_capacity(PHASE_KEYS.len());
-            for key in PHASE_KEYS {
-                labels.push(text.label(key)?);
-            }
-            headers.push(plates(scene, HEADER_WIDTH, HEADER_BYTES, &labels)?);
-        }
+        let headers = phase_headers(scene, &catalogue)?;
         let ranks = plates(scene, RANK_WIDTH, RANK_BYTES, &RANKS)?;
         Ok(Self {
             background,
@@ -497,6 +501,7 @@ impl BonusArt {
             departure,
             headers,
             inflated,
+            instruction,
             opponents,
             pumps,
             ranks,
@@ -527,6 +532,15 @@ impl BonusArt {
             BonusPhase::StageCard | BonusPhase::StageSetup
         ) {
             draws.push(header.draw(phase, 16, 100)?);
+            return Ok(());
+        }
+        if bonus.phase() == BonusPhase::Instructions
+            && let Some(instruction) = &self.instruction
+        {
+            let [frame, heading, prompt] = instruction.draws(language)?;
+            draws.extend([frame, heading]);
+            self.queue_instruction(bonus, draws)?;
+            draws.push(prompt);
             return Ok(());
         }
         draws.push(self.background.draw(self.background.rect, false));
@@ -721,6 +735,26 @@ fn load_inflated(
     ])
 }
 
+fn phase_headers(
+    scene: &mut SceneSession<'_, '_>,
+    catalogue: &TranslationCatalog,
+) -> Result<Vec<TextAtlas>, RenderError> {
+    let mut headers = Vec::with_capacity(title_messages::LOCALES.len());
+    for index in 0..title_messages::LOCALES.len() {
+        let locale = title_messages::locale_tag(index)?;
+        let text = title_messages::TitleText {
+            catalog: catalogue,
+            locale: &locale,
+        };
+        let mut labels = Vec::with_capacity(PHASE_KEYS.len());
+        for key in PHASE_KEYS {
+            labels.push(text.label(key)?);
+        }
+        headers.push(plates(scene, HEADER_WIDTH, HEADER_BYTES, &labels)?);
+    }
+    Ok(headers)
+}
+
 fn plates(
     scene: &mut SceneSession<'_, '_>,
     width: u16,
@@ -751,6 +785,56 @@ fn plates(
         },
         &lines,
     )
+}
+
+/// Verify localized instruction plates change only their registered bounds.
+pub(super) fn verify_instruction(
+    scene: &mut SceneSession<'_, '_>,
+    art: &mut Scene,
+    cabinet: &Cabinet,
+) -> Result<(), RenderError> {
+    let Some(instruction) = art
+        .poses
+        .bonus
+        .as_ref()
+        .and_then(|bonus_art| bonus_art.instruction.as_ref())
+    else {
+        return Ok(());
+    };
+    let language = cabinet.session().language_index();
+    let alternate = usize::from(language == 0);
+    let [frame, heading, prompt] = instruction.draws(language)?;
+    let [other_frame, other_heading, other_prompt] =
+        instruction.draws(alternate)?;
+    if frame != other_frame
+        || ![frame, heading, prompt]
+            .iter()
+            .all(|draw| art.draws.contains(draw))
+    {
+        return Err(failure("localized instruction layers were not queued"));
+    }
+    let alternate_draws: Vec<_> = art
+        .draws
+        .iter()
+        .map(|draw| {
+            if *draw == heading {
+                other_heading
+            } else if *draw == prompt {
+                other_prompt
+            } else {
+                *draw
+            }
+        })
+        .collect();
+    let view = art.presentation_view(scene, cabinet)?;
+    let actual = scene.readback()?;
+    let _alternate = scene.present([24, 22, 30], &alternate_draws)?;
+    let localized = scene.readback()?;
+    let _restored = art.present(scene, cabinet)?;
+    scenery::verify_pixels(&actual, &localized, view.width, &[
+        heading.destination,
+        prompt.destination,
+    ])
 }
 
 /// Verify a single admitted automatic competitor contributes visible pixels.

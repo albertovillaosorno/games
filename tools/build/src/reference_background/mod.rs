@@ -66,7 +66,7 @@ use crate::{USAGE, reference_palette, text};
 /// Explicit paths to a single bounded, private original observation.
 #[derive(Debug)]
 pub struct Arguments {
-    background_top: Option<usize>,
+    background: Option<art::BackgroundSelection>,
     digest: ContentHash,
     frame: OsString,
     layer_digests: bool,
@@ -100,7 +100,7 @@ impl Arguments {
         observation.reconstruct(machine, &assets, &mut pens)?;
         let colors = &observation.colors;
         let matched = count_matches(&pens, colors, &frame)?;
-        if (self.layer_digests || self.background_top.is_some())
+        if (self.layer_digests || self.background.is_some())
             && matched != pens.len()
         {
             return Err(String::from("scene differs from observation"));
@@ -121,12 +121,12 @@ impl Arguments {
             }
             return layers.report();
         }
-        if let Some(top) = self.background_top {
+        if let Some(selection) = self.background {
             return art::report_background(
                 (machine, &assets),
                 observation,
                 &mut pens,
-                top,
+                selection,
             );
         }
         #[cfg(feature = "native-preview")]
@@ -154,7 +154,7 @@ impl Arguments {
             <[OsString; 7]>::try_from(args)
                 .map_err(|_args| String::from(USAGE))?;
         Ok(Self {
-            background_top: None,
+            background: None,
             digest: text(&digest)?
                 .parse()
                 .map_err(|_error| String::from("invalid manifest hash"))?,
@@ -194,12 +194,9 @@ impl Arguments {
                 Ok(parsed)
             },
             "scene-background-digest" => {
-                let top = args.pop().ok_or_else(|| String::from(USAGE))?;
+                let selection = art::BackgroundSelection::parse(&mut args)?;
                 let mut parsed = Self::parse_scene(args)?;
-                parsed.background_top =
-                    Some(text(&top)?.parse().map_err(|_error| {
-                        String::from("invalid top exclusion")
-                    })?);
+                parsed.background = Some(selection);
                 Ok(parsed)
             },
             #[cfg(feature = "native-preview")]
@@ -633,11 +630,27 @@ mod tests {
         .to_vec();
         let parse = |values| {
             Arguments::parse_command("scene-background-digest", values)
-                .map(|value| value.background_top)
+                .map(|value| value.background)
         };
         assert!(parse(args.clone()).is_err());
         args.push(OsString::from("28"));
-        assert_eq!(parse(args.clone()), Ok(Some(28)));
+        assert_eq!(
+            parse(args.clone()),
+            Ok(Some(art::BackgroundSelection {
+                omitted_layer: None,
+                top: 28
+            }))
+        );
+        let mut omitted = args.clone();
+        omitted.extend(["--omit-layer", "1"].map(OsString::from));
+        assert_eq!(
+            parse(omitted.clone()),
+            Ok(Some(art::BackgroundSelection {
+                omitted_layer: Some(1),
+                top: 28
+            }))
+        );
+        assert!(Arguments::parse_command("scene-check", omitted).is_err());
         assert!(Arguments::parse_command("scene-check", args.clone()).is_err());
         let _top = args.pop();
         args.push(OsString::from("-1"));

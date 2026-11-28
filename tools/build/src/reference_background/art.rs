@@ -235,7 +235,36 @@ impl Art {
 pub struct BackgroundPublication {
     output: OsString,
     scene: Arguments,
-    top: usize,
+    selection: BackgroundSelection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BackgroundSelection {
+    pub(super) omitted_layer: Option<usize>,
+    pub(super) top: usize,
+}
+
+impl BackgroundSelection {
+    pub(super) fn parse(args: &mut Vec<OsString>) -> Result<Self, String> {
+        let omitted_layer = match args.as_slice() {
+            [.., flag, index] if flag == "--omit-layer" => {
+                let layer = text(index)?
+                    .parse::<usize>()
+                    .map_err(|_error| String::from("invalid omitted layer"))?;
+                if layer >= 3 {
+                    return Err(String::from("invalid omitted layer"));
+                }
+                args.truncate(args.len().saturating_sub(2));
+                Some(layer)
+            },
+            _ => None,
+        };
+        let raw_top = args.pop().ok_or_else(|| String::from(USAGE))?;
+        let top = text(&raw_top)?
+            .parse()
+            .map_err(|_error| String::from("invalid top exclusion"))?;
+        Ok(Self { omitted_layer, top })
+    }
 }
 
 impl BackgroundPublication {
@@ -243,18 +272,15 @@ impl BackgroundPublication {
     /// # Errors
     /// Rejects incomplete observations and malformed exclusion arguments.
     pub fn parse(mut args: Vec<OsString>) -> Result<Self, String> {
-        if args.len() != 11 {
+        let selection = BackgroundSelection::parse(&mut args)?;
+        if args.len() != 10 {
             return Err(String::from(USAGE));
         }
-        let raw_top = args.pop().ok_or_else(|| String::from(USAGE))?;
-        let top = text(&raw_top)?
-            .parse()
-            .map_err(|_error| String::from("invalid top exclusion"))?;
         let output = args.remove(0);
         Ok(Self {
             output,
             scene: Arguments::parse_scene(args)?,
-            top,
+            selection,
         })
     }
 
@@ -277,7 +303,7 @@ impl BackgroundPublication {
             (machine, &assets),
             observation,
             &mut pens,
-            self.top,
+            self.selection,
         )?;
         publish_image(
             &self.output,
@@ -819,9 +845,19 @@ impl RegisteredLayer {
 
 /// Register independent maps and verify their sprite-free composition.
 pub(super) fn registered_layers(
+    context: (Machine, &SceneAssets<'_>),
+    observation: &mut Observation,
+    pens: &mut [Pixel],
+) -> Result<RegisteredLayers, String> {
+    register_layers(context, observation, pens, None)
+}
+
+// Compare the full layer composition before exposing any selected subset.
+fn register_layers(
     (machine, assets): (Machine, &SceneAssets<'_>),
     observation: &mut Observation,
     pens: &mut [Pixel],
+    omitted_layer: Option<usize>,
 ) -> Result<RegisteredLayers, String> {
     let _sprites = observation.sprites.take();
     observation.reconstruct(machine, assets, pens)?;
@@ -831,6 +867,7 @@ pub(super) fn registered_layers(
     let mut map = vec![Pixel::default(); width.saturating_mul(height)];
     let backdrop = u16::from(mixer.backdrop.palette_bank) << 4u32;
     let mut composed = vec![backdrop; pens.len()];
+    let mut selected = omitted_layer.map(|_| vec![backdrop; pens.len()]);
     let mut layers = Vec::with_capacity(3);
     let background = Background {
         scroll_control: observation.scroll,
@@ -842,12 +879,22 @@ pub(super) fn registered_layers(
             .isolate_layer(background, index, &mut map)
             .map_err(|error| format!("isolated layer: {error:?}"))?;
         overlay_layer(&map, origin, raster.extent(), &mut composed)?;
+        if Some(index) != omitted_layer
+            && let Some(subset) = &mut selected
+        {
+            overlay_layer(&map, origin, raster.extent(), subset)?;
+        }
         let image =
             Image::from_pens(&map, (width, height), &observation.colors, true)?;
         layers.push(RegisteredLayer { image, index, origin });
     }
     if !pens.iter().copied().map(Pixel::pen).eq(composed) {
         return Err(String::from("isolated layer composition differs"));
+    }
+    if let Some(subset) = selected {
+        for (pixel, pen) in pens.iter_mut().zip(subset) {
+            *pixel = Pixel::from_pen(pen);
+        }
     }
     Ok(RegisteredLayers { backdrop, layers })
 }
@@ -902,9 +949,13 @@ pub(super) fn report_background(
     context: (Machine, &SceneAssets<'_>),
     observation: Observation,
     pens: &mut [Pixel],
-    top: usize,
+    selection: BackgroundSelection,
 ) -> Result<(), String> {
-    let image = background_image(context, observation, pens, top)?;
+    let image = background_image(context, observation, pens, selection)?;
+    if let Some(layer) = selection.omitted_layer {
+        toolchain::write_line(&format!("Omitted registered layer: {layer}"))
+            .map_err(|error| error.to_string())?;
+    }
     toolchain::write_line(&format!(
         "Verified background: {}x{} RGBA8 {}",
         image.width,
@@ -918,17 +969,26 @@ fn background_image(
     (machine, assets): (Machine, &SceneAssets<'_>),
     mut observation: Observation,
     pens: &mut [Pixel],
-    top: usize,
+    selection: BackgroundSelection,
 ) -> Result<Image, String> {
-    let _sprites = observation.sprites.take();
-    observation.reconstruct(machine, assets, pens)?;
+    if selection.omitted_layer.is_some() {
+        let _layers = register_layers(
+            (machine, assets),
+            &mut observation,
+            pens,
+            selection.omitted_layer,
+        )?;
+    } else {
+        let _sprites = observation.sprites.take();
+        observation.reconstruct(machine, assets, pens)?;
+    }
     Image::from_pens(
         pens,
         machine.background_raster().extent(),
         &observation.colors,
         false,
     )?
-    .without_top(top)
+    .without_top(selection.top)
 }
 
 fn graphics_bundle(
@@ -1376,9 +1436,27 @@ mod tests {
         assert!(BackgroundPublication::parse(args.clone()).is_err());
         args.push(OsString::from("28"));
         assert_eq!(
-            BackgroundPublication::parse(args.clone()).map(|value| value.top),
+            BackgroundPublication::parse(args.clone())
+                .map(|value| value.selection.top),
             Ok(28)
         );
+        let with_layer = |layer: &str| {
+            let mut candidate = args.clone();
+            candidate.extend(["--omit-layer", layer].map(OsString::from));
+            BackgroundPublication::parse(candidate).map(|value| value.selection)
+        };
+        for layer in 0..3 {
+            assert_eq!(
+                with_layer(&layer.to_string()),
+                Ok(BackgroundSelection {
+                    omitted_layer: Some(layer),
+                    top: 28
+                })
+            );
+        }
+        assert!(with_layer("3").is_err());
+        assert!(with_layer("-1").is_err());
+        assert!(with_layer("not-a-layer").is_err());
         args.push(OsString::from("unexpected"));
         assert!(BackgroundPublication::parse(args.clone()).is_err());
         let _extra = args.pop();

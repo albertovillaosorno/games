@@ -271,3 +271,16 @@ entire selected group after verifying the original full scene, using a
 pixel budget no larger than the original raster. The reported origin is
 signed and may lie outside the visible raster. This option does not
 infer actor identity, animation identity or draw order.
+
+## Selective reference backgrounds
+
+The `mame scene-background-digest` and `mame scene-background-publish`
+commands accept an optional `--omit-layer INDEX` after the existing top
+row exclusion argument. The index selects a registered hardware layer
+(0, 1 or 2), not its priority position. Both commands first compare the
+complete observed scene and verify the full sprite-free composition.
+Only then do they compose the remaining maps in the original priority
+order. This supports language-neutral backgrounds when original lettering
+occupies an independent layer; it does not establish authored text parity.
+Without the flag the original background digest and publication behavior
+are unchanged.

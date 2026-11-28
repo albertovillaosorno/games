@@ -67,6 +67,7 @@ pub(super) const LOCALES: [(&str, &str); 2] =
     [("en", "English"), ("es-MX", "Espa\u{f1}ol")];
 
 messages! {
+    "title.bonus.heading" => "BONUS GAME", "JUEGO DE BONO";
     "title.bonus.instructions" => "TAP ATTACK OR JUMP TO PUMP",
         "PULSA ATAQUE O SALTO PARA INFLAR";
     "title.bonus.ready" => "READY", "LISTOS";

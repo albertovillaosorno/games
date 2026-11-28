@@ -657,6 +657,7 @@ fn smoke_bonus(
     let scores = simulation.state().stations().map(|station| station.score);
     await_bonus(simulation, BonusPhase::Instructions)?;
     let _instructions = art.present(scene, simulation.state())?;
+    super::bonus::verify_instruction(scene, art, simulation.state())?;
     let initial = scene.readback()?;
     advance(simulation, 8)?;
     let _demonstration = art.present(scene, simulation.state())?;

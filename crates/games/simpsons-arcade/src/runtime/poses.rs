@@ -123,6 +123,7 @@ pub(super) struct Catalogue {
     bonus: Option<ContentHash>,
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
+    bonus_instruction: Option<ContentHash>,
     bonus_opponents: Option<Box<bonus::opposition::Digests>>,
     cemetery: Option<Box<cemetery::Selection>>,
     cemetery_layers: Option<[ContentHash; cemetery::layers::PHASES]>,
@@ -206,6 +207,10 @@ impl Catalogue {
                     .saturating_mul(bonus::INFLATED_ATLAS_BYTES),
             )
             .saturating_add(
+                usize::from(self.bonus_instruction.is_some())
+                    .saturating_mul(bonus::INSTRUCTION_ATLAS_BYTES),
+            )
+            .saturating_add(
                 usize::from(self.bonus_opponents.is_some())
                     .saturating_mul(bonus::opposition::ATLAS_BYTES),
             )
@@ -249,6 +254,11 @@ impl Catalogue {
             .saturating_add(
                 usize::from(self.bonus_inflated.is_some()).saturating_mul(
                     bonus::INFLATED_ATLAS_COUNT.saturating_sub(1),
+                ),
+            )
+            .saturating_add(
+                usize::from(self.bonus_instruction.is_some()).saturating_mul(
+                    bonus::INSTRUCTION_ATLAS_COUNT.saturating_sub(1),
                 ),
             )
             .saturating_add(
@@ -340,6 +350,7 @@ impl Catalogue {
             && (self.bonus.is_none() || self.has_wrestler())
             && (self.bonus_departure.is_none() || self.bonus.is_some())
             && (self.bonus_inflated.is_none() || self.bonus.is_some())
+            && (self.bonus_instruction.is_none() || self.bonus.is_some())
             && (self.bonus_opponents.is_none()
                 || (self.bonus_departure.is_some()
                     && self.bonus_inflated.is_some()))
@@ -378,6 +389,7 @@ impl Catalogue {
             .saturating_add(usize::from(self.bonus.is_some()))
             .saturating_add(usize::from(self.bonus_departure.is_some()))
             .saturating_add(usize::from(self.bonus_inflated.is_some()))
+            .saturating_add(usize::from(self.bonus_instruction.is_some()))
             .saturating_add(
                 usize::from(self.bonus_opponents.is_some())
                     .saturating_mul(bonus::opposition::BUNDLE_COUNT),
@@ -404,6 +416,7 @@ impl Catalogue {
             .chain(self.bonus)
             .chain(self.bonus_departure)
             .chain(self.bonus_inflated)
+            .chain(self.bonus_instruction)
             .chain(
                 self.bonus_opponents
                     .iter()
@@ -448,7 +461,7 @@ impl Catalogue {
             },
             Some(
                 "bonus" | "bonus-departure" | "bonus-inflated"
-                | "bonus-opponents",
+                | "bonus-instruction" | "bonus-opponents",
             ) => self.insert_bonus(line)?,
             Some("arrival") => {
                 self.arrival =
@@ -498,6 +511,13 @@ impl Catalogue {
                     "bonus-inflated",
                     line,
                     self.bonus_inflated,
+                )?);
+            },
+            Some("bonus-instruction") => {
+                self.bonus_instruction = Some(parse_single_bundle(
+                    "bonus-instruction",
+                    line,
+                    self.bonus_instruction,
                 )?);
             },
             Some("bonus-opponents") => {
@@ -602,16 +622,13 @@ impl Catalogue {
     ) -> Result<Option<bonus::BonusArt>, RenderError> {
         self.bonus
             .map(|digest| {
-                bonus::BonusArt::load(
-                    store,
-                    scene,
-                    (
-                        digest,
-                        self.bonus_departure,
-                        self.bonus_inflated,
-                        self.bonus_opponents.as_deref(),
-                    ),
-                )
+                bonus::BonusArt::load(store, scene, &bonus::BonusDigests {
+                    base: digest,
+                    departure: self.bonus_departure,
+                    inflated: self.bonus_inflated,
+                    instruction: self.bonus_instruction,
+                    opponents: self.bonus_opponents.as_deref(),
+                })
             })
             .transpose()
     }
@@ -1954,6 +1971,7 @@ mod tests {
         assert_bonus_budget(&plain, &selected);
         assert_departure_catalogue(&fighter, &record, &selected);
         assert_inflated_catalogue(&fighter, &record, &selected);
+        assert_instruction_catalogue(&fighter, &record, &selected);
         assert_opposition_catalogue(&fighter, &record);
 
         assert_stage_two_catalogue(&fighter, &record, &selected);
@@ -2016,6 +2034,42 @@ mod tests {
             );
         }
         assert!(Catalogue::parse(&format!("{text}{inflated}")).is_err());
+    }
+
+    fn assert_instruction_catalogue(
+        fighter: &str,
+        bonus_record: &str,
+        selected: &Catalogue,
+    ) {
+        let digest = "e".repeat(64);
+        let instruction = format!("bonus-instruction {digest}\n");
+        let text = format!("{fighter}{bonus_record}{instruction}");
+        for invalid in [
+            format!("{fighter}{instruction}"),
+            format!("{text}{instruction}"),
+            format!("{fighter}{bonus_record}bonus-instruction invalid"),
+        ] {
+            assert!(Catalogue::parse(&invalid).is_err());
+        }
+        let parsed = Catalogue::parse(&text);
+        assert!(parsed.is_ok());
+        if let Ok(value) = parsed {
+            assert_eq!(value.count(), selected.count().saturating_add(1));
+            assert_eq!(value.digests().count(), value.count());
+            assert!(value.digests().any(|hash| hash.to_string() == digest));
+            assert_eq!(
+                value.atlas_count(),
+                selected
+                    .atlas_count()
+                    .saturating_add(bonus::INSTRUCTION_ATLAS_COUNT)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                selected
+                    .atlas_bytes()
+                    .saturating_add(bonus::INSTRUCTION_ATLAS_BYTES)
+            );
+        }
     }
 
     fn assert_opposition_catalogue(fighter: &str, bonus_record: &str) {
