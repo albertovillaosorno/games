@@ -6410,12 +6410,23 @@ The bounded horizontal steering bands and target reservations are
 driven by station input, not by replaying a captured position sequence.
 The closest eligible station policy is shared with the street,
 wrestler and balloon encounters. Two routed regressions compare
-42 preceding-step positions and selected targets per actor and
-control, for 168 actor samples. The opposed two-station control also
-checks that the sample is withdrawn at the first close-range change.
+50 and 42 preceding-step positions, targets and pose selections per
+actor, for 184 actor samples. Both controls also check withdrawal at
+the first close-range change.
 
-This does not admit general steering, enemy animation, attacks, hit
+This does not admit general steering, enemy art rendering, attacks, hit
 resolution, terrain responses or a normal campaign transition.
 Unsupported direction bands, station actions and close-range
 transitions terminate the bounded approach sample. Original-art
 composition and full third-stage acceptance remain open.
+
+The approach now also carries the latched body pose, independently of
+its movement cadence. Both actors begin with the same frame, then
+select an eight-keyframe, six-tick animation cycle. At keyframe
+boundaries a target less than sixteen depth units selects the horizontal
+family; a more distant target selects the corresponding depth-facing
+family. The first two opposed controls independently verify the
+diverging family and delayed phase in the routed position regressions.
+The sprite groups are linked to persistent actor positions rather than
+their incidental extraction order. Full, unclipped source registration,
+draw ordering and pixel composition are not yet admitted.

@@ -35,8 +35,10 @@
 mod pursuit;
 
 use games::animation::cycle_tick;
-pub use pursuit::CemeteryEnemyApproach;
 use pursuit::PursuitPair;
+pub use pursuit::{
+    CemeteryEnemyApproach, CemeteryEnemyDepth, CemeteryEnemyPose,
+};
 
 use super::{
     Facing, GROUND_ATTACK_RECOVERY_TICKS, Maneuver, PendingManeuver, Player,
@@ -47,6 +49,7 @@ const FIRST_BACKGROUND: u64 = 13;
 const FIRST_STATION: u64 = 107;
 const PLAYABLE_TICK: u64 = 237;
 const FIRST_ENEMY_APPROACH: u64 = 238;
+const FIRST_ENEMY_ANIMATION: u64 = 239;
 const FIRST_ENEMY_MOVEMENT: u64 = 240;
 const FIRST_WALK_TICK: u64 = 242;
 const LAST_WALK_TICK: u64 = 357;
@@ -278,6 +281,11 @@ impl CemeteryRoom {
         }
         self.presentation_enemies =
             self.pursuit.map(|pair| pair.sample(self.depth_offset));
+        if tick == FIRST_ENEMY_ANIMATION
+            && let Some(pair) = &mut self.pursuit
+        {
+            pair.begin_animation();
+        }
         if tick > LAST_WALK_TICK {
             self.pursuit = None;
         } else if tick >= FIRST_ENEMY_MOVEMENT
@@ -727,9 +735,10 @@ mod tests {
             let stride: i32 = match (first, homer_lisa, sample) {
                 (true, _, 240..=255) | (true, true, 256..=263) => 48,
                 (true, false, 256..=263) => 32,
-                (true, false, 272..=278) | (false, false, 249..=256) => -16,
+                (true, false, 272..=279) | (false, false, 249..=256) => -16,
                 (true, true, 272..=278) | (false, false, 257..=272) => -48,
-                (false, false, 273..=278) => -64,
+                (true, false, 280..=286) => -32,
+                (false, false, 273..=286) => -64,
                 _ => 0,
             };
             units = units.saturating_add(stride);
@@ -766,12 +775,41 @@ mod tests {
             Player::Bart
         };
         CemeteryEnemyApproach {
+            pose: observed_enemy_pose(tick, homer_lisa, first),
             position: Point {
                 x,
                 y: observed_enemy_depth(tick, homer_lisa, first),
             },
             target,
         }
+    }
+
+    fn observed_enemy_pose(
+        tick: i16,
+        homer_lisa: bool,
+        first: bool,
+    ) -> Option<CemeteryEnemyPose> {
+        let phase = match tick {
+            239..=244 => 0,
+            245..=250 => 1,
+            251..=256 => 2,
+            257..=262 => 3,
+            263..=268 => 4,
+            269..=274 => 5,
+            275..=280 => 6,
+            281..=286 => 7,
+            _ => return None,
+        };
+        let depth = match (first, homer_lisa, phase) {
+            (_, _, 0) | (true, _, 1..=2) => CemeteryEnemyDepth::Increasing,
+            (false, false, 2..=7) => CemeteryEnemyDepth::Decreasing,
+            _ => CemeteryEnemyDepth::Level,
+        };
+        Some(CemeteryEnemyPose {
+            depth,
+            facing: Facing::Left,
+            phase,
+        })
     }
 
     fn assert_enemy_approach_trace(homer_lisa: bool) {
@@ -791,17 +829,19 @@ mod tests {
             bart.held = right;
             lisa.held = left;
         }
-        for tick in 238i16..=280 {
+        let terminal = if homer_lisa {
+            280i16
+        } else {
+            288i16
+        };
+        for tick in 238i16..=terminal {
             entrance.advance(false);
             let _advanced = entrance
                 .advance_room(&mut slots, [PendingManeuver::default(); 4]);
             let enemies =
                 entrance.room().and_then(CemeteryRoom::presentation_enemies);
-            if tick == 280 && homer_lisa {
+            if tick == terminal {
                 assert_eq!(enemies, None);
-                break;
-            }
-            if tick > 279 {
                 break;
             }
             let prior = tick.saturating_sub(1);
