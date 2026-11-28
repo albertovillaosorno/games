@@ -6922,3 +6922,51 @@ All use trusted directory selection and retain no canvas or
 preferences. The ordinary launch selection is unchanged. Physical
 speaker output, original FM synthesis, hardware channel allocation
 and full campaign timing parity remain open.
+
+### Choice arithmetic and rotated automatic pumping
+
+The protected-room choice arithmetic now has exhaustive native tests:
+all 65,536 recurrence words and 131,072 byte-draw cases, spanning
+every pair of choice and high bytes with two contrasting low bytes.
+The tests verify unchanged unrelated state as well as returned values.
+The complete arithmetic leaves are mapped in the private ledger;
+original campaign call cadence and choice ownership remain open.
+
+Thirteen read-only solo original routes, varying preceding street
+inputs, independently cover all four automatic scan starts. The
+initializer reads the high byte of the running choice word and masks
+its low two bits. The first automated station receives reload five.
+Later automated stations add the wrapped station index and the scan
+offset to that baseline; human stations do not emit automatic pulses.
+The four rotations produce station-ordered automated reload triples of
+(5, 9, 11), (5, 8, 10), (9, 5, 9) and (8, 10, 5).
+The native preview now uses this interval arithmetic rather than
+doubling the scan offset. Its preview-clock selector is still not
+the original campaign word.
+
+Native regression covers every roster mask and scan rotation with
+independent period tables, all four instruction-skip pulse schedules,
+and all 65,536 byte-counter and reload pairs. The previously observed
+3,947 original counter updates and
+550 pulses agree with the complete counter-transition mapping.
+Four further replays cover all rotations and match 5,652 counter
+observations and 688 reload pulses without discrepancy.
+The initializer remains pending because the original campaign
+choice-word scheduling is not established. A separate six-route
+original axis observation matches 11,280 station samples, including
+1,172 axis changes, against the shared choice-word selector and
+clamped inverse-axis arithmetic. The native independent axis
+scheduling is still a preview policy. The ordinary launch
+selection remains unchanged.
+
+### Optional neutral attack precursor
+
+The neutral cemetery diagnostic continues through presentation tick 370
+without extending the protected walkable interval. Two registered poses
+add 16,736 atlas bytes and no draw capacity. Fixed-step tests cover the
+second actor's windup and first airborne pose, expired station markers,
+and the explicit stop at the next unsupported encounter boundary.
+Native OpenGL/X11 and Firefox both match 369 original scene samples
+exactly (12 additional), with zero missing or mismatching samples.
+The optional asset selection is local; contact, damage, subsequent
+airborne poses and landing remain unsupported.

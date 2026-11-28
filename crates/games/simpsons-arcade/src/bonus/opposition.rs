@@ -70,7 +70,8 @@ impl Pump {
                 5
             } else {
                 5u8.saturating_add(
-                    u8::try_from(offset).unwrap_or_default().saturating_mul(2),
+                    u8::try_from(offset.saturating_add(index))
+                        .unwrap_or_default(),
                 )
             };
             if let Some(pump) = pumps.get_mut(index) {
@@ -139,18 +140,20 @@ mod tests {
 
     #[test]
     fn every_roster_and_rotation_preserves_independent_pump_periods() {
+        const PERIODS: [[usize; 4]; 4] =
+            [[6, 8, 10, 12], [7, 9, 11, 9], [8, 10, 8, 10], [9, 7, 9, 11]];
         for mask in 0..16u8 {
             let human = from_fn(|index| mask & (1 << index) != 0);
-            for start in 0..4 {
-                verify_roster(human, start);
+            for (start, periods) in PERIODS.into_iter().enumerate() {
+                verify_roster(human, start, periods);
             }
         }
     }
 
-    fn verify_roster(human: [bool; 4], start: usize) {
+    fn verify_roster(human: [bool; 4], start: usize, periods: [usize; 4]) {
         let pumps = Pump::roster(human, start);
         let mut first = true;
-        for offset in 0..4usize {
+        for (offset, later_period) in periods.into_iter().enumerate() {
             let index = start.saturating_add(offset).rem_euclid(4);
             let entry = pumps.get(index).copied().flatten();
             if human.get(index) == Some(&true) {
@@ -160,12 +163,27 @@ mod tests {
             let period = if first {
                 6
             } else {
-                6usize.saturating_add(offset.saturating_mul(2))
+                later_period
             };
             first = false;
             assert!(entry.is_some());
             if let Some(pump) = entry {
                 verify_pulses(pump, period);
+            }
+        }
+    }
+
+    #[test]
+    fn counter_update_matches_every_byte_pair() {
+        for pair in 0..=u16::MAX {
+            let [reload, remaining] = pair.to_be_bytes();
+            let mut pump = Pump { reload, remaining };
+            let pulse = remaining == 0;
+            let next = remaining.checked_sub(1).unwrap_or(reload);
+            assert_eq!(pump.advance(), pulse);
+            assert_eq!(pump, Pump { reload, remaining: next });
+            if remaining <= reload {
+                assert_eq!(pump.pressed(), pulse);
             }
         }
     }

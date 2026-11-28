@@ -750,6 +750,35 @@ mod tests {
     }
 
     #[test]
+    fn automatic_pulses_follow_all_instruction_skip_rotations() {
+        let schedules =
+            [[0, 10, 6, 10], [0, 9, 11, 6], [0, 6, 10, 12], [0, 6, 9, 11]];
+        for (delay, periods) in schedules.into_iter().enumerate() {
+            let tick = INSTRUCTION_MIN_TICKS
+                .saturating_add(u16::try_from(delay).unwrap_or_default());
+            assert_automatic_pulse_schedule(tick, periods);
+        }
+    }
+
+    fn assert_automatic_pulse_schedule(tick: u16, periods: [u16; 4]) {
+        let mut bonus =
+            Bonus::new([true, false, false, false]).with_opponents(true);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        advance_quietly(&mut bonus, tick.saturating_sub(1));
+        bonus.advance([true, false, false, false], true);
+        assert_eq!(bonus.phase(), BonusPhase::Ready);
+        advance_quietly(&mut bonus, READY_TICKS);
+        assert_eq!(bonus.phase(), BonusPhase::Pumping);
+        for elapsed in 0..60u16 {
+            bonus.advance([false; 4], false);
+            for (player, period) in Player::ALL.into_iter().zip(periods) {
+                let pulse = period != 0 && elapsed.is_multiple_of(period);
+                assert_eq!(bonus.automatic_pressed(player), pulse);
+            }
+        }
+    }
+
+    #[test]
     fn competition_roster_resamples_then_freezes_all_station_masks() {
         for mask in 0..16u8 {
             verify_competition_roster(
