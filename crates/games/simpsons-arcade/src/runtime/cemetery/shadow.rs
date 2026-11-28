@@ -408,4 +408,128 @@ mod tests {
             assert_eq!(room_index(point), expected);
         }
     }
+
+    #[test]
+    fn shadow_palette_covers_every_byte_without_double_attenuation() {
+        let mut expected = 0u8;
+        let mut remainder = 0u8;
+        for channel in 0..=u8::MAX {
+            let background = [channel, 255, 0, 255];
+            assert_eq!(
+                resolve(
+                    [MASK, [0; 4], MASK, MASK].into_iter(),
+                    [[0; 4], background].into_iter(),
+                ),
+                Some([expected, 153, 0, 255]),
+                "palette channel {channel}"
+            );
+            // Accumulate the rational step independently of multiplication.
+            remainder = remainder.saturating_add(3);
+            if remainder >= 5 {
+                remainder = remainder.saturating_sub(5);
+                expected = expected.saturating_add(1);
+            }
+        }
+    }
+
+    #[test]
+    fn shadow_preserves_frontmost_opaque_actor_in_every_overlap_order() {
+        for front in 0usize..4 {
+            assert_opaque_priority(front);
+        }
+    }
+
+    fn assert_opaque_priority(front: usize) {
+        let first = [12, 34, 56, 255];
+        let second = [78, 90, 123, 255];
+        let background = [148, 123, 109, 255];
+        for back in 0usize..4 {
+            if front == back {
+                continue;
+            }
+            let mut actors = [MASK; 4];
+            if let Some(pixel) = actors.get_mut(front) {
+                *pixel = first;
+            }
+            if let Some(pixel) = actors.get_mut(back) {
+                *pixel = second;
+            }
+            let expected = if front < back {
+                first
+            } else {
+                second
+            };
+            assert_eq!(
+                resolve(actors.into_iter(), [background].into_iter()),
+                Some(expected),
+                "opaque indices {front} and {back}"
+            );
+        }
+    }
+
+    #[test]
+    fn shadow_projection_and_sampling_are_inverse_on_registered_crops() {
+        for width in [1u32, 2, 3, 7, 31, 196, 320] {
+            for (origin, target) in [
+                (0i32, -17i32),
+                (0i32, 0i32),
+                (0i32, 319i32),
+                (7i32, -17i32),
+                (7i32, 0i32),
+                (7i32, 319i32),
+                (96i32, -17i32),
+                (96i32, 0i32),
+                (96i32, 319i32),
+            ] {
+                let source = (origin, width);
+                let destination = (target, width);
+                assert_axis_inverse(source, destination, false);
+                assert_axis_inverse(source, destination, true);
+            }
+        }
+    }
+
+    fn assert_axis_inverse(
+        source: (i32, u32),
+        destination: (i32, u32),
+        flip: bool,
+    ) {
+        let width = i32::try_from(source.1).unwrap_or_default();
+        for offset in 0i32..width {
+            let pixel = source.0.saturating_add(offset);
+            let projected = project_axis(source, destination, flip, pixel);
+            let expected = if flip {
+                destination.0.saturating_add(
+                    width.saturating_sub(1).saturating_sub(offset),
+                )
+            } else {
+                destination.0.saturating_add(offset)
+            };
+            assert_eq!(projected, Some(expected));
+            assert_eq!(
+                projected.and_then(|point| {
+                    sample_axis(source, destination, flip, point)
+                }),
+                usize::try_from(pixel).ok()
+            );
+        }
+        assert_eq!(
+            project_axis(
+                source,
+                destination,
+                flip,
+                source.0.saturating_add(width)
+            ),
+            None
+        );
+        assert_eq!(
+            sample_axis(
+                source,
+                destination,
+                flip,
+                destination.0.saturating_sub(1)
+            ),
+            None
+        );
+    }
 }
