@@ -6791,6 +6791,16 @@ all four restart the same FM channel, and the final voice keys off
 commands retain ticks 188, 204, 220 and 236. Neither effect is admitted
 by the Rust runtime yet; local sound captures are not distributed.
 
+An additional original four-station campaign replay observes all ten
+ambient admissions alongside the soundtrack: the PCM allocator uses
+one channel for the first six and another for the last four. All five
+scenery and descent cue admissions also reach their callbacks. All
+four ranked landing commands restart one FM channel while music is
+active; its final effect record clears 36 frames after the final
+command. These traces establish admission in the observed contention
+case, not an exact general-purpose voice allocation or FM synthesis
+implementation.
+
 ### Protected repeat strike and second actor wind-up
 
 The existing 183-role diagnostic now preserves the shared choice
