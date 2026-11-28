@@ -607,7 +607,15 @@ impl Bonus {
 
 #[cfg(test)]
 mod tests {
+    use std::array::from_fn;
+
     use super::*;
+    #[derive(Clone, Copy)]
+    struct ExpectedScore {
+        points: u8,
+        rank: u8,
+        reveal: u16,
+    }
 
     fn start_pump(participants: [bool; 4]) -> Bonus {
         let mut bonus = Bonus::new(participants);
@@ -967,6 +975,108 @@ mod tests {
         advance_quietly(&mut bonus, 256);
         assert_eq!(bonus.displayed_result(Player::Marge), Some((1, 64)));
         assert_eq!(bonus.visual_inflation(Player::Homer), Some(0));
+    }
+
+    #[test]
+    fn results_preserve_rank_groups_across_all_station_orderings() {
+        // Absence, zero, four ordered positive scores and the maximum
+        // exercise all tie and admission patterns in cabinet order.
+        let scores = [
+            None,
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(BONUS_MAX_INFLATION),
+        ];
+        for ordinal in 0..scores.len().pow(4) {
+            let mut remaining = ordinal;
+            let sample = from_fn(|_| {
+                let digit =
+                    remaining.checked_rem(scores.len()).unwrap_or_default();
+                remaining =
+                    remaining.checked_div(scores.len()).unwrap_or_default();
+                scores.get(digit).copied().flatten()
+            });
+            assert_result_groups(sample);
+        }
+    }
+
+    fn assert_result_groups(scores: [Option<u8>; 4]) {
+        let mut ordered: Vec<_> = scores.into_iter().flatten().collect();
+        ordered.sort_unstable_by(|left, right| right.cmp(left));
+        ordered.dedup();
+        let mut bonus = Bonus::new(scores.map(|score| score.is_some()));
+        bonus.phase = BonusPhase::Results;
+        bonus.result = Some(ResultSequence {
+            scores,
+            stage: ResultStage::Reveal,
+            stage_tick: 0,
+        });
+        let groups = expected_result_groups(scores, &ordered);
+        let group_count = u16::try_from(ordered.len()).unwrap_or_default();
+        let first_count = 61u16.saturating_add(group_count.saturating_mul(14));
+        let maximum = ordered.first().copied().unwrap_or_default();
+        let last_count =
+            first_count.saturating_add(u16::from(maximum).saturating_mul(4));
+        let mut count = 0u8;
+        let mut next_count = first_count.saturating_add(4);
+        for tick in 0..=last_count {
+            if tick == next_count {
+                count = count.saturating_add(1);
+                next_count = next_count.saturating_add(4);
+            }
+            assert_result_readouts(bonus, groups, tick, count);
+            bonus.advance([true; 4], true);
+        }
+    }
+
+    fn expected_result_groups(
+        scores: [Option<u8>; 4],
+        ordered: &[u8],
+    ) -> [Option<ExpectedScore>; 4] {
+        let mut groups = [None; 4];
+        let mut reveal = 1u16;
+        for (index, group) in ordered.iter().enumerate() {
+            let rank = if *group == 0 {
+                4
+            } else {
+                u8::try_from(index.saturating_add(1)).unwrap_or_default()
+            };
+            for (expected, _) in groups
+                .iter_mut()
+                .zip(scores)
+                .filter(|(_, score)| *score == Some(*group))
+            {
+                *expected = Some(ExpectedScore {
+                    points: *group,
+                    rank,
+                    reveal,
+                });
+            }
+            reveal = reveal.saturating_add(14);
+        }
+        groups
+    }
+
+    fn assert_result_readouts(
+        bonus: Bonus,
+        groups: [Option<ExpectedScore>; 4],
+        tick: u16,
+        count: u8,
+    ) {
+        for (player, group) in Player::ALL.into_iter().zip(groups) {
+            assert_eq!(bonus.rank(player), group.map(|sample| sample.rank));
+            let expected = group
+                .filter(|sample| tick >= sample.reveal)
+                .map(|sample| (sample.rank, count.min(sample.points)));
+            assert_eq!(
+                bonus.displayed_result(player),
+                expected,
+                "player {player:?}, tick {tick}",
+            );
+        }
     }
 
     #[test]
