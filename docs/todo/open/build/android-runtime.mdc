@@ -263,3 +263,46 @@ shared SDL2 window creation, with a positive final log result. The
 launches return 41 and 42 respectively and the emulator shuts down.
 This is diagnostic storage and logging evidence, not an admitted
 launcher, production asset namespace or physical-device acceptance.
+
+The workspace now admits optional Inventory registration and JNI 0.22.4
+for one typed application callback, rejecting absent or ambiguous
+registrations. A scoped Rust worker receives explicit launch arguments,
+the installed shared library and a private data root; the shared process
+IR writes status and diagnostics through Java Log. The Activity selects
+an app-owned parent, and the native adapter admits a dedicated 0700
+child without relaxing the existing storage trust rules. The Simpsons
+title resolves its default catalogue in this directory, with desktop
+fallback only when app data is unavailable. The packaged title enables
+touch by default; the direct desktop entry remains unchanged. The
+workspace tests and strict interactive Android ARM64 Clippy gate pass.
+
+A diagnostic built the actual title from committed revision 8cec222
+using NDK r28c at API 24, thin LTO and the pinned SDL2 native library.
+The stripped title shared object is 4,039,648 bytes, is AArch64 and
+exports the platform-owned JNI method. The ARM64-only APK passes
+16 KiB native library alignment and v2/v3 signature verification
+with a disposable key. The Activity uses the private upstream SDL
+delegation patch described above; this is not yet a reproducible
+production packaging command.
+
+On the translated API 35 emulator an empty installation entered the
+actual title callback, created its 0700 data child and cleanly
+reported the missing catalogue. A subsequent launch with 198 locally
+provisioned canonical manifests and 416 distinct payload objects
+rendered the title and the touch panel, selected OpenSL ES audio and
+retained Activity focus. No original media was packaged in the APK.
+A fresh-install repeat observed viewport pixel changes after two
+Start touches and a held Right touch. Home and foreground restoration
+observed native pause/resume, surface recreation and the expected
+touch-panel color returning. This is evidence of interactive startup
+and presentation, not full gameplay parity or audible playback.
+
+An intermediate attempt to transfer data through ADB exec-in was
+incomplete; the byte-counted private archive transfer succeeded.
+A later cold restart of the retained installation did not show the
+expected panel within the diagnostic window; the reason was not
+captured. Fresh installation and provisioning reproduced the passing
+interactive result. Repeatable cold-restart acceptance, persistent
+settings writes in the actual title, production package automation,
+audible audio, physical ARM64, controllers and sensors remain open.
+The isolated emulator was shut down.
