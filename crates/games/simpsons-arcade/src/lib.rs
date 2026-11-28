@@ -56,6 +56,7 @@ pub use balloon::{BALLOON_QUANTITY, BalloonAction, BalloonBoss};
 pub use bonus::{BONUS_MAX_INFLATION, Bonus, BonusDeparture, BonusPhase};
 pub use cemetery::{
     CemeteryBody, CemeteryEntrance, CemeteryPhase, CemeteryPose, CemeteryRoom,
+    CemeteryRoomBody,
 };
 pub use cooperative::{BART_LISA_JUMP_TICKS, Pair, PairMotion, PairPose};
 pub use encounter::{

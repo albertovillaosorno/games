@@ -35,8 +35,8 @@
 use games::animation::cycle_tick;
 
 use super::{
-    Maneuver, PendingManeuver, Player, Point, Slot, StreetLayout,
-    stage_card_departed,
+    Facing, Maneuver, PendingManeuver, Player, Point, Slot, StreetLayout,
+    WalkMotion, stage_card_departed,
 };
 
 const FIRST_BACKGROUND: u64 = 13;
@@ -107,6 +107,30 @@ pub struct CemeteryBody {
     pub position: Point,
 }
 
+/// One projected first-room station from the preceding simulation step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CemeteryRoomBody {
+    /// Whether an active maneuver requires a separate body family.
+    pub action: bool,
+    /// Horizontal facing at the displayed sample.
+    pub facing: Facing,
+    /// Camera-relative station record position.
+    pub position: Point,
+    /// Walking phase at the displayed sample.
+    pub walking: Option<WalkMotion>,
+}
+
+impl CemeteryRoomBody {
+    const fn idle(position: Point) -> Self {
+        Self {
+            action: false,
+            facing: Facing::Right,
+            position,
+            walking: None,
+        }
+    }
+}
+
 /// Bounded first-room actions and shared vertical projection.
 ///
 /// World depth increases away from the viewer. The projected depth adds
@@ -116,8 +140,8 @@ pub struct CemeteryBody {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoom {
     depth_offset: i16,
+    presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
-    presentation_positions: [Point; 4],
     walk_depth: [i16; 4],
 }
 
@@ -125,8 +149,8 @@ impl Default for CemeteryRoom {
     fn default() -> Self {
         Self {
             depth_offset: 0,
+            presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
-            presentation_positions: ROOM_LAYOUT.spawn,
             walk_depth: [0; 4],
         }
     }
@@ -142,8 +166,12 @@ impl CemeteryRoom {
         if !slots.iter().all(|slot| slot.station.can_fight()) {
             return false;
         }
-        self.presentation_positions =
-            slots.map(|slot| self.project(slot.station.position));
+        self.presentation_bodies = slots.map(|slot| CemeteryRoomBody {
+            action: slot.station.maneuver != Maneuver::Idle,
+            facing: slot.station.facing,
+            position: self.project(slot.station.position),
+            walking: slot.station.walking,
+        });
         for ((player, slot), queued) in
             Player::ALL.into_iter().zip(&mut *slots).zip(pending)
         {
@@ -207,6 +235,12 @@ impl CemeteryRoom {
         self.depth_offset
     }
 
+    /// Previous station action, orientation and position in cabinet order.
+    #[must_use]
+    pub const fn presentation_bodies(self) -> [CemeteryRoomBody; 4] {
+        self.presentation_bodies
+    }
+
     /// Camera offset consumed by the displayed tile layers.
     ///
     /// Original tile-state sampling precedes the current room step.
@@ -220,8 +254,8 @@ impl CemeteryRoom {
     /// The preceding simulation sample shares the displayed camera offset.
     /// Stations remain in cabinet order, even when movement is blocked.
     #[must_use]
-    pub const fn presentation_positions(self) -> [Point; 4] {
-        self.presentation_positions
+    pub fn presentation_positions(self) -> [Point; 4] {
+        self.presentation_bodies.map(|body| body.position)
     }
 
     /// Project a room world position into camera-relative record space.
@@ -844,6 +878,65 @@ mod tests {
         let mut other = arrival(Player::Homer).at(240);
         other.enable_room();
         assert_eq!(other.room_body_visibility(), None);
+    }
+
+    fn observed_diagonal_walking(prior: u64) -> Option<WalkMotion> {
+        match prior {
+            242..=281 => Some(WalkMotion {
+                away: false,
+                tick: prior.saturating_sub(242),
+            }),
+            290..=329 => Some(WalkMotion {
+                away: true,
+                tick: prior.saturating_sub(290),
+            }),
+            _ => None,
+        }
+    }
+
+    fn assert_diagonal_body_sample(room: CemeteryRoom, tick: u64) {
+        let [marge, homer, bart, lisa] = room.presentation_bodies();
+        let prior = tick.saturating_sub(1);
+        let walking = observed_diagonal_walking(prior);
+        assert_eq!(marge.walking, walking, "Marge at {tick}");
+        assert_eq!(bart.walking, walking, "Bart at {tick}");
+        assert_eq!(homer.walking, None, "Homer at {tick}");
+        assert_eq!(lisa.walking, None, "Lisa at {tick}");
+        assert_eq!(
+            marge.facing,
+            if prior < 290 {
+                Facing::Right
+            } else {
+                Facing::Left
+            },
+            "Marge at {tick}",
+        );
+        assert_eq!(
+            bart.facing,
+            if (242..290).contains(&prior) {
+                Facing::Left
+            } else {
+                Facing::Right
+            },
+            "Bart at {tick}",
+        );
+        assert!(room.presentation_bodies().iter().all(|body| !body.action));
+    }
+
+    #[test]
+    fn room_body_samples_keep_the_previous_action_and_orientation() {
+        let mut state = arrival(Player::Marge).at(238);
+        state.enable_room();
+        let mut slots = room_slots();
+        for tick in 239u64..=357 {
+            apply_diagonal_schedule(&mut slots, tick);
+            state.advance(false);
+            let _advanced =
+                state.advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            assert!(state.room().is_some());
+            let room = state.room().unwrap_or_default();
+            assert_diagonal_body_sample(room, tick);
+        }
     }
 
     #[test]
