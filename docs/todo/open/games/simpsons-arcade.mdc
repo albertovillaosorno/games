@@ -6708,3 +6708,17 @@ with 1,682 readbacks and 1,751 blits. All 523 reported cemetery checkpoints
 match between both browser selections and the earlier accepted browser
 run; 381 native enemy-room digests also match the browser. Both browser
 runs release the canvas and retain no preferences.
+
+All sixteen ready-entry roster masks now have model regression coverage.
+The tests preserve the sampled human/automatic division through pumping,
+ignore post-admission joins and nonhuman pump edges, and preserve final
+scores, ranks and retirement despite subsequent input. A cabinet-level
+late join on the winning automatic station cannot change its pumping
+or receive its health reward. The catalogue regression rejects incomplete,
+extra and duplicate opponent records and incomplete prerequisite art,
+and checks the exact nine-bundle, fourteen-atlas resource increment.
+These tests do not establish the original visual parity of late joins.
+
+Native startup independently rejects a truncated opponent bundle list
+and a full opponent list without the inflated human art prerequisite.
+Both fail before renderer admission under isolated local selections.

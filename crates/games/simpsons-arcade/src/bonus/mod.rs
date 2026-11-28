@@ -758,6 +758,96 @@ mod tests {
         }
     }
 
+    #[test]
+    fn automatic_rosters_freeze_and_ignore_nonhuman_pump_edges() {
+        for mask in 0..16u8 {
+            let admitted = from_fn(|index| mask & (1 << index) != 0);
+            verify_automatic_roster(admitted);
+        }
+    }
+
+    fn assert_automatic_roster(bonus: Bonus, admitted: [bool; 4]) {
+        let occupied = admitted.contains(&true);
+        assert_eq!(
+            Player::ALL.map(|player| bonus.is_automatic(player)),
+            admitted.map(|human| occupied && !human)
+        );
+        assert_roster(bonus, [occupied; 4]);
+    }
+
+    fn verify_automatic_roster(admitted: [bool; 4]) {
+        let other = admitted.map(|human| !human);
+        let mut bonus = Bonus::new([false; 4]).with_opponents(true);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        bonus.refresh_participants(other);
+        assert_automatic_roster(bonus, other);
+        bonus.advance([false; 4], false);
+        bonus.refresh_participants(admitted);
+        assert_automatic_roster(bonus, other);
+        advance_quietly(&mut bonus, INSTRUCTION_MAX_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::Ready);
+        bonus.refresh_participants(admitted);
+        assert_automatic_roster(bonus, admitted);
+        bonus.advance([false; 4], false);
+        bonus.refresh_participants(other);
+        assert_automatic_roster(bonus, admitted);
+        advance_quietly(&mut bonus, READY_TICKS - 1);
+        assert_eq!(bonus.phase(), BonusPhase::Pumping);
+        assert_automatic_roster(bonus, admitted);
+
+        let mut with_input = bonus;
+        for _ in 0..PUMP_TICKS {
+            bonus.advance([false; 4], false);
+            with_input.refresh_participants(other);
+            with_input.advance(other, true);
+            assert_eq!(bonus, with_input);
+            if bonus.phase() == BonusPhase::Results {
+                break;
+            }
+        }
+        assert_eq!(bonus.phase(), BonusPhase::Results);
+        assert_automatic_results(bonus, admitted);
+    }
+
+    fn assert_automatic_scores(bonus: Bonus, admitted: [bool; 4]) {
+        for (player, human) in Player::ALL.into_iter().zip(admitted) {
+            assert_eq!(bonus.human_rank(player), human.then_some(4));
+            match (human, admitted.contains(&true)) {
+                (true, _) => assert_eq!(bonus.inflation(player), Some(0)),
+                (false, true) => {
+                    assert!(bonus.inflation(player).is_some_and(|n| n > 0));
+                },
+                (false, false) => assert_eq!(bonus.inflation(player), None),
+            }
+        }
+    }
+
+    fn assert_automatic_results(mut bonus: Bonus, admitted: [bool; 4]) {
+        assert_automatic_scores(bonus, admitted);
+        let scores = Player::ALL.map(|player| bonus.inflation(player));
+        let ranks = Player::ALL.map(|player| bonus.rank(player));
+        let mut with_input = bonus;
+        for _ in 0..1000u16 {
+            bonus.advance([false; 4], false);
+            with_input.refresh_participants([true; 4]);
+            with_input.advance([true; 4], true);
+            assert_eq!(bonus, with_input);
+            assert_eq!(
+                Player::ALL.map(|player| bonus.inflation(player)),
+                scores
+            );
+            assert_eq!(Player::ALL.map(|player| bonus.rank(player)), ranks);
+            if bonus.phase() == BonusPhase::Complete {
+                break;
+            }
+        }
+        assert_eq!(bonus.phase(), BonusPhase::Complete);
+        assert_eq!(
+            Player::ALL.map(|player| bonus.visual_axes(player)),
+            [None; 4]
+        );
+    }
+
     fn verify_competition_roster(admitted: [bool; 4]) {
         let other = admitted.map(|active| !active);
         let mut bonus = Bonus::new([false; 4]);

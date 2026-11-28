@@ -1954,6 +1954,7 @@ mod tests {
         assert_bonus_budget(&plain, &selected);
         assert_departure_catalogue(&fighter, &record, &selected);
         assert_inflated_catalogue(&fighter, &record, &selected);
+        assert_opposition_catalogue(&fighter, &record);
 
         assert_stage_two_catalogue(&fighter, &record, &selected);
         assert!(
@@ -2015,6 +2016,68 @@ mod tests {
             );
         }
         assert!(Catalogue::parse(&format!("{text}{inflated}")).is_err());
+    }
+
+    fn assert_opposition_catalogue(fighter: &str, bonus_record: &str) {
+        let departure = format!("bonus-departure {HASH}\n");
+        let inflated = format!("bonus-inflated {HASH}\n");
+        let base = format!("{fighter}{bonus_record}{departure}{inflated}");
+        let bundles = [HASH; bonus::opposition::BUNDLE_COUNT];
+        let record = format!("bonus-opponents {}\n", bundles.join(" "));
+        for incomplete in [
+            fighter.to_owned(),
+            format!("{fighter}{bonus_record}"),
+            format!("{fighter}{bonus_record}{departure}"),
+            format!("{fighter}{bonus_record}{inflated}"),
+        ] {
+            assert!(
+                Catalogue::parse(&format!("{incomplete}{record}")).is_err()
+            );
+        }
+        let plain = Catalogue::parse(&base);
+        let selected = Catalogue::parse(&format!("{base}{record}"));
+        assert!(plain.is_ok());
+        assert!(selected.is_ok());
+        if let (Ok(before), Ok(after)) = (plain, selected) {
+            assert_opposition_budget(&before, &after);
+        }
+        assert!(Catalogue::parse(&format!("{base}{record}{record}")).is_err());
+        for count in 0..bundles.len() {
+            let prefix = bundles.get(..count).unwrap_or_default().join(" ");
+            assert!(
+                Catalogue::parse(&format!("{base}bonus-opponents {prefix}"))
+                    .is_err()
+            );
+        }
+        assert!(
+            Catalogue::parse(&format!(
+                "{base}bonus-opponents {} {HASH}",
+                bundles.join(" ")
+            ))
+            .is_err()
+        );
+    }
+
+    fn assert_opposition_budget(before: &Catalogue, after: &Catalogue) {
+        assert_eq!(
+            after.count(),
+            before
+                .count()
+                .saturating_add(bonus::opposition::BUNDLE_COUNT)
+        );
+        assert_eq!(after.digests().count(), after.count());
+        assert_eq!(
+            after.atlas_count(),
+            before
+                .atlas_count()
+                .saturating_add(bonus::opposition::ATLAS_COUNT)
+        );
+        assert_eq!(
+            after.atlas_bytes(),
+            before
+                .atlas_bytes()
+                .saturating_add(bonus::opposition::ATLAS_BYTES)
+        );
     }
 
     fn assert_departure_budget(

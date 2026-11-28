@@ -4058,6 +4058,46 @@ mod tests {
         assert!(late_bart.can_fight());
     }
 
+    #[test]
+    fn late_human_cannot_control_or_inherit_an_automatic_winner() {
+        let mut state = cabinet();
+        state.input_step(0, &pulse(Player::Marge, Control::Start));
+        state.bonus = Some(
+            Bonus::new(state.slots.map(|slot| slot.station.can_fight()))
+                .with_opponents(true),
+        );
+        advance_until_bonus_phase(&mut state, BonusPhase::Pumping);
+        let mut control = state;
+        state.input_step(2000, &pulse(Player::Homer, Control::Start));
+        control.input_step(2000, &[]);
+        let [_, homer, ..] = &mut state.slots;
+        assert!(homer.station.can_fight());
+        // Make any erroneous rank-one reward observable on the late station.
+        homer.station.health = 8;
+        homer.station.display_health = 8;
+        let before = state.stations();
+        for tick in 2001..3000 {
+            state.input_step(tick, &pulse(Player::Homer, Control::Primary));
+            control.input_step(tick, &[]);
+            assert_eq!(state.bonus(), control.bonus());
+            if state.bonus().map(Bonus::phase) == Some(BonusPhase::Results) {
+                break;
+            }
+        }
+        assert_eq!(state.bonus().map(Bonus::phase), Some(BonusPhase::Results));
+        assert_eq!(
+            state.bonus().and_then(|bonus| bonus.rank(Player::Homer)),
+            Some(1)
+        );
+        assert!(
+            state
+                .bonus()
+                .is_some_and(|bonus| bonus.is_automatic(Player::Homer))
+        );
+        finish_bonus_health_fixture(&mut state);
+        assert_eq!(state.stations(), before);
+    }
+
     fn assert_late_instruction_gate(state: &mut Cabinet) {
         advance_empty(state, 2001..2208);
         state.input_step(2208, &pulse(Player::Homer, Control::Primary));
