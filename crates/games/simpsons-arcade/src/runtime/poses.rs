@@ -58,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(28_671);
+    NonZeroU64::MIN.saturating_add(32_767);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
@@ -299,6 +299,11 @@ impl Catalogue {
                     .cemetery
                     .as_deref()
                     .is_some_and(cemetery::Selection::animated))
+            && (!self
+                .cemetery
+                .as_deref()
+                .is_some_and(cemetery::Selection::room_walking)
+                || self.cemetery_layers.is_some())
             && (self.linked.is_none() || self.stage_two.is_some())
     }
 
@@ -434,9 +439,6 @@ impl Catalogue {
     }
 
     fn insert_cemetery(&mut self, line: &str) -> Result<(), RenderError> {
-        if line.split_whitespace().next() == Some("cemetery-room-layers") {
-            return self.insert_cemetery_layers(line);
-        }
         if line.split_whitespace().next() == Some("cemetery-room-layers") {
             return self.insert_cemetery_layers(line);
         }
@@ -1020,7 +1022,7 @@ const fn walk_duration(player: Player) -> u8 {
     }
 }
 
-fn walking_offset(player: Player, elapsed: u64) -> Option<u8> {
+pub(super) fn walking_offset(player: Player, elapsed: u64) -> Option<u8> {
     cycle_tick(elapsed, walk_duration(player))
 }
 
@@ -1599,7 +1601,7 @@ mod tests {
     #[test]
     fn memory_pose_text_has_the_same_byte_budget_as_local_text() {
         let valid = complete();
-        let padded = format!("{valid}\n{}", " ".repeat(28_672));
+        let padded = format!("{valid}\n{}", " ".repeat(32_768));
         assert!(Catalogue::parse(&valid).is_ok());
         assert!(Catalogue::parse(&padded).is_err());
     }
@@ -2096,6 +2098,66 @@ mod tests {
         }
     }
 
+    fn assert_cemetery_walking_catalogue(
+        with_boss: &str,
+        animated: &str,
+        layers: &str,
+    ) {
+        let walking = (300u32..360)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let marge_first = animated.replacen(
+            "cemetery-entrance homer",
+            "cemetery-entrance marge",
+            1,
+        );
+        let full = format!("{} {walking}\n", marge_first.trim_end());
+        assert!(Catalogue::parse(&format!("{with_boss}{full}")).is_err());
+        let baseline =
+            Catalogue::parse(&format!("{with_boss}{marge_first}{layers}"));
+        let selected = Catalogue::parse(&format!("{with_boss}{full}{layers}"));
+        assert!(baseline.is_ok() && selected.is_ok());
+        if let (Ok(base), Ok(value)) = (baseline, selected) {
+            assert_eq!(value.count(), base.count().saturating_add(60));
+            assert_eq!(
+                value.atlas_count(),
+                base.atlas_count().saturating_add(60)
+            );
+            assert_eq!(
+                value.atlas_bytes(),
+                base.atlas_bytes().saturating_add(452_452)
+            );
+            assert_eq!(value.scenic_sprite_count(), base.scenic_sprite_count());
+            assert_eq!(value.digests().count(), value.count());
+        }
+        assert_cemetery_walking_rejections(with_boss, &full, layers);
+    }
+
+    fn assert_cemetery_walking_rejections(
+        with_boss: &str,
+        full: &str,
+        layers: &str,
+    ) {
+        let wrong_rank = full.replacen(
+            "cemetery-entrance marge",
+            "cemetery-entrance homer",
+            1,
+        );
+        assert!(
+            Catalogue::parse(&format!("{with_boss}{wrong_rank}{layers}"))
+                .is_err()
+        );
+        let incomplete = full
+            .trim_end()
+            .rsplit_once(' ')
+            .map_or("", |(prefix, _)| prefix);
+        assert!(
+            Catalogue::parse(&format!("{with_boss}{incomplete}\n{layers}"))
+                .is_err()
+        );
+    }
+
     fn assert_cemetery_layer_catalogue(
         with_boss: &str,
         sparse: &str,
@@ -2106,6 +2168,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let layers = format!("cemetery-room-layers {hashes}\n");
+        assert_cemetery_walking_catalogue(with_boss, animated, &layers);
         assert!(Catalogue::parse(&format!("{with_boss}{layers}")).is_err());
         assert!(
             Catalogue::parse(&format!("{with_boss}{sparse}{layers}")).is_err()

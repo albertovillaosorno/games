@@ -6127,3 +6127,28 @@ and 59 visible), and the existing body selector observes that gate.
 The ordinary entrance and other rotations are unaffected. No new
 moving-room runtime selection, pose mapping, shadow presentation or
 post-boundary interaction is admitted.
+
+### Registered protected-room walking bodies
+
+The delayed room snapshot now retains the preceding horizontal facing,
+walking phase and action admission together with all four projected
+positions. The portable diagonal regression covers all 119 bounded
+samples, including movement, neutral intervals and reversal.
+
+The isolated Homer/Lisa and reversed four-station controls each match
+all 59 body-visible original scenes. The four controls independently
+match all 944 isolated body observations to canonical or horizontally
+reflected poses and registration anchors. The observed walking phases
+share the existing 42-, 40-, 25- and 40-tick cycles. Four neutral roles
+reuse the final grounded landing poses. The 60 additional walking roles
+use 452,452 atlas bytes without separate reflected textures.
+
+Four persistent shadow-classified crops match 136 isolated observations
+on both visibility parities. All 944 primary object records across both
+controls retain their respective station offsets and follow ascending
+projected depth, with ties in cabinet order. All 944 visible body
+groups follow that same ordering. The published crops
+contain only opaque or transparent pixels. Their full composition and
+ordering with the remaining objects are not established. Action poses,
+post-protection interactions and complete moving-room presentation
+remain open; the normal entrance does not select the moving room.
