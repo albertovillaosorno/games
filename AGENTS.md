@@ -283,6 +283,11 @@
   mappings or additional implementation states. Keep research notes apart
   from final Rust owner and symbol fields. Justify each discard.
   Inspect indirect calls, dispatch tables and all executable regions.
+  Automate repeated flow resolution by instruction family, using bounded
+  selector analysis and bank-aware immutable table evidence. Run batch
+  analysis before manual inspection; investigate only residual unknowns.
+  Never promote candidates or delete unresolved observations without
+  complete control-flow and ownership evidence.
 - Inspect the private decompiler output, listings and cross-references
   directly. Derive behavioural specifications from static evidence and
   implement independent Rust using the existing engine, importer and IR.

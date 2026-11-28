@@ -139,3 +139,73 @@ conditional direct-page call edges were recovered. The report is
 discovery evidence, not an authoritative function inventory. Computed
 dispatch tables, caller summaries, function-body ownership, exact
 edition admission and canonical ledger synchronization remain open.
+
+## Batch computed dispatch analysis
+
+Export decoded facts from the existing mapped project, read-only, then
+run the Rust selector analysis on the same physical image:
+
+```sh
+cargo run --locked --quiet -p games-build -- ghidra-board simpsons facts \
+  > "$scratch/ExportDispatchFacts.java"
+analyzeHeadless "$PROJECT_DIR" "$PROJECT_NAME" -process "$PROGRAM_NAME" \
+  -noanalysis -readOnly -scriptPath "$scratch" \
+  -postScript ExportDispatchFacts.java "$scratch/dispatch.json"
+cargo run --locked --quiet -p games-build -- ghidra-board simpsons bounds \
+  "$scratch/dispatch.json" "$PHYSICAL_ROM" 16777216
+```
+
+The export verifies the physical bank map and fixed aliases, captures
+decoded instruction ownership and follows unique known fallthrough
+predecessors, stopping at calls, joins and function roots. It labels
+immediate operands from the opcode rather than ambiguous printed
+syntax. The Rust pass requires the matching SHA-256 of the physical
+image. It enumerates masked byte/word selectors and guarded signed
+intervals, then reads every immutable table word. A generic scaled
+selector diagnostic enumerates all 128 even byte offsets without
+pretending the valid subset proves a narrower domain.
+
+Every examined computed site receives a result. A bounded candidate
+has admitted destinations for all enumerated slots but still requires
+proof of incoming contexts. Needs-targets identifies an incomplete
+bounded table; needs-selector retains the full scaled domain;
+unsupported retains other instruction shapes. Code overlaps and
+unmapped pointers remain explicit blockers. No candidate automatically
+mutates the canonical ledger. The report stays private.
+
+The initial two exhaustive closures can now be reproduced without
+title-specific addresses in the analysis implementation.
+
+The finite byte evaluator extends these rules with immediate loads,
+arithmetic, masks, comparisons and fallthrough guards. It starts from
+all 256 values and widens on unknown operations. A branch to its own
+fallthrough cannot narrow the domain. An immediate register-pair base
+must remain unchanged after loading.
+
+To reconcile an already admitted local proof against the existing
+graph, generate a candidate ledger without changing the input:
+
+```sh
+cargo run --locked --quiet -p games-build -- ghidra-board simpsons reconcile \
+  "$scratch/dispatch.json" "$PHYSICAL_ROM" "$LEDGER" 33554432 \
+  > "$scratch/candidate.jsonl"
+cargo run --locked --quiet -p games-build -- ledger check \
+  "$scratch/candidate.jsonl" 33554432 10000
+```
+
+Reconciliation reuses the structural ledger checker before and after
+the operation. It requires the exact source owner, all enumerated
+targets and their existing owners, no admitted edge entering the
+interior of the selector chain and no additional unknown observation
+at the same site. It records the finite proof alongside original
+evidence and removes only the matching local computed observation.
+It does not infer unknown memory producers, interrupt effects,
+unresolved banks, or callback stack preservation. It never overwrites
+the canonical ledger; inspect a candidate before replacing the
+private canonical file under its coordinated ownership.
+
+On the selected game, the two previously admitted finite domains can
+be reconciled automatically on a replay copy: 190 local observations
+become 188, with unchanged function statuses and graph identities.
+The current canonical ledger already contains those closures; its
+188 remaining observations are not resolved by this implementation.

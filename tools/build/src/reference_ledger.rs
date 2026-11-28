@@ -476,6 +476,13 @@ impl GroupReport {
     }
 }
 
+/// Verify an in-memory candidate without publishing it.
+/// # Errors
+/// Rejects malformed or inconsistent function graphs.
+pub(crate) fn verify(input: &str, limit: NonZeroUsize) -> Result<(), String> {
+    audit(input, limit, None).map(|_report| ())
+}
+
 fn audit(
     input: &str,
     limit: NonZeroUsize,

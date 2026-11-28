@@ -31,8 +31,14 @@
 
 //! Board-specific Ghidra integration script generation.
 
+mod bounds;
+mod domain;
+mod facts;
+mod reconcile;
+
 use std::ffi::OsString;
 use std::fmt::Write as _;
+use std::num::NonZeroU64;
 
 use games_platform::ir::toolchain::write_line;
 
@@ -411,14 +417,20 @@ public class MapKonamiBoard extends GhidraScript {
 }"#;
 
 /// Supported board memory profile.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Board {
     /// Simpsons four-player Konami 053248 board.
     Simpsons,
+    /// Finite selector candidate report.
+    SimpsonsBounds(OsString, OsString, NonZeroU64),
+    /// Read-only decoded dispatch fact export script.
+    SimpsonsFacts,
     /// Synthetic 512 KiB bank traversal fixture, emitted as hex.
     SimpsonsFixture,
     /// Bounded bank-aware instruction discovery script.
     SimpsonsFlow,
+    /// Reconcile proven local flow observations into a candidate ledger.
+    SimpsonsReconcile(OsString, OsString, OsString, NonZeroU64),
 }
 
 impl Board {
@@ -432,9 +444,25 @@ impl Board {
                 Ok(Self::SimpsonsFixture)
             },
             ("simpsons", [mode]) if mode == "flow" => Ok(Self::SimpsonsFlow),
-            _ => Err(String::from(
-                "expected ghidra-board simpsons [fixture|flow]",
-            )),
+            ("simpsons", [mode]) if mode == "facts" => Ok(Self::SimpsonsFacts),
+            ("simpsons", [mode, facts, rom, limit]) if mode == "bounds" => {
+                Ok(Self::SimpsonsBounds(
+                    facts.clone(),
+                    rom.clone(),
+                    crate::parse_limit(limit)?,
+                ))
+            },
+            ("simpsons", [mode, facts, rom, ledger, limit])
+                if mode == "reconcile" =>
+            {
+                Ok(Self::SimpsonsReconcile(
+                    facts.clone(),
+                    rom.clone(),
+                    ledger.clone(),
+                    crate::parse_limit(limit)?,
+                ))
+            },
+            _ => Err(String::from("invalid ghidra-board simpsons mode")),
         }
     }
 
@@ -446,6 +474,13 @@ impl Board {
             Self::Simpsons => write_line(SIMPSONS),
             Self::SimpsonsFixture => write_line(&fixture_hex()?),
             Self::SimpsonsFlow => write_line(FLOW),
+            Self::SimpsonsFacts => write_line(facts::SCRIPT),
+            Self::SimpsonsReconcile(facts, rom, ledger, limit) => {
+                return bounds::reconcile(&facts, &rom, &ledger, limit);
+            },
+            Self::SimpsonsBounds(facts, rom, limit) => {
+                return bounds::run(&facts, &rom, limit);
+            },
         }
         .map_err(|error| error.to_string())
     }
