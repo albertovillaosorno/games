@@ -74,6 +74,8 @@ pub enum CemeteryEnemyPose {
         /// Zero-based approach frame.
         phase: u8,
     },
+    /// Grounded landing body after the final descending step.
+    Landing,
     /// Left-facing airborne body, latched independently of elevation.
     Leap {
         /// Zero-based airborne keyframe.
@@ -113,8 +115,8 @@ impl CemeteryEnemyPose {
 
 /// One enemy's camera-relative position and currently selected station.
 ///
-/// The bounded first-room diagnostic does not include contact response,
-/// terrain changes or the subsequent encounter.
+/// The bounded first-room diagnostic admits only the verified contact
+/// and landing profiles, not terrain changes or the subsequent encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryEnemyApproach {
     /// Whole-pixel elevation above the ground depth.
@@ -123,6 +125,8 @@ pub struct CemeteryEnemyApproach {
     pub pose: Option<CemeteryEnemyPose>,
     /// Floored logical position at the sampled camera offset.
     pub position: Point,
+    /// Retained ground ordering depth on the first withdrawal sample.
+    pub priority_depth: Option<i16>,
     /// Linked station in cabinet order.
     pub target: Player,
 }
@@ -132,6 +136,8 @@ enum PursuitMotion {
     AlignDepth,
     AlignHorizontal,
     Leap { age: u8 },
+    LeapLanding,
+    LeapRecovery { tick: u8 },
     LongRange,
     Retreat { primed: bool },
     Strike { tick: u8 },
@@ -239,7 +245,9 @@ impl Pursuer {
             | PursuitMotion::Retreat { .. }
             | PursuitMotion::Strike { .. }
             | PursuitMotion::Windup { .. }
-            | PursuitMotion::Leap { .. } => {
+            | PursuitMotion::Leap { .. }
+            | PursuitMotion::LeapLanding
+            | PursuitMotion::LeapRecovery { .. } => {
                 return None;
             },
         }
@@ -283,8 +291,29 @@ impl Pursuer {
         Some(())
     }
 
+    const fn leap_recovery_step(&mut self, tick: u8) -> Option<()> {
+        if tick >= 7 {
+            return None;
+        }
+        let next = tick.saturating_add(1);
+        if next == ANIMATION_INTERVAL {
+            self.pose = Some(CemeteryEnemyPose::Approach {
+                depth: CemeteryEnemyDepth::Decreasing,
+                facing: Facing::Right,
+                phase: 1,
+            });
+        }
+        self.motion = PursuitMotion::LeapRecovery { tick: next };
+        Some(())
+    }
+
     const fn leap_step(&mut self, age: u8) -> Option<()> {
-        if age >= 30 {
+        if age == 30 {
+            self.pose = Some(CemeteryEnemyPose::Landing);
+            self.motion = PursuitMotion::LeapLanding;
+            return Some(());
+        }
+        if age > 30 {
             return None;
         }
         if age == 3 {
@@ -332,6 +361,22 @@ impl Pursuer {
             x: i16::try_from(horizontal.div_euclid(UNIT)).unwrap_or_default(),
             y: i16::try_from(depth.div_euclid(UNIT)).unwrap_or_default(),
         }
+    }
+
+    // The observed landing retains the Bart link and starts a diagonal
+    // withdrawal. Other landing geometries are not admitted.
+    const fn recover_leap(&mut self, dx: i32, dy: i32) -> Option<()> {
+        if !matches!(self.target, Player::Bart) || dx != -14i32 || dy != 0i32 {
+            return None;
+        }
+        self.motion = PursuitMotion::LeapRecovery { tick: 0 };
+        self.pose = Some(CemeteryEnemyPose::Approach {
+            depth: CemeteryEnemyDepth::Decreasing,
+            facing: Facing::Right,
+            phase: 0,
+        });
+        self.velocity = (182i32, -182i32);
+        Some(())
     }
 
     // After the strike, only the observed near, leftward alignment
@@ -395,6 +440,8 @@ impl Pursuer {
                 PursuitMotion::Leap { age } => leap_elevation(age),
                 PursuitMotion::AlignDepth
                 | PursuitMotion::AlignHorizontal
+                | PursuitMotion::LeapLanding
+                | PursuitMotion::LeapRecovery { .. }
                 | PursuitMotion::LongRange
                 | PursuitMotion::Retreat { .. }
                 | PursuitMotion::Strike { .. }
@@ -404,6 +451,19 @@ impl Pursuer {
             position: Point {
                 y: point.y.saturating_add(depth_offset),
                 ..point
+            },
+            priority_depth: if matches!(
+                self.motion,
+                PursuitMotion::LeapRecovery { tick: 0 }
+            ) {
+                let prior = self.position.1.saturating_sub(self.velocity.1);
+                Some(
+                    i16::try_from(prior.div_euclid(UNIT))
+                        .unwrap_or_default()
+                        .saturating_add(depth_offset),
+                )
+            } else {
+                None
             },
             target: self.target,
         }
@@ -447,6 +507,10 @@ impl Pursuer {
             },
             PursuitMotion::Windup { tick } => self.windup_step(tick),
             PursuitMotion::Leap { age } => self.leap_step(age)?,
+            PursuitMotion::LeapLanding => self.recover_leap(dx, dy)?,
+            PursuitMotion::LeapRecovery { tick } => {
+                self.leap_recovery_step(tick)?;
+            },
         }
         let (horizontal, depth) = self.position;
         let (vx, vy) = self.velocity;
@@ -574,6 +638,8 @@ impl PursuitPair {
                     PursuitMotion::Strike { .. }
                         | PursuitMotion::Windup { .. }
                         | PursuitMotion::Leap { .. }
+                        | PursuitMotion::LeapLanding
+                        | PursuitMotion::LeapRecovery { .. }
                 )
             {
                 Self::retarget(enemy, &mut self.reservations, slots)?;
@@ -742,7 +808,7 @@ fn stations_admitted(slots: &[Slot; 4], contact_preview: bool) -> bool {
                     && matches!(
                         (player, slot.station.maneuver),
                         (Player::Lisa, Maneuver::Hurt { tick: 0..=13 })
-                            | (Player::Bart, Maneuver::Hurt { tick: 0..=7 })
+                            | (Player::Bart, Maneuver::Hurt { tick: 0..=16 })
                     )))
     })
 }

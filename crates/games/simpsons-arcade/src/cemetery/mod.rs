@@ -66,6 +66,10 @@ const LAST_SHADOW_PREVIEW_SAMPLE: u64 = 373;
 const LAST_CONTACT_PREVIEW_SAMPLE: u64 = 379;
 #[cfg(any(test, feature = "native-preview"))]
 const LAST_REACTION_PREVIEW_SAMPLE: u64 = 397;
+#[cfg(any(test, feature = "native-preview"))]
+const LAST_LANDING_PREVIEW_SAMPLE: u64 = 406;
+const MARGE_IDLE_DELAY: u8 = 160;
+const MARGE_IDLE_PHASE_TICKS: u8 = 4;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -200,10 +204,12 @@ pub struct CemeteryRoom {
     depth_offset: i16,
     enemy_alignment: bool,
     enemy_choice_seed: Option<u16>,
+    marge_idle_ticks: Option<u8>,
     neutral_preview_end: Option<u64>,
     presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
     presentation_enemies: Option<[CemeteryEnemyApproach; 2]>,
+    presentation_marge_idle: Option<u8>,
     pursuit: Option<PursuitPair>,
     walk_depth: [i16; 4],
 }
@@ -215,10 +221,12 @@ impl Default for CemeteryRoom {
             depth_offset: 0,
             enemy_alignment: false,
             enemy_choice_seed: None,
+            marge_idle_ticks: None,
             neutral_preview_end: None,
             presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
             presentation_enemies: None,
+            presentation_marge_idle: None,
             pursuit: None,
             walk_depth: [0; 4],
         }
@@ -291,6 +299,24 @@ impl CemeteryRoom {
             };
         }
         true
+    }
+
+    // Only the optional landing diagnostic registers Marge's inactivity
+    // animation. Walking or another maneuver starts a new quiet interval.
+    fn advance_marge_idle(&mut self, slots: &[Slot; 4]) {
+        let Some(ticks) = &mut self.marge_idle_ticks else {
+            return;
+        };
+        let Some(slot) = slots.get(Player::Marge.index()) else {
+            return;
+        };
+        *ticks = if slot.station.maneuver == Maneuver::Idle
+            && slot.station.walking.is_none()
+        {
+            ticks.saturating_add(1)
+        } else {
+            0
+        };
     }
 
     // The observed entrance activates two independently staggered actors.
@@ -377,6 +403,13 @@ impl CemeteryRoom {
         self.presentation_enemies
     }
 
+    /// Registered Marge inactivity keyframe, when the optional preview
+    /// reaches one of the three observed phases.
+    #[must_use]
+    pub const fn presentation_marge_idle(self) -> Option<u8> {
+        self.presentation_marge_idle
+    }
+
     /// Projected station positions consumed by the displayed actor sample.
     ///
     /// The preceding simulation sample shares the displayed camera offset.
@@ -399,6 +432,11 @@ impl CemeteryRoom {
 
     fn sample_presentation(&mut self, slots: &[Slot; 4]) {
         let preceding_room = *self;
+        self.presentation_marge_idle = self
+            .marge_idle_ticks
+            .and_then(|ticks| ticks.checked_sub(MARGE_IDLE_DELAY))
+            .and_then(|age| age.checked_div(MARGE_IDLE_PHASE_TICKS))
+            .filter(|phase| *phase < 3);
         for (body, slot) in self.presentation_bodies.iter_mut().zip(slots) {
             *body = CemeteryRoomBody {
                 facing: slot.station.facing,
@@ -469,15 +507,16 @@ impl CemeteryEntrance {
             }
             room.advance_pursuit(self.tick, slots);
         }
-        if walking {
-            return room.advance(slots, pending);
-        }
+        let advanced = walking && room.advance(slots, pending);
         if !self.card && self.tick == LAST_WALK_TICK.saturating_add(1) {
-            for slot in slots {
+            for slot in slots.iter_mut() {
                 slot.station.walking = None;
             }
         }
-        false
+        if !self.card && self.tick >= FIRST_ENEMY_APPROACH {
+            room.advance_marge_idle(slots);
+        }
+        advanced
     }
 
     // Reference rosters share Marge and Homer, with either other station.
@@ -613,6 +652,14 @@ impl CemeteryEntrance {
             } else {
                 LAST_NEUTRAL_PREVIEW_SAMPLE
             });
+        }
+    }
+
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn enable_neutral_landing_preview(&mut self) {
+        if let Some(room) = &mut self.room {
+            room.neutral_preview_end = Some(LAST_LANDING_PREVIEW_SAMPLE);
+            room.marge_idle_ticks = Some(0);
         }
     }
 
@@ -1044,6 +1091,7 @@ mod tests {
                 x,
                 y: observed_enemy_depth(tick, homer_lisa, first),
             },
+            priority_depth: None,
             target,
         }
     }
@@ -1175,6 +1223,7 @@ mod tests {
                     phase,
                 }),
                 position: Point { x: x1, y: y1 },
+                priority_depth: None,
                 target: if homer_lisa {
                     Player::Lisa
                 } else {
@@ -1189,6 +1238,7 @@ mod tests {
                     phase: second_phase,
                 }),
                 position: Point { x: x2, y: y2 },
+                priority_depth: None,
                 target: Player::Marge,
             },
         ]
@@ -1317,6 +1367,7 @@ mod tests {
                     x: 329,
                     y: 154i16.saturating_sub(pan),
                 },
+                priority_depth: None,
                 target: Player::Lisa,
             },
             CemeteryEnemyApproach {
@@ -1337,6 +1388,7 @@ mod tests {
                     x: second_x,
                     y: 207i16.saturating_sub(pan),
                 },
+                priority_depth: None,
                 target: if tick >= 351 {
                     Player::Bart
                 } else {
@@ -1366,6 +1418,7 @@ mod tests {
                         .ok()?,
                 }),
                 position: Point { x: x1, y: y1 },
+                priority_depth: None,
                 target: if tick >= 351 {
                     Player::Homer
                 } else {
@@ -1383,6 +1436,7 @@ mod tests {
                     .ok()?,
                 }),
                 position: Point { x: x2, y: y2 },
+                priority_depth: None,
                 target: Player::Marge,
             },
         ])
@@ -1450,7 +1504,16 @@ mod tests {
     }
 
     fn expected_neutral_preview(tick: u64) -> [CemeteryEnemyApproach; 2] {
-        let (pose, x, elevation) = expected_neutral_second(tick);
+        let (pose, horizontal, elevation) = expected_neutral_second(tick);
+        let depth = match tick {
+            399 => 206,
+            400 => 205,
+            401..=402 => 204,
+            403 => 203,
+            404..=405 => 202,
+            406 => 201,
+            _ => 207,
+        };
         let cycle = if tick >= 393 {
             68
         } else {
@@ -1463,12 +1526,14 @@ mod tests {
                     tick.saturating_sub(cycle),
                 )),
                 position: Point { x: 329, y: 154 },
+                priority_depth: None,
                 target: Player::Lisa,
             },
             CemeteryEnemyApproach {
                 elevation,
                 pose: Some(pose),
-                position: Point { x, y: 207 },
+                position: Point { x: horizontal, y: depth },
+                priority_depth: (tick == 399).then_some(207),
                 target: Player::Bart,
             },
         ]
@@ -1515,8 +1580,32 @@ mod tests {
             394 => (CemeteryEnemyPose::Leap { phase: 3 }, 194, 17),
             395 => (CemeteryEnemyPose::Leap { phase: 3 }, 192, 14),
             396 => (CemeteryEnemyPose::Leap { phase: 3 }, 190, 11),
-            _ => (CemeteryEnemyPose::Leap { phase: 3 }, 188, 7),
+            397 => (CemeteryEnemyPose::Leap { phase: 3 }, 188, 7),
+            _ => expected_neutral_recovery(tick),
         }
+    }
+
+    fn expected_neutral_recovery(tick: u64) -> (CemeteryEnemyPose, i16, i16) {
+        if tick == 398 {
+            return (CemeteryEnemyPose::Landing, 186, 0);
+        }
+        let horizontal = match tick {
+            399 => 187,
+            400..=401 => 188,
+            402 => 189,
+            403 => 190,
+            404..=405 => 191,
+            _ => 192,
+        };
+        (
+            CemeteryEnemyPose::Approach {
+                depth: CemeteryEnemyDepth::Decreasing,
+                facing: Facing::Right,
+                phase: u8::from(tick >= 405),
+            },
+            horizontal,
+            0,
+        )
     }
 
     #[test]
@@ -1565,15 +1654,63 @@ mod tests {
 
     #[test]
     fn contact_preview_debits_before_reaction_and_stops_at_pose_boundary() {
-        verify_contact_preview(false, 380);
-        verify_contact_preview(true, 398);
+        verify_contact_preview(
+            |entrance| entrance.enable_neutral_contact_preview(false),
+            380,
+        );
+        verify_contact_preview(
+            |entrance| entrance.enable_neutral_contact_preview(true),
+            398,
+        );
     }
 
-    fn verify_contact_preview(complete_reaction: bool, terminal: u64) {
+    #[test]
+    fn landing_preview_matches_observed_withdrawal_and_idle_animation() {
+        verify_contact_preview(
+            CemeteryEntrance::enable_neutral_landing_preview,
+            407,
+        );
+    }
+
+    #[test]
+    fn inactivity_animation_requires_a_new_quiet_interval_after_movement() {
+        let mut room = CemeteryRoom {
+            marge_idle_ticks: Some(0),
+            ..CemeteryRoom::default()
+        };
+        let mut slots = room_slots();
+        for _ in 0u8..159 {
+            room.advance_marge_idle(&slots);
+        }
+        room.sample_presentation(&slots);
+        assert_eq!(room.presentation_marge_idle(), None);
+        if let Some(slot) = slots.get_mut(Player::Marge.index()) {
+            slot.station.walking = Some(WalkMotion { away: false, tick: 0 });
+        }
+        room.advance_marge_idle(&slots);
+        if let Some(slot) = slots.get_mut(Player::Marge.index()) {
+            slot.station.walking = None;
+        }
+        for _ in 0u8..159 {
+            room.advance_marge_idle(&slots);
+        }
+        room.sample_presentation(&slots);
+        assert_eq!(room.presentation_marge_idle(), None);
+        for age in 0u8..9 {
+            room.advance_marge_idle(&slots);
+            room.sample_presentation(&slots);
+            assert_eq!(room.presentation_marge_idle(), age.checked_div(4));
+        }
+    }
+
+    fn verify_contact_preview(
+        enable: impl FnOnce(&mut CemeteryEntrance),
+        terminal: u64,
+    ) {
         let mut entrance = arrival(Player::Marge).at(237);
         entrance.enable_room();
         entrance.enable_enemy_strike(0x1207);
-        entrance.enable_neutral_contact_preview(complete_reaction);
+        enable(&mut entrance);
         let mut slots = room_slots();
         for tick in 238..=terminal {
             for (slot, held) in slots.iter_mut().zip(strike_controls(0, tick)) {
@@ -1599,9 +1736,25 @@ mod tests {
                 break;
             }
             assert_contact_pose(tick, &entrance);
+            assert_idle_preview(tick, &entrance);
             assert_eq!(entrance.room_body_visibility(), Some(true));
             assert_eq!(enemies, Some(expected_neutral_preview(tick)), "{tick}");
         }
+    }
+
+    fn assert_idle_preview(tick: u64, entrance: &CemeteryEntrance) {
+        assert_eq!(
+            entrance
+                .room()
+                .and_then(CemeteryRoom::presentation_marge_idle),
+            match tick {
+                398..=401 => Some(0),
+                402..=405 => Some(1),
+                406 => Some(2),
+                _ => None,
+            },
+            "{tick}"
+        );
     }
 
     fn assert_contact_state(tick: u64, slots: &[Slot; 4]) {
@@ -1653,7 +1806,7 @@ mod tests {
 
     fn assert_contact_pose(tick: u64, entrance: &CemeteryEntrance) {
         for (player, first, end) in
-            [(Player::Lisa, 375, 389), (Player::Bart, 390, 398)]
+            [(Player::Lisa, 375, 389), (Player::Bart, 390, 407)]
         {
             let expected = if (first..end).contains(&tick) {
                 Maneuver::Hurt {

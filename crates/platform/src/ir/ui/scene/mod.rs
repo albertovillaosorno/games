@@ -31,7 +31,7 @@
 
 //! Backend-independent scene command values.
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroI64, NonZeroU32, NonZeroUsize};
 
 pub use games::presentation::SpriteRect;
 use games::presentation::{Dimensions, Viewport};
@@ -82,6 +82,45 @@ pub struct SpriteDraw {
 }
 
 impl SpriteDraw {
+    /// Clip an unscaled horizontal draw to the half-open logical interval.
+    ///
+    /// Preserve source registration and horizontal reflection. An empty
+    /// intersection, horizontal scaling or overflow yields no draw.
+    #[must_use]
+    pub fn clipped_horizontal(self, left: i32, right: i32) -> Option<Self> {
+        if self.source.width != self.destination.width || left >= right {
+            return None;
+        }
+        let x = i64::from(self.destination.x);
+        let end =
+            x.checked_add(NonZeroI64::from(self.destination.width).get())?;
+        let start = x.max(i64::from(left));
+        let stop = end.min(i64::from(right));
+        let width =
+            NonZeroU32::new(u32::try_from(stop.checked_sub(start)?).ok()?)?;
+        let offset = if self.flip_horizontal {
+            end.checked_sub(stop)?
+        } else {
+            start.checked_sub(x)?
+        };
+        let source_x =
+            i32::try_from(i64::from(self.source.x).checked_add(offset)?)
+                .ok()?;
+        Some(Self {
+            destination: SpriteRect {
+                x: i32::try_from(start).ok()?,
+                width,
+                ..self.destination
+            },
+            source: SpriteRect {
+                x: source_x,
+                width,
+                ..self.source
+            },
+            ..self
+        })
+    }
+
     /// Draw a one-period wrapped atlas view without scaling or overlap.
     ///
     /// The atlas contains exactly the supplied period, rooted at zero.
@@ -159,6 +198,69 @@ mod tests {
             width: dim(width),
             x: horizontal,
             y: vertical,
+        }
+    }
+
+    #[test]
+    fn clipped_horizontal_preserves_source_and_reflection() {
+        let draw = SpriteDraw {
+            atlas: AtlasId(3),
+            destination: rect(13, 190, 30, 8),
+            flip_horizontal: false,
+            flip_vertical: true,
+            source: rect(7, 3, 30, 8),
+        };
+        for (flip, source_x) in [(false, 10i32), (true, 11i32)] {
+            let oriented = SpriteDraw {
+                flip_horizontal: flip,
+                ..draw
+            };
+            let expected = SpriteDraw {
+                destination: rect(16, 190, 23, 8),
+                source: rect(source_x, 3, 23, 8),
+                ..oriented
+            };
+            assert_eq!(oriented.clipped_horizontal(16, 39), Some(expected));
+            assert_eq!(oriented.clipped_horizontal(0, 50), Some(oriented));
+            assert_eq!(oriented.clipped_horizontal(43, 50), None);
+            assert_eq!(oriented.clipped_horizontal(0, 13), None);
+            assert_eq!(oriented.clipped_horizontal(20, 20), None);
+        }
+        let scaled = SpriteDraw {
+            destination: rect(13, 190, 60, 8),
+            ..draw
+        };
+        assert_eq!(scaled.clipped_horizontal(16, 39), None);
+    }
+
+    #[test]
+    fn clipped_horizontal_excludes_both_black_margins() {
+        let cases = [
+            (-14i32, None),
+            (13i32, Some((16i32, 3i32, 27u32))),
+            (16i32, Some((16i32, 0i32, 30u32))),
+            (270i32, Some((270i32, 0i32, 30u32))),
+            (274i32, Some((274i32, 0i32, 30u32))),
+            (302i32, Some((302i32, 0i32, 2u32))),
+            (304i32, None),
+            (306i32, None),
+        ];
+        for (x, expected) in cases {
+            let draw = SpriteDraw {
+                atlas: AtlasId(3),
+                destination: rect(x, 190, 30, 1),
+                flip_horizontal: false,
+                flip_vertical: false,
+                source: rect(0, 0, 30, 1),
+            };
+            let actual = draw.clipped_horizontal(16, 304).map(|clipped| {
+                (
+                    clipped.destination.x,
+                    clipped.source.x,
+                    clipped.destination.width.get(),
+                )
+            });
+            assert_eq!(actual, expected);
         }
     }
 

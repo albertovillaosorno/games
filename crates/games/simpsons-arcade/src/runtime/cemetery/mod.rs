@@ -43,7 +43,7 @@ use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
 use games_platform::ir::process::write_status;
-use games_platform::ir::scene::{SpriteDraw, SpriteRect};
+use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::storage::bundle::BundleSource;
 
 use super::{Art, Scene, failure, open_bundle, scenery, world};
@@ -70,6 +70,7 @@ const NEUTRAL_PREVIEW_ROLE_COUNT: usize = RETREAT_ROLE_COUNT + 2;
 const SHADOW_PREVIEW_ROLE_COUNT: usize = NEUTRAL_PREVIEW_ROLE_COUNT + 2;
 const CONTACT_PREVIEW_ROLE_COUNT: usize = SHADOW_PREVIEW_ROLE_COUNT + 4;
 const REACTION_PREVIEW_ROLE_COUNT: usize = CONTACT_PREVIEW_ROLE_COUNT + 2;
+const LANDING_PREVIEW_ROLE_COUNT: usize = REACTION_PREVIEW_ROLE_COUNT + 5;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
@@ -86,6 +87,8 @@ const SHADOW_PREVIEW_ATLAS_BYTES: usize = NEUTRAL_PREVIEW_ATLAS_BYTES + 10_368;
 const CONTACT_PREVIEW_ATLAS_BYTES: usize = SHADOW_PREVIEW_ATLAS_BYTES + 19_860;
 const REACTION_PREVIEW_ATLAS_BYTES: usize =
     CONTACT_PREVIEW_ATLAS_BYTES + 18_248;
+const LANDING_PREVIEW_ATLAS_BYTES: usize =
+    REACTION_PREVIEW_ATLAS_BYTES + 48_800;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -95,7 +98,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; REACTION_PREVIEW_ROLE_COUNT] = [
+const ROLES: [Role; LANDING_PREVIEW_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -305,6 +308,12 @@ const ROLES: [Role; REACTION_PREVIEW_ROLE_COUNT] = [
     // Fourth airborne body and remaining station reaction.
     Role::new("actor/room-enemy", (57, 52), (-88i32, -40i32)),
     Role::new("actor/room-lisa", (34, 47), (-90i32, -23i32)),
+    // Grounded landing, three idle phases and the independent scenic object.
+    Role::new("actor/room-enemy", (32, 64), (-80i32, -40i32)),
+    Role::new("actor/room-marge", (33, 76), (-75i32, -52i32)),
+    Role::new("actor/room-marge", (40, 68), (-82i32, -44i32)),
+    Role::new("actor/room-marge", (44, 61), (-86i32, -37i32)),
+    Role::new("actor/room-scenic", (80, 28), (-103i32, -67i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -355,7 +364,8 @@ enum EnemyControlKind {
 
 type EnemyControl<'label> = (&'label str, [u8; 4], u64, EnemyControlKind);
 
-type RoomVisibility = (bool, bool, Option<[CemeteryEnemyApproach; 2]>);
+type RoomVisibility =
+    (bool, bool, Option<[CemeteryEnemyApproach; 2]>, Option<u8>);
 
 #[derive(Clone, Copy, Debug)]
 struct RoleArt {
@@ -442,6 +452,7 @@ impl Selection {
 
     pub(super) const fn atlas_bytes(&self) -> usize {
         let registered = match self.count() {
+            LANDING_PREVIEW_ROLE_COUNT => LANDING_PREVIEW_ATLAS_BYTES,
             REACTION_PREVIEW_ROLE_COUNT => REACTION_PREVIEW_ATLAS_BYTES,
             CONTACT_PREVIEW_ROLE_COUNT => CONTACT_PREVIEW_ATLAS_BYTES,
             SHADOW_PREVIEW_ROLE_COUNT => SHADOW_PREVIEW_ATLAS_BYTES,
@@ -500,7 +511,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(REACTION_PREVIEW_ROLE_COUNT.saturating_add(1))
+            .take(LANDING_PREVIEW_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -520,10 +531,11 @@ impl Selection {
                 | SHADOW_PREVIEW_ROLE_COUNT
                 | CONTACT_PREVIEW_ROLE_COUNT
                 | REACTION_PREVIEW_ROLE_COUNT
+                | LANDING_PREVIEW_ROLE_COUNT
         ) {
             return Err(failure(concat!(
                 "invalid count (16/44/104/108/120/154/156/172/",
-                "175/183/186/188/190/194/196)"
+                "175/183/186/188/190/194/196/201)"
             )));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
@@ -638,7 +650,9 @@ impl CemeteryArt {
     }
 
     const fn enable_neutral_preview(&self, entrance: &mut CemeteryEntrance) {
-        if self.roles.len() >= CONTACT_PREVIEW_ROLE_COUNT {
+        if self.roles.len() >= LANDING_PREVIEW_ROLE_COUNT {
+            entrance.enable_neutral_landing_preview();
+        } else if self.roles.len() >= CONTACT_PREVIEW_ROLE_COUNT {
             entrance.enable_neutral_contact_preview(
                 self.roles.len() >= REACTION_PREVIEW_ROLE_COUNT,
             );
@@ -677,10 +691,7 @@ impl CemeteryArt {
         let mut destination = art.rect;
         (destination.x, destination.y) = role.room_offset(position, false);
         destination.y = destination.y.saturating_sub(i32::from(elevation));
-        let columns = enemy_visible_columns(destination);
-        let mut draw = art.draw(destination.left_columns(columns)?, false);
-        draw.source = draw.source.left_columns(columns)?;
-        Some(draw)
+        room_clip(art.draw(destination, false))
     }
 
     fn enemy_shadow(
@@ -832,6 +843,7 @@ impl CemeteryArt {
 
     const fn neutral_strike_terminal(&self) -> u64 {
         match self.roles.len() {
+            LANDING_PREVIEW_ROLE_COUNT.. => 407,
             REACTION_PREVIEW_ROLE_COUNT.. => 398,
             CONTACT_PREVIEW_ROLE_COUNT.. => 380,
             SHADOW_PREVIEW_ROLE_COUNT.. => 374,
@@ -867,7 +879,12 @@ impl CemeteryArt {
             let blocked = self.foreground_blocked(enemies);
             self.queue_room(
                 &room.presentation_bodies(),
-                (visible, entrance.room_markers_visible(), enemies),
+                (
+                    visible,
+                    entrance.room_markers_visible(),
+                    enemies,
+                    room.presentation_marge_idle(),
+                ),
                 draws,
             );
             if let Some(shadow) = &mut self.shadow {
@@ -891,7 +908,7 @@ impl CemeteryArt {
     fn queue_room(
         &self,
         bodies: &[CemeteryRoomBody; 4],
-        (visible, markers, enemies): RoomVisibility,
+        (visible, markers, enemies, marge_idle): RoomVisibility,
         draws: &mut Vec<SpriteDraw>,
     ) {
         let order = room_order(bodies, enemies.as_ref());
@@ -905,7 +922,7 @@ impl CemeteryArt {
         draws.extend(order.into_iter().filter_map(|index| {
             if let Some(&player) = Player::ALL.get(index) {
                 visible.then_some(())?;
-                self.room_draw(player, *bodies.get(index)?)
+                self.room_preview_draw(player, *bodies.get(index)?, marge_idle)
             } else {
                 self.enemy_draw(
                     *enemies.as_ref()?.get(index.saturating_sub(4))?,
@@ -916,6 +933,20 @@ impl CemeteryArt {
             draws.extend([Player::Lisa, Player::Bart].into_iter().filter_map(
                 |player| self.contact_effect(*bodies.get(player.index())?),
             ));
+            // The original idle gag object has independent foreground
+            // priority, above the station and enemy body records.
+            if marge_idle.is_some()
+                && let Some(body) = bodies.get(Player::Marge.index())
+            {
+                draws.extend(
+                    self.room_registered_draw(
+                        LANDING_PREVIEW_ROLE_COUNT.saturating_sub(1),
+                        body.position,
+                        false,
+                    )
+                    .and_then(room_clip),
+                );
+            }
         }
         // The lower original ordering bytes place persistent markers
         // in front of every body, even when the station bodies are hidden.
@@ -960,6 +991,24 @@ impl CemeteryArt {
         }
         let (index, flip) = room_role(player, body)?;
         self.room_registered_draw(index, body.position, flip)
+    }
+
+    fn room_preview_draw(
+        &self,
+        player: Player,
+        body: CemeteryRoomBody,
+        marge_idle: Option<u8>,
+    ) -> Option<SpriteDraw> {
+        if player == Player::Marge
+            && let Some(phase) = marge_idle
+        {
+            return self.room_registered_draw(
+                idle_marge_role(phase)?,
+                body.position,
+                false,
+            );
+        }
+        self.room_draw(player, body)
     }
 
     fn room_registered_draw(
@@ -1343,8 +1392,8 @@ impl CemeteryArt {
         }; 4];
         let mut hidden = Vec::new();
         let mut visible = Vec::new();
-        self.queue_room(&bodies, (false, true, None), &mut hidden);
-        self.queue_room(&bodies, (true, true, None), &mut visible);
+        self.queue_room(&bodies, (false, true, None, None), &mut hidden);
+        self.queue_room(&bodies, (true, true, None, None), &mut visible);
         if hidden.len() != 4
             || visible.len() != 8
             || !visible.ends_with(&hidden)
@@ -1511,7 +1560,7 @@ impl CemeteryArt {
             .ok_or(RenderError::InvalidSprite)?
             .queue(phase, 0, &mut draws)?;
         let background_count = draws.len();
-        self.queue_room(&bodies, (visible, true, None), &mut draws);
+        self.queue_room(&bodies, (visible, true, None, None), &mut draws);
         let shadow = self.shadow.as_mut().ok_or(RenderError::InvalidSprite)?;
         let correction =
             shadow.queue(scene, &draws, (background_count, [None; 2]))?;
@@ -1574,21 +1623,19 @@ fn room_order(
     order.sort_unstable_by_key(|&index| {
         let depth =
             bodies.get(index).map(|body| body.position.y).or_else(|| {
-                enemies?
-                    .get(index.saturating_sub(4))
-                    .map(|enemy| enemy.position.y)
+                enemies?.get(index.saturating_sub(4)).map(|enemy| {
+                    enemy.priority_depth.unwrap_or(enemy.position.y)
+                })
             });
         Reverse((depth, index))
     });
     order
 }
 
-// The protected original room keeps columns 304..320 black.
+// The protected original room keeps both sixteen-column margins black.
 // Clip both rectangles without scaling or changing actor registration.
-fn enemy_visible_columns(destination: SpriteRect) -> u32 {
-    u32::try_from(304i32.saturating_sub(destination.x))
-        .unwrap_or_default()
-        .min(destination.width.get())
+fn room_clip(draw: SpriteDraw) -> Option<SpriteDraw> {
+    draw.clipped_horizontal(16, 304)
 }
 
 const fn enemy_control_at(
@@ -1637,7 +1684,9 @@ const fn hurt_body_role(player: Player, maneuver: Maneuver) -> Option<usize> {
         (Player::Bart, Maneuver::Hurt { tick: 0..=4 }) => {
             Some(player.index().saturating_add(12))
         },
-        (Player::Bart, Maneuver::Hurt { tick: 5..=7 }) => Some(30),
+        (Player::Bart, Maneuver::Hurt { tick: 5..=9 }) => Some(30),
+        (Player::Bart, Maneuver::Hurt { tick: 10..=15 }) => Some(31),
+        (Player::Bart, Maneuver::Hurt { tick: 16 }) => Some(32),
         (Player::Lisa, Maneuver::Hurt { tick: 0..=5 }) => {
             Some(SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1))
         },
@@ -1657,10 +1706,29 @@ const fn hurt_body_role(player: Player, maneuver: Maneuver) -> Option<usize> {
     }
 }
 
+fn idle_marge_role(phase: u8) -> Option<usize> {
+    if phase < 3 {
+        Some(
+            REACTION_PREVIEW_ROLE_COUNT
+                .saturating_add(1usize.saturating_add(usize::from(phase))),
+        )
+    } else {
+        None
+    }
+}
+
 fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
-    use CemeteryEnemyDepth::{Decreasing, Increasing, Level};
+    use CemeteryEnemyDepth::Decreasing;
     let (phase, depth) = match pose {
         CemeteryEnemyPose::Windup => return Some(RETREAT_ROLE_COUNT),
+        CemeteryEnemyPose::Landing => return Some(REACTION_PREVIEW_ROLE_COUNT),
+        CemeteryEnemyPose::Approach {
+            depth: Decreasing,
+            facing: Facing::Right,
+            phase: phase @ 0..=1,
+        } => {
+            return Some(AIR_ROLE_COUNT.saturating_add(usize::from(phase)));
+        },
         CemeteryEnemyPose::Leap { phase: 3 } => {
             return Some(CONTACT_PREVIEW_ROLE_COUNT);
         },
@@ -1693,6 +1761,11 @@ fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
         | CemeteryEnemyPose::Strike { .. }
         | CemeteryEnemyPose::Leap { .. } => return None,
     };
+    enemy_approach_role(phase, depth)
+}
+
+fn enemy_approach_role(phase: u8, depth: CemeteryEnemyDepth) -> Option<usize> {
+    use CemeteryEnemyDepth::{Decreasing, Increasing, Level};
     if depth == Increasing && (3..=5).contains(&phase) {
         return Some(
             STRIKE_ROLE_COUNT
@@ -1836,6 +1909,11 @@ fn room_source(index: usize, count: usize) -> bool {
         && [0, 5].into_iter().any(|tick| {
             hurt_body_role(Player::Bart, Maneuver::Hurt { tick }) == Some(index)
         }))
+        || (count >= LANDING_PREVIEW_ROLE_COUNT
+            && [10, 16].into_iter().any(|tick| {
+                hurt_body_role(Player::Bart, Maneuver::Hurt { tick })
+                    == Some(index)
+            }))
         || index >= ANIMATED_ROLE_COUNT
         || Player::ALL
             .into_iter()
@@ -2001,6 +2079,7 @@ mod tests {
             elevation: 0,
             pose: None,
             position: Point { x: 384, y },
+            priority_depth: None,
             target: Player::Marge,
         };
         assert_eq!(
@@ -2014,38 +2093,19 @@ mod tests {
             ),
             [5, 0, 3, 4, 2, 1]
         );
-    }
 
-    #[test]
-    fn enemy_art_clips_to_the_observed_black_border_without_scaling() {
-        use std::num::NonZeroU32;
-
-        let width = NonZeroU32::new(30).unwrap_or(NonZeroU32::MIN);
-        let rect = SpriteRect {
-            x: 274,
-            y: 190,
-            width,
-            height: NonZeroU32::MIN,
+        let recovering = CemeteryEnemyApproach {
+            priority_depth: Some(207),
+            ..enemy(206)
         };
-        for (x, expected) in [
-            (270i32, 30u32),
-            (274i32, 30),
-            (302i32, 2),
-            (304i32, 0),
-            (306i32, 0),
-        ] {
-            let destination = SpriteRect { x, ..rect };
-            let columns = enemy_visible_columns(destination);
-            assert_eq!(columns, expected);
-            assert_eq!(
-                destination.left_columns(columns).map(|clipped| (
-                    clipped.x,
-                    clipped.y,
-                    clipped.width.get()
-                )),
-                (expected != 0).then_some((x, rect.y, expected))
-            );
-        }
+        assert_eq!(
+            room_order(&[body(207); 4], Some(&[enemy(154), recovering])),
+            [5, 3, 2, 1, 0, 4]
+        );
+        assert_eq!(
+            room_order(&[body(207); 4], Some(&[enemy(154), enemy(206)])),
+            [3, 2, 1, 0, 5, 4]
+        );
     }
 
     #[test]
@@ -2095,7 +2155,11 @@ mod tests {
                         facing: Facing::Right,
                         phase,
                     }),
-                    None
+                    if depth == Decreasing && phase < 2 {
+                        Some(AIR_ROLE_COUNT.saturating_add(usize::from(phase)))
+                    } else {
+                        None
+                    }
                 );
             }
         }
@@ -2302,6 +2366,32 @@ mod tests {
     }
 
     #[test]
+    fn landing_preview_requires_all_new_roles() {
+        let previous = parse_enemy_catalogue(REACTION_PREVIEW_ROLE_COUNT);
+        let extended = parse_enemy_catalogue(LANDING_PREVIEW_ROLE_COUNT);
+        assert!(previous.is_ok() && extended.is_ok());
+        if let (Ok(old), Ok(new)) = (previous, extended) {
+            assert_eq!(
+                new.atlas_bytes(),
+                old.atlas_bytes().saturating_add(48_800)
+            );
+            assert_eq!(new.sprite_count(), old.sprite_count());
+        }
+        for count in [197, 198, 199, 200, 202] {
+            assert!(parse_enemy_catalogue(count).is_err());
+        }
+    }
+
+    #[test]
+    fn landing_and_idle_roles_have_independent_registrations() {
+        assert_eq!(enemy_shadow_role(CemeteryEnemyPose::Landing), None);
+        assert_eq!(idle_marge_role(0), Some(197));
+        assert_eq!(idle_marge_role(1), Some(198));
+        assert_eq!(idle_marge_role(2), Some(199));
+        assert_eq!(idle_marge_role(3), None);
+    }
+
+    #[test]
     fn reaction_preview_registers_observed_body_phases() {
         let fourth = CemeteryEnemyPose::Leap { phase: 3 };
         assert_eq!(enemy_role(fourth), Some(CONTACT_PREVIEW_ROLE_COUNT));
@@ -2334,7 +2424,12 @@ mod tests {
             (4, Some(14)),
             (5, Some(30)),
             (7, Some(30)),
-            (8, None),
+            (8, Some(30)),
+            (9, Some(30)),
+            (10, Some(31)),
+            (15, Some(31)),
+            (16, Some(32)),
+            (17, None),
         ] {
             assert_eq!(
                 hurt_body_role(Player::Bart, Maneuver::Hurt { tick }),
@@ -2344,6 +2439,10 @@ mod tests {
         for index in [14, 30] {
             assert!(room_source(index, REACTION_PREVIEW_ROLE_COUNT));
             assert!(!room_source(index, CONTACT_PREVIEW_ROLE_COUNT));
+        }
+        for index in [31, 32] {
+            assert!(room_source(index, LANDING_PREVIEW_ROLE_COUNT));
+            assert!(!room_source(index, REACTION_PREVIEW_ROLE_COUNT));
         }
     }
 
@@ -2374,6 +2473,7 @@ mod tests {
             (SHADOW_PREVIEW_ROLE_COUNT, SHADOW_PREVIEW_ATLAS_BYTES),
             (CONTACT_PREVIEW_ROLE_COUNT, CONTACT_PREVIEW_ATLAS_BYTES),
             (REACTION_PREVIEW_ROLE_COUNT, REACTION_PREVIEW_ATLAS_BYTES),
+            (LANDING_PREVIEW_ROLE_COUNT, LANDING_PREVIEW_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(

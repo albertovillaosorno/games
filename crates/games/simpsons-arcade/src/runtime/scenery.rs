@@ -45,7 +45,7 @@ use games_platform::ir::scene::{SpriteDraw, SpriteRect};
 use games_platform::ir::storage::bundle::BundleSource;
 
 use super::world::{View, camera_at_limit};
-use super::{Art, Scene, dimension, failure, open_bundle};
+use super::{Art, Scene, failure, open_bundle};
 use crate::{
     Action, BASE_WIDTH, Cabinet, Control, MID_STREET_SCRIPT_ORIGIN,
     MID_STREET_SCRIPT_TICKS, Player, Point, SIDE, STATIONARY_SCENE_CYCLE,
@@ -358,27 +358,15 @@ fn clipped_draw(
     } else {
         0
     };
-    let x = i32::from(point.x);
-    let left = x.max(i32::try_from(side).map_err(failure)?);
-    let right = x
-        .saturating_add(i32::try_from(art.rect.width.get()).map_err(failure)?)
-        .min(i32::try_from(view_width.saturating_sub(side)).map_err(failure)?);
-    if right <= left {
-        return Ok(None);
-    }
-    let width =
-        dimension(u32::try_from(right.saturating_sub(left)).map_err(failure)?)?;
-    let source = SpriteRect {
-        x: art.rect.x.saturating_add(left.saturating_sub(x)),
-        width,
+    let destination = SpriteRect {
+        x: i32::from(point.x),
+        y: i32::from(point.y),
         ..art.rect
     };
-    let destination = SpriteRect {
-        x: left,
-        y: i32::from(point.y),
-        ..source
-    };
-    Ok(Some(Art { rect: source, ..art }.draw(destination, false)))
+    let left = i32::try_from(side).map_err(failure)?;
+    let right =
+        i32::try_from(view_width.saturating_sub(side)).map_err(failure)?;
+    Ok(art.draw(destination, false).clipped_horizontal(left, right))
 }
 
 fn has_track<T>(entries: &Track<T>, kind: Kind) -> bool {

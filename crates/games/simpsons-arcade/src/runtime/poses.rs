@@ -58,7 +58,7 @@ use crate::{
 
 const MAX_POSES: usize = 220;
 pub(super) const MAX_CATALOGUE_BYTES: NonZeroU64 =
-    NonZeroU64::MIN.saturating_add(38_721);
+    NonZeroU64::MIN.saturating_add(39_046);
 const REPELLED_KEYS: [u8; 12] = [0, 5, 10, 16, 19, 25, 29, 34, 49, 56, 77, 83];
 const RESTRAINT_KEYS: [u8; 6] = [0, 7, 14, 20, 27, 45];
 const MARGE_HOMER_JUMP_KEYS: [u8; 8] = [0, 2, 8, 10, 12, 14, 16, 18];
