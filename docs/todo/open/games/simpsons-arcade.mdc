@@ -6522,3 +6522,37 @@ distinct ranks and zero scores. The native competitive roster still
 excludes nonparticipants; their original fall and linked display
 presentation are not implemented. Full original scheduling and visual
 equivalence are not claimed.
+
+### Automated bonus opposition and completion
+
+Six isolated original controls cover one to three human stations,
+neutral and active input, and a late join. Across 3,947 automated
+counter observations and 550 pump pulses, the counter recurrence
+matches without discrepancy. Sampled reload intervals produce six,
+ten and twelve tick periods. The initialization rotates the station
+order according to board state; fixed native seat order would not
+reproduce arbitrary original arrangements.
+
+All 24 station departure starts agree with ranks derived from all
+four frozen scores, including automated opponents. The zero-score
+rank remains four. Automated scores can reach the size limit while
+human stations remain idle. The six complete exit periods agree
+with the latest ranked terminal time: a participating station uses
+160 ticks plus its rank delay, and an automated station uses 209
+ticks plus its rank delay. Observed whole exit periods are 224, 239
+and 254 ticks.
+
+Nine automated departures each follow the same release, 27-tick
+fall, 96-tick hold and terminal sequence. Across seven linked records,
+868 fall and hold samples match the signed fixed-point recurrence
+and landing clamp. Earlier completed stations continue reporting
+completion until the final station finishes. The private ledger
+retains these observations for twelve pending functions without
+claiming new implemented functions or resolving computed flow.
+
+Native integration remains open: automated competitors must be
+presented when their scores influence rank and the shared size limit.
+Do not substitute a constant partial-roster exit delay, or silently
+include invisible automated competitors. Original board-dependent
+initialization, automated presentation, input eligibility, and the
+separate retirement state require a coherent playable slice.
