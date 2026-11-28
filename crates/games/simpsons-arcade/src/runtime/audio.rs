@@ -43,6 +43,7 @@ use games::input::{InputEvent, LogicalAction};
 use games::presentation::DisplaySettings;
 use games::replay::{InputStep as _, LiveSimulation};
 use games::session::LocalSession;
+use games::timing::{FixedTick, StepClock};
 use games_assets::pcm::PcmSamples;
 use games_assets::{AssetRecord, ContentHash, ManifestLimits};
 use games_platform::ir::audio::{NativeAudio, PlaybackControl, PlaybackSpec};
@@ -55,8 +56,8 @@ use games_platform::ir::storage::preferences::VolumeStore;
 
 use super::launch::AudioSelection as LocalAudioSelection;
 use super::{
-    Controls, failure, fixed, live_with_session, open_selected_bundle,
-    parse_hash, parse_hashes, size, smoke_press,
+    Controls, dimension, failure, fixed, live_with_session,
+    open_selected_bundle, parse_hash, parse_hashes, size, smoke_press,
 };
 use crate::{
     Action, BonusPhase, Cabinet, CemeteryEntrance, CemeteryPhase, Control,
@@ -1411,9 +1412,26 @@ impl Playback {
 }
 
 #[derive(Clone, Copy)]
+struct CemeteryEffectProbe {
+    clock: StepClock,
+    first_drained: bool,
+    observed: u8,
+    previous: Duration,
+}
+
+struct CemeterySmokeTicks<'cabinet>(&'cabinet mut Cabinet);
+
+impl FixedTick for CemeterySmokeTicks<'_> {
+    fn fixed_tick(&mut self, index: u64) {
+        self.0.input_step(index, &[]);
+    }
+}
+
+#[derive(Clone, Copy)]
 enum SoundtrackSmokePhase {
     Cemetery,
     CemeteryCard,
+    CemeteryEffects(CemeteryEffectProbe),
     Draining,
     Exhausted { since: Duration },
     Paused { since: Duration, queued: u32 },
@@ -1434,6 +1452,23 @@ pub(super) struct SoundtrackSmoke {
 }
 
 impl SoundtrackSmoke {
+    fn begin_drain(&mut self, timestamp: Duration) -> Result<(), RenderError> {
+        self.phase = if self.target == MusicCue::Cemetery
+            && self.output.entrance.clip.is_some()
+        {
+            SoundtrackSmokePhase::CemeteryEffects(CemeteryEffectProbe {
+                clock: StepClock::new(TICK_INTERVAL, dimension(8)?)
+                    .map_err(failure)?,
+                first_drained: false,
+                observed: 0,
+                previous: timestamp,
+            })
+        } else {
+            SoundtrackSmokePhase::Draining
+        };
+        Ok(())
+    }
+
     fn pause_track(&mut self) {
         self.cabinet
             .input_step(0, &bonus_smoke_pulse(Control::Pause));
@@ -1465,6 +1500,9 @@ impl SoundtrackSmoke {
             SoundtrackSmokePhase::StageTwo => self.step_stage_two(queued)?,
             SoundtrackSmokePhase::CemeteryCard => {
                 self.step_cemetery_card(queued)?;
+            },
+            SoundtrackSmokePhase::CemeteryEffects(probe) => {
+                self.step_cemetery_effects(timestamp, probe)?;
             },
             SoundtrackSmokePhase::Cemetery
             | SoundtrackSmokePhase::Draining
@@ -1499,6 +1537,65 @@ impl SoundtrackSmoke {
         }
         self.cabinet.input_step(193, &[]);
         self.phase = SoundtrackSmokePhase::Cemetery;
+        Ok(())
+    }
+
+    fn step_cemetery_effects(
+        &mut self,
+        timestamp: Duration,
+        mut probe: CemeteryEffectProbe,
+    ) -> Result<(), RenderError> {
+        self.verify_voice(self.target)?;
+        let elapsed = timestamp.saturating_sub(probe.previous);
+        let _advanced = probe
+            .clock
+            .advance(elapsed, &mut CemeterySmokeTicks(&mut self.cabinet))
+            .map_err(failure)?;
+        probe.previous = timestamp;
+        let entrance = self
+            .cabinet
+            .cemetery_entrance()
+            .ok_or_else(|| failure("cemetery entrance disappeared"))?;
+        let tick = entrance.tick();
+        let expected =
+            u8::from(tick >= 26).saturating_add(u8::from(tick >= 120));
+        self.output.update(&self.cabinet)?;
+        let active = self.output.mixer.active_on(AudioSource::Effects);
+        if self.output.entrance.count != expected
+            || active > 1
+            || (expected == 0 && active != 0)
+            || (expected == probe.observed
+                && expected == 1
+                && probe.first_drained
+                && active != 0)
+        {
+            return Err(failure("browser entrance effect timing differs"));
+        }
+        if expected != probe.observed {
+            if active != 1
+                || expected != probe.observed.saturating_add(1)
+                || (expected == 2 && !probe.first_drained)
+            {
+                return Err(failure(
+                    "browser entrance effect admission differs",
+                ));
+            }
+            probe.observed = expected;
+            Self::report(if expected == 1 {
+                "cemetery setup effect admitted"
+            } else {
+                "cemetery descent effect admitted"
+            })?;
+        }
+        if expected == 1 && active == 0 {
+            probe.first_drained = true;
+        }
+        if expected == 2 && active == 0 {
+            Self::report("cemetery entrance effects drained")?;
+            self.phase = SoundtrackSmokePhase::Draining;
+        } else {
+            self.phase = SoundtrackSmokePhase::CemeteryEffects(probe);
+        }
         Ok(())
     }
 
@@ -1541,7 +1638,8 @@ impl SoundtrackSmoke {
         match self.phase {
             SoundtrackSmokePhase::Street
             | SoundtrackSmokePhase::StageTwo
-            | SoundtrackSmokePhase::CemeteryCard => {
+            | SoundtrackSmokePhase::CemeteryCard
+            | SoundtrackSmokePhase::CemeteryEffects(_) => {
                 return Err(failure("soundtrack diagnostic state leaked"));
             },
             SoundtrackSmokePhase::Cemetery => {
@@ -1573,7 +1671,7 @@ impl SoundtrackSmoke {
                 }
                 if queued != 0 {
                     Self::report("resumed")?;
-                    self.phase = SoundtrackSmokePhase::Draining;
+                    self.begin_drain(timestamp)?;
                 }
             },
             SoundtrackSmokePhase::Draining => {

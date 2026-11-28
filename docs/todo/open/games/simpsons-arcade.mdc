@@ -6745,3 +6745,23 @@ The separately observed board-phase ambient cue and ranked landing
 command remain unresolved; no exact audio parity is claimed. Physical
 speaker and browser entrance-effect acceptance remain open. The
 reference captures and original assets stay private.
+
+The host-consumed Firefox diagnostic now advances the existing fixed
+simulation clock through the two admitted one-player entrance cues.
+It rejects early, repeated or overlapping effect voices and requires
+first-cue exhaustion before the second admission. The finite cemetery
+track continues through both effects without accelerated draining.
+
+With the local original-derived selection, the isolated effects-only
+launch submits two identical centered stereo waveforms. Each spans
+34,915 frames from its first to last nonzero sample, including 34,058
+nonzero samples per channel. The fully muted launch submits silence
+while retaining both deterministic admissions. The mixed music and
+effects launch also passes. Each launch reports all ten milestones,
+submits exactly 2,880,000 cemetery frames at 48 kHz, observes all
+11,266 scheduled buffer completions and closes its audio context.
+The second-stage-only selection retains its five original milestones
+and exact 2,880,000 second-stage frames. All four runs use the trusted
+directory picker, retain no canvas or preferences and leave the
+owner's ordinary selection unchanged. This is browser software output,
+not physical speaker, ambient or landing-command parity.
