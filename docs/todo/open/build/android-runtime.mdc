@@ -365,3 +365,34 @@ byte-identical and the title logged both restored volume levels at 75
 percent. The display slot contained fill/windowed. Locale, controller,
 physical ARM64, audible playback and production release signing are
 not established by these tests. The emulator was shut down.
+
+The repaired workspace packaging command produced an 11,650,421-byte
+APK; the independent receipt checker verified 137 files totaling
+12,283,355 bytes. A separate locally signed copy passed APK schemes
+v2/v3 and SDK 16 KiB alignment. On a fresh private translated-emulator
+installation, two forced font-scale recreations both retained the
+foreground title and touch panel. Subsequent cold starts, including
+across emulator boots, recovered the title after local provisioning.
+The actual menu saved Spanish (es-MX), display and both volume slots.
+All four files were byte-identical after a cold restart, the Spanish
+main-menu pixels were nearly identical, and cycling the restored Fill
+mode produced Stretch rather than the initial default. The title
+logged restored master and effects gains of 75 percent. A later menu
+change to zero master gain survived a cold launch; 75 was restored
+before shutdown.
+
+Host PulseAudio initialization failed in the isolated emulator, including
+an ALSA-selected attempt. The QEMU WAV backend captured stereo 44.1 kHz
+PCM without using a host microphone or speakers. A synthetic Android
+tone verified that this route can carry a signal. In one subsequent
+actual-title attack trial AudioFlinger identified the title's active
+48 kHz stereo OpenSL ES track and the recorded attack interval peaked
+at -44.69 dBFS. The guest media volume was 5 of 15. Other trials,
+including a paired normal/muted attempt, captured near-silence
+(-84.29 dBFS peak) and the virtual backend advanced much more slowly
+than elapsed wall time. These results establish an admitted output
+track and one non-silent recording, not repeatable audible playback,
+reliable volume attenuation, latency or audio quality. Physical ARM64,
+physical controller and sensor checks, soundtrack playback and release
+signing remain open. The private emulator and diagnostic host audio
+sink were stopped; original media and keys remain outside the package.
