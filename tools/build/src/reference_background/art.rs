@@ -359,6 +359,229 @@ impl LayerPublication {
     }
 }
 
+/// Publish registered, unscaled actor states from verified scene observations.
+#[derive(Debug)]
+pub struct ActorGrid {
+    layout: GridLayout,
+    output: OsString,
+    scenes: Vec<(Arguments, Group)>,
+}
+
+impl ActorGrid {
+    /// Parse a fixed cell region, column count and complete observations.
+    ///
+    /// # Errors
+    /// Rejects invalid geometry, excessive allocation or incomplete scenes.
+    pub fn parse(args: &[OsString]) -> Result<Self, String> {
+        let (header, paths) = args
+            .split_first_chunk::<8>()
+            .ok_or_else(|| String::from(USAGE))?;
+        let [output, parent, digest, left, top, width, height, columns] =
+            header;
+        let (groups, remainder) = paths.as_chunks::<8>();
+        if !remainder.is_empty() {
+            return Err(String::from("incomplete actor grid scene"));
+        }
+        let number = |value: &OsString| {
+            text(value)?
+                .parse::<usize>()
+                .map_err(|error| error.to_string())
+        };
+        let layout = GridLayout {
+            cell: (number(width)?, number(height)?),
+            columns: number(columns)?,
+            count: groups.len(),
+            origin: (number(left)?, number(top)?),
+        };
+        let _extent = layout.extent()?;
+        let scenes = groups
+            .iter()
+            .map(|group| {
+                let (raw_indices, scene) = group
+                    .split_last()
+                    .ok_or_else(|| String::from("missing actor group"))?;
+                let observation = Arguments::parse_scene(
+                    [parent.clone(), digest.clone()]
+                        .into_iter()
+                        .chain(scene.iter().cloned())
+                        .collect(),
+                )?;
+                let indices =
+                    parse_indices(text(raw_indices)?, &mut BTreeSet::new())?;
+                Ok((observation, Group {
+                    complete: false,
+                    indices,
+                    key: String::from("scene/actor-grid"),
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Self {
+            layout,
+            output: output.clone(),
+            scenes,
+        })
+    }
+
+    /// Verify each full scene and publish its isolated actor in a grid cell.
+    ///
+    /// # Errors
+    /// Rejects unverified observations, clipping and out-of-budget images.
+    pub fn run(&self, machine: Machine) -> Result<(), String> {
+        publication::require_asset_parent(
+            &self.output,
+            &machine.identity().title,
+        )?;
+        let (first, _) = self
+            .scenes
+            .first()
+            .ok_or_else(|| String::from("empty actor grid"))?;
+        let bundle = graphics_bundle(first, machine)?;
+        let payloads = GraphicsPayloads::load(&bundle, true)?;
+        let assets = payloads.bind(&bundle)?;
+        let raster = machine.background_raster();
+        self.layout.check_region(raster.extent())?;
+        let mut pens = vec![Pixel::default(); raster.pixels()];
+        let mut image = self.layout.image()?;
+        for (index, (paths, group)) in self.scenes.iter().enumerate() {
+            let observation =
+                verified_scene(paths, machine, &assets, &mut pens)?;
+            let sprites = observation
+                .sprites
+                .as_ref()
+                .ok_or_else(|| String::from("missing object observation"))?;
+            let crop =
+                isolate((machine, &assets), &observation, sprites, group)?;
+            self.layout.insert(&mut image, index, &crop)?;
+        }
+        publish_image(
+            &self.output,
+            &bundle,
+            &image,
+            ("scene/actor-grid", limits()?),
+        )
+    }
+}
+
+type GridExtent = (usize, usize);
+
+#[derive(Clone, Copy, Debug)]
+struct GridLayout {
+    cell: GridExtent,
+    columns: usize,
+    count: usize,
+    origin: GridExtent,
+}
+
+impl GridLayout {
+    fn check_region(self, extent: GridExtent) -> Result<(), String> {
+        if self
+            .origin
+            .0
+            .checked_add(self.cell.0)
+            .is_none_or(|right| right > extent.0)
+            || self
+                .origin
+                .1
+                .checked_add(self.cell.1)
+                .is_none_or(|bottom| bottom > extent.1)
+        {
+            return Err(String::from("actor grid region outside scene"));
+        }
+        Ok(())
+    }
+
+    fn extent(self) -> Result<GridExtent, String> {
+        let invalid = || String::from("invalid actor grid extent");
+        if self.columns == 0
+            || self.columns > self.count
+            || self.cell.0 == 0
+            || self.cell.1 == 0
+        {
+            return Err(invalid());
+        }
+        let width =
+            self.cell.0.checked_mul(self.columns).ok_or_else(invalid)?;
+        let rows = self.count.div_ceil(self.columns);
+        let height = self.cell.1.checked_mul(rows).ok_or_else(invalid)?;
+        let bytes = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(invalid)?;
+        if bytes > limits()?.payload_bytes.get() {
+            return Err(String::from("actor grid exceeds byte limit"));
+        }
+        Ok((width, height))
+    }
+
+    fn image(self) -> Result<Image, String> {
+        let (width, height) = self.extent()?;
+        let length = width
+            .checked_mul(height)
+            .ok_or_else(|| String::from("actor grid pixel count"))?;
+        Ok(Image {
+            height,
+            pixels: vec![[0; 4]; length],
+            width,
+        })
+    }
+
+    fn insert(
+        self,
+        image: &mut Image,
+        index: usize,
+        crop: &Crop,
+    ) -> Result<(), String> {
+        let invalid = || String::from("actor crop outside grid cell");
+        if index >= self.count {
+            return Err(invalid());
+        }
+        let left = usize::try_from(crop.origin.0)
+            .ok()
+            .and_then(|x| x.checked_sub(self.origin.0))
+            .ok_or_else(invalid)?;
+        let top = usize::try_from(crop.origin.1)
+            .ok()
+            .and_then(|y| y.checked_sub(self.origin.1))
+            .ok_or_else(invalid)?;
+        if left
+            .checked_add(crop.image.width)
+            .is_none_or(|right| right > self.cell.0)
+            || top
+                .checked_add(crop.image.height)
+                .is_none_or(|bottom| bottom > self.cell.1)
+        {
+            return Err(invalid());
+        }
+        let column = index.checked_rem(self.columns).ok_or_else(invalid)?;
+        let row = index.checked_div(self.columns).ok_or_else(invalid)?;
+        let target_left = column
+            .checked_mul(self.cell.0)
+            .and_then(|offset| offset.checked_add(left))
+            .ok_or_else(invalid)?;
+        let target_top = row
+            .checked_mul(self.cell.1)
+            .and_then(|offset| offset.checked_add(top))
+            .ok_or_else(invalid)?;
+        let end = target_left
+            .checked_add(crop.image.width)
+            .ok_or_else(invalid)?;
+        for (target, source) in image
+            .pixels
+            .chunks_exact_mut(image.width)
+            .skip(target_top)
+            .take(crop.image.height)
+            .zip(crop.image.pixels.chunks_exact(crop.image.width))
+        {
+            target
+                .get_mut(target_left..end)
+                .ok_or_else(invalid)?
+                .copy_from_slice(source);
+        }
+        Ok(())
+    }
+}
+
 /// Bounded adjacent scene observations for a continuous background strip.
 #[derive(Debug)]
 pub struct Strip {
@@ -1213,6 +1436,106 @@ mod tests {
     use games_platform::ir::storage::fixtures::TestRoot;
 
     use super::*;
+    #[test]
+    fn actor_grid_preserves_registered_pixels_across_cells()
+    -> Result<(), String> {
+        let layout = GridLayout {
+            cell: (3, 2),
+            columns: 2,
+            count: 3,
+            origin: (10, 20),
+        };
+        layout.check_region((13, 22))?;
+        let mut image = layout.image()?;
+        let red = [255, 0, 0, 255];
+        let green = [0, 255, 0, 255];
+        let clear = [0; 4];
+        let first = Crop {
+            image: Image {
+                height: 1,
+                pixels: vec![red, green],
+                width: 2,
+            },
+            origin: (11i32, 21i32),
+        };
+        layout.insert(&mut image, 0, &first)?;
+        layout.insert(&mut image, 1, &first)?;
+        layout.insert(&mut image, 2, &first)?;
+        if (image.width, image.height) != (6, 4)
+            || image.pixels
+                != [
+                    clear, clear, clear, clear, clear, clear, clear, red,
+                    green, clear, red, green, clear, clear, clear, clear,
+                    clear, clear, clear, red, green, clear, clear, clear,
+                ]
+        {
+            return Err(String::from(
+                "grid did not preserve registered pixels",
+            ));
+        }
+        if layout.insert(&mut image, 3, &first).is_ok() {
+            return Err(String::from("grid admitted excess cell"));
+        }
+        let outside = Crop {
+            origin: (12i32, 21i32),
+            ..first
+        };
+        if layout.insert(&mut image, 0, &outside).is_ok()
+            || layout.check_region((12, 22)).is_ok()
+        {
+            return Err(String::from("grid admitted clipped region"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn actor_grid_rejects_unbounded_or_incomplete_observations()
+    -> Result<(), String> {
+        let digest = "0".repeat(64);
+        let args = [
+            "output",
+            "parent",
+            &digest,
+            "10",
+            "20",
+            "3",
+            "2",
+            "1",
+            "ram",
+            "registers",
+            "scroll",
+            "palette",
+            "frame",
+            "objects",
+            "controls",
+            "0,1",
+        ];
+        let parse = |values: &[&str]| {
+            ActorGrid::parse(
+                &values.iter().map(OsString::from).collect::<Vec<_>>(),
+            )
+        };
+        let _valid = parse(&args)?;
+        let (_, incomplete) = args
+            .split_last()
+            .ok_or_else(|| String::from("missing test args"))?;
+        if parse(incomplete).is_ok() {
+            return Err(String::from("grid admitted incomplete scene"));
+        }
+        for (position, replacement) in
+            [(5, "0"), (6, "1000000"), (7, "2"), (15, "0,0"), (15, "256")]
+        {
+            let mut invalid = args;
+            let value = invalid
+                .get_mut(position)
+                .ok_or_else(|| String::from("invalid test position"))?;
+            *value = replacement;
+            if parse(&invalid).is_ok() {
+                return Err(format!("grid admitted invalid field {position}"));
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn actor_digests_require_disjoint_named_groups_and_complete_scene() {

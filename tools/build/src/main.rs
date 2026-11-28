@@ -142,6 +142,10 @@ const USAGE: &str = concat!(
     "mame art-publish MACHINE REV OUTPUT PARENT SHA256 ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS ",
     "[--complete-objects] KEY:INDEX,...\n",
+    "mame scene-actor-grid-publish MACHINE REV OUTPUT PARENT SHA256 ",
+    "X Y WIDTH HEIGHT COLUMNS ",
+    "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS INDICES ",
+    "[MORE SCENES...]\n",
     "mame strip-publish MACHINE REV OUTPUT PARENT SHA256 ",
     "TOP SIDE [--scene-limit COUNT] ",
     "RAM REGISTERS SCROLL PALETTE RGB32 OBJECTS CONTROLS ",
@@ -249,6 +253,7 @@ impl Arguments {
 #[derive(Debug)]
 enum Command {
     ActorDigests(Machine, reference_background::art::ActorDigests),
+    ActorGridPublish(Machine, reference_background::art::ActorGrid),
     ArtPublish(Machine, reference_background::art::Art),
     #[cfg(feature = "native-preview")]
     AudioCheck(Machine, audio_check::Arguments),
@@ -356,6 +361,10 @@ impl Command {
         args: Vec<OsString>,
     ) -> Result<Self, String> {
         match action {
+            "scene-actor-grid-publish" => Ok(Self::ActorGridPublish(
+                machine,
+                reference_background::art::ActorGrid::parse(&args)?,
+            )),
             "strip-publish" => Ok(Self::StripPublish(
                 machine,
                 reference_background::art::Strip::parse(&args)?,
@@ -504,6 +513,7 @@ impl Command {
         match action {
             "art-publish"
             | "strip-publish"
+            | "scene-actor-grid-publish"
             | "scene-actor-digests"
             | "scene-layer-publish"
             | "scene-background-publish" => {
@@ -740,6 +750,7 @@ impl Command {
             },
             Self::PackageTitle(title) => title_package::configured(title),
             Self::ActorDigests(machine, args) => args.run(machine),
+            Self::ActorGridPublish(machine, args) => args.run(machine),
             Self::ArtPublish(machine, args) => args.run(machine),
             Self::LayerPublish(machine, args) => args.run(machine),
             Self::StripPublish(machine, args) => args.run(machine),
@@ -807,6 +818,7 @@ impl Command {
             | Self::RenderCheck(..)
             | Self::SceneSequence(..) => Err(String::from(USAGE)),
             Self::ActorDigests(..)
+            | Self::ActorGridPublish(..)
             | Self::ArtPublish(..)
             | Self::BackgroundCheck(..)
             | Self::BackgroundPublish(..)
