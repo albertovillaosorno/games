@@ -6493,6 +6493,38 @@ committed. The new room alignment configuration is explicitly opt-in;
 normal campaign admission, right-facing families, the attack selector,
 collision, damage and physical Android acceptance remain open.
 
+### First-room attack and contact observation
+
+Three isolated original controls share the first lane-alignment entry
+and then hold, retreat or approach. All 99 reconstructed scenes agree
+exactly with the original captures, including both complete enemy
+object groups. The first attacker retains its position and previous
+body for one transition tick, then presents eight distinct attack
+keyframes for 3, 3, 3, 3, 4, 5, 6 and 5 ticks respectively. All three
+controls agree on the complete first-attacker pose dimensions and
+payload at every sampled tick. The attack ends before the next pose
+selector becomes visible. The independent second actor continues its
+own pursuit sequence.
+
+A repeated neutral control reproduces the station samples exactly.
+Passive station writes separate expiration of initial protection from
+contact: the first two armed intervals do not cause a reaction, and
+protection expires before the third. The third interval writes contact
+from the first actor and the next tick enters the station reaction.
+Two additional controls moving away horizontally or in depth retain
+the same third attack timing and avoid contact.
+
+Twelve short movement probes further bound this particular contact.
+At the observed attack position, horizontal integer separation 45
+connects and 47 does not; depth separation 9 connects and 11 does not.
+The two observed facing cases enter distinct reaction poses with
+22- and 30-tick timers. These are sampled bounds for this attack and
+station, not a general collision policy or a damage amount. The attack
+family selection, other contact geometries, reaction progression,
+right-facing art and the normal campaign remain unimplemented. All
+captures and extracted artwork remain local; the launch catalogue
+and native runtime are unchanged by this evidence update.
+
 ### Nonparticipant departure and ranked-motion verification
 
 Two isolated original controls, one with three stations throughout and
