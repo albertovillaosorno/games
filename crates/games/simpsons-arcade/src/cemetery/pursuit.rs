@@ -284,7 +284,7 @@ impl Pursuer {
     }
 
     const fn leap_step(&mut self, age: u8) -> Option<()> {
-        if age >= 25 {
+        if age >= 30 {
             return None;
         }
         if age == 3 {
@@ -742,7 +742,7 @@ fn stations_admitted(slots: &[Slot; 4], contact_preview: bool) -> bool {
                     && matches!(
                         (player, slot.station.maneuver),
                         (Player::Lisa, Maneuver::Hurt { tick: 0..=13 })
-                            | (Player::Bart, Maneuver::Hurt { tick: 0..=2 })
+                            | (Player::Bart, Maneuver::Hurt { tick: 0..=7 })
                     )))
     })
 }

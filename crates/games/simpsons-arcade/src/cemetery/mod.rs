@@ -65,7 +65,7 @@ const LAST_NEUTRAL_PREVIEW_SAMPLE: u64 = 370;
 const LAST_SHADOW_PREVIEW_SAMPLE: u64 = 373;
 const LAST_CONTACT_PREVIEW_SAMPLE: u64 = 379;
 #[cfg(any(test, feature = "native-preview"))]
-const LAST_REACTION_PREVIEW_SAMPLE: u64 = 392;
+const LAST_REACTION_PREVIEW_SAMPLE: u64 = 397;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -1450,7 +1450,32 @@ mod tests {
     }
 
     fn expected_neutral_preview(tick: u64) -> [CemeteryEnemyApproach; 2] {
-        let (pose, x, elevation) = match tick {
+        let (pose, x, elevation) = expected_neutral_second(tick);
+        let cycle = if tick >= 393 {
+            68
+        } else {
+            34
+        };
+        [
+            CemeteryEnemyApproach {
+                elevation: 0,
+                pose: Some(expected_first_strike_pose(
+                    tick.saturating_sub(cycle),
+                )),
+                position: Point { x: 329, y: 154 },
+                target: Player::Lisa,
+            },
+            CemeteryEnemyApproach {
+                elevation,
+                pose: Some(pose),
+                position: Point { x, y: 207 },
+                target: Player::Bart,
+            },
+        ]
+    }
+
+    fn expected_neutral_second(tick: u64) -> (CemeteryEnemyPose, i16, i16) {
+        match tick {
             359 => (
                 CemeteryEnemyPose::Strike {
                     facing: Facing::Left,
@@ -1485,22 +1510,13 @@ mod tests {
             389 => (CemeteryEnemyPose::Leap { phase: 3 }, 204, 28),
             390 => (CemeteryEnemyPose::Leap { phase: 3 }, 202, 27),
             391 => (CemeteryEnemyPose::Leap { phase: 3 }, 200, 25),
-            _ => (CemeteryEnemyPose::Leap { phase: 3 }, 198, 22),
-        };
-        [
-            CemeteryEnemyApproach {
-                elevation: 0,
-                pose: Some(expected_first_strike_pose(tick.saturating_sub(34))),
-                position: Point { x: 329, y: 154 },
-                target: Player::Lisa,
-            },
-            CemeteryEnemyApproach {
-                elevation,
-                pose: Some(pose),
-                position: Point { x, y: 207 },
-                target: Player::Bart,
-            },
-        ]
+            392 => (CemeteryEnemyPose::Leap { phase: 3 }, 198, 22),
+            393 => (CemeteryEnemyPose::Leap { phase: 3 }, 196, 20),
+            394 => (CemeteryEnemyPose::Leap { phase: 3 }, 194, 17),
+            395 => (CemeteryEnemyPose::Leap { phase: 3 }, 192, 14),
+            396 => (CemeteryEnemyPose::Leap { phase: 3 }, 190, 11),
+            _ => (CemeteryEnemyPose::Leap { phase: 3 }, 188, 7),
+        }
     }
 
     #[test]
@@ -1550,7 +1566,7 @@ mod tests {
     #[test]
     fn contact_preview_debits_before_reaction_and_stops_at_pose_boundary() {
         verify_contact_preview(false, 380);
-        verify_contact_preview(true, 393);
+        verify_contact_preview(true, 398);
     }
 
     fn verify_contact_preview(complete_reaction: bool, terminal: u64) {
@@ -1637,7 +1653,7 @@ mod tests {
 
     fn assert_contact_pose(tick: u64, entrance: &CemeteryEntrance) {
         for (player, first, end) in
-            [(Player::Lisa, 375, 389), (Player::Bart, 390, 393)]
+            [(Player::Lisa, 375, 389), (Player::Bart, 390, 398)]
         {
             let expected = if (first..end).contains(&tick) {
                 Maneuver::Hurt {

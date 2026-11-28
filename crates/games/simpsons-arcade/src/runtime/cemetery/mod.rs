@@ -832,7 +832,7 @@ impl CemeteryArt {
 
     const fn neutral_strike_terminal(&self) -> u64 {
         match self.roles.len() {
-            REACTION_PREVIEW_ROLE_COUNT.. => 393,
+            REACTION_PREVIEW_ROLE_COUNT.. => 398,
             CONTACT_PREVIEW_ROLE_COUNT.. => 380,
             SHADOW_PREVIEW_ROLE_COUNT.. => 374,
             NEUTRAL_PREVIEW_ROLE_COUNT.. => 371,
@@ -1633,23 +1633,27 @@ const fn enemy_control_at(
 }
 
 const fn hurt_body_role(player: Player, maneuver: Maneuver) -> Option<usize> {
-    match maneuver {
-        Maneuver::Hurt { tick: 0..=2 } if matches!(player, Player::Bart) => {
+    match (player, maneuver) {
+        (Player::Bart, Maneuver::Hurt { tick: 0..=4 }) => {
             Some(player.index().saturating_add(12))
         },
-        Maneuver::Hurt { tick: 0..=5 } if matches!(player, Player::Lisa) => {
+        (Player::Bart, Maneuver::Hurt { tick: 5..=7 }) => Some(30),
+        (Player::Lisa, Maneuver::Hurt { tick: 0..=5 }) => {
             Some(SHADOW_PREVIEW_ROLE_COUNT.saturating_add(1))
         },
-        Maneuver::Hurt { tick: 6..=13 } if matches!(player, Player::Lisa) => {
+        (Player::Lisa, Maneuver::Hurt { tick: 6..=13 }) => {
             Some(CONTACT_PREVIEW_ROLE_COUNT.saturating_add(1))
         },
-        Maneuver::AirAttack(_)
-        | Maneuver::Attack { .. }
-        | Maneuver::Hurt { .. }
-        | Maneuver::Idle
-        | Maneuver::Jump(_)
-        | Maneuver::Restrained
-        | Maneuver::Special { .. } => None,
+        (
+            _,
+            Maneuver::AirAttack(_)
+            | Maneuver::Attack { .. }
+            | Maneuver::Hurt { .. }
+            | Maneuver::Idle
+            | Maneuver::Jump(_)
+            | Maneuver::Restrained
+            | Maneuver::Special { .. },
+        ) => None,
     }
 }
 
@@ -1829,8 +1833,9 @@ fn room_source(index: usize, count: usize) -> bool {
         return false;
     }
     (count >= REACTION_PREVIEW_ROLE_COUNT
-        && hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 0 })
-            == Some(index))
+        && [0, 5].into_iter().any(|tick| {
+            hurt_body_role(Player::Bart, Maneuver::Hurt { tick }) == Some(index)
+        }))
         || index >= ANIMATED_ROLE_COUNT
         || Player::ALL
             .into_iter()
@@ -2324,20 +2329,22 @@ mod tests {
 
     #[test]
     fn airborne_contact_reuses_registered_reaction_source() {
-        assert_eq!(
-            hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 0 }),
-            Some(14)
-        );
-        assert_eq!(
-            hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 2 }),
-            Some(14)
-        );
-        assert_eq!(
-            hurt_body_role(Player::Bart, Maneuver::Hurt { tick: 3 }),
-            None
-        );
-        assert!(room_source(14, REACTION_PREVIEW_ROLE_COUNT));
-        assert!(!room_source(14, CONTACT_PREVIEW_ROLE_COUNT));
+        for (tick, expected) in [
+            (0, Some(14)),
+            (4, Some(14)),
+            (5, Some(30)),
+            (7, Some(30)),
+            (8, None),
+        ] {
+            assert_eq!(
+                hurt_body_role(Player::Bart, Maneuver::Hurt { tick }),
+                expected
+            );
+        }
+        for index in [14, 30] {
+            assert!(room_source(index, REACTION_PREVIEW_ROLE_COUNT));
+            assert!(!room_source(index, CONTACT_PREVIEW_ROLE_COUNT));
+        }
     }
 
     #[test]
