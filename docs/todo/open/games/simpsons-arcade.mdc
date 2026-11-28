@@ -6228,3 +6228,31 @@ timing still needs independent reconciliation with the delayed
 maneuver. Ground and air attacks, enemy objects and exact shadow
 composition remain open. The normal entrance still does not select
 the moving room; no campaign or physical-device parity is claimed.
+
+### Exhaustive computed-flow bounds
+
+The ledger now has two fewer unresolved control-flow observations.
+The bank-16 masked selector is exhaustively evaluated for all 256
+input bytes. Four immutable table slots select three existing targets;
+each slot admits exactly 64 inputs. The independent ROM word check
+matches the previously observed runtime pointer reads.
+
+The bank-28 signed selector admits exactly 31 nonzero values in the
+range from minus 16 through 15. A bounded Ghidra pass on an isolated
+copy verifies every immutable table word against the ROM extraction.
+Nine formerly unowned entries converge on the existing shared
+continuation. The pass admits 158 instructions and 422 decoded bytes,
+preserves unique instruction ownership and adds 12 direct call
+observations. No new computed-flow gap or function identity is added.
+The private ledger retains the original observations and adds all
+31 bounded table edges with reciprocal graph evidence.
+
+The checker reports 1,672 functions, 61,229 owned bytes, 4,498
+reciprocal pairs, 5,127 detailed flow records and 188 unresolved
+observations: 147 computed transfers, 23 alternate bank contexts,
+16 unbounded selectors and two callback stack obligations.
+The two local closures do not certify complete gameplay semantics
+or Rust equivalents; both functions remain pending. The completion
+gate must reject the title ledger until every remaining observation
+is reconciled. Reuse exhaustive selector bounds and bounded target
+admission before collecting more repeated observations.
