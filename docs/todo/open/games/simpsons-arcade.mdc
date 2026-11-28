@@ -5995,3 +5995,24 @@ The board diagnostic with unresolved flow remains pending. The other
 dispositions with unknown flow and rejects this ledger in completion
 mode. Prioritise high-fan-in shared mechanisms and reverse-map already
 tested Rust; do not accumulate more partial mapping records.
+
+### Verified transport omissions and inverse-axis arithmetic
+
+The fixed-transfer review independently matches 49 complete, single
+instruction, non-interior tail transfers to their exact destinations
+in the retained listings. Eight sound CPU vector and reset entries
+also have only processor-level setup or transfer effects. These 57
+entries are discarded, not implemented. Their destination behavior
+and caller selection remain separate obligations; banked transfers
+with unverified context and interior-entry semantics remain open.
+The canonical ledger retains every identity and all graph edges.
+
+The two inverse balloon axis helpers share one native implementation.
+The static review verifies both caller strengths, two independently
+truncated unsigned products, each axis's lower bound, the common
+upper bound, and the distinction between an exact bound and a clamp.
+The portable regression covers 131,076 admitted nonzero-strength
+axis transitions, in both directions, and the existing isolated
+pump-and-leak regression covers the neutral grace interval. This
+maps only the arithmetic helpers; the board-dependent choice of axis,
+record flags, art selection, and overall bonus timing remain open.

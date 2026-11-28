@@ -696,6 +696,38 @@ mod tests {
     }
 
     #[test]
+    fn inverse_axis_matches_bounded_reference_domain() {
+        for minimum in [0x2000, 0x4000] {
+            verify_axis_domain(minimum, true, 0x1c00);
+            verify_axis_domain(minimum, false, 0x1800);
+        }
+    }
+
+    fn verify_axis_domain(minimum: u16, growing: bool, strength: u64) {
+        for initial in minimum..=0xb000 {
+            // Independent widened arithmetic models the two truncated
+            // products and the strict, rather than inclusive, clamp.
+            let value = u64::from(initial);
+            let squared = value.saturating_pow(2).checked_div(65_536);
+            let delta = squared
+                .unwrap_or_default()
+                .saturating_mul(strength)
+                .checked_div(65_536)
+                .unwrap_or_default();
+            let candidate = if growing {
+                value.saturating_sub(delta)
+            } else {
+                value.saturating_add(delta)
+            };
+            let expected = candidate.clamp(u64::from(minimum), 0xb000);
+            let mut actual = initial;
+            let within = Balloon::adjust(&mut actual, minimum, growing);
+            assert_eq!(u64::from(actual), expected);
+            assert_eq!(within, candidate == expected);
+        }
+    }
+
+    #[test]
     fn rapid_edges_end_early_but_sparse_edges_do_not() {
         let mut rapid = start_pump([true, true, false, false]);
         let mut sparse = rapid;
