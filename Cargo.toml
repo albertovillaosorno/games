@@ -32,6 +32,8 @@ toml = "1.1.5"
 sha2 = "0.11"
 zeroize = "1.9.2"
 sdl2 = "0.39.0"
+inventory = "0.3.25"
+jni = "=0.22.4"
 nix = { version = "0.31.3", features = ["fs", "user"] }
 # Match the official CLI schema and retain a single syn major version.
 js-sys = { version = "=0.3.104", default-features = false }

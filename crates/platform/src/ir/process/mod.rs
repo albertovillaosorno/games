@@ -31,6 +31,10 @@
 
 //! Portable process arguments, status and diagnostic output, retry waits.
 
+/// Optional independently packaged application registration.
+#[cfg(feature = "application-entry")]
+pub mod application;
+
 /// Isolated host integration test scheduling and opt-in.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;

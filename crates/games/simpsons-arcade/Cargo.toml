@@ -19,6 +19,7 @@ games-platform = { workspace = true, optional = true }
 workspace = true
 
 [features]
+application-entry = ["native-preview", "games-platform/application-entry"]
 browser-audio-smoke = [
     "dep:games-platform",
     "games-platform/interactive",

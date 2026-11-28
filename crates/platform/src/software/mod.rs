@@ -31,6 +31,8 @@
 
 //! Private software implementation and current host selection.
 
+#[cfg(all(target_os = "android", feature = "application-entry"))]
+mod android;
 mod linux;
 #[cfg(any(test, all(target_arch = "wasm32", target_os = "unknown")))]
 mod web;
@@ -135,6 +137,7 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 #[cfg(not(any(
     target_os = "linux",
+    all(target_os = "android", feature = "application-entry"),
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 use std::fmt::Arguments as StatusMessage;
@@ -166,6 +169,7 @@ use crate::ir::input::fixtures::EventFixturePort;
 use crate::ir::measurement::MeasurementSource;
 #[cfg(not(any(
     target_os = "linux",
+    all(target_os = "android", feature = "application-entry"),
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 use crate::ir::process::ProcessPort;
@@ -452,15 +456,21 @@ impl MeasurementSource for () {
 
 impl ExecutableLocation for () {
     fn executable_path() -> io::Result<OsString> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(target_os = "android", feature = "application-entry"))]
+        return android::process::executable_path();
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
         return linux::storage::executable_path().map(PathBuf::into_os_string);
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(
+            target_arch = "wasm32",
+            all(target_os = "android", not(feature = "application-entry"))
+        ))]
         Err(ErrorKind::Unsupported.into())
     }
 }
 
 #[cfg(not(any(
     target_os = "linux",
+    all(target_os = "android", feature = "application-entry"),
     all(target_arch = "wasm32", target_os = "unknown")
 )))]
 impl ProcessPort for () {

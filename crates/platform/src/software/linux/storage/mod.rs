@@ -76,7 +76,7 @@ mod save;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod staging;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 use std::env;
 use std::ffi::{OsStr, OsString};
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -202,7 +202,7 @@ impl BundleFactory for () {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 pub(in crate::software) fn executable_path() -> io::Result<PathBuf> {
     env::current_exe()
 }

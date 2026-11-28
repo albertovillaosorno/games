@@ -100,6 +100,8 @@ use games_platform::ir::measurement::{
     FrameMeter, elapsed_between, executable_bytes, now, peak_resident_bytes,
     resident_bytes,
 };
+#[cfg(feature = "application-entry")]
+use games_platform::ir::process::application::{Application, register};
 use games_platform::ir::process::write_status;
 use games_platform::ir::scene::{
     AtlasId, EventBatch, SceneLimits, SpriteDraw, SpriteRect,
@@ -121,6 +123,11 @@ use super::{
 };
 use crate::lan::HostLan;
 use crate::remote::{HostedCabinet, HostedInput};
+
+#[cfg(feature = "application-entry")]
+register! {
+    Application::new(run)
+}
 
 // Leave transport, fixed updates and presentation time between input bursts.
 const EVENT_BUDGET: usize = 32;

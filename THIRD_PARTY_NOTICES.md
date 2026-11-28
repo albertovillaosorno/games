@@ -7,7 +7,9 @@ SHA-2 and Serde JSON for canonical manifests. The importer uses ZIP
 and the pure-Rust zlib-rs Deflate backend. The native platform
 adapter uses Rustls, Ring and SHA-2 for authenticated LAN transport and
 Nix for descriptor-relative archive staging. Linux graphics and audio use
-Rust-SDL2 with the system SDL2 library (Zlib licence), linked dynamically. No
+Rust-SDL2 with the system SDL2 library (Zlib licence), linked dynamically.
+Optional packaged application entry uses Inventory registration and the
+Android JNI bindings. No
 original game assets, original game code or candidate project source is
 incorporated or distributed by this repository. The development validator
 uses Serde JSON, TOML and SHA-2; platform tests use Rcgen.
@@ -41,9 +43,11 @@ for the current lockfile. They are not a completed distribution audit.
 | `bitflags` | MIT OR Apache-2.0 |
 | `block-buffer` | MIT OR Apache-2.0 |
 | `bumpalo` | MIT OR Apache-2.0 |
+| `bytes` | MIT |
 | `cc` | MIT OR Apache-2.0 |
 | `cfg-if` | MIT OR Apache-2.0 |
 | `cfg_aliases` | MIT |
+| `combine` | MIT |
 | `const-oid` | Apache-2.0 OR MIT |
 | `constant_time_eq` | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | `cpufeatures` | MIT OR Apache-2.0 |
@@ -61,10 +65,16 @@ for the current lockfile. They are not a completed distribution audit.
 | `hashbrown` | MIT OR Apache-2.0 |
 | `hybrid-array` | MIT OR Apache-2.0 |
 | `indexmap` | Apache-2.0 OR MIT |
+| `inventory` | MIT OR Apache-2.0 |
 | `itoa` | MIT OR Apache-2.0 |
+| `jni` | MIT OR Apache-2.0 |
+| `jni-macros` | MIT OR Apache-2.0 |
+| `jni-sys` | MIT OR Apache-2.0 |
+| `jni-sys-macros` | MIT OR Apache-2.0 |
 | `js-sys` | MIT OR Apache-2.0 |
 | `lazy_static` | MIT OR Apache-2.0 |
 | `libc` | MIT OR Apache-2.0 |
+| `log` | MIT OR Apache-2.0 |
 | `memchr` | Unlicense OR MIT |
 | `minimal-lexical` | MIT/Apache-2.0 |
 | `nix` | MIT |
@@ -82,13 +92,16 @@ for the current lockfile. They are not a completed distribution audit.
 | `r-efi` | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | `rcgen` | MIT OR Apache-2.0 |
 | `ring` | Apache-2.0 AND ISC |
+| `rustc_version` | MIT OR Apache-2.0 |
 | `rusticata-macros` | MIT/Apache-2.0 |
 | `rustls-pki-types` | MIT OR Apache-2.0 |
 | `rustls-webpki` | ISC |
 | `rustls` | Apache-2.0 OR ISC OR MIT |
 | `rustversion` | MIT OR Apache-2.0 |
+| `same-file` | Unlicense/MIT |
 | `sdl2` | MIT |
 | `sdl2-sys` | MIT AND Zlib |
+| `semver` | MIT OR Apache-2.0 |
 | `serde_core` | MIT OR Apache-2.0 |
 | `serde_derive` | MIT OR Apache-2.0 |
 | `serde_json` | MIT OR Apache-2.0 |
@@ -96,6 +109,8 @@ for the current lockfile. They are not a completed distribution audit.
 | `serde` | MIT OR Apache-2.0 |
 | `sha2` | MIT OR Apache-2.0 |
 | `shlex` | MIT OR Apache-2.0 |
+| `simd_cesu8` | Apache-2.0 OR MIT |
+| `simdutf8` | MIT OR Apache-2.0 |
 | `subtle` | BSD-3-Clause |
 | `syn` | MIT OR Apache-2.0 |
 | `synstructure` | MIT |
@@ -113,12 +128,14 @@ for the current lockfile. They are not a completed distribution audit.
 | `unicode-ident` | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `untrusted` | ISC |
 | `version-compare` | MIT |
+| `walkdir` | Unlicense/MIT |
 | `wasi` | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | `wasm-bindgen-macro-support` | MIT OR Apache-2.0 |
 | `wasm-bindgen-macro` | MIT OR Apache-2.0 |
 | `wasm-bindgen-shared` | MIT OR Apache-2.0 |
 | `wasm-bindgen` | MIT OR Apache-2.0 |
 | `web-sys` | MIT OR Apache-2.0 |
+| `winapi-util` | Unlicense OR MIT |
 | `windows-link` | MIT OR Apache-2.0 |
 | `windows-sys` | MIT OR Apache-2.0 |
 | `windows-targets` | MIT OR Apache-2.0 |
