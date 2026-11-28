@@ -31,6 +31,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::io::ErrorKind;
 use std::iter::Peekable;
 use std::num::NonZeroU64;
 use std::{str, vec};
@@ -46,7 +47,8 @@ use games_platform::ir::storage::preferences::{
     ControlStore, DisplayStore, LocaleStore, PublicationPolicy, VolumeStore,
 };
 use games_platform::ir::storage::{
-    canonical_path, executable_path, join_path, parent_path, paths_overlap,
+    application_data_path, canonical_path, executable_path, join_path,
+    parent_path, paths_overlap,
 };
 
 use super::{
@@ -74,7 +76,7 @@ const USAGE: &str = concat!(
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
     "Without an asset selection, read simpsons-arcade.local ",
-    "beside the binary.\n",
+    "in application data or beside the binary.\n",
     "usage: simpsons-arcade --lan-controller FILE [--settings DIR] ",
     "[--controls FILE | --reset-controls]\n",
     "usage: simpsons-arcade --list-audio-devices\n",
@@ -389,9 +391,7 @@ impl Assets {
             }
             Self::open(&config)
         } else if remaining.peek().is_none() {
-            let executable = executable_path()
-                .map_err(|error| format!("executable path: {error}"))?;
-            Self::open(&sibling_catalogue(&executable)?)
+            Self::open(&default_catalogue()?)
         } else {
             Ok((
                 Self::explicit(remaining)?,
@@ -1084,6 +1084,18 @@ pub(super) fn resolve_local(
     value: &str,
 ) -> Result<OsString, String> {
     join_path(base, value).map_err(|error| format!("local path: {error}"))
+}
+
+fn default_catalogue() -> Result<OsString, String> {
+    match application_data_path() {
+        Ok(directory) => resolve_local(&directory, FILE_NAME),
+        Err(unavailable) if unavailable.kind() == ErrorKind::Unsupported => {
+            let executable = executable_path()
+                .map_err(|error| format!("executable path: {error}"))?;
+            sibling_catalogue(&executable)
+        },
+        Err(error) => Err(format!("application data path: {error}")),
+    }
 }
 
 fn sibling_catalogue(executable: &OsStr) -> Result<OsString, String> {

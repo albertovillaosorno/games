@@ -126,7 +126,7 @@ use crate::remote::{HostedCabinet, HostedInput};
 
 #[cfg(feature = "application-entry")]
 register! {
-    Application::new(run)
+    Application::new(run_packaged)
 }
 
 // Leave transport, fixed updates and presentation time between input bursts.
@@ -2247,6 +2247,14 @@ fn project_contact(
         ContactPhase::Motion(None) | ContactPhase::Up => phase,
     };
     Ok(Some(InputEvent::Contact { id, phase: projected }))
+}
+
+#[cfg(feature = "application-entry")]
+fn run_packaged(mut args: Vec<OsString>) -> Result<(), String> {
+    if args.is_empty() {
+        args.push(OsString::from("--touch"));
+    }
+    run(args)
 }
 
 /// Launch interactive preview or a hidden finite native smoke.

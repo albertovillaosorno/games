@@ -92,6 +92,8 @@ use std::path::{Component, Path};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use file::DIRECTORY_FLAGS;
+#[cfg(all(target_os = "android", feature = "application-entry"))]
+pub(in crate::software) use file::application_data_directory;
 use games_assets::ContentHash;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use nix::fcntl::open;

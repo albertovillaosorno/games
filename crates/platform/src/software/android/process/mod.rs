@@ -34,6 +34,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt::Arguments;
 use std::io::{Error, ErrorKind, Result as IoResult};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
@@ -47,8 +48,9 @@ use jni::{Env, EnvUnowned, JValue, JavaVM, jni_mangle, jni_sig, jni_str};
 use crate::ir::process::ProcessPort;
 use crate::ir::process::application::launch_registered;
 use crate::ir::storage::{
-    PathKind, canonical_path, path_is_absolute, path_kind,
+    PathKind, canonical_path, path_is_absolute, path_kind, paths_overlap,
 };
+use crate::software::linux::storage::application_data_directory;
 
 // The Java launcher supplies one artifact and an explicitly bounded list of
 // arguments. Reject excess inputs rather than narrowing them.
@@ -64,6 +66,7 @@ type JavaResult<T> = Result<T, Box<JavaError>>;
 struct Context {
     arguments: Vec<OsString>,
     artifact: OsString,
+    data: OsString,
     vm: JavaVM,
 }
 
@@ -104,6 +107,10 @@ where
         .as_ref()
         .map(read)
         .ok_or_else(|| ErrorKind::Unsupported.into())
+}
+
+pub(in crate::software) fn application_data_path() -> IoResult<OsString> {
+    observe(|context| context.data.clone())
 }
 
 pub(in crate::software) fn executable_path() -> IoResult<OsString> {
@@ -163,6 +170,21 @@ fn log_record(vm: &JavaVM, level: &JNIStr, message: &str) -> IoResult<()> {
         return Err(Error::other("Android log rejected message"));
     }
     Ok(())
+}
+
+fn admitted_data(artifact: &OsStr, parent: &OsStr) -> IoResult<OsString> {
+    if !path_is_absolute(parent)? || path_kind(parent)? != PathKind::Directory {
+        return Err(ErrorKind::InvalidInput.into());
+    }
+    let canonical = canonical_path(parent)?;
+    let library = Path::new(artifact)
+        .parent()
+        .ok_or(ErrorKind::InvalidInput)?;
+    if paths_overlap(&canonical, library.as_os_str())? {
+        return Err(ErrorKind::InvalidInput.into());
+    }
+    application_data_directory(Path::new(&canonical))
+        .map(PathBuf::into_os_string)
 }
 
 fn installed_artifact(path: &OsStr) -> IoResult<OsString> {
@@ -234,6 +256,7 @@ pub fn run_native<'local>(
     mut unowned_env: EnvUnowned<'local>,
     _class: JClass<'local>,
     artifact: JString<'local>,
+    data_parent: JString<'local>,
     arguments: JObjectArray<'local, JString<'local>>,
 ) -> jint {
     unowned_env
@@ -242,9 +265,15 @@ pub fn run_native<'local>(
             let vm = env.get_java_vm()?;
             let installed = installed_artifact(OsStr::new(&supplied))
                 .map_err(|_error| invalid_arguments())?;
+            let data = admitted_data(
+                &installed,
+                OsStr::new(&data_parent.try_to_string(env)?),
+            )
+            .map_err(|_error| invalid_arguments())?;
             let context = Context {
                 arguments: launch_arguments(env, &arguments)?,
                 artifact: installed,
+                data,
                 vm,
             };
             Ok(if run_application(context).is_ok() {

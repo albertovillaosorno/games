@@ -455,6 +455,13 @@ impl MeasurementSource for () {
 }
 
 impl ExecutableLocation for () {
+    fn application_data_path() -> io::Result<OsString> {
+        #[cfg(all(target_os = "android", feature = "application-entry"))]
+        return android::process::application_data_path();
+        #[cfg(not(all(target_os = "android", feature = "application-entry")))]
+        Err(ErrorKind::Unsupported.into())
+    }
+
     fn executable_path() -> io::Result<OsString> {
         #[cfg(all(target_os = "android", feature = "application-entry"))]
         return android::process::executable_path();

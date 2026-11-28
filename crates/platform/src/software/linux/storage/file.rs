@@ -36,10 +36,15 @@ use std::io;
 use std::num::NonZeroU64;
 use std::os::fd::{AsFd, AsRawFd as _, OwnedFd};
 use std::path::Path;
+#[cfg(any(
+    test,
+    all(target_os = "android", feature = "application-entry")
+))]
+use std::path::PathBuf;
 
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", feature = "application-entry"))]
 use nix::sys::stat::mkdirat;
 use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
 use nix::unistd::geteuid;
@@ -341,6 +346,44 @@ pub(super) fn sync_regular(
     verify_staged_regular(parent, name, expected)
 }
 
+// Only the Android Activity supplies the app-owned parent. Its private
+// getDir location may be group-writable, but the dedicated child must
+// satisfy the stricter owner-only policy without changing the parent.
+#[cfg(any(
+    test,
+    all(target_os = "android", feature = "application-entry")
+))]
+pub(in crate::software) fn application_data_directory(
+    parent: &Path,
+) -> io::Result<PathBuf> {
+    if !parent.is_absolute() {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let directory = open(parent, DIRECTORY_FLAGS, Mode::empty())?;
+    let parent_stat = fstat(&directory)?;
+    if parent_stat.st_uid != geteuid().as_raw()
+        || parent_stat.st_mode & 0o002 != 0
+    {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    let name = "data";
+    match mkdirat(&directory, name, Mode::S_IRWXU) {
+        Ok(()) | Err(Errno::EEXIST) => {},
+        Err(error) => return Err(error.into()),
+    }
+    let child = openat(&directory, name, DIRECTORY_FLAGS, Mode::empty())?;
+    let stat = fstat(&child)?;
+    if !trusted_directory_stat(&stat) || stat.st_mode & 0o077 != 0 {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    let path = parent.join(name);
+    let named = open(&path, DIRECTORY_FLAGS, Mode::empty())?;
+    if !same_inode(&stat, &fstat(&named)?) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(path)
+}
+
 // Both contributor workflows use one local directory and lease policy.
 // Only the workspace owner may create or mutate lease entries.
 #[cfg(target_os = "linux")]
@@ -494,6 +537,31 @@ mod tests {
         symlink(&directory, &linked_directory)?;
         require(contributor_directory(&linked_directory).is_err())?;
         require(contributor_lease(&linked_directory.join("lock")).is_err())
+    }
+
+    #[test]
+    fn application_data_reuses_only_owner_private_directory()
+    -> Result<(), FileReadError> {
+        let root = TestRoot::new()?;
+        fs::set_permissions(&root.path, fs::Permissions::from_mode(0o771))?;
+        let directory = application_data_directory(&root.path)?;
+        require(application_data_directory(&root.path)? == directory)?;
+        require(
+            fs::metadata(&directory)?.permissions().mode() & 0o777 == 0o700,
+        )?;
+        require(
+            fs::metadata(&root.path)?.permissions().mode() & 0o777 == 0o771,
+        )?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o750))?;
+        require(application_data_directory(&root.path).is_err())?;
+        fs::remove_dir(&directory)?;
+        symlink(&root.path, &directory)?;
+        require(application_data_directory(&root.path).is_err())?;
+        fs::remove_file(&directory)?;
+        fs::write(&directory, b"file")?;
+        require(application_data_directory(&root.path).is_err())?;
+        fs::set_permissions(&root.path, fs::Permissions::from_mode(0o777))?;
+        require(application_data_directory(&root.path).is_err())
     }
 
     #[test]

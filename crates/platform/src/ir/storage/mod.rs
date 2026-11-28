@@ -61,8 +61,10 @@ pub struct DirectoryEntry {
     pub name: OsString,
 }
 
-/// Backend observation of the process executable location.
+/// Backend observation of the application artifact and private data root.
 pub(crate) trait ExecutableLocation {
+    fn application_data_path() -> IoResult<OsString>;
+
     fn executable_path() -> IoResult<OsString>;
 }
 
@@ -199,6 +201,16 @@ fn entries_with(
         <() as PathObservation>::directory_entries(path, maximum, access)?;
     admit_directory_entries(&mut entries, maximum)?;
     Ok(entries)
+}
+
+/// Observe an admitted app-private data directory supplied at launch.
+///
+/// This is distinct from the installed artifact directory and does not
+/// discover media or grant access to its contents.
+/// # Errors
+/// Reports unsupported application data or a host observation error.
+pub fn application_data_path() -> IoResult<OsString> {
+    <() as ExecutableLocation>::application_data_path()
 }
 
 /// Observe the running executable's location for explicit local resolution.
