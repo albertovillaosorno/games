@@ -434,7 +434,7 @@ impl CemeteryEntrance {
         false
     }
 
-    // Only the full roster has reference evidence for the active window.
+    // Reference rosters share Marge and Homer, with either other station.
     // The cabinet supplies its preceding unpaused play phase, not a
     // phase derived from the card or the number of rendered frames.
     pub(super) fn advance_with_board_phase(
@@ -444,7 +444,7 @@ impl CemeteryEntrance {
     ) {
         self.advance(active_edge);
         if !self.card
-            && self.admitted == [true; 4]
+            && matches!(self.admitted, [true, true, _, _])
             && (FIRST_AMBIENT_RECEIPT..=LAST_AMBIENT_RECEIPT)
                 .contains(&self.tick)
             && previous_phase == 0
@@ -453,10 +453,10 @@ impl CemeteryEntrance {
         }
     }
 
-    /// Cumulative periodic scenery sound admissions in the full roster.
+    /// Cumulative periodic scenery sound admissions for verified rosters.
     ///
     /// The active play phase is a preview clock, not an assertion of
-    /// original board counter equivalence. Partial rosters remain silent.
+    /// original board counter equivalence. Unverified rosters stay silent.
     #[must_use]
     pub const fn ambient_effect_cues(self) -> u8 {
         self.ambient_cues
@@ -1743,9 +1743,15 @@ mod tests {
             assert_eq!(entrance.ambient_effect_cues(), 0);
         }
         let mut expected = 0u8;
+        let verified = [
+            [true, true, false, false],
+            [true, true, true, false],
+            [true, true, false, true],
+            [true; 4],
+        ]
+        .contains(&admitted);
         for tick in 1..=260 {
-            if admitted == [true; 4] && (13..=168).contains(&tick) && phase == 0
-            {
+            if verified && (13..=168).contains(&tick) && phase == 0 {
                 expected = expected.saturating_add(1);
             }
             entrance.advance_with_board_phase(false, phase);
@@ -1753,7 +1759,7 @@ mod tests {
             assert_eq!(entrance.tick(), tick);
             assert_eq!(entrance.ambient_effect_cues(), expected);
         }
-        if admitted == [true; 4] {
+        if verified {
             assert!((9..=10).contains(&expected));
         } else {
             assert_eq!(expected, 0);

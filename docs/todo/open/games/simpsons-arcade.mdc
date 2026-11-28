@@ -6788,7 +6788,8 @@ respectively, so a byte-identical waveform is not claimed. A second
 controlled run submits four commands sixteen original frames apart:
 all four restart the same FM channel, and the final voice keys off
 34 original frames after its final admission. The original routed
-commands retain ticks 188, 204, 220 and 236. Neither effect is admitted
+commands retain ticks 188, 204, 220 and 236. At that checkpoint neither
+effect was admitted
 by the Rust runtime yet; local sound captures are not distributed.
 
 An additional original four-station campaign replay observes all ten
@@ -6821,3 +6822,30 @@ reports 1,750 readbacks and 1,819 framebuffer blits across the routed
 diagnostic, with all thirteen milestones, trusted directory selection,
 and no retained canvas or preferences. The owner's ordinary launch
 selection is unchanged; no normal campaign parity is claimed.
+
+### Cemetery ambient preview and partial-roster controls
+
+A read-only original campaign trace observes 35,821 consecutive device
+frames. After initialization, 34,780 counter samples increment and 433
+hold, including eleven holds at the cemetery title departure. The
+modern title-wide, unpaused fixed-step phase is therefore explicitly
+a preview clock, not exact original campaign counter provenance.
+
+Three independent original input controls omit the fourth station,
+omit both the third and fourth, or omit the third from all joins. Each
+reaches the cemetery with the intended subset and emits ten gated
+ambient commands, with three, two and three ranked landing commands
+respectively. Both the two-station and alternate three-station
+producers remain active from setup tick 12 through tick 167, as in the
+four-station control. Removing only late fourth-station credits still
+yields four admitted stations.
+The solo route did not reach the cemetery within the sampled interval;
+other subsets remain unverified.
+
+The runtime admits the observed optional canonical PCM for the four
+verified rosters at the next fixed tick when the preceding unpaused
+play phase satisfies the period gate. All phase offsets and roster
+masks are covered by fixed-step regression tests. The card, pause,
+session reset and distinct voice retrigger behavior are also tested.
+No original campaign, unverified roster or FM landing parity is
+claimed. The ordinary launch selection remains unchanged.

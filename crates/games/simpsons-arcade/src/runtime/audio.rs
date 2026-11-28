@@ -733,7 +733,16 @@ impl Playback {
         self.smoke_source_changes()?;
         self.smoke_impact()?;
         self.smoke_hurts()?;
-        self.smoke_bonus_music()
+        self.smoke_bonus_music()?;
+        for roster in [
+            [true, true, false, false],
+            [true, true, true, false],
+            [true, true, false, true],
+            [true; 4],
+        ] {
+            self.smoke_cemetery_ambient(roster)?;
+        }
+        Ok(())
     }
 
     fn smoke_bonus_music(&mut self) -> Result<(), RenderError> {
@@ -827,6 +836,86 @@ impl Playback {
             return Err(failure("finished results music restarted"));
         }
         Ok(())
+    }
+
+    fn smoke_cemetery_ambient(
+        &mut self,
+        roster: [bool; 4],
+    ) -> Result<(), RenderError> {
+        if self.ambient.clip.is_none() {
+            return Ok(());
+        }
+        let mut cabinet = smoke_campaign(self.smoke_session(), true)?;
+        self.update(&cabinet)?;
+        let starts: Vec<_> = Player::ALL
+            .into_iter()
+            .zip(roster)
+            .filter(|(_, admitted)| *admitted)
+            .flat_map(|(player, _)| {
+                [true, false].map(|down| LogicalAction {
+                    action: Action {
+                        control: Control::Start,
+                        player,
+                    },
+                    down,
+                })
+            })
+            .collect();
+        cabinet.input_step(0, &starts);
+        cabinet.enter_stage_two(270);
+        let admitted = cabinet.stations().map(crate::Station::can_fight);
+        if admitted != roster {
+            return Err(failure("ambient smoke roster differs"));
+        }
+        cabinet.cemetery = Some(CemeteryEntrance::new(admitted, Player::Marge));
+        self.update(&cabinet)?;
+        for tick in 1..=192u64 {
+            cabinet.input_step(tick, &[]);
+            self.update(&cabinet)?;
+            if self.ambient.count != 0 || self.mixer.active() != 0 {
+                return Err(failure("ambient effect leaked through the card"));
+            }
+        }
+        self.smoke_cemetery_ambient_setup(&mut cabinet, roster)
+    }
+
+    fn smoke_cemetery_ambient_setup(
+        &mut self,
+        cabinet: &mut Cabinet,
+        roster: [bool; 4],
+    ) -> Result<(), RenderError> {
+        let mut expected = 0u8;
+        for tick in 1..=250u64 {
+            let receipt =
+                (13..=168).contains(&tick) && cabinet.board_phase == 0;
+            cabinet.input_step(tick, &[]);
+            self.device.clear().map_err(failure)?;
+            self.update(cabinet)?;
+            expected = expected.saturating_add(u8::from(receipt));
+            if self.ambient.count != expected {
+                return Err(failure("ambient effect admission timing differs"));
+            }
+            if !receipt {
+                continue;
+            }
+            if self.mixer.active_on(AudioSource::Effects) == 0
+                || self.queued_frames()? != QUEUE_FRAMES
+            {
+                return Err(failure("ambient PCM was not submitted"));
+            }
+            if expected == 1 {
+                self.verify_submission(1)?;
+            }
+        }
+        if expected != 10 || self.mixer.active_on(AudioSource::Effects) != 0 {
+            return Err(failure(
+                "ambient smoke did not admit and drain ten cues",
+            ));
+        }
+        write_status(format_args!(
+            "Cemetery ambient PCM: ten cues for {roster:?}"
+        ))
+        .map_err(failure)
     }
 
     fn smoke_cemetery_descent(
