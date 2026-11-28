@@ -546,13 +546,7 @@ fn translate(
         slot.station.position.y =
             slot.station.position.y.saturating_add(step_y);
         slot.station.walking = None;
-        if dx != 0 {
-            slot.station.facing = if dx < 0 {
-                Facing::Left
-            } else {
-                Facing::Right
-            };
-        }
+        slot.station.facing = slot.station.facing.with_horizontal_motion(dx);
     }
 }
 

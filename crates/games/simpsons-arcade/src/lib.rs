@@ -236,6 +236,16 @@ pub enum Facing {
     Right,
 }
 
+impl Facing {
+    const fn with_horizontal_motion(self, motion: i16) -> Self {
+        match motion {
+            i16::MIN..=-1 => Self::Left,
+            0 => self,
+            _ => Self::Right,
+        }
+    }
+}
+
 /// Prototype walkable area and four initial foot positions.
 ///
 /// Isolated original-machine observations support the two-pixel rate
@@ -666,12 +676,9 @@ impl Slot {
             Maneuver::Idle => !self.action_recovery.allows_turn(),
             Maneuver::Jump(_) | Maneuver::Special { .. } => false,
         };
-        if !facing_locked && dx != 0 {
-            self.station.facing = if dx < 0 {
-                Facing::Left
-            } else {
-                Facing::Right
-            };
+        if !facing_locked {
+            self.station.facing =
+                self.station.facing.with_horizontal_motion(dx);
         }
         let (step_x, step_y) = self.maneuver_step(dx, dy);
         let position = &mut self.station.position;
@@ -2514,6 +2521,29 @@ mod tests {
         ]);
         let [marge, ..] = state.stations();
         assert_eq!(marge.maneuver, Maneuver::Attack { moving: false, tick: 0 });
+    }
+
+    #[test]
+    fn horizontal_facing_matches_all_signed_motion_words() {
+        for motion in i16::MIN..=i16::MAX {
+            for initial in [Facing::Left, Facing::Right] {
+                assert_eq!(
+                    initial.with_horizontal_motion(motion),
+                    observed_motion_facing(motion, initial),
+                );
+            }
+        }
+    }
+
+    fn observed_motion_facing(motion: i16, initial: Facing) -> Facing {
+        let [high, low] = motion.to_be_bytes();
+        if high == 0 && low == 0 {
+            initial
+        } else if high & 0x80 != 0 {
+            Facing::Left
+        } else {
+            Facing::Right
+        }
     }
 
     #[test]
