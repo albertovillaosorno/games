@@ -202,6 +202,7 @@ fn selection(digest: ContentHash, audio: ContentHash) -> Selection<'static> {
         audio: Some(AudioSelection {
             base: audio,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,

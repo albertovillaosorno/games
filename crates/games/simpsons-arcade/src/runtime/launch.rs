@@ -72,6 +72,7 @@ const USAGE: &str = concat!(
     "[--bonus-music PUMP_SHA RESULT_SHA] ",
     "[--handoff-music DEFEAT_SHA VICTORY_SHA TRANSITION_SHA INSTRUCTIONS_SHA] ",
     "[--stage-two-music SHA] [--cemetery-music SHA] ",
+    "[--cemetery-landing SHA] ",
     "[--effects-volume PERCENT] [--music-volume PERCENT]] ",
     "[--shadow SHA] [--world SHA] ",
     "PARENT MARGE_SHA HOMER_SHA BART_SHA LISA_SHA]\n",
@@ -89,6 +90,7 @@ type Arguments = Peekable<vec::IntoIter<OsString>>;
 type AudioVolumes = (Option<MasterVolume>, Option<MasterVolume>);
 type BonusMusicHashes = Option<[OsString; 2]>;
 type ConfiguredAssets = (Assets, DisplaySettings, LocalPaths);
+type EffectHashes = (Option<OsString>, Option<OsString>, Option<OsString>);
 type EnemyHashes = Option<[OsString; 2]>;
 type HandoffMusicHashes = Option<[OsString; 4]>;
 type MusicHashes = (
@@ -113,6 +115,7 @@ struct LocalPaths {
 pub(super) struct AudioSelection {
     pub(super) base: OsString,
     pub(super) bonus_music: BonusMusicHashes,
+    pub(super) cemetery_landing: Option<OsString>,
     pub(super) cemetery_music: Option<OsString>,
     pub(super) effects_volume: MasterVolume,
     pub(super) handoff_music: HandoffMusicHashes,
@@ -147,6 +150,9 @@ impl AudioSelection {
         let cemetery_music = flag(args, "--cemetery-music")
             .then(|| next(args))
             .transpose()?;
+        let cemetery_landing = flag(args, "--cemetery-landing")
+            .then(|| next(args))
+            .transpose()?;
         let effects = flag(args, "--effects-volume")
             .then(|| next(args))
             .transpose()?;
@@ -158,8 +164,7 @@ impl AudioSelection {
             MasterVolume::parse(text).map_err(|error| format!("{error:?}"))
         };
         Self::new(
-            base,
-            replacement,
+            (base, replacement, cemetery_landing),
             (
                 music,
                 bonus_music,
@@ -179,8 +184,11 @@ impl AudioSelection {
             MasterVolume::parse(value).map_err(|error| format!("{error:?}"))
         };
         Self::new(
-            values.remove("audio").map(hash).transpose()?,
-            values.remove("audio_mod").map(hash).transpose()?,
+            (
+                values.remove("audio").map(hash).transpose()?,
+                values.remove("audio_mod").map(hash).transpose()?,
+                values.remove("cemetery_landing").map(hash).transpose()?,
+            ),
             (
                 values.remove("music").map(hash).transpose()?,
                 music_hashes(values.remove("bonus_music"))?,
@@ -196,12 +204,12 @@ impl AudioSelection {
     }
 
     fn new(
-        base: Option<OsString>,
-        replacement: Option<OsString>,
+        effect_hashes: EffectHashes,
         music_hashes: MusicHashes,
         volumes: AudioVolumes,
     ) -> Result<Option<Self>, String> {
         let (effects_volume, music_volume) = volumes;
+        let (base, replacement, cemetery_landing) = effect_hashes;
         let (
             music,
             bonus_music,
@@ -230,6 +238,7 @@ impl AudioSelection {
             (Some(digest), changes, track) => Ok(Some(Self {
                 base: digest,
                 bonus_music,
+                cemetery_landing,
                 cemetery_music,
                 effects_volume: effects_volume.unwrap_or_default(),
                 handoff_music,
@@ -238,7 +247,11 @@ impl AudioSelection {
                 replacement: changes,
                 stage_two_music,
             })),
-            (None, None, None) if effects_volume.is_none() => Ok(None),
+            (None, None, None)
+                if effects_volume.is_none() && cemetery_landing.is_none() =>
+            {
+                Ok(None)
+            },
             (None, _, _) => {
                 Err(String::from("audio options require a base bundle"))
             },
@@ -1325,6 +1338,7 @@ mod tests {
             audio: Some(AudioSelection {
                 base: DIGEST.into(),
                 bonus_music: None,
+                cemetery_landing: None,
                 cemetery_music: None,
                 effects_volume: MasterVolume::Full,
                 handoff_music: None,
@@ -1555,6 +1569,7 @@ mod tests {
             audio: Some(AudioSelection {
                 base: "audio".into(),
                 bonus_music: None,
+                cemetery_landing: None,
                 cemetery_music: None,
                 effects_volume: MasterVolume::Full,
                 handoff_music: None,
@@ -1640,6 +1655,32 @@ mod tests {
                 return Err(String::from(
                     "invalid second-stage music admitted",
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cemetery_landing_catalogue_requires_base_and_valid_digest()
+    -> Result<(), String> {
+        let path = OsStr::new("local");
+        let base = catalogue();
+        let landing = format!("cemetery_landing={DIGEST}\n");
+        let (configured, _, _) = Assets::catalogue(
+            path,
+            &format!("{base}audio={DIGEST}\n{landing}"),
+        )?;
+        if configured.audio.and_then(|audio| audio.cemetery_landing)
+            != Some(DIGEST.into())
+        {
+            return Err(String::from("cemetery landing lost"));
+        }
+        for invalid in [
+            format!("{base}{landing}"),
+            format!("{base}audio={DIGEST}\ncemetery_landing=invalid"),
+        ] {
+            if Assets::catalogue(path, &invalid).is_ok() {
+                return Err(String::from("invalid cemetery landing admitted"));
             }
         }
         Ok(())
@@ -1758,6 +1799,8 @@ mod tests {
             "second",
             "--cemetery-music",
             "third",
+            "--cemetery-landing",
+            "landing",
             "--effects-volume",
             "25",
             "--music-volume",
@@ -1773,6 +1816,7 @@ mod tests {
             != Some(AudioSelection {
                 base: "base".into(),
                 bonus_music: Some(["pump".into(), "results".into()]),
+                cemetery_landing: Some("landing".into()),
                 cemetery_music: Some("third".into()),
                 effects_volume: MasterVolume::Quarter,
                 handoff_music: Some(

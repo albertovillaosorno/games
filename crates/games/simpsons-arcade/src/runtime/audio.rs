@@ -78,6 +78,9 @@ const MUSIC_LOOP_START: usize = 175_680;
 const STAGE_TWO_TRACK: (&str, usize) = ("audio/stage-two-music", 2_880_000);
 // Finite cemetery service excerpt; no verified recurring seam yet.
 const CEMETERY_TRACK: (&str, usize) = ("audio/cemetery-music", 2_880_000);
+// A local isolated FM capture, not an FM hardware implementation.
+const CEMETERY_LANDING: (&str, usize) =
+    ("audio/cemetery-landing-preview", 28_000);
 // Bounded service captures: ten seconds of pumping music and the
 // five-second results cue including its verified silent tail.
 const BONUS_TRACKS: [(&str, usize); 2] = [
@@ -188,6 +191,8 @@ pub struct AudioSelection {
     pub base: ContentHash,
     /// Optional pumping and results music manifests, in that order.
     pub bonus_music: Option<[ContentHash; 2]>,
+    /// Optional isolated ranked landing capture manifest.
+    pub cemetery_landing: Option<ContentHash>,
     /// Optional finite cemetery music manifest.
     pub cemetery_music: Option<ContentHash>,
     /// Independent effects attenuation before the master level.
@@ -214,6 +219,11 @@ impl AudioSelection {
                 .bonus_music
                 .as_ref()
                 .map(parse_hashes)
+                .transpose()?,
+            cemetery_landing: selection
+                .cemetery_landing
+                .as_deref()
+                .map(parse_hash)
                 .transpose()?,
             cemetery_music: selection
                 .cemetery_music
@@ -261,6 +271,7 @@ impl AudioSelection {
 pub(super) struct Samples {
     ambient_effect: Option<OwnedClip>,
     bonus_music: Option<[OwnedClip; 2]>,
+    cemetery_landing: Option<OwnedClip>,
     cemetery_music: Option<OwnedClip>,
     clips: [Rc<[i16]>; 4],
     effects_volume: MasterVolume,
@@ -274,7 +285,7 @@ pub(super) struct Samples {
 }
 
 impl Samples {
-    fn cemetery_effects(&self) -> [CountedEffect; 2] {
+    fn cemetery_effects(&self) -> [CountedEffect; 3] {
         [
             CountedEffect::new(
                 self.ambient_effect.clone(),
@@ -283,6 +294,10 @@ impl Samples {
             CountedEffect::new(
                 self.entrance_effect.clone(),
                 CEMETERY_EFFECT_GAIN,
+            ),
+            CountedEffect::new(
+                self.cemetery_landing.clone(),
+                StereoGain::UNITY,
             ),
         ]
     }
@@ -313,6 +328,7 @@ impl Samples {
         let [marge, homer, bart, lisa] = HURT_CLIPS.map(|(key, frames)| {
             load_optional_effect(&bundle, key, HURT_RATE, (frames, 0))
         });
+        let landing = load_cemetery_landing(store, selection.cemetery_landing)?;
         Ok(Self {
             ambient_effect: load_optional_effect(
                 &bundle,
@@ -324,6 +340,7 @@ impl Samples {
                 .bonus_music
                 .map(|hashes| load_tracks(store, hashes, BONUS_TRACKS))
                 .transpose()?,
+            cemetery_landing: landing,
             cemetery_music: selection
                 .cemetery_music
                 .map(|hash| load_cemetery_music(store, hash))
@@ -357,6 +374,17 @@ impl Samples {
                 .map(|hash| load_stage_two_music(store, hash))
                 .transpose()?,
         })
+    }
+
+    fn soundtrack(&self) -> Soundtrack {
+        Soundtrack {
+            bonus: self.bonus_music.clone(),
+            cemetery: self.cemetery_music.clone(),
+            cue: MusicCue::Quiet,
+            handoff: self.handoff_music.clone(),
+            stage_two: self.stage_two_music.clone(),
+            street: self.music.clone(),
+        }
     }
 
     fn source_settings(&self) -> SourceSettings {
@@ -504,6 +532,16 @@ struct CountedEffect {
 }
 
 impl CountedEffect {
+    const fn matches_count(&self, expected: u8) -> bool {
+        self.count == expected
+            && self.admitted
+                == if self.clip.is_some() {
+                    expected
+                } else {
+                    0
+                }
+    }
+
     const fn new(clip: Option<OwnedClip>, gain: StereoGain) -> Self {
         Self {
             admitted: 0,
@@ -553,6 +591,7 @@ pub(super) struct Playback {
     hurt_cues: [u64; 4],
     impact: Option<OwnedClip>,
     impact_cues: u64,
+    landing: CountedEffect,
     live_output: bool,
     mixer: OwnedMixer,
     music: Soundtrack,
@@ -625,7 +664,7 @@ impl Playback {
             sources.music.map_or("unavailable", MasterVolume::percent),
         ))
         .map_err(failure)?;
-        let [ambient, entrance] = samples.cemetery_effects();
+        let [ambient, entrance, landing] = samples.cemetery_effects();
         Ok(Self {
             ambient,
             clips: samples.clips()?,
@@ -637,16 +676,10 @@ impl Playback {
             hurt_cues: [0; 4],
             impact: samples.impact.clone(),
             impact_cues: 0,
+            landing,
             live_output: false,
             mixer,
-            music: Soundtrack {
-                bonus: samples.bonus_music.clone(),
-                cemetery: samples.cemetery_music.clone(),
-                cue: MusicCue::Quiet,
-                handoff: samples.handoff_music.clone(),
-                stage_two: samples.stage_two_music.clone(),
-                street: samples.music.clone(),
-            },
+            music: samples.soundtrack(),
             scratch: [[0; 2]; CHUNK],
             sources,
             volume,
@@ -700,6 +733,10 @@ impl Playback {
         self.entrance.observe(
             &mut self.mixer,
             entrance.map_or(0, CemeteryEntrance::entrance_effect_cues),
+        )?;
+        self.landing.observe(
+            &mut self.mixer,
+            entrance.map_or(0, CemeteryEntrance::landing_effect_cues),
         )
     }
 
@@ -860,7 +897,7 @@ impl Playback {
         &mut self,
         roster: [bool; 4],
     ) -> Result<(), RenderError> {
-        if self.ambient.clip.is_none() {
+        if self.ambient.clip.is_none() && self.landing.clip.is_none() {
             return Ok(());
         }
         let mut cabinet = smoke_campaign(self.smoke_session(), true)?;
@@ -889,19 +926,32 @@ impl Playback {
         roster: [bool; 4],
     ) -> Result<(), RenderError> {
         let mut expected = 0u8;
-        for tick in 1..=250u64 {
+        let mut landed = 0u8;
+        let has_ambient = self.ambient.clip.is_some();
+        let has_landing = self.landing.clip.is_some();
+        for tick in 1..=252u64 {
             let receipt =
                 (13..=168).contains(&tick) && cabinet.board_phase == 0;
             cabinet.input_step(tick, &[]);
             self.device.clear().map_err(failure)?;
             self.update(cabinet)?;
             expected = expected.saturating_add(u8::from(receipt));
-            if self.ambient.count != expected
-                || self.ambient.admitted != expected
-            {
+            let [marge, homer, bart, lisa] = roster;
+            let landing = [188, 204, 220, 236]
+                .into_iter()
+                .zip([marge, bart, lisa, homer])
+                .any(|(at, joined)| joined && tick == at);
+            landed = landed.saturating_add(u8::from(landing));
+            if !self.landing.matches_count(landed) {
+                return Err(failure("landing preview timing differs"));
+            }
+            if !self.ambient.matches_count(expected) {
                 return Err(failure("ambient effect admission timing differs"));
             }
-            if !receipt {
+            if landing && has_landing {
+                self.verify_submission(1)?;
+            }
+            if !receipt || !has_ambient {
                 continue;
             }
             if self.mixer.active_on(AudioSource::Effects) == 0
@@ -918,10 +968,19 @@ impl Playback {
                 "ambient smoke did not admit and drain ten cues",
             ));
         }
-        write_status(format_args!(
-            "Cemetery ambient PCM: ten cues for {roster:?}"
-        ))
-        .map_err(failure)
+        if has_landing {
+            write_status(format_args!(
+                "Cemetery landing preview: {landed} cues for {roster:?}"
+            ))
+            .map_err(failure)?;
+        }
+        if has_ambient {
+            write_status(format_args!(
+                "Cemetery ambient PCM: ten cues for {roster:?}"
+            ))
+            .map_err(failure)?;
+        }
+        Ok(())
     }
 
     fn smoke_cemetery_descent(
@@ -1433,7 +1492,9 @@ impl Playback {
         } else {
             MusicCue::StageTwo
         };
-        if target == MusicCue::Cemetery && self.ambient.clip.is_some() {
+        if target == MusicCue::Cemetery
+            && (self.ambient.clip.is_some() || self.landing.clip.is_some())
+        {
             smoke_join_roster(&mut cabinet, [true; 4]);
         } else {
             cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
@@ -1475,6 +1536,7 @@ impl Playback {
             self.impact_cues = cabinet.impact_cues();
             self.ambient.reset();
             self.entrance.reset();
+            self.landing.reset();
             self.discard_queued = true;
             self.mixer.clear();
             self.music.cue = MusicCue::Quiet;
@@ -1518,6 +1580,7 @@ impl Playback {
             || self.impact_cues != 0
             || self.ambient.count != 0
             || self.entrance.count != 0
+            || self.landing.count != 0
         {
             return Err(failure("audio played before an admitted cue"));
         }
@@ -1552,12 +1615,12 @@ struct CemeteryEffectProbe {
 struct CemeteryAmbientProbe {
     clock: StepClock,
     initial_phase: u64,
-    observed: [u8; 2],
+    observed: [u8; 3],
     previous: Duration,
 }
 
 impl CemeteryAmbientProbe {
-    fn expected(self, tick: u64) -> [u8; 2] {
+    fn expected(self, tick: u64) -> [u8; 3] {
         let ambient = (13..=tick.min(168))
             .filter(|receipt| {
                 self.initial_phase
@@ -1571,7 +1634,11 @@ impl CemeteryAmbientProbe {
             .into_iter()
             .filter(|receipt| *receipt <= tick)
             .fold(0u8, |count, _| count.saturating_add(1));
-        [ambient, entrance]
+        let landing = [188, 204, 220, 236]
+            .into_iter()
+            .filter(|receipt| *receipt <= tick)
+            .fold(0u8, |count, _| count.saturating_add(1));
+        [ambient, entrance, landing]
     }
 
     fn new(
@@ -1587,7 +1654,7 @@ impl CemeteryAmbientProbe {
             clock: StepClock::new(TICK_INTERVAL, dimension(8)?)
                 .map_err(failure)?,
             initial_phase,
-            observed: [0; 2],
+            observed: [0; 3],
             previous: timestamp,
         })
     }
@@ -1629,7 +1696,8 @@ pub(super) struct SoundtrackSmoke {
 impl SoundtrackSmoke {
     fn begin_drain(&mut self, timestamp: Duration) -> Result<(), RenderError> {
         self.phase = if self.target == MusicCue::Cemetery
-            && self.output.ambient.clip.is_some()
+            && (self.output.ambient.clip.is_some()
+                || self.output.landing.clip.is_some())
         {
             SoundtrackSmokePhase::CemeteryAmbient(CemeteryAmbientProbe::new(
                 &self.cabinet,
@@ -1726,9 +1794,9 @@ impl SoundtrackSmoke {
         let expected = probe.expected(tick);
         self.output.update(&self.cabinet)?;
         let active = self.verify_ambient_voices(expected, probe.observed)?;
-        let [ambient, entrance] = expected;
-        let [prior_ambient, prior_entrance] = probe.observed;
-        if ambient != prior_ambient {
+        let [ambient, entrance, landing] = expected;
+        let [prior_ambient, prior_entrance, prior_landing] = probe.observed;
+        if ambient != prior_ambient && self.output.ambient.clip.is_some() {
             Self::report("cemetery ambient cue admitted")?;
         }
         if entrance != prior_entrance {
@@ -1738,10 +1806,19 @@ impl SoundtrackSmoke {
                 "cemetery ranked entrance cue without clip"
             })?;
         }
+        if landing != prior_landing && self.output.landing.clip.is_some() {
+            Self::report("cemetery ranked landing preview admitted")?;
+        }
         probe.observed = expected;
-        if tick >= 168 && active == 0 {
-            if !(9..=10).contains(&ambient) || entrance != 5 {
-                return Err(failure("ambient receipt window incomplete"));
+        let end = if self.output.landing.clip.is_some() {
+            236
+        } else {
+            168
+        };
+        if tick >= end && active == 0 {
+            self.verify_cemetery_receipts(expected)?;
+            if self.output.landing.clip.is_some() {
+                Self::report("cemetery landing preview drained")?;
             }
             Self::report("cemetery ambient and ranked effects drained")?;
             self.phase = SoundtrackSmokePhase::Draining;
@@ -1756,6 +1833,7 @@ impl SoundtrackSmoke {
             || self.output.music_voices() != 0
             || self.output.ambient.count != 0
             || self.output.entrance.count != 0
+            || self.output.landing.count != 0
             || queued != 0
         {
             return Err(failure("cemetery card retained queued music"));
@@ -1844,7 +1922,8 @@ impl SoundtrackSmoke {
         if self.target == MusicCue::Cemetery {
             enter_soundtrack_cemetery(
                 &mut self.cabinet,
-                self.output.ambient.clip.is_some(),
+                self.output.ambient.clip.is_some()
+                    || self.output.landing.clip.is_some(),
             )?;
             self.phase = SoundtrackSmokePhase::CemeteryCard;
         } else {
@@ -1932,34 +2011,52 @@ impl SoundtrackSmoke {
 
     fn verify_ambient_voices(
         &self,
-        expected: [u8; 2],
-        observed: [u8; 2],
+        expected: [u8; 3],
+        observed: [u8; 3],
     ) -> Result<usize, RenderError> {
-        let [ambient, entrance] = expected;
-        let [prior_ambient, prior_entrance] = observed;
-        let has_entrance = self.output.entrance.clip.is_some();
+        let effects = [
+            &self.output.ambient,
+            &self.output.entrance,
+            &self.output.landing,
+        ];
         let active = self.output.mixer.active_on(AudioSource::Effects);
-        if self.output.ambient.count != ambient
-            || self.output.ambient.admitted != ambient
-            || self.output.entrance.count != entrance
-            || self.output.entrance.admitted
-                != if has_entrance {
-                    entrance
-                } else {
-                    0
-                }
-            || active > 1usize.saturating_add(usize::from(has_entrance))
-            || (ambient == 0 && entrance == 0 && active != 0)
-            || expected.into_iter().zip(observed).any(|(after, before)| {
-                after < before || after > before.saturating_add(1)
-            })
-            || (active == 0
-                && (ambient != prior_ambient
-                    || (has_entrance && entrance != prior_entrance)))
+        let available = effects
+            .iter()
+            .filter(|effect| effect.clip.is_some())
+            .count();
+        let changed = effects.iter().zip(expected).zip(observed).any(
+            |((effect, after), before)| {
+                effect.clip.is_some() && after != before
+            },
+        );
+        if active > available
+            || (active == 0 && changed)
+            || (expected == [0; 3] && active != 0)
+            || effects.into_iter().zip(expected).zip(observed).any(
+                |((effect, after), before)| {
+                    !effect.matches_count(after)
+                        || after < before
+                        || after > before.saturating_add(1)
+                },
+            )
         {
-            return Err(failure("browser ambient effect admission differs"));
+            return Err(failure("browser cemetery effect admission differs"));
         }
         Ok(active)
+    }
+
+    fn verify_cemetery_receipts(
+        &self,
+        counts: [u8; 3],
+    ) -> Result<(), RenderError> {
+        let [ambient, entrance, landing] = counts;
+        if !(9..=10).contains(&ambient)
+            || entrance != 5
+            || (self.output.landing.clip.is_some() && landing != 4)
+        {
+            return Err(failure("cemetery receipt window incomplete"));
+        }
+        Ok(())
     }
 
     fn verify_pause(
@@ -2053,6 +2150,10 @@ pub(super) fn handoff_music_limits() -> Result<ManifestLimits, RenderError> {
 
 pub(super) fn stage_two_music_limits() -> Result<ManifestLimits, RenderError> {
     stereo_limits(STAGE_TWO_TRACK.1)
+}
+
+pub(super) fn cemetery_landing_limits() -> Result<ManifestLimits, RenderError> {
+    stereo_limits(CEMETERY_LANDING.1)
 }
 
 pub(super) fn cemetery_music_limits() -> Result<ManifestLimits, RenderError> {
@@ -2157,7 +2258,7 @@ fn load_optional_effect(
         .map_err(failure)
 }
 
-fn load_music(
+fn load_stereo_clip(
     store: BundleSource<'_>,
     hash: ContentHash,
     (key, frames): (&str, usize),
@@ -2167,38 +2268,53 @@ fn load_music(
     let record = bundle
         .manifest()
         .record(key)
-        .ok_or_else(|| failure("missing music PCM"))?;
+        .ok_or_else(|| failure("missing stereo PCM"))?;
     let bytes = bundle.view_payload(key).map_err(failure)?;
     let pcm = PcmSamples::new(record, &bytes).map_err(failure)?;
     if pcm.channels() != NonZeroU8::MIN.saturating_add(1)
         || pcm.sample_rate() != RATE
         || usize::try_from(pcm.frames().get()).ok() != Some(frames)
     {
-        return Err(failure("unexpected music PCM format"));
+        return Err(failure("unexpected stereo PCM format"));
     }
     OwnedClip::new(copy_samples(pcm.samples())?, Channels::Stereo, RATE)
         .map_err(failure)
+}
+
+fn load_cemetery_landing(
+    store: BundleSource<'_>,
+    hash: Option<ContentHash>,
+) -> Result<Option<OwnedClip>, RenderError> {
+    hash.map(|digest| {
+        load_stereo_clip(
+            store,
+            digest,
+            CEMETERY_LANDING,
+            cemetery_landing_limits()?,
+        )
+    })
+    .transpose()
 }
 
 fn load_cemetery_music(
     store: BundleSource<'_>,
     hash: ContentHash,
 ) -> Result<OwnedClip, RenderError> {
-    load_music(store, hash, CEMETERY_TRACK, cemetery_music_limits()?)
+    load_stereo_clip(store, hash, CEMETERY_TRACK, cemetery_music_limits()?)
 }
 
 fn load_stage_two_music(
     store: BundleSource<'_>,
     hash: ContentHash,
 ) -> Result<OwnedClip, RenderError> {
-    load_music(store, hash, STAGE_TWO_TRACK, stage_two_music_limits()?)
+    load_stereo_clip(store, hash, STAGE_TWO_TRACK, stage_two_music_limits()?)
 }
 
 fn load_street_music(
     store: BundleSource<'_>,
     hash: ContentHash,
 ) -> Result<OwnedClip, RenderError> {
-    load_music(store, hash, (MUSIC_KEY, MUSIC_FRAMES), music_limits()?)
+    load_stereo_clip(store, hash, (MUSIC_KEY, MUSIC_FRAMES), music_limits()?)
 }
 
 fn load_tracks<const COUNT: usize>(
@@ -2210,7 +2326,7 @@ fn load_tracks<const COUNT: usize>(
     hashes
         .into_iter()
         .zip(tracks)
-        .map(|(hash, track)| load_music(store, hash, track, limits))
+        .map(|(hash, track)| load_stereo_clip(store, hash, track, limits))
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
         .map_err(|_error| failure("music track count"))
@@ -2618,6 +2734,23 @@ mod tests {
         Ok(())
     }
 
+    fn fixture_sample_format(key: &str) -> (NonZeroU8, NonZeroU32) {
+        if key == CEMETERY_LANDING.0 {
+            return (NonZeroU8::MIN.saturating_add(1), RATE);
+        }
+        let rate = if matches!(
+            key,
+            IMPACT_KEY | CEMETERY_EFFECT_KEY | CEMETERY_AMBIENT_KEY
+        ) {
+            PITCH_E40_RATE
+        } else if HURT_CLIPS.iter().any(|(clip, _frames)| *clip == key) {
+            HURT_RATE
+        } else {
+            SOURCE_RATE
+        };
+        (NonZeroU8::MIN, rate)
+    }
+
     fn publish_fixture(
         parent: &OsStr,
         clips: &[FixtureClip<'_>],
@@ -2633,24 +2766,17 @@ mod tests {
             CanonicalStaging::new(parent, budget).map_err(failure)?;
         let mut records = Vec::new();
         for &(key, frames, value) in clips {
+            let (channels, rate) = fixture_sample_format(key);
+            let samples =
+                frames.saturating_mul(NonZeroU64::from(channels).get());
             let bytes = value
                 .to_le_bytes()
-                .repeat(usize::try_from(frames).map_err(failure)?);
+                .repeat(usize::try_from(samples).map_err(failure)?);
             let digest = ContentHash::calculate(&bytes);
             let format = AssetFormat::PcmS16Le {
-                channels: NonZeroU8::MIN,
+                channels,
                 frames: NonZeroU64::new(frames).ok_or(RenderError::TooLarge)?,
-                sample_rate: if matches!(
-                    key,
-                    IMPACT_KEY | CEMETERY_EFFECT_KEY | CEMETERY_AMBIENT_KEY
-                ) {
-                    PITCH_E40_RATE
-                } else if HURT_CLIPS.iter().any(|(clip, _frames)| *clip == key)
-                {
-                    HURT_RATE
-                } else {
-                    SOURCE_RATE
-                },
+                sample_rate: rate,
             };
             stage.write_payload(digest, &bytes).map_err(failure)?;
             records.push(AssetRecord {
@@ -2688,6 +2814,7 @@ mod tests {
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &base)?,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
@@ -2700,6 +2827,7 @@ mod tests {
         if original.ambient_effect.is_some()
             || original.impact.is_some()
             || original.entrance_effect.is_some()
+            || original.cemetery_landing.is_some()
             || original.hurt.iter().any(Option::is_some)
             || original
                 .clips
@@ -2741,6 +2869,61 @@ mod tests {
     }
 
     #[test]
+    fn optional_landing_capture_checks_extent_and_retriggers_effects()
+    -> Result<(), RenderError> {
+        let root = TestRoot::new().map_err(failure)?;
+        let parent = root.location();
+        let frames = u64::try_from(CEMETERY_LANDING.1).map_err(failure)?;
+        let key = CEMETERY_LANDING.0;
+        let mut selection = AudioSelection {
+            base: publish_fixture(
+                parent,
+                &CLIPS.map(|(attack, extent)| (attack, extent, 12)),
+            )?,
+            bonus_music: None,
+            cemetery_landing: Some(publish_fixture(parent, &[(
+                key, frames, 1024,
+            )])?),
+            cemetery_music: None,
+            effects_volume: MasterVolume::Full,
+            handoff_music: None,
+            music: None,
+            music_volume: MasterVolume::Full,
+            replacement: None,
+            stage_two_music: None,
+        };
+        let samples = Samples::load(BundleSource::Local(parent), &selection)?;
+        let [_, _, mut landing] = samples.cemetery_effects();
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        for count in 1..=4u8 {
+            landing.observe(&mut mixer, count)?;
+            let mut output = [[0; 2]];
+            mixer.render(&mut output);
+            if output != [[1024; 2]]
+                || mixer.active() != 1
+                || landing.admitted != count
+            {
+                return Err(failure("landing preview did not retrigger"));
+            }
+        }
+        let mut output = vec![[0; 2]; CEMETERY_LANDING.1];
+        mixer.render(&mut output);
+        if mixer.active() != 0 || output.last() != Some(&[0; 2]) {
+            return Err(failure("landing preview did not exhaust"));
+        }
+        selection.cemetery_landing = Some(publish_fixture(parent, &[(
+            key,
+            frames.saturating_sub(1),
+            1024,
+        )])?);
+        if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
+            return Err(failure("invalid landing extent admitted"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn optional_entrance_effect_validates_stored_and_playback_extents()
     -> Result<(), RenderError> {
         let root = TestRoot::new().map_err(failure)?;
@@ -2750,6 +2933,7 @@ mod tests {
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
@@ -2827,6 +3011,7 @@ mod tests {
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
@@ -2911,7 +3096,7 @@ mod tests {
             cabinet.input_step(tick, &[]);
         }
         let probe = CemeteryAmbientProbe::new(&cabinet, Duration::ZERO)?;
-        let mut final_counts = [0u8; 2];
+        let mut final_counts = [0u8; 3];
         for tick in 195..=445 {
             cabinet.input_step(tick, &[]);
             let entrance = cabinet
@@ -2922,13 +3107,14 @@ mod tests {
                 != [
                     entrance.ambient_effect_cues(),
                     entrance.entrance_effect_cues(),
+                    entrance.landing_effect_cues(),
                 ]
             {
                 return Err(failure("browser cue schedule mismatch"));
             }
         }
-        let [ambient, entrance] = final_counts;
-        if !(9..=10).contains(&ambient) || entrance != 5 {
+        let [ambient, entrance, landing] = final_counts;
+        if !(9..=10).contains(&ambient) || entrance != 5 || landing != 4 {
             return Err(failure("browser cue window incomplete"));
         }
         Ok(())
@@ -2979,6 +3165,7 @@ mod tests {
         let mut selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
@@ -3025,6 +3212,7 @@ mod tests {
         let selection = AudioSelection {
             base: publish_fixture(parent, &clips)?,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             effects_volume: MasterVolume::Full,
             handoff_music: None,
@@ -3116,6 +3304,7 @@ mod tests {
         let samples = Samples {
             ambient_effect: None,
             bonus_music: None,
+            cemetery_landing: None,
             cemetery_music: None,
             clips: array::from_fn(|_| Rc::from([i16::MAX; 2])),
             effects_volume: MasterVolume::Full,

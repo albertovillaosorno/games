@@ -594,6 +594,20 @@ impl CemeteryEntrance {
         u32::try_from(height).ok()
     }
 
+    /// Cumulative admitted landing commands, independent of rendering.
+    ///
+    /// The observed sound command precedes the first grounded pose by one
+    /// tick. Absent stations do not emit a command.
+    #[must_use]
+    pub fn landing_effect_cues(self) -> u8 {
+        Player::ALL.into_iter().fold(0u8, |count, player| {
+            count.saturating_add(u8::from(
+                self.rank_elapsed(player)
+                    .is_some_and(|elapsed| elapsed >= 81i32),
+            ))
+        })
+    }
+
     /// Grounded presentation family after the preceding airborne sample.
     ///
     /// The preview holds the final entrance sample at the input boundary;
@@ -1755,6 +1769,38 @@ mod tests {
             for bits in 0u8..16 {
                 let admitted = [1, 2, 4, 8].map(|bit| bits & bit != 0);
                 assert_entrance_effect_cues(admitted, first);
+            }
+        }
+    }
+
+    fn assert_landing_effect_cues(admitted: [bool; 4], first: Player) {
+        let mut entrance = CemeteryEntrance::new(admitted, first);
+        for _ in 0u16..192 {
+            entrance.advance(false);
+            assert_eq!(entrance.landing_effect_cues(), 0);
+        }
+        for tick in 0..=280u64 {
+            let expected = Player::ALL
+                .into_iter()
+                .filter(|player| {
+                    admitted.get(player.index()).copied() == Some(true)
+                        && tick
+                            >= 188u64.saturating_add(16u64.saturating_mul(
+                                u64::from(entrance.rank(*player)),
+                            ))
+                })
+                .count();
+            assert_eq!(usize::from(entrance.landing_effect_cues()), expected);
+            entrance.advance(false);
+        }
+    }
+
+    #[test]
+    fn landing_effects_precede_grounded_pose_for_all_admitted_ranks() {
+        for first in Player::ALL {
+            for bits in 0u8..16 {
+                let admitted = [1, 2, 4, 8].map(|bit| bits & bit != 0);
+                assert_landing_effect_cues(admitted, first);
             }
         }
     }

@@ -364,6 +364,14 @@ With the second-stage music and cemetery entrance art admitted, set
 explicit launch accepts `--cemetery-music SHA` after `--stage-two-music`.
 The previous cue stops at the title card, and the excerpt begins on
 setup tick one without restarting at landing. No repeating loop is claimed.
+An optional `cemetery_landing=SHA` selection admits a separately published
+28,000-frame stereo capture of the original isolated landing cue. Explicit
+native launch accepts `--cemetery-landing SHA` after `--cemetery-music`.
+It requires an audio base, not music, and uses the effects volume. Every
+admitted ranked landing restarts the same local capture; this is not exact
+FM synthesis or original hardware voice arbitration. The capture is local
+and is not distributed with the executable.
+
 Native launch options follow the order shown in usage. For a path value
 starting with `--`, use an explicit relative path such as `./--controls`
 to distinguish the filename from a misplaced option.

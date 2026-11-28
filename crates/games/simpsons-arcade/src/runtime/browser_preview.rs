@@ -380,6 +380,12 @@ fn append_audio_requests(
             limits: audio::stage_two_music_limits()?,
         });
     }
+    if let Some(digest) = audio.cemetery_landing {
+        requests.push(ManifestRequest {
+            digest,
+            limits: audio::cemetery_landing_limits()?,
+        });
+    }
     if let Some(digest) = audio.cemetery_music {
         requests.push(ManifestRequest {
             digest,
@@ -515,6 +521,7 @@ mod tests {
     use games_assets::{ContentHash, ManifestLimits};
 
     use super::*;
+    type ManifestExpectation = (ContentHash, usize, ManifestLimits);
 
     #[test]
     fn only_unavailable_store_open_is_eligible_for_transient_fallback() {
@@ -825,6 +832,7 @@ mod tests {
         let pump = ContentHash::calculate(b"pump");
         let results = ContentHash::calculate(b"results");
         let stage_two_music = ContentHash::calculate(b"stage two music");
+        let cemetery_landing = ContentHash::calculate(b"cemetery landing");
         let cemetery_music = ContentHash::calculate(b"cemetery music");
         let poses = pose_fixture(pose, scenic, background);
         let selection = Selection {
@@ -832,6 +840,7 @@ mod tests {
             audio: Some(AudioSelection {
                 base,
                 bonus_music: Some([pump, results]),
+                cemetery_landing: Some(cemetery_landing),
                 cemetery_music: Some(cemetery_music),
                 effects_volume: MasterVolume::Full,
                 handoff_music: Some(handoff_fixture()),
@@ -848,7 +857,7 @@ mod tests {
             world: Some(world),
         };
         let requests = manifest_requests(&selection)?;
-        for (digest, count, limit) in [
+        verify_manifest_request_set(&requests, &[
             (actor, 4, art_bundle_limits()?),
             (enemy, 2, art_bundle_limits()?),
             (shadow, 1, art_bundle_limits()?),
@@ -862,16 +871,25 @@ mod tests {
             (results, 1, audio::bonus_music_limits()?),
             (replacement, 1, audio::replacement_limits()?),
             (stage_two_music, 1, audio::stage_two_music_limits()?),
+            (cemetery_landing, 1, audio::cemetery_landing_limits()?),
             (cemetery_music, 1, audio::cemetery_music_limits()?),
-        ] {
-            if !has_manifest_requests(&requests, digest, count, limit) {
+        ])?;
+        verify_handoff_requests(&requests, handoff_fixture())?;
+        verify_invalid_pose(&selection)
+    }
+
+    fn verify_manifest_request_set(
+        requests: &[ManifestRequest],
+        expected: &[ManifestExpectation],
+    ) -> Result<(), RenderError> {
+        for &(digest, count, limit) in expected {
+            if !has_manifest_requests(requests, digest, count, limit) {
                 return Err(failure(
                     "missing or incorrectly bounded browser manifest",
                 ));
             }
         }
-        verify_handoff_requests(&requests, handoff_fixture())?;
-        verify_invalid_pose(&selection)
+        Ok(())
     }
 
     fn verify_invalid_pose(
