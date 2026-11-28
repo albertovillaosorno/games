@@ -1947,6 +1947,11 @@ impl InputStep for Cabinet {
     }
 }
 
+// Shared wrapping arithmetic; callers own the original choice cadence.
+const fn advance_choice_word(word: u16) -> u16 {
+    word.wrapping_mul(5).wrapping_add(0x3711)
+}
+
 const fn axis(negative: bool, positive: bool) -> i16 {
     match (negative, positive) {
         (true, false) => -2,

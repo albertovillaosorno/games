@@ -34,7 +34,10 @@
 
 use games::animation::cycle_tick;
 
-use crate::{Facing, Maneuver, Player, Point, Slot, nearest_fighting_station};
+use crate::{
+    Facing, Maneuver, Player, Point, Slot, advance_choice_word,
+    nearest_fighting_station,
+};
 
 const UNIT: i32 = 256;
 const APPROACH_SPEED: i32 = 320;
@@ -146,7 +149,7 @@ struct ChoiceStream {
 
 impl ChoiceStream {
     const fn advance(&mut self) {
-        self.word = self.word.wrapping_mul(5).wrapping_add(0x3711);
+        self.word = advance_choice_word(self.word);
     }
 
     const fn draw(&mut self) -> u8 {

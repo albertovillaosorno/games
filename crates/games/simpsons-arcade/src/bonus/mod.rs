@@ -39,6 +39,7 @@ pub use opposition::AutomaticDeparture;
 use opposition::Pump;
 
 use super::{Player, stage_card_departed};
+use crate::advance_choice_word;
 
 // Baseline instruction entry is 953 reference frames after the terminal
 // response, of which 128 are the separate wrestler defeat phase.
@@ -46,7 +47,10 @@ const VICTORY_TICKS: u16 = 825;
 // The activity gate opens after the counter has exceeded 208.
 const INSTRUCTION_MIN_TICKS: u16 = 210;
 const INSTRUCTION_MAX_TICKS: u16 = 384;
+const DEMO_PULSE_PHASE: u16 = 3;
 const DEMO_PUMP_TICKS: u16 = 4;
+// The local preview chooses the verified solo instruction baseline.
+const DEMO_WORD: u16 = 0x5e43;
 // A 96-tick countdown bracketed by phase setup and pump entry.
 const READY_TICKS: u16 = 98;
 // Neutral timeout includes the packed-decimal countdown and entry.
@@ -172,6 +176,17 @@ impl Balloon {
         bounded == candidate
     }
 
+    fn adjust_axes(&mut self, pressed: bool, width_first: bool) {
+        if width_first {
+            if !Self::adjust(&mut self.width, MIN_WIDTH, pressed) {
+                let _bounded =
+                    Self::adjust(&mut self.height, MIN_HEIGHT, pressed);
+            }
+        } else if !Self::adjust(&mut self.height, MIN_HEIGHT, pressed) {
+            let _bounded = Self::adjust(&mut self.width, MIN_WIDTH, pressed);
+        }
+    }
+
     fn advance(&mut self, pressed: bool) {
         if pressed {
             self.rest = REST_TICKS;
@@ -183,14 +198,7 @@ impl Balloon {
         // coupling stations through an unrelated global random stream.
         let width_first = self.turn == 0;
         self.turn = self.turn.wrapping_add(1) & 3;
-        if width_first {
-            if !Self::adjust(&mut self.width, MIN_WIDTH, pressed) {
-                let _bounded =
-                    Self::adjust(&mut self.height, MIN_HEIGHT, pressed);
-            }
-        } else if !Self::adjust(&mut self.height, MIN_HEIGHT, pressed) {
-            let _bounded = Self::adjust(&mut self.width, MIN_WIDTH, pressed);
-        }
+        self.adjust_axes(pressed, width_first);
     }
 
     fn inflation(self) -> u8 {
@@ -391,13 +399,44 @@ impl ResultSequence {
     }
 }
 
+// The instruction preview owns its choice word and pulse phase. They are
+// sampled from one original baseline, not from an emulated campaign clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Demonstration {
+    balloon: Balloon,
+    player: Player,
+    pulse_phase: u16,
+    word: u16,
+}
+
+impl Demonstration {
+    fn advance(&mut self, tick: u16) {
+        self.word = advance_choice_word(self.word);
+        if tick.rem_euclid(DEMO_PUMP_TICKS) == self.pulse_phase {
+            let [high, _] = self.word.to_be_bytes();
+            // The four-tick pulses never exhaust the original leak grace.
+            self.balloon.adjust_axes(true, high.trailing_zeros() >= 2);
+        }
+    }
+
+    const fn new(player: Player, word: u16, pulse_phase: u16) -> Self {
+        Self {
+            balloon: Balloon::new(),
+            player,
+            pulse_phase,
+            word,
+        }
+    }
+}
+
 /// Read-only bonus state, in character rather than physical-seat order.
 ///
-/// Axis scheduling remains an independent native choice.
+/// Competition axis scheduling remains an independent native choice. The
+/// instruction demonstration uses a local, verified baseline choice stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Bonus {
     balloons: [Balloon; 4],
-    demonstration: Option<(Player, Balloon)>,
+    demonstration: Option<Demonstration>,
     opponents: Option<[Option<Pump>; 4]>,
     participants: [bool; 4],
     phase: BonusPhase,
@@ -451,8 +490,8 @@ impl Bonus {
             self.refresh_opponents();
             return BonusPhase::Ready;
         }
-        if let Some((_, balloon)) = &mut self.demonstration {
-            balloon.advance(self.tick.is_multiple_of(DEMO_PUMP_TICKS));
+        if let Some(demonstration) = &mut self.demonstration {
+            demonstration.advance(self.tick);
         }
         BonusPhase::Instructions
     }
@@ -603,7 +642,7 @@ impl Bonus {
     #[must_use]
     pub const fn instruction_player(self) -> Option<Player> {
         match self.demonstration {
-            Some((player, _)) => Some(player),
+            Some(demonstration) => Some(demonstration.player),
             None => None,
         }
     }
@@ -682,7 +721,9 @@ impl Bonus {
         self.demonstration = Player::ALL
             .into_iter()
             .find(|player| self.participants.get(player.index()) == Some(&true))
-            .map(|player| (player, Balloon::new()));
+            .map(|player| {
+                Demonstration::new(player, DEMO_WORD, DEMO_PULSE_PHASE)
+            });
     }
 
     fn refresh_opponents(&mut self) {
@@ -725,8 +766,8 @@ impl Bonus {
 
     fn visible_balloon(self, player: Player) -> Option<Balloon> {
         if self.phase == BonusPhase::Instructions {
-            return self.demonstration.and_then(|(demo, balloon)| {
-                (demo == player).then_some(balloon)
+            return self.demonstration.and_then(|demo| {
+                (demo.player == player).then_some(demo.balloon)
             });
         }
         self.competition_balloon(player)
@@ -764,6 +805,7 @@ impl Bonus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    type AxisCheckpoint = (u16, (u16, u16));
     #[derive(Clone, Copy)]
     struct ExpectedScore {
         points: u8,
@@ -848,6 +890,123 @@ mod tests {
         }
     }
 
+    #[test]
+    fn instruction_choice_profiles_reproduce_original_axis_checkpoints() {
+        let profiles = [
+            (0x5e43, 3, 77, [
+                (0, (0xb000, 0xb000)),
+                (2, (0xb000, 0xb000)),
+                (3, (0xb000, 0xa2c4)),
+                (39, (0xa2c4, 0x6669)),
+                (79, (0x76c9, 0x5368)),
+                (159, (0x6669, 0x3369)),
+                (239, (0x4dad, 0x27d6)),
+                (310, (0x4453, 0x208c)),
+            ]),
+            (0x0e60, 2, 78, [
+                (0, (0xb000, 0xb000)),
+                (1, (0xb000, 0xb000)),
+                (2, (0xb000, 0xa2c4)),
+                (39, (0xa2c4, 0x6669)),
+                (79, (0x76c9, 0x5368)),
+                (159, (0x6669, 0x3369)),
+                (239, (0x4dad, 0x27d6)),
+                (310, (0x4453, 0x2019)),
+            ]),
+            (0xfe69, 1, 78, [
+                (0, (0xb000, 0xb000)),
+                (1, (0xb000, 0xa2c4)),
+                (2, (0xb000, 0xa2c4)),
+                (39, (0x9773, 0x6b54)),
+                (79, (0x7d84, 0x5070)),
+                (159, (0x6669, 0x3369)),
+                (239, (0x4b1a, 0x2889)),
+                (310, (0x4074, 0x2103)),
+            ]),
+            (0xb5f0, 2, 78, [
+                (0, (0xb000, 0xb000)),
+                (1, (0xb000, 0xb000)),
+                (2, (0xb000, 0xa2c4)),
+                (39, (0x9773, 0x6b54)),
+                (79, (0x8515, 0x4dad)),
+                (159, (0x6669, 0x3369)),
+                (239, (0x5a13, 0x2544)),
+                (310, (0x4453, 0x2019)),
+            ]),
+        ];
+        for (word, phase, pulses, checkpoints) in profiles {
+            verify_instruction_choice_profile(word, phase, pulses, checkpoints);
+        }
+    }
+
+    fn verify_instruction_choice_profile(
+        word: u16,
+        phase: u16,
+        pulses: u16,
+        checkpoints: [AxisCheckpoint; 8],
+    ) {
+        let mut demo = Demonstration::new(Player::Marge, word, phase);
+        let mut previous = (demo.balloon.width, demo.balloon.height);
+        let mut changes = 0u16;
+        for tick in 0..=310u16 {
+            if tick != 0 {
+                demo.advance(tick);
+            }
+            let axes = (demo.balloon.width, demo.balloon.height);
+            let pulse = tick != 0 && tick.rem_euclid(4) == phase;
+            assert_eq!(axes != previous, pulse);
+            assert!(axes.0 <= previous.0 && axes.1 <= previous.1);
+            changes = changes.saturating_add(u16::from(pulse));
+            if let Some((_, expected)) =
+                checkpoints.iter().find(|(sample, _)| *sample == tick)
+            {
+                assert_eq!(axes, *expected);
+            }
+            previous = axes;
+        }
+        assert_eq!(changes, pulses);
+    }
+
+    #[test]
+    fn instruction_preview_uses_the_baseline_without_mutating_scores() {
+        let roster = [true, false, false, false];
+        let mut bonus = Bonus::new(roster).with_opponents(true);
+        advance_quietly(&mut bonus, VICTORY_TICKS);
+        let scores = Player::ALL.map(|player| bonus.inflation(player));
+        let mut previous_tick = 0u16;
+        for (tick, expected) in [
+            (0u16, (0xb0, 0xb0)),
+            (2, (0xb0, 0xb0)),
+            (3, (0xb0, 0xa2)),
+            (39, (0xa2, 0x66)),
+            (79, (0x76, 0x53)),
+            (159, (0x66, 0x33)),
+            (239, (0x4d, 0x27)),
+            (310, (0x44, 0x20)),
+        ] {
+            advance_quietly(&mut bonus, tick.saturating_sub(previous_tick));
+            assert_eq!(bonus.phase(), BonusPhase::Instructions);
+            assert_eq!(bonus.tick(), tick);
+            assert_eq!(bonus.visual_axes(Player::Marge), Some(expected));
+            assert_eq!(
+                Player::ALL.map(|player| bonus.inflation(player)),
+                scores
+            );
+            previous_tick = tick;
+        }
+        advance_quietly(
+            &mut bonus,
+            INSTRUCTION_MAX_TICKS.saturating_sub(previous_tick),
+        );
+        assert_eq!(bonus.phase(), BonusPhase::Ready);
+        assert_eq!(bonus.instruction_player(), None);
+        assert_eq!(
+            Player::ALL.map(|player| bonus.visual_axes(player)),
+            [Some((0xb0, 0xb0)); 4]
+        );
+        assert_eq!(Player::ALL.map(|player| bonus.inflation(player)), scores);
+    }
+
     fn verify_instruction_demonstration(
         admitted: [bool; 4],
         expected: Option<Player>,
@@ -897,7 +1056,9 @@ mod tests {
             assert_eq!(*bonus, with_input);
             let inflation =
                 expected.and_then(|player| bonus.visual_inflation(player));
-            if expected.is_some() && tick.is_multiple_of(4) {
+            if expected.is_some()
+                && tick.rem_euclid(DEMO_PUMP_TICKS) == DEMO_PULSE_PHASE
+            {
                 assert!(inflation > previous);
             } else {
                 assert_eq!(inflation, previous);
