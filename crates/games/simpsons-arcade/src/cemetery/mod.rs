@@ -186,6 +186,7 @@ impl CemeteryRoomBody {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryRoom {
     depth_offset: i16,
+    enemy_alignment: bool,
     presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
     presentation_enemies: Option<[CemeteryEnemyApproach; 2]>,
@@ -197,6 +198,7 @@ impl Default for CemeteryRoom {
     fn default() -> Self {
         Self {
             depth_offset: 0,
+            enemy_alignment: false,
             presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
             presentation_enemies: None,
@@ -290,7 +292,7 @@ impl CemeteryRoom {
             self.pursuit = None;
         } else if tick >= FIRST_ENEMY_MOVEMENT
             && let Some(pair) = &mut self.pursuit
-            && pair.advance(slots).is_none()
+            && pair.advance(slots, self.enemy_alignment).is_none()
         {
             self.pursuit = None;
         }
@@ -490,6 +492,13 @@ impl CemeteryEntrance {
         })
     }
 
+    // Opt in only when the close-range body families are available.
+    pub(super) const fn enable_enemy_alignment(&mut self) {
+        if let Some(room) = &mut self.room {
+            room.enemy_alignment = true;
+        }
+    }
+
     pub(super) fn enable_room(&mut self) {
         if self.admitted.into_iter().all(|admitted| admitted) {
             self.room = Some(CemeteryRoom::default());
@@ -680,6 +689,52 @@ mod tests {
         (354, 2),
     ];
 
+    // Independent preceding-position samples from the two routed controls.
+    // Each row records both world X and projected depth, after the first
+    // pursuer enters lane alignment while the second continues approaching.
+    const HOMER_LISA_ALIGNMENT: [[i16; 4]; 12] = [
+        [334, 162, 343, 207],
+        [334, 160, 342, 207],
+        [334, 159, 340, 207],
+        [334, 158, 339, 207],
+        [334, 157, 338, 207],
+        [334, 156, 337, 207],
+        [334, 155, 335, 207],
+        [334, 154, 334, 207],
+        [332, 154, 333, 207],
+        [331, 154, 332, 207],
+        [330, 154, 330, 207],
+        [329, 154, 329, 207],
+    ];
+    const REVERSED_ALIGNMENT: [[i16; 4]; 26] = [
+        [324, 161, 333, 199],
+        [324, 160, 332, 199],
+        [324, 159, 330, 199],
+        [324, 158, 329, 199],
+        [324, 157, 328, 198],
+        [324, 156, 327, 198],
+        [324, 154, 325, 198],
+        [324, 153, 324, 198],
+        [322, 153, 323, 197],
+        [321, 153, 322, 197],
+        [320, 153, 320, 197],
+        [319, 153, 319, 197],
+        [318, 153, 318, 196],
+        [317, 153, 317, 196],
+        [316, 153, 315, 196],
+        [316, 154, 314, 196],
+        [316, 156, 313, 195],
+        [316, 157, 312, 195],
+        [316, 158, 310, 195],
+        [316, 159, 309, 195],
+        [316, 160, 308, 194],
+        [316, 161, 307, 194],
+        [316, 162, 305, 194],
+        [316, 163, 304, 194],
+        [316, 164, 303, 194],
+        [316, 165, 302, 194],
+    ];
+
     fn arrival(first: Player) -> CemeteryEntrance {
         let mut state = CemeteryEntrance::new([true; 4], first);
         for _ in 0u64..192 {
@@ -854,6 +909,132 @@ mod tests {
                 "control {homer_lisa}, source tick {prior}",
             );
         }
+    }
+
+    fn alignment_controls(homer_lisa: bool, tick: u64) -> [u8; 4] {
+        if tick >= 299 {
+            let up = Control::Up.mask();
+            let left = up | Control::Left.mask();
+            let right = up | Control::Right.mask();
+            return [right, left, left, right];
+        }
+        if tick >= 292 {
+            return [0; 4];
+        }
+        let down = Control::Down.mask();
+        let left = down | Control::Left.mask();
+        let right = down | Control::Right.mask();
+        if homer_lisa {
+            [0, left, 0, right]
+        } else {
+            [left, right, right, left]
+        }
+    }
+
+    fn observed_alignment_sample(
+        homer_lisa: bool,
+        index: usize,
+        [x1, y1, x2, y2]: [i16; 4],
+    ) -> [CemeteryEnemyApproach; 2] {
+        let phase = u8::try_from(index.checked_div(6).unwrap_or_default())
+            .unwrap_or_default();
+        let first_depth = if index < 6 {
+            CemeteryEnemyDepth::Decreasing
+        } else {
+            CemeteryEnemyDepth::Level
+        };
+        let second_phase = if homer_lisa {
+            match index {
+                0..=1 => 6,
+                2..=7 => 7,
+                _ => 0,
+            }
+        } else {
+            phase
+        };
+        let second_depth = if homer_lisa {
+            CemeteryEnemyDepth::Level
+        } else {
+            CemeteryEnemyDepth::Decreasing
+        };
+        [
+            CemeteryEnemyApproach {
+                pose: Some(CemeteryEnemyPose {
+                    depth: first_depth,
+                    facing: Facing::Left,
+                    phase,
+                }),
+                position: Point { x: x1, y: y1 },
+                target: if homer_lisa {
+                    Player::Lisa
+                } else {
+                    Player::Bart
+                },
+            },
+            CemeteryEnemyApproach {
+                pose: Some(CemeteryEnemyPose {
+                    depth: second_depth,
+                    facing: Facing::Left,
+                    phase: second_phase,
+                }),
+                position: Point { x: x2, y: y2 },
+                target: Player::Marge,
+            },
+        ]
+    }
+
+    fn assert_enemy_alignment_trace(homer_lisa: bool) {
+        let mut entrance = arrival(Player::Marge).at(237);
+        entrance.enable_room();
+        entrance.enable_enemy_alignment();
+        let mut slots = room_slots();
+        let start = if homer_lisa {
+            280u64
+        } else {
+            288u64
+        };
+        let trace: &[[i16; 4]] = if homer_lisa {
+            &HOMER_LISA_ALIGNMENT
+        } else {
+            &REVERSED_ALIGNMENT
+        };
+        let end = start
+            .saturating_add(u64::try_from(trace.len()).unwrap_or_default());
+        for tick in 238..=end {
+            for (slot, controls) in
+                slots.iter_mut().zip(alignment_controls(homer_lisa, tick))
+            {
+                slot.held = controls;
+            }
+            entrance.advance(false);
+            let _advanced = entrance
+                .advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            let enemies =
+                entrance.room().and_then(CemeteryRoom::presentation_enemies);
+            if tick == end {
+                assert_eq!(enemies, None, "unsupported boundary {tick}");
+                break;
+            }
+            if tick < start {
+                continue;
+            }
+            let index =
+                usize::try_from(tick.saturating_sub(start)).unwrap_or_default();
+            let expected = trace.get(index).copied().map(|coordinates| {
+                observed_alignment_sample(homer_lisa, index, coordinates)
+            });
+            assert_eq!(enemies, expected, "{tick}");
+        }
+    }
+
+    #[test]
+    fn room_enemy_alignment_matches_opposed_two_station_control() {
+        assert_enemy_alignment_trace(true);
+    }
+
+    #[test]
+    fn room_enemy_alignment_matches_released_four_station_control() {
+        assert_enemy_alignment_trace(false);
     }
 
     #[test]

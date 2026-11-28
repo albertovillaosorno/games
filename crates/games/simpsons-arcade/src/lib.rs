@@ -834,16 +834,22 @@ struct LinkedEncounter {
 enum CemeterySelection {
     Entrance(Player),
     Room(Player),
+    RoomAlignment(Player),
 }
 
 impl CemeterySelection {
     fn entrance(self, admitted: [bool; 4]) -> CemeteryEntrance {
         let first = match self {
-            Self::Entrance(player) | Self::Room(player) => player,
+            Self::Entrance(player)
+            | Self::Room(player)
+            | Self::RoomAlignment(player) => player,
         };
         let mut entrance = CemeteryEntrance::new(admitted, first);
-        if matches!(self, Self::Room(_)) {
+        if matches!(self, Self::Room(_) | Self::RoomAlignment(_)) {
             entrance.enable_room();
+        }
+        if matches!(self, Self::RoomAlignment(_)) {
+            entrance.enable_enemy_alignment();
         }
         entrance
     }
@@ -1701,6 +1707,15 @@ impl Cabinet {
     #[must_use]
     pub const fn with_cemetery_room(self, first: Player) -> Self {
         self.configure_cemetery(Some(CemeterySelection::Room(first)))
+    }
+
+    /// Select the opt-in first-room lane alignment diagnostic.
+    ///
+    /// Requires the extended body catalogue for rendering. Attacks,
+    /// damage and unverified enemy directions are not admitted.
+    #[must_use]
+    pub const fn with_cemetery_room_alignment(self, first: Player) -> Self {
+        self.configure_cemetery(Some(CemeterySelection::RoomAlignment(first)))
     }
 
     /// Enable optional pair locomotion in cabinet pair order.

@@ -63,6 +63,7 @@ const SPECIAL_ROLE_COUNT: usize = MARKER_ROLE_COUNT + 12;
 const GROUND_ROLE_COUNT: usize = SPECIAL_ROLE_COUNT + 34;
 const AIR_ROLE_COUNT: usize = GROUND_ROLE_COUNT + 2;
 const ENEMY_ROLE_COUNT: usize = AIR_ROLE_COUNT + 16;
+const ALIGNMENT_ROLE_COUNT: usize = ENEMY_ROLE_COUNT + 3;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
@@ -71,6 +72,7 @@ const SPECIAL_ATLAS_BYTES: usize = MARKER_ATLAS_BYTES + 122_708;
 const GROUND_ATLAS_BYTES: usize = SPECIAL_ATLAS_BYTES + 404_236;
 const AIR_ATLAS_BYTES: usize = GROUND_ATLAS_BYTES + 14_700;
 const ENEMY_ATLAS_BYTES: usize = AIR_ATLAS_BYTES + 101_680;
+const ALIGNMENT_ATLAS_BYTES: usize = ENEMY_ATLAS_BYTES + 24_812;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -80,7 +82,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; ENEMY_ROLE_COUNT] = [
+const ROLES: [Role; ALIGNMENT_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -259,6 +261,10 @@ const ROLES: [Role; ENEMY_ROLE_COUNT] = [
     Role::new("actor/room-enemy", (24, 63), (-76i32, -40i32)),
     Role::new("actor/room-enemy", (29, 62), (-75i32, -40i32)),
     Role::new("actor/room-enemy", (28, 63), (-76i32, -40i32)),
+    // Alignment entry and the independently continuing enemy cycle.
+    Role::new("actor/room-enemy", (37, 63), (-80i32, -39i32)),
+    Role::new("actor/room-enemy", (32, 63), (-78i32, -39i32)),
+    Role::new("actor/room-enemy", (29, 64), (-75i32, -40i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -381,7 +387,9 @@ impl Selection {
     }
 
     pub(super) const fn atlas_bytes(&self) -> usize {
-        let registered = if self.count() == ENEMY_ROLE_COUNT {
+        let registered = if self.count() == ALIGNMENT_ROLE_COUNT {
+            ALIGNMENT_ATLAS_BYTES
+        } else if self.count() == ENEMY_ROLE_COUNT {
             ENEMY_ATLAS_BYTES
         } else if self.room_air_attacks() {
             AIR_ATLAS_BYTES
@@ -440,7 +448,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(ENEMY_ROLE_COUNT.saturating_add(1))
+            .take(ALIGNMENT_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -453,9 +461,10 @@ impl Selection {
                 | GROUND_ROLE_COUNT
                 | AIR_ROLE_COUNT
                 | ENEMY_ROLE_COUNT
+                | ALIGNMENT_ROLE_COUNT
         ) {
             return Err(failure(
-                "invalid cemetery role count (16/44/104/108/120/154/156/172)",
+                "invalid role count (16/44/104/108/120/154/156/172/175)",
             ));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
@@ -485,7 +494,7 @@ impl Selection {
     }
 
     pub(super) const fn sprite_count(&self) -> usize {
-        if self.count() == ENEMY_ROLE_COUNT {
+        if self.count() >= ENEMY_ROLE_COUNT {
             EXTRA_SPRITES + 7
         } else if self.count() >= MARKER_ROLE_COUNT {
             EXTRA_SPRITES + 5
@@ -831,6 +840,9 @@ impl CemeteryArt {
             return Err(failure("unexpected cemetery route start"));
         }
         entrance.enable_room();
+        if self.roles.len() == ALIGNMENT_ROLE_COUNT {
+            entrance.enable_enemy_alignment();
+        }
         let [Some(marge), Some(homer), Some(bart), Some(lisa)] =
             Player::ALL.map(|player| entrance.position(player))
         else {
@@ -842,6 +854,11 @@ impl CemeteryArt {
             slot.held = controls;
         }
         for tick in 238..terminal {
+            for (slot, controls) in
+                slots.iter_mut().zip(enemy_control_at(tick, held))
+            {
+                slot.held = controls;
+            }
             entrance.advance(false);
             let _advanced = entrance.advance_room(
                 &mut slots,
@@ -964,19 +981,25 @@ impl CemeteryArt {
         &mut self,
         scene: &mut SceneSession<'_, '_>,
     ) -> Result<(), RenderError> {
-        if self.roles.len() != ENEMY_ROLE_COUNT {
+        if self.roles.len() < ENEMY_ROLE_COUNT {
             return Ok(());
         }
         let down = crate::Control::Down.mask();
         let left = down | crate::Control::Left.mask();
         let right = down | crate::Control::Right.mask();
+        let (reversed_end, opposed_end) =
+            if self.roles.len() == ALIGNMENT_ROLE_COUNT {
+                (314, 292)
+            } else {
+                (288, 280)
+            };
         self.verify_enemy_control(
             scene,
-            ("reversed", [left, right, right, left], 288),
+            ("reversed", [left, right, right, left], reversed_end),
         )?;
         self.verify_enemy_control(
             scene,
-            ("homer-lisa", [0, left, 0, right], 280),
+            ("homer-lisa", [0, left, 0, right], opposed_end),
         )
     }
 
@@ -1394,6 +1417,19 @@ fn enemy_visible_columns(destination: SpriteRect) -> u32 {
         .min(destination.width.get())
 }
 
+const fn enemy_control_at(tick: u64, initial: [u8; 4]) -> [u8; 4] {
+    if tick >= 299 {
+        let up = crate::Control::Up.mask();
+        let left = up | crate::Control::Left.mask();
+        let right = up | crate::Control::Right.mask();
+        [right, left, left, right]
+    } else if tick >= 292 {
+        [0; 4]
+    } else {
+        initial
+    }
+}
+
 fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
     use CemeteryEnemyDepth::{Decreasing, Increasing, Level};
     if pose.facing != Facing::Left {
@@ -1412,6 +1448,9 @@ fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
                 .saturating_add(6)
                 .saturating_add(usize::from(pose.depth == Level))
         },
+        (0, Decreasing) => 16,
+        (0, Level) => 17,
+        (1, Decreasing) => 18,
         _ => return None,
     };
     Some(AIR_ROLE_COUNT.saturating_add(ordinal))
@@ -1751,6 +1790,9 @@ mod tests {
             (6, Level),
             (7, Decreasing),
             (7, Level),
+            (0, Decreasing),
+            (0, Level),
+            (1, Decreasing),
         ];
         for phase in 0u8..=8 {
             for depth in [Decreasing, Increasing, Level] {
@@ -1775,17 +1817,18 @@ mod tests {
         }
     }
 
+    fn parse_enemy_catalogue(count: usize) -> Result<Selection, RenderError> {
+        let hashes = (0..count)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Selection::parse(&format!("cemetery-entrance marge {hashes}"))
+    }
+
     #[test]
     fn enemy_catalogue_preserves_the_previous_exact_budget() {
-        let parse = |count: usize| {
-            let hashes = (0..count)
-                .map(|index| format!("{index:064x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            Selection::parse(&format!("cemetery-entrance marge {hashes}"))
-        };
-        let previous = parse(AIR_ROLE_COUNT);
-        let extended = parse(ENEMY_ROLE_COUNT);
+        let previous = parse_enemy_catalogue(AIR_ROLE_COUNT);
+        let extended = parse_enemy_catalogue(ENEMY_ROLE_COUNT);
         assert!(previous.is_ok() && extended.is_ok());
         if let (Ok(old), Ok(new)) = (previous, extended) {
             assert!(old.room_air_attacks() && new.room_air_attacks());
@@ -1800,9 +1843,26 @@ mod tests {
             );
         }
         for count in 157..172 {
-            assert!(parse(count).is_err());
+            assert!(parse_enemy_catalogue(count).is_err());
         }
-        assert!(parse(173).is_err());
+    }
+
+    #[test]
+    fn alignment_catalogue_preserves_enemy_draw_budget() {
+        let alignment = parse_enemy_catalogue(ALIGNMENT_ROLE_COUNT);
+        let approach = parse_enemy_catalogue(ENEMY_ROLE_COUNT);
+        assert!(alignment.is_ok() && approach.is_ok());
+        if let (Ok(old), Ok(new)) = (approach, alignment) {
+            assert_eq!(new.count(), old.count().saturating_add(3));
+            assert_eq!(
+                new.atlas_bytes(),
+                old.atlas_bytes().saturating_add(24_812),
+            );
+            assert_eq!(new.sprite_count(), old.sprite_count());
+        }
+        assert!(parse_enemy_catalogue(173).is_err());
+        assert!(parse_enemy_catalogue(174).is_err());
+        assert!(parse_enemy_catalogue(176).is_err());
     }
 
     #[test]
@@ -1835,6 +1895,7 @@ mod tests {
             (GROUND_ROLE_COUNT, GROUND_ATLAS_BYTES),
             (AIR_ROLE_COUNT, AIR_ATLAS_BYTES),
             (ENEMY_ROLE_COUNT, ENEMY_ATLAS_BYTES),
+            (ALIGNMENT_ROLE_COUNT, ALIGNMENT_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(
