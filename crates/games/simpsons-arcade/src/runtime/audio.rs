@@ -497,6 +497,7 @@ impl Soundtrack {
 }
 
 struct CountedEffect {
+    admitted: u8,
     clip: Option<OwnedClip>,
     count: u8,
     gain: StereoGain,
@@ -504,7 +505,12 @@ struct CountedEffect {
 
 impl CountedEffect {
     const fn new(clip: Option<OwnedClip>, gain: StereoGain) -> Self {
-        Self { clip, count: 0, gain }
+        Self {
+            admitted: 0,
+            clip,
+            count: 0,
+            gain,
+        }
     }
 
     fn observe(
@@ -512,15 +518,27 @@ impl CountedEffect {
         mixer: &mut OwnedMixer,
         count: u8,
     ) -> Result<(), RenderError> {
+        if count < self.count {
+            self.admitted = 0;
+        }
         let changed = count > self.count;
         self.count = count;
         if changed && let Some(clip) = &self.clip {
             return match mixer.retrigger_effect(clip.clone(), self.gain) {
-                Ok(_) | Err(AudioError::VoicesFull) => Ok(()),
+                Ok(_) => {
+                    self.admitted = self.admitted.saturating_add(1);
+                    Ok(())
+                },
+                Err(AudioError::VoicesFull) => Ok(()),
                 Err(error) => Err(failure(error)),
             };
         }
         Ok(())
+    }
+
+    const fn reset(&mut self) {
+        self.admitted = 0;
+        self.count = 0;
     }
 }
 
@@ -847,21 +865,7 @@ impl Playback {
         }
         let mut cabinet = smoke_campaign(self.smoke_session(), true)?;
         self.update(&cabinet)?;
-        let starts: Vec<_> = Player::ALL
-            .into_iter()
-            .zip(roster)
-            .filter(|(_, admitted)| *admitted)
-            .flat_map(|(player, _)| {
-                [true, false].map(|down| LogicalAction {
-                    action: Action {
-                        control: Control::Start,
-                        player,
-                    },
-                    down,
-                })
-            })
-            .collect();
-        cabinet.input_step(0, &starts);
+        smoke_join_roster(&mut cabinet, roster);
         cabinet.enter_stage_two(270);
         let admitted = cabinet.stations().map(crate::Station::can_fight);
         if admitted != roster {
@@ -892,7 +896,9 @@ impl Playback {
             self.device.clear().map_err(failure)?;
             self.update(cabinet)?;
             expected = expected.saturating_add(u8::from(receipt));
-            if self.ambient.count != expected {
+            if self.ambient.count != expected
+                || self.ambient.admitted != expected
+            {
                 return Err(failure("ambient effect admission timing differs"));
             }
             if !receipt {
@@ -1422,12 +1428,16 @@ impl Playback {
             return Err(failure("stage-two soundtrack selection is required"));
         }
         let mut cabinet = smoke_campaign(self.smoke_session(), true)?;
-        cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
         let target = if self.music.cemetery.is_some() {
             MusicCue::Cemetery
         } else {
             MusicCue::StageTwo
         };
+        if target == MusicCue::Cemetery && self.ambient.clip.is_some() {
+            smoke_join_roster(&mut cabinet, [true; 4]);
+        } else {
+            cabinet.input_step(0, &bonus_smoke_pulse(Control::Start));
+        }
         self.enable_output();
         Ok(SoundtrackSmoke {
             cabinet,
@@ -1463,8 +1473,8 @@ impl Playback {
             self.cues = stations.map(|station| station.attack_cues);
             self.hurt_cues = stations.map(|station| station.hurt_cues);
             self.impact_cues = cabinet.impact_cues();
-            self.ambient.count = 0;
-            self.entrance.count = 0;
+            self.ambient.reset();
+            self.entrance.reset();
             self.discard_queued = true;
             self.mixer.clear();
             self.music.cue = MusicCue::Quiet;
@@ -1538,6 +1548,51 @@ struct CemeteryEffectProbe {
     previous: Duration,
 }
 
+#[derive(Clone, Copy)]
+struct CemeteryAmbientProbe {
+    clock: StepClock,
+    initial_phase: u64,
+    observed: [u8; 2],
+    previous: Duration,
+}
+
+impl CemeteryAmbientProbe {
+    fn expected(self, tick: u64) -> [u8; 2] {
+        let ambient = (13..=tick.min(168))
+            .filter(|receipt| {
+                self.initial_phase
+                    .wrapping_add(*receipt)
+                    .wrapping_sub(1)
+                    .trailing_zeros()
+                    >= 4
+            })
+            .fold(0u8, |count, _| count.saturating_add(1));
+        let entrance = [26, 120, 136, 152, 168]
+            .into_iter()
+            .filter(|receipt| *receipt <= tick)
+            .fold(0u8, |count, _| count.saturating_add(1));
+        [ambient, entrance]
+    }
+
+    fn new(
+        cabinet: &Cabinet,
+        timestamp: Duration,
+    ) -> Result<Self, RenderError> {
+        let entrance = cabinet
+            .cemetery_entrance()
+            .ok_or_else(|| failure("missing ambient entrance fixture"))?;
+        let initial_phase =
+            u64::from(cabinet.board_phase).wrapping_sub(entrance.tick()) & 15;
+        Ok(Self {
+            clock: StepClock::new(TICK_INTERVAL, dimension(8)?)
+                .map_err(failure)?,
+            initial_phase,
+            observed: [0; 2],
+            previous: timestamp,
+        })
+    }
+}
+
 struct CemeterySmokeTicks<'cabinet>(&'cabinet mut Cabinet);
 
 impl FixedTick for CemeterySmokeTicks<'_> {
@@ -1549,6 +1604,7 @@ impl FixedTick for CemeterySmokeTicks<'_> {
 #[derive(Clone, Copy)]
 enum SoundtrackSmokePhase {
     Cemetery,
+    CemeteryAmbient(CemeteryAmbientProbe),
     CemeteryCard,
     CemeteryEffects(CemeteryEffectProbe),
     Draining,
@@ -1573,6 +1629,13 @@ pub(super) struct SoundtrackSmoke {
 impl SoundtrackSmoke {
     fn begin_drain(&mut self, timestamp: Duration) -> Result<(), RenderError> {
         self.phase = if self.target == MusicCue::Cemetery
+            && self.output.ambient.clip.is_some()
+        {
+            SoundtrackSmokePhase::CemeteryAmbient(CemeteryAmbientProbe::new(
+                &self.cabinet,
+                timestamp,
+            )?)
+        } else if self.target == MusicCue::Cemetery
             && self.output.entrance.clip.is_some()
         {
             SoundtrackSmokePhase::CemeteryEffects(CemeteryEffectProbe {
@@ -1623,6 +1686,9 @@ impl SoundtrackSmoke {
             SoundtrackSmokePhase::CemeteryEffects(probe) => {
                 self.step_cemetery_effects(timestamp, probe)?;
             },
+            SoundtrackSmokePhase::CemeteryAmbient(probe) => {
+                self.step_cemetery_ambient(timestamp, probe)?;
+            },
             SoundtrackSmokePhase::Cemetery
             | SoundtrackSmokePhase::Draining
             | SoundtrackSmokePhase::Exhausted { .. }
@@ -1640,9 +1706,56 @@ impl SoundtrackSmoke {
         ))
     }
 
+    fn step_cemetery_ambient(
+        &mut self,
+        timestamp: Duration,
+        mut probe: CemeteryAmbientProbe,
+    ) -> Result<(), RenderError> {
+        self.verify_voice(self.target)?;
+        let elapsed = timestamp.saturating_sub(probe.previous);
+        let _advanced = probe
+            .clock
+            .advance(elapsed, &mut CemeterySmokeTicks(&mut self.cabinet))
+            .map_err(failure)?;
+        probe.previous = timestamp;
+        let tick = self
+            .cabinet
+            .cemetery_entrance()
+            .ok_or_else(|| failure("ambient entrance disappeared"))?
+            .tick();
+        let expected = probe.expected(tick);
+        self.output.update(&self.cabinet)?;
+        let active = self.verify_ambient_voices(expected, probe.observed)?;
+        let [ambient, entrance] = expected;
+        let [prior_ambient, prior_entrance] = probe.observed;
+        if ambient != prior_ambient {
+            Self::report("cemetery ambient cue admitted")?;
+        }
+        if entrance != prior_entrance {
+            Self::report(if self.output.entrance.clip.is_some() {
+                "cemetery ranked entrance cue admitted"
+            } else {
+                "cemetery ranked entrance cue without clip"
+            })?;
+        }
+        probe.observed = expected;
+        if tick >= 168 && active == 0 {
+            if !(9..=10).contains(&ambient) || entrance != 5 {
+                return Err(failure("ambient receipt window incomplete"));
+            }
+            Self::report("cemetery ambient and ranked effects drained")?;
+            self.phase = SoundtrackSmokePhase::Draining;
+        } else {
+            self.phase = SoundtrackSmokePhase::CemeteryAmbient(probe);
+        }
+        Ok(())
+    }
+
     fn step_cemetery_card(&mut self, queued: u32) -> Result<(), RenderError> {
         if self.output.music.cue != MusicCue::Quiet
             || self.output.music_voices() != 0
+            || self.output.ambient.count != 0
+            || self.output.entrance.count != 0
             || queued != 0
         {
             return Err(failure("cemetery card retained queued music"));
@@ -1681,6 +1794,7 @@ impl SoundtrackSmoke {
         self.output.update(&self.cabinet)?;
         let active = self.output.mixer.active_on(AudioSource::Effects);
         if self.output.entrance.count != expected
+            || self.output.entrance.admitted != expected
             || active > 1
             || (expected == 0 && active != 0)
             || (expected == probe.observed
@@ -1728,7 +1842,10 @@ impl SoundtrackSmoke {
         }
         Self::report("second-stage queued")?;
         if self.target == MusicCue::Cemetery {
-            enter_smoke_cemetery(&mut self.cabinet);
+            enter_soundtrack_cemetery(
+                &mut self.cabinet,
+                self.output.ambient.clip.is_some(),
+            )?;
             self.phase = SoundtrackSmokePhase::CemeteryCard;
         } else {
             self.pause_track();
@@ -1758,6 +1875,7 @@ impl SoundtrackSmoke {
             SoundtrackSmokePhase::Street
             | SoundtrackSmokePhase::StageTwo
             | SoundtrackSmokePhase::CemeteryCard
+            | SoundtrackSmokePhase::CemeteryAmbient(_)
             | SoundtrackSmokePhase::CemeteryEffects(_) => {
                 return Err(failure("soundtrack diagnostic state leaked"));
             },
@@ -1810,6 +1928,38 @@ impl SoundtrackSmoke {
             },
         }
         Ok(())
+    }
+
+    fn verify_ambient_voices(
+        &self,
+        expected: [u8; 2],
+        observed: [u8; 2],
+    ) -> Result<usize, RenderError> {
+        let [ambient, entrance] = expected;
+        let [prior_ambient, prior_entrance] = observed;
+        let has_entrance = self.output.entrance.clip.is_some();
+        let active = self.output.mixer.active_on(AudioSource::Effects);
+        if self.output.ambient.count != ambient
+            || self.output.ambient.admitted != ambient
+            || self.output.entrance.count != entrance
+            || self.output.entrance.admitted
+                != if has_entrance {
+                    entrance
+                } else {
+                    0
+                }
+            || active > 1usize.saturating_add(usize::from(has_entrance))
+            || (ambient == 0 && entrance == 0 && active != 0)
+            || expected.into_iter().zip(observed).any(|(after, before)| {
+                after < before || after > before.saturating_add(1)
+            })
+            || (active == 0
+                && (ambient != prior_ambient
+                    || (has_entrance && entrance != prior_entrance)))
+        {
+            return Err(failure("browser ambient effect admission differs"));
+        }
+        Ok(active)
     }
 
     fn verify_pause(
@@ -2128,6 +2278,24 @@ fn smoke_campaign(
     Ok(cabinet)
 }
 
+fn smoke_join_roster(cabinet: &mut Cabinet, roster: [bool; 4]) {
+    let starts: Vec<_> = Player::ALL
+        .into_iter()
+        .zip(roster)
+        .filter(|(_, admitted)| *admitted)
+        .flat_map(|(player, _)| {
+            [true, false].map(|down| LogicalAction {
+                action: Action {
+                    control: Control::Start,
+                    player,
+                },
+                down,
+            })
+        })
+        .collect();
+    cabinet.input_step(0, &starts);
+}
+
 fn clear_smoke_wrestler(cabinet: &mut Cabinet) {
     cabinet.wrestler = Some(Wrestler {
         action: WrestlerAction::Cleared,
@@ -2135,6 +2303,22 @@ fn clear_smoke_wrestler(cabinet: &mut Cabinet) {
         ..Wrestler::new(0)
     });
     cabinet.admit_bonus();
+}
+
+fn enter_soundtrack_cemetery(
+    cabinet: &mut Cabinet,
+    ambient: bool,
+) -> Result<(), RenderError> {
+    if ambient {
+        let roster = cabinet.stations().map(crate::Station::can_fight);
+        if roster != [true; 4] {
+            return Err(failure("browser ambient roster differs"));
+        }
+        cabinet.cemetery = Some(CemeteryEntrance::new(roster, Player::Marge));
+    } else {
+        enter_smoke_cemetery(cabinet);
+    }
+    Ok(())
 }
 
 const fn enter_smoke_cemetery(cabinet: &mut Cabinet) {
@@ -2672,6 +2856,80 @@ mod tests {
         selection.base = publish_fixture(parent, &clips)?;
         if Samples::load(BundleSource::Local(parent), &selection).is_ok() {
             return Err(failure("invalid ambient effect extent accepted"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn counted_effect_distinguishes_observed_and_admitted_receipts()
+    -> Result<(), RenderError> {
+        let clip = OwnedClip::new(Rc::from([100, 200]), Channels::Mono, RATE)
+            .map_err(failure)?;
+        let mut effect =
+            CountedEffect::new(Some(clip.clone()), StereoGain::UNITY);
+        let mut mixer =
+            OwnedMixer::new(RATE, NonZeroU16::MIN).map_err(failure)?;
+        let _music = mixer
+            .play_on(clip, SourceGain {
+                source: AudioSource::Music,
+                stereo: StereoGain::UNITY,
+            })
+            .map_err(failure)?;
+        effect.observe(&mut mixer, 1)?;
+        if (effect.count, effect.admitted) != (1, 0) {
+            return Err(failure("effect receipt accounting mismatch"));
+        }
+        mixer.stop_source(AudioSource::Music);
+        effect.observe(&mut mixer, 1)?;
+        if (effect.count, effect.admitted) != (1, 0) {
+            return Err(failure("effect receipt accounting mismatch"));
+        }
+        effect.observe(&mut mixer, 2)?;
+        effect.observe(&mut mixer, 3)?;
+        if (effect.count, effect.admitted) != (3, 2) {
+            return Err(failure("effect receipt accounting mismatch"));
+        }
+        effect.observe(&mut mixer, 0)?;
+        if (effect.count, effect.admitted) != (0, 0) {
+            return Err(failure("effect receipt accounting mismatch"));
+        }
+        effect.observe(&mut mixer, 1)?;
+        if (effect.count, effect.admitted) != (1, 1) {
+            return Err(failure("effect receipt accounting mismatch"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ambient_browser_fixture_preserves_the_full_roster_and_schedule()
+    -> Result<(), RenderError> {
+        let mut cabinet = smoke_campaign(LocalSession::default(), true)?;
+        smoke_join_roster(&mut cabinet, [true; 4]);
+        enter_smoke_stage_two(&mut cabinet)?;
+        enter_soundtrack_cemetery(&mut cabinet, true)?;
+        for tick in 1..=194 {
+            cabinet.input_step(tick, &[]);
+        }
+        let probe = CemeteryAmbientProbe::new(&cabinet, Duration::ZERO)?;
+        let mut final_counts = [0u8; 2];
+        for tick in 195..=445 {
+            cabinet.input_step(tick, &[]);
+            let entrance = cabinet
+                .cemetery_entrance()
+                .ok_or_else(|| failure("ambient fixture disappeared"))?;
+            final_counts = probe.expected(entrance.tick());
+            if final_counts
+                != [
+                    entrance.ambient_effect_cues(),
+                    entrance.entrance_effect_cues(),
+                ]
+            {
+                return Err(failure("browser cue schedule mismatch"));
+            }
+        }
+        let [ambient, entrance] = final_counts;
+        if !(9..=10).contains(&ambient) || entrance != 5 {
+            return Err(failure("browser cue window incomplete"));
         }
         Ok(())
     }
