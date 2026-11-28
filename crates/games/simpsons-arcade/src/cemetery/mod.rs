@@ -1137,7 +1137,7 @@ mod tests {
         if route == 1 && (299..317).contains(&tick) {
             return [0, 0, 0, Control::Right.mask()];
         }
-        if route == 2 && tick >= 299 {
+        if route == 2 && (299..349).contains(&tick) {
             let up = Control::Up.mask();
             return [
                 0,
@@ -1276,6 +1276,28 @@ mod tests {
         ])
     }
 
+    fn assert_retreat_release(entrance: &CemeteryEntrance, tick: u64) {
+        assert_eq!(
+            entrance.room().map(CemeteryRoom::presentation_positions),
+            Some([
+                Point { x: 116, y: 191 },
+                Point { x: 212, y: 191 },
+                Point { x: 172, y: 191 },
+                Point { x: 200, y: 191 },
+            ]),
+            "{tick}",
+        );
+        let moving = entrance.room().map(|room| {
+            room.presentation_bodies()
+                .map(|body| body.walking.is_some())
+        });
+        assert_eq!(
+            moving,
+            Some([false, tick == 349, false, tick == 349]),
+            "{tick}",
+        );
+    }
+
     fn verify_strike_route(route: u8) {
         let mut entrance = arrival(Player::Marge).at(237);
         entrance.enable_room();
@@ -1299,6 +1321,9 @@ mod tests {
             if tick == terminal {
                 assert_eq!(enemies, None, "{route} {tick}");
                 break;
+            }
+            if route == 2 && tick >= 349 {
+                assert_retreat_release(&entrance, tick);
             }
             assert_eq!(
                 enemies,

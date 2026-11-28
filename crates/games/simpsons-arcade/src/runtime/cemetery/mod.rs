@@ -1492,7 +1492,7 @@ const fn enemy_control_at(
             };
         },
         EnemyControlKind::AwayStrike => {
-            if tick >= 299 {
+            if tick >= 299 && tick < 349 {
                 let up = crate::Control::Up.mask();
                 return [
                     0,
