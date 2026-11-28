@@ -123,6 +123,7 @@ pub(super) struct Catalogue {
     bonus_departure: Option<ContentHash>,
     bonus_inflated: Option<ContentHash>,
     cemetery: Option<Box<cemetery::Selection>>,
+    cemetery_layers: Option<[ContentHash; cemetery::layers::PHASES]>,
     entries: BTreeMap<Key, ContentHash>,
     landing_markers: Option<ContentHash>,
     linked: Option<[ContentHash; linked::POSE_COUNT]>,
@@ -176,6 +177,10 @@ impl Catalogue {
             )
             .saturating_add(self.scenery.atlas_bytes())
             .saturating_add(
+                usize::from(self.cemetery_layers.is_some())
+                    .saturating_mul(cemetery::layers::ATLAS_BYTES),
+            )
+            .saturating_add(
                 usize::from(self.arrival.is_some())
                     .saturating_mul(arrival::ATLAS_BYTES),
             )
@@ -206,6 +211,12 @@ impl Catalogue {
 
     pub(super) fn atlas_count(&self) -> usize {
         self.count()
+            .saturating_add(
+                usize::from(self.cemetery_layers.is_some()).saturating_mul(
+                    cemetery::layers::ATLAS_COUNT
+                        .saturating_sub(cemetery::layers::PHASES),
+                ),
+            )
             .saturating_add(
                 usize::from(self.arrival.is_some())
                     .saturating_mul(arrival::ATLAS_COUNT.saturating_sub(1)),
@@ -283,6 +294,11 @@ impl Catalogue {
             && (self.balloon.is_none()
                 || (self.linked.is_some() && self.backdrop.has_boardwalk()))
             && (self.cemetery.is_none() || self.balloon.is_some())
+            && (self.cemetery_layers.is_none()
+                || self
+                    .cemetery
+                    .as_deref()
+                    .is_some_and(cemetery::Selection::animated))
             && (self.linked.is_none() || self.stage_two.is_some())
     }
 
@@ -307,6 +323,10 @@ impl Catalogue {
                     .map_or(0, cemetery::Selection::count),
             )
             .saturating_add(self.wrestler.count())
+            .saturating_add(
+                usize::from(self.cemetery_layers.is_some())
+                    .saturating_mul(cemetery::layers::PHASES),
+            )
             .saturating_add(usize::from(self.bonus.is_some()))
             .saturating_add(usize::from(self.bonus_departure.is_some()))
             .saturating_add(usize::from(self.bonus_inflated.is_some()))
@@ -328,6 +348,7 @@ impl Catalogue {
                     .flat_map(|selection| selection.digests()),
             )
             .chain(self.wrestler.digests())
+            .chain(self.cemetery_layers.into_iter().flatten())
             .chain(self.bonus)
             .chain(self.bonus_departure)
             .chain(self.bonus_inflated)
@@ -355,7 +376,9 @@ impl Catalogue {
                 self.balloon =
                     Some(balloon::parse(line, self.balloon.is_some())?);
             },
-            Some("cemetery-entrance") => self.insert_cemetery(line)?,
+            Some("cemetery-entrance" | "cemetery-room-layers") => {
+                self.insert_cemetery(line)?;
+            },
             Some("linked-actors") => {
                 self.linked = Some(linked::parse(line, self.linked.is_some())?);
             },
@@ -411,10 +434,27 @@ impl Catalogue {
     }
 
     fn insert_cemetery(&mut self, line: &str) -> Result<(), RenderError> {
+        if line.split_whitespace().next() == Some("cemetery-room-layers") {
+            return self.insert_cemetery_layers(line);
+        }
+        if line.split_whitespace().next() == Some("cemetery-room-layers") {
+            return self.insert_cemetery_layers(line);
+        }
         if self.cemetery.is_some() {
             return Err(failure("duplicate cemetery entrance"));
         }
         self.cemetery = Some(Box::new(cemetery::Selection::parse(line)?));
+        Ok(())
+    }
+
+    fn insert_cemetery_layers(
+        &mut self,
+        line: &str,
+    ) -> Result<(), RenderError> {
+        if self.cemetery_layers.is_some() {
+            return Err(failure("duplicate cemetery layer record"));
+        }
+        self.cemetery_layers = Some(cemetery::layers::parse(line)?);
         Ok(())
     }
 
@@ -461,8 +501,13 @@ impl Catalogue {
                 .cemetery
                 .as_deref()
                 .map(|selection| {
-                    cemetery::CemeteryArt::load(store, scene, selection)
-                        .map(Box::new)
+                    cemetery::CemeteryArt::load(
+                        store,
+                        scene,
+                        selection,
+                        self.cemetery_layers.as_ref(),
+                    )
+                    .map(Box::new)
                 })
                 .transpose()?,
             entries,
@@ -535,6 +580,10 @@ impl Catalogue {
             .track_count()
             .saturating_add(self.linked_sprite_count())
             .saturating_add(self.balloon_sprite_count())
+            .saturating_add(
+                usize::from(self.cemetery_layers.is_some())
+                    .saturating_mul(cemetery::layers::EXTRA_DRAWS),
+            )
             .saturating_add(
                 usize::from(self.cemetery.is_some())
                     .saturating_mul(cemetery::EXTRA_SPRITES),
@@ -1986,6 +2035,7 @@ mod tests {
             .collect();
         let extended =
             format!("{} {}\n", record.trim_end(), animated.join(" "));
+        assert_cemetery_layer_catalogue(with_boss, record, &extended);
         let selected = Catalogue::parse(&format!("{with_boss}{extended}"));
         assert!(selected.is_ok());
         if let (Ok(baseline), Ok(value)) =
@@ -2022,6 +2072,47 @@ mod tests {
             format!("{}{duplicate}\n", record.trim_end())
         });
         assert!(Catalogue::parse(&format!("{with_boss}{repeated}")).is_err());
+    }
+
+    fn assert_cemetery_layer_budgets(base_text: &str, selected_text: &str) {
+        let baseline = Catalogue::parse(base_text);
+        let parsed = Catalogue::parse(selected_text);
+        assert!(baseline.is_ok() && parsed.is_ok());
+        if let (Ok(base), Ok(selected)) = (baseline, parsed) {
+            assert_eq!(selected.count(), base.count().saturating_add(4));
+            assert_eq!(selected.digests().count(), selected.count());
+            assert_eq!(
+                selected.atlas_count(),
+                base.atlas_count().saturating_add(7)
+            );
+            assert_eq!(
+                selected.atlas_bytes(),
+                base.atlas_bytes().saturating_add(3_145_732)
+            );
+            assert_eq!(
+                selected.scenic_sprite_count(),
+                base.scenic_sprite_count().saturating_add(3)
+            );
+        }
+    }
+
+    fn assert_cemetery_layer_catalogue(
+        with_boss: &str,
+        sparse: &str,
+        animated: &str,
+    ) {
+        let hashes = (200u32..204)
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let layers = format!("cemetery-room-layers {hashes}\n");
+        assert!(Catalogue::parse(&format!("{with_boss}{layers}")).is_err());
+        assert!(
+            Catalogue::parse(&format!("{with_boss}{sparse}{layers}")).is_err()
+        );
+        let full = format!("{with_boss}{animated}");
+        assert!(Catalogue::parse(&format!("{full}{layers}{layers}")).is_err());
+        assert_cemetery_layer_budgets(&full, &format!("{layers}{full}"));
     }
 
     fn assert_cemetery_catalogue(with_boss: &str, without_boss: &str) {

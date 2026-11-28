@@ -862,7 +862,7 @@ impl Scene {
             .cemetery
             .as_deref()
             .ok_or(RenderError::InvalidSprite)?;
-        art.queue(entrance, &mut self.draws);
+        let _backgrounds = art.queue(entrance, &mut self.draws)?;
         if entrance.background_phase().is_none()
             || !cabinet.session().world_visible()
         {

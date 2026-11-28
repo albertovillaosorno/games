@@ -31,9 +31,12 @@
 
 //! Optional registered third-stage entrance art.
 
+pub(super) mod layers;
+
 use games_assets::ContentHash;
 use games_platform::ir::frame::RenderError;
 use games_platform::ir::graphics::scene_renderer::SceneSession;
+use games_platform::ir::process::write_status;
 use games_platform::ir::scene::SpriteDraw;
 use games_platform::ir::storage::bundle::BundleSource;
 
@@ -158,6 +161,10 @@ pub(super) struct Selection {
 }
 
 impl Selection {
+    pub(super) const fn animated(&self) -> bool {
+        self.count() == ANIMATED_ROLE_COUNT
+    }
+
     pub(super) const fn atlas_bytes(&self) -> usize {
         if self.count() == ANIMATED_ROLE_COUNT {
             ANIMATED_ATLAS_BYTES
@@ -220,6 +227,7 @@ impl Selection {
 #[derive(Debug)]
 pub(super) struct CemeteryArt {
     first: Player,
+    layers: Option<layers::Layers>,
     roles: Vec<RoleArt>,
 }
 
@@ -258,6 +266,7 @@ impl CemeteryArt {
         store: BundleSource<'_>,
         scene: &mut SceneSession<'_, '_>,
         selection: &Selection,
+        layer_hashes: Option<&[ContentHash; layers::PHASES]>,
     ) -> Result<Self, RenderError> {
         let roles = selection
             .digests()
@@ -283,6 +292,9 @@ impl CemeteryArt {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             first: selection.first,
+            layers: layer_hashes
+                .map(|hashes| layers::Layers::load(store, scene, *hashes))
+                .transpose()?,
             roles,
         })
     }
@@ -291,17 +303,48 @@ impl CemeteryArt {
         &self,
         entrance: CemeteryEntrance,
         draws: &mut Vec<SpriteDraw>,
-    ) {
-        draws.extend(self.background(entrance));
+    ) -> Result<usize, RenderError> {
+        let start = draws.len();
+        if let (Some(layers), Some(phase)) =
+            (&self.layers, entrance.background_phase())
+            && entrance.phase() == CemeteryPhase::Landed
+        {
+            let offset = entrance
+                .room()
+                .map_or(0, crate::CemeteryRoom::presentation_depth_offset);
+            layers.queue(phase, offset, draws)?;
+        } else {
+            draws.extend(self.background(entrance));
+        }
+        let background_count = draws.len().saturating_sub(start);
         draws.extend(
             Player::ALL
                 .into_iter()
                 .filter_map(|player| self.body(entrance, player)),
         );
+        Ok(background_count)
     }
 
     fn role(&self, index: usize) -> Option<(Art, Role)> {
         Some((self.roles.get(index)?.art, *ROLES.get(index)?))
+    }
+
+    pub(super) fn verify_layer_phases(
+        &self,
+        scene: &mut SceneSession<'_, '_>,
+    ) -> Result<(), RenderError> {
+        let Some(layers) = &self.layers else {
+            return Ok(());
+        };
+        for phase in 0u8..4 {
+            let expected = self
+                .roles
+                .get(usize::from(phase).saturating_add(2))
+                .ok_or(RenderError::InvalidSprite)?
+                .digest;
+            verify_layer_offsets(scene, layers, phase, expected)?;
+        }
+        Ok(())
     }
 }
 
@@ -358,7 +401,7 @@ pub(super) fn verify(
         .as_deref()
         .ok_or(RenderError::InvalidSprite)?;
     let mut expected = Vec::new();
-    cemetery.queue(entrance, &mut expected);
+    let background_count = cemetery.queue(entrance, &mut expected)?;
     let background = background_index(entrance)
         .and_then(|index| cemetery.roles.get(index))
         .map(|role| role.digest);
@@ -370,13 +413,16 @@ pub(super) fn verify(
         return Err(failure("cemetery viewport or layering differs"));
     }
     if let (Some(draw), Some(digest)) = (expected.first(), background) {
-        verify_background(scene, (*draw, digest))?;
-        if expected.len() > 1 {
+        let backgrounds = expected
+            .get(..background_count)
+            .ok_or(RenderError::InvalidSprite)?;
+        verify_background(scene, backgrounds, *draw, digest)?;
+        if expected.len() > background_count {
             let baseline = scene.readback()?;
             let _composed = scene.present([24, 22, 30], &expected)?;
             let bounds: Vec<_> = expected
                 .iter()
-                .skip(1)
+                .skip(background_count)
                 .map(|body_draw| body_draw.destination)
                 .collect();
             scenery::verify_pixels(
@@ -391,23 +437,54 @@ pub(super) fn verify(
     Ok(())
 }
 
-fn verify_background(
+fn background_digest(
     scene: &mut SceneSession<'_, '_>,
-    (draw, digest): (SpriteDraw, ContentHash),
-) -> Result<(), RenderError> {
+    draws: &[SpriteDraw],
+    draw: SpriteDraw,
+) -> Result<ContentHash, RenderError> {
     let pitch = scene.layout().pitch();
     let offset = pitch
         .saturating_mul(usize::try_from(draw.destination.y).map_err(failure)?);
     let bytes = pitch.saturating_mul(
         usize::try_from(draw.destination.height.get()).map_err(failure)?,
     );
-    let _isolated = scene.present([24, 22, 30], &[draw])?;
+    let _isolated = scene.present([24, 22, 30], draws)?;
     let pixels = scene.readback()?;
     let region = pixels
         .get(offset..offset.saturating_add(bytes))
         .ok_or(RenderError::InvalidLength)?;
-    if ContentHash::calculate(region) != digest {
+    Ok(ContentHash::calculate(region))
+}
+
+fn verify_background(
+    scene: &mut SceneSession<'_, '_>,
+    draws: &[SpriteDraw],
+    draw: SpriteDraw,
+    digest: ContentHash,
+) -> Result<(), RenderError> {
+    if background_digest(scene, draws, draw)? != digest {
         return Err(failure("isolated cemetery background pixels differ"));
+    }
+    Ok(())
+}
+
+fn verify_layer_offsets(
+    scene: &mut SceneSession<'_, '_>,
+    layers: &layers::Layers,
+    phase: u8,
+    expected: ContentHash,
+) -> Result<(), RenderError> {
+    let mut draws = Vec::new();
+    for offset in 0i16..=31 {
+        draws.clear();
+        layers.queue(phase, offset, &mut draws)?;
+        let draw = *draws.first().ok_or(RenderError::InvalidSprite)?;
+        let digest = background_digest(scene, &draws, draw)?;
+        if offset == 0 && digest != expected {
+            return Err(failure("cemetery layer phase differs from entrance"));
+        }
+        write_status(format_args!("Cemetery layer: {phase} {offset} {digest}"))
+            .map_err(failure)?;
     }
     Ok(())
 }
