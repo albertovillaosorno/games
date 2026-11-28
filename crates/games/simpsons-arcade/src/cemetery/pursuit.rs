@@ -676,6 +676,35 @@ mod tests {
     use super::{ChoiceStream, PursuitPair};
 
     #[test]
+    fn choice_word_recurrence_matches_every_word() {
+        for word in 0..=u16::MAX {
+            let mut stream = ChoiceStream { choice: 0x5a, word };
+            let expected =
+                u32::from(word).saturating_mul(5).saturating_add(0x3711)
+                    & 0xffff;
+            stream.advance();
+            assert_eq!(u32::from(stream.word), expected);
+            assert_eq!(stream.choice, 0x5a);
+        }
+    }
+
+    #[test]
+    fn choice_byte_recurrence_matches_every_pair() {
+        for pair in 0..=u16::MAX {
+            let [choice, high] = pair.to_be_bytes();
+            let expected =
+                u16::from(choice).saturating_add(u16::from(high)) & 0xff;
+            for low in [0, u8::MAX] {
+                let word = u16::from_be_bytes([high, low]);
+                let mut stream = ChoiceStream { choice, word };
+                assert_eq!(u16::from(stream.draw()), expected);
+                assert_eq!(u16::from(stream.choice), expected);
+                assert_eq!(stream.word, word);
+            }
+        }
+    }
+
+    #[test]
     fn room_admission_shares_a_word_across_both_choices() {
         for (word, first, second, next) in
             [(0x1207, 0x12, 0x24, 0x9134), (0x4a25, 0x4a, 0x94, 0xa9ca)]
