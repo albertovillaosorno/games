@@ -122,6 +122,10 @@ identity tie-breaking. Close related behaviour as a batch through
 existing shared Rust mechanisms and regression tests. Graph-ready means
 only that no known pending external callee remains; semantic gaps may
 still block implementation. The report is read-only.
+Pending dependencies and callers are conservatively projected through
+discarded functions, so discarding a transport stub does not hide its
+pending destination. Implemented functions terminate that projection;
+discarded functions never become pending group members.
 
 ## Bounded private research retention
 

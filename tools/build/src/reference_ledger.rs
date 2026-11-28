@@ -46,6 +46,8 @@ use serde_json::Value;
 
 use crate::{USAGE, parse_limit, text};
 
+type NeighborLinks = fn(&Function) -> &[String];
+
 /// Read-only function inventory check.
 #[derive(Debug)]
 pub(crate) struct Arguments {
@@ -539,6 +541,35 @@ fn pending(function: &Function) -> bool {
     function.status == "pending"
 }
 
+fn caller_links(function: &Function) -> &[String] {
+    &function.callers
+}
+
+// A discarded mechanism can still forward to pending behaviour. Project
+// paths through discarded functions without counting them as work items.
+fn pending_neighbors<'ledger>(
+    functions: &'ledger BTreeMap<String, Function>,
+    source: &'ledger Function,
+    links: NeighborLinks,
+) -> BTreeSet<&'ledger str> {
+    let mut visited = BTreeSet::new();
+    let mut neighbors = BTreeSet::new();
+    let mut stack: Vec<_> = links(source).iter().map(String::as_str).collect();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        if let Some(node) = functions.get(id) {
+            if pending(node) {
+                let _inserted = neighbors.insert(id);
+            } else if node.status == "discarded" {
+                stack.extend(links(node).iter().map(String::as_str));
+            }
+        }
+    }
+    neighbors
+}
+
 // Iterative postorder avoids stack overflow on deep private call graphs.
 fn finish_order(functions: &BTreeMap<String, Function>) -> Vec<&str> {
     let mut visited = BTreeSet::new();
@@ -555,7 +586,9 @@ fn finish_order(functions: &BTreeMap<String, Function>) -> Vec<&str> {
             {
                 stack.push((id, true));
                 stack.extend(
-                    node.callees.iter().map(|callee| (callee.as_str(), false)),
+                    pending_neighbors(functions, node, |item| &item.callees)
+                        .into_iter()
+                        .map(|callee| (callee, false)),
                 );
             }
         }
@@ -576,7 +609,7 @@ fn components(functions: &BTreeMap<String, Function>) -> BTreeMap<&str, usize> {
                 && let Entry::Vacant(entry) = owners.entry(id)
             {
                 let _owner = entry.insert(next);
-                stack.extend(node.callers.iter().map(String::as_str));
+                stack.extend(pending_neighbors(functions, node, caller_links));
             }
         }
         next = next.saturating_add(1);
@@ -606,18 +639,16 @@ fn dependency_groups(
             .unknown_flows
             .saturating_add(function.unresolved_flows.len());
         group.dependencies.extend(
-            function
-                .callees
-                .iter()
-                .filter_map(|callee| owners.get(callee.as_str()))
+            pending_neighbors(functions, function, |node| &node.callees)
+                .into_iter()
+                .filter_map(|callee| owners.get(callee))
                 .copied()
                 .filter(|target| target != owner),
         );
         group.callers.extend(
-            function
-                .callers
-                .iter()
-                .filter_map(|caller| owners.get(caller.as_str()))
+            pending_neighbors(functions, function, |node| &node.callers)
+                .into_iter()
+                .filter_map(|caller| owners.get(caller))
                 .copied()
                 .filter(|source| source != owner),
         );
@@ -866,6 +897,58 @@ mod tests {
             super::audit(&lines(&[third, second, first]), limit, Some(limit))?;
         if reordered.groups.as_ref() != Some(&groups) {
             return Err(String::from("group report is not deterministic"));
+        }
+        Ok(())
+    }
+
+    fn discard(mut fixture: Value) -> Result<Value, String> {
+        for (field, value) in [
+            ("analysis_state", Value::from("semantic-complete")),
+            ("semantic_name", Value::from("forwarding")),
+            ("behavior", Value::from("fixture transfer")),
+            ("semantic_evidence", Value::from("fixture")),
+            ("inputs", serde_json::json!([])),
+            ("outputs", serde_json::json!([])),
+            ("state_mutations", serde_json::json!([])),
+            ("data_dependencies", serde_json::json!([])),
+            ("test_evidence", serde_json::json!(["fixture"])),
+            ("status", Value::from("discarded")),
+        ] {
+            set_field(&mut fixture, field, value)?;
+        }
+        Ok(fixture)
+    }
+
+    #[test]
+    fn retains_pending_dependencies_through_discarded_cycles()
+    -> Result<(), String> {
+        let first = "audio:z80:program:fixed:0001";
+        let second = "audio:z80:program:fixed:0002";
+        let leaf = "audio:z80:program:fixed:0003";
+        let transit = "audio:z80:program:fixed:0004";
+        let return_link = "audio:z80:program:fixed:0005";
+        let records = [
+            record("0001", &[second], &[transit]),
+            record("0002", &[return_link], &[first]),
+            record("0003", &[return_link], &[]),
+            discard(record("0004", &[first, return_link], &[return_link]))?,
+            discard(record("0005", &[transit], &[transit, second, leaf]))?,
+        ];
+        let limit = NonZeroUsize::new(5).ok_or("fixture limit")?;
+        let report = super::audit(&lines(&records), limit, Some(limit))?;
+        let groups = report.groups.ok_or("missing groups")?;
+        let [ready, blocked] = groups.selected.as_slice() else {
+            return Err(String::from("unexpected component count"));
+        };
+        if groups.total != 2
+            || groups.ready != 1
+            || ready.members != [leaf]
+            || ready.callers.len() != 1
+            || blocked.members != [first, second]
+            || blocked.dependencies.len() != 1
+            || report.statuses.get("discarded") != Some(&2)
+        {
+            return Err(String::from("discarded transit hid dependencies"));
         }
         Ok(())
     }
