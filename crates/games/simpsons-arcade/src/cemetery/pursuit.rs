@@ -9,7 +9,7 @@
 //
 // Boundary-Contract:
 // - Owns:
-//   - Bounded first-room approach, alignment, protected strike and targeting.
+//   - Bounded first-room approach, alignment, strikes and leap precursor.
 // - Must-Not:
 //   - Admit contact damage, decode source media or render sprites.
 // - Allows:
@@ -21,12 +21,12 @@
 // - Merge-When:
 //   - Another encounter implements equivalent target reservation rules.
 // - Summary:
-//   - Model observed approach, alignment and protected strike phases.
+//   - Model observed pursuit and bounded enemy attack poses.
 // - Description:
 //   - Track fractional motion, staggered steering and periodic target
 //     balancing, stopping at the first unsupported transition.
 // - Usage:
-//   - Drive once per protected room tick, before station movement.
+//   - Drive once per admitted room tick, before station movement.
 // - Defaults:
 //   - No normal campaign admission or unverified enemy combat.
 
@@ -71,13 +71,17 @@ pub enum CemeteryEnemyPose {
         /// Zero-based approach frame.
         phase: u8,
     },
-    /// Protected strike, with no contact damage admitted.
+    /// Left-facing first airborne body.
+    Leap,
+    /// Left-facing strike, with no contact damage admitted.
     Strike {
         /// Horizontal orientation at the start of the strike.
         facing: Facing,
         /// Zero-based strike frame.
         phase: u8,
     },
+    /// Left-facing leap wind-up body.
+    Windup,
 }
 
 impl CemeteryEnemyPose {
@@ -103,10 +107,12 @@ impl CemeteryEnemyPose {
 
 /// One enemy's camera-relative position and currently selected station.
 ///
-/// The bounded first-room approach and protected strike do not include
-/// contact response, terrain changes or the subsequent encounter.
+/// The bounded first-room diagnostic does not include contact response,
+/// terrain changes or the subsequent encounter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CemeteryEnemyApproach {
+    /// Whole-pixel elevation above the ground depth.
+    pub elevation: i16,
     /// Latched body art identity, absent before both bodies initialize.
     pub pose: Option<CemeteryEnemyPose>,
     /// Floored logical position at the sampled camera offset.
@@ -119,6 +125,7 @@ pub struct CemeteryEnemyApproach {
 enum PursuitMotion {
     AlignDepth,
     AlignHorizontal,
+    Leap { age: u8 },
     LongRange,
     Retreat { primed: bool },
     Strike { tick: u8 },
@@ -225,7 +232,8 @@ impl Pursuer {
             PursuitMotion::LongRange
             | PursuitMotion::Retreat { .. }
             | PursuitMotion::Strike { .. }
-            | PursuitMotion::Windup { .. } => {
+            | PursuitMotion::Windup { .. }
+            | PursuitMotion::Leap { .. } => {
                 return None;
             },
         }
@@ -360,6 +368,15 @@ impl Pursuer {
     fn sample(self, depth_offset: i16) -> CemeteryEnemyApproach {
         let point = self.point();
         CemeteryEnemyApproach {
+            elevation: match self.motion {
+                PursuitMotion::Leap { age } => leap_elevation(age),
+                PursuitMotion::AlignDepth
+                | PursuitMotion::AlignHorizontal
+                | PursuitMotion::LongRange
+                | PursuitMotion::Retreat { .. }
+                | PursuitMotion::Strike { .. }
+                | PursuitMotion::Windup { .. } => 0,
+            },
             pose: self.pose,
             position: Point {
                 y: point.y.saturating_add(depth_offset),
@@ -405,18 +422,13 @@ impl Pursuer {
             PursuitMotion::Strike { tick } => {
                 self.strike_step(tick, (dx, dy), choice)?;
             },
-            PursuitMotion::Windup { tick } => {
-                // The wind-up holds the same body as the final strike
-                // frame. The following family is not yet registered.
-                if tick >= 4 {
+            PursuitMotion::Windup { tick } => self.windup_step(tick),
+            PursuitMotion::Leap { age } => {
+                if age >= 3 {
                     return None;
                 }
-                self.pose = Some(CemeteryEnemyPose::Strike {
-                    facing: Facing::Left,
-                    phase: 7,
-                });
-                self.motion = PursuitMotion::Windup {
-                    tick: tick.saturating_add(1),
+                self.motion = PursuitMotion::Leap {
+                    age: age.saturating_add(1),
                 };
             },
         }
@@ -486,6 +498,26 @@ impl Pursuer {
             _ => Some(false),
         }
     }
+
+    const fn windup_step(&mut self, tick: u8) {
+        if tick >= 11 {
+            self.pose = Some(CemeteryEnemyPose::Leap);
+            self.velocity = (-512i32, 0i32);
+            self.motion = PursuitMotion::Leap { age: 0 };
+        } else {
+            self.pose = Some(if tick < 4 {
+                CemeteryEnemyPose::Strike {
+                    facing: Facing::Left,
+                    phase: 7,
+                }
+            } else {
+                CemeteryEnemyPose::Windup
+            });
+            self.motion = PursuitMotion::Windup {
+                tick: tick.saturating_add(1),
+            };
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -524,7 +556,9 @@ impl PursuitPair {
             if refresh
                 && !matches!(
                     enemy.motion,
-                    PursuitMotion::Strike { .. } | PursuitMotion::Windup { .. }
+                    PursuitMotion::Strike { .. }
+                        | PursuitMotion::Windup { .. }
+                        | PursuitMotion::Leap { .. }
                 )
             {
                 Self::retarget(enemy, &mut self.reservations, slots)?;
@@ -644,6 +678,18 @@ fn approach_velocity(dx: i32, dy: i32, retreat: bool) -> Option<(i32, i32)> {
         APPROACH_SPEED.saturating_mul(dx.signum()),
         depth.saturating_mul(dy.signum()),
     ))
+}
+
+// Integrate the launch velocity and quarter-pixel acceleration in Q8.
+// The age counts complete steps after the first airborne sample.
+fn leap_elevation(age: u8) -> i16 {
+    let elapsed = i32::from(age).saturating_add(1);
+    let elevation = elapsed.saturating_mul(1024).saturating_sub(
+        elapsed
+            .saturating_mul(elapsed.saturating_sub(1))
+            .saturating_mul(32),
+    );
+    i16::try_from(elevation.div_euclid(UNIT)).unwrap_or_default()
 }
 
 // Diagonal bins independently observed at the four steering updates.

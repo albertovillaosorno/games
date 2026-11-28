@@ -66,6 +66,7 @@ const ENEMY_ROLE_COUNT: usize = AIR_ROLE_COUNT + 16;
 const ALIGNMENT_ROLE_COUNT: usize = ENEMY_ROLE_COUNT + 3;
 const STRIKE_ROLE_COUNT: usize = ALIGNMENT_ROLE_COUNT + 8;
 const RETREAT_ROLE_COUNT: usize = STRIKE_ROLE_COUNT + 3;
+const NEUTRAL_PREVIEW_ROLE_COUNT: usize = RETREAT_ROLE_COUNT + 2;
 pub(super) const ATLAS_BYTES: usize = 1_678_356;
 const ANIMATED_ATLAS_BYTES: usize = ATLAS_BYTES + 210_300;
 const WALKING_ATLAS_BYTES: usize = ANIMATED_ATLAS_BYTES + 452_452;
@@ -77,6 +78,7 @@ const ENEMY_ATLAS_BYTES: usize = AIR_ATLAS_BYTES + 101_680;
 const ALIGNMENT_ATLAS_BYTES: usize = ENEMY_ATLAS_BYTES + 24_812;
 const STRIKE_ATLAS_BYTES: usize = ALIGNMENT_ATLAS_BYTES + 92_004;
 const RETREAT_ATLAS_BYTES: usize = STRIKE_ATLAS_BYTES + 21_444;
+const NEUTRAL_PREVIEW_ATLAS_BYTES: usize = RETREAT_ATLAS_BYTES + 16_736;
 // One background or card, plus up to four bodies.
 pub(super) const EXTRA_SPRITES: usize = 5;
 
@@ -86,7 +88,7 @@ const BACKGROUND: Role =
 
 // Offsets register the verified crop origin against the original station
 // ground coordinate and the preceding fixed-point elevation sample.
-const ROLES: [Role; RETREAT_ROLE_COUNT] = [
+const ROLES: [Role; NEUTRAL_PREVIEW_ROLE_COUNT] = [
     CARD,
     CARD,
     BACKGROUND,
@@ -282,6 +284,9 @@ const ROLES: [Role; RETREAT_ROLE_COUNT] = [
     Role::new("actor/room-enemy", (29, 63), (-78i32, -39i32)),
     Role::new("actor/room-enemy", (31, 62), (-82i32, -38i32)),
     Role::new("actor/room-enemy", (26, 62), (-78i32, -39i32)),
+    // Neutral diagnostic through the first airborne body.
+    Role::new("actor/room-enemy", (40, 55), (-88i32, -31i32)),
+    Role::new("actor/room-enemy", (31, 64), (-79i32, -40i32)),
 ];
 
 // Opening, raised and descending families reuse the street atlas handles.
@@ -332,7 +337,7 @@ enum EnemyControlKind {
 
 type EnemyControl<'label> = (&'label str, [u8; 4], u64, EnemyControlKind);
 
-type RoomVisibility = (bool, Option<[CemeteryEnemyApproach; 2]>);
+type RoomVisibility = (bool, bool, Option<[CemeteryEnemyApproach; 2]>);
 
 #[derive(Clone, Copy, Debug)]
 struct RoleArt {
@@ -414,6 +419,7 @@ impl Selection {
 
     pub(super) const fn atlas_bytes(&self) -> usize {
         let registered = match self.count() {
+            NEUTRAL_PREVIEW_ROLE_COUNT => NEUTRAL_PREVIEW_ATLAS_BYTES,
             RETREAT_ROLE_COUNT => RETREAT_ATLAS_BYTES,
             STRIKE_ROLE_COUNT => STRIKE_ATLAS_BYTES,
             ALIGNMENT_ROLE_COUNT => ALIGNMENT_ATLAS_BYTES,
@@ -468,7 +474,7 @@ impl Selection {
             _ => return Err(failure("missing cemetery rank rotation")),
         };
         let hashes = fields
-            .take(RETREAT_ROLE_COUNT.saturating_add(1))
+            .take(NEUTRAL_PREVIEW_ROLE_COUNT.saturating_add(1))
             .map(|field| field.parse::<ContentHash>().map_err(failure))
             .collect::<Result<Vec<_>, _>>()?;
         if !matches!(
@@ -484,9 +490,10 @@ impl Selection {
                 | ALIGNMENT_ROLE_COUNT
                 | STRIKE_ROLE_COUNT
                 | RETREAT_ROLE_COUNT
+                | NEUTRAL_PREVIEW_ROLE_COUNT
         ) {
             return Err(failure(
-                "invalid count (16/44/104/108/120/154/156/172/175/183/186)",
+                "invalid count (16/44/104/108/120/154/156/172/175/183/186/188)",
             ));
         }
         if hashes.len() >= WALKING_ROLE_COUNT && first != Player::Marge {
@@ -593,6 +600,8 @@ impl CemeteryArt {
         let mut destination = art.rect;
         (destination.x, destination.y) =
             role.room_offset(sample.position, false);
+        destination.y =
+            destination.y.saturating_sub(i32::from(sample.elevation));
         let columns = enemy_visible_columns(destination);
         let mut draw = art.draw(destination.left_columns(columns)?, false);
         draw.source = draw.source.left_columns(columns)?;
@@ -746,7 +755,11 @@ impl CemeteryArt {
         {
             self.queue_room(
                 &room.presentation_bodies(),
-                (visible, room.presentation_enemies()),
+                (
+                    visible,
+                    entrance.room_markers_visible(),
+                    room.presentation_enemies(),
+                ),
                 draws,
             );
             if let Some(shadow) = &mut self.shadow {
@@ -770,7 +783,7 @@ impl CemeteryArt {
     fn queue_room(
         &self,
         bodies: &[CemeteryRoomBody; 4],
-        (visible, enemies): RoomVisibility,
+        (visible, markers, enemies): RoomVisibility,
         draws: &mut Vec<SpriteDraw>,
     ) {
         let order = room_order(bodies, enemies.as_ref());
@@ -786,6 +799,9 @@ impl CemeteryArt {
         }));
         // The lower original ordering bytes place persistent markers
         // in front of every body, even when the station bodies are hidden.
+        if !markers {
+            return;
+        }
         draws.extend(order.into_iter().filter_map(|index| {
             self.marker_draw(
                 *Player::ALL.get(index)?,
@@ -868,6 +884,11 @@ impl CemeteryArt {
         if kind != EnemyControlKind::Alignment {
             // Explicit protected-room checkpoint, not a campaign seed.
             entrance.enable_enemy_strike(0x1207);
+            if kind == EnemyControlKind::NeutralStrike
+                && self.roles.len() >= NEUTRAL_PREVIEW_ROLE_COUNT
+            {
+                entrance.enable_neutral_enemy_preview();
+            }
         }
         let [Some(marge), Some(homer), Some(bart), Some(lisa)] =
             Player::ALL.map(|player| entrance.position(player))
@@ -1039,7 +1060,15 @@ impl CemeteryArt {
         )?;
         if self.roles.len() >= STRIKE_ROLE_COUNT {
             for (label, kind, terminal) in [
-                ("neutral-strike", EnemyControlKind::NeutralStrike, 359),
+                (
+                    "neutral-strike",
+                    EnemyControlKind::NeutralStrike,
+                    if self.roles.len() >= NEUTRAL_PREVIEW_ROLE_COUNT {
+                        371
+                    } else {
+                        359
+                    },
+                ),
                 ("toward-strike", EnemyControlKind::TowardStrike, 359),
                 (
                     "away-strike",
@@ -1183,8 +1212,8 @@ impl CemeteryArt {
         }; 4];
         let mut hidden = Vec::new();
         let mut visible = Vec::new();
-        self.queue_room(&bodies, (false, None), &mut hidden);
-        self.queue_room(&bodies, (true, None), &mut visible);
+        self.queue_room(&bodies, (false, true, None), &mut hidden);
+        self.queue_room(&bodies, (true, true, None), &mut visible);
         if hidden.len() != 4
             || visible.len() != 8
             || !visible.ends_with(&hidden)
@@ -1351,7 +1380,7 @@ impl CemeteryArt {
             .ok_or(RenderError::InvalidSprite)?
             .queue(phase, 0, &mut draws)?;
         let background_count = draws.len();
-        self.queue_room(&bodies, (visible, None), &mut draws);
+        self.queue_room(&bodies, (visible, true, None), &mut draws);
         let shadow = self.shadow.as_mut().ok_or(RenderError::InvalidSprite)?;
         let correction = shadow.queue(scene, &draws, background_count)?;
         if correction.is_some() != visible {
@@ -1518,6 +1547,10 @@ const fn enemy_control_at(
 fn enemy_role(pose: CemeteryEnemyPose) -> Option<usize> {
     use CemeteryEnemyDepth::{Decreasing, Increasing, Level};
     let (phase, depth) = match pose {
+        CemeteryEnemyPose::Windup => return Some(RETREAT_ROLE_COUNT),
+        CemeteryEnemyPose::Leap => {
+            return Some(RETREAT_ROLE_COUNT.saturating_add(1));
+        },
         CemeteryEnemyPose::Approach {
             phase,
             depth,
@@ -1826,6 +1859,7 @@ mod tests {
             0, 3, 2, 1, 5, 4
         ]);
         let enemy = |y| CemeteryEnemyApproach {
+            elevation: 0,
             pose: None,
             position: Point { x: 384, y },
             target: Player::Marge,
@@ -2035,6 +2069,30 @@ mod tests {
     }
 
     #[test]
+    fn neutral_preview_admits_both_new_body_roles_together() {
+        assert_eq!(
+            enemy_role(CemeteryEnemyPose::Windup),
+            Some(RETREAT_ROLE_COUNT),
+        );
+        assert_eq!(
+            enemy_role(CemeteryEnemyPose::Leap),
+            Some(RETREAT_ROLE_COUNT.saturating_add(1)),
+        );
+        let previous = parse_enemy_catalogue(RETREAT_ROLE_COUNT);
+        let extended = parse_enemy_catalogue(NEUTRAL_PREVIEW_ROLE_COUNT);
+        assert!(previous.is_ok() && extended.is_ok());
+        if let (Ok(old), Ok(new)) = (previous, extended) {
+            assert_eq!(
+                new.atlas_bytes(),
+                old.atlas_bytes().saturating_add(16_736),
+            );
+            assert_eq!(new.sprite_count(), old.sprite_count());
+        }
+        assert!(parse_enemy_catalogue(187).is_err());
+        assert!(parse_enemy_catalogue(189).is_err());
+    }
+
+    #[test]
     fn opaque_marker_readback_recovers_the_exact_transparent_crop() {
         use std::num::NonZeroU32;
 
@@ -2067,6 +2125,7 @@ mod tests {
             (ALIGNMENT_ROLE_COUNT, ALIGNMENT_ATLAS_BYTES),
             (STRIKE_ROLE_COUNT, STRIKE_ATLAS_BYTES),
             (RETREAT_ROLE_COUNT, RETREAT_ATLAS_BYTES),
+            (NEUTRAL_PREVIEW_ROLE_COUNT, NEUTRAL_PREVIEW_ATLAS_BYTES),
         ] {
             let bytes = ROLES.iter().take(count).fold(0u32, |sum, role| {
                 sum.saturating_add(

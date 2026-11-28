@@ -58,6 +58,7 @@ const FIRST_WALK_TICK: u64 = 242;
 const LAST_WALK_TICK: u64 = 357;
 const FIRST_PROTECTED_BODY_SAMPLE: u64 = 240;
 const LAST_PROTECTED_BODY_SAMPLE: u64 = 358;
+const LAST_NEUTRAL_PREVIEW_SAMPLE: u64 = 370;
 const ROOM_LAYOUT: StreetLayout = StreetLayout {
     max: Point { x: 320, y: 176 },
     min: Point { x: 112, y: 122 },
@@ -191,6 +192,7 @@ pub struct CemeteryRoom {
     depth_offset: i16,
     enemy_alignment: bool,
     enemy_choice_seed: Option<u16>,
+    neutral_enemy_preview: bool,
     presentation_bodies: [CemeteryRoomBody; 4],
     presentation_depth_offset: i16,
     presentation_enemies: Option<[CemeteryEnemyApproach; 2]>,
@@ -204,6 +206,7 @@ impl Default for CemeteryRoom {
             depth_offset: 0,
             enemy_alignment: false,
             enemy_choice_seed: None,
+            neutral_enemy_preview: false,
             presentation_bodies: ROOM_LAYOUT.spawn.map(CemeteryRoomBody::idle),
             presentation_depth_offset: 0,
             presentation_enemies: None,
@@ -294,7 +297,12 @@ impl CemeteryRoom {
         {
             self.pursuit = None;
         }
-        if tick > LAST_WALK_TICK {
+        let last_step = if self.neutral_enemy_preview {
+            LAST_NEUTRAL_PREVIEW_SAMPLE.saturating_sub(1)
+        } else {
+            LAST_WALK_TICK
+        };
+        if tick > last_step {
             self.pursuit = None;
         } else if tick >= FIRST_ENEMY_MOVEMENT
             && let Some(pair) = &mut self.pursuit
@@ -543,6 +551,15 @@ impl CemeteryEntrance {
         }
     }
 
+    // Neutral source-scene diagnostic only. The unprotected contact
+    // and damage policy remains outside the admitted playable room.
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn enable_neutral_enemy_preview(&mut self) {
+        if let Some(room) = &mut self.room {
+            room.neutral_enemy_preview = true;
+        }
+    }
+
     pub(super) fn enable_room(&mut self) {
         if self.admitted.into_iter().all(|admitted| admitted) {
             self.room = Some(CemeteryRoom::default());
@@ -704,13 +721,21 @@ impl CemeteryEntrance {
         }
     }
 
-    /// Body visibility in the observed protected room display samples.
+    /// Body visibility in the admitted room display samples.
     ///
     /// The original active body records receive zero object ordering
     /// bytes on alternate samples. Shadows have separate admission.
-    /// Other rotations and the encounter boundary remain unverified.
+    /// The neutral diagnostic also observes the end of protected blinking.
     #[must_use]
     pub fn room_body_visibility(self) -> Option<bool> {
+        if self.first == Player::Marge
+            && self.room().is_some_and(|room| room.neutral_enemy_preview)
+            && (LAST_PROTECTED_BODY_SAMPLE.saturating_add(1)
+                ..=LAST_NEUTRAL_PREVIEW_SAMPLE)
+                .contains(&self.tick)
+        {
+            return Some(true);
+        }
         if self.room().is_none()
             || self.first != Player::Marge
             || !(FIRST_PROTECTED_BODY_SAMPLE..=LAST_PROTECTED_BODY_SAMPLE)
@@ -719,6 +744,13 @@ impl CemeteryEntrance {
             return None;
         }
         Some(self.tick & 1 != 0)
+    }
+
+    // Station-number markers persist only through the protected sample.
+    // Called after the room presentation itself has been admitted.
+    #[cfg(any(test, feature = "native-preview"))]
+    pub(super) const fn room_markers_visible(self) -> bool {
+        self.tick <= LAST_PROTECTED_BODY_SAMPLE
     }
 
     /// Whether the bounded room accepts motion on the current tick.
@@ -947,6 +979,7 @@ mod tests {
             Player::Bart
         };
         CemeteryEnemyApproach {
+            elevation: 0,
             pose: observed_enemy_pose(tick, homer_lisa, first),
             position: Point {
                 x,
@@ -1076,6 +1109,7 @@ mod tests {
         };
         [
             CemeteryEnemyApproach {
+                elevation: 0,
                 pose: Some(CemeteryEnemyPose::Approach {
                     depth: first_depth,
                     facing: Facing::Left,
@@ -1089,6 +1123,7 @@ mod tests {
                 },
             },
             CemeteryEnemyApproach {
+                elevation: 0,
                 pose: Some(CemeteryEnemyPose::Approach {
                     depth: second_depth,
                     facing: Facing::Left,
@@ -1217,6 +1252,7 @@ mod tests {
         );
         [
             CemeteryEnemyApproach {
+                elevation: 0,
                 pose: Some(expected_first_strike_pose(tick)),
                 position: Point {
                     x: 329,
@@ -1225,6 +1261,7 @@ mod tests {
                 target: Player::Lisa,
             },
             CemeteryEnemyApproach {
+                elevation: 0,
                 pose: Some(if tick >= 356 {
                     CemeteryEnemyPose::Strike {
                         facing: Facing::Left,
@@ -1262,6 +1299,7 @@ mod tests {
         let &[x1, y1, x2, y2] = RETREAT_POSITIONS.get(index)?;
         Some([
             CemeteryEnemyApproach {
+                elevation: 0,
                 pose: Some(CemeteryEnemyPose::Approach {
                     depth: CemeteryEnemyDepth::Increasing,
                     facing: Facing::Left,
@@ -1276,6 +1314,7 @@ mod tests {
                 },
             },
             CemeteryEnemyApproach {
+                elevation: 0,
                 pose: Some(CemeteryEnemyPose::Approach {
                     depth: CemeteryEnemyDepth::Level,
                     facing: Facing::Left,
@@ -1348,6 +1387,72 @@ mod tests {
                 },
                 "{route} {tick}"
             );
+        }
+    }
+
+    fn expected_neutral_preview(tick: u64) -> [CemeteryEnemyApproach; 2] {
+        let (pose, x, elevation) = match tick {
+            359 => (
+                CemeteryEnemyPose::Strike {
+                    facing: Facing::Left,
+                    phase: 7,
+                },
+                250,
+                0,
+            ),
+            360..=366 => (CemeteryEnemyPose::Windup, 250, 0),
+            367 => (CemeteryEnemyPose::Leap, 248, 4),
+            368 => (CemeteryEnemyPose::Leap, 246, 7),
+            369 => (CemeteryEnemyPose::Leap, 244, 11),
+            _ => (CemeteryEnemyPose::Leap, 242, 14),
+        };
+        [
+            CemeteryEnemyApproach {
+                elevation: 0,
+                pose: Some(expected_first_strike_pose(tick.saturating_sub(34))),
+                position: Point { x: 329, y: 154 },
+                target: Player::Lisa,
+            },
+            CemeteryEnemyApproach {
+                elevation,
+                pose: Some(pose),
+                position: Point { x, y: 207 },
+                target: Player::Bart,
+            },
+        ]
+    }
+
+    #[test]
+    fn neutral_enemy_preview_stops_before_unverified_effect() {
+        let mut entrance = arrival(Player::Marge).at(237);
+        entrance.enable_room();
+        entrance.enable_enemy_strike(0x1207);
+        entrance.enable_neutral_enemy_preview();
+        let mut slots = room_slots();
+        for tick in 238..=371 {
+            for (slot, held) in slots.iter_mut().zip(strike_controls(0, tick)) {
+                slot.held = held;
+            }
+            entrance.advance(false);
+            let _advanced = entrance
+                .advance_room(&mut slots, [PendingManeuver::default(); 4]);
+            if tick < 359 {
+                continue;
+            }
+            let enemies =
+                entrance.room().and_then(CemeteryRoom::presentation_enemies);
+            assert_eq!(
+                (entrance.room_walkable(), entrance.room_markers_visible()),
+                (false, false),
+                "{tick}"
+            );
+            if tick == 371 {
+                assert_eq!(enemies, None);
+                assert_eq!(entrance.room_body_visibility(), None);
+                break;
+            }
+            assert_eq!(entrance.room_body_visibility(), Some(true));
+            assert_eq!(enemies, Some(expected_neutral_preview(tick)), "{tick}");
         }
     }
 
