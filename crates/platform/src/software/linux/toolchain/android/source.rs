@@ -21,9 +21,9 @@
 // - Merge-When:
 //   - Upstream SDL provides the required safe application entry.
 // - Summary:
-//   - Adapt one pinned Java call to the platform-owned JNI entry.
+//   - Adapt the pinned Java runner to the platform-owned JNI entry.
 // - Description:
-//   - Preserve upstream lifecycle and reject unknown source identities.
+//   - Preserve Activity ownership and reject unknown source identities.
 // - Usage:
 //   - Generate inputs for the authored Android package.
 // - Defaults:
@@ -49,9 +49,41 @@ const MAIN_HOOK: &str = concat!(
 );
 const ORIGINAL_CALL: &str =
     "        SDLActivity.nativeRunMain(library, function, arguments);";
-const DELEGATE_CALL: &str = concat!(
-    "        SDLActivity.mSingleton.runApplication",
-    "(library, function, arguments);",
+const DELEGATE_CALL: &str =
+    "        owner.runApplication(library, function, arguments);";
+const ORIGINAL_RUNNER: &str = concat!(
+    "        String library = SDLActivity.mSingleton.getMainSharedObject();\n",
+    "        String function = SDLActivity.mSingleton.getMainFunction();\n",
+    "        String[] arguments = SDLActivity.mSingleton.getArguments();\n",
+);
+const OWNED_RUNNER: &str = concat!(
+    "        final SDLActivity owner = SDLActivity.mSingleton;\n",
+    "        final Thread worker = Thread.currentThread();\n",
+    "        String library = owner.getMainSharedObject();\n",
+    "        String function = owner.getMainFunction();\n",
+    "        String[] arguments = owner.getArguments();\n",
+);
+const ORIGINAL_FINISH: &str = concat!(
+    "        if (SDLActivity.mSingleton != null",
+    " && !SDLActivity.mSingleton.isFinishing()) {\n",
+    "            // Let's finish the Activity\n",
+    "            SDLActivity.mSDLThread = null;\n",
+    "            SDLActivity.mSingleton.finish();\n",
+    "        }  // else: Activity is already being destroyed\n",
+);
+const GUARDED_FINISH: &str = concat!(
+    "        // Games modification: a retiring runner must not finish",
+    " a replacement.\n",
+    "        owner.runOnUiThread(() -> {\n",
+    "            if (SDLActivity.mSingleton == owner\n",
+    "                    && SDLActivity.mSDLThread == worker\n",
+    "                    && !owner.isFinishing()\n",
+    "                    && !owner.isDestroyed()\n",
+    "                    && !owner.isChangingConfigurations()) {\n",
+    "                SDLActivity.mSDLThread = null;\n",
+    "                owner.finish();\n",
+    "            }\n",
+    "        });\n",
 );
 
 pub(super) fn adapt_activity(source: &str) -> Option<String> {
@@ -64,13 +96,24 @@ pub(super) fn adapt_activity(source: &str) -> Option<String> {
 }
 
 fn delegate(source: &str) -> Option<String> {
-    if source.matches(MAIN_DECLARATION).count() != 1
-        || source.matches(ORIGINAL_CALL).count() != 1
+    if [
+        MAIN_DECLARATION,
+        ORIGINAL_RUNNER,
+        ORIGINAL_CALL,
+        ORIGINAL_FINISH,
+    ]
+    .into_iter()
+    .any(|fragment| source.matches(fragment).count() != 1)
         || source.contains("runApplication(")
     {
         return None;
     }
-    let delegated = source.replace(ORIGINAL_CALL, DELEGATE_CALL);
+    // The UI thread owns Activity destruction and the SDL worker reference.
+    // A worker ending during recreation cannot finish the replacement.
+    let delegated = source
+        .replace(ORIGINAL_RUNNER, OWNED_RUNNER)
+        .replace(ORIGINAL_CALL, DELEGATE_CALL)
+        .replace(ORIGINAL_FINISH, GUARDED_FINISH);
     Some(
         delegated.replace(
             MAIN_DECLARATION,
@@ -135,21 +178,34 @@ mod tests {
     #[test]
     fn exact_delegation_preserves_default_upstream_entry() -> Result<(), String>
     {
-        let source = format!("{MAIN_DECLARATION}\n}}\n{ORIGINAL_CALL}");
+        let source = [
+            MAIN_DECLARATION,
+            "\n}\n",
+            ORIGINAL_RUNNER,
+            ORIGINAL_CALL,
+            "\n",
+            ORIGINAL_FINISH,
+        ]
+        .concat();
         let modified = delegate(&source).ok_or("SDL source rejected")?;
         require(modified.contains(MAIN_HOOK))?;
+        require(modified.contains(OWNED_RUNNER))?;
         require(modified.contains(DELEGATE_CALL))?;
+        require(modified.contains(GUARDED_FINISH))?;
+        require(!modified.contains(ORIGINAL_RUNNER))?;
+        require(!modified.contains(ORIGINAL_FINISH))?;
         require(modified.matches(ORIGINAL_CALL).count() == 1)?;
         require(modified.matches(MAIN_DECLARATION).count() == 1)?;
         require(delegate(&modified).is_none())?;
         require(adapt_activity(&source).is_none())?;
-        for ambiguous in [
-            format!("{source}\n{MAIN_DECLARATION}"),
-            format!("{source}\n{ORIGINAL_CALL}"),
-            ORIGINAL_CALL.to_owned(),
-            MAIN_DECLARATION.to_owned(),
+        for fragment in [
+            MAIN_DECLARATION,
+            ORIGINAL_RUNNER,
+            ORIGINAL_CALL,
+            ORIGINAL_FINISH,
         ] {
-            require(delegate(&ambiguous).is_none())?;
+            require(delegate(&format!("{source}\n{fragment}")).is_none())?;
+            require(delegate(&source.replace(fragment, "")).is_none())?;
         }
         Ok(())
     }

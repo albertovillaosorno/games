@@ -339,3 +339,29 @@ expected panel color with native pause/resume and surface recreation.
 The settings directory remained empty. The emulator was shut down.
 These checks do not establish audible output, physical ARM64 support,
 persistent writes, gameplay parity or repeatable cold-restart behavior.
+
+A retained-installation repeat observed one failed and seven successful
+process-cold launches. The failure coincided with a dynamic system UI
+resource-overlay update: ActivityTaskManager relaunched the Activity
+with configuration mask 80000000. During destruction the old SDL
+runner returned and requested finish on the Activity token, which
+also retired the replacement. A controlled font-scale change (mask
+40000000) reproduced the same relaunch and app-requested finish.
+
+The pinned SDL Java adaptation captures the owning Activity and worker
+and posts completion to the UI thread. Only the still-current worker
+of a live, non-recreating Activity may clear the worker and request
+finish. A separately built diagnostic with the same title libraries
+and this adaptation survived three forced font-scale recreations,
+rendered the touch panel again and retained normal menu Exit behavior.
+The Rust source transformation rejects missing, duplicated and unknown
+upstream fragments. Activity recreation restarts the title; gameplay
+state restoration across recreation has not been established.
+
+On the translated emulator the actual title settings menu wrote
+app-private display, master-volume and effects-volume slots with
+0600 permissions. After a process-cold restart their contents remained
+byte-identical and the title logged both restored volume levels at 75
+percent. The display slot contained fill/windowed. Locale, controller,
+physical ARM64, audible playback and production release signing are
+not established by these tests. The emulator was shut down.
